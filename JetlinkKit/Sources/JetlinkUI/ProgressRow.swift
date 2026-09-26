@@ -35,10 +35,10 @@ public struct ProgressRow: View {
   /// The server's stage names in plain English.
   public nonisolated static func stageName(_ stage: String?) -> String {
     switch stage {
-    case "upload": "Receiving model"
-    case "patch": "Preparing the model"
-    case "parse": "Reading the model"
-    case "convert": "Converting for CoreML"
+    case "upload": "Receiving"
+    case "patch": "Preparing"
+    case "parse": "Reading"
+    case "convert": "Converting"
     case "compile": "Compiling"
     case "build": "Building"
     case "save": "Saving"

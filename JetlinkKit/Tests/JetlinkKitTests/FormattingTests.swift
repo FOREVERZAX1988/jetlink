@@ -127,10 +127,10 @@ struct FormattingTests {
 
   @Test("Every stage the server sends has plain English for it")
   func stageNames() {
-    #expect(ProgressRow.stageName("upload") == "Receiving model")
-    #expect(ProgressRow.stageName("patch") == "Preparing the model")
-    #expect(ProgressRow.stageName("parse") == "Reading the model")
-    #expect(ProgressRow.stageName("convert") == "Converting for CoreML")
+    #expect(ProgressRow.stageName("upload") == "Receiving")
+    #expect(ProgressRow.stageName("patch") == "Preparing")
+    #expect(ProgressRow.stageName("parse") == "Reading")
+    #expect(ProgressRow.stageName("convert") == "Converting")
     #expect(ProgressRow.stageName("compile") == "Compiling")
     #expect(ProgressRow.stageName("build") == "Building")
     #expect(ProgressRow.stageName("save") == "Saving")
@@ -144,8 +144,8 @@ struct FormattingTests {
 
   @Test("The headline is the room left at p99, or how far over it is")
   func headroom() {
-    #expect(FrameBudgetView.headroomText(p99: 38.4) == "11.6 ms to spare")
-    #expect(FrameBudgetView.headroomText(p99: 50) == "0.0 ms to spare")
+    #expect(FrameBudgetView.headroomText(p99: 38.4) == "11.6 ms headroom")
+    #expect(FrameBudgetView.headroomText(p99: 50) == "0.0 ms headroom")
     #expect(FrameBudgetView.headroomText(p99: 53.2) == "3.2 ms over")
     #expect(FrameBudgetView.Room(headroomMs: 11.6) == .plenty)
     #expect(FrameBudgetView.Room(headroomMs: 10) == .plenty)

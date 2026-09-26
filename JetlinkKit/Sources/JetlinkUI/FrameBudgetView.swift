@@ -39,7 +39,7 @@ public struct FrameBudgetView: View {
         Text(FrameBudgetView.headroomText(p99: stats.servedMs.p99))
           .font(.title2.weight(.semibold))
         Label {
-          Text("\(room.title) at p99, against a \(Int(FrameBudgetView.budgetMs)) ms budget")
+          Text("\(room.title) · P99 of \(Int(FrameBudgetView.budgetMs)) ms")
             .foregroundStyle(.secondary)
         } icon: {
           Image(systemName: room.symbol)
@@ -49,8 +49,8 @@ public struct FrameBudgetView: View {
       }
       Spacer()
       VStack(alignment: .trailing, spacing: 2) {
-        Text("\(FrameBudgetView.ms(stats.servedMs.mean)) mean")
-        Text("\(FrameBudgetView.ms(stats.servedMs.p99)) p99, \(FrameBudgetView.ms(stats.servedMs.max)) max")
+        Text("Avg \(FrameBudgetView.ms(stats.servedMs.mean))")
+        Text("P99 \(FrameBudgetView.ms(stats.servedMs.p99)) · Max \(FrameBudgetView.ms(stats.servedMs.max))")
           .foregroundStyle(.secondary)
       }
       .font(.callout)
@@ -58,10 +58,10 @@ public struct FrameBudgetView: View {
     }
   }
 
-  /// "18.4 ms to spare", or "3.2 ms over" once p99 is past the budget.
+  /// "18.4 ms headroom", or "3.2 ms over" once p99 is past the budget.
   public nonisolated static func headroomText(p99: Double) -> String {
     let room = budgetMs - p99
-    return room >= 0 ? "\(ms(room)) to spare" : "\(ms(-room)) over"
+    return room >= 0 ? "\(ms(room)) headroom" : "\(ms(-room)) over"
   }
 
   public nonisolated static func ms(_ value: Double) -> String {
@@ -83,9 +83,9 @@ public struct FrameBudgetView: View {
 
     public var title: String {
       switch self {
-      case .plenty: "Room to spare"
+      case .plenty: "Good"
       case .tight: "Tight"
-      case .over: "Over budget"
+      case .over: "Over Budget"
       }
     }
 
@@ -115,19 +115,19 @@ public enum FrameStage: CaseIterable, Identifiable, Sendable {
 
   public var title: String {
     switch self {
-    case .inputs: "Inputs"
+    case .inputs: "Input"
     case .model: "Model"
-    case .overhead: "Overhead"
-    case .reply: "Reply"
+    case .overhead: "Other"
+    case .reply: "Send"
     }
   }
 
   public var detail: String {
     switch self {
-    case .inputs: "Staging the frame into the model's inputs"
-    case .model: "Running the model, as the backend times it"
-    case .overhead: "The rest of the run: handing the frame to the worker and checking the output"
-    case .reply: "Sending the result back to the comma"
+    case .inputs: "Staging the frame for the model"
+    case .model: "Running the model"
+    case .overhead: "Everything else in the frame"
+    case .reply: "Sending the result to the comma"
     }
   }
 
@@ -194,7 +194,7 @@ public struct FrameStageBar: View {
 
         marker(at: x(FrameBudgetView.budgetMs), width: 1, color: .primary.opacity(0.55))
         marker(at: x(stats.servedMs.p99), width: 2, color: .primary)
-        Text("p99")
+        Text("P99")
           .font(.caption)
           .foregroundStyle(.secondary)
           .fixedSize()
@@ -309,19 +309,19 @@ public struct FrameTimeChart: View {
     VStack(alignment: .leading, spacing: 8) {
       HStack(spacing: 14) {
         if showsTitle {
-          Text("Last two minutes")
+          Text("Last 2 Minutes")
             .font(.callout)
             .foregroundStyle(.secondary)
           Spacer()
         }
-        legendItem("Mean") {
+        legendItem("Avg") {
           Capsule().fill(Color.primary).frame(width: 14, height: 2)
         }
-        legendItem("Mean to p99") {
+        legendItem("P99") {
           RoundedRectangle(cornerRadius: 2).fill(Color.primary.opacity(0.12)).frame(width: 14, height: 10)
         }
         if !over.isEmpty {
-          legendItem("A frame over budget") {
+          legendItem("Over Budget") {
             Circle().fill(Color.red).frame(width: 8, height: 8)
           }
         }
@@ -456,7 +456,7 @@ public struct FrameTimeChart: View {
   }
 }
 
-#Preview("Room to spare") {
+#Preview("Good") {
   Form {
     Section("Frame Budget") {
       FrameBudgetView(stats: PreviewData.stats, history: PreviewData.statsHistory)

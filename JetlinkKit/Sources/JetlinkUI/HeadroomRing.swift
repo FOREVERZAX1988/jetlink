@@ -14,7 +14,7 @@ public struct HeadroomRing: View {
   let lineWidth: CGFloat
 
   /// `p99` nil draws an empty track: no frames to measure yet.
-  public init(p99: Double?, lineWidth: CGFloat = 18) {
+  public init(p99: Double?, lineWidth: CGFloat = 22) {
     self.p99 = p99
     self.lineWidth = lineWidth
   }
@@ -28,18 +28,21 @@ public struct HeadroomRing: View {
     let fraction = p99.map { min(max($0 / FrameBudgetView.budgetMs, 0), 1) } ?? 0
     ZStack {
       arc(to: HeadroomRing.sweep)
-        .stroke(tint.opacity(p99 == nil ? 0.15 : 0.2), style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+        .stroke(tint.opacity(p99 == nil ? 0.15 : 0.22), style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
       if p99 != nil {
-        arc(to: HeadroomRing.sweep * fraction)
-          .stroke(tint, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+        // A shade deeper where the fill starts, as the Activity rings draw theirs.
+        arc(to: HeadroomRing.sweep * max(fraction, 0.001))
+          .stroke(
+            AngularGradient(
+              colors: [tint.mix(with: .black, by: 0.15), tint], center: .center,
+              startAngle: .degrees(135), endAngle: .degrees(135 + 360 * HeadroomRing.sweep * max(fraction, 0.001))),
+            style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
+          )
           .animation(.smooth(duration: 0.6), value: fraction)
       }
-      ForEach(Array(stride(from: 10.0, to: FrameBudgetView.budgetMs, by: 10)), id: \.self) { ms in
-        tick(at: ms / FrameBudgetView.budgetMs)
-      }
       center(room: room)
-      Text("\(Int(FrameBudgetView.budgetMs)) ms budget")
-        .font(.caption.weight(.medium))
+      Text("\(Int(FrameBudgetView.budgetMs)) ms")
+        .font(.footnote.weight(.semibold))
         .foregroundStyle(.secondary)
         .frame(maxHeight: .infinity, alignment: .bottom)
     }
@@ -55,58 +58,44 @@ public struct HeadroomRing: View {
       .rotation(.degrees(135))
   }
 
-  /// A hairline across the track every 10 ms, so the fill reads against a scale.
-  private func tick(at fraction: Double) -> some View {
-    GeometryReader { proxy in
-      let radius = min(proxy.size.width, proxy.size.height) / 2
-      let angle = Angle.degrees(135 + 360 * HeadroomRing.sweep * fraction)
-      Capsule()
-        .fill(.background.opacity(0.9))
-        .frame(width: 2, height: lineWidth)
-        .rotationEffect(angle + .degrees(90))
-        .position(
-          x: proxy.size.width / 2 + radius * cos(angle.radians),
-          y: proxy.size.height / 2 + radius * sin(angle.radians))
-    }
-  }
-
   @ViewBuilder
   private func center(room: FrameBudgetView.Room?) -> some View {
-    VStack(spacing: 2) {
+    VStack(spacing: 4) {
       if let p99, let room {
         let headroom = FrameBudgetView.budgetMs - p99
-        Text(abs(headroom).formatted(.number.precision(.fractionLength(1))))
-          .font(.system(size: 64, weight: .semibold))
-          .contentTransition(.numericText(value: headroom))
-          .animation(.smooth, value: headroom)
-          .minimumScaleFactor(0.5)
-          .lineLimit(1)
-        Text(headroom >= 0 ? "ms to spare" : "ms over")
-          .font(.headline)
-          .foregroundStyle(.secondary)
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+          Text(abs(headroom).formatted(.number.precision(.fractionLength(1))))
+            .font(.system(size: 64, weight: .bold, design: .rounded))
+            .contentTransition(.numericText(value: headroom))
+            .animation(.smooth, value: headroom)
+          Text(headroom >= 0 ? "ms" : "ms over")
+            .font(.system(.title3, design: .rounded, weight: .semibold))
+            .foregroundStyle(.secondary)
+        }
+        .minimumScaleFactor(0.5)
+        .lineLimit(1)
         Label(room.title, systemImage: room.symbol)
-          .font(.subheadline.weight(.semibold))
+          .font(.headline)
           .foregroundStyle(room.tone.color)
-          .padding(.top, 6)
       } else {
-        Text("—")
-          .font(.system(size: 64, weight: .semibold))
+        Text("--")
+          .font(.system(size: 64, weight: .bold, design: .rounded))
           .foregroundStyle(.tertiary)
-        Text("no frames yet")
+        Text("No Frames")
           .font(.headline)
           .foregroundStyle(.secondary)
       }
     }
-    .padding(.horizontal, lineWidth * 2)
+    .padding(.horizontal, lineWidth * 1.5)
   }
 
   private func accessibilityText(_ room: FrameBudgetView.Room?) -> String {
-    guard let p99, let room else { return "No frames measured yet" }
-    return "\(FrameBudgetView.headroomText(p99: p99)) at p99 of a \(Int(FrameBudgetView.budgetMs)) millisecond budget. \(room.title)."
+    guard let p99, let room else { return "No frames yet" }
+    return "\(FrameBudgetView.headroomText(p99: p99)) of \(Int(FrameBudgetView.budgetMs)) milliseconds. \(room.title)."
   }
 }
 
-#Preview("Room to spare") {
+#Preview("Good") {
   HeadroomRing(p99: 31.6)
     .frame(width: 280)
     .padding()
