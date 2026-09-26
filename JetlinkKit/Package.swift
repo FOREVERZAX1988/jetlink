@@ -51,12 +51,13 @@ let package = Package(
     .target(name: "JetlinkRegistry", dependencies: ["JetlinkKit"]),
     .target(
       name: "JetlinkServer",
-      dependencies: ["JetlinkKit", "JetlinkRegistry", "COrt"],  // TEMP: + JetlinkONNX once it lands
+      dependencies: ["JetlinkKit", "JetlinkONNX", "JetlinkRegistry", "COrt"],
       linkerSettings: [.linkedFramework("Metal")]),
     .executableTarget(name: "jetlink-serve", dependencies: ["JetlinkKit", "JetlinkServer"]),
     .executableTarget(name: "jetlink-onnx", dependencies: ["JetlinkONNX"]),
     .testTarget(name: "JetlinkKitTests", dependencies: ["JetlinkKit", "JetlinkUI"], resources: [.copy("Fixtures")]),
-    .testTarget(name: "JetlinkONNXTests", dependencies: ["JetlinkONNX"]),
+    // The fixtures are read in place through #filePath, so they are not resources.
+    .testTarget(name: "JetlinkONNXTests", dependencies: ["JetlinkONNX"], exclude: ["Fixtures"]),
     .testTarget(name: "JetlinkRegistryTests", dependencies: ["JetlinkRegistry"]),
     .testTarget(name: "JetlinkServerTests", dependencies: ["JetlinkServer"]),
   ]

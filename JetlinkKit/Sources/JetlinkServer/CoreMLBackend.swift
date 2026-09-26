@@ -1,4 +1,5 @@
 import Foundation
+import JetlinkONNX
 import Metal
 import os
 
@@ -107,10 +108,10 @@ public final class CoreMLBackend: EngineBackend {
     }
   }
 
-  /// onnxruntime wants the key alphanumeric and under 64 characters.
+  /// The Python backend's key for one session's compiled model: onnxruntime
+  /// wants it alphanumeric and under 64 characters.
   static func cacheKey(artifact: URL, part: String) -> String {
-    let stem = artifact.deletingPathExtension().lastPathComponent
-    return String((stem + part).filter { $0.isASCII && ($0.isLetter || $0.isNumber) }.prefix(63))
+    CoreMLPreparation.cacheKey(stem: artifact.deletingPathExtension().lastPathComponent, part: part)
   }
 
   public func deriveSpec(model: URL, sha256: String, nbytes: Int64, frameSkip: Int) throws -> ModelSpec {
