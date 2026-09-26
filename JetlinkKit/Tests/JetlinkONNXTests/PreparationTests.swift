@@ -1,0 +1,159 @@
+import Foundation
+import Testing
+@testable import JetlinkONNX
+
+/// The Swift preparation held to what Python's makes of the same graphs.
+/// Scripts/make_onnx_fixtures.py wrote the graphs, Python's prepared files and
+/// python.json (the counts, the weight bytes, or the error Python raised),
+/// with cache keys from the prefix "fixture". The files must match byte for
+/// byte; Scripts/check_onnx_prep.py does the field-by-field comparison and
+/// runs both with onnxruntime.
+@Suite struct PreparationTests {
+  struct PythonResult: Decodable, Sendable {
+    let error: String?
+    let stripped: Int?
+    let retypedImages: Bool?
+    let gathers: Int?
+    let gemms: Int?
+    let tiles: Int?
+    let parts: [String: Int64]?
+  }
+
+  static let python: [String: PythonResult] = {
+    guard let data = try? Data(contentsOf: Fixtures.url("python.json")),
+          let results = try? JSONDecoder().decode([String: PythonResult].self, from: data) else { return [:] }
+    return results
+  }()
+
+  /// "<fixture>.<layout>" for every case Python ran.
+  static let cases: [String] = python.keys.sorted()
+
+  @Test func fixturesArePresent() {
+    #expect(Self.cases.count == 30)
+    #expect(Self.cases.contains("stateful.split"))
+  }
+
+  @Test(arguments: cases)
+  func matchesPython(_ name: String) throws {
+    let expected = try #require(Self.python[name])
+    let fixture = String(name.split(separator: ".")[0])
+    let layout: CoreMLPreparation.Layout = name.hasSuffix(".split") ? .split : .whole
+    let layoutName = layout == .split ? "split" : "whole"
+    let out = try TemporaryDirectory()
+    defer { out.cleanup() }
+
+    let prepare = {
+      try CoreMLPreparation.prepare(
+        source: Fixtures.url("\(fixture).onnx"), into: out.url, layout: layout,
+        cacheKey: { CoreMLPreparation.cacheKey(stem: "fixture", part: $0) })
+    }
+
+    if fixture == "unrecorded", layout == .whole {
+      // The one place the two differ by design: Python asks onnx's shape
+      // inferrer for the Gather's input and rewrites it; Swift has no
+      // inferrer and leaves a Gather whose input shape is not recorded alone.
+      #expect(expected.gathers == 1)
+      let report = try prepare()
+      #expect(report.gathers == 0)
+      #expect(report.retypedImages)
+      return
+    }
+    if fixture == "noshape", layout == .split {
+      // Python asks onnx's shape inferrer for the trunk's shape; Swift has none.
+      #expect(throws: OnnxError("the export records no shape for trunk; this model cannot be prepared on iPhone")) {
+        try prepare()
+      }
+      #expect(try FileManager.default.contentsOfDirectory(atPath: out.url.path).isEmpty)
+      return
+    }
+    if let message = expected.error {
+      #expect(throws: OnnxError(message)) { try prepare() }
+      #expect(try FileManager.default.contentsOfDirectory(atPath: out.url.path).isEmpty)
+      return
+    }
+
+    let report = try prepare()
+    #expect(report.stripped == expected.stripped)
+    #expect(report.retypedImages == expected.retypedImages)
+    #expect(report.gathers == expected.gathers)
+    #expect(report.gemms == expected.gemms)
+    #expect(report.tiles == expected.tiles)
+    #expect(report.parts.map(\.name) == (layout == .split ? ["vision", "policy"] : ["model"]))
+    for part in report.parts {
+      #expect(part.weightBytes == expected.parts?[part.name], "\(part.name)")
+      #expect(part.url == out.url.appendingPathComponent("\(part.name).onnx"))
+      let mine = try Data(contentsOf: part.url)
+      let theirs = try Data(contentsOf: Fixtures.url("\(fixture).\(layoutName).\(part.name).expected.onnx"))
+      #expect(mine == theirs, "\(name) \(part.name): \(mine.count) bytes against Python's \(theirs.count)")
+    }
+  }
+
+  @Test func progressRisesToOne() throws {
+    let out = try TemporaryDirectory()
+    defer { out.cleanup() }
+    var seen: [Double] = []
+    _ = try CoreMLPreparation.prepare(
+      source: Fixtures.url("stateful.onnx"), into: out.url, layout: .split,
+      cacheKey: { "k\($0)" }, progress: { seen.append($0) })
+    #expect(!seen.isEmpty)
+    #expect(seen == seen.sorted())
+    #expect(seen.last == 1.0)
+    #expect(seen.allSatisfy { (0...1).contains($0) })
+  }
+
+  /// The caller's key is written as it is given, replacing CACHE_KEY.
+  @Test func cacheKeyReplacesOldKeys() throws {
+    let out = try TemporaryDirectory()
+    defer { out.cleanup() }
+    let report = try CoreMLPreparation.prepare(
+      source: Fixtures.url("queued.onnx"), into: out.url, layout: .whole, cacheKey: { "abc\($0)" })
+    let meta = try OnnxMeta.read(contentsOf: report.parts[0].url)
+    #expect(meta.props.map(\.key) == ["output_slices", "model_checkpoint", "COREML_CACHE_KEY"])
+    #expect(meta.prop("COREML_CACHE_KEY") == "abcmodel")
+  }
+
+  /// The split parts carry only the key: Extractor copies no metadata_props.
+  @Test func splitPartsCarryOnlyTheKey() throws {
+    let out = try TemporaryDirectory()
+    defer { out.cleanup() }
+    let report = try CoreMLPreparation.prepare(
+      source: Fixtures.url("queued.onnx"), into: out.url, layout: .split, cacheKey: { $0 })
+    let vision = try OnnxMeta.read(contentsOf: report.parts[0].url)
+    #expect(vision.props == [.init(key: "COREML_CACHE_KEY", value: "vision")])
+    #expect(vision.inputs.map(\.name) == ["img", "big_img"])
+    #expect(vision.inputs.allSatisfy { $0.elemType == 10 })
+    #expect(vision.outputs.map(\.name) == ["trunk"])
+    let policy = try OnnxMeta.read(contentsOf: report.parts[1].url)
+    #expect(policy.inputs.map(\.name) == ["trunk", "desire_pulse", "traffic_convention", "features_buffer"])
+    #expect(policy.outputs.map(\.name) == ["outputs"])
+  }
+
+  /// Two branches that never meet: the cut is every tensor the policy reads.
+  @Test func noSingleCut() throws {
+    let out = try TemporaryDirectory()
+    defer { out.cleanup() }
+    let report = try CoreMLPreparation.prepare(
+      source: Fixtures.url("nocut.onnx"), into: out.url, layout: .split, cacheKey: { $0 })
+    let vision = try OnnxMeta.read(contentsOf: report.parts[0].url)
+    #expect(vision.outputs.map(\.name) == ["a", "b", "vision_out"])
+    let policy = try OnnxMeta.read(contentsOf: report.parts[1].url)
+    #expect(policy.inputs.map(\.name) == ["a", "b", "desire"])
+  }
+
+  @Test func cacheKeyMatchesPython() {
+    // re.sub('[^A-Za-z0-9]', '', stem + part)[:63]
+    #expect(CoreMLPreparation.cacheKey(stem: "404a18cfd86d2963.ort1.29.0.ane-Apple M1 Pro", part: "vision")
+      == "404a18cfd86d2963ort1290aneAppleM1Provision")
+    #expect(CoreMLPreparation.cacheKey(stem: String(repeating: "é-x", count: 70), part: "policy")
+      == String(repeating: "x", count: 63))
+  }
+
+  @Test func missingSourceIsAnError() throws {
+    let out = try TemporaryDirectory()
+    defer { out.cleanup() }
+    #expect(throws: (any Error).self) {
+      try CoreMLPreparation.prepare(
+        source: out.url.appendingPathComponent("none.onnx"), into: out.url, layout: .whole, cacheKey: { $0 })
+    }
+  }
+}
