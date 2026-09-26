@@ -62,8 +62,7 @@ units. Mean / p99 in ms at 20 Hz, interleaved on 2026-09-25:
 One session is unusable on V3, because the Neural Engine cannot run its
 stateful policy efficiently. On V2 it was about 1 ms faster, but only with the
 policy's LayerNormalizations forced into fp32 to keep them off the Neural
-Engine and one CPU core kept spinning for CoreML's work in each frame. One
-layout for every model is worth more than that millisecond.
+Engine and one CPU core kept spinning for CoreML's work in each frame. Jetlink uses the two-session layout for both models to support V3 consistently.
 
 The cut also keeps the Neural Engine's fp16 LayerNormalization out of the
 layers after the trunk: with them on the Neural Engine, `road_transform` fell

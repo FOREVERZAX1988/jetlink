@@ -13,7 +13,7 @@ Install the server, set up the comma, and wait for its icon to turn green.
 | Understand icons, startup, and model switching | [Using Jetlink](using-jetlink.md) |
 | Choose a model or prepare it ahead of time | [Model management](models.md) |
 | Update or restore an earlier version | [Updates and rollback](releasing.md) |
-| Choose a cable or configure power and suspend | [Cables, networking, and power](transport.md) |
+| Choose a cable or set up power and sleep | [Cables, networking, and power](transport.md) |
 | Check performance and operating limits | [Performance and limits](status.md) |
 
 If something fails, start with the [common checks](../README.md#if-something-is-wrong),
@@ -23,6 +23,8 @@ then use troubleshooting in your platform guide.
 
 | Task | Reference |
 | --- | --- |
+| Install manually or customize USB | [Installation reference](installation-reference.md) |
+| Investigate Jetson sleep, USB wake, or shutdown | [Jetson power management reference](jetson-power-reference.md) |
 | Use the model CLI | [Commands, identifiers, and cache files](model-cli.md) |
 | Control a running server from an app or script | [Control protocol](control-protocol.md) |
 | Choose or investigate an inference backend | [Backends and measurements](backends.md) |

@@ -12,7 +12,7 @@ it to the comma. Keep laptops powered and awake; sleep interrupts the link.
 | Green while driving | The large model is active. |
 | Green, dimmed while driving | The large model is ready but cannot switch yet. See below. |
 | Orange | Preparation failed. Read the alert on the home screen. |
-| Returns to normal after parking | With idle suspend enabled, the comma releases the link so the server can sleep. Otherwise the link stays connected while the comma is awake. |
+| Returns to normal after parking | With Jetson deep sleep enabled, this is normal: the Jetson is preparing to sleep. |
 
 ## What to expect when driving
 
@@ -24,25 +24,26 @@ it to the comma. Keep laptops powered and awake; sleep interrupts the link.
   car with lateral control always on.
 - A **Big Model Ready** chime means it has taken over.
 - Picking a new model needs the comma online once, while parked, to download
-  it. After that it is prepared wherever you are: drive off in the middle and
-  the small model drives, the panel counts the preparation down, and the large
-  model joins at the first chance to switch.
+  it. While it prepares, the comma uses its small model and shows progress.
+  The large model takes over when ready and the switching conditions above
+  are met.
 - **Big Model Lost** while engaged is a soft disable. Take over. The small model
   drives, and Jetlink reconnects and switches back at the next chance.
 
 ## Parking and waking a Jetson
 
-With **Always on** selected in the installer, the Jetson sleeps (suspends)
-after the comma releases the USB connection and the idle timeout passes.
-Sleep draws about **300 mW (0.3 W)** directly on 12 V, and the comma can wake
-the Jetson over USB when needed again.
+With the Jetson connected to **always-on power** and **Always on** selected
+in the installer:
 
-If you also allowed the comma to shut down the Jetson for battery protection,
-that action turns it fully off. **The comma can wake a sleeping Jetson, but
-cannot boot a fully shut-down Jetson.** Even with always-on 12 V connected,
-you must press the Jetson's power button or disconnect and reconnect its power
-after a full shutdown. See [power and sleep setup](transport.md#power-requirements)
-for timing and shutdown behavior.
+- **Ignition off:** the Jetson goes into deep sleep after a few minutes,
+  using about **300 mW (0.3 W)** directly on 12 V. Leave power and USB connected.
+- **Car started:** the comma wakes the Jetson automatically.
+- **After a full shutdown for battery protection:** press the Jetson's power
+  button or disconnect and reconnect its power. Starting the car alone will
+  not restart it on always-on power.
+
+See [power setup](transport.md#recommended-jetson-power-setup) for the recommended
+adapter and installer choices.
 
 ## Choose a model
 

@@ -61,9 +61,8 @@ printf '{"id":1,"cmd":"download","ref":"f877d7a0ccc3cce943c76e285214c020cd65c899
   | nc -U /tmp/jetlink-control.sock
 ```
 
-`socat` also supports this socket. To have a model downloaded if need be,
-prepared and loaded without stopping the server, replace `<sha256>` with its
-full SHA-256 hash:
+To download, prepare, and load a model without stopping the server, send
+`prepare`. Replace `<sha256>` with its full SHA-256 hash:
 
 ```bash
 printf '{"id":2,"cmd":"prepare","sha256":"<sha256>","frame_skip":4}\n' \

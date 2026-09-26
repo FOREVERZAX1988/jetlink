@@ -1,7 +1,8 @@
 # Publish a release
 
 For updating an installed server, see [updates and rollback](releasing.md).
-This page is for maintainers publishing artifacts.
+This page is for maintainers publishing the app, Python packages, and container
+images.
 
 Pushing a `v*` tag starts the Release workflow. It builds and publishes the
 macOS app, Python source distribution and wheel, and container images.

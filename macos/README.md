@@ -29,8 +29,8 @@ bundle, under the same stripped environment the app uses.
 make -C macos dev
 ```
 
-That opens `Jetlink.xcodeproj` with `JETLINK_PYTHON` pointing at the repo's
-`.venv`, so Xcode's Run needs no embedded runtime. Set the venv up once with
+This opens `Jetlink.xcodeproj` with `JETLINK_PYTHON` pointing at the repo's
+`.venv`. Xcode runs the app with that environment instead of the embedded runtime. Set the venv up once with
 `pip install -e ".[ort,usb]"` plus tinygrad from git (the commit in
 `Python/requirements-git.txt`; the PyPI wheel cannot parse the models).
 

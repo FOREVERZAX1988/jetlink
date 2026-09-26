@@ -12,8 +12,8 @@ See [daily use](using-jetlink.md#choose-a-model) for model changes and switching
 Use the server's internet connection to download a model before connecting the
 comma. This can save time when the comma is on LTE.
 
-On Mac, use **Models > Download**, then **Prepare**, and wait for **Loaded**.
-Select the same model on the comma. See the [Mac guide](macos-app.md#prepare-a-model-before-you-drive).
+On Mac, open **Models**, click **Use Model**, and wait for **In Use**.
+Select the same model on the comma. See the [Mac guide](macos-app.md#use-a-model-before-you-drive).
 
 ### On a Jetson or an installed PC
 
@@ -74,18 +74,13 @@ from a source install, to inspect disk use. The Mac app shows it under **Models*
 See the [model command reference](model-cli.md#commands) for listing, fetching,
 importing, preparing, and deleting models, including arguments and examples.
 
-## The control channel
+## Developer reference
 
-For scripts and app development, see the [server control protocol](control-protocol.md).
-It lets a client manage downloads and preparation through a running server.
+For cache internals and scripting, see the [model CLI](model-cli.md) and
+[server control protocol](control-protocol.md).
 
 <a id="model-identifiers-and-storage"></a>
 <a id="the-protocol"></a>
-
-Model identifiers and cache internals are documented in the
-[command reference](model-cli.md#model-identifiers-and-storage); JSON messages
-are documented in the [protocol reference](control-protocol.md#the-protocol).
-
 <a id="list"></a>
 <a id="resolve"></a>
 <a id="fetch"></a>
@@ -94,13 +89,8 @@ are documented in the [protocol reference](control-protocol.md#the-protocol).
 <a id="rm"></a>
 <a id="prepare"></a>
 <a id="exit-codes"></a>
-
-The former command sections are now in the [CLI reference](model-cli.md#commands).
-
 <a id="starting-a-server-with-a-control-socket"></a>
 <a id="on-connect"></a>
 <a id="example"></a>
 <a id="events"></a>
 <a id="commands-1"></a>
-
-The former protocol sections are now in the [control reference](control-protocol.md).

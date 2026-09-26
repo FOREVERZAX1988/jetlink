@@ -35,11 +35,9 @@ Use separate power supplies for the comma and server. Voltage drops can reboot
 the server and interrupt the link. Keep laptops powered and awake, and provide
 adequate cooling during sustained use.
 
-An always-on Jetson can sleep while parked and wake over USB when the comma
-needs it. Reported sleep consumption is about 300 mW (0.3 W) directly on 12 V;
-measure your installation for its actual draw. A fully shut-down Jetson cannot
-be woken by the comma: press its power button or disconnect and reconnect its
-power to boot. See [power and suspend setup](transport.md#power-requirements).
+With always-on power, the Jetson sleeps when the ignition is off and the comma
+wakes it when the car starts. See [power setup](transport.md#power-requirements)
+for consumption and the separate battery-protection shutdown option.
 
 TCP has no client authentication. Use a trusted network. Wi-Fi missed the frame
 budget in measurements; use USB 3 or wired Ethernet.

@@ -58,16 +58,11 @@ changing anything. Choose the power option that matches your wiring.
 
 | It asks | What it means |
 | --- | --- |
-| How is the Jetson powered in the car? | **Always on** (installer default): keeps power available while parked so the Jetson can suspend and wake. Check [power and suspend setup](transport.md#always-on-supply-and-suspend) before choosing it. **Switched**: it turns on and off with the car, and the large model is ready about a minute after you start it. |
-| Allow the comma to shut down the Jetson to protect the car battery? | Always on only. Allows a full shutdown under the comma's battery policy, separate from normal parked sleep. The comma cannot wake the Jetson after this: press the Jetson's power button or disconnect and reconnect its power. See [powering off with the comma](transport.md#powering-off-with-the-comma). |
+| How is the Jetson powered in the car? | Choose **Always on** if power stays on with the ignition off. The Jetson sleeps when parked and the comma wakes it when you start the car. Choose **Switched** if power turns off with the ignition; the Jetson boots each time you start the car. |
+| Allow the comma to shut down the Jetson to protect the car battery? | If enabled, the comma can turn the Jetson fully off for battery protection. After that, you must press the Jetson's power button or disconnect and reconnect its power. |
 
-**For normal parking on always-on power, use deep sleep (suspend).** It draws about
-**300 mW (0.3 W)** when directly connected to 12 V, and the comma can wake the
-Jetson over USB. Keeping 12 V connected does not keep the Jetson awake, but it
-also does not boot it after a full shutdown. The optional shutdown setting
-protects the battery by turning the Jetson fully off; consider how you will
-restart it before enabling that setting. See [sleep and USB wake
-setup](transport.md#always-on-supply-and-suspend).
+See [parking and starting the car](transport.md#always-on-supply-and-suspend)
+for what to expect with always-on power and deep sleep.
 
 When it finishes, it prints the comma steps. Running it again is safe: it
 offers to keep your answers and brings everything up to date.
@@ -121,7 +116,7 @@ This is optional; the comma normally sends the model automatically.
 | Large model build is killed or hangs | Check `free -h` shows 8 GB of swap; the installer skips it when the disk is too small |
 | Model repeatedly drops out | Check separate supplies and voltage dips, cable, cooling, and `jetlink logs` |
 | Frame time exceeds 50 ms | Check USB 3 speed, the power mode (`sudo nvpmodel -q`), cooling, and model choice |
-| Jetson fails to wake | See [USB wake setup](transport.md#always-on-supply-and-suspend) |
+| Jetson fails to wake | See [sleep and wake guidance](transport.md#always-on-supply-and-suspend) |
 | Jetson stays off after the comma shut it down | This was a full shutdown, not sleep. Press the Jetson's power button or disconnect and reconnect its power; the comma cannot boot it over USB. |
 | Server refuses the comma after an update | Update both sides together, see [updates](releasing.md) |
 | "Speed Error: nan" or no path | Stop the test and collect logs |
@@ -148,47 +143,8 @@ From a laptop with the matching private key, run the command below. Replace
 ssh comma@<comma-ip> 'tar czf - /data/log' > comma-log.tgz
 ```
 
-## What the installer changes
+<a id="what-the-installer-changes"></a>
+<a id="installing-by-hand"></a>
 
-The installer:
-
-- installs Docker and NVIDIA's container toolkit if they are missing
-- downloads the Jetlink server, or builds it on the Jetson when there is no
-  ready-made one for its JetPack (the same 10 to 30 minutes)
-- checks that the server can use the GPU
-- switches the Jetson to its fastest power mode, MAXN SUPER, which the large
-  models need to keep up (the power supply has to deliver it; switching can
-  need one restart, and the installer says so at the end)
-- adds 8 GB of swap, which the 1.7 GB models need while they are prepared
-- sets up the `jetlink-server` service to start at every boot, and the
-  `jetlink` command
-- stops the Jetson waiting for a network at boot (the car has none, and waiting
-  cost about two minutes), and keeps the system log under 200 MB
-- keeps models and prepared engines in `/mnt/data/jetlink`
-
-## Installing by hand
-
-The installer is the supported way. For a custom setup, these are the pieces it
-puts together, from a checkout of this repository:
-
-1. Docker, and the NVIDIA Container Toolkit with `sudo nvidia-ctk runtime
-   configure --runtime=docker`. On JetPack 6 use Ubuntu's `docker.io`: Docker 28
-   and later cannot run containers on a JetPack 6 kernel. On a Jetson install
-   `nvidia-container-toolkit`, not JetPack's `nvidia-container`: that package
-   removes whatever Docker is installed and puts in the newest Docker CE, in
-   the background, a minute after apt finishes.
-2. The server image: `sudo docker/build.sh` picks `docker/Dockerfile` (CUDA 13,
-   JetPack 7.2 and PCs) or `docker/Dockerfile.jetpack6`.
-3. `/etc/jetlink/server.env`, which `scripts/jetlink-run-server` reads to start
-   the container. Its header lists every setting; `JETLINK_IMAGE` is the
-   image's ID from `sudo docker image inspect --format '{{.Id}}' jetlink:latest`.
-4. `scripts/jetlink-run-server` installed as `/usr/local/lib/jetlink/run-server`
-   and `scripts/jetlink-server.service` in `/etc/systemd/system`, then
-   `sudo systemctl enable --now jetlink-server`.
-5. On an always-on supply, `scripts/99-jetlink-usb-wakeup.rules` in
-   `/etc/udev/rules.d` and `scripts/jetlink-wake-setup.sh` as
-   `/usr/local/lib/jetlink/wake-setup`, so the comma can wake the Jetson; and
-   optionally the `scripts/jetlink-poweroff.*` units.
-
-To try the server in a terminal first, `sudo docker/run.sh --transport usb`
-runs it in the foreground; Ctrl-C stops it.
+For manual installation and system changes, see the
+[installation reference](installation-reference.md#jetson-installation).

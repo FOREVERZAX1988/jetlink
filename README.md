@@ -51,12 +51,11 @@ in the installer to enable deep sleep. For the Orin Nano Super devkit, use a
 **5.5 mm outer / 2.5 mm inner, center-positive** plug. See the
 [adapter example and power setup](docs/transport.md#recommended-jetson-power-setup).
 
-Deep sleep draws about **300 mW (0.3 W)** directly on 12 V, and the comma can
-wake the Jetson over USB. A full shutdown leaves the Jetson off, even with
-12 V still connected: the comma cannot boot it again. You must press the
-Jetson's power button or disconnect and reconnect its power. See
-[sleep and shutdown](docs/transport.md#always-on-supply-and-suspend), including
-the optional battery-protection shutdown setting.
+With this setup, the Jetson sleeps a few minutes after the ignition is turned
+off and wakes automatically when you start the car. Deep sleep uses about
+**300 mW (0.3 W)** directly on 12 V. If you enable battery-protection shutdown,
+a full shutdown requires pressing the Jetson's power button or disconnecting
+and reconnecting its power. See [parking and starting the car](docs/transport.md#always-on-supply-and-suspend).
 
 When the installer finishes, run `jetlink status` to check the server, then
 continue with comma setup below.

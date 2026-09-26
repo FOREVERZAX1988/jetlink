@@ -1,0 +1,107 @@
+# Installation reference
+
+For normal setup, use the [Jetson guide](jetson.md), [Mac app](macos-app.md),
+or [PC guide](platforms.md). This page covers manual installation and custom
+integrations.
+
+## Jetson installation
+
+### What the installer changes
+
+The installer:
+
+- installs Docker and NVIDIA's container toolkit if they are missing
+- downloads the Jetlink server, or builds it on the Jetson when there is no
+  ready-made one for its JetPack (the same 10 to 30 minutes)
+- checks that the server can use the GPU
+- switches the Jetson to its fastest power mode, MAXN SUPER, which the large
+  models need to keep up (the power supply has to deliver it; switching can
+  need one restart, and the installer says so at the end)
+- adds 8 GB of swap, which the 1.7 GB models need while they are prepared
+- sets up the `jetlink-server` service to start at every boot, and the
+  `jetlink` command
+- stops the Jetson waiting for a network at boot (the car has none, and waiting
+  cost about two minutes), and keeps the system log under 200 MB
+- keeps models and prepared engines in `/mnt/data/jetlink`
+
+### Installing by hand
+
+The installer is the supported way. For a custom setup, these are the pieces it
+puts together, from a checkout of this repository:
+
+1. Docker, and the NVIDIA Container Toolkit with `sudo nvidia-ctk runtime
+   configure --runtime=docker`. On JetPack 6 use Ubuntu's `docker.io`: Docker 28
+   and later cannot run containers on a JetPack 6 kernel. On a Jetson install
+   `nvidia-container-toolkit`, not JetPack's `nvidia-container`: that package
+   removes whatever Docker is installed and puts in the newest Docker CE, in
+   the background, a minute after apt finishes.
+2. The server image: `sudo docker/build.sh` picks `docker/Dockerfile` (CUDA 13,
+   JetPack 7.2 and PCs) or `docker/Dockerfile.jetpack6`.
+3. `/etc/jetlink/server.env`, which `scripts/jetlink-run-server` reads to start
+   the container. Its header lists every setting; `JETLINK_IMAGE` is the
+   image's ID from `sudo docker image inspect --format '{{.Id}}' jetlink:latest`.
+4. `scripts/jetlink-run-server` installed as `/usr/local/lib/jetlink/run-server`
+   and `scripts/jetlink-server.service` in `/etc/systemd/system`, then
+   `sudo systemctl enable --now jetlink-server`.
+5. On an always-on supply, `scripts/99-jetlink-usb-wakeup.rules` in
+   `/etc/udev/rules.d` and `scripts/jetlink-wake-setup.sh` as
+   `/usr/local/lib/jetlink/wake-setup`, so the comma can wake the Jetson; and
+   optionally the `scripts/jetlink-poweroff.*` units.
+
+To try the server in a terminal first, `sudo docker/run.sh --transport usb`
+runs it in the foreground; Ctrl-C stops it.
+## Custom USB integrations
+
+The comma 3X with AGNOS kernel 4.9.103 includes FunctionFS and USB gadget
+support. The Jetson host uses libusb and does not need gadget kernel modules.
+Reversing these roles requires gadget modules that may be missing from the
+Jetson's L4T installation.
+
+For manual integration, run this from the Jetlink checkout on the comma once per
+boot:
+
+```bash
+sudo scripts/setup_gadget.sh
+```
+
+The script creates the gadget configuration. `jetlinkd` opens `ep0`, writes
+FunctionFS descriptors, and binds the USB device controller. The setup script
+cannot bind the controller before those descriptors exist.
+
+On the Jetson, the installer sets up the server as a service; for a manual run,
+from a checkout:
+
+```bash
+sudo docker/run.sh --transport usb
+```
+
+Jetlink uses the pid.codes test allocation `1209:0001`. Custom distributions
+need their own USB product ID.
+
+## Versions and manual rollback
+
+### Choose a version
+
+The installer follows `main` by default. Mac app releases are built from
+that branch. The zoompilot fork records the exact Jetlink commit it was tested with
+as its `jetlink_repo` submodule, and `main` is kept compatible with the current
+`jetson-trt` branch. If the protocol versions differ, the server rejects the
+connection and the comma keeps driving on the small model.
+
+To install a release, or the commit the fork records, instead of `main`, pass
+it to the installer. Replace `v0.4.0` with a release tag:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zoompilot/jetlink/v0.4.0/install.sh | bash -s -- --ref v0.4.0
+```
+
+### Restore a Docker image
+
+Or put an earlier image back by hand: `sudo docker image ls` shows the images on
+the machine, and the one to run is `JETLINK_IMAGE` in `/etc/jetlink/server.env`
+(an image ID from `sudo docker image inspect --format '{{.Id}}' IMAGE`). Then
+`jetlink restart`. Each update keeps the settings it replaced as
+`/etc/jetlink/server.env.prev`, so going back one update is
+`sudo cp /etc/jetlink/server.env.prev /etc/jetlink/server.env` and
+`jetlink restart`.
+

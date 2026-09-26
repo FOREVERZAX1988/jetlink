@@ -53,7 +53,7 @@ See the [full measurements and test conditions](mac-performance.md).
 | Investigate intermittent GPU latency | [GPU keep-alive](mac-performance.md#keeping-the-mac-gpu-responsive-between-frames) |
 | Understand CoreML engine preparation | [Model preparation](mac-performance.md#model-preparation) |
 
-## Runtime requirements
+## Runtime implementation and dependencies
 
 - tinygrad calls run on one dedicated thread because its JIT and Metal state
   require the same thread for loading and inference.

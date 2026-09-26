@@ -13,20 +13,15 @@ Use a USB 3 A-to-C data cable. Charge-only cables do not work.
 | Mac | USB-A port on a hub, dock, or USB-C-to-A adapter |
 | Linux PC | USB-A port on the PC |
 
-The comma acts as the USB device (also called a gadget). The server computer
-acts as the USB host. The compatible comma build configures this connection at
-boot when **Accelerator Link** is enabled.
-
-Use the Jetson devkit's USB-A ports. Its USB-C port selects the wrong USB role
-for this connection. A direct C-to-C cable on a Mac may also select the wrong
-role. The comma's USB-C port cannot serve Jetlink and chestnut at the same time.
+Use the USB-A connection shown above. The Jetson's USB-C port and a direct
+C-to-C cable on a Mac may not connect correctly. The comma's USB-C port cannot
+serve Jetlink and chestnut at the same time.
 
 ## Ethernet (TCP)
 
 Use wired Ethernet for TCP. On the comma, use a USB-C gigabit Ethernet adapter
-with a Realtek RTL8152/8153 or ASIX AX88179 chipset. AGNOS includes these
-drivers. It does not include the host drivers for NCM, ECM, or RNDIS USB
-Ethernet gadgets.
+with a Realtek RTL8152/8153 or ASIX AX88179 chipset. These are supported by
+the comma.
 
 1. Connect the comma and server to a wired network with fixed IP addresses.
 2. Start the server with `--transport tcp`.
@@ -47,8 +42,8 @@ its 25 W power mode. The comma's USB port cannot power the Jetson.
 The supply must tolerate voltage drops when the engine starts. A voltage drop
 can reboot the Jetson and interrupt the link. With ignition-switched power,
 allow about 65 to 96 seconds from power-on until the model is ready. The comma
-uses its small model during startup. Switching requires a stop with cruise
-off, or lateral control off; see [daily use](using-jetlink.md#what-to-expect-when-driving).
+uses its small model during startup. See [daily use](using-jetlink.md#what-to-expect-when-driving)
+for when it switches to the large model.
 
 ### Recommended Jetson power setup
 
@@ -59,14 +54,10 @@ adapter like the one below make this straightforward.
 
 <img src="images/jetson-12v-dc-adapter.jpg" width="320" alt="Example of a 12 V car accessory socket plug to DC barrel adapter cable">
 
-Use a **5.5 mm outer diameter / 2.5 mm inner diameter, center-positive** DC
-plug for this devkit. NVIDIA lists the connector dimensions in its
-[hardware guide](https://docs.nvidia.com/jetson/orin-nano-devkit/user-guide/hardware_layout.html)
-and polarity in the
-[carrier board specification](https://developer.nvidia.com/downloads/assets/embedded/secure/jetson/orin_nano/docs/jetson_orin_nano_devkit_carrier_board_specification_sp.pdf).
-The photo illustrates the adapter style; check the cable's specifications
-when buying, and check your carrier board's requirements if using another
-Jetson.
+For the Orin Nano Super devkit, use a **5.5 mm outer / 2.5 mm inner,
+center-positive** plug. Check these specifications when buying; the photo
+shows the adapter style. Other Jetson carrier boards may have different
+power requirements.
 
 1. Confirm the 12 V source stays powered after the car is off, including after
    any delayed accessory-power timeout. The Jetson needs power throughout sleep.
@@ -75,105 +66,36 @@ Jetson.
 3. Choose **Always on** in the installer, or run `jetlink setup` to change an
    existing installation. This configures deep sleep and USB wake.
 
-Leave power connected while parked. The Jetson sleeps to reduce consumption,
-and the comma wakes it when needed. The optional battery-protection shutdown
-is a separate choice: after a full shutdown, you must press the power button
-or disconnect and reconnect power, as explained below.
+<a id="always-on-supply-and-suspend"></a>
 
-### Always-on supply and suspend
+### When you park and start the car
 
-**Deep sleep (suspend) is the normal parked state for an always-on Jetson.** It
-uses very little power, keeps the loaded engine in memory, and lets the comma
-wake the Jetson over USB when it needs the server again. Reported sleep power
-is about **300 mW (0.3 W) when directly connected to 12 V**, compared with
-measured awake idle power of 6.8 W. Consumption varies with the supply and
-connected peripherals; measure your installation for its actual parked draw.
+With the Jetson connected to **always-on power** and **Always on** selected
+in the installer:
 
-| Jetson state | What happens when the comma needs it again? |
+| When | What the Jetson does |
 | --- | --- |
-| Sleeping, with power still connected | The comma can wake it over USB when idle suspend and USB wake are configured. |
-| Fully shut down, with power still connected | The comma cannot boot it. Press the Jetson's power button or disconnect and reconnect its power. |
+| Ignition off | Goes into deep sleep after a few minutes. Leave its power and USB cables connected. |
+| Car started | The comma wakes the Jetson automatically over USB. You do not need to press its power button. |
 
-Always-on power means power remains available; it does not mean the Jetson
-must stay awake. It also cannot restart a Jetson that has fully shut down.
-
-To enable idle suspend, choose **Always on**, the recommended answer, when the
-[installer](jetson.md#2-run-the-installer) asks how the Jetson is powered, or
-run `jetlink setup` to change the answer later. The installer arms USB wake on
-the Jetson's hubs, grants the container access to `/sys/power`, and starts the
-server with `--sleep-after 120`. Suspend requires `deep` support in
-`/sys/power/mem_sleep`; the installer checks, and says so when it is missing.
-
-With idle suspend enabled:
-
-1. After ignition turns off, the comma releases the USB connection once the
-   engine is ready and at least one minute has passed.
-2. The Jetson suspends after 120 seconds without a USB device connection.
-3. A USB connection or disconnection wakes the Jetson. If no device connects,
-   the server waits another 120 seconds and suspends again.
-
-The comma reconnects when it needs the server. Without `--sleep-after`, the link
-stays connected while the comma remains awake after parking.
-
-If suspend fails, the server retries after 10 seconds and doubles the delay
-between attempts, up to 5 minutes. Check the server logs if the Jetson stays
-awake. The container needs write access to `/sys/power`, and USB wake must be
-enabled on the root hubs and onboard hub.
+Deep sleep uses about **300 mW (0.3 W)** directly on 12 V. Actual consumption
+varies with your supply and accessories.
 
 ### Powering off with the comma
 
-This optional battery-protection action is a **full shutdown, not sleep**.
-When enabled, the comma asks the Jetson to power off when the comma shuts down
-under its battery policy (11.8 V or 30 hours parked). The installer sets this
-up when you allow the comma to shut down the Jetson; it is the host-side
-`jetlink-poweroff.path` unit and its service. The server writes a flag in the
-models folder; the host service removes the flag and powers off. Flags from
-earlier boots are ignored.
+The installer also asks whether the comma may shut down the Jetson to protect
+the car battery. If enabled, the Jetson turns fully off when the comma shuts
+down for low battery or after a long time parked.
 
-For testing, disable this poweroff action by creating the dry-run file:
+**After a full shutdown, starting the car will not restart a Jetson connected
+to always-on power.** Press the Jetson's power button or disconnect and
+reconnect its power. The comma can wake it from deep sleep, but cannot turn it
+back on after a full shutdown.
 
-```bash
-touch /mnt/data/jetlink/poweroff-dry-run
-```
+You can change this setting with `jetlink setup`. See the
+[technical reference](jetson-power-reference.md) for sleep timing, shutdown
+thresholds, and custom power setups.
 
-Remove the file to enable poweroff again:
+<a id="custom-usb-integrations"></a>
 
-```bash
-rm /mnt/data/jetlink/poweroff-dry-run
-```
-
-A powered-off Jetson stays off on an always-on supply, even if the comma starts
-again. USB wake only works from sleep. To boot after a full shutdown, press the
-Jetson's power button or disconnect and reconnect its power. For automatic
-restart, the installation needs a way to do this, such as a low-voltage
-disconnect that restores power when the
-alternator runs, or an ignition-controlled connection to the J14 power-button
-input. The devkit starts automatically when DC power returns.
-
-## Custom USB integrations
-
-The comma 3X with AGNOS kernel 4.9.103 includes FunctionFS and USB gadget
-support. The Jetson host uses libusb and does not need gadget kernel modules.
-Reversing these roles requires gadget modules that may be missing from the
-Jetson's L4T installation.
-
-For manual integration, run this from the Jetlink checkout on the comma once per
-boot:
-
-```bash
-sudo scripts/setup_gadget.sh
-```
-
-The script creates the gadget configuration. `jetlinkd` opens `ep0`, writes
-FunctionFS descriptors, and binds the USB device controller. The setup script
-cannot bind the controller before those descriptors exist.
-
-On the Jetson, the installer sets up the server as a service; for a manual run,
-from a checkout:
-
-```bash
-sudo docker/run.sh --transport usb
-```
-
-Jetlink uses the pid.codes test allocation `1209:0001`. Custom distributions
-need their own USB product ID.
+For custom USB setups, see the [installation reference](installation-reference.md#custom-usb-integrations).

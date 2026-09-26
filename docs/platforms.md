@@ -40,9 +40,7 @@ brew install python libusb
 scripts/run-mac.sh
 ```
 
-The first run creates a Python environment and installs dependencies. The server
-then serves the comma over USB using CoreML, with the model's vision layers on
-the Neural Engine and the rest on the GPU. Plug the comma into a
+The first run installs dependencies and starts the server. Plug the comma into a
 **USB-A port on a hub or dock** with an A-to-C data cable, or use a USB-C-to-A
 adapter. Going through USB-A makes the Mac take the host role reliably; a plain
 C-to-C cable may not.
@@ -72,7 +70,7 @@ JETLINK_BACKEND=tinygrad scripts/run-mac.sh
 scripts/run-mac.sh --build /path/to/big_driving_supercombo.onnx
 ```
 
-How fast each one runs: [backends and measurements](backends.md#mac-measured).
+For performance comparisons, see [backends and measurements](backends.md#mac-measured).
 
 ## Linux (NVIDIA GPU)
 
@@ -83,12 +81,12 @@ Debian. Run the installer:
 curl -fsSL https://raw.githubusercontent.com/zoompilot/jetlink/main/install.sh | bash
 ```
 
-It checks the NVIDIA driver (580 or newer, which CUDA 13 needs) and on Ubuntu
-offers to install it, in which case restart and run the installer again. It
-then installs Docker and the NVIDIA Container Toolkit if they are missing, gets
-the Jetlink server, and asks whether to start it with the computer. Afterwards
-`jetlink status`, `jetlink logs`, `jetlink update` and `jetlink uninstall` look
-after it; see [everyday use](jetson.md#everyday-use), which is the same on a PC.
+The installer checks for NVIDIA driver 580 or newer. On Ubuntu, it can install
+the driver for you; restart and run the installer again if prompted. It then
+installs Jetlink and asks whether to start it with the computer.
+
+Run `jetlink status` to check it. See [everyday commands](jetson.md#everyday-use)
+for logs, updates, and uninstalling.
 
 Plug the comma into a USB-A port, and keep the computer powered and awake while
 driving: sleep drops the link.

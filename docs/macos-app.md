@@ -8,14 +8,9 @@ the [Jetson guide](jetson.md). For the command line on any platform, see
 
 ## Requirements
 
-| What you need | Why |
-| --- | --- |
-| A Mac with Apple silicon | The app is arm64 only. Intel Macs are not supported. |
-| macOS 15 or later | The app uses system features added in macOS 15. |
-| 16 GB of memory recommended | CoreML preparation uses about 3 GB on an M1 Pro; allow memory for other apps. |
-| About 3 GB of disk per model | A 766 MB download plus a 2.1 GB CoreML engine. |
-| A USB-A port on a hub, dock or adapter | Going through USB-A makes the Mac take the host role reliably. |
-| A USB 3 A-to-C data cable | Charge-only cables do not work. |
+- An Apple silicon Mac with macOS 15 or later. Intel Macs are not supported.
+- 16 GB of memory recommended and about 3 GB of disk space per model.
+- A USB-A port on a hub, dock, or adapter, and a USB 3 A-to-C data cable.
 
 You also need a comma running a zoompilot build with Jetlink in it, set up with
 the steps in the [README](../README.md#quick-start).
@@ -64,13 +59,8 @@ The Status screen then shows:
 - **Rate**, the frames per second the comma is sending. It should settle near
   20 per second.
 - **Slow frames**, the number of frames over 60 ms in the last second. This should stay at zero. A consistently higher count means the Mac is too slow, and the comma may drop back to its small model.
-- **Frame budget**, how much of the comma's 50 ms frame the Mac uses. The
-  headline is the room left at p99 (99% of frames take this long or less). The
-  bar splits the average frame into Inputs, Model, Overhead and Reply, with p99
-  marked against the 50 ms track. The chart shows the last two minutes, with a
-  red dot for any second whose slowest frame went over 50 ms. The Mac's time is
-  not all of it: the comma's own work and the transfer to the Mac come out of
-  the same 50 ms, so keep 10 ms or more to spare.
+- **Frame budget**, the time left to finish each frame. Aim for at least
+  10 ms to spare. See [performance measurements](mac-performance.md) for details.
 
 On the comma, the home-button icon pulses while the model transfers and loads,
 then turns green. For driving behavior, see the
@@ -81,6 +71,8 @@ then turns green. For driving behavior, see the
 Keep the Mac powered and awake. You can close the window; the server keeps
 running and the menu bar icon stays. Quitting Jetlink stops the server.
 The next launch uses the same model again.
+
+<a id="prepare-a-model-before-you-drive"></a>
 
 ## Use a model before you drive
 
@@ -152,10 +144,9 @@ Click **Restart Server** to apply these settings.
 
 ## Backends
 
-Automatic runs the model's vision layers on the Neural Engine and the rest on
-the GPU, the fastest way on a Mac. The measurements below use an M1 Pro;
-performance on other Macs may differ. See [backends and
-measurements](backends.md#mac-measured).
+Leave **Backend** set to **Automatic**. If another app is using the Neural
+Engine and Jetlink slows down, try **CoreML on the GPU**. These comparisons
+were measured on an M1 Pro; other Macs may differ.
 
 | Backend | On an M1 Pro | Pick it when |
 | --- | --- | --- |
@@ -163,10 +154,8 @@ measurements](backends.md#mac-measured).
 | CoreML on the GPU | About a third slower | Another app keeps the Neural Engine busy. |
 | tinygrad on Metal | Over the 50 ms budget every frame | Test tinygrad; it exceeds the driving frame budget on this Mac. |
 
-Automatic assumes Jetlink is the only app using the Neural Engine. If you
-chose **CoreML on the GPU** in an earlier version, it stays selected; choose
-**Automatic** to switch. Disk use depends on the backend: a CoreML engine is
-about 2 GB, a tinygrad engine is 777 MB.
+If you previously chose **CoreML on the GPU**, select **Automatic** to switch
+back. See [backend measurements](backends.md#mac-measured) for details.
 
 ## Troubleshooting
 
@@ -207,5 +196,4 @@ Login Items**.
 Building the app, the embedded Python runtime, signing and notarizing are
 covered in the [Mac developer guide](../macos/README.md).
 
-The same download, prepare and inventory work is available as a command line
-tool on every platform, and the running server has a control channel. See the [model CLI](model-cli.md) and [control protocol](control-protocol.md).
+For scripting, see the [model CLI](model-cli.md) and [control protocol](control-protocol.md).
