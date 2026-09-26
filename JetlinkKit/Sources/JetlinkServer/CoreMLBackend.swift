@@ -47,6 +47,9 @@ public final class CoreMLBackend: EngineBackend {
     case ane
     /// The whole graph on the GPU, for when something else holds the Neural Engine.
     case coreml
+    /// onnxruntime's CPU provider and no CoreML at all: for tests, and nowhere
+    /// near the frame budget with a real model.
+    case cpu
   }
 
   /// What a CoreML build writes, as the Python's PREPARE_VERSION: 5 is every
@@ -101,10 +104,11 @@ public final class CoreMLBackend: EngineBackend {
   }
 
   /// (session name, compute units) in run order.
-  var sessions: [(name: String, units: String)] {
+  var sessions: [(name: String, units: String?)] {
     switch device {
     case .ane: [("vision", "CPUAndNeuralEngine"), ("policy", "CPUAndGPU")]
     case .coreml: [("model", "CPUAndGPU")]
+    case .cpu: [("model", nil)]
     }
   }
 
@@ -142,15 +146,19 @@ public final class CoreMLBackend: EngineBackend {
     }
     var manifest: [[String: Any]] = []
     for (session, part) in zip(sessions, prepared.parts) {
+      guard let units = session.units else {
+        manifest.append(["model": part.file, "units": NSNull(), "cache": NSNull()])
+        continue
+      }
       let cache = "coreml-\(session.name)"
       try FileManager.default.createDirectory(at: staged.appending(path: cache, directoryHint: .isDirectory), withIntermediateDirectories: true)
-      manifest.append(["model": part.file, "units": session.units, "cache": cache])
+      manifest.append(["model": part.file, "units": units, "cache": cache])
     }
     try JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted]).write(to: staged.appending(path: CoreMLBackend.manifestName))
     report("patch", 1, "prepared")
 
     let weights = prepared.parts.reduce(0) { $0 + $1.weightBytes }
-    let caches = manifest.map { staged.appending(path: $0["cache"] as! String, directoryHint: .isDirectory) }
+    let caches = manifest.compactMap { ($0["cache"] as? String).map { staged.appending(path: $0, directoryHint: .isDirectory) } }
     let expect = sidecar(artifact)
     let progress = CoreMLProgress(caches: caches, weightBytes: weights, expect: expect)
     report("convert", 0, "converting for CoreML")

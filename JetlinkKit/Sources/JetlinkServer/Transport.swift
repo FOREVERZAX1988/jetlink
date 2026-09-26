@@ -54,6 +54,33 @@ public final class TCPTransport: @unchecked Sendable {
     rx.deallocate()
   }
 
+  /// A client's end: what the comma opens. For tests and benches.
+  public static func connect(host: String, port: UInt16) throws -> TCPTransport {
+    let fd = socket(AF_INET, SOCK_STREAM, 0)
+    guard fd >= 0 else { throw LinkError.closed("socket: \(String(cString: strerror(errno)))") }
+    var address = sockaddr_in()
+    address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+    address.sin_family = sa_family_t(AF_INET)
+    address.sin_port = port.bigEndian
+    address.sin_addr.s_addr = inet_addr(host)
+    let connected = withUnsafePointer(to: &address) {
+      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+    }
+    guard connected == 0 else {
+      let reason = String(cString: strerror(errno))
+      Darwin.close(fd)
+      throw LinkError.closed("could not connect to \(host):\(port): \(reason)")
+    }
+    return TCPTransport(fd: fd, peer: "\(host):\(port)")
+  }
+
+  /// A receive timeout, so a test waiting on a reply that never comes fails
+  /// instead of hanging. The server's side never sets one.
+  public func setReceiveTimeout(_ seconds: TimeInterval) {
+    var timeout = timeval(tv_sec: Int(seconds), tv_usec: Int32((seconds - Double(Int(seconds))) * 1_000_000))
+    _ = setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+  }
+
   // MARK: receiving
 
   public func recv() throws -> Message {

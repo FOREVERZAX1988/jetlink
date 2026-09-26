@@ -59,6 +59,7 @@ extension CoreMLBackend.Device {
     switch self {
     case .ane: "Neural Engine and GPU"
     case .coreml: "GPU only"
+    case .cpu: "CPU only"
     }
   }
 }

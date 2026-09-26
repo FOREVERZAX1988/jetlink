@@ -59,6 +59,6 @@ let package = Package(
     // The fixtures are read in place through #filePath, so they are not resources.
     .testTarget(name: "JetlinkONNXTests", dependencies: ["JetlinkONNX"], exclude: ["Fixtures"]),
     .testTarget(name: "JetlinkRegistryTests", dependencies: ["JetlinkRegistry"]),
-    .testTarget(name: "JetlinkServerTests", dependencies: ["JetlinkServer"]),
+    .testTarget(name: "JetlinkServerTests", dependencies: ["JetlinkServer"], exclude: ["Fixtures"]),
   ]
 )
