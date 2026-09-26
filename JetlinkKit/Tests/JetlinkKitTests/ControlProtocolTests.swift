@@ -1,15 +1,15 @@
 import Foundation
 import Testing
 
-@testable import Jetlink
+@testable import JetlinkKit
 
-/// The fixture files live next to this source file, so both SwiftPM and Xcode
-/// find them without a resource bundle.
+/// The fixture files, copied into the test bundle as the Fixtures folder.
 enum Fixture {
-  static let directory = URL(filePath: #filePath).deletingLastPathComponent().appending(path: "Fixtures")
+  static let directory = Bundle.module.url(forResource: "Fixtures", withExtension: nil)
 
   static func data(_ name: String) throws -> Data {
-    try Data(contentsOf: directory.appending(path: name))
+    guard let directory else { throw CocoaError(.fileNoSuchFile) }
+    return try Data(contentsOf: directory.appending(path: name))
   }
 
   static func lines(_ name: String) throws -> [Data] {

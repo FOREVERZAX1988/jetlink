@@ -1,4 +1,6 @@
 import AppKit
+import JetlinkKit
+import JetlinkUI
 import SwiftUI
 
 /// What the server, the comma and the engine are doing right now.
@@ -249,7 +251,7 @@ struct StatusView: View {
       HStack {
         Button("Use \(row.displayName)") { models.use(row) }
           .buttonStyle(.borderedProminent)
-          .help(ModelsView.useHelp(row))
+          .help(ModelFormatting.useHelp(row, device: "this Mac"))
         Button("Choose Another Model…") { selection = .models }
       }
     } else {

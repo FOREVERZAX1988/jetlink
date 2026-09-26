@@ -1,14 +1,7 @@
 import Foundation
+import JetlinkKit
 import Observation
 import os
-
-enum ServerRunState: Equatable, Sendable {
-  case stopped
-  case starting
-  case serving
-  case stopping
-  case failed(String)
-}
 
 struct ServerInfo: Equatable, Sendable {
   let pid: Int32
@@ -46,18 +39,11 @@ enum ServerStoreError: Error, LocalizedError, Equatable {
   }
 }
 
-/// One `stats` event and when it arrived, for the frame time chart.
-struct StatsSample: Identifiable, Equatable, Sendable {
-  var id: Date { at }
-  let at: Date
-  let stats: StatsEvent
-}
-
 /// Owns the server process, the control connection, and everything the Status
 /// view shows.
 @MainActor
 @Observable
-final class ServerStore {
+final class ServerStore: ServerControlling {
   private(set) var runState: ServerRunState = .stopped
   private(set) var info: ServerInfo?
   private(set) var link: LinkEvent = .waiting
@@ -67,9 +53,6 @@ final class ServerStore {
   var stats: StatsEvent? { statsHistory.last?.stats }
   private(set) var startedAt: Date?
   var lastFailure: String?
-
-  /// Two minutes at one summary a second.
-  static let statsHistoryLength = 120
 
   let settings: AppSettings
   let logs: LogBuffer
@@ -282,10 +265,7 @@ final class ServerStore {
     case .engine(let value):
       engine = value
     case .stats(let value):
-      statsHistory.append(StatsSample(at: Date(), stats: value))
-      if statsHistory.count > ServerStore.statsHistoryLength {
-        statsHistory.removeFirst(statsHistory.count - ServerStore.statsHistoryLength)
-      }
+      statsHistory = StatsSample.appending(value, to: statsHistory)
     case .reply:
       break
     default:

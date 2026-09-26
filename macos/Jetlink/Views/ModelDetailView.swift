@@ -1,3 +1,5 @@
+import JetlinkKit
+import JetlinkUI
 import SwiftUI
 
 /// Everything known about one model, shown in the Models inspector.
@@ -35,7 +37,7 @@ struct ModelDetailView: View {
         } else {
           ForEach(row.preparedFor) { artifact in
             VStack(alignment: .leading, spacing: 2) {
-              Text(ModelsView.backendName(artifact.backend))
+              Text(ModelFormatting.backendName(artifact.backend))
               Text(artifact.device)
                 .font(.callout)
                 .foregroundStyle(.secondary)

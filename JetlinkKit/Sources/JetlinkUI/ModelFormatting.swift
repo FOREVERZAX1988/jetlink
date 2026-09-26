@@ -64,7 +64,7 @@ public enum ModelFormatting {
 
   /// "Downloading 42%, 41 MB/s".
   public static func downloadCaption(frac: Double, rateBps: Double) -> String {
-    let percent = "Downloading \(Int((min(max(frac, 0), 1) * 100).rounded()))%"
+    let percent = ModelStatusLabel.downloadingText(frac)
     return rateBps > 0 ? "\(percent), \(ByteCount.rate(rateBps))" : percent
   }
 }
@@ -74,7 +74,6 @@ public enum ModelFormatting {
 public struct ModelTag: View {
   let text: String
   let tone: Color
-  @Environment(\.backgroundProminence) private var prominence
 
   public init(_ text: String, tone: Color) {
     self.text = text
@@ -82,12 +81,11 @@ public struct ModelTag: View {
   }
 
   public var body: some View {
-    let selected = prominence == .increased
     Text(text)
       .font(.caption.weight(.medium))
       .padding(.horizontal, 6)
       .padding(.vertical, 1)
-      .foregroundStyle(selected ? AnyShapeStyle(.primary) : AnyShapeStyle(tone))
-      .background(Capsule().fill(selected ? AnyShapeStyle(.white.opacity(0.2)) : AnyShapeStyle(tone.opacity(0.14))))
+      .foregroundStyle(SelectableTint(tone))
+      .background(Capsule().fill(SelectableTint(tone.opacity(0.14), selected: AnyShapeStyle(.white.opacity(0.2)))))
   }
 }

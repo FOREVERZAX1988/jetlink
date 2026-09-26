@@ -1,4 +1,5 @@
 import AppKit
+import JetlinkUI
 import SwiftUI
 
 struct SettingsView: View {

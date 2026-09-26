@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import Jetlink
+@testable import JetlinkKit
 
 struct ModelRowBuilderTests {
   // The five catalog refs whose pointers the fixture has resolved.

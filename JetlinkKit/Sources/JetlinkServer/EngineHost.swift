@@ -118,12 +118,10 @@ final class FrameStats: @unchecked Sendable {
     return StatsEvent(
       frames: framesTotal,
       fps: round2(n / seconds),
-      totalMs: spread(rows.map(\.totalUs)),
-      gpuMs: StatsEvent.Gpu(mean: round2(gpu)),
-      slow: rows.filter { $0.totalUs > FrameStats.slowUs }.count,
-      windowS: (seconds * 10).rounded() / 10,
+      servedMs: spread(rows.map { $0.totalUs + $0.sendUs }),
       stagesMs: StatsEvent.Stages(queue: round2(queue), gpu: round2(gpu), other: round2(max(0, total - gpu - queue)), send: round2(mean(\.sendUs))),
-      servedMs: spread(rows.map { $0.totalUs + $0.sendUs }))
+      slow: rows.filter { $0.totalUs > FrameStats.slowUs }.count,
+      windowS: (seconds * 10).rounded() / 10)
   }
 }
 

@@ -24,7 +24,7 @@ public struct HeadroomRing: View {
 
   public var body: some View {
     let room = p99.map { FrameBudgetView.Room(headroomMs: FrameBudgetView.budgetMs - $0) }
-    let tint = room?.color ?? .secondary
+    let tint = room?.tone.color ?? .secondary
     let fraction = p99.map { min(max($0 / FrameBudgetView.budgetMs, 0), 1) } ?? 0
     ZStack {
       arc(to: HeadroomRing.sweep)
@@ -86,7 +86,7 @@ public struct HeadroomRing: View {
           .foregroundStyle(.secondary)
         Label(room.title, systemImage: room.symbol)
           .font(.subheadline.weight(.semibold))
-          .foregroundStyle(room.color)
+          .foregroundStyle(room.tone.color)
           .padding(.top, 6)
       } else {
         Text("—")

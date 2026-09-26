@@ -1,4 +1,5 @@
 import AppKit
+import JetlinkUI
 import SwiftUI
 
 /// The server's stderr, line by line.

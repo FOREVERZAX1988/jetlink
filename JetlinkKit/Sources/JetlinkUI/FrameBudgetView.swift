@@ -23,7 +23,7 @@ public struct FrameBudgetView: View {
     VStack(alignment: .leading, spacing: 14) {
       headline
       FrameStageBar(stats: stats)
-      FrameStageLegend(stages: stats.stages)
+      FrameStageLegend(stages: stats.stagesMs)
       if history.count > 1 {
         Divider()
         FrameTimeChart(history: history)
@@ -33,24 +33,24 @@ public struct FrameBudgetView: View {
   }
 
   private var headline: some View {
-    let room = Room(headroomMs: FrameBudgetView.budgetMs - stats.served.p99)
+    let room = Room(headroomMs: FrameBudgetView.budgetMs - stats.servedMs.p99)
     return HStack(alignment: .firstTextBaseline) {
       VStack(alignment: .leading, spacing: 4) {
-        Text(FrameBudgetView.headroomText(p99: stats.served.p99))
+        Text(FrameBudgetView.headroomText(p99: stats.servedMs.p99))
           .font(.title2.weight(.semibold))
         Label {
           Text("\(room.title) at p99, against a \(Int(FrameBudgetView.budgetMs)) ms budget")
             .foregroundStyle(.secondary)
         } icon: {
           Image(systemName: room.symbol)
-            .foregroundStyle(room.color)
+            .foregroundStyle(room.tone.color)
         }
         .font(.callout)
       }
       Spacer()
       VStack(alignment: .trailing, spacing: 2) {
-        Text("\(FrameBudgetView.ms(stats.served.mean)) mean")
-        Text("\(FrameBudgetView.ms(stats.served.p99)) p99, \(FrameBudgetView.ms(stats.served.max)) max")
+        Text("\(FrameBudgetView.ms(stats.servedMs.mean)) mean")
+        Text("\(FrameBudgetView.ms(stats.servedMs.p99)) p99, \(FrameBudgetView.ms(stats.servedMs.max)) max")
           .foregroundStyle(.secondary)
       }
       .font(.callout)
@@ -97,11 +97,11 @@ public struct FrameBudgetView: View {
       }
     }
 
-    public var color: Color {
+    public var tone: StatusBadge.Tone {
       switch self {
-      case .plenty: .green
-      case .tight: .orange
-      case .over: .red
+      case .plenty: .good
+      case .tight: .warning
+      case .over: .bad
       }
     }
   }
@@ -193,12 +193,12 @@ public struct FrameStageBar: View {
         }
 
         marker(at: x(FrameBudgetView.budgetMs), width: 1, color: .primary.opacity(0.55))
-        marker(at: x(stats.served.p99), width: 2, color: .primary)
+        marker(at: x(stats.servedMs.p99), width: 2, color: .primary)
         Text("p99")
           .font(.caption)
           .foregroundStyle(.secondary)
           .fixedSize()
-          .position(x: x(stats.served.p99), y: top / 2 - 2)
+          .position(x: x(stats.servedMs.p99), y: top / 2 - 2)
 
         ForEach(FrameStageBar.ticks(scale), id: \.self) { tick in
           Text(tick == FrameBudgetView.budgetMs ? "\(Int(tick)) ms" : "\(Int(tick))")
@@ -233,7 +233,7 @@ public struct FrameStageBar: View {
 
   /// The stages with any time in them, laid end to end.
   private var segments: [Segment] {
-    let stages = stats.stages
+    let stages = stats.stagesMs
     let present = FrameStage.allCases.filter { $0.value(stages) > 0 }
     var segments: [Segment] = []
     var start = 0.0
@@ -247,7 +247,7 @@ public struct FrameStageBar: View {
 
   /// The budget with room after it, or further when the frames run past it.
   static func domainMax(_ stats: StatsEvent) -> Double {
-    max(FrameBudgetView.budgetMs * 1.1, stats.served.p99 * 1.08, stats.served.mean * 1.08)
+    max(FrameBudgetView.budgetMs * 1.1, stats.servedMs.p99 * 1.08, stats.servedMs.mean * 1.08)
   }
 
   /// Every 10 ms from zero, as far as the bar goes.
@@ -257,7 +257,7 @@ public struct FrameStageBar: View {
 
   private var accessibilityText: String {
     let parts = segments.map { "\($0.stage.title) \(FrameBudgetView.ms($0.end - $0.start))" }
-    return "Frame time by stage: " + parts.joined(separator: ", ") + ". p99 \(FrameBudgetView.ms(stats.served.p99)) of \(Int(FrameBudgetView.budgetMs)) ms."
+    return "Frame time by stage: " + parts.joined(separator: ", ") + ". p99 \(FrameBudgetView.ms(stats.servedMs.p99)) of \(Int(FrameBudgetView.budgetMs)) ms."
   }
 }
 
@@ -303,6 +303,9 @@ public struct FrameTimeChart: View {
   }
 
   public var body: some View {
+    // Once a render: hovering re-renders the chart at the pointer's rate.
+    let over = overBudget
+    let top = yMax
     VStack(alignment: .leading, spacing: 8) {
       HStack(spacing: 14) {
         if showsTitle {
@@ -317,14 +320,14 @@ public struct FrameTimeChart: View {
         legendItem("Mean to p99") {
           RoundedRectangle(cornerRadius: 2).fill(Color.primary.opacity(0.12)).frame(width: 14, height: 10)
         }
-        if !overBudget.isEmpty {
+        if !over.isEmpty {
           legendItem("A frame over budget") {
             Circle().fill(Color.red).frame(width: 8, height: 8)
           }
         }
       }
       .font(.caption)
-      chart
+      chart(yMax: top, overBudget: over)
         .frame(height: 150)
     }
   }
@@ -337,18 +340,21 @@ public struct FrameTimeChart: View {
     }
   }
 
-  private var chart: some View {
-    Chart {
+  private func chart(yMax: Double, overBudget: [StatsSample]) -> some View {
+    // A spike past the top is drawn at the top; the readout has its real value.
+    let clamped = { (ms: Double) in min(ms, yMax) }
+    let length = Double(StatsSample.historyLength)
+    return Chart {
       ForEach(history) { sample in
         AreaMark(
           x: .value("Seconds", seconds(sample)),
-          yStart: .value("Mean", clamped(sample.stats.served.mean)),
-          yEnd: .value("p99", clamped(sample.stats.served.p99))
+          yStart: .value("Mean", clamped(sample.stats.servedMs.mean)),
+          yEnd: .value("p99", clamped(sample.stats.servedMs.p99))
         )
         .foregroundStyle(Color.primary.opacity(0.12))
       }
       ForEach(history) { sample in
-        LineMark(x: .value("Seconds", seconds(sample)), y: .value("Mean", clamped(sample.stats.served.mean)))
+        LineMark(x: .value("Seconds", seconds(sample)), y: .value("Mean", clamped(sample.stats.servedMs.mean)))
           .foregroundStyle(Color.primary)
           .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
       }
@@ -361,7 +367,7 @@ public struct FrameTimeChart: View {
             .foregroundStyle(.secondary)
         }
       ForEach(overBudget) { sample in
-        PointMark(x: .value("Seconds", seconds(sample)), y: .value("Worst frame", clamped(sample.stats.served.max)))
+        PointMark(x: .value("Seconds", seconds(sample)), y: .value("Worst frame", clamped(sample.stats.servedMs.max)))
           .foregroundStyle(Color.red)
           .symbolSize(50)
       }
@@ -374,14 +380,14 @@ public struct FrameTimeChart: View {
           }
       }
     }
-    .chartXScale(domain: -Double(StatsSample.historyLength)...0)
+    .chartXScale(domain: -length...0)
     .chartYScale(domain: 0...yMax)
     .chartXAxis {
-      AxisMarks(values: [-120.0, -90, -60, -30, 0]) { value in
+      AxisMarks(values: Array(stride(from: -length, through: 0, by: 30))) { value in
         let seconds = value.as(Double.self) ?? 0
         AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
         // A centred label at either end would hang off the chart and be dropped.
-        AxisValueLabel(anchor: seconds == 0 ? .topTrailing : seconds <= -120 ? .topLeading : .top) {
+        AxisValueLabel(anchor: seconds == 0 ? .topTrailing : seconds <= -length ? .topLeading : .top) {
           Text(FrameTimeChart.axisLabel(seconds))
         }
       }
@@ -401,7 +407,7 @@ public struct FrameTimeChart: View {
   }
 
   private func readout(_ sample: StatsSample) -> some View {
-    let served = sample.stats.served
+    let served = sample.stats.servedMs
     return VStack(alignment: .leading, spacing: 2) {
       Text(FrameTimeChart.agoText(-seconds(sample)))
         .foregroundStyle(.secondary)
@@ -420,13 +426,8 @@ public struct FrameTimeChart: View {
     sample.at.timeIntervalSince(latest)
   }
 
-  /// A spike past the top is drawn at the top; the readout has its real value.
-  private func clamped(_ ms: Double) -> Double {
-    min(ms, yMax)
-  }
-
   private var overBudget: [StatsSample] {
-    history.filter { $0.stats.served.max > FrameBudgetView.budgetMs }
+    history.filter { $0.stats.servedMs.max > FrameBudgetView.budgetMs }
   }
 
   private var selected: StatsSample? {
@@ -436,7 +437,7 @@ public struct FrameTimeChart: View {
 
   /// Room above the budget, and above the highest p99 when that is higher.
   private var yMax: Double {
-    let top = history.map(\.stats.served.p99).max() ?? 0
+    let top = history.map(\.stats.servedMs.p99).max() ?? 0
     return max(FrameBudgetView.budgetMs * 1.2, (top * 1.1 / 10).rounded(.up) * 10)
   }
 
@@ -444,7 +445,7 @@ public struct FrameTimeChart: View {
     let ago = Int(-seconds.rounded())
     switch ago {
     case 0: return "now"
-    case 120: return "2 min"
+    case StatsSample.historyLength: return "\(ago / 60) min"
     default: return "\(ago) s"
     }
   }
@@ -467,10 +468,8 @@ public struct FrameTimeChart: View {
 
 #Preview("Over budget") {
   let stats = StatsEvent(
-    frames: 900, fps: 18.2, totalMs: StatsEvent.Total(mean: 47.1, p99: 58.3, max: 71.0),
-    gpuMs: StatsEvent.Gpu(mean: 43.7), slow: 2, windowS: 1,
-    stagesMs: StatsEvent.Stages(queue: 0.7, gpu: 43.7, other: 2.7, send: 1.4),
-    servedMs: StatsEvent.Total(mean: 48.5, p99: 59.1, max: 72.4))
+    frames: 900, fps: 18.2, servedMs: StatsEvent.Total(mean: 48.5, p99: 59.1, max: 72.4),
+    stagesMs: StatsEvent.Stages(queue: 0.7, gpu: 43.7, other: 2.7, send: 1.4), slow: 2, windowS: 1)
   return Form {
     Section("Frame Budget") {
       FrameBudgetView(stats: stats, history: [])

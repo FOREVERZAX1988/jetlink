@@ -1,25 +1,8 @@
 import AppKit
+import JetlinkKit
+import JetlinkUI
 import SwiftUI
 import UniformTypeIdentifiers
-
-/// Build times as the catalog reports them, ISO-8601 in UTC.
-enum BuildTime {
-  static func date(_ text: String?) -> Date? {
-    guard let text, !text.isEmpty else { return nil }
-    let withFraction = ISO8601DateFormatter()
-    withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    if let date = withFraction.date(from: text) { return date }
-    let plain = ISO8601DateFormatter()
-    plain.formatOptions = [.withInternetDateTime]
-    return plain.date(from: text)
-  }
-
-  /// An abbreviated date, or nothing at all when the build time is unknown.
-  static func text(_ text: String?) -> String {
-    guard let date = date(text) else { return "" }
-    return date.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted))
-  }
-}
 
 struct ModelsView: View {
   @Environment(ServerStore.self) private var server
@@ -207,7 +190,7 @@ struct ModelsView: View {
 
   private var diskSummary: String {
     guard let disk = models.inventory?.disk else { return "" }
-    return ModelsView.diskSummary(models: disk.modelsBytes, engines: disk.enginesBytes, free: disk.freeBytes)
+    return ModelFormatting.diskSummary(models: disk.modelsBytes, engines: disk.enginesBytes, free: disk.freeBytes)
   }
 
   // MARK: Actions
@@ -323,67 +306,7 @@ struct ModelsView: View {
     }
   }
 
-  // MARK: Formatting
-
-  /// What Use Model is about to do, for its tooltip.
-  static func useHelp(_ row: ModelRow) -> String {
-    switch row.status {
-    case .notDownloaded:
-      let size = row.bytes.map { " \(ByteCount.string($0))" } ?? ""
-      return "Downloads\(size), prepares it for this Mac and starts using it"
-    case .prepared:
-      return "Starts using it. It is prepared already, so this takes seconds."
-    case .failed:
-      return "Tries again"
-    default:
-      return "Prepares it for this Mac and starts using it"
-    }
-  }
-
-  /// "Sep 1, 2026 · 766 MB · Prepared for CoreML": everything but the name and
-  /// what is happening right now, on one line under the name.
-  static func detailLine(_ row: ModelRow) -> String {
-    var parts: [String] = []
-    let built = BuildTime.text(row.buildTime)
-    if !built.isEmpty { parts.append(built) }
-    if let bytes = row.bytes { parts.append(ByteCount.string(bytes)) }
-    let prepared = preparedForText(row)
-    if !prepared.isEmpty {
-      parts.append("Prepared for \(prepared)")
-    } else if row.status == .downloaded {
-      parts.append("Downloaded")
-    }
-    if parts.isEmpty, row.isOrphan, let sha = row.sha256 {
-      parts.append(String(sha.prefix(16)))
-    }
-    return parts.joined(separator: " · ")
-  }
-
-  /// "Downloads 2.3 GB · Prepared engines 6.9 GB · 13.6 GB available".
-  static func diskSummary(models: Int64, engines: Int64, free: Int64) -> String {
-    "Downloads \(ByteCount.string(models)) · Prepared engines \(ByteCount.string(engines)) · \(ByteCount.string(free)) available"
-  }
-
   static let onnxType = UTType(filenameExtension: "onnx") ?? .data
-
-  /// "CoreML, tinygrad": the backends a model already has an engine for.
-  static func preparedForText(_ row: ModelRow) -> String {
-    var seen: [String] = []
-    for artifact in row.preparedFor {
-      let name = backendName(artifact.backend)
-      if !seen.contains(name) { seen.append(name) }
-    }
-    return seen.joined(separator: ", ")
-  }
-
-  static func backendName(_ backend: String) -> String {
-    switch backend {
-    case "ort": "CoreML"
-    case "trt": "TensorRT"
-    case "tinygrad": "tinygrad"
-    default: backend
-    }
-  }
 }
 
 /// One model in the list: its name and tags, one line of facts, and on the
@@ -404,7 +327,7 @@ struct ModelListRow: View {
           if row.isDefault { ModelTag("Default", tone: .accentColor) }
           if row.isRequestedByComma { ModelTag("Comma", tone: .green) }
         }
-        let detail = ModelsView.detailLine(row)
+        let detail = ModelFormatting.detailLine(row)
         if !detail.isEmpty {
           Text(detail)
             .font(.callout)
@@ -429,7 +352,7 @@ struct ModelListRow: View {
         .font(.callout)
     case let .downloading(frac, rateBps):
       HStack(spacing: 8) {
-        progress(frac: frac, caption: ModelListRow.downloadCaption(frac: frac, rateBps: rateBps))
+        progress(frac: frac, caption: ModelFormatting.downloadCaption(frac: frac, rateBps: rateBps))
         Button(action: cancel) {
           Image(systemName: "xmark.circle.fill")
         }
@@ -461,7 +384,7 @@ struct ModelListRow: View {
       .buttonStyle(.bordered)
       .buttonBorderShape(.capsule)
       .controlSize(.small)
-      .help(ModelsView.useHelp(row))
+      .help(ModelFormatting.useHelp(row, device: "this Mac"))
   }
 
   private func progress(frac: Double, caption: String) -> some View {
@@ -475,33 +398,6 @@ struct ModelListRow: View {
         .monospacedDigit()
         .lineLimit(1)
     }
-  }
-
-  /// "Downloading 42%, 41 MB/s".
-  static func downloadCaption(frac: Double, rateBps: Double) -> String {
-    let percent = ModelStatusLabel.downloadingText(frac)
-    return rateBps > 0 ? "\(percent), \(ByteCount.rate(rateBps))" : percent
-  }
-}
-
-/// A small capsule label next to a model's name. On a selected row it turns
-/// to the selection's text colour, so an accent tag never sits on the accent.
-struct ModelTag: View {
-  let text: String
-  let tone: Color
-
-  init(_ text: String, tone: Color) {
-    self.text = text
-    self.tone = tone
-  }
-
-  var body: some View {
-    Text(text)
-      .font(.caption.weight(.medium))
-      .padding(.horizontal, 6)
-      .padding(.vertical, 1)
-      .foregroundStyle(SelectableTint(tone))
-      .background(Capsule().fill(SelectableTint(tone.opacity(0.14), selected: AnyShapeStyle(.white.opacity(0.2)))))
   }
 }
 

@@ -108,14 +108,6 @@ public struct StatsEvent: Codable, Sendable, Equatable {
     }
   }
 
-  public struct Gpu: Codable, Sendable, Equatable {
-    public let mean: Double
-
-    public init(mean: Double) {
-      self.mean = mean
-    }
-  }
-
   /// Means that add up to `servedMs.mean`: staging the inputs, the model run,
   /// the rest of the run, and sending the reply.
   public struct Stages: Codable, Sendable, Equatable {
@@ -134,33 +126,19 @@ public struct StatsEvent: Codable, Sendable, Equatable {
 
   public let frames: Int
   public let fps: Double
-  public let totalMs: Total
-  public let gpuMs: Gpu
+  /// From a frame's arrival to its reply leaving.
+  public let servedMs: Total
+  public let stagesMs: Stages
   public let slow: Int
   public let windowS: Double
-  /// Absent from a server older than the frame budget view.
-  public var stagesMs: Stages? = nil
-  /// From a frame's arrival to its reply leaving: `totalMs` plus the send.
-  public var servedMs: Total? = nil
 
-  public init(frames: Int, fps: Double, totalMs: Total, gpuMs: Gpu, slow: Int, windowS: Double, stagesMs: Stages? = nil, servedMs: Total? = nil) {
+  public init(frames: Int, fps: Double, servedMs: Total, stagesMs: Stages, slow: Int, windowS: Double) {
     self.frames = frames
     self.fps = fps
-    self.totalMs = totalMs
-    self.gpuMs = gpuMs
+    self.servedMs = servedMs
+    self.stagesMs = stagesMs
     self.slow = slow
     self.windowS = windowS
-    self.stagesMs = stagesMs
-    self.servedMs = servedMs
-  }
-
-  /// The stages, or for an older server the model run and everything else.
-  public var stages: Stages {
-    stagesMs ?? Stages(queue: 0, gpu: gpuMs.mean, other: max(0, totalMs.mean - gpuMs.mean), send: 0)
-  }
-
-  public var served: Total {
-    servedMs ?? totalMs
   }
 }
 

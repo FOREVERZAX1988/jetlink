@@ -1,4 +1,6 @@
 import AppKit
+import JetlinkKit
+import JetlinkUI
 import SwiftUI
 
 /// The menu behind the menu bar icon: what is happening, and the two things
