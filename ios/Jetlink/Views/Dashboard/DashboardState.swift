@@ -33,7 +33,8 @@ struct DashboardState: Equatable {
 
   /// What the big card in the middle shows.
   enum Hero: Equatable {
-    case budget(StatsEvent)
+    /// The comma is connected to a loaded model; nil until its first frames land.
+    case budget(StatsEvent?)
     case progress(EngineEvent)
     case waiting
     case noModel
@@ -50,10 +51,7 @@ struct DashboardState: Equatable {
     case .failed:
       return .failed(engine.detail.isEmpty ? "The model could not be prepared." : engine.detail)
     case .ready:
-      if link.state == .connected, let recent {
-        return .budget(recent)
-      }
-      return .waiting
+      return link.state == .connected ? .budget(recent) : .waiting
     case .none:
       return hasPreparedModel ? .waiting : .noModel
     }

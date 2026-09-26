@@ -32,17 +32,19 @@ struct HeroCard: View {
 
   // MARK: serving
 
-  private func budget(_ stats: StatsEvent) -> some View {
+  private func budget(_ stats: StatsEvent?) -> some View {
     VStack(spacing: compact ? 8 : 14) {
-      HeadroomRing(p99: stats.served.p99, lineWidth: compact ? 14 : 18)
+      HeadroomRing(p99: stats?.served.p99, lineWidth: compact ? 14 : 18)
         .frame(maxWidth: 320, maxHeight: compact ? 190 : .infinity)
         .frame(maxWidth: .infinity)
-      HStack {
-        figure("Mean", stats.served.mean)
-        Divider().frame(height: 30)
-        figure("p99", stats.served.p99)
-        Divider().frame(height: 30)
-        figure("Worst", stats.served.max)
+      if let stats {
+        HStack {
+          figure("Mean", stats.served.mean)
+          Divider().frame(height: 30)
+          figure("p99", stats.served.p99)
+          Divider().frame(height: 30)
+          figure("Worst", stats.served.max)
+        }
       }
       if !compact {
         Text("Round trip on this iPhone over the last ten seconds, from a frame's arrival to its reply leaving.")
