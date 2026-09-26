@@ -9,45 +9,47 @@
 /* Begin PBXBuildFile section */
 		15023ACD3AC6BCE6E2D2CD0A /* JetlinkKit in Frameworks */ = {isa = PBXBuildFile; productRef = EE168AFAF92FF522E4DD799C /* JetlinkKit */; };
 		19B4F58262E92BFF0D8E1DAC /* DeviceHealth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97D183B499FE3A9E2A1F1C6C /* DeviceHealth.swift */; };
+		1D0A668C1539B8689D46AE98 /* StatusScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DF5CD5EDD3C0D6A4DBAF03F /* StatusScreen.swift */; };
 		343E2DEDC2FA6A0FA1C3CD9F /* SettingsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA25A3A098F7C2EDFC752AA6 /* SettingsScreen.swift */; };
+		3621BC8C8E848D685FB21407 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BBD8FD990F83901290E13A3 /* RootView.swift */; };
 		4F73EECC86A909ED778A1FE6 /* NetworkInterfaces.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B61B41EBDB9F3F6A507D23F /* NetworkInterfaces.swift */; };
+		5AA1F48F85AC0413344622A8 /* StatusState.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19ACCFB7A9291A8C22640D5 /* StatusState.swift */; };
 		5B0ED2BA13F028709B8112E7 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43DBEE74070286C6D86FE93C /* AppModel.swift */; };
-		6528B0F4888CCEEE46E19993 /* DashboardState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 508B06237313297F631F25E0 /* DashboardState.swift */; };
 		704C60823F8F013189311EEF /* DeviceMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = F37E4DCE1D8F75581B01BA63 /* DeviceMonitor.swift */; };
-		856DC9CE7E2BDDCCA5468827 /* DashboardScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED53AB4115C0FB7B03F66B2A /* DashboardScreen.swift */; };
 		867D4BEC3B41AABE9BE09147 /* JetlinkPhoneApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06BC10AE5D7D06DBE4A59332 /* JetlinkPhoneApp.swift */; };
-		93BC9EE04EA582A70EC763CB /* HeroCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE4DF2F44B9525A33F77219D /* HeroCard.swift */; };
 		A5E4E102CDE0D258167999C2 /* LocalNetworkAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0770C4D38956ECDB36EA481C /* LocalNetworkAccess.swift */; };
 		AB2684B23066DDD9F23FD099 /* ModelsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = D35A2D25446BA8901A1ACC8B /* ModelsScreen.swift */; };
 		ADFB4A5A28CCC9EF06EB05C0 /* PhoneServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8965401CE0D537AAE299392 /* PhoneServer.swift */; };
 		BC2C8BEE97C8C36333DCE538 /* JetlinkRegistry in Frameworks */ = {isa = PBXBuildFile; productRef = 274CFEF8A0044F990232F4AE /* JetlinkRegistry */; };
 		C17ECDB8A4833CBCF16B9746 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6B71A2709AC0F259D4486CB6 /* Assets.xcassets */; };
-		C7876C18E76546D9C0C581A3 /* Card.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3737B09B1F4F911EA01B2950 /* Card.swift */; };
 		C97C593B2028CC112617A42C /* JetlinkServer in Frameworks */ = {isa = PBXBuildFile; productRef = 18188F707063EC9D73EC6510 /* JetlinkServer */; };
 		D670F7279D6E2E827E607299 /* JetlinkUI in Frameworks */ = {isa = PBXBuildFile; productRef = 95031BC76E32EFCF41AB88C6 /* JetlinkUI */; };
 		E1F9CD7E83F269C2600CF610 /* PhoneSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = B61BCBBE9254A57B8F820C68 /* PhoneSettings.swift */; };
-		FF40E95E3203E9A20B9C2372 /* DashboardContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C1DD0CBB0A2132A1B9B03DD /* DashboardContent.swift */; };
+		E5DB00B5FA009F7E3B0BAB9D /* HeroCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4460F447D4E35D304487C46F /* HeroCard.swift */; };
+		E7EB4D4A712E9336D41D327B /* StatusContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6054CA347A624AC4AB57AB2D /* StatusContent.swift */; };
+		F3C19F42C9DC07E3F2F9A31F /* Cards.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7585EEA0A0D690E6B7CAD4F /* Cards.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		06BC10AE5D7D06DBE4A59332 /* JetlinkPhoneApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JetlinkPhoneApp.swift; sourceTree = "<group>"; };
 		0770C4D38956ECDB36EA481C /* LocalNetworkAccess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalNetworkAccess.swift; sourceTree = "<group>"; };
-		0C1DD0CBB0A2132A1B9B03DD /* DashboardContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardContent.swift; sourceTree = "<group>"; };
-		3737B09B1F4F911EA01B2950 /* Card.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Card.swift; sourceTree = "<group>"; };
+		2DF5CD5EDD3C0D6A4DBAF03F /* StatusScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusScreen.swift; sourceTree = "<group>"; };
 		43DBEE74070286C6D86FE93C /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
+		4460F447D4E35D304487C46F /* HeroCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeroCard.swift; sourceTree = "<group>"; };
 		4B61B41EBDB9F3F6A507D23F /* NetworkInterfaces.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkInterfaces.swift; sourceTree = "<group>"; };
-		508B06237313297F631F25E0 /* DashboardState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardState.swift; sourceTree = "<group>"; };
+		6054CA347A624AC4AB57AB2D /* StatusContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusContent.swift; sourceTree = "<group>"; };
 		6B71A2709AC0F259D4486CB6 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		7BBD8FD990F83901290E13A3 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		97D183B499FE3A9E2A1F1C6C /* DeviceHealth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceHealth.swift; sourceTree = "<group>"; };
 		A8965401CE0D537AAE299392 /* PhoneServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneServer.swift; sourceTree = "<group>"; };
-		AE4DF2F44B9525A33F77219D /* HeroCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeroCard.swift; sourceTree = "<group>"; };
 		B61BCBBE9254A57B8F820C68 /* PhoneSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneSettings.swift; sourceTree = "<group>"; };
 		C8ECBD9F702381594E2513CB /* Jetlink.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Jetlink.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		CA25A3A098F7C2EDFC752AA6 /* SettingsScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsScreen.swift; sourceTree = "<group>"; };
+		D19ACCFB7A9291A8C22640D5 /* StatusState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusState.swift; sourceTree = "<group>"; };
 		D35A2D25446BA8901A1ACC8B /* ModelsScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelsScreen.swift; sourceTree = "<group>"; };
-		ED53AB4115C0FB7B03F66B2A /* DashboardScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardScreen.swift; sourceTree = "<group>"; };
 		F37E4DCE1D8F75581B01BA63 /* DeviceMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceMonitor.swift; sourceTree = "<group>"; };
 		F3F05DFEF6D33AC14D49161F /* JetlinkKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = JetlinkKit; path = ../JetlinkKit; sourceTree = SOURCE_ROOT; };
+		F7585EEA0A0D690E6B7CAD4F /* Cards.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Cards.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -65,15 +67,15 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		09DB9B476496F550465CABF4 /* Dashboard */ = {
+		1FB9B01B434543FFF6A4FE15 /* Status */ = {
 			isa = PBXGroup;
 			children = (
-				0C1DD0CBB0A2132A1B9B03DD /* DashboardContent.swift */,
-				ED53AB4115C0FB7B03F66B2A /* DashboardScreen.swift */,
-				508B06237313297F631F25E0 /* DashboardState.swift */,
-				AE4DF2F44B9525A33F77219D /* HeroCard.swift */,
+				4460F447D4E35D304487C46F /* HeroCard.swift */,
+				6054CA347A624AC4AB57AB2D /* StatusContent.swift */,
+				2DF5CD5EDD3C0D6A4DBAF03F /* StatusScreen.swift */,
+				D19ACCFB7A9291A8C22640D5 /* StatusState.swift */,
 			);
-			path = Dashboard;
+			path = Status;
 			sourceTree = "<group>";
 		};
 		318EB7FF480D358BE2CCCDBB /* Settings */ = {
@@ -131,10 +133,11 @@
 		7FDBA8385B1CDAAE7E427846 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				7BBD8FD990F83901290E13A3 /* RootView.swift */,
 				C794CBAC723A211E853C3A05 /* Components */,
-				09DB9B476496F550465CABF4 /* Dashboard */,
 				5C16C704A11658C20EC2EA92 /* Models */,
 				318EB7FF480D358BE2CCCDBB /* Settings */,
+				1FB9B01B434543FFF6A4FE15 /* Status */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -142,7 +145,7 @@
 		C794CBAC723A211E853C3A05 /* Components */ = {
 			isa = PBXGroup;
 			children = (
-				3737B09B1F4F911EA01B2950 /* Card.swift */,
+				F7585EEA0A0D690E6B7CAD4F /* Cards.swift */,
 			);
 			path = Components;
 			sourceTree = "<group>";
@@ -265,20 +268,21 @@
 			buildActionMask = 2147483647;
 			files = (
 				5B0ED2BA13F028709B8112E7 /* AppModel.swift in Sources */,
-				C7876C18E76546D9C0C581A3 /* Card.swift in Sources */,
-				FF40E95E3203E9A20B9C2372 /* DashboardContent.swift in Sources */,
-				856DC9CE7E2BDDCCA5468827 /* DashboardScreen.swift in Sources */,
-				6528B0F4888CCEEE46E19993 /* DashboardState.swift in Sources */,
+				F3C19F42C9DC07E3F2F9A31F /* Cards.swift in Sources */,
 				19B4F58262E92BFF0D8E1DAC /* DeviceHealth.swift in Sources */,
 				704C60823F8F013189311EEF /* DeviceMonitor.swift in Sources */,
-				93BC9EE04EA582A70EC763CB /* HeroCard.swift in Sources */,
+				E5DB00B5FA009F7E3B0BAB9D /* HeroCard.swift in Sources */,
 				867D4BEC3B41AABE9BE09147 /* JetlinkPhoneApp.swift in Sources */,
 				A5E4E102CDE0D258167999C2 /* LocalNetworkAccess.swift in Sources */,
 				AB2684B23066DDD9F23FD099 /* ModelsScreen.swift in Sources */,
 				4F73EECC86A909ED778A1FE6 /* NetworkInterfaces.swift in Sources */,
 				ADFB4A5A28CCC9EF06EB05C0 /* PhoneServer.swift in Sources */,
 				E1F9CD7E83F269C2600CF610 /* PhoneSettings.swift in Sources */,
+				3621BC8C8E848D685FB21407 /* RootView.swift in Sources */,
 				343E2DEDC2FA6A0FA1C3CD9F /* SettingsScreen.swift in Sources */,
+				E7EB4D4A712E9336D41D327B /* StatusContent.swift in Sources */,
+				1D0A668C1539B8689D46AE98 /* StatusScreen.swift in Sources */,
+				5AA1F48F85AC0413344622A8 /* StatusState.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -371,7 +375,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.1;
 				MARKETING_VERSION = 0.0.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
@@ -441,7 +445,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.1;
 				MARKETING_VERSION = 0.0.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;

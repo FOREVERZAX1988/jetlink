@@ -57,9 +57,9 @@ final class PhoneSettings {
 extension CoreMLBackend.Device {
   var title: String {
     switch self {
-    case .ane: "Neural Engine and GPU"
-    case .coreml: "GPU only"
-    case .cpu: "CPU only"
+    case .ane: "Neural Engine + GPU"
+    case .coreml: "GPU"
+    case .cpu: "CPU"
     }
   }
 }

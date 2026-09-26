@@ -23,7 +23,7 @@ For a Mac, see [Jetlink for Mac](macos-app.md). For a Jetson or PC, see the
 
 | What you need | Why |
 | --- | --- |
-| An iPhone with USB-C on iOS 26 | For a USB-C Ethernet adapter. A Pro model's USB 3 port leaves more room in the frame budget than USB 2 |
+| An iPhone with USB-C on iOS 26.1 or later | For a USB-C Ethernet adapter. A Pro model's USB 3 port leaves more room in the frame budget than USB 2 |
 | Two USB-C gigabit Ethernet adapters and a short Ethernet cable | One adapter on the comma, one on the phone. The comma supports Realtek RTL8152/8153 and ASIX AX88179 adapters |
 | An adapter with USB-C power passthrough on the phone side | The phone runs the model 20 times a second and belongs on power |
 | About 3 GB of free space per model | A 766 MB download plus the prepared CoreML engine |
@@ -65,7 +65,7 @@ with Ethernet first.
 
 ## Prepare a model before you drive
 
-Open **Models** and tap **Use** on the model your comma uses. Jetlink downloads
+Open **Models** and tap **Get** on the model your comma uses. Jetlink downloads
 it, prepares it for this iPhone and loads it, in one step. The download needs
 Wi-Fi or cellular data. Keep Jetlink open until it finishes, because iOS
 suspends background apps and their downloads.
@@ -73,26 +73,27 @@ suspends background apps and their downloads.
 If you skip this, the comma sends its model when it connects. It drives on its
 small model until the phone has the model ready.
 
-## The dashboard
+## Status
 
 Mount the phone where you can see it, in either orientation. The screen stays
-on while Jetlink is open.
+on while Jetlink is open. The title's subtitle says where things stand:
+**Connected**, **Waiting**, **Preparing**, **Disconnected**, or what is wrong.
 
-- **The headline** says whether the comma is getting the big model: **Serving**,
-  **Waiting for the comma**, **Preparing**, or what is wrong.
-- **The ring** is the 50 ms frame budget. It is filled to the slowest 1% of
-  frames (p99) over the last ten seconds, and the number inside is the room
-  left. Green means room to spare, orange means under 10 ms left, and red means
-  over budget. The phone's own time counts toward the 50 ms, and so do the
-  comma's time and the network.
-- **Where the Time Goes** splits a frame into staging the inputs, running the
-  model, overhead, and sending the reply, on the same 50 ms scale.
-- **Last Two Minutes** shows the mean and p99 per second, and marks any second
-  with a frame over budget.
-- **Rate, slow frames, model time and frames** give the numbers behind the
-  ring. The comma sends 20 frames per second.
-- **Temperature and battery** are the phone's own. A hot phone slows down,
-  and it shows up here before it shows up in the ring.
+- **Headroom** is the 50 ms frame budget as a ring, filled to the slowest 1%
+  of frames (P99) over the last 10 seconds. The number inside is the room
+  left. Green is **Good**, orange **Tight** (under 10 ms left), red **Over
+  Budget**. The comma's own time and the network come out of the same 50 ms.
+- **Latency** is the average frame, split into Input, Model, Other and Send,
+  each measured against the budget.
+- **History** has a bar for every 5 seconds of the last 2 minutes, as tall as
+  that span's slowest frames.
+- **Link** has the frame rate (the comma sends 20 a second) and slow frames.
+- **iPhone** has the phone's temperature and battery. A hot phone slows down,
+  and it shows here before it shows in the ring.
+
+On its side the phone shows the ring and the latency with nothing else on
+screen. On the Models and Settings tabs, the state stays in view in a bar
+above the tabs; tap it to go back.
 
 ## Limits
 
@@ -108,6 +109,6 @@ on while Jetlink is open.
 | Setting | What it does |
 | --- | --- |
 | Port | The TCP port the comma's `JetlinkEndpoint` names, 5599 by default |
-| Run the Model On | Neural Engine and GPU (default), or GPU only if another app keeps the Neural Engine busy. Changing it prepares the model again |
-| Keep the GPU Clocked Up | A small GPU job between frames so the GPU does not slow down in the gaps. It uses some power |
+| Compute | Neural Engine + GPU (default), or GPU if another app keeps the Neural Engine busy. Changing it prepares the model again |
+| GPU Keep-Alive | A small GPU job between frames so the GPU does not slow down in the gaps. It uses some power |
 | Keep the Screen On | On by default. With it off, auto-lock suspends Jetlink |

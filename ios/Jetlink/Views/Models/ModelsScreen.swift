@@ -3,11 +3,11 @@ import JetlinkUI
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// The catalog and what is on this iPhone: one Use button per model, which
-/// downloads, prepares and loads it in one step, and swipes to delete.
+/// The catalog and what is on this iPhone. One button per model, as the App
+/// Store has one: Get downloads, prepares and loads it; Use loads one that is
+/// here; a ring shows a download, and a tap on it stops it.
 struct ModelsScreen: View {
   @Environment(AppModel.self) private var app
-  @Environment(\.dismiss) private var dismiss
   @State private var importing = false
   @State private var confirmation: Confirmation?
   @State private var importError: String?
@@ -15,18 +15,17 @@ struct ModelsScreen: View {
   @State private var stagedImports: Set<String> = []
 
   enum Confirmation: Identifiable {
-    case deleteDownload(ModelRow), deleteEngines(ModelRow), switchModel(ModelRow)
+    case delete(ModelRow), switchModel(ModelRow)
 
     var row: ModelRow {
       switch self {
-      case let .deleteDownload(row), let .deleteEngines(row), let .switchModel(row): row
+      case let .delete(row), let .switchModel(row): row
       }
     }
 
     var id: String {
       switch self {
-      case .deleteDownload: "download-\(row.id)"
-      case .deleteEngines: "engines-\(row.id)"
+      case .delete: "delete-\(row.id)"
       case .switchModel: "use-\(row.id)"
       }
     }
@@ -38,13 +37,9 @@ struct ModelsScreen: View {
     NavigationStack {
       content
         .navigationTitle("Models")
-        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-          ToolbarItem(placement: .topBarLeading) {
+          ToolbarItem(placement: .topBarTrailing) {
             Button("Add Model File", systemImage: "plus") { importing = true }
-          }
-          ToolbarItem(placement: .confirmationAction) {
-            Button("Done") { dismiss() }
           }
         }
     }
@@ -60,60 +55,89 @@ struct ModelsScreen: View {
         stagedImports.remove(event.path)
       }
     }
-    .alert(Text(confirmationTitle), isPresented: confirmationPresented, presenting: confirmation) { item in
-      Button(confirmButtonTitle(item), role: isDestructive(item) ? .destructive : nil) { perform(item) }
+    .alert(confirmationTitle, isPresented: confirmationPresented, presenting: confirmation) { item in
+      switch item {
+      case let .delete(row):
+        Button("Delete", role: .destructive) { models.forget(row, artifacts: true, model: true) }
+      case let .switchModel(row):
+        Button("Use Model") { models.use(row, confirmedInterruption: true) }
+      }
       Button("Cancel", role: .cancel) {}
     } message: { item in
       Text(confirmationMessage(item))
     }
-    .alert("Couldn't add that file", isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })) {
+    .alert("Couldn't Add File", isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })) {
       Button("OK") { importError = nil }
     } message: {
       Text(importError ?? "")
+    }
+    .alert("Couldn't Complete", isPresented: Binding(get: { models.lastError != nil }, set: { if !$0 { models.clearError() } })) {
+      Button("OK") { models.clearError() }
+    } message: {
+      Text(models.lastError ?? "")
     }
   }
 
   @ViewBuilder
   private var content: some View {
     if models.catalog == nil && models.rows.isEmpty {
-      ProgressView("Loading the model list…")
+      ProgressView()
+        .controlSize(.large)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.groupedBackground)
     } else {
       List {
-        if let error = models.catalog?.error, !error.isEmpty {
-          Section {
-            Label(models.catalog?.models.isEmpty ?? true ? "Model list unavailable" : "Model list not refreshed", systemImage: "exclamationmark.triangle.fill")
-              .foregroundStyle(.orange)
-            Text(error)
-              .font(.footnote)
-              .foregroundStyle(.secondary)
-          }
-        }
         Section {
-          rows(models.rows.filter { !$0.isLocal && !$0.isOrphan })
+          let available = models.rows.filter { !$0.isLocal && !$0.isOrphan }
+          if available.isEmpty {
+            catalogPlaceholder
+          }
+          rows(available)
         } header: {
-          Text("sunnypilot Models")
+          Text("Available")
         } footer: {
-          Text(
-            "Use a model to download it, prepare it for this iPhone and serve it to the comma. Only the download needs a network connection; keep Jetlink open until it finishes."
-          )
+          if let error = models.catalog?.error, !error.isEmpty {
+            Label("Couldn't refresh. Pull down to try again.", systemImage: "exclamationmark.triangle.fill")
+          }
         }
         let local = models.rows.filter { $0.isLocal && !$0.isOrphan }
         if !local.isEmpty {
-          Section("Added to This iPhone") { rows(local) }
+          Section("Added") { rows(local) }
         }
         let orphans = models.rows.filter(\.isOrphan)
         if !orphans.isEmpty {
-          Section("Unrecognized Files") { rows(orphans) }
+          Section("Uploaded") { rows(orphans) }
         }
         if let disk = models.inventory?.disk {
           Section {
           } footer: {
-            Text(ModelFormatting.diskSummary(models: disk.modelsBytes, engines: disk.enginesBytes, free: disk.freeBytes))
+            Text("Models \(ByteCount.string(disk.modelsBytes)) · Engines \(ByteCount.string(disk.enginesBytes)) · \(ByteCount.string(disk.freeBytes)) Free")
           }
         }
       }
+      .listStyle(.insetGrouped)
       .refreshable { models.refreshCatalog() }
+    }
+  }
+
+  /// The Available section while the list has nothing in it: loading, or why not.
+  @ViewBuilder
+  private var catalogPlaceholder: some View {
+    if let error = models.catalog?.error, !error.isEmpty {
+      HStack {
+        Label("Couldn't Load", systemImage: "exclamationmark.triangle.fill")
+          .foregroundStyle(.secondary)
+        Spacer()
+        Button("Try Again") { models.refreshCatalog() }
+          .buttonStyle(.bordered)
+          .buttonBorderShape(.capsule)
+      }
+    } else {
+      HStack(spacing: 10) {
+        ProgressView()
+        Text("Loading…")
+          .foregroundStyle(.secondary)
+      }
     }
   }
 
@@ -121,18 +145,13 @@ struct ModelsScreen: View {
     ForEach(rows) { row in
       ModelRowView(
         row: row,
-        isCheckingCatalog: models.catalog == nil,
         use: { startUse(row) },
         cancel: { models.cancelDownload(row) },
         stop: { models.unload() }
       )
       .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-        if !row.preparedFor.isEmpty {
-          Button("Delete Engines", systemImage: "trash", role: .destructive) { confirmation = .deleteEngines(row) }
-        }
-        if hasModelFile(row) {
-          Button("Delete Download", systemImage: "arrow.down.circle.dotted") { confirmation = .deleteDownload(row) }
-            .tint(.orange)
+        if hasFiles(row) {
+          Button("Delete", systemImage: "trash", role: .destructive) { confirmation = .delete(row) }
         }
       }
       .contextMenu { menu(for: row) }
@@ -145,16 +164,14 @@ struct ModelsScreen: View {
       Button("Use Model", systemImage: "play.circle") { startUse(row) }
     }
     if case .downloading = row.status {
-      Button("Cancel Download", systemImage: "xmark.circle") { models.cancelDownload(row) }
+      Button("Stop Download", systemImage: "stop.circle") { models.cancelDownload(row) }
     }
     if row.status == .loaded {
-      Button("Stop Using Model", systemImage: "stop.circle") { models.unload() }
+      Button("Stop Using", systemImage: "stop.circle") { models.unload() }
     }
-    if hasModelFile(row) {
-      Button("Delete Download…", systemImage: "arrow.down.circle.dotted", role: .destructive) { confirmation = .deleteDownload(row) }
-    }
-    if !row.preparedFor.isEmpty {
-      Button("Delete Prepared Engines…", systemImage: "trash", role: .destructive) { confirmation = .deleteEngines(row) }
+    if hasFiles(row) {
+      Divider()
+      Button("Delete", systemImage: "trash", role: .destructive) { confirmation = .delete(row) }
     }
   }
 
@@ -168,13 +185,14 @@ struct ModelsScreen: View {
     }
   }
 
-  private func hasModelFile(_ row: ModelRow) -> Bool {
+  private func hasFiles(_ row: ModelRow) -> Bool {
     guard let sha = row.sha256 else { return false }
-    return models.inventory?.models.contains { $0.sha256 == sha } ?? false
+    let model = models.inventory?.models.contains { $0.sha256 == sha } ?? false
+    return model || !row.preparedFor.isEmpty
   }
 
-  /// A picked file is only readable while its security scope is open, and
-  /// the import runs later on the server's own time, so it gets a copy of its own.
+  /// A picked file is readable only while its security scope is open, and the
+  /// import runs later on the server's own time, so it gets a copy of its own.
   private func stageImport(_ url: URL) {
     let scoped = url.startAccessingSecurityScopedResource()
     defer { if scoped { url.stopAccessingSecurityScopedResource() } }
@@ -189,14 +207,6 @@ struct ModelsScreen: View {
     models.importModel(at: staged)
   }
 
-  private func perform(_ item: Confirmation) {
-    switch item {
-    case let .deleteDownload(row): models.forget(row, artifacts: false, model: true)
-    case let .deleteEngines(row): models.forget(row, artifacts: true, model: false)
-    case let .switchModel(row): models.use(row, confirmedInterruption: true)
-    }
-  }
-
   // MARK: alerts
 
   private var confirmationPresented: Binding<Bool> {
@@ -205,112 +215,83 @@ struct ModelsScreen: View {
 
   private var confirmationTitle: String {
     switch confirmation {
-    case .deleteDownload: "Delete the download?"
-    case .deleteEngines: "Delete the prepared engines?"
+    case let .delete(row): "Delete \(row.displayName)?"
     case let .switchModel(row): "Use \(row.displayName)?"
     case nil: ""
     }
   }
 
-  private func confirmButtonTitle(_ item: Confirmation) -> String {
-    switch item {
-    case .deleteDownload, .deleteEngines: "Delete"
-    case .switchModel: "Use Model"
-    }
-  }
-
-  private func isDestructive(_ item: Confirmation) -> Bool {
-    switch item {
-    case .deleteDownload, .deleteEngines: true
-    case .switchModel: false
-    }
-  }
-
   private func confirmationMessage(_ item: Confirmation) -> String {
     switch item {
-    case let .deleteDownload(row):
-      let size = row.bytes.map { "\(ByteCount.string($0)) " } ?? ""
-      return "Deletes the \(size)model file for \(row.displayName). The prepared engine stays, so the comma can still use this model."
-    case let .deleteEngines(row):
-      let bytes = row.preparedFor.reduce(Int64(0)) { $0 + $1.bytes }
-      var text = "Deletes every prepared engine for \(row.displayName), \(ByteCount.string(bytes)) in all. Using it again prepares it again."
-      if row.isLoaded {
-        text += " Jetlink stops using it first."
-      }
-      return text
-    case let .switchModel(row):
-      let current = models.rows.first { $0.isLoaded }?.displayName ?? "another model"
-      return "The comma is using \(current). Switching drops it to its small model until \(row.displayName) is ready."
+    case .delete:
+      return "The download and the prepared engine are removed. You can get it again later."
+    case .switchModel:
+      return "The comma uses its small model until this one is ready."
     }
   }
 
   static let onnxType = UTType(filenameExtension: "onnx") ?? .data
 }
 
-/// One model: its name and tags, one line of facts, and on the trailing edge
-/// whatever applies now: Use, progress, or In Use.
+/// One model: its name, one line of facts or progress, and the button.
 struct ModelRowView: View {
   let row: ModelRow
-  let isCheckingCatalog: Bool
   let use: () -> Void
   let cancel: () -> Void
   let stop: () -> Void
 
   var body: some View {
     HStack(spacing: 12) {
-      VStack(alignment: .leading, spacing: 3) {
+      VStack(alignment: .leading, spacing: 2) {
         HStack(spacing: 6) {
-          Text(row.displayName)
-            .font(.body.weight(.medium))
+          Text(row.isOrphan ? "Uploaded Model" : row.displayName)
             .lineLimit(1)
-          if row.isDefault { ModelTag("Default", tone: .accentColor) }
-          if row.isRequestedByComma { ModelTag("Comma", tone: .green) }
+          if row.isDefault {
+            ModelTag("Default", tone: .accentColor)
+          }
         }
-        let detail = ModelFormatting.detailLine(row)
-        if !detail.isEmpty {
-          Text(detail)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-        }
-        status
+        Text(subtitle)
+          .font(.subheadline)
+          .foregroundStyle(subtitleTone)
+          .lineLimit(1)
+          .monospacedDigit()
       }
       Spacer(minLength: 8)
       accessory
     }
     .padding(.vertical, 2)
+    .accessibilityElement(children: .combine)
   }
 
-  @ViewBuilder
-  private var status: some View {
+  private var subtitle: String {
     switch row.status {
     case let .downloading(frac, rateBps):
-      ProgressView(value: min(max(frac, 0), 1)) {
-        Text(ModelFormatting.downloadCaption(frac: frac, rateBps: rateBps))
-          .font(.caption)
-          .foregroundStyle(.secondary)
-          .monospacedDigit()
-      }
-      .padding(.top, 2)
-    case let .preparing(stage, frac, msg):
-      ProgressView(value: min(max(frac, 0), 1)) {
-        Text(msg.isEmpty ? ProgressRow.stageName(stage) : msg)
-          .font(.caption)
-          .foregroundStyle(.secondary)
-          .lineLimit(1)
-      }
-      .padding(.top, 2)
-    case let .failed(detail):
-      Text(detail)
-        .font(.caption)
-        .foregroundStyle(.red)
-        .lineLimit(2)
+      let percent = frac.formatted(.percent.precision(.fractionLength(0)))
+      return rateBps > 0 ? "Downloading · \(percent) · \(ByteCount.rate(rateBps))" : "Downloading · \(percent)"
+    case let .preparing(stage, frac, _):
+      return "\(ProgressRow.stageName(stage)) · \(frac.formatted(.percent.precision(.fractionLength(0))))"
+    case .loaded:
+      return row.isOrphan ? "In Use · \(row.sha256.map { String($0.prefix(12)) } ?? "")" : "In Use"
+    case .failed:
+      return "Failed"
     case .unresolved:
-      Text(isCheckingCatalog ? "Checking…" : "Size unknown")
-        .font(.caption)
-        .foregroundStyle(.secondary)
-    default:
-      EmptyView()
+      return "Checking…"
+    case .notDownloaded, .downloaded, .prepared:
+      var parts: [String] = []
+      if row.isOrphan, let sha = row.sha256 { parts.append(String(sha.prefix(12))) }
+      if let bytes = row.bytes { parts.append(ByteCount.string(bytes)) }
+      let built = BuildTime.text(row.buildTime)
+      if !built.isEmpty { parts.append(built) }
+      if row.status == .prepared { parts.append("Ready") }
+      return parts.joined(separator: " · ")
+    }
+  }
+
+  private var subtitleTone: Color {
+    switch row.status {
+    case .loaded: .green
+    case .failed: .red
+    default: .secondary
     }
   }
 
@@ -319,30 +300,62 @@ struct ModelRowView: View {
     switch row.status {
     case .loaded:
       Menu {
-        Button("Stop Using Model", systemImage: "stop.circle", action: stop)
+        Button("Stop Using", systemImage: "stop.circle", action: stop)
       } label: {
-        Label("In Use", systemImage: "checkmark.circle.fill")
-          .font(.subheadline.weight(.semibold))
+        Image(systemName: "checkmark.circle.fill")
+          .font(.title2)
           .foregroundStyle(.green)
       }
-    case .downloading:
-      Button("Cancel", systemImage: "xmark.circle.fill", action: cancel)
-        .labelStyle(.iconOnly)
-        .font(.title3)
-        .foregroundStyle(.secondary)
-        .buttonStyle(.plain)
-    case .preparing:
-      ProgressView()
+      .accessibilityLabel("In Use")
+    case let .downloading(frac, _):
+      Button(action: cancel) {
+        ProgressRing(frac: frac, stoppable: true)
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel("Stop Download")
+    case let .preparing(_, frac, _):
+      ProgressRing(frac: frac, stoppable: false)
     case .unresolved:
       EmptyView()
-    case .notDownloaded, .downloaded, .prepared, .failed:
-      if ModelStore.canUse(row) {
-        Button(row.status == .failed("") ? "Retry" : "Use", action: use)
-          .buttonStyle(.bordered)
-          .buttonBorderShape(.capsule)
-          .controlSize(.small)
-          .accessibilityHint(ModelFormatting.useHelp(row, device: "this iPhone"))
+    case .notDownloaded:
+      pill("Get")
+    case .downloaded, .prepared:
+      pill("Use")
+    case .failed:
+      pill("Retry")
+    }
+  }
+
+  private func pill(_ title: String) -> some View {
+    Button(title, action: use)
+      .font(.subheadline.weight(.bold))
+      .buttonStyle(.bordered)
+      .buttonBorderShape(.capsule)
+      .accessibilityHint(ModelFormatting.useHelp(row, device: "this iPhone"))
+  }
+}
+
+/// A small determinate ring, the App Store's download indicator: with a stop
+/// square inside while it can be stopped.
+struct ProgressRing: View {
+  let frac: Double
+  let stoppable: Bool
+
+  var body: some View {
+    ZStack {
+      Circle()
+        .stroke(Color.accentColor.opacity(0.2), lineWidth: 3)
+      Circle()
+        .trim(from: 0, to: min(max(frac, 0.02), 1))
+        .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+        .rotationEffect(.degrees(-90))
+        .animation(.smooth, value: frac)
+      if stoppable {
+        RoundedRectangle(cornerRadius: 2)
+          .fill(Color.accentColor)
+          .frame(width: 9, height: 9)
       }
     }
+    .frame(width: 28, height: 28)
   }
 }

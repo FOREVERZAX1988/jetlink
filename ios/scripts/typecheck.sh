@@ -17,7 +17,7 @@ import PackageDescription
 
 let package = Package(
   name: "typecheck",
-  platforms: [.iOS(.v26), .macOS(.v15)],
+  platforms: [.iOS("26.1"), .macOS(.v15)],
   dependencies: [.package(path: "$REPO/JetlinkKit")],
   targets: [
     .executableTarget(name: "JetlinkApp", dependencies: [
@@ -32,5 +32,5 @@ SWIFT
 
 find "$IOS_DIR/Jetlink" -name '*.swift' -exec ln -sf {} "$WORK/Sources/JetlinkApp/" \;
 cd "$WORK"
-swift build --triple arm64-apple-ios26.0 --sdk "$(xcrun --sdk iphoneos --show-sdk-path)"
-echo "the iPhone app compiles and links for arm64 iOS 26"
+swift build --triple arm64-apple-ios26.1 --sdk "$(xcrun --sdk iphoneos --show-sdk-path)"
+echo "the iPhone app compiles and links for arm64 iOS 26.1"

@@ -20,20 +20,18 @@ struct DeviceHealth: Equatable, Sendable {
 
     var title: String {
       switch self {
-      case .nominal: "Cool"
+      case .nominal: "Normal"
       case .fair: "Warm"
       case .serious: "Hot"
-      case .critical: "Too hot"
+      case .critical: "Critical"
       }
     }
 
-    /// What the state means for the frames, in a few words.
-    var detail: String {
+    /// Said only when the heat costs frames.
+    var note: String? {
       switch self {
-      case .nominal: "Full speed"
-      case .fair: "Full speed"
-      case .serious: "Slowing down"
-      case .critical: "Throttled hard"
+      case .nominal, .fair: nil
+      case .serious, .critical: "Throttling"
       }
     }
 
@@ -48,7 +46,7 @@ struct DeviceHealth: Equatable, Sendable {
 
     var tone: Color {
       switch self {
-      case .nominal, .fair: .green
+      case .nominal, .fair: .secondary
       case .serious: .orange
       case .critical: .red
       }
@@ -65,15 +63,16 @@ struct DeviceHealth: Equatable, Sendable {
   var power: Power = .unknown
   var lowPowerMode = false
 
-  var batteryText: String {
-    guard let batteryLevel else { return "Unknown" }
-    return batteryLevel.formatted(.percent.precision(.fractionLength(0)))
+  /// "82", the unit set beside it; "--" when unknown.
+  var batteryValue: String {
+    guard let batteryLevel else { return "--" }
+    return Int((batteryLevel * 100).rounded()).formatted()
   }
 
   var powerText: String {
     switch power {
-    case .unknown: "Power unknown"
-    case .unplugged: lowPowerMode ? "Low Power Mode" : "Not charging"
+    case .unknown: "Unknown"
+    case .unplugged: lowPowerMode ? "Low Power Mode" : "Not Charging"
     case .charging: "Charging"
     case .full: "Charged"
     }
@@ -96,8 +95,7 @@ struct DeviceHealth: Equatable, Sendable {
   /// A phone running a model twenty times a second belongs on power.
   var batteryTone: Color {
     switch power {
-    case .charging, .full: .green
-    case .unknown: .secondary
+    case .charging, .full, .unknown: .secondary
     case .unplugged: (batteryLevel ?? 1) < 0.2 ? .red : .orange
     }
   }

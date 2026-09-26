@@ -6,7 +6,7 @@
 name: Jetlink
 options:
   bundleIdPrefix: io.zoompilot
-  deploymentTarget: { iOS: "26.0" }
+  deploymentTarget: { iOS: "26.1" }
   xcodeVersion: "26.6"
   createIntermediateGroups: true
   generateEmptyDirectories: true
@@ -49,6 +49,7 @@ targets:
           UIApplicationSupportsMultipleScenes: false
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
         UIRequiredDeviceCapabilities: [arm64, metal]

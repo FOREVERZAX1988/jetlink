@@ -35,9 +35,9 @@ final class AppModel {
     models.refreshCatalog()
   }
 
-  /// Everything the dashboard draws, from the stores.
-  var dashboard: DashboardState {
-    var state = DashboardState()
+  /// Everything the Status tab draws, from the stores.
+  var status: StatusState {
+    var state = StatusState()
     state.runState = server.runState
     state.link = server.link
     state.engine = server.engine
@@ -50,13 +50,22 @@ final class AppModel {
     state.health = device.health
     state.defaultModel = models.rows.first { $0.isDefault }
     state.hasPreparedModel = !(models.inventory?.artifacts.filter(\.current).isEmpty ?? true)
-    state.computeSummary = settings.device.title
+    state.catalogUnavailable = models.catalog?.error != nil && (models.catalog?.models.isEmpty ?? true)
     state.localNetworkDenied = localNetwork.state == .denied
     return state
   }
 
+  /// The list failed to load and nothing is cached: try again when the
+  /// network changes or the app comes back, rather than leave it empty.
+  func retryCatalogIfEmpty() {
+    guard let catalog = models.catalog, catalog.error != nil, catalog.models.isEmpty else { return }
+    models.refreshCatalog()
+  }
+
   func modelName(_ sha256: String?) -> String? {
     guard let sha256 else { return nil }
-    return models.rows.first { $0.sha256 == sha256 }?.displayName
+    guard let row = models.rows.first(where: { $0.sha256 == sha256 }) else { return nil }
+    // A model the comma sent that no catalog names has only its hash.
+    return row.isOrphan ? "Uploaded Model" : row.displayName
   }
 }

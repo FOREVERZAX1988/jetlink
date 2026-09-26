@@ -8,7 +8,7 @@ struct JetlinkPhoneApp: App {
 
   var body: some Scene {
     WindowGroup {
-      DashboardScreen()
+      RootView()
         .environment(app)
         .onAppear { app.launch() }
         .onChange(of: scenePhase) { _, phase in
@@ -17,10 +17,12 @@ struct JetlinkPhoneApp: App {
             app.device.refresh()
             app.network.refresh()
             app.localNetwork.check()
+            app.retryCatalogIfEmpty()
           }
           updateIdleTimer()
         }
         .onChange(of: app.settings.keepScreenOn) { updateIdleTimer() }
+        .onChange(of: app.network.addresses) { app.retryCatalogIfEmpty() }
         .onChange(of: app.server.runState) { updateIdleTimer() }
     }
   }
