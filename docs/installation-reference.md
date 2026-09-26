@@ -105,3 +105,30 @@ the machine, and the one to run is `JETLINK_IMAGE` in `/etc/jetlink/server.env`
 `sudo cp /etc/jetlink/server.env.prev /etc/jetlink/server.env` and
 `jetlink restart`.
 
+
+## Deep sleep and USB wake
+
+Choosing **Always on** in the installer enables USB wake on the Jetson's hubs,
+gives the container access to `/sys/power`, and sets `--sleep-after 120`.
+The installer checks for `deep` support in `/sys/power/mem_sleep`.
+
+After ignition off, the comma releases USB once the engine is ready and at
+least one minute has passed. The Jetson sleeps after 120 seconds without a
+USB connection. Connecting or disconnecting USB wakes it; without a new
+connection, it sleeps again after 120 seconds.
+
+If sleep fails, retries start after 10 seconds and double up to 5 minutes.
+Check logs, write access to `/sys/power`, and USB wake on the root and onboard
+hubs. Without `--sleep-after`, the link stays connected while the comma is awake.
+
+## Battery-protection shutdown
+
+When enabled, the comma requests shutdown at 11.8 V or after 30 hours parked.
+The server writes a flag in the models folder; `jetlink-poweroff.path` triggers
+the host service to remove it and power off. Flags from earlier boots are ignored.
+
+To test without powering off, run `touch /mnt/data/jetlink/poweroff-dry-run`.
+Remove that file to restore shutdown behavior.
+
+Automatic restart after full shutdown requires hardware to cycle DC power or
+trigger the J14 power-button input. The devkit boots when DC power returns.

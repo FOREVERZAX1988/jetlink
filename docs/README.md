@@ -24,7 +24,6 @@ then use troubleshooting in your platform guide.
 | Task | Reference |
 | --- | --- |
 | Install manually or customize USB | [Installation reference](installation-reference.md) |
-| Investigate Jetson sleep, USB wake, or shutdown | [Jetson power management reference](jetson-power-reference.md) |
 | Use the model CLI | [Commands, identifiers, and cache files](model-cli.md) |
 | Control a running server from an app or script | [Control protocol](control-protocol.md) |
 | Choose or investigate an inference backend | [Backends and measurements](backends.md) |

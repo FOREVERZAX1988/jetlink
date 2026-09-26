@@ -26,39 +26,34 @@ online during setup.
 2. Complete [comma setup](#comma-setup-all-platforms).
 3. Wait for the comma's icon to turn green.
 
-### Jetson or Linux PC
+### Jetson
 
-<a href="docs/images/install-demo.mp4"><img src="docs/images/install-demo.webp" width="100%" alt="The installer on a Jetson: one command, two questions about power, then Docker, GPU access and the Jetlink server, and jetlink status"></a>
+Follow the **[Jetson setup guide](docs/jetson.md)** for what you need, power
+choices, and installation.
 
-For a Jetson Orin or an Ubuntu/Debian PC with an NVIDIA GeForce RTX 20 series
-or newer GPU, run:
+We recommend **always-on 12 V power with deep sleep**: the Jetson sleeps when
+the ignition is off and the comma wakes it when you start the car. If your
+socket turns off with the ignition, choose **Switched** in the installer.
+
+<details>
+<summary>Watch the installer</summary>
+
+<a href="docs/images/install-demo.mp4"><img src="docs/images/install-demo.webp" width="100%" alt="Jetlink installer on a Jetson"></a>
+
+</details>
+
+<a id="jetson-or-linux-pc"></a>
+
+### Linux PC
+
+On Ubuntu or Debian with an NVIDIA GeForce RTX 20 series or newer GPU, run:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zoompilot/jetlink/main/install.sh | bash
 ```
 
-The installer checks the computer, asks about your setup, installs dependencies,
-and starts Jetlink. Allow 10 to 30 minutes, mostly for downloads.
-
-A Jetson needs JetPack first. Follow the [Jetson guide](docs/jetson.md) for
-installation and power choices. Use JetPack 7.2.1 (recommended) or 6.2.
-For PC requirements,
-see [Linux setup](docs/platforms.md#linux-nvidia-gpu).
-
-**Recommended Jetson power setup:** use a straight 12 V-to-DC barrel adapter
-from a supply that **stays on with the ignition off**, and choose **Always on**
-in the installer to enable deep sleep. For the Orin Nano Super devkit, use a
-**5.5 mm outer / 2.5 mm inner, center-positive** plug. See the
-[adapter example and power setup](docs/transport.md#recommended-jetson-power-setup).
-
-With this setup, the Jetson sleeps a few minutes after the ignition is turned
-off and wakes automatically when you start the car. Deep sleep uses about
-**300 mW (0.3 W)** directly on 12 V. If you enable battery-protection shutdown,
-a full shutdown requires pressing the Jetson's power button or disconnecting
-and reconnecting its power. See [parking and starting the car](docs/transport.md#always-on-supply-and-suspend).
-
-When the installer finishes, run `jetlink status` to check the server, then
-continue with comma setup below.
+Allow 10–30 minutes, then complete comma setup below.
+See [Linux setup](docs/platforms.md#linux-nvidia-gpu) for help.
 
 ### Mac
 
