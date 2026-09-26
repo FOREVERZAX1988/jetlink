@@ -11,6 +11,7 @@ final class AppModel {
   let models: ModelStore
   let device: DeviceMonitor
   let network: NetworkInterfaces
+  let localNetwork: LocalNetworkAccess
   @ObservationIgnored private var launched = false
 
   init() {
@@ -21,6 +22,7 @@ final class AppModel {
     self.models = ModelStore(server: server)
     self.device = DeviceMonitor()
     self.network = NetworkInterfaces()
+    self.localNetwork = LocalNetworkAccess()
   }
 
   /// The server starts with the app: an iPhone app has nothing else to do,
@@ -29,6 +31,7 @@ final class AppModel {
     guard !launched else { return }
     launched = true
     server.start()
+    localNetwork.check()
     models.refreshCatalog()
   }
 
@@ -48,6 +51,7 @@ final class AppModel {
     state.defaultModel = models.rows.first { $0.isDefault }
     state.hasPreparedModel = !(models.inventory?.artifacts.filter(\.current).isEmpty ?? true)
     state.computeSummary = settings.device.title
+    state.localNetworkDenied = localNetwork.state == .denied
     return state
   }
 

@@ -1,6 +1,7 @@
 import JetlinkKit
 import JetlinkUI
 import SwiftUI
+import UIKit
 
 /// The app's one screen: the dashboard, with Models and Settings a tap away.
 struct DashboardScreen: View {
@@ -16,7 +17,8 @@ struct DashboardScreen: View {
         landscape: verticalSizeClass == .compact,
         onUseDefault: useDefault,
         onOpenModels: { showingModels = true },
-        onRetry: retry)
+        onRetry: retry,
+        onOpenSettings: openSettings)
         .navigationTitle("Jetlink")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -47,6 +49,12 @@ struct DashboardScreen: View {
   private func useDefault() {
     guard let row = app.models.rows.first(where: \.isDefault) else { return }
     app.models.use(row, confirmedInterruption: true)
+  }
+
+  private func openSettings() {
+    if let url = URL(string: UIApplication.openSettingsURLString) {
+      UIApplication.shared.open(url)
+    }
   }
 
   /// A failed server starts again; a failed model is asked for again.

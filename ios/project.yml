@@ -53,6 +53,8 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         UIRequiredDeviceCapabilities: [arm64, metal]
         NSLocalNetworkUsageDescription: Jetlink serves your comma's driving model over the Ethernet or Wi-Fi network the comma is on.
+        # The browse that asks for Local Network access at launch.
+        NSBonjourServices: [_jetlink._tcp]
         ITSAppUsesNonExemptEncryption: false
         NSHumanReadableCopyright: "MIT License. Copyright 2026 Zeph Leggett."
     entitlements:

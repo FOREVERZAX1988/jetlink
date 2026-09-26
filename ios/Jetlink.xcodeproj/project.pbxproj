@@ -17,6 +17,7 @@
 		856DC9CE7E2BDDCCA5468827 /* DashboardScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED53AB4115C0FB7B03F66B2A /* DashboardScreen.swift */; };
 		867D4BEC3B41AABE9BE09147 /* JetlinkPhoneApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06BC10AE5D7D06DBE4A59332 /* JetlinkPhoneApp.swift */; };
 		93BC9EE04EA582A70EC763CB /* HeroCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE4DF2F44B9525A33F77219D /* HeroCard.swift */; };
+		A5E4E102CDE0D258167999C2 /* LocalNetworkAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0770C4D38956ECDB36EA481C /* LocalNetworkAccess.swift */; };
 		AB2684B23066DDD9F23FD099 /* ModelsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = D35A2D25446BA8901A1ACC8B /* ModelsScreen.swift */; };
 		ADFB4A5A28CCC9EF06EB05C0 /* PhoneServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8965401CE0D537AAE299392 /* PhoneServer.swift */; };
 		BC2C8BEE97C8C36333DCE538 /* JetlinkRegistry in Frameworks */ = {isa = PBXBuildFile; productRef = 274CFEF8A0044F990232F4AE /* JetlinkRegistry */; };
@@ -30,6 +31,7 @@
 
 /* Begin PBXFileReference section */
 		06BC10AE5D7D06DBE4A59332 /* JetlinkPhoneApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JetlinkPhoneApp.swift; sourceTree = "<group>"; };
+		0770C4D38956ECDB36EA481C /* LocalNetworkAccess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalNetworkAccess.swift; sourceTree = "<group>"; };
 		0C1DD0CBB0A2132A1B9B03DD /* DashboardContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardContent.swift; sourceTree = "<group>"; };
 		3737B09B1F4F911EA01B2950 /* Card.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Card.swift; sourceTree = "<group>"; };
 		43DBEE74070286C6D86FE93C /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
@@ -177,6 +179,7 @@
 			children = (
 				97D183B499FE3A9E2A1F1C6C /* DeviceHealth.swift */,
 				F37E4DCE1D8F75581B01BA63 /* DeviceMonitor.swift */,
+				0770C4D38956ECDB36EA481C /* LocalNetworkAccess.swift */,
 				4B61B41EBDB9F3F6A507D23F /* NetworkInterfaces.swift */,
 			);
 			path = Device;
@@ -270,6 +273,7 @@
 				704C60823F8F013189311EEF /* DeviceMonitor.swift in Sources */,
 				93BC9EE04EA582A70EC763CB /* HeroCard.swift in Sources */,
 				867D4BEC3B41AABE9BE09147 /* JetlinkPhoneApp.swift in Sources */,
+				A5E4E102CDE0D258167999C2 /* LocalNetworkAccess.swift in Sources */,
 				AB2684B23066DDD9F23FD099 /* ModelsScreen.swift in Sources */,
 				4F73EECC86A909ED778A1FE6 /* NetworkInterfaces.swift in Sources */,
 				ADFB4A5A28CCC9EF06EB05C0 /* PhoneServer.swift in Sources */,

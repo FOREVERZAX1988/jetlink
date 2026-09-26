@@ -16,6 +16,7 @@ struct JetlinkPhoneApp: App {
             app.server.becameActive()
             app.device.refresh()
             app.network.refresh()
+            app.localNetwork.check()
           }
           updateIdleTimer()
         }

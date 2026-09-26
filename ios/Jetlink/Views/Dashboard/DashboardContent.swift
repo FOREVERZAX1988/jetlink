@@ -12,6 +12,7 @@ struct DashboardContent: View {
   var onUseDefault: () -> Void = {}
   var onOpenModels: () -> Void = {}
   var onRetry: () -> Void = {}
+  var onOpenSettings: () -> Void = {}
 
   /// Off only for snapshots: ImageRenderer draws nothing inside a ScrollView.
   var scrolls = true
@@ -29,13 +30,13 @@ struct DashboardContent: View {
   private var cards: some View {
       Group {
         if landscape {
+          // A phone on its side is about 350 points tall under the bar: the
+          // ring takes the left and fits the height, the rest scrolls beside it.
           HStack(alignment: .top, spacing: 16) {
-            VStack(spacing: 16) {
+            HeroCard(state: state, compact: true, onUseDefault: onUseDefault, onOpenModels: onOpenModels, onRetry: onRetry, onOpenSettings: onOpenSettings)
+              .frame(width: 330)
+            VStack(spacing: 12) {
               headline
-              hero
-            }
-            .frame(maxWidth: .infinity)
-            VStack(spacing: 16) {
               details
             }
             .frame(maxWidth: .infinity)
@@ -53,7 +54,7 @@ struct DashboardContent: View {
   }
 
   private var hero: some View {
-    HeroCard(state: state, onUseDefault: onUseDefault, onOpenModels: onOpenModels, onRetry: onRetry)
+    HeroCard(state: state, onUseDefault: onUseDefault, onOpenModels: onOpenModels, onRetry: onRetry, onOpenSettings: onOpenSettings)
   }
 
   @ViewBuilder

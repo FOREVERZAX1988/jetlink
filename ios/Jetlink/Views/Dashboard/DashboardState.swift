@@ -24,6 +24,8 @@ struct DashboardState: Equatable {
   var hasPreparedModel = false
   /// Where the model runs, in words: "Neural Engine and GPU".
   var computeSummary = "Neural Engine and GPU"
+  /// iOS refuses Jetlink the local network, so the comma cannot connect.
+  var localNetworkDenied = false
 
   var isServingFrames: Bool {
     link.state == .connected && engine.state == .ready && recent != nil
@@ -79,6 +81,9 @@ struct DashboardState: Equatable {
       return ("Model failed", "The comma drives on its small model.", .bad)
     case .ready, .none:
       break
+    }
+    if localNetworkDenied && link.state != .connected {
+      return ("Local Network is off", "The comma cannot connect until Jetlink is allowed on the local network.", .bad)
     }
     switch link.state {
     case .connected:

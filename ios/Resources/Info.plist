@@ -26,6 +26,10 @@
 	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_jetlink._tcp</string>
+	</array>
 	<key>NSHumanReadableCopyright</key>
 	<string>MIT License. Copyright 2026 Zeph Leggett.</string>
 	<key>NSLocalNetworkUsageDescription</key>

@@ -6,9 +6,12 @@ import SwiftUI
 /// otherwise whatever stands between the comma and the big model.
 struct HeroCard: View {
   let state: DashboardState
+  /// For a phone on its side: the ring sized to the height, no caption.
+  var compact = false
   var onUseDefault: () -> Void = {}
   var onOpenModels: () -> Void = {}
   var onRetry: () -> Void = {}
+  var onOpenSettings: () -> Void = {}
 
   var body: some View {
     Card {
@@ -30,9 +33,9 @@ struct HeroCard: View {
   // MARK: serving
 
   private func budget(_ stats: StatsEvent) -> some View {
-    VStack(spacing: 14) {
-      HeadroomRing(p99: stats.served.p99)
-        .frame(maxWidth: 320)
+    VStack(spacing: compact ? 8 : 14) {
+      HeadroomRing(p99: stats.served.p99, lineWidth: compact ? 14 : 18)
+        .frame(maxWidth: 320, maxHeight: compact ? 190 : .infinity)
         .frame(maxWidth: .infinity)
       HStack {
         figure("Mean", stats.served.mean)
@@ -41,11 +44,13 @@ struct HeroCard: View {
         Divider().frame(height: 30)
         figure("Worst", stats.served.max)
       }
-      Text("Round trip on this iPhone over the last ten seconds, from a frame's arrival to its reply leaving.")
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .multilineTextAlignment(.center)
-        .frame(maxWidth: .infinity)
+      if !compact {
+        Text("Round trip on this iPhone over the last ten seconds, from a frame's arrival to its reply leaving.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .multilineTextAlignment(.center)
+          .frame(maxWidth: .infinity)
+      }
     }
   }
 
@@ -112,7 +117,14 @@ struct HeroCard: View {
       Text(state.link.state == .disconnected ? "Waiting for the comma to reconnect" : "Waiting for the comma")
         .font(.title3.weight(.semibold))
         .multilineTextAlignment(.center)
-      if let endpoint = state.endpoint {
+      if state.localNetworkDenied {
+        Text("Turn on Local Network for Jetlink in the Settings app, under Privacy & Security, or the comma's connection is refused.")
+          .font(.subheadline)
+          .foregroundStyle(.secondary)
+          .multilineTextAlignment(.center)
+        Button("Open Settings", action: onOpenSettings)
+          .buttonStyle(.glassProminent)
+      } else if let endpoint = state.endpoint {
         VStack(spacing: 4) {
           Text("The comma's JetlinkEndpoint")
             .font(.subheadline)
@@ -148,7 +160,7 @@ struct HeroCard: View {
         .multilineTextAlignment(.center)
       if let row = state.defaultModel, ModelStore.canUse(row) {
         Button(action: onUseDefault) {
-          Text("Use \(row.name)")
+          Text("Use \(row.displayName)")
             .frame(maxWidth: .infinity)
         }
         .buttonStyle(.glassProminent)
