@@ -10,8 +10,10 @@ Allow about an hour the first time, mostly downloads.
 - **JetPack 7.2.1** (recommended) or **6.2**.
 - A microSD card of 64 GB or more, or better an NVMe SSD.
 - A power supply that can deliver the Jetson's full power: 25 W or more for an
-  Orin Nano. In the car, that means a proper DC supply, not the comma's USB port.
-  Choose power behavior in the installer; see the options below.
+  Orin Nano. We recommend a straight **12 V-to-DC barrel adapter** from a source
+  that **stays on with the ignition off**, paired with deep sleep. For the Orin
+  Nano Super devkit, use a **5.5 mm outer / 2.5 mm inner, center-positive** plug.
+  See the [adapter example and power setup](transport.md#recommended-jetson-power-setup).
 - Internet during setup, and a **USB 3 A-to-C data cable** for the comma.
 
 ## 1. Put JetPack on the Jetson
@@ -59,7 +61,7 @@ changing anything. Choose the power option that matches your wiring.
 | How is the Jetson powered in the car? | **Always on** (installer default): keeps power available while parked so the Jetson can suspend and wake. Check [power and suspend setup](transport.md#always-on-supply-and-suspend) before choosing it. **Switched**: it turns on and off with the car, and the large model is ready about a minute after you start it. |
 | Allow the comma to shut down the Jetson to protect the car battery? | Always on only. Allows a full shutdown under the comma's battery policy, separate from normal parked sleep. The comma cannot wake the Jetson after this: press the Jetson's power button or disconnect and reconnect its power. See [powering off with the comma](transport.md#powering-off-with-the-comma). |
 
-**For normal parking on always-on power, use sleep (suspend).** It draws about
+**For normal parking on always-on power, use deep sleep (suspend).** It draws about
 **300 mW (0.3 W)** when directly connected to 12 V, and the comma can wake the
 Jetson over USB. Keeping 12 V connected does not keep the Jetson awake, but it
 also does not boot it after a full shutdown. The optional shutdown setting

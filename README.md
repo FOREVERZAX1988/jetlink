@@ -45,10 +45,14 @@ installation and power choices. Use JetPack 7.2.1 (recommended) or 6.2.
 For PC requirements,
 see [Linux setup](docs/platforms.md#linux-nvidia-gpu).
 
-**Jetson power: sleep and shutdown are different.** With always-on power,
-choose **Always on** in the installer so the Jetson can sleep while parked
-and the comma can wake it over USB. Sleep draws about **300 mW (0.3 W)** when
-directly connected to 12 V. A full shutdown leaves the Jetson off, even with
+**Recommended Jetson power setup:** use a straight 12 V-to-DC barrel adapter
+from a supply that **stays on with the ignition off**, and choose **Always on**
+in the installer to enable deep sleep. For the Orin Nano Super devkit, use a
+**5.5 mm outer / 2.5 mm inner, center-positive** plug. See the
+[adapter example and power setup](docs/transport.md#recommended-jetson-power-setup).
+
+Deep sleep draws about **300 mW (0.3 W)** directly on 12 V, and the comma can
+wake the Jetson over USB. A full shutdown leaves the Jetson off, even with
 12 V still connected: the comma cannot boot it again. You must press the
 Jetson's power button or disconnect and reconnect its power. See
 [sleep and shutdown](docs/transport.md#always-on-supply-and-suspend), including

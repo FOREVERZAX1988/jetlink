@@ -50,9 +50,39 @@ allow about 65 to 96 seconds from power-on until the model is ready. The comma
 uses its small model during startup. Switching requires a stop with cruise
 off, or lateral control off; see [daily use](using-jetlink.md#what-to-expect-when-driving).
 
+### Recommended Jetson power setup
+
+For the Orin Nano Super devkit, we recommend a **straight 12 V-to-DC barrel
+adapter**, connected to a supply that **stays on when the ignition is off**,
+with Jetson **deep sleep** enabled. An always-on 12 V accessory socket and an
+adapter like the one below make this straightforward.
+
+<img src="images/jetson-12v-dc-adapter.jpg" width="320" alt="Example of a 12 V car accessory socket plug to DC barrel adapter cable">
+
+Use a **5.5 mm outer diameter / 2.5 mm inner diameter, center-positive** DC
+plug for this devkit. NVIDIA lists the connector dimensions in its
+[hardware guide](https://docs.nvidia.com/jetson/orin-nano-devkit/user-guide/hardware_layout.html)
+and polarity in the
+[carrier board specification](https://developer.nvidia.com/downloads/assets/embedded/secure/jetson/orin_nano/docs/jetson_orin_nano_devkit_carrier_board_specification_sp.pdf).
+The photo illustrates the adapter style; check the cable's specifications
+when buying, and check your carrier board's requirements if using another
+Jetson.
+
+1. Confirm the 12 V source stays powered after the car is off, including after
+   any delayed accessory-power timeout. The Jetson needs power throughout sleep.
+2. Connect the adapter to the Jetson's DC input. The socket and cable must
+   support the Jetson's full running power, as described above.
+3. Choose **Always on** in the installer, or run `jetlink setup` to change an
+   existing installation. This configures deep sleep and USB wake.
+
+Leave power connected while parked. The Jetson sleeps to reduce consumption,
+and the comma wakes it when needed. The optional battery-protection shutdown
+is a separate choice: after a full shutdown, you must press the power button
+or disconnect and reconnect power, as explained below.
+
 ### Always-on supply and suspend
 
-**Sleep (suspend) is the normal parked state for an always-on Jetson.** It
+**Deep sleep (suspend) is the normal parked state for an always-on Jetson.** It
 uses very little power, keeps the loaded engine in memory, and lets the comma
 wake the Jetson over USB when it needs the server again. Reported sleep power
 is about **300 mW (0.3 W) when directly connected to 12 V**, compared with
