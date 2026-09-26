@@ -45,6 +45,15 @@ installation and power choices. Use JetPack 7.2.1 (recommended) or 6.2.
 For PC requirements,
 see [Linux setup](docs/platforms.md#linux-nvidia-gpu).
 
+**Jetson power: sleep and shutdown are different.** With always-on power,
+choose **Always on** in the installer so the Jetson can sleep while parked
+and the comma can wake it over USB. Sleep draws about **300 mW (0.3 W)** when
+directly connected to 12 V. A full shutdown leaves the Jetson off, even with
+12 V still connected: the comma cannot boot it again. You must press the
+Jetson's power button or disconnect and reconnect its power. See
+[sleep and shutdown](docs/transport.md#always-on-supply-and-suspend), including
+the optional battery-protection shutdown setting.
+
 When the installer finishes, run `jetlink status` to check the server, then
 continue with comma setup below.
 

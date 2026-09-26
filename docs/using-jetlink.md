@@ -30,6 +30,20 @@ it to the comma. Keep laptops powered and awake; sleep interrupts the link.
 - **Big Model Lost** while engaged is a soft disable. Take over. The small model
   drives, and Jetlink reconnects and switches back at the next chance.
 
+## Parking and waking a Jetson
+
+With **Always on** selected in the installer, the Jetson sleeps (suspends)
+after the comma releases the USB connection and the idle timeout passes.
+Sleep draws about **300 mW (0.3 W)** directly on 12 V, and the comma can wake
+the Jetson over USB when needed again.
+
+If you also allowed the comma to shut down the Jetson for battery protection,
+that action turns it fully off. **The comma can wake a sleeping Jetson, but
+cannot boot a fully shut-down Jetson.** Even with always-on 12 V connected,
+you must press the Jetson's power button or disconnect and reconnect its power
+after a full shutdown. See [power and sleep setup](transport.md#power-requirements)
+for timing and shutdown behavior.
+
 ## Choose a model
 
 While parked and online, open **Settings > Models > Big Model** on the comma.

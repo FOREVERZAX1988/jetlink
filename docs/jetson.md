@@ -57,7 +57,15 @@ changing anything. Choose the power option that matches your wiring.
 | It asks | What it means |
 | --- | --- |
 | How is the Jetson powered in the car? | **Always on** (installer default): keeps power available while parked so the Jetson can suspend and wake. Check [power and suspend setup](transport.md#always-on-supply-and-suspend) before choosing it. **Switched**: it turns on and off with the car, and the large model is ready about a minute after you start it. |
-| Allow the comma to shut down the Jetson to protect the car battery? | Always on only. When the comma shuts itself down for low battery, it turns the Jetson off too. The Jetson then stays off until its power is reconnected. See [powering off with the comma](transport.md#powering-off-with-the-comma). |
+| Allow the comma to shut down the Jetson to protect the car battery? | Always on only. Allows a full shutdown under the comma's battery policy, separate from normal parked sleep. The comma cannot wake the Jetson after this: press the Jetson's power button or disconnect and reconnect its power. See [powering off with the comma](transport.md#powering-off-with-the-comma). |
+
+**For normal parking on always-on power, use sleep (suspend).** It draws about
+**300 mW (0.3 W)** when directly connected to 12 V, and the comma can wake the
+Jetson over USB. Keeping 12 V connected does not keep the Jetson awake, but it
+also does not boot it after a full shutdown. The optional shutdown setting
+protects the battery by turning the Jetson fully off; consider how you will
+restart it before enabling that setting. See [sleep and USB wake
+setup](transport.md#always-on-supply-and-suspend).
 
 When it finishes, it prints the comma steps. Running it again is safe: it
 offers to keep your answers and brings everything up to date.
@@ -112,6 +120,7 @@ This is optional; the comma normally sends the model automatically.
 | Model repeatedly drops out | Check separate supplies and voltage dips, cable, cooling, and `jetlink logs` |
 | Frame time exceeds 50 ms | Check USB 3 speed, the power mode (`sudo nvpmodel -q`), cooling, and model choice |
 | Jetson fails to wake | See [USB wake setup](transport.md#always-on-supply-and-suspend) |
+| Jetson stays off after the comma shut it down | This was a full shutdown, not sleep. Press the Jetson's power button or disconnect and reconnect its power; the comma cannot boot it over USB. |
 | Server refuses the comma after an update | Update both sides together, see [updates](releasing.md) |
 | "Speed Error: nan" or no path | Stop the test and collect logs |
 

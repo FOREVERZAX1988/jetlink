@@ -52,10 +52,20 @@ off, or lateral control off; see [daily use](using-jetlink.md#what-to-expect-whe
 
 ### Always-on supply and suspend
 
-An always-on supply allows the Jetson to suspend while parked and keep the
-loaded engine in memory. Suspend power consumption is not measured. Measure it
-on your installation before leaving the Jetson connected permanently. The
-measured awake idle power is 6.8 W.
+**Sleep (suspend) is the normal parked state for an always-on Jetson.** It
+uses very little power, keeps the loaded engine in memory, and lets the comma
+wake the Jetson over USB when it needs the server again. Reported sleep power
+is about **300 mW (0.3 W) when directly connected to 12 V**, compared with
+measured awake idle power of 6.8 W. Consumption varies with the supply and
+connected peripherals; measure your installation for its actual parked draw.
+
+| Jetson state | What happens when the comma needs it again? |
+| --- | --- |
+| Sleeping, with power still connected | The comma can wake it over USB when idle suspend and USB wake are configured. |
+| Fully shut down, with power still connected | The comma cannot boot it. Press the Jetson's power button or disconnect and reconnect its power. |
+
+Always-on power means power remains available; it does not mean the Jetson
+must stay awake. It also cannot restart a Jetson that has fully shut down.
 
 To enable idle suspend, choose **Always on**, the recommended answer, when the
 [installer](jetson.md#2-run-the-installer) asks how the Jetson is powered, or
@@ -82,9 +92,10 @@ enabled on the root hubs and onboard hub.
 
 ### Powering off with the comma
 
-When the comma shuts down under its battery policy (11.8 V or 30 hours parked),
-it asks the Jetson to power off. The installer sets this up when you allow the
-comma to shut down the Jetson; it is the host-side
+This optional battery-protection action is a **full shutdown, not sleep**.
+When enabled, the comma asks the Jetson to power off when the comma shuts down
+under its battery policy (11.8 V or 30 hours parked). The installer sets this
+up when you allow the comma to shut down the Jetson; it is the host-side
 `jetlink-poweroff.path` unit and its service. The server writes a flag in the
 models folder; the host service removes the flag and powers off. Flags from
 earlier boots are ignored.
@@ -101,8 +112,11 @@ Remove the file to enable poweroff again:
 rm /mnt/data/jetlink/poweroff-dry-run
 ```
 
-A powered-off Jetson stays off on an always-on supply. The installation needs a
-way to restart it, such as a low-voltage disconnect that restores power when the
+A powered-off Jetson stays off on an always-on supply, even if the comma starts
+again. USB wake only works from sleep. To boot after a full shutdown, press the
+Jetson's power button or disconnect and reconnect its power. For automatic
+restart, the installation needs a way to do this, such as a low-voltage
+disconnect that restores power when the
 alternator runs, or an ignition-controlled connection to the J14 power-button
 input. The devkit starts automatically when DC power returns.
 
