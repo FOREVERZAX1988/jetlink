@@ -1,0 +1,139 @@
+import Foundation
+
+/// The wire protocol, byte for byte what `jetlink/protocol.py` defines.
+///
+/// Every message is a 32-byte header and an opaque payload. INFER is a fixed
+/// struct plus two raw arrays sized at handshake, not json: one vectored write
+/// out, one read into a preallocated buffer back.
+public enum Wire {
+  public static let magic: UInt32 = 0x4B4E_4C4A  // b'JLNK'
+  /// Bumped so a new client cannot silently pair with a legacy server.
+  public static let version: UInt16 = 2
+  public static let headerSize = 32
+  /// A bulk transfer ends on a short packet, so a message that is an exact
+  /// multiple of the packet size gets a pad byte and Flag.padded. TCP keeps
+  /// the rule so one client speaks to every transport the same way.
+  public static let packetMultiple = 1024
+  /// Stops a corrupt length field making the receive buffer allocate
+  /// gigabytes. A frame is about 460 KB.
+  public static let maxMessage = 16 << 20
+  public static let defaultPort: UInt16 = 5599
+
+  public enum Msg: UInt16, Sendable {
+    case helloReq = 1
+    case helloResp = 2
+    case engineReq = 3
+    case engineResp = 4
+    case uploadChunk = 5
+    case uploadDone = 6
+    case progress = 7
+    case inferReq = 8
+    case inferResp = 9
+    case stateReq = 12
+    case stateResp = 13
+    case error = 14
+    case ping = 15
+    case pong = 16
+    case shutdownReq = 17
+    case shutdownResp = 18
+  }
+
+  public struct Flag: OptionSet, Sendable {
+    public let rawValue: UInt32
+    public init(rawValue: UInt32) { self.rawValue = rawValue }
+    /// On INFER_REQ: warm-start, clear history before this frame.
+    public static let resetQueues = Flag(rawValue: 1 << 0)
+    /// On INFER_REQ: append telemetry json to the response.
+    public static let wantState = Flag(rawValue: 1 << 1)
+    /// One pad byte follows the payload; see packetMultiple.
+    public static let padded = Flag(rawValue: 1 << 7)
+  }
+
+  public enum Status: UInt32, Sendable {
+    case ok = 0
+    case notReady = 1
+    case badShape = 2
+    case inferFailed = 3
+    /// The model produced NaN or Inf; the comma falls back.
+    case notFinite = 4
+  }
+
+  /// INFER_REQ: frame_id, flags.
+  public static let inferReqSize = 8
+  /// INFER_RESP: frame_id, status, gpu_us, queue_us, total_us.
+  public static let inferRespSize = 20
+
+  public struct Header: Equatable, Sendable {
+    public var msgType: UInt16
+    public var seq: UInt32
+    public var flags: UInt32
+    public var length: UInt32
+    public var reserved: UInt64 = 0
+
+    public init(msgType: UInt16, seq: UInt32, flags: UInt32, length: UInt32, reserved: UInt64 = 0) {
+      self.msgType = msgType
+      self.seq = seq
+      self.flags = flags
+      self.length = length
+      self.reserved = reserved
+    }
+  }
+
+  public enum ProtocolError: Error, CustomStringConvertible {
+    case badMagic(UInt32)
+    case badVersion(UInt16)
+    case tooLong(UInt32)
+
+    public var description: String {
+      switch self {
+      case .badMagic(let magic):
+        return "bad magic 0x\(String(magic, radix: 16)) (link desynced or not a jetlink peer)"
+      case .badVersion(let version):
+        return "peer speaks protocol v\(version), we speak v\(Wire.version)"
+      case .tooLong(let length):
+        return "message claims \(length) bytes, over the \(Wire.maxMessage) cap"
+      }
+    }
+  }
+
+  /// '<IHHIIIQ4x': magic, version, msg_type, seq, flags, length, reserved, 4 pad.
+  public static func packHeader(_ header: Header, into out: UnsafeMutableRawPointer) {
+    out.storeBytes(of: magic.littleEndian, toByteOffset: 0, as: UInt32.self)
+    out.storeBytes(of: version.littleEndian, toByteOffset: 4, as: UInt16.self)
+    out.storeBytes(of: header.msgType.littleEndian, toByteOffset: 6, as: UInt16.self)
+    out.storeBytes(of: header.seq.littleEndian, toByteOffset: 8, as: UInt32.self)
+    out.storeBytes(of: header.flags.littleEndian, toByteOffset: 12, as: UInt32.self)
+    out.storeBytes(of: header.length.littleEndian, toByteOffset: 16, as: UInt32.self)
+    out.storeBytes(of: header.reserved.littleEndian, toByteOffset: 20, as: UInt64.self)
+    out.storeBytes(of: UInt32(0), toByteOffset: 28, as: UInt32.self)
+  }
+
+  public static func unpackHeader(_ buffer: UnsafeRawPointer) throws -> Header {
+    let magicRead = UInt32(littleEndian: buffer.loadUnaligned(fromByteOffset: 0, as: UInt32.self))
+    guard magicRead == magic else { throw ProtocolError.badMagic(magicRead) }
+    let versionRead = UInt16(littleEndian: buffer.loadUnaligned(fromByteOffset: 4, as: UInt16.self))
+    guard versionRead == version else { throw ProtocolError.badVersion(versionRead) }
+    return Header(
+      msgType: UInt16(littleEndian: buffer.loadUnaligned(fromByteOffset: 6, as: UInt16.self)),
+      seq: UInt32(littleEndian: buffer.loadUnaligned(fromByteOffset: 8, as: UInt32.self)),
+      flags: UInt32(littleEndian: buffer.loadUnaligned(fromByteOffset: 12, as: UInt32.self)),
+      length: UInt32(littleEndian: buffer.loadUnaligned(fromByteOffset: 16, as: UInt32.self)),
+      reserved: UInt64(littleEndian: buffer.loadUnaligned(fromByteOffset: 20, as: UInt64.self)))
+  }
+
+  public static func packInferResp(frameID: UInt32, status: Status, gpuUs: UInt32, queueUs: UInt32, totalUs: UInt32, into out: UnsafeMutableRawPointer) {
+    out.storeBytes(of: frameID.littleEndian, toByteOffset: 0, as: UInt32.self)
+    out.storeBytes(of: status.rawValue.littleEndian, toByteOffset: 4, as: UInt32.self)
+    out.storeBytes(of: gpuUs.littleEndian, toByteOffset: 8, as: UInt32.self)
+    out.storeBytes(of: queueUs.littleEndian, toByteOffset: 12, as: UInt32.self)
+    out.storeBytes(of: totalUs.littleEndian, toByteOffset: 16, as: UInt32.self)
+  }
+
+  public static func inferResp(frameID: UInt32 = 0, status: Status, gpuUs: UInt32 = 0, queueUs: UInt32 = 0, totalUs: UInt32 = 0) -> [UInt8] {
+    var bytes = [UInt8](repeating: 0, count: inferRespSize)
+    bytes.withUnsafeMutableBytes {
+      packInferResp(frameID: frameID, status: status, gpuUs: gpuUs, queueUs: queueUs, totalUs: totalUs, into: $0.baseAddress!)
+    }
+    return bytes
+  }
+}
