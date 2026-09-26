@@ -51,7 +51,7 @@ let package = Package(
     .target(name: "JetlinkRegistry", dependencies: ["JetlinkKit"]),
     .target(
       name: "JetlinkServer",
-      dependencies: ["JetlinkKit", "COrt"],  // TEMP: + JetlinkONNX, JetlinkRegistry once they land
+      dependencies: ["JetlinkKit", "JetlinkRegistry", "COrt"],  // TEMP: + JetlinkONNX once it lands
       linkerSettings: [.linkedFramework("Metal")]),
     .executableTarget(name: "jetlink-serve", dependencies: ["JetlinkKit", "JetlinkServer"]),
     .executableTarget(name: "jetlink-onnx", dependencies: ["JetlinkONNX"]),

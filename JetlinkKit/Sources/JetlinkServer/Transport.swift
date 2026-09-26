@@ -293,19 +293,18 @@ public final class TCPListener: @unchecked Sendable {
       if isClosed { return nil }
       var poller = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
       let ready = poll(&poller, 1, 250)
+      if ready < 0 && errno != EINTR { return nil }
       if ready <= 0 { continue }
+      // iOS reclaims a suspended app's listening sockets; this one is gone.
+      if poller.revents & Int16(POLLERR | POLLHUP | POLLNVAL) != 0 { return nil }
       var address = sockaddr_in()
       var length = socklen_t(MemoryLayout<sockaddr_in>.size)
       let client = withUnsafeMutablePointer(to: &address) {
         $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.accept(fd, $0, &length) }
       }
       if client < 0 {
-        if errno == EINTR || errno == ECONNABORTED { continue }
-        lock.lock()
-        let isClosed = closed
-        lock.unlock()
-        if isClosed { return nil }
-        continue
+        if errno == EINTR || errno == ECONNABORTED || errno == EAGAIN { continue }
+        return nil
       }
       var text = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
       inet_ntop(AF_INET, &address.sin_addr, &text, socklen_t(INET_ADDRSTRLEN))

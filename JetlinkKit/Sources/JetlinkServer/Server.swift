@@ -60,19 +60,60 @@ public final class Server: @unchecked Sendable {
 
   /// Listens, and serves until `stop`. Returns once listening.
   public func start() throws {
+    try listen()
+    if configuration.preload {
+      host.preload()
+    }
+    ticker = Ticker(interval: Server.statsInterval) { [weak self] _ in self?.tick() }
+  }
+
+  private func listen() throws {
     let listener = try TCPListener(host: configuration.host, port: configuration.port)
     lock.lock()
     self.listener = listener
     lock.unlock()
     log.info("listening on \(self.configuration.host, privacy: .public):\(listener.port)")
-    setLink(LinkEvent(state: .waiting, detail: "listening on \(configuration.host):\(listener.port)", peer: nil))
-    if configuration.preload {
-      host.preload()
+    if currentLink.state != .connected {
+      setLink(LinkEvent(state: .waiting, detail: "listening on \(configuration.host):\(listener.port)", peer: nil))
     }
-    let thread = Thread { [self] in acceptLoop(listener) }
+    let thread = Thread { [self] in
+      acceptLoop(listener)
+      listenerEnded(listener)
+    }
     thread.name = "jetlink-accept"
     thread.start()
-    ticker = Ticker(interval: Server.statsInterval) { [weak self] _ in self?.tick() }
+  }
+
+  /// Whether the listener is still accepting. iOS takes a suspended app's
+  /// listening socket away, so the app asks this when it comes back.
+  public var isListening: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return listener != nil
+  }
+
+  /// Listens again after the old socket was taken away. The engine stays loaded.
+  public func reopenListener() throws {
+    lock.lock()
+    let old = listener
+    let isStopped = stopped
+    listener = nil
+    lock.unlock()
+    guard !isStopped else { return }
+    old?.close()
+    try listen()
+  }
+
+  private func listenerEnded(_ ended: TCPListener) {
+    lock.lock()
+    let wasCurrent = listener === ended
+    if wasCurrent { listener = nil }
+    let isStopped = stopped
+    lock.unlock()
+    if wasCurrent && !isStopped {
+      log.warning("the listening socket went away")
+      ended.close()
+    }
   }
 
   public var port: UInt16? {
@@ -92,6 +133,12 @@ public final class Server: @unchecked Sendable {
     lock.lock()
     defer { lock.unlock() }
     return current?.frames ?? 0
+  }
+
+  /// The frames served over the last `window` seconds, as one summary: the
+  /// dashboard's headline, steadier than the once-a-second event.
+  public func recentStats(window: TimeInterval) -> StatsEvent? {
+    host.frameStats.summary(window: window, framesTotal: framesServed)
   }
 
   public func stop() {
