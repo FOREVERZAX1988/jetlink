@@ -72,7 +72,7 @@ final class NetworkInterfaces {
       defer { cursor = entry.pointee.ifa_next }
       let flags = Int32(entry.pointee.ifa_flags)
       guard flags & IFF_UP != 0, flags & IFF_LOOPBACK == 0,
-            let socket = entry.pointee.ifa_addr, socket.pointee.sa_family == UInt8(AF_INET)
+        let socket = entry.pointee.ifa_addr, socket.pointee.sa_family == UInt8(AF_INET)
       else { continue }
       let name = String(cString: entry.pointee.ifa_name)
       let kind: Address.Kind
@@ -83,7 +83,7 @@ final class NetworkInterfaces {
       } else if name.hasPrefix("bridge") {
         kind = .hotspot
       } else if name.hasPrefix("pdp_ip") || name.hasPrefix("utun") || name.hasPrefix("ipsec") || name.hasPrefix("awdl") || name.hasPrefix("llw") {
-        continue   // cellular and tunnels: never where a comma is
+        continue  // cellular and tunnels: never where a comma is
       } else {
         kind = .other
       }

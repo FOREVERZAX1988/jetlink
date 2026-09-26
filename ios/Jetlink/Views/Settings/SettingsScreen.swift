@@ -24,14 +24,18 @@ struct SettingsScreen: View {
         } header: {
           Text("Model")
         } footer: {
-          Text("The vision half of the model runs on the Neural Engine and the rest on the GPU, the fastest layout on a Mac. GPU only is for when another app keeps the Neural Engine busy; each choice prepares the model again. A small GPU job between frames stops the GPU slowing down in the gaps, at some cost in power.")
+          Text(
+            "The vision half of the model runs on the Neural Engine and the rest on the GPU, the fastest layout on a Mac. GPU only is for when another app keeps the Neural Engine busy; each choice prepares the model again. A small GPU job between frames stops the GPU slowing down in the gaps, at some cost in power."
+          )
         }
         Section {
           Toggle("Keep the Screen On", isOn: $settings.keepScreenOn)
         } header: {
           Text("While Jetlink Is Open")
         } footer: {
-          Text("iOS suspends Jetlink when the iPhone locks or another app comes to the front, and the comma then drives on its small model. Keep Jetlink on screen while driving, and keep the iPhone on power.")
+          Text(
+            "iOS suspends Jetlink when the iPhone locks or another app comes to the front, and the comma then drives on its small model. Keep Jetlink on screen while driving, and keep the iPhone on power."
+          )
         }
         storage
         about

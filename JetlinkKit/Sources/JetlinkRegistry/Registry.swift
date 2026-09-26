@@ -132,7 +132,7 @@ public final class Registry: Sendable {
     for next in (version + 1)...(version + limit) {
       do {
         found.append(try await fetchCatalog(Catalog.url(version: next)))
-      } catch where error.kind == .notFound {
+      } catch  where error.kind == .notFound {
         break
       } catch {
         Registry.log.warning("stopped probing for newer catalogs: \(error.message, privacy: .public)")

@@ -1,33 +1,37 @@
 import Foundation
 import Testing
+
 @testable import JetlinkONNX
 
 @Suite struct OnnxMetaTests {
   @Test func queuedFixture() throws {
     let meta = try OnnxMeta.read(contentsOf: Fixtures.url("queued.onnx"))
-    #expect(meta.inputs == [
-      .init(name: "img", elemType: 2, dims: [1, 12, 8, 16]),
-      .init(name: "big_img", elemType: 2, dims: [1, 12, 8, 16]),
-      .init(name: "desire_pulse", elemType: 1, dims: [1, 4, 8]),
-      .init(name: "traffic_convention", elemType: 1, dims: [1, 2]),
-      .init(name: "features_buffer", elemType: 1, dims: [1, 4, 16]),
-    ])
+    #expect(
+      meta.inputs == [
+        .init(name: "img", elemType: 2, dims: [1, 12, 8, 16]),
+        .init(name: "big_img", elemType: 2, dims: [1, 12, 8, 16]),
+        .init(name: "desire_pulse", elemType: 1, dims: [1, 4, 8]),
+        .init(name: "traffic_convention", elemType: 1, dims: [1, 2]),
+        .init(name: "features_buffer", elemType: 1, dims: [1, 4, 16]),
+      ])
     #expect(meta.outputs == [.init(name: "outputs", elemType: 1, dims: [1, 104])])
     #expect(meta.props.map(\.key) == ["output_slices", "model_checkpoint", "CACHE_KEY"])
     #expect(meta.modelCheckpoint == "queued-test")
-    #expect(try meta.outputSlices() == [
-      OutputSlice(name: "plan", start: 0, stop: 48),
-      OutputSlice(name: "lead", start: 48, stop: 96),
-      OutputSlice(name: "hidden_state", start: 96, stop: 104),
-    ])
+    #expect(
+      try meta.outputSlices() == [
+        OutputSlice(name: "plan", start: 0, stop: 48),
+        OutputSlice(name: "lead", start: 48, stop: 96),
+        OutputSlice(name: "hidden_state", start: 96, stop: 104),
+      ])
     #expect(meta.inputs[0].typeName == "uint8")
   }
 
   @Test func statefulFixture() throws {
     let meta = try OnnxMeta.read(contentsOf: Fixtures.url("stateful.onnx"))
-    #expect(meta.inputs.map(\.name) == [
-      "new_img", "desire", "traffic_convention", "action_t", "state_img_q", "state_desire_q", "state_feat_q",
-    ])
+    #expect(
+      meta.inputs.map(\.name) == [
+        "new_img", "desire", "traffic_convention", "action_t", "state_img_q", "state_desire_q", "state_feat_q",
+      ])
     #expect(meta.outputs.map(\.name) == ["outputs", "next_state_img_q", "next_state_desire_q", "next_state_feat_q"])
     #expect(meta.outputs[1] == .init(name: "next_state_img_q", elemType: 2, dims: [2, 5, 6, 8, 16]))
     #expect(meta.inputs[1].dims == [8])

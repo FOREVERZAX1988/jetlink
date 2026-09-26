@@ -98,7 +98,7 @@ public enum Catalog {
         if self.selector(bundle) == selector {
           if !kept.contains(ref) { kept[ref] = .object(bundle) }
         } else if bundle["is_big"]?.truthy == true {
-          others[ref] = .object(bundle)   // the newest catalog's entry wins, in the first one's place
+          others[ref] = .object(bundle)  // the newest catalog's entry wins, in the first one's place
         }
       }
     }

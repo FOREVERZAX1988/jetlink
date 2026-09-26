@@ -36,11 +36,11 @@ final class MetalKeepAlive: @unchecked Sendable {
   /// Nil where Metal is unavailable; inference goes on without it.
   static func make() -> MetalKeepAlive? {
     guard let device = MTLCreateSystemDefaultDevice(),
-          let queue = device.makeCommandQueue(),
-          let library = try? device.makeLibrary(source: shader, options: nil),
-          let function = library.makeFunction(name: "keep_active"),
-          let pipeline = try? device.makeComputePipelineState(function: function),
-          let buffer = device.makeBuffer(length: 128, options: .storageModeShared)
+      let queue = device.makeCommandQueue(),
+      let library = try? device.makeLibrary(source: shader, options: nil),
+      let function = library.makeFunction(name: "keep_active"),
+      let pipeline = try? device.makeComputePipelineState(function: function),
+      let buffer = device.makeBuffer(length: 128, options: .storageModeShared)
     else { return nil }
     return MetalKeepAlive(queue: queue, pipeline: pipeline, buffer: buffer)
   }

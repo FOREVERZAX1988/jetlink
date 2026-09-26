@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import JetlinkServer
 
 @Suite("Model spec")

@@ -21,7 +21,8 @@ public struct ONNXPreparer: ModelPreparer {
 
   public func prepare(model: URL, into directory: URL, split: Bool, cacheKey: @escaping (String) -> String) throws -> PreparedModel {
     let report = try CoreMLPreparation.prepare(source: model, into: directory, layout: split ? .split : .whole, cacheKey: cacheKey)
-    let summary = "stripped \(report.stripped) tinygrad op(s), \(report.retypedImages ? "images retyped to fp16" : "inputs left as declared"), "
+    let summary =
+      "stripped \(report.stripped) tinygrad op(s), \(report.retypedImages ? "images retyped to fp16" : "inputs left as declared"), "
       + "\(report.gathers) negative Gather index(es) normalized, \(report.gemms) MatMul+Add rewritten as Gemm(transB=1), \(report.tiles) Expand(s) as Tile"
     return PreparedModel(
       parts: report.parts.map { PreparedModel.Part(name: $0.name, file: $0.url.lastPathComponent, weightBytes: $0.weightBytes) },

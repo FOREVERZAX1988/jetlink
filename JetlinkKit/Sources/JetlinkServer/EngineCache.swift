@@ -80,9 +80,9 @@ public final class EngineCache: @unchecked Sendable {
     var found = Set<String>()
     for meta in files where meta.pathExtension == "json" {
       guard let data = try? Data(contentsOf: meta),
-            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-            let spec = object["spec"] as? [String: Any],
-            let sha = spec["sha256"] as? String, EngineCache.isSHA256(sha)
+        let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        let spec = object["spec"] as? [String: Any],
+        let sha = spec["sha256"] as? String, EngineCache.isSHA256(sha)
       else { continue }
       let entry = entry(sha)
       if entry.metaPath.standardizedFileURL == meta.standardizedFileURL && entry.exists {
@@ -103,9 +103,9 @@ public final class EngineCache: @unchecked Sendable {
 
   public func lastLoaded() -> (sha256: String, frameSkip: Int)? {
     guard let data = try? Data(contentsOf: root.appending(path: EngineCache.lastLoadedName)),
-          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-          let sha = object["sha256"] as? String, EngineCache.isSHA256(sha),
-          let skip = (object["frame_skip"] as? NSNumber)?.intValue
+      let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+      let sha = object["sha256"] as? String, EngineCache.isSHA256(sha),
+      let skip = (object["frame_skip"] as? NSNumber)?.intValue
     else { return nil }
     return (sha, skip)
   }

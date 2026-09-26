@@ -68,18 +68,22 @@ public enum CoreMLPreparation {
     return String(String.UnicodeScalarView(kept.prefix(63)))
   }
 
-  public static func prepare(source: URL, into directory: URL, layout: Layout,
-                             cacheKey: (String) -> String,
-                             progress: ((Double) -> Void)? = nil) throws -> Report {
+  public static func prepare(
+    source: URL, into directory: URL, layout: Layout,
+    cacheKey: (String) -> String,
+    progress: ((Double) -> Void)? = nil
+  ) throws -> Report {
     let data = try Data(contentsOf: source, options: .alwaysMapped)
     return try data.withUnsafeBytes { buf in
       try prepare(Source(bytes: buf), into: directory, layout: layout, cacheKey: cacheKey, progress: progress)
     }
   }
 
-  private static func prepare(_ src: Source, into directory: URL, layout: Layout,
-                              cacheKey: (String) -> String,
-                              progress: ((Double) -> Void)?) throws -> Report {
+  private static func prepare(
+    _ src: Source, into directory: URL, layout: Layout,
+    cacheKey: (String) -> String,
+    progress: ((Double) -> Void)?
+  ) throws -> Report {
     var model = try Decode.model(src)
     guard var g = model.graph else { throw OnnxError("the model has no graph") }
     if let t = g.initializers.first(where: \.isExternal) {
@@ -111,8 +115,10 @@ public enum CoreMLPreparation {
     }
 
     let encoded = parts.map { part in
-      (name: part.name, bytes: Encode.model(part.model, src),
-       weights: part.model.graph!.initializers.reduce(Int64(0)) { $0 + Int64($1.raw?.count ?? 0) })
+      (
+        name: part.name, bytes: Encode.model(part.model, src),
+        weights: part.model.graph!.initializers.reduce(Int64(0)) { $0 + Int64($1.raw?.count ?? 0) }
+      )
     }
     let total = max(1, encoded.reduce(0) { $0 + $1.bytes.count })
 
@@ -138,8 +144,9 @@ public enum CoreMLPreparation {
       throw error
     }
     progress?(1.0)
-    return Report(stripped: stripped, retypedImages: retyped, gathers: gathers, gemms: gemms, tiles: tiles,
-                  parts: reported)
+    return Report(
+      stripped: stripped, retypedImages: retyped, gathers: gathers, gemms: gemms, tiles: tiles,
+      parts: reported)
   }
 }
 
@@ -273,9 +280,11 @@ final class PartWriter {
   }
 
   @inline(__always)
-  private static func transposeBand<T: FixedWidthInteger>(_: T.Type, _ from: UnsafeRawPointer,
-                                                          _ to: UnsafeMutableRawPointer,
-                                                          _ rows: Int, _ cols: Int, _ j0: Int, _ j1: Int) {
+  private static func transposeBand<T: FixedWidthInteger>(
+    _: T.Type, _ from: UnsafeRawPointer,
+    _ to: UnsafeMutableRawPointer,
+    _ rows: Int, _ cols: Int, _ j0: Int, _ j1: Int
+  ) {
     let size = MemoryLayout<T>.size
     // The source may sit at any offset in the file, so its loads are unaligned.
     for i in 0..<rows {

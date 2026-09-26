@@ -102,7 +102,7 @@ public enum LFS {
     let body: Data
     do {
       body = try await http.get(pointerURL(ref: ref), timeout: timeout, limit: pointerMax)
-    } catch where error.kind == .notFound {
+    } catch  where error.kind == .notFound {
       return try await fetchExportPointer(ref: ref, http: http, timeout: timeout)
     }
     guard let pointer = parsePointer(String(decoding: body, as: UTF8.self)) else {

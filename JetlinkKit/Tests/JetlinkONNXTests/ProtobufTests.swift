@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import JetlinkONNX
 
 // The expected bytes are what Python's protobuf (upb, protobuf 7.36.1, onnx
@@ -88,8 +89,9 @@ import Testing
     let bytes = [UInt8]()
     bytes.withUnsafeBytes { buf in
       let src = Source(bytes: buf)
-      #expect(hexString(flatten(Encode.tensor(shaped, src), src))
-        == "0802080210074201784a20" + "0100000000000000" + "0200000000000000" + "0300000000000000" + "0400000000000000")
+      #expect(
+        hexString(flatten(Encode.tensor(shaped, src), src))
+          == "0802080210074201784a20" + "0100000000000000" + "0200000000000000" + "0300000000000000" + "0400000000000000")
     }
   }
 
@@ -99,8 +101,9 @@ import Testing
     let bytes = [UInt8]()
     bytes.withUnsafeBytes { buf in
       let src = Source(bytes: buf)
-      #expect(hexString(flatten(Encode.node(node, src), src))
-        == "0a01610a01620a01631201791a0167220447656d6d2a0d0a067472616e73421801a00102")
+      #expect(
+        hexString(flatten(Encode.node(node, src), src))
+          == "0a01610a01620a01631201791a0167220447656d6d2a0d0a067472616e73421801a00102")
     }
   }
 
@@ -113,8 +116,9 @@ import Testing
   /// Packed floats, the type first, and the name twice: Python keeps the
   /// last name and writes the fields in number order.
   @Test func oddAttributeIsWrittenAsPythonWritesIt() throws {
-    try assertReencodes(attribute: "a00106" + "0a0178" + "3a080000803f00000040" + "0a0173",
-                        to: "0a01733d0000803f3d00000040a00106")
+    try assertReencodes(
+      attribute: "a00106" + "0a0178" + "3a080000803f00000040" + "0a0173",
+      to: "0a01733d0000803f3d00000040a00106")
   }
 
   /// An attribute Python wrote is copied as it is.
@@ -135,7 +139,7 @@ import Testing
   }
 
   @Test func invalidUTF8NamesAreRefused() {
-    let bytes = hex("4202ff61")   // name = 0xff 'a'
+    let bytes = hex("4202ff61")  // name = 0xff 'a'
     #expect(throws: OnnxError.self) {
       try bytes.withUnsafeBytes { buf in
         _ = try Decode.tensor(Source(bytes: buf), 0..<buf.count)

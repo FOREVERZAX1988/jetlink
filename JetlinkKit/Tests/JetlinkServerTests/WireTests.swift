@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import JetlinkServer
 
 @Suite("Wire protocol")
@@ -9,7 +10,8 @@ struct WireTests {
   func headerBytes() throws {
     var bytes = [UInt8](repeating: 0xFF, count: Wire.headerSize)
     bytes.withUnsafeMutableBytes {
-      Wire.packHeader(Wire.Header(msgType: Wire.Msg.inferReq.rawValue, seq: 7, flags: (Wire.Flag.wantState.union(.padded)).rawValue, length: 1234), into: $0.baseAddress!)
+      Wire.packHeader(
+        Wire.Header(msgType: Wire.Msg.inferReq.rawValue, seq: 7, flags: (Wire.Flag.wantState.union(.padded)).rawValue, length: 1234), into: $0.baseAddress!)
     }
     #expect(hex(bytes) == "4a4c4e4b020008000700000082000000d2040000000000000000000000000000")
     let header = try bytes.withUnsafeBytes { try Wire.unpackHeader($0.baseAddress!) }
@@ -29,7 +31,7 @@ struct WireTests {
     var bytes = [UInt8](repeating: 0, count: Wire.headerSize)
     #expect(throws: Wire.ProtocolError.self) { try bytes.withUnsafeBytes { try Wire.unpackHeader($0.baseAddress!) } }
     bytes.withUnsafeMutableBytes { Wire.packHeader(Wire.Header(msgType: 1, seq: 1, flags: 0, length: 0), into: $0.baseAddress!) }
-    bytes[4] = 1   // version 1
+    bytes[4] = 1  // version 1
     #expect(throws: Wire.ProtocolError.self) { try bytes.withUnsafeBytes { try Wire.unpackHeader($0.baseAddress!) } }
   }
 

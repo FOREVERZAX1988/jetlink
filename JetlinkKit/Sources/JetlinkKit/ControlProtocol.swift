@@ -173,7 +173,10 @@ public struct InventoryArtifact: Codable, Sendable, Equatable, Identifiable {
   public let checkpoint: String?
   public let current: Bool
 
-  public init(sha256: String, key: String, path: String, bytes: Int64, backend: String, runtimeVersion: String?, device: String, builtAt: String?, buildSeconds: Double?, checkpoint: String?, current: Bool) {
+  public init(
+    sha256: String, key: String, path: String, bytes: Int64, backend: String, runtimeVersion: String?, device: String, builtAt: String?, buildSeconds: Double?,
+    checkpoint: String?, current: Bool
+  ) {
     self.sha256 = sha256
     self.key = key
     self.path = path

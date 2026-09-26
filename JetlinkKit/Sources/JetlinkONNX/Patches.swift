@@ -94,8 +94,9 @@ enum Patches {
       } else if layoutOps.contains(node.op) {
         retyped.formUnion(node.outputs)
       } else {
-        throw OnnxError("\(node.op) \(pyRepr(node.displayName)) reads the uint8 images; only layout ops "
-          + "and the head Cast are expected there")
+        throw OnnxError(
+          "\(node.op) \(pyRepr(node.displayName)) reads the uint8 images; only layout ops "
+            + "and the head Cast are expected there")
       }
     }
     guard !casts.isEmpty else {
@@ -177,12 +178,15 @@ enum Patches {
       guard size > 0 else { continue }
       let fixed = values.map { $0 < 0 ? $0 + size : $0 }
       if fixed.contains(where: { $0 < 0 || $0 >= size }) {
-        throw OnnxError("\(node.displayName): Gather index \(pyList(values, index.dims)) out of range "
-          + "for axis \(axis) of size \(size)")
+        throw OnnxError(
+          "\(node.displayName): Gather index \(pyList(values, index.dims)) out of range "
+            + "for axis \(axis) of size \(size)")
       }
       let name = "\(node.outputs.first ?? "")__index"
-      g.initializers.append(Tensor(name: name, dims: index.dims, dataType: index.dataType,
-                                   raw: .owned(try Elements.encode(fixed, as: index.elementType, for: name))))
+      g.initializers.append(
+        Tensor(
+          name: name, dims: index.dims, dataType: index.dataType,
+          raw: .owned(try Elements.encode(fixed, as: index.elementType, for: name))))
       g.nodes[k].inputs[1] = name
       rewritten += 1
     }
@@ -262,9 +266,11 @@ enum Patches {
       // The bias has to broadcast over the output's last axis; anything else
       // is a real elementwise Add and not a Gemm's C.
       guard let bias = add.inputs.first(where: { initializers[$0] != nil }),
-            g.initializers[initializers[bias]!].dims == [weight.dims[1]] else { continue }
+        g.initializers[initializers[bias]!].dims == [weight.dims[1]]
+      else { continue }
       guard let shape = dims[node.inputs[0]], shape.count >= 2, shape.last == weight.dims[0],
-            !shape.contains(where: { $0 <= 0 }) else { continue }
+        !shape.contains(where: { $0 <= 0 })
+      else { continue }
 
       let stem = node.outputs[0]
       let transposed = "\(stem)__wt"
@@ -279,13 +285,17 @@ enum Patches {
         new.append(Node(inputs: [node.inputs[0], flat], outputs: [a], name: "\(stem)__reshape_in", opType: "Reshape"))
       }
       let gemmOut = shape.count == 2 ? add.outputs[0] : "\(stem)__gemm"
-      new.append(Node(inputs: [a, transposed, bias], outputs: [gemmOut], name: "\(stem)__gemm", opType: "Gemm",
-                      attributes: [.int("transB", 1)]))
+      new.append(
+        Node(
+          inputs: [a, transposed, bias], outputs: [gemmOut], name: "\(stem)__gemm", opType: "Gemm",
+          attributes: [.int("transB", 1)]))
       if shape.count > 2 {
         let back = "\(stem)__out_shape"
         g.initializers.append(int64Tensor(Array(shape.dropLast()) + [weight.dims[1]], back))
-        new.append(Node(inputs: [gemmOut, back], outputs: [add.outputs[0]], name: "\(stem)__reshape_out",
-                        opType: "Reshape"))
+        new.append(
+          Node(
+            inputs: [gemmOut, back], outputs: [add.outputs[0]], name: "\(stem)__reshape_out",
+            opType: "Reshape"))
       }
       replacements[k] = new
       drop.insert(after[0])
@@ -342,7 +352,8 @@ enum Patches {
       // layout. Anything else is decoded when it is written.
       let field = Elements.typedField(type)
       if let field, field == 4 || field == 10, type == DataType.float || type == DataType.double,
-         let ranges = weight.typed[field], ranges.count == 1, ranges[0].count == expected {
+        let ranges = weight.typed[field], ranges.count == 1, ranges[0].count == expected
+      {
         elements = .source(ranges[0])
       } else {
         let count = try Elements.typedCount(weight, src)
@@ -351,8 +362,9 @@ enum Patches {
       }
     }
     let transpose = Transpose(elements: elements, rows: rows, cols: cols, elementSize: size)
-    return Tensor(name: name, dims: [weight.dims[1], weight.dims[0]], dataType: weight.dataType,
-                  raw: .transposed(transpose))
+    return Tensor(
+      name: name, dims: [weight.dims[1], weight.dims[0]], dataType: weight.dataType,
+      raw: .transposed(transpose))
   }
 
   private static func sizeMismatch(_ t: Tensor, _ have: Int, _ want: Int) -> OnnxError {

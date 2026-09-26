@@ -182,7 +182,7 @@ final class Session: @unchecked Sendable {
 
   private func onEngineReq(_ message: Message) throws {
     guard let d = JSONLine.decode(message.payload), let sha = d["sha256"] as? String,
-          let nbytes = (d["nbytes"] as? NSNumber)?.int64Value
+      let nbytes = (d["nbytes"] as? NSNumber)?.int64Value
     else {
       try error(message.seq, "bad_request", "ENGINE_REQ needs sha256 and nbytes")
       return
@@ -236,9 +236,11 @@ final class Session: @unchecked Sendable {
     let digest = (try? sha256File(path))?.0
     if digest != request.sha256 {
       try? FileManager.default.removeItem(at: path)
-      try sendJSON(.engineResp, seq: message.seq, [
-        "state": "failed", "detail": "sha256 mismatch after upload", "sha256": request.sha256, "chunk": ModelConstants.chunk,
-      ])
+      try sendJSON(
+        .engineResp, seq: message.seq,
+        [
+          "state": "failed", "detail": "sha256 mismatch after upload", "sha256": request.sha256, "chunk": ModelConstants.chunk,
+        ])
       return
     }
     progress("upload", 1, "verified")
@@ -337,7 +339,9 @@ final class Session: @unchecked Sendable {
     let sendUs = microseconds(since: sendStarted)
     frames += 1
     if totalUs > FrameStats.slowUs || sendUs > 10_000 {
-      log.warning("slow frame \(frameID): gpu \(Double(loaded.engine.lastGpuUs) / 1000) queue \(Double(queueUs) / 1000) total \(Double(totalUs) / 1000) send \(Double(sendUs) / 1000) ms")
+      log.warning(
+        "slow frame \(frameID): gpu \(Double(loaded.engine.lastGpuUs) / 1000) queue \(Double(queueUs) / 1000) total \(Double(totalUs) / 1000) send \(Double(sendUs) / 1000) ms"
+      )
     }
     host.frameStats.record(totalUs: totalUs, gpuUs: loaded.engine.lastGpuUs, queueUs: queueUs, sendUs: sendUs)
   }

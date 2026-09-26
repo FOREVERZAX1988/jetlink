@@ -203,7 +203,8 @@ public final class EngineHost: @unchecked Sendable {
       return EngineEvent(state: .ready, sha256: loaded.sha256, detail: "", stage: nil, frac: 1, msg: msg, loadOnly: job?.loadOnly ?? false)
     }
     if let job, job.state == .building {
-      return EngineEvent(state: job.loadOnly ? .loading : .building, sha256: job.sha256, detail: job.detail, stage: stage, frac: frac, msg: msg, loadOnly: job.loadOnly)
+      return EngineEvent(
+        state: job.loadOnly ? .loading : .building, sha256: job.sha256, detail: job.detail, stage: stage, frac: frac, msg: msg, loadOnly: job.loadOnly)
     }
     if let job, job.state == .failed {
       return EngineEvent(state: .failed, sha256: job.sha256, detail: job.detail, stage: "failed", frac: frac, msg: msg, loadOnly: job.loadOnly)
@@ -315,7 +316,7 @@ public final class EngineHost: @unchecked Sendable {
     if busy { return }
     let entry = cache.entry(sha256)
     guard let d = cachedSpec(entry), let spec = try? ModelSpec.from(d).withFrameSkip(frameSkip),
-          let request = try? Request(sha256: sha256, nbytes: 0, frameSkip: frameSkip)
+      let request = try? Request(sha256: sha256, nbytes: 0, frameSkip: frameSkip)
     else { return }
     log.info("preloading the engine loaded last: \(entry.path.lastPathComponent, privacy: .public)")
     start(Job(sha256: sha256, loadOnly: true), request: request, entry: entry, modelPath: cache.modelPath(sha256), spec: spec)

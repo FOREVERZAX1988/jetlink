@@ -32,13 +32,13 @@ enum Fixture {
   }
 }
 
-let REF = "f877d7a0ccc3cce943c76e285214c020cd65c899"
-let OID = "a086d5249fc308bb73993d1e64630c669d4c7df5bde85f42ad61902543648525"
-let SIZE: Int64 = 765_953_504
-let NEWEST = "37bfa1413edcdc2e8844984b83727c33f81d8f46"
-let BLOB = Data(String(repeating: "onnx", count: 1024).utf8)
-let BLOB_SHA = sha256Hex(BLOB)
-let SMALL_REF = String(repeating: "a", count: 40)
+let fixtureRef = "f877d7a0ccc3cce943c76e285214c020cd65c899"
+let fixtureOID = "a086d5249fc308bb73993d1e64630c669d4c7df5bde85f42ad61902543648525"
+let fixtureSize: Int64 = 765_953_504
+let newestRef = "37bfa1413edcdc2e8844984b83727c33f81d8f46"
+let fixtureBlob = Data(String(repeating: "onnx", count: 1024).utf8)
+let fixtureBlobSHA = sha256Hex(fixtureBlob)
+let smallRef = String(repeating: "a", count: 40)
 
 func sha256Hex(_ data: Data) -> String {
   SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
@@ -63,14 +63,14 @@ func batch(oid: String, size: Int64, href: String?) -> Data {
   return JSON.object(payload).data()
 }
 
-func smallPointerText(oid: String = BLOB_SHA, size: Int64 = Int64(BLOB.count)) -> Data {
+func smallPointerText(oid: String = fixtureBlobSHA, size: Int64 = Int64(fixtureBlob.count)) -> Data {
   Data("version https://git-lfs.github.com/spec/v1\noid sha256:\(oid)\nsize \(size)\n".utf8)
 }
 
 /// The first endpoint has nothing, the second serves the object.
-func smallRoutes(oid: String = BLOB_SHA, size: Int64 = Int64(BLOB.count), blob: Data = BLOB) -> [String: MockNet.Reply] {
+func smallRoutes(oid: String = fixtureBlobSHA, size: Int64 = Int64(fixtureBlob.count), blob: Data = fixtureBlob) -> [String: MockNet.Reply] {
   [
-    LFS.pointerURL(ref: SMALL_REF): .body(smallPointerText(oid: oid, size: size)),
+    LFS.pointerURL(ref: smallRef): .body(smallPointerText(oid: oid, size: size)),
     "\(LFS.endpoints[0])/objects/batch": .body(batch(oid: oid, size: size, href: nil)),
     "\(LFS.endpoints[1])/objects/batch": .body(batch(oid: oid, size: size, href: "https://blob.example/object")),
     "https://blob.example/object": .body(blob),
@@ -260,7 +260,7 @@ final class LocalServer: Sendable {
     Thread.detachNewThread {
       while true {
         let client = accept(fd, nil, nil)
-        if client < 0 { return }   // the listener was closed
+        if client < 0 { return }  // the listener was closed
         Thread.detachNewThread { LocalServer.serve(client, total: total, pattern: pattern) }
       }
     }

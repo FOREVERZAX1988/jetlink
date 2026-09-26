@@ -18,17 +18,18 @@ struct DashboardScreen: View {
         onUseDefault: useDefault,
         onOpenModels: { showingModels = true },
         onRetry: retry,
-        onOpenSettings: openSettings)
-        .navigationTitle("Jetlink")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-          ToolbarItem(placement: .topBarLeading) {
-            Button("Models", systemImage: "shippingbox") { showingModels = true }
-          }
-          ToolbarItem(placement: .topBarTrailing) {
-            Button("Settings", systemImage: "gearshape") { showingSettings = true }
-          }
+        onOpenSettings: openSettings
+      )
+      .navigationTitle("Jetlink")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .topBarLeading) {
+          Button("Models", systemImage: "shippingbox") { showingModels = true }
         }
+        ToolbarItem(placement: .topBarTrailing) {
+          Button("Settings", systemImage: "gearshape") { showingSettings = true }
+        }
+      }
     }
     .sheet(isPresented: $showingModels) {
       ModelsScreen()

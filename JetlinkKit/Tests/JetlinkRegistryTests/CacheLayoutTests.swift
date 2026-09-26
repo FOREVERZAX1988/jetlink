@@ -30,7 +30,7 @@ struct CacheLayoutTests {
     #expect(layout.localModelsURL.path(percentEncoded: false) == "/cache/registry/local-models.json")
     #expect(layout.lastLoadedURL.path(percentEncoded: false) == "/cache/last-loaded.json")
     #expect(CacheLayout.isSHA256(sha) && !CacheLayout.isSHA256(sha.uppercased()) && !CacheLayout.isSHA256(String(sha.dropLast())))
-    #expect(CacheLayout.isRef(REF) && !CacheLayout.isRef(OID))
+    #expect(CacheLayout.isRef(fixtureRef) && !CacheLayout.isRef(fixtureOID))
   }
 
   @Test func theKeyIsTheModelAndTheBackendTag() throws {

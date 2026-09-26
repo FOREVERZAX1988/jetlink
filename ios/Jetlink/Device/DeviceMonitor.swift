@@ -19,9 +19,10 @@ final class DeviceMonitor {
       UIDevice.batteryLevelDidChangeNotification,
       UIDevice.batteryStateDidChangeNotification,
     ] {
-      observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-        MainActor.assumeIsolated { self?.refresh() }
-      })
+      observers.append(
+        center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+          MainActor.assumeIsolated { self?.refresh() }
+        })
     }
   }
 

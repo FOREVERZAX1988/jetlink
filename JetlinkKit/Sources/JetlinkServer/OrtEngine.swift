@@ -53,7 +53,7 @@ public final class OrtEngine: @unchecked Sendable {
   /// state_ input -> the buffer its next_state_ output writes, swapped each run.
   private var spare: [String: UnsafeMutableRawPointer] = [:]
   private var looped: [(input: String, output: String)] = []
-  private var bindings: [[OrtBinding]] = []   // [parity][session]
+  private var bindings: [[OrtBinding]] = []  // [parity][session]
   private var parity = 0
   private let keepAlive: MetalKeepAlive?
   private var closed = false

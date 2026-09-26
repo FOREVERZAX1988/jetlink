@@ -157,7 +157,7 @@ public final class ServerController: @unchecked Sendable {
       let snapshot = server.host.snapshot()
       publish(.engine(snapshot))
       if snapshot.state == .ready || snapshot.state == .failed {
-        publishInventory()   // a build or a load changed the disk
+        publishInventory()  // a build or a load changed the disk
       }
     case .link(let value):
       lock.lock()
@@ -241,9 +241,10 @@ public final class ServerController: @unchecked Sendable {
     if !missing.isEmpty {
       await registry.resolveMissingPointers(missing)
       // Re-read rather than patch: the registry owns what a pointer means.
-      payload = registry.cachedCatalog().map {
-        CatalogEvent(fetchedAt: $0.fetchedAt, url: $0.url, defaultRef: $0.defaultRef, error: payload.error, models: $0.models)
-      } ?? payload
+      payload =
+        registry.cachedCatalog().map {
+          CatalogEvent(fetchedAt: $0.fetchedAt, url: $0.url, defaultRef: $0.defaultRef, error: payload.error, models: $0.models)
+        } ?? payload
     }
     publish(.catalog(payload))
   }
@@ -505,7 +506,8 @@ public final class ServerController: @unchecked Sendable {
       return fileSize(modelPath)
     }
     if let spec = (try? server.cache.entry(sha256).meta())?["spec"] as? [String: Any],
-       let bytes = (spec["nbytes"] as? NSNumber)?.int64Value, bytes > 0 {
+      let bytes = (spec["nbytes"] as? NSNumber)?.int64Value, bytes > 0
+    {
       return bytes
     }
     return 0

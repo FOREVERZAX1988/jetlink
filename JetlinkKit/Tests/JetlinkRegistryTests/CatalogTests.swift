@@ -18,7 +18,7 @@ struct CatalogParseTests {
   @Test func keepsTheBigModelsNewestFirst() {
     let models = Catalog.parse(catalog)
     #expect(models.count == 13)
-    #expect(models[0].ref == NEWEST)
+    #expect(models[0].ref == newestRef)
     #expect(models[0].shortName == "CTMV2")
     #expect(models.map(\.index) == models.map(\.index).sorted(by: >))
   }
@@ -37,7 +37,7 @@ struct CatalogParseTests {
   @Test func survivesRubbish() {
     #expect(Catalog.parse([:]).isEmpty)
     #expect(Catalog.parse(["bundles": "nope"]).isEmpty)
-    #expect(Catalog.parse(["bundles": [nil, 5, ["ref": .string(REF), "minimum_selector_version": "x", "is_big": true]]]).isEmpty)
+    #expect(Catalog.parse(["bundles": [nil, 5, ["ref": .string(fixtureRef), "minimum_selector_version": "x", "is_big": true]]]).isEmpty)
   }
 
   @Test func aDuplicateRefIsListedOnce() {
@@ -234,36 +234,36 @@ struct CatalogPayloadTests {
   @Test func theCatalogCarriesAResolvedPointer() async throws {
     let tmp = try TempDir()
     defer { tmp.remove() }
-    let net = MockNet(catalogRoutes([LFS.pointerURL(ref: REF): .body(Fixture.data("pointer_f877d7a0.txt"))]))
+    let net = MockNet(catalogRoutes([LFS.pointerURL(ref: fixtureRef): .body(Fixture.data("pointer_f877d7a0.txt"))]))
     let registry = Registry(layout: tmp.layout, session: net.session)
-    _ = try await registry.resolve(ref: REF)
+    _ = try await registry.resolve(ref: fixtureRef)
     let payload = await registry.catalog()
-    let entry = payload.models.first { $0.ref == REF }
-    #expect(entry?.sha256 == OID)
-    #expect(entry?.bytes == SIZE)
-    #expect(payload.models.first { $0.ref == NEWEST }?.sha256 == nil)
+    let entry = payload.models.first { $0.ref == fixtureRef }
+    #expect(entry?.sha256 == fixtureOID)
+    #expect(entry?.bytes == fixtureSize)
+    #expect(payload.models.first { $0.ref == newestRef }?.sha256 == nil)
   }
 
   @Test func nameForFindsTheCatalogName() async throws {
     let tmp = try TempDir()
     defer { tmp.remove() }
-    let net = MockNet(catalogRoutes([LFS.pointerURL(ref: REF): .body(Fixture.data("pointer_f877d7a0.txt"))]))
+    let net = MockNet(catalogRoutes([LFS.pointerURL(ref: fixtureRef): .body(Fixture.data("pointer_f877d7a0.txt"))]))
     let registry = Registry(layout: tmp.layout, session: net.session)
     _ = await registry.catalog()
-    _ = try await registry.resolve(ref: REF)
-    #expect(registry.name(for: OID) == ("BMRLNAP Model v4 (August 30, 2026)", REF))
+    _ = try await registry.resolve(ref: fixtureRef)
+    #expect(registry.name(for: fixtureOID) == ("BMRLNAP Model v4 (August 30, 2026)", fixtureRef))
     #expect(registry.name(for: String(repeating: "b", count: 64)) == (nil, nil))
-    #expect(registry.ref(for: OID) == REF)
+    #expect(registry.ref(for: fixtureOID) == fixtureRef)
     #expect(registry.ref(for: String(repeating: "b", count: 64)) == nil)
   }
 
   @Test func stateFilesAreWrittenAtomically() async throws {
     let tmp = try TempDir()
     defer { tmp.remove() }
-    let net = MockNet(catalogRoutes([LFS.pointerURL(ref: REF): .body(Fixture.data("pointer_f877d7a0.txt"))]))
+    let net = MockNet(catalogRoutes([LFS.pointerURL(ref: fixtureRef): .body(Fixture.data("pointer_f877d7a0.txt"))]))
     let registry = Registry(layout: tmp.layout, session: net.session)
     _ = await registry.catalog()
-    _ = try await registry.resolve(ref: REF)
+    _ = try await registry.resolve(ref: fixtureRef)
     #expect(tmp.names("registry") == ["catalog.json", "pointers.json"])
     let cached = Files.readJSON(tmp.layout.catalogURL)
     #expect(cached?["url"]?.string == Catalog.url)

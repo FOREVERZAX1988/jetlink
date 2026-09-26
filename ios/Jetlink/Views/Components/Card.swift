@@ -1,27 +1,33 @@
 import SwiftUI
 
 #if canImport(UIKit)
-import UIKit
+  import UIKit
 #else
-import AppKit
+  import AppKit
 #endif
 
 extension Color {
   /// The screen behind the cards: grouped, as Settings and Health draw it.
   static var groupedBackground: Color {
     #if canImport(UIKit)
-    Color(uiColor: .systemGroupedBackground)
+      Color(uiColor: .systemGroupedBackground)
     #else
-    Color(nsColor: NSColor(name: nil) { $0.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? .black : NSColor(srgbRed: 0.949, green: 0.949, blue: 0.969, alpha: 1) })
+      Color(
+        nsColor: NSColor(name: nil) {
+          $0.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? .black : NSColor(srgbRed: 0.949, green: 0.949, blue: 0.969, alpha: 1)
+        })
     #endif
   }
 
   /// A card's surface on the grouped background.
   static var cardBackground: Color {
     #if canImport(UIKit)
-    Color(uiColor: .secondarySystemGroupedBackground)
+      Color(uiColor: .secondarySystemGroupedBackground)
     #else
-    Color(nsColor: NSColor(name: nil) { $0.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? NSColor(srgbRed: 0.11, green: 0.11, blue: 0.118, alpha: 1) : .white })
+      Color(
+        nsColor: NSColor(name: nil) {
+          $0.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? NSColor(srgbRed: 0.11, green: 0.11, blue: 0.118, alpha: 1) : .white
+        })
     #endif
   }
 }

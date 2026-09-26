@@ -48,7 +48,9 @@ public struct ModelSpec: Sendable, Equatable {
   public let outputSlices: [NamedRange]
   public let checkpoint: String?
 
-  public init(sha256: String, nbytes: Int64, frameSkip: Int, inputShapes: [NamedShape], outputShapes: [NamedShape], outputSlices: [NamedRange], checkpoint: String?) {
+  public init(
+    sha256: String, nbytes: Int64, frameSkip: Int, inputShapes: [NamedShape], outputShapes: [NamedShape], outputSlices: [NamedRange], checkpoint: String?
+  ) {
     self.sha256 = sha256
     self.nbytes = nbytes
     self.frameSkip = frameSkip
@@ -67,7 +69,9 @@ public struct ModelSpec: Sendable, Equatable {
   }
 
   public func withFrameSkip(_ frameSkip: Int) -> ModelSpec {
-    ModelSpec(sha256: sha256, nbytes: nbytes, frameSkip: frameSkip, inputShapes: inputShapes, outputShapes: outputShapes, outputSlices: outputSlices, checkpoint: checkpoint)
+    ModelSpec(
+      sha256: sha256, nbytes: nbytes, frameSkip: frameSkip, inputShapes: inputShapes, outputShapes: outputShapes, outputSlices: outputSlices,
+      checkpoint: checkpoint)
   }
 
   // MARK: layout

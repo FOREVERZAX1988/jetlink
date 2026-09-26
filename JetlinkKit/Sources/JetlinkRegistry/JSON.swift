@@ -291,7 +291,7 @@ extension JSON {
     }
 
     mutating func string() throws -> String {
-      index += 1   // the opening quote
+      index += 1  // the opening quote
       var out = String.UnicodeScalarView()
       var runStart = index
       func flush(_ end: Int) throws {

@@ -61,8 +61,9 @@ public struct OnnxMeta: Sendable, Equatable {
           Tensor(name: vi.key, elemType: vi.elemType, dims: (vi.shape?.dims ?? []).map { $0.value ?? 0 })
         }
       }
-      return OnnxMeta(inputs: tensors(meta.inputs), outputs: tensors(meta.outputs),
-                      props: meta.props.map { Prop(key: $0.key, value: $0.value) })
+      return OnnxMeta(
+        inputs: tensors(meta.inputs), outputs: tensors(meta.outputs),
+        props: meta.props.map { Prop(key: $0.key, value: $0.value) })
     }
   }
 

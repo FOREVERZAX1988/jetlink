@@ -10,28 +10,28 @@ struct ImportTests {
     defer { tmp.remove() }
     let registry = Registry(layout: tmp.layout)
     let source = tmp.url.appending(path: "big_driving_supercombo.onnx")
-    try BLOB.write(to: source)
+    try fixtureBlob.write(to: source)
     let seen = ProgressLog()
 
     let local = try await registry.importModel(at: source, progress: seen.callback)
 
-    #expect(local.sha256 == BLOB_SHA && local.bytes == Int64(BLOB.count))
+    #expect(local.sha256 == fixtureBlobSHA && local.bytes == Int64(fixtureBlob.count))
     #expect(local.name == "big_driving_supercombo")
-    #expect(try Data(contentsOf: registry.modelPath(sha256: BLOB_SHA)) == BLOB)
+    #expect(try Data(contentsOf: registry.modelPath(sha256: fixtureBlobSHA)) == fixtureBlob)
     #expect(seen.all.last == 1.0)
     #expect(seen.all.contains(0.5), "the hash is the first half")
-    #expect(tmp.names("models") == ["\(BLOB_SHA.prefix(16)).onnx"], "no .part is left")
+    #expect(tmp.names("models") == ["\(fixtureBlobSHA.prefix(16)).onnx"], "no .part is left")
 
     _ = try await registry.importModel(at: source, name: "again")
     #expect(registry.localModels().map(\.name) == ["again"])
-    #expect(registry.name(for: BLOB_SHA) == ("again", nil))
+    #expect(registry.name(for: fixtureBlobSHA) == ("again", nil))
   }
 
   @Test func refusesAFileThatIsNotAnONNX() async throws {
     let tmp = try TempDir()
     defer { tmp.remove() }
     let source = tmp.url.appending(path: "model.bin")
-    try BLOB.write(to: source)
+    try fixtureBlob.write(to: source)
     let error = await #expect(throws: RegistryError.self) {
       try await Registry(layout: tmp.layout).importModel(at: source)
     }
@@ -173,15 +173,15 @@ struct InventoryTests {
   @Test func aDownloadedModelIsNamedFromTheCatalog() async throws {
     let tmp = try TempDir()
     defer { tmp.remove() }
-    let net = MockNet(catalogRoutes([LFS.pointerURL(ref: REF): .body(Fixture.data("pointer_f877d7a0.txt"))]))
+    let net = MockNet(catalogRoutes([LFS.pointerURL(ref: fixtureRef): .body(Fixture.data("pointer_f877d7a0.txt"))]))
     let registry = Registry(layout: tmp.layout, session: net.session)
     _ = await registry.catalog()
-    _ = try await registry.resolve(ref: REF)
-    try Data("x".utf8).write(to: registry.modelPath(sha256: OID))
+    _ = try await registry.resolve(ref: fixtureRef)
+    try Data("x".utf8).write(to: registry.modelPath(sha256: fixtureOID))
     let model = registry.inventory(artifactTag: nil, artifactSuffix: ".ortcache", loaded: nil).models.first
-    #expect(model?.sha256 == OID)
+    #expect(model?.sha256 == fixtureOID)
     #expect(model?.name == "BMRLNAP Model v4 (August 30, 2026)")
-    #expect(model?.ref == REF)
+    #expect(model?.ref == fixtureRef)
   }
 
   @Test func lastLoadedComesFromTheMarker() throws {
@@ -202,9 +202,10 @@ struct InventoryTests {
     let object = try JSONSerialization.jsonObject(with: encoder.encode(payload)) as? [String: Any]
     // the ort artifact has every field; Codable leaves a nil one out, which is the encoder's business
     let artifact = (object?["artifacts"] as? [[String: Any]])?.first { $0["backend"] as? String == "ort" }
-    #expect(Set(artifact?.keys.map { $0 } ?? []) == [
-      "sha256", "key", "path", "bytes", "backend", "runtime_version", "device", "built_at", "build_seconds", "checkpoint", "current",
-    ])
+    #expect(
+      Set(artifact?.keys.map { $0 } ?? []) == [
+        "sha256", "key", "path", "bytes", "backend", "runtime_version", "device", "built_at", "build_seconds", "checkpoint", "current",
+      ])
     #expect(Set((object?["disk"] as? [String: Any])?.keys.map { $0 } ?? []) == ["models_bytes", "engines_bytes", "free_bytes"])
   }
 }
@@ -244,16 +245,16 @@ struct RemoveTests {
     defer { tmp.remove() }
     let registry = Registry(layout: tmp.layout)
     let source = tmp.url.appending(path: "mine.onnx")
-    try BLOB.write(to: source)
+    try fixtureBlob.write(to: source)
     _ = try await registry.importModel(at: source, name: "mine")
     let keeper = tmp.url.appending(path: "other.onnx")
     try Data("other bytes".utf8).write(to: keeper)
     let other = try await registry.importModel(at: keeper, name: "other")
 
-    try registry.remove(sha256: BLOB_SHA, artifacts: false, model: true)
+    try registry.remove(sha256: fixtureBlobSHA, artifacts: false, model: true)
 
     #expect(registry.localModels().map(\.sha256) == [other.sha256])
-    #expect(registry.name(for: BLOB_SHA) == (nil, nil))
+    #expect(registry.name(for: fixtureBlobSHA) == (nil, nil))
     #expect(registry.inventory(artifactTag: nil, artifactSuffix: ".ortcache", loaded: nil).models.map(\.sha256) == [other.sha256])
   }
 
@@ -262,9 +263,9 @@ struct RemoveTests {
     defer { tmp.remove() }
     let registry = Registry(layout: tmp.layout)
     let source = tmp.url.appending(path: "mine.onnx")
-    try BLOB.write(to: source)
+    try fixtureBlob.write(to: source)
     _ = try await registry.importModel(at: source, name: "mine")
-    try registry.remove(sha256: BLOB_SHA, artifacts: true, model: false)
+    try registry.remove(sha256: fixtureBlobSHA, artifacts: true, model: false)
     #expect(registry.localModels().map(\.name) == ["mine"])
   }
 

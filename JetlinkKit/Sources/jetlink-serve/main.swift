@@ -47,7 +47,8 @@ func line(_ event: String, _ payload: [String: Any]) {
   object["event"] = event
   object["t"] = Date().timeIntervalSince1970
   if let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes]),
-     let text = String(data: data, encoding: .utf8) {
+    let text = String(data: data, encoding: .utf8)
+  {
     print(text)
     fflush(stdout)
   }
@@ -57,7 +58,7 @@ func encode<T: Encodable>(_ value: T) -> [String: Any] {
   let encoder = JSONEncoder()
   encoder.keyEncodingStrategy = .convertToSnakeCase
   guard let data = try? encoder.encode(value),
-        let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
   else { return [:] }
   return object
 }

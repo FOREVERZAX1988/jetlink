@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import JetlinkONNX
 
 @Suite struct OutputSlicesTests {
@@ -36,20 +37,25 @@ import Testing
   /// BINPUT/BINGET in 2 and 3, MEMOIZE/BINGET in 4 and 5; GLOBAL with
   /// __builtin__ in 2 and builtins in 3, STACK_GLOBAL and FRAME in 4 and 5.
   static let protocols: [Int: String] = [
-    2: "gAJ9cQAoWAoAAABsYW5lX2xpbmVzcQFjX19idWlsdGluX18Kc2xpY2UKcQJLAE0QAk6HcQNScQRYBAAAAHdpZGVxBWgCS8hKcBEBAE6HcQZScQdYAwAAAGZhcnEIaAJK/f///4oGAAAAAAABTodxCVJxClgDAAAAbmVncQtoAkpgef7/Svv///9Oh3EMUnENdS4=",
-    3: "gAN9cQAoWAoAAABsYW5lX2xpbmVzcQFjYnVpbHRpbnMKc2xpY2UKcQJLAE0QAk6HcQNScQRYBAAAAHdpZGVxBWgCS8hKcBEBAE6HcQZScQdYAwAAAGZhcnEIaAJK/f///4oGAAAAAAABTodxCVJxClgDAAAAbmVncQtoAkpgef7/Svv///9Oh3EMUnENdS4=",
-    4: "gASVdwAAAAAAAAB9lCiMCmxhbmVfbGluZXOUjAhidWlsdGluc5SMBXNsaWNllJOUSwBNEAJOh5RSlIwEd2lkZZRoBEvISnARAQBOh5RSlIwDZmFylGgESv3///+KBgAAAAAAAU6HlFKUjANuZWeUaARKYHn+/0r7////ToeUUpR1Lg==",
-    5: "gAWVdwAAAAAAAAB9lCiMCmxhbmVfbGluZXOUjAhidWlsdGluc5SMBXNsaWNllJOUSwBNEAJOh5RSlIwEd2lkZZRoBEvISnARAQBOh5RSlIwDZmFylGgESv3///+KBgAAAAAAAU6HlFKUjANuZWeUaARKYHn+/0r7////ToeUUpR1Lg==",
+    2:
+      "gAJ9cQAoWAoAAABsYW5lX2xpbmVzcQFjX19idWlsdGluX18Kc2xpY2UKcQJLAE0QAk6HcQNScQRYBAAAAHdpZGVxBWgCS8hKcBEBAE6HcQZScQdYAwAAAGZhcnEIaAJK/f///4oGAAAAAAABTodxCVJxClgDAAAAbmVncQtoAkpgef7/Svv///9Oh3EMUnENdS4=",
+    3:
+      "gAN9cQAoWAoAAABsYW5lX2xpbmVzcQFjYnVpbHRpbnMKc2xpY2UKcQJLAE0QAk6HcQNScQRYBAAAAHdpZGVxBWgCS8hKcBEBAE6HcQZScQdYAwAAAGZhcnEIaAJK/f///4oGAAAAAAABTodxCVJxClgDAAAAbmVncQtoAkpgef7/Svv///9Oh3EMUnENdS4=",
+    4:
+      "gASVdwAAAAAAAAB9lCiMCmxhbmVfbGluZXOUjAhidWlsdGluc5SMBXNsaWNllJOUSwBNEAJOh5RSlIwEd2lkZZRoBEvISnARAQBOh5RSlIwDZmFylGgESv3///+KBgAAAAAAAU6HlFKUjANuZWeUaARKYHn+/0r7////ToeUUpR1Lg==",
+    5:
+      "gAWVdwAAAAAAAAB9lCiMCmxhbmVfbGluZXOUjAhidWlsdGluc5SMBXNsaWNllJOUSwBNEAJOh5RSlIwEd2lkZZRoBEvISnARAQBOh5RSlIwDZmFylGgESv3///+KBgAAAAAAAU6HlFKUjANuZWeUaARKYHn+/0r7////ToeUUpR1Lg==",
   ]
 
   @Test(arguments: [2, 3, 4, 5]) func protocolVersions(_ p: Int) throws {
     let slices = try OutputSlices.decode(base64: Self.protocols[p]!)
-    #expect(slices == [
-      OutputSlice(name: "lane_lines", start: 0, stop: 528),
-      OutputSlice(name: "wide", start: 200, stop: 70_000),
-      OutputSlice(name: "far", start: -3, stop: 1 << 40),
-      OutputSlice(name: "neg", start: -100_000, stop: -5),
-    ])
+    #expect(
+      slices == [
+        OutputSlice(name: "lane_lines", start: 0, stop: 528),
+        OutputSlice(name: "wide", start: 200, stop: 70_000),
+        OutputSlice(name: "far", start: -3, stop: 1 << 40),
+        OutputSlice(name: "neg", start: -100_000, stop: -5),
+      ])
   }
 
   /// One item goes through SETITEM rather than SETITEMS.
@@ -74,8 +80,10 @@ import Testing
 
   @Test(arguments: [
     // protocol 0: its text opcodes, DICT first
-    ("KGRwMApWbGFuZV9saW5lcwpwMQpjX19idWlsdGluX18Kc2xpY2UKcDIKKEkwCkk1MjgKTnRwMwpScDQKc1Z3aWRlCnA1CmcyCihJMjAwCkk3MDAwMApOdHA2ClJwNwpzVmZhcgpwOApnMgooSS0zCkwxMDk5NTExNjI3Nzc2TApOdHA5ClJwMTAKc1ZuZWcKcDExCmcyCihJLTEwMDAwMApJLTUKTnRwMTIKUnAxMwpzLg==",
-     "unsupported opcode 0x64 ('d')"),
+    (
+      "KGRwMApWbGFuZV9saW5lcwpwMQpjX19idWlsdGluX18Kc2xpY2UKcDIKKEkwCkk1MjgKTnRwMwpScDQKc1Z3aWRlCnA1CmcyCihJMjAwCkk3MDAwMApOdHA2ClJwNwpzVmZhcgpwOApnMgooSS0zCkwxMDk5NTExNjI3Nzc2TApOdHA5ClJwMTAKc1ZuZWcKcDExCmcyCihJLTEwMDAwMApJLTUKTnRwMTIKUnAxMwpzLg==",
+      "unsupported opcode 0x64 ('d')"
+    ),
     // a list, not a dict
     ("gASVIgAAAAAAAABdlIwIYnVpbHRpbnOUjAVzbGljZZSTlEsASwFOh5RSlGEu", "unsupported opcode 0x5d (']')"),
     // {'a': 1}
@@ -83,8 +91,10 @@ import Testing
     // {'a': slice(0, 10, 2)}
     ("gASVJwAAAAAAAAB9lIwBYZSMCGJ1aWx0aW5zlIwFc2xpY2WUk5RLAEsKSwKHlFKUcy4=", "output_slices entry a has a step; expected None"),
     // collections.OrderedDict(a=slice(0, 1)): a REDUCE of anything but slice
-    ("gASVRQAAAAAAAACMC2NvbGxlY3Rpb25zlIwLT3JkZXJlZERpY3SUk5QpUpSMAWGUjAhidWlsdGluc5SMBXNsaWNllJOUSwBLAU6HlFKUcy4=",
-     "unsupported opcode 0x29 (')')"),
+    (
+      "gASVRQAAAAAAAACMC2NvbGxlY3Rpb25zlIwLT3JkZXJlZERpY3SUk5QpUpSMAWGUjAhidWlsdGluc5SMBXNsaWNllJOUSwBLAU6HlFKUcy4=",
+      "unsupported opcode 0x29 (')')"
+    ),
     // {'b': slice(7)}, through TUPLE1: no start
     ("gAJ9WAEAAABiY19fYnVpbHRpbl9fCnNsaWNlCksHhVJzLg==", "output_slices entry b is not slice(int, int)"),
     ("!!!", "output_slices is not valid base64"),
@@ -105,8 +115,9 @@ import Testing
   @Test func reduceOfAnotherGlobalIsRefused() throws {
     // {'a': collections.OrderedDict(1)} by hand: GLOBAL, TUPLE1, REDUCE. The
     // callable is only named, never called, so this is refused by name.
-    let bytes = Data([0x80, 0x02, 0x7d, 0x58, 0x01, 0, 0, 0, 0x61]
-      + Array("ccollections\nOrderedDict\n".utf8) + [0x4b, 0x01, 0x85, 0x52, 0x73, 0x2e])
+    let bytes = Data(
+      [0x80, 0x02, 0x7d, 0x58, 0x01, 0, 0, 0, 0x61]
+        + Array("ccollections\nOrderedDict\n".utf8) + [0x4b, 0x01, 0x85, 0x52, 0x73, 0x2e])
     let error = try #require(throws: OnnxError.self) { try OutputSlices.decode(pickle: bytes) }
     #expect(error.message.contains("REDUCE of the global collections.OrderedDict; only builtins.slice is allowed"))
   }

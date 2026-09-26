@@ -77,13 +77,13 @@ public final class CoreMLBackend: EngineBackend {
   /// agree on a cache key.
   static func chipName() -> String {
     #if os(macOS)
-    var size = 0
-    if sysctlbyname("machdep.cpu.brand_string", nil, &size, nil, 0) == 0, size > 1 {
-      var bytes = [CChar](repeating: 0, count: size)
-      if sysctlbyname("machdep.cpu.brand_string", &bytes, &size, nil, 0) == 0 {
-        return String(decoding: bytes.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+      var size = 0
+      if sysctlbyname("machdep.cpu.brand_string", nil, &size, nil, 0) == 0, size > 1 {
+        var bytes = [CChar](repeating: 0, count: size)
+        if sysctlbyname("machdep.cpu.brand_string", &bytes, &size, nil, 0) == 0 {
+          return String(decoding: bytes.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+        }
       }
-    }
     #endif
     let name = MTLCreateSystemDefaultDevice()?.name ?? "unknown"
     return name.hasSuffix(" GPU") ? String(name.dropLast(4)) : name
@@ -214,14 +214,15 @@ public final class CoreMLBackend: EngineBackend {
   public func load(artifact: URL, report: @escaping ProgressFn) throws -> any Engine {
     let manifestURL = artifact.appending(path: CoreMLBackend.manifestName)
     guard let data = try? Data(contentsOf: manifestURL),
-          let manifest = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]], !manifest.isEmpty
+      let manifest = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]], !manifest.isEmpty
     else {
       throw ArtifactInvalid("\(artifact.lastPathComponent): no readable \(CoreMLBackend.manifestName) inside")
     }
     let meta = sidecar(artifact)
     let version = (meta["prepare"] as? NSNumber)?.intValue ?? 1
     if version != CoreMLBackend.prepareVersion {
-      throw ArtifactInvalid("\(artifact.lastPathComponent): prepared as version \(version), CoreML builds are now at \(CoreMLBackend.prepareVersion); rebuilding")
+      throw ArtifactInvalid(
+        "\(artifact.lastPathComponent): prepared as version \(version), CoreML builds are now at \(CoreMLBackend.prepareVersion); rebuilding")
     }
     for entry in manifest {
       guard let model = entry["model"] as? String, FileManager.default.fileExists(atPath: artifact.appending(path: model).path) else {

@@ -6,31 +6,31 @@ import Testing
 /// tests/test_registry.py's pointers, lfs and precompiled-pkl sections.
 struct PointerTests {
   @Test func parsesTheFixture() {
-    #expect(LFS.parsePointer(String(decoding: Fixture.data("pointer_f877d7a0.txt"), as: UTF8.self)) == Pointer(oid: OID, size: SIZE))
+    #expect(LFS.parsePointer(String(decoding: Fixture.data("pointer_f877d7a0.txt"), as: UTF8.self)) == Pointer(oid: fixtureOID, size: fixtureSize))
   }
 
   @Test(arguments: [
     "not a pointer at all",
-    "oid sha256:\(OID)\n",  // no size
+    "oid sha256:\(fixtureOID)\n",  // no size
     "oid sha256:nothex\nsize 12\n",
-    "oid sha256:\(OID)\nsize twelve\n",
+    "oid sha256:\(fixtureOID)\nsize twelve\n",
     String(repeating: "x", count: 5000),  // an onnx served where a pointer was expected
-    "oid sha256:\(OID)\nsize 0\n",
+    "oid sha256:\(fixtureOID)\nsize 0\n",
   ])
   func refusesAnythingElse(text: String) {
     #expect(LFS.parsePointer(text) == nil)
   }
 
   @Test func readsAPointerWithOtherLineBreaks() {
-    #expect(LFS.parsePointer("version x\r\noid sha256:\(OID)\r\nsize 765_953_504\r\n") == Pointer(oid: OID, size: SIZE))
+    #expect(LFS.parsePointer("version x\r\noid sha256:\(fixtureOID)\r\nsize 765_953_504\r\n") == Pointer(oid: fixtureOID, size: fixtureSize))
   }
 
   @Test func resolveFetchesAPointerOnceAndKeepsIt() async throws {
     let tmp = try TempDir()
     defer { tmp.remove() }
-    let net = MockNet([LFS.pointerURL(ref: REF): .body(Fixture.data("pointer_f877d7a0.txt"))])
-    #expect(try await Registry(layout: tmp.layout, session: net.session).resolve(ref: REF) == Pointer(oid: OID, size: SIZE))
-    #expect(try await Registry(layout: tmp.layout, session: net.session).resolve(ref: REF) == Pointer(oid: OID, size: SIZE))
+    let net = MockNet([LFS.pointerURL(ref: fixtureRef): .body(Fixture.data("pointer_f877d7a0.txt"))])
+    #expect(try await Registry(layout: tmp.layout, session: net.session).resolve(ref: fixtureRef) == Pointer(oid: fixtureOID, size: fixtureSize))
+    #expect(try await Registry(layout: tmp.layout, session: net.session).resolve(ref: fixtureRef) == Pointer(oid: fixtureOID, size: fixtureSize))
     #expect(net.calls.count == 1)
   }
 
@@ -46,9 +46,9 @@ struct PointerTests {
   @Test func aPointerHostThatServesTheWholeModelIsCutOff() async throws {
     let tmp = try TempDir()
     defer { tmp.remove() }
-    let net = MockNet([LFS.pointerURL(ref: REF): .chunks(Array(repeating: Data(count: 64 << 10), count: 32))])
+    let net = MockNet([LFS.pointerURL(ref: fixtureRef): .chunks(Array(repeating: Data(count: 64 << 10), count: 32))])
     let error = await #expect(throws: RegistryError.self) {
-      try await Registry(layout: tmp.layout, session: net.session).resolve(ref: REF)
+      try await Registry(layout: tmp.layout, session: net.session).resolve(ref: fixtureRef)
     }
     #expect(error?.message == "f877d7a0cc did not serve an lfs pointer")
   }
@@ -56,22 +56,22 @@ struct PointerTests {
   @Test func resolveMissingReportsTheFailuresAndKeepsTheRest() async throws {
     let tmp = try TempDir()
     defer { tmp.remove() }
-    let (good, bad) = (NEWEST, REF)
+    let (good, bad) = (newestRef, fixtureRef)
     let net = MockNet([LFS.pointerURL(ref: good): .body(Fixture.data("pointer_f877d7a0.txt"))])
     let registry = Registry(layout: tmp.layout, session: net.session)
 
     let out = await registry.resolveMissing([good, bad, "nothex", good])
 
-    #expect(try out[good]?.get() == Pointer(oid: OID, size: SIZE))
+    #expect(try out[good]?.get() == Pointer(oid: fixtureOID, size: fixtureSize))
     #expect(throws: RegistryError.self) { try out[bad]?.get() }
     #expect(throws: RegistryError.self) { try out["nothex"]?.get() }
     let written = Files.readJSON(tmp.layout.pointersURL)
-    #expect(written == [good: ["oid": .string(OID), "size": .int(SIZE)]])
+    #expect(written == [good: ["oid": .string(fixtureOID), "size": .int(fixtureSize)]])
 
     // a second pass asks only for what is still missing
     let before = net.calls.count
     let again = await registry.resolveMissing([good, bad])
-    #expect(try again[good]?.get() == Pointer(oid: OID, size: SIZE))
+    #expect(try again[good]?.get() == Pointer(oid: fixtureOID, size: fixtureSize))
     #expect(net.calls.count == before + 1)
   }
 
@@ -112,7 +112,7 @@ struct PointerTests {
 }
 
 struct LFSBatchTests {
-  private let pointer = Pointer(oid: OID, size: SIZE)
+  private let pointer = Pointer(oid: fixtureOID, size: fixtureSize)
 
   @Test func returnsTheHref() async {
     let net = MockNet(["\(LFS.endpoints[0])/objects/batch": .body(Fixture.data("lfs_batch_response.json"))])
@@ -122,7 +122,7 @@ struct LFSBatchTests {
     let call = net.calls.first
     #expect(call?.method == "POST")
     let body = call?.body.flatMap { try? JSON.parse($0) }
-    #expect(body == ["operation": "download", "transfers": ["basic"], "objects": [["oid": .string(OID), "size": .int(SIZE)]]])
+    #expect(body == ["operation": "download", "transfers": ["basic"], "objects": [["oid": .string(fixtureOID), "size": .int(fixtureSize)]]])
   }
 
   @Test func isNilWhenTheServerLacksItOrIsDown() async {
@@ -134,13 +134,16 @@ struct LFSBatchTests {
   }
 
   @Test func theEndpointsAreAskedInPythonsOrder() {
-    #expect(LFS.endpoints == [
-      "https://gitlab.com/commaai/openpilot-lfs.git/info/lfs",
-      "https://huggingface.co/commaai/openpilot-lfs.git/info/lfs",
-      "https://huggingface.co/commaai/openpilot_driving_models.git/info/lfs",
-    ])
-    #expect(LFS.pointerURL(ref: REF) == "https://raw.githubusercontent.com/commaai/openpilot/\(REF)/openpilot/selfdrive/modeld/models/big_driving_supercombo.onnx")
-    #expect(LFS.commitPatchURL(ref: REF) == "https://github.com/commaai/openpilot/commit/\(REF).patch")
+    #expect(
+      LFS.endpoints == [
+        "https://gitlab.com/commaai/openpilot-lfs.git/info/lfs",
+        "https://huggingface.co/commaai/openpilot-lfs.git/info/lfs",
+        "https://huggingface.co/commaai/openpilot_driving_models.git/info/lfs",
+      ])
+    #expect(
+      LFS.pointerURL(ref: fixtureRef)
+        == "https://raw.githubusercontent.com/commaai/openpilot/\(fixtureRef)/openpilot/selfdrive/modeld/models/big_driving_supercombo.onnx")
+    #expect(LFS.commitPatchURL(ref: fixtureRef) == "https://github.com/commaai/openpilot/commit/\(fixtureRef).patch")
     #expect(LFS.drivingModelsTreeURL == "https://huggingface.co/api/models/commaai/openpilot_driving_models/tree/main")
   }
 }
@@ -148,19 +151,19 @@ struct LFSBatchTests {
 // MARK: - a commit that ships a precompiled pkl
 // Cinque Terre V3, as github and huggingface served it on 2026-09-25.
 
-let V3_REF = "bf3e3631b3f91d92a1020a5e0dd4298b93ff4244"
-let V3_OID = "404a18cfd86d29637d20c697dfde245bb47c666ae016730ab674c65f4d1e1aa4"
-let V3_SIZE: Int64 = 766_354_845
-let V3_FOLDER = "f78ed37d-afad-4dbc-8050-40ea885eedde"
+let v3Ref = "bf3e3631b3f91d92a1020a5e0dd4298b93ff4244"
+let v3OID = "404a18cfd86d29637d20c697dfde245bb47c666ae016730ab674c65f4d1e1aa4"
+let v3Size: Int64 = 766_354_845
+let v3Folder = "f78ed37d-afad-4dbc-8050-40ea885eedde"
 
 func patchHead(_ subject: String) -> Data {
   Data(
-    ("From \(V3_REF) Mon Sep 17 00:00:00 2001\nFrom: Bruce Wayne <x@example.com>\n"
+    ("From \(v3Ref) Mon Sep 17 00:00:00 2001\nFrom: Bruce Wayne <x@example.com>\n"
       + "Date: Tue, 15 Sep 2026 23:30:35 -0700\nSubject: [PATCH] \(subject)\n\n---\n"
       + " openpilot/selfdrive/modeld/models/big_driving_tinygrad.pkl | 2 +-\n").utf8)
 }
 
-func onnxEntry(_ path: String, oid: String = V3_OID, size: Int64 = V3_SIZE) -> JSON {
+func onnxEntry(_ path: String, oid: String = v3OID, size: Int64 = v3Size) -> JSON {
   [
     "type": "file", "path": .string("\(path)/big_driving_supercombo.onnx"), "size": .int(size),
     "lfs": ["oid": .string(oid), "size": .int(size), "pointerSize": 134],
@@ -170,15 +173,15 @@ func onnxEntry(_ path: String, oid: String = V3_OID, size: Int64 = V3_SIZE) -> J
 func exportRoutes(subject: String = "Use f78ed37d for the precompiled eGPU driving model", folderFiles: [JSON]? = nil) -> [String: MockNet.Reply] {
   let top: JSON = [
     ["type": "directory", "path": "1a421175-db71-4e3d-9d62-e2166421b02b"],
-    ["type": "directory", "path": .string(V3_FOLDER)],
+    ["type": "directory", "path": .string(v3Folder)],
     ["type": "file", "path": "README.md", "size": 21],
   ]
-  let files = JSON.array(folderFiles ?? [["type": "directory", "path": .string("\(V3_FOLDER)/12864")], onnxEntry("\(V3_FOLDER)/12864")])
+  let files = JSON.array(folderFiles ?? [["type": "directory", "path": .string("\(v3Folder)/12864")], onnxEntry("\(v3Folder)/12864")])
   return [
-    LFS.pointerURL(ref: V3_REF): .status(404),
-    LFS.commitPatchURL(ref: V3_REF): .body(patchHead(subject)),
+    LFS.pointerURL(ref: v3Ref): .status(404),
+    LFS.commitPatchURL(ref: v3Ref): .body(patchHead(subject)),
     LFS.drivingModelsTreeURL: .body(top.data()),
-    "\(LFS.drivingModelsTreeURL)/\(V3_FOLDER)?recursive=true": .body(files.data()),
+    "\(LFS.drivingModelsTreeURL)/\(v3Folder)?recursive=true": .body(files.data()),
   ]
 }
 
@@ -187,9 +190,9 @@ struct ExportPointerTests {
     let tmp = try TempDir()
     defer { tmp.remove() }
     let net = MockNet(exportRoutes())
-    #expect(try await Registry(layout: tmp.layout, session: net.session).resolve(ref: V3_REF) == Pointer(oid: V3_OID, size: V3_SIZE))
+    #expect(try await Registry(layout: tmp.layout, session: net.session).resolve(ref: v3Ref) == Pointer(oid: v3OID, size: v3Size))
     // kept for good like any other pointer
-    #expect(try await Registry(layout: tmp.layout, session: MockNet().session).resolve(ref: V3_REF) == Pointer(oid: V3_OID, size: V3_SIZE))
+    #expect(try await Registry(layout: tmp.layout, session: MockNet().session).resolve(ref: v3Ref) == Pointer(oid: v3OID, size: v3Size))
   }
 
   @Test func theExportRepoIsTheLastLFSServerAsked() {
@@ -197,21 +200,21 @@ struct ExportPointerTests {
   }
 
   @Test func aSubjectThatNamesTheCheckpointPicksAmongSeveral() async throws {
-    let files = [onnxEntry("\(V3_FOLDER)/12000", oid: String(repeating: "1", count: 64)), onnxEntry("\(V3_FOLDER)/12864")]
-    let named = MockNet(exportRoutes(subject: "\(V3_FOLDER)/12864", folderFiles: files))
-    #expect(try await LFS.fetchPointer(ref: V3_REF, http: HTTP(session: named.session)) == Pointer(oid: V3_OID, size: V3_SIZE))
+    let files = [onnxEntry("\(v3Folder)/12000", oid: String(repeating: "1", count: 64)), onnxEntry("\(v3Folder)/12864")]
+    let named = MockNet(exportRoutes(subject: "\(v3Folder)/12864", folderFiles: files))
+    #expect(try await LFS.fetchPointer(ref: v3Ref, http: HTTP(session: named.session)) == Pointer(oid: v3OID, size: v3Size))
 
     let unnamed = MockNet(exportRoutes(folderFiles: files))
     let error = await #expect(throws: RegistryError.self) {
-      try await LFS.fetchPointer(ref: V3_REF, http: HTTP(session: unnamed.session))
+      try await LFS.fetchPointer(ref: v3Ref, http: HTTP(session: unnamed.session))
     }
     #expect(error?.message.contains("2 copies") == true)
   }
 
   @Test func aFoldedSubjectIsReadWholeAndTheDiffstatIsNot() async throws {
     let head = patchHead("Use f78ed37d for the precompiled eGPU\n driving model")
-    let net = MockNet([LFS.commitPatchURL(ref: V3_REF): .body(head)])
-    #expect(try await LFS.commitSubject(ref: V3_REF, http: HTTP(session: net.session)) == "Use f78ed37d for the precompiled eGPU driving model")
+    let net = MockNet([LFS.commitPatchURL(ref: v3Ref): .body(head)])
+    #expect(try await LFS.commitSubject(ref: v3Ref, http: HTTP(session: net.session)) == "Use f78ed37d for the precompiled eGPU driving model")
   }
 
   @Test(arguments: [
@@ -221,7 +224,7 @@ struct ExportPointerTests {
   func aSubjectThatLeadsNowhereSaysSo(subject: String, match: String) async throws {
     let net = MockNet(exportRoutes(subject: subject))
     let error = await #expect(throws: RegistryError.self) {
-      try await LFS.fetchPointer(ref: V3_REF, http: HTTP(session: net.session))
+      try await LFS.fetchPointer(ref: v3Ref, http: HTTP(session: net.session))
     }
     #expect(error?.message.contains(match) == true)
     #expect(error?.kind == .registry)
@@ -229,13 +232,13 @@ struct ExportPointerTests {
 
   @Test func onlyAMissingFileFallsBackAndAnOutageDoesNot() async throws {
     var routes = exportRoutes()
-    routes[LFS.pointerURL(ref: V3_REF)] = .status(503)
+    routes[LFS.pointerURL(ref: v3Ref)] = .status(503)
     let net = MockNet(routes)
     let error = await #expect(throws: RegistryError.self) {
-      try await LFS.fetchPointer(ref: V3_REF, http: HTTP(session: net.session))
+      try await LFS.fetchPointer(ref: v3Ref, http: HTTP(session: net.session))
     }
     #expect(error?.isNetwork == true)
-    #expect(net.urls == [LFS.pointerURL(ref: V3_REF)])
+    #expect(net.urls == [LFS.pointerURL(ref: v3Ref)])
   }
 
   @Test func exportIDsAreWholeHexWords() {

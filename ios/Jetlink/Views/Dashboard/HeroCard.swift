@@ -156,10 +156,12 @@ struct HeroCard: View {
         .padding(.top, 8)
       Text("No model on this iPhone")
         .font(.title3.weight(.semibold))
-      Text("Get the model your comma uses now, while there is Wi-Fi. Otherwise the comma sends its model when it connects, and drives on its small model until the iPhone is ready.")
-        .font(.subheadline)
-        .foregroundStyle(.secondary)
-        .multilineTextAlignment(.center)
+      Text(
+        "Get the model your comma uses now, while there is Wi-Fi. Otherwise the comma sends its model when it connects, and drives on its small model until the iPhone is ready."
+      )
+      .font(.subheadline)
+      .foregroundStyle(.secondary)
+      .multilineTextAlignment(.center)
       if let row = state.defaultModel, ModelStore.canUse(row) {
         Button(action: onUseDefault) {
           Text("Use \(row.displayName)")

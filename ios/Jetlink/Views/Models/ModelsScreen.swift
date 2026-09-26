@@ -94,7 +94,9 @@ struct ModelsScreen: View {
         } header: {
           Text("sunnypilot Models")
         } footer: {
-          Text("Use a model to download it, prepare it for this iPhone and serve it to the comma. Only the download needs a network connection; keep Jetlink open until it finishes.")
+          Text(
+            "Use a model to download it, prepare it for this iPhone and serve it to the comma. Only the download needs a network connection; keep Jetlink open until it finishes."
+          )
         }
         let local = models.rows.filter { $0.isLocal && !$0.isOrphan }
         if !local.isEmpty {
@@ -122,17 +124,18 @@ struct ModelsScreen: View {
         isCheckingCatalog: models.catalog == nil,
         use: { startUse(row) },
         cancel: { models.cancelDownload(row) },
-        stop: { models.unload() })
-        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-          if !row.preparedFor.isEmpty {
-            Button("Delete Engines", systemImage: "trash", role: .destructive) { confirmation = .deleteEngines(row) }
-          }
-          if hasModelFile(row) {
-            Button("Delete Download", systemImage: "arrow.down.circle.dotted") { confirmation = .deleteDownload(row) }
-              .tint(.orange)
-          }
+        stop: { models.unload() }
+      )
+      .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+        if !row.preparedFor.isEmpty {
+          Button("Delete Engines", systemImage: "trash", role: .destructive) { confirmation = .deleteEngines(row) }
         }
-        .contextMenu { menu(for: row) }
+        if hasModelFile(row) {
+          Button("Delete Download", systemImage: "arrow.down.circle.dotted") { confirmation = .deleteDownload(row) }
+            .tint(.orange)
+        }
+      }
+      .contextMenu { menu(for: row) }
     }
   }
 

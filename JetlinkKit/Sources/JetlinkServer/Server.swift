@@ -20,7 +20,10 @@ public final class Server: @unchecked Sendable {
     /// Start loading the engine that was loaded last, before a comma asks.
     public var preload: Bool
 
-    public init(host: String = "0.0.0.0", port: UInt16 = Wire.defaultPort, cacheRoot: URL, device: CoreMLBackend.Device = .ane, keepAlive: Bool = true, preload: Bool = true) {
+    public init(
+      host: String = "0.0.0.0", port: UInt16 = Wire.defaultPort, cacheRoot: URL, device: CoreMLBackend.Device = .ane, keepAlive: Bool = true,
+      preload: Bool = true
+    ) {
       self.host = host
       self.port = port
       self.cacheRoot = cacheRoot

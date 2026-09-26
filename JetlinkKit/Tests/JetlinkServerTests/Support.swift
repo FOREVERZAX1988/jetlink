@@ -1,4 +1,5 @@
 import Foundation
+
 @testable import JetlinkServer
 
 /// The golden files make_server_fixtures.py writes, read in place.
@@ -45,7 +46,11 @@ final class TestClient {
 
   @discardableResult
   func send(_ type: Wire.Msg, _ payload: Data = Data(), flags: Wire.Flag = [], seq explicit: UInt32? = nil) throws -> UInt32 {
-    let seq = explicit ?? { self.seq += 1; return self.seq }()
+    let seq =
+      explicit
+      ?? {
+        self.seq += 1; return self.seq
+      }()
     try transport.send(type, seq: seq, data: [payload], flags: flags)
     return seq
   }

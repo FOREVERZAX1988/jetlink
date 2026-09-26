@@ -28,29 +28,29 @@ struct DashboardContent: View {
   }
 
   private var cards: some View {
-      Group {
-        if landscape {
-          // A phone on its side is about 350 points tall under the bar: the
-          // ring takes the left and fits the height, the rest scrolls beside it.
-          HStack(alignment: .top, spacing: 16) {
-            HeroCard(state: state, compact: true, onUseDefault: onUseDefault, onOpenModels: onOpenModels, onRetry: onRetry, onOpenSettings: onOpenSettings)
-              .frame(width: 330)
-            VStack(spacing: 12) {
-              headline
-              details
-            }
-            .frame(maxWidth: .infinity)
-          }
-        } else {
-          VStack(spacing: 16) {
+    Group {
+      if landscape {
+        // A phone on its side is about 350 points tall under the bar: the
+        // ring takes the left and fits the height, the rest scrolls beside it.
+        HStack(alignment: .top, spacing: 16) {
+          HeroCard(state: state, compact: true, onUseDefault: onUseDefault, onOpenModels: onOpenModels, onRetry: onRetry, onOpenSettings: onOpenSettings)
+            .frame(width: 330)
+          VStack(spacing: 12) {
             headline
-            hero
             details
           }
+          .frame(maxWidth: .infinity)
+        }
+      } else {
+        VStack(spacing: 16) {
+          headline
+          hero
+          details
         }
       }
-      .padding(.horizontal, 16)
-      .padding(.bottom, 24)
+    }
+    .padding(.horizontal, 16)
+    .padding(.bottom, 24)
   }
 
   private var hero: some View {
@@ -124,7 +124,8 @@ struct DashboardContent: View {
     let health = state.health
     return Grid(horizontalSpacing: 12, verticalSpacing: 12) {
       GridRow {
-        StatTile(label: "Temperature", value: health.thermal.title, detail: health.thermal.detail, systemImage: health.thermal.symbol, tone: health.thermal.tone)
+        StatTile(
+          label: "Temperature", value: health.thermal.title, detail: health.thermal.detail, systemImage: health.thermal.symbol, tone: health.thermal.tone)
         StatTile(label: "Battery", value: health.batteryText, detail: health.powerText, systemImage: health.batterySymbol, tone: health.batteryTone)
       }
     }

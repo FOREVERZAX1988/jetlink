@@ -1,5 +1,5 @@
-import JetlinkKit
 import Foundation
+import JetlinkKit
 
 /// Sample events for previews and formatting tests, shared by the Mac and
 /// iPhone apps. Nothing here is used by a running app; the values are copies

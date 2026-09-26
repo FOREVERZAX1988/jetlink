@@ -1,6 +1,7 @@
 import Foundation
 import JetlinkKit
 import Testing
+
 @testable import JetlinkServer
 
 /// A registry with one catalog model, the tiny queued graph, whose "download"
@@ -22,9 +23,11 @@ final class FakeRegistry: ModelRegistry, @unchecked Sendable {
   }
 
   var catalogEvent: CatalogEvent {
-    CatalogEvent(fetchedAt: 1, url: "fake", defaultRef: FakeRegistry.ref, error: nil, models: [
-      CatalogModel(name: "Tiny", shortName: "T", ref: FakeRegistry.ref, buildTime: "", index: 1, sha256: sha256, bytes: size),
-    ])
+    CatalogEvent(
+      fetchedAt: 1, url: "fake", defaultRef: FakeRegistry.ref, error: nil,
+      models: [
+        CatalogModel(name: "Tiny", shortName: "T", ref: FakeRegistry.ref, buildTime: "", index: 1, sha256: sha256, bytes: size)
+      ])
   }
 
   func cachedCatalog() -> CatalogEvent? { catalogEvent }
@@ -53,7 +56,8 @@ final class FakeRegistry: ModelRegistry, @unchecked Sendable {
 
   func inventory(artifactTag: String?, artifactSuffix: String, loaded: String?) -> InventoryEvent {
     let path = cache.appending(path: "models/\(sha256.prefix(16)).onnx")
-    let models = FileManager.default.fileExists(atPath: path.path)
+    let models =
+      FileManager.default.fileExists(atPath: path.path)
       ? [InventoryModel(sha256: sha256, bytes: size, path: path.path, name: "Tiny", ref: FakeRegistry.ref)] : []
     return InventoryEvent(loaded: loaded, lastLoaded: nil, models: models, artifacts: [], disk: InventoryDisk(modelsBytes: 0, enginesBytes: 0, freeBytes: 0))
   }
@@ -156,13 +160,15 @@ struct ControllerTests {
     }
   }
 
-  @Test("Commands the server cannot carry out say why", arguments: [
-    ControlCommand.prepare(sha256: String(repeating: "b", count: 64), frameSkip: 4),
-    ControlCommand.prepare(sha256: "not a sha", frameSkip: 4),
-    ControlCommand.download(ref: nil, sha256: nil),
-    ControlCommand.cancelDownload(sha256: String(repeating: "c", count: 64)),
-    ControlCommand.importModel(path: "/no/such/file.onnx"),
-  ])
+  @Test(
+    "Commands the server cannot carry out say why",
+    arguments: [
+      ControlCommand.prepare(sha256: String(repeating: "b", count: 64), frameSkip: 4),
+      ControlCommand.prepare(sha256: "not a sha", frameSkip: 4),
+      ControlCommand.download(ref: nil, sha256: nil),
+      ControlCommand.cancelDownload(sha256: String(repeating: "c", count: 64)),
+      ControlCommand.importModel(path: "/no/such/file.onnx"),
+    ])
   func refusals(_ command: ControlCommand) async throws {
     try await withController { controller, _, _ in
       let reply = await controller.handle(command)

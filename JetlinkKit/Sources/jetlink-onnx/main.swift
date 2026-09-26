@@ -88,14 +88,16 @@ func prepare(_ args: [String]) throws {
     cacheKey: { CoreMLPreparation.cacheKey(stem: stem, part: $0) })
   let elapsed = clock.now - start
 
-  print("stripped \(report.stripped) tinygrad op(s), "
-    + (report.retypedImages ? "images retyped to fp16" : "inputs left as declared")
-    + ", \(report.gathers) negative Gather index(es) normalized, \(report.gemms) MatMul+Add rewritten as "
-    + "Gemm(transB=1), \(report.tiles) Expand(s) as Tile")
+  print(
+    "stripped \(report.stripped) tinygrad op(s), "
+      + (report.retypedImages ? "images retyped to fp16" : "inputs left as declared")
+      + ", \(report.gathers) negative Gather index(es) normalized, \(report.gemms) MatMul+Add rewritten as "
+      + "Gemm(transB=1), \(report.tiles) Expand(s) as Tile")
   for part in report.parts {
     let size = (try? FileManager.default.attributesOfItem(atPath: part.url.path)[.size] as? Int64) ?? 0
-    print("  \(padded(part.name, 7)) \(part.url.path)  \(size) bytes, weights \(part.weightBytes) bytes, "
-      + "key \(CoreMLPreparation.cacheKey(stem: stem, part: part.name))")
+    print(
+      "  \(padded(part.name, 7)) \(part.url.path)  \(size) bytes, weights \(part.weightBytes) bytes, "
+        + "key \(CoreMLPreparation.cacheKey(stem: stem, part: part.name))")
   }
   let ms = Double(elapsed.components.seconds) * 1000 + Double(elapsed.components.attoseconds) / 1e15
   print(String(format: "prepared in %.0f ms", ms))

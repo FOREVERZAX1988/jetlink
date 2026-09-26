@@ -713,8 +713,10 @@ enum Canonical {
     try message(fields, src, known: attributeFields, singular: attributeSingular, unpacked: [7: .fixed32, 8: .varint])
   }
 
-  static func message(_ fields: [WireField], _ src: Source, known: Set<Int>, singular: Set<Int>,
-                      unpacked: [Int: Wire]) throws -> [UInt8]? {
+  static func message(
+    _ fields: [WireField], _ src: Source, known: Set<Int>, singular: Set<Int>,
+    unpacked: [Int: Wire]
+  ) throws -> [UInt8]? {
     func key(_ f: WireField) -> Int { known.contains(f.number) ? f.number : Int.max }
     var seen = Set<Int>()
     var canonical = true
@@ -723,7 +725,8 @@ enum Canonical {
       let k = key(f)
       if k < last
         || (singular.contains(f.number) && !seen.insert(f.number).inserted)
-        || (unpacked[f.number] != nil && f.wire == .bytes) {
+        || (unpacked[f.number] != nil && f.wire == .bytes)
+      {
         canonical = false
         break
       }

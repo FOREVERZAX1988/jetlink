@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import JetlinkServer
 
 /// The whole server, over a real socket, on onnxruntime's CPU provider: the
@@ -56,7 +57,7 @@ struct ServerTests {
     try serve { _, client in
       let seq = try client.send(.ping)
       #expect(try client.recv().type == Wire.Msg.pong.rawValue)
-      try client.send(.ping, seq: seq)   // a replay: no answer
+      try client.send(.ping, seq: seq)  // a replay: no answer
       let next = try client.send(.ping)
       let reply = try client.recv()
       #expect(reply.type == Wire.Msg.pong.rawValue)

@@ -153,6 +153,21 @@ jobs:
       - name: Run the Swift tests
         run: make -C macos test
 
+      - name: Run the JetlinkKit tests
+        run: swift test --package-path JetlinkKit
+        # The Swift server the iPhone runs, on onnxruntime's CPU provider:
+        # wire bytes against protocol.py, the preparation byte for byte
+        # against Python's, and whole-server runs against golden frames.
+
+      - name: Check the committed iPhone project is fresh
+        run: |
+          make -C ios project
+          git diff --exit-code ios/Jetlink.xcodeproj
+
+      - name: Compile the iPhone app for iOS
+        run: make -C ios typecheck
+        # SwiftPM against the iPhone SDK, so it needs no iOS simulator runtime.
+
   app:
     name: App bundle and control channel smoke test
     runs-on: macos-26
@@ -232,7 +247,7 @@ jobs:
           sudo xcode-select -s /Applications/Xcode_26.6.app
 
       - name: Lint the Swift sources
-        run: xcrun swift-format lint --strict --configuration macos/.swift-format --recursive macos/Jetlink macos/JetlinkTests
+        run: xcrun swift-format lint --strict --configuration macos/.swift-format --recursive macos/Jetlink macos/JetlinkTests JetlinkKit/Sources JetlinkKit/Tests ios/Jetlink
         # macos/.swift-format is the repo style: 2 spaces, 160 columns, and no
         # UseSynthesizedInitializer, because the event structs keep their
         # memberwise initializers on purpose (01-contracts.md section 7).

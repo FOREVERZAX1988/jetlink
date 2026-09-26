@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import JetlinkONNX
 
 /// The Swift preparation held to what Python's makes of the same graphs.
@@ -21,7 +22,8 @@ import Testing
 
   static let python: [String: PythonResult] = {
     guard let data = try? Data(contentsOf: Fixtures.url("python.json")),
-          let results = try? JSONDecoder().decode([String: PythonResult].self, from: data) else { return [:] }
+      let results = try? JSONDecoder().decode([String: PythonResult].self, from: data)
+    else { return [:] }
     return results
   }()
 
@@ -142,10 +144,12 @@ import Testing
 
   @Test func cacheKeyMatchesPython() {
     // re.sub('[^A-Za-z0-9]', '', stem + part)[:63]
-    #expect(CoreMLPreparation.cacheKey(stem: "404a18cfd86d2963.ort1.29.0.ane-Apple M1 Pro", part: "vision")
-      == "404a18cfd86d2963ort1290aneAppleM1Provision")
-    #expect(CoreMLPreparation.cacheKey(stem: String(repeating: "é-x", count: 70), part: "policy")
-      == String(repeating: "x", count: 63))
+    #expect(
+      CoreMLPreparation.cacheKey(stem: "404a18cfd86d2963.ort1.29.0.ane-Apple M1 Pro", part: "vision")
+        == "404a18cfd86d2963ort1290aneAppleM1Provision")
+    #expect(
+      CoreMLPreparation.cacheKey(stem: String(repeating: "é-x", count: 70), part: "policy")
+        == String(repeating: "x", count: 63))
   }
 
   @Test func missingSourceIsAnError() throws {
