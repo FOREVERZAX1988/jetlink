@@ -68,6 +68,12 @@ You need Apple silicon and macOS 15 or later; 16 GB of memory is recommended.
 
 The app includes its dependencies.
 
+### iPhone (experimental)
+
+An iPhone with USB-C can serve the comma over wired Ethernet, with the server
+running inside the app. It is built from source with Xcode and has not been
+measured on a phone yet; see [Jetlink for iPhone](docs/iphone-app.md).
+
 ## Comma setup (all platforms)
 
 1. **Install zoompilot with Jetlink.** After resetting the comma, enter
