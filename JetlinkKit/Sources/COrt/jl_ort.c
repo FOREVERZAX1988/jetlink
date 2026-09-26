@@ -72,12 +72,17 @@ char *jl_env_create(int log_severity, jl_env **out) {
   if (env == NULL) {
     return copy("out of memory");
   }
+  // The official Apple build carries Microsoft's events SDK and uploads to
+  // mobile.events.data.microsoft.com (seen from the iPhone simulator). The
+  // switch below is read when the environment is created, which is before
+  // DisableTelemetryEvents can be called, and events logged in between were
+  // still uploaded. A car has no business sending any.
+  setenv("ORT_DISABLE_TELEMETRY", "1", 1);
   char *error = take(api()->CreateEnv((OrtLoggingLevel)log_severity, "jetlink", &env->env));
   if (error != NULL) {
     free(env);
     return error;
   }
-  // The Apple builds carry no telemetry, but a car has no business sending any.
   free(take(api()->DisableTelemetryEvents(env->env)));
   *out = env;
   return NULL;
