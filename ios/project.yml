@@ -1,0 +1,73 @@
+# xcodegen spec for the Jetlink iPhone app.
+#
+# Regenerate with `make project`. The generated Jetlink.xcodeproj is committed
+# so `open Jetlink.xcodeproj` works without installing xcodegen. Signing is left
+# to Xcode: pick your team in Signing & Capabilities before running on a phone.
+name: Jetlink
+options:
+  bundleIdPrefix: io.zoompilot
+  deploymentTarget: { iOS: "26.0" }
+  xcodeVersion: "26.6"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+packages:
+  JetlinkKit:
+    path: ../JetlinkKit
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    MARKETING_VERSION: ${JETLINK_VERSION}
+    CURRENT_PROJECT_VERSION: ${JETLINK_BUILD}
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: ""
+    TARGETED_DEVICE_FAMILY: "1"
+    ARCHS: arm64
+    DEAD_CODE_STRIPPING: YES
+targets:
+  Jetlink:
+    type: application
+    platform: iOS
+    sources:
+      - path: Jetlink
+      - path: Resources/Assets.xcassets
+    dependencies:
+      - package: JetlinkKit
+        products: [JetlinkKit, JetlinkUI, JetlinkRegistry, JetlinkServer]
+    info:
+      path: Resources/Info.plist
+      properties:
+        CFBundleName: Jetlink
+        CFBundleDisplayName: Jetlink
+        CFBundleIdentifier: io.zoompilot.jetlink.ios
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleIconName: AppIcon
+        LSRequiresIPhoneOS: true
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UIRequiredDeviceCapabilities: [arm64, metal]
+        NSLocalNetworkUsageDescription: Jetlink serves your comma's driving model over the Ethernet or Wi-Fi network the comma is on.
+        ITSAppUsesNonExemptEncryption: false
+        NSHumanReadableCopyright: "MIT License. Copyright 2026 Zeph Leggett."
+    entitlements:
+      path: Resources/Jetlink.entitlements
+      properties:
+        # CoreML compiles the 766 MB model inside the app. On a Mac that
+        # peaked near 3 GB resident; this is headroom for it on a phone.
+        com.apple.developer.kernel.increased-memory-limit: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.zoompilot.jetlink.ios
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ENABLE_USER_SCRIPT_SANDBOXING: YES
+schemes:
+  Jetlink:
+    build: { targets: { Jetlink: all } }
+    run: { config: Debug }
+    archive: { config: Release }
