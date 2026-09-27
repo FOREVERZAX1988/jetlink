@@ -1,3 +1,8 @@
+Jetlink v0.4.3
+==============
+* Mac
+  * Fixed "This build has no bundled Python runtime" when opening the app from Finder or the Dock on macOS 15
+
 Jetlink v0.4.2
 ==============
 * Mac
