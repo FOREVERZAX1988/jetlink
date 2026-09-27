@@ -12,8 +12,8 @@ CI runs this against the signed bundle, so it fails when the app does not
 launch, when the server inside it does not start, or when the protocol
 regresses. The app is launched with TCP on a free port and a cache in a
 temporary directory (the argument domain overrides the stored settings without
-saving them), then a client says hello and pings, and the app must exit on
-SIGTERM. No comma and no model are involved.
+saving them), then a client says hello and pings, and SIGTERM must end the app
+within 20 s. No comma and no model are involved.
 
   macos/scripts/smoke.py                      macos/build/Jetlink.app
   macos/scripts/smoke.py --app path/to/Jetlink.app
