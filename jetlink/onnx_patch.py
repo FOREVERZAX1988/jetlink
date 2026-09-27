@@ -16,9 +16,13 @@ Runs on the Jetson at build time. The shipped model is never modified in place.
 """
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import onnx
 from onnx import TensorProto, helper, numpy_helper
+
+log = logging.getLogger('jetlink.onnx_patch')
 
 # where the vision trunk starts: img and big_img in a queued graph, the newest
 # frame and the frame queue in a stateful one (openpilot #38916). The uint8
@@ -287,6 +291,222 @@ def _static_dims(model: onnx.ModelProto, wanted: set[str]) -> dict[str, tuple[in
     except Exception:
       pass
   return dims
+
+
+def _static_types(model: onnx.ModelProto, wanted: set[str]) -> dict[str, int]:
+  """Element types of the graph's tensors, as `_static_dims` finds shapes:
+  from what the file carries, the shape inferrer only when one of `wanted`
+  is missing, and fails open the same way."""
+  g = model.graph
+  types: dict[str, int] = {}
+
+  def take(values):
+    for vi in values:
+      if vi.type.tensor_type.elem_type:
+        types[vi.name] = vi.type.tensor_type.elem_type
+  take(g.input)
+  take(g.value_info)
+  take(g.output)
+  if wanted - types.keys():
+    try:
+      take(onnx.shape_inference.infer_shapes(model).graph.value_info)
+    except Exception:
+      pass
+  return types
+
+
+# -- the whole graph on the Neural Engine ------------------------------------
+# `--device ane` keeps everything after the vision trunk off the Neural Engine
+# (split_vision_policy). `--device ane-whole` runs the graph as one CoreML
+# program with every compute unit allowed instead, which is what a phone,
+# whose GPU is far weaker than its Neural Engine, wants; these two passes are
+# what that takes. Measured on an iPhone 17 Pro and an M1 Pro, 2026-09-24/25.
+
+# LayerNorm(x / k) is LayerNorm(x) with epsilon scaled by k^2: 1e-5 becomes
+# 6.4e-4 at k = 8, well under the variance of anything the norms see, so the
+# epsilon is left alone. The policy's inputs reach 1189, whose square
+# overflows fp16, while the row sums of (x / 8)^2 stay under 34,000.
+LAYERNORM_PRESCALE = 8
+# The ops heads_in_fp32 moves to fp32: the small MLPs and linear layers that
+# end the vision trunk. A reduction, a reshape or anything else ends the region.
+HEAD_OPS = frozenset(('Gemm', 'MatMul', 'LayerNormalization', 'Gelu', 'Add', 'Sub', 'Mul', 'Div',
+                      'Relu', 'Sigmoid', 'Tanh'))
+# Larger than that is not the heads but the trunk itself, which belongs in fp16.
+HEAD_MAX_NODES = 64
+
+
+def prescale_layernorm(model: onnx.ModelProto, k: int = LAYERNORM_PRESCALE) -> int:
+  """Feed every fp16 LayerNormalization on the policy side its input times
+  1/k, one Mul per distinct input. In place; returns how many norms.
+
+  The Neural Engine's fp16 LayerNormalization squares its input before it
+  reduces, and the policy's residual stream reaches values whose square
+  overflows fp16. Scaling the input first keeps the sum in range and changes
+  the result only through epsilon (see LAYERNORM_PRESCALE). Vision-side
+  norms (`_vision_mask`) are left alone: their inputs are small, and on
+  `ane-whole` they go to fp32 with the heads. A norm whose input type the
+  file does not record and the inferrer cannot find is left alone too.
+
+  Deterministic, so a port can reproduce the bytes: the constant is one fp16
+  initializer `__layernorm_prescale_{k}` holding np.float16(1 / k), appended
+  after the existing initializers; a norm reading `x` reads `x__scaled`
+  instead, made by `Mul(x, const)` named `x__prescale` inserted directly
+  before the first norm that reads `x`, in graph order. A norm already fed by
+  such a Mul is not scaled again, so the pass is idempotent.
+  """
+  g = model.graph
+  const = f"__layernorm_prescale_{k}"
+  mask = _vision_mask(model)
+  norms = {i for i, (n, vision) in enumerate(zip(g.node, mask, strict=True))
+           if n.op_type == 'LayerNormalization' and not vision}
+  already = {n.output[0] for n in g.node if n.op_type == 'Mul' and len(n.input) == 2 and n.input[1] == const}
+  types = _static_types(model, {g.node[i].input[0] for i in norms})
+  new, scaled, done = [], {}, 0
+  for i, node in enumerate(g.node):
+    if i in norms and node.input[0] not in already and types.get(node.input[0]) == TensorProto.FLOAT16:
+      x = node.input[0]
+      if x not in scaled:
+        scaled[x] = f"{x}__scaled"
+        new.append(helper.make_node('Mul', [x, const], [scaled[x]], name=f"{x}__prescale"))
+      node.input[0] = scaled[x]
+      done += 1
+    new.append(node)
+  if done:
+    g.initializer.append(numpy_helper.from_array(np.array(1.0 / k, np.float16), const))
+    del g.node[:]
+    g.node.extend(new)
+  return done
+
+
+def vision_heads(model: onnx.ModelProto) -> list[int]:
+  """The indices, in graph order, of the heads that end the vision trunk:
+  the largest set of vision nodes (`_vision_mask`) with ops in HEAD_OPS
+  whose outputs are all read, and read only, by each other or by a Concat
+  that makes a graph output. Empty when there is no such Concat or the set
+  would exceed HEAD_MAX_NODES.
+
+  Found by growing backwards to a fixed point: a pass over the nodes from
+  last to first adds each one whose every output has a reader and every
+  reader is already in the region or is such a Concat, and passes repeat
+  until one adds nothing. A node that makes a graph output itself never
+  joins: the worker returns it as it is.
+  """
+  g = model.graph
+  mask = _vision_mask(model)
+  outputs = {o.name for o in g.output}
+  ends = {i for i, n in enumerate(g.node) if n.op_type == 'Concat' and any(o in outputs for o in n.output)}
+  if not ends:
+    return []
+  readers: dict[str, set[int]] = {}
+  for i, n in enumerate(g.node):
+    for x in n.input:
+      readers.setdefault(x, set()).add(i)
+  region: set[int] = set()
+  grew = True
+  while grew:
+    grew = False
+    for i in reversed(range(len(g.node))):
+      n = g.node[i]
+      if i in region or not mask[i] or n.op_type not in HEAD_OPS or any(o in outputs for o in n.output):
+        continue
+      read = [readers.get(o, set()) for o in n.output]
+      if all(r and r <= region | ends for r in read):
+        region.add(i)
+        grew = True
+  return sorted(region) if len(region) <= HEAD_MAX_NODES else []
+
+
+def heads_in_fp32(model: onnx.ModelProto) -> int:
+  """Run `vision_heads` in fp32: cast what they read from the trunk up,
+  their fp16 weights to fp32 copies, and what they hand the output Concat
+  back down. The Neural Engine cannot run fp32, so CoreML places them on the
+  GPU or CPU. In place; returns how many nodes moved, 0 with a warning when
+  it found no heads it could move.
+
+  The heads are small (24 nodes and 4 MB of weights in the 766 MB chestnut
+  model), but in fp16 on the Neural Engine their LayerNormalization, Gelu
+  and 1024-wide Gemms lose enough that road_transform fails the parity gate
+  on an iPhone 17 Pro (worst column 0.9989). Computed exactly from the
+  Neural Engine's own trunk output, every column is 0.9996 or better.
+  Measured 2026-09-25. `split_vision_policy` keeps them off the Neural
+  Engine for the same reason.
+
+  Deterministic, so a port can reproduce the bytes. An entry is a tensor a
+  head reads that no head makes and no initializer is; an exit is a tensor
+  a head makes that something outside the heads reads. Every entry has to
+  be fp16 and every head weight fp16 or fp32, or nothing is done. In name
+  order, each fp16 weight `w` gets an fp32 copy `w__fp32` appended to the
+  initializers (an existing tensor of that name is reused). Then, in graph
+  order: the first head to read an entry `x` is preceded by
+  `Cast(x) -> x__fp32` named `x__cast_fp32`; a head that makes an exit `o`
+  writes `o__fp32` and is followed by `Cast(o__fp32) -> o` named
+  `o__cast_fp16`, one per exit in the node's output order; head inputs are
+  renamed to the `__fp32` tensor throughout. The fp16 weights nothing
+  outside the heads reads are dropped, and the value_infos of the tensors
+  made and consumed inside the heads, which said fp16, with them. Running it
+  again finds no heads (the Casts fence them off) and changes nothing.
+  """
+  g = model.graph
+  index = vision_heads(model)
+  if not index:
+    log.warning("heads_in_fp32: no heads found after the vision trunk (no output Concat they feed, "
+                "or more than %d nodes); the whole graph stays fp16", HEAD_MAX_NODES)
+    return 0
+  heads = set(index)
+  init = {t.name: t for t in g.initializer}
+  produced = {o for i in index for o in g.node[i].output}
+  entries = {x for i in index for x in g.node[i].input if x and x not in init and x not in produced}
+  types = _static_types(model, entries)
+  if any(types.get(x) != TensorProto.FLOAT16 for x in entries):
+    log.warning("heads_in_fp32: a head reads %s, which is not fp16; the whole graph stays fp16",
+                sorted(x for x in entries if types.get(x) != TensorProto.FLOAT16))
+    return 0
+  weights = {x for i in index for x in g.node[i].input if x in init}
+  odd = sorted(w for w in weights if init[w].data_type not in (TensorProto.FLOAT16, TensorProto.FLOAT))
+  if odd:
+    log.warning("heads_in_fp32: head weights %s are neither fp16 nor fp32; the whole graph stays fp16", odd)
+    return 0
+  read_outside = {x for j, n in enumerate(g.node) if j not in heads for x in n.input}
+  exits = produced & read_outside
+  wide = {}
+  for w in sorted(weights):
+    if init[w].data_type == TensorProto.FLOAT16:
+      wide[w] = f"{w}__fp32"
+      if wide[w] not in init:
+        g.initializer.append(numpy_helper.from_array(numpy_helper.to_array(init[w]).astype(np.float32), wide[w]))
+  new, cast = [], set()
+  for j, n in enumerate(g.node):
+    if j not in heads:
+      new.append(n)
+      continue
+    for i, x in enumerate(n.input):
+      if x in entries:
+        if x not in cast:
+          cast.add(x)
+          new.append(helper.make_node('Cast', [x], [f"{x}__fp32"], name=f"{x}__cast_fp32", to=TensorProto.FLOAT))
+        n.input[i] = f"{x}__fp32"
+      elif x in exits:
+        n.input[i] = f"{x}__fp32"
+      elif x in wide:
+        n.input[i] = wide[x]
+    back = [o for o in n.output if o in exits]
+    for i, o in enumerate(n.output):
+      if o in exits:
+        n.output[i] = f"{o}__fp32"
+    new.append(n)
+    for o in back:
+      new.append(helper.make_node('Cast', [f"{o}__fp32"], [o], name=f"{o}__cast_fp16", to=TensorProto.FLOAT16))
+  del g.node[:]
+  g.node.extend(new)
+  # The fp16 originals, unless something outside the heads reads them too.
+  keep = [t for t in g.initializer if t.name not in wide or t.name in read_outside]
+  del g.initializer[:]
+  g.initializer.extend(keep)
+  # What the heads compute inside is fp32 now; the value infos said fp16.
+  keep_vi = [v for v in g.value_info if v.name not in produced - exits]
+  del g.value_info[:]
+  g.value_info.extend(keep_vi)
+  return len(index)
 
 
 def patch_uint8_inputs(model: onnx.ModelProto) -> onnx.ModelProto:
