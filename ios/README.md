@@ -24,8 +24,15 @@ Settings screens, the server's lifecycle in the app, and the phone's health.
 
 ```
 brew install xcodegen
+cp ios/Config/Local.xcconfig.example ios/Config/Local.xcconfig   # your team and bundle id
 make -C ios open
 ```
+
+Signing comes from `ios/Config/Signing.xcconfig`, and your own team and bundle
+identifier from `Local.xcconfig` beside it, which git ignores. Leave Signing &
+Capabilities alone: it would write them into the committed project. The
+**Jetlink** scheme runs Release, since frame times from an unoptimized build
+mean little; **Jetlink Debug** runs Debug for the debugger.
 
 Xcode builds for iPhone only once the iOS platform is installed (Xcode >
 Settings > Components). `make -C ios build` compiles for a device without
