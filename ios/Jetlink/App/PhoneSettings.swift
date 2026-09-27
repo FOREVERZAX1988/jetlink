@@ -13,8 +13,9 @@ final class PhoneSettings {
     didSet { defaults.set(Int(port), forKey: Keys.port) }
   }
 
-  /// The vision trunk on the Neural Engine and the rest on the GPU, or the
-  /// whole model on the GPU for when something else holds the Neural Engine.
+  /// The whole model on the Neural Engine, which is what a phone wants; the
+  /// trunk there and the rest on the GPU, as a Mac runs it; or the whole
+  /// model on the GPU for when something else holds the Neural Engine.
   var device: CoreMLBackend.Device {
     didSet { defaults.set(device.rawValue, forKey: Keys.device) }
   }
@@ -22,6 +23,12 @@ final class PhoneSettings {
   /// A small GPU job between frames so the GPU does not clock down in the gaps.
   var keepGPUAwake: Bool {
     didSet { defaults.set(keepGPUAwake, forKey: Keys.keepGPUAwake) }
+  }
+
+  /// A CPU core kept busy between frames while the Neural Engine runs the
+  /// model, so the next frame is not waiting on a core that went to sleep.
+  var keepCPUWarm: Bool {
+    didSet { defaults.set(keepCPUWarm, forKey: Keys.keepCPUWarm) }
   }
 
   /// The screen stays on while Jetlink is open: iOS suspends an app whose
@@ -34,8 +41,9 @@ final class PhoneSettings {
     self.defaults = defaults
     let port = defaults.integer(forKey: Keys.port)
     self.port = port > 0 && port < 65_536 ? UInt16(port) : 5599
-    self.device = defaults.string(forKey: Keys.device).flatMap(CoreMLBackend.Device.init(rawValue:)) ?? .ane
+    self.device = defaults.string(forKey: Keys.device).flatMap(CoreMLBackend.Device.init(rawValue:)) ?? .aneWhole
     self.keepGPUAwake = defaults.object(forKey: Keys.keepGPUAwake) as? Bool ?? true
+    self.keepCPUWarm = defaults.object(forKey: Keys.keepCPUWarm) as? Bool ?? true
     self.keepScreenOn = defaults.object(forKey: Keys.keepScreenOn) as? Bool ?? true
   }
 
@@ -50,6 +58,7 @@ final class PhoneSettings {
     static let port = "port"
     static let device = "device"
     static let keepGPUAwake = "keepGPUAwake"
+    static let keepCPUWarm = "keepCPUWarm"
     static let keepScreenOn = "keepScreenOn"
   }
 }

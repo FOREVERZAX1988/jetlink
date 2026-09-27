@@ -3,7 +3,7 @@ import JetlinkServer
 import JetlinkUI
 import SwiftUI
 
-/// Connection, performance, display, storage and versions, as a native form.
+/// Connection, performance, display, storage, help and versions, as a native form.
 struct SettingsScreen: View {
   @Environment(AppModel.self) private var app
   @State private var portText = ""
@@ -23,11 +23,14 @@ struct SettingsScreen: View {
               Text(CoreMLBackend.Device.cpu.title).tag(CoreMLBackend.Device.cpu)
             #endif
           }
+          Toggle("CPU Keep-Warm", isOn: $settings.keepCPUWarm)
           Toggle("GPU Keep-Alive", isOn: $settings.keepGPUAwake)
         } header: {
           Text("Performance")
         } footer: {
-          Text("Changing Compute prepares models again. Keep-Alive holds the GPU at speed between frames.")
+          Text(
+            "Changing Compute prepares models again. Keep-Warm holds a CPU core busy between frames while the Neural Engine runs the model; Keep-Alive does the same for the GPU."
+          )
         }
         Section {
           Toggle("Keep Screen On", isOn: $settings.keepScreenOn)
@@ -37,12 +40,14 @@ struct SettingsScreen: View {
           Text("Jetlink has to stay open while you drive.")
         }
         storage
+        help
         about
       }
       .navigationTitle("Settings")
       .onAppear { portText = String(settings.port) }
       .onChange(of: settings.device) { app.server.restart() }
       .onChange(of: settings.keepGPUAwake) { app.server.restart() }
+      .onChange(of: settings.keepCPUWarm) { app.server.restart() }
     }
   }
 
@@ -50,6 +55,7 @@ struct SettingsScreen: View {
 
   private var connection: some View {
     Section {
+      LabeledContent("Link", value: app.server.linkKind?.title ?? (app.network.cable == nil ? "Not Connected" : "Dialing"))
       LabeledContent("Port") {
         TextField("5599", text: $portText)
           .keyboardType(.numberPad)
@@ -61,11 +67,11 @@ struct SettingsScreen: View {
         Button("Use Port \(portText)", action: applyPort)
       }
       if app.network.addresses.isEmpty {
-        LabeledContent("Address", value: "Not Connected")
+        LabeledContent("Address", value: "None")
       }
       ForEach(app.network.addresses) { address in
         LabeledContent {
-          Text("\(address.address):\(app.server.port.map(String.init) ?? portText)")
+          Text(address.kind == .cable ? address.address : "\(address.address):\(app.server.port.map(String.init) ?? portText)")
             .monospacedDigit()
             .textSelection(.enabled)
         } label: {
@@ -75,7 +81,7 @@ struct SettingsScreen: View {
     } header: {
       Text("Connection")
     } footer: {
-      Text("Set the comma's endpoint to the Ethernet address.")
+      Text("Over USB the phone dials the comma; nothing to set. Over an Ethernet adapter, set the comma's endpoint to the Ethernet address.")
     }
   }
 
@@ -103,6 +109,14 @@ struct SettingsScreen: View {
         LabeledContent("Engines", value: ByteCount.string(disk.enginesBytes))
         LabeledContent("Available", value: ByteCount.string(disk.freeBytes))
       }
+    }
+  }
+
+  // MARK: help
+
+  private var help: some View {
+    Section("Help") {
+      NavigationLink("Connecting the Comma") { ConnectHelpScreen() }
     }
   }
 

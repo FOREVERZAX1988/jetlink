@@ -124,7 +124,7 @@ final class PhoneServer: ServerControlling {
       let root = try PhoneServer.prepareCacheDirectory()
       let server = try Server(
         configuration: Server.Configuration(
-          port: settings.port, cacheRoot: root, device: settings.device, keepAlive: settings.keepGPUAwake),
+          port: settings.port, cacheRoot: root, device: settings.device, keepAlive: settings.keepGPUAwake, keepCPUWarm: settings.keepCPUWarm),
         preparer: ONNXPreparer())
       let controller = ServerController(server: server, registry: Registry(layout: CacheLayout(root: root)))
       self.server = server
