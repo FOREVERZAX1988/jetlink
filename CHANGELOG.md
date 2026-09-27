@@ -1,3 +1,8 @@
+Jetlink v0.4.1
+==============
+* Mac
+  * The app is signed with a Developer ID and notarized, so it opens without the Gatekeeper workaround
+
 Jetlink v0.4.0
 ==============
 * Install script that fully sets up your Jetson or Linux PC
