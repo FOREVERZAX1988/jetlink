@@ -89,7 +89,7 @@ do {
   signal(SIGINT, SIG_IGN)
   let interrupt = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
   interrupt.setEventHandler {
-    server.stop()
+    server.shutdown()
     exit(0)
   }
   interrupt.resume()

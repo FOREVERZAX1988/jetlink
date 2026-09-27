@@ -39,6 +39,8 @@ public final class Server: @unchecked Sendable {
   }
 
   public static let statsInterval: TimeInterval = 1.0
+  /// Between attempts to listen again after the socket went away.
+  static let relistenBackoff: ClosedRange<TimeInterval> = 0.5...5.0
 
   public let configuration: Configuration
   public let host: EngineHost
@@ -49,11 +51,13 @@ public final class Server: @unchecked Sendable {
 
   private let log = Logger(subsystem: "io.zoompilot.jetlink", category: "server")
   private let lock = NSLock()
-  private var listener: TCPListener?
+  /// Internal so a test can end it under the accept loop.
+  var listener: TCPListener?
   private var current: Session?
-  private var currentDone: DispatchSemaphore?
+  private var currentDone: Latch?
   private var link: LinkEvent = .waiting
   private var ticker: Ticker?
+  private var started = false
   private var stopped = false
 
   public init(configuration: Configuration, preparer: any ModelPreparer) throws {
@@ -70,6 +74,9 @@ public final class Server: @unchecked Sendable {
   /// Listens, and serves until `stop`. Returns once listening.
   public func start() throws {
     try listen()
+    lock.lock()
+    started = true
+    lock.unlock()
     if configuration.preload {
       host.preload()
     }
@@ -79,6 +86,12 @@ public final class Server: @unchecked Sendable {
   private func listen() throws {
     let listener = try TCPListener(host: configuration.host, port: configuration.port)
     lock.lock()
+    if self.listener != nil {
+      // Listened again from two sides at once; the first one stands.
+      lock.unlock()
+      listener.close()
+      return
+    }
     self.listener = listener
     lock.unlock()
     log.info("listening on \(self.configuration.host, privacy: .public):\(listener.port)")
@@ -115,15 +128,32 @@ public final class Server: @unchecked Sendable {
     try listen()
   }
 
+  /// The accept loop ended on its own: iOS reclaimed the socket, or accept
+  /// failed. Listen again, backing off while the system refuses, until the
+  /// server stops or something else has listened meanwhile.
   private func listenerEnded(_ ended: TCPListener) {
     lock.lock()
     let wasCurrent = listener === ended
     if wasCurrent { listener = nil }
     let isStopped = stopped
     lock.unlock()
-    if wasCurrent && !isStopped {
-      log.warning("the listening socket went away")
-      ended.close()
+    guard wasCurrent && !isStopped else { return }
+    log.warning("the listening socket went away; listening again")
+    ended.close()
+    var backoff = Server.relistenBackoff.lowerBound
+    while true {
+      Thread.sleep(forTimeInterval: backoff)
+      lock.lock()
+      let idle = listener == nil && !stopped
+      lock.unlock()
+      guard idle else { return }
+      do {
+        try listen()
+        return
+      } catch {
+        log.warning("cannot listen yet: \(String(describing: error), privacy: .public)")
+        backoff = min(backoff * 2, Server.relistenBackoff.upperBound)
+      }
     }
   }
 
@@ -152,6 +182,8 @@ public final class Server: @unchecked Sendable {
     host.frameStats.summary(window: window, framesTotal: framesServed)
   }
 
+  /// Stops listening and serving. The engine stays loaded, for a
+  /// server that will be started again; `shutdown()` releases it.
   public func stop() {
     lock.lock()
     stopped = true
@@ -162,34 +194,49 @@ public final class Server: @unchecked Sendable {
     ticker?.stop()
     listener?.close()
     session?.interrupt()
+  }
+
+  /// `stop()` and release the engine: the process is ending.
+  public func shutdown() {
+    stop()
     host.close()
   }
 
+  // MARK: connections
+
   private func acceptLoop(_ listener: TCPListener) {
     while let transport = listener.accept() {
-      lock.lock()
-      let previous = current
-      let previousDone = currentDone
-      lock.unlock()
-      if let previous {
-        log.info("a new connection from \(transport.peer, privacy: .public) takes over from \(previous.peer, privacy: .public)")
-        previous.interrupt()
-        previousDone?.wait()
-      }
-      let session = Session(transport: transport, host: host) { [weak self] in self?.telemetry() ?? [:] }
-      let done = DispatchSemaphore(value: 0)
-      lock.lock()
-      current = session
-      currentDone = done
-      lock.unlock()
-      let thread = Thread { [self] in
-        serve(session)
-        done.signal()
-      }
-      thread.name = "jetlink-session"
-      thread.qualityOfService = .userInteractive
-      thread.start()
+      _ = takeover(transport)
     }
+  }
+
+  /// Serves `transport` on a thread of its own, after the session being
+  /// served, if any, has been interrupted and has ended. Returns the latch
+  /// the new session's end releases.
+  private func takeover(_ transport: TCPTransport) -> Latch {
+    lock.lock()
+    let previous = current
+    let previousDone = currentDone
+    lock.unlock()
+    if let previous {
+      log.info("a new connection from \(transport.peer, privacy: .public) takes over from \(previous.peer, privacy: .public)")
+      previous.interrupt()
+      previousDone?.wait()
+    }
+    let session = Session(transport: transport, host: host) { [weak self] in self?.telemetry() ?? [:] }
+    let done = Latch()
+    lock.lock()
+    current = session
+    currentDone = done
+    lock.unlock()
+    let thread = Thread { [self] in
+      serve(session)
+      done.release()
+    }
+    thread.name = "jetlink-session"
+    thread.qualityOfService = .userInteractive
+    thread.start()
+    return done
   }
 
   private func serve(_ session: Session) {
@@ -232,5 +279,26 @@ public final class Server: @unchecked Sendable {
     lock.unlock()
     guard connected, let stats = host.frameStats.summary(window: window, framesTotal: frames) else { return }
     host.emit(.stats(stats))
+  }
+}
+
+/// Released once, waited on by any number of threads.
+final class Latch: @unchecked Sendable {
+  private let condition = NSCondition()
+  private var released = false
+
+  func release() {
+    condition.lock()
+    released = true
+    condition.broadcast()
+    condition.unlock()
+  }
+
+  func wait() {
+    condition.lock()
+    while !released {
+      condition.wait()
+    }
+    condition.unlock()
   }
 }

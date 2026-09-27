@@ -119,3 +119,53 @@ struct ServerTests {
     }
   }
 }
+
+/// The listener beside the sessions: it heals, and stopping keeps the engine.
+@Suite("Server lifecycle", .serialized)
+struct ServerLifecycleTests {
+  func makeServer(_ cache: TemporaryDirectory) throws -> Server {
+    try Server(
+      configuration: Server.Configuration(
+        host: "127.0.0.1", port: 0, cacheRoot: cache.url, device: .cpu, keepAlive: false, preload: false),
+      preparer: ONNXPreparer())
+  }
+
+  @Test("stop keeps the engine loaded; shutdown releases it")
+  func stopKeepsTheEngine() throws {
+    let golden = try Golden("tiny_queued")
+    let cache = try TemporaryDirectory()
+    let server = try makeServer(cache)
+    try server.start()
+    let client = try TestClient(port: server.port!)
+    _ = try client.ensureEngine(model: golden.model, sha256: golden.sha256)
+    client.close()
+    server.stop()
+    #expect(server.host.loadedSHA() == golden.sha256)
+    #expect(server.port == nil)
+    server.shutdown()
+    #expect(server.host.loadedSHA() == nil)
+  }
+
+  @Test("A listener that goes away is opened again")
+  func listenerHeals() throws {
+    let cache = try TemporaryDirectory()
+    let server = try makeServer(cache)
+    try server.start()
+    let first = server.port!
+    // The accept loop's listener ends as iOS ends it: closed under the loop.
+    server.listener?.close()
+    let deadline = Date().addingTimeInterval(5)
+    while server.isListening && Date() < deadline {
+      Thread.sleep(forTimeInterval: 0.05)
+    }
+    #expect(!server.isListening)
+    while !server.isListening && Date() < deadline {
+      Thread.sleep(forTimeInterval: 0.05)
+    }
+    guard let port = server.port else { throw TestError("the server did not listen again after \(first) went away") }
+    let client = try TestClient(port: port)
+    defer { client.close(); server.shutdown() }
+    try client.send(.ping)
+    #expect(try client.recv().type == Wire.Msg.pong.rawValue)
+  }
+}

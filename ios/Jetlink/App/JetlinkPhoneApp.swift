@@ -24,6 +24,7 @@ struct JetlinkPhoneApp: App {
         .onChange(of: app.settings.keepScreenOn) { updateIdleTimer() }
         .onChange(of: app.network.addresses) { app.retryCatalogIfEmpty() }
         .onChange(of: app.server.runState) { updateIdleTimer() }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willTerminateNotification)) { _ in app.server.shutdown() }
     }
   }
 

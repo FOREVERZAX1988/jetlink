@@ -74,11 +74,26 @@ final class PhoneServer: ServerControlling {
     }
   }
 
+  /// Stops serving. The engine stays loaded in the server until it is let
+  /// go; `shutdown()` is for the app's end.
   func stop() {
+    tearDown(release: false)
+  }
+
+  /// The app is terminating: stop, and release the engine with it.
+  func shutdown() {
+    tearDown(release: true)
+  }
+
+  private func tearDown(release: Bool) {
     recentTask?.cancel()
     recentTask = nil
     controller?.finish()
-    server?.stop()
+    if release {
+      server?.shutdown()
+    } else {
+      server?.stop()
+    }
     consumeTask?.cancel()
     consumeTask = nil
     server = nil
