@@ -119,13 +119,31 @@ downloaded or prepared again.
 
 | Setting | What it does |
 | --- | --- |
+| Server | **Python (bundled runtime)**, the default, or **Swift (built in)**, the server the iPhone app runs, inside the app with no Python. See [The Swift server](#the-swift-server). |
 | Backend | Which runtime prepares and runs the model. See [Backends](#backends). |
 | Connection | **USB (the comma)** for driving, or **TCP** for testing without a comma. |
 | Port | The TCP port, 5599 by default. Only shown for TCP. |
 | Log level | **Normal (INFO)** or **Verbose (DEBUG)**. Use verbose when reporting a problem. |
-| Python interpreter override | For development only. Leave it empty to use the bundled runtime. |
+| Python interpreter override | For development only. Leave it empty to use the bundled runtime. Shown for the Python server only. |
 
 Click **Restart Server** to apply these settings.
+
+### The Swift server
+
+**Settings > Server > Swift (built in)** runs the server the iPhone app runs,
+inside Jetlink: nothing to find or start, the same models and cache folder,
+and the same Status, Models and Logs. It opens the comma's USB link itself
+through macOS's USB framework, or listens on the TCP port for a bench client.
+On an M1 Pro it is about 1 ms faster a frame than the Python server
+([measurements](mac-performance.md#the-python-server-and-the-swift-server)).
+
+- It has **Automatic** and **CoreML on the GPU**. tinygrad is Python only; with
+  it selected, the Swift server runs Automatic and says so in Logs.
+- The **Benchmark** page (Command-3) runs the loaded model at the comma's pace
+  on the Mac alone and gives the same verdict as the iPhone app. It works with
+  the Swift server only, and only while no comma is connected.
+- It has not yet driven with a comma on USB. Until that is measured, the Python
+  server stays the default.
 
 ## Backends
 

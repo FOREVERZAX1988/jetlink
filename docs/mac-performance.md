@@ -38,6 +38,45 @@ Neural Engine's part again.
 The mean is the average frame time. The p99 is the time at or below which 99% of
 frames complete. The maximum is the slowest frame.
 
+## The Python server and the Swift server
+
+The app can run either server (Settings > Server). Both run the same prepared
+graph through onnxruntime's CoreML provider, so the difference is everything
+around the model: the queues, the copies and the process layout. The Python
+server runs the model in a worker process; the Swift server runs it in the
+app's own process.
+
+Measured 2026-09-27 on the same M1 Pro with Cinque Terre V3, the default
+Neural Engine and GPU split, `bench_link.py --rate 20 --n 1200` over TCP
+loopback, one server at a time. The Swift server is `jetlink-serve` built for
+release, the Python server `python -m jetlink.server.main --transport tcp`.
+
+| Run | round trip p50 / p99 / max | server-side total | over 50 ms |
+| --- | ---: | ---: | ---: |
+| Python 1 | 31.20 / 57.63 / 96.35 ms | 30.92 ms | 18 of 1,190 |
+| Python 2 | 31.16 / 51.34 / 145.63 ms | 30.50 ms | 15 of 1,190 |
+| Python 3 | 31.03 / 34.54 / 45.07 ms | 29.92 ms | 0 of 1,190 |
+| Swift 1 | 29.81 / 33.51 / 36.90 ms | 28.87 ms | 0 of 1,190 |
+| Swift 2 | 30.14 / 33.90 / 34.76 ms | 29.06 ms | 0 of 1,190 |
+
+Another process was building in a container during the first two Python
+runs; the third ran under the same load as the Swift runs. On the clean runs
+the Swift server is about 1 ms faster a frame at p50 and 0.6 to 1 ms at p99.
+That is the server alone: loopback TCP adds about 1.4 ms either way.
+
+Not yet measured: the same A/B over USB with a comma, which is the gate for
+making the Swift server the default (its p99 no worse than the Python
+server's, and no frame dropped). To run it, plug the comma into the Mac, set
+Settings > Server to each in turn (or run `jetlink-serve --usb` from
+`JetlinkKit/.build/release`), and on the parked comma run
+`jetlink_repo/scripts/comma/jetlink_live_bench.sh 180` for each.
+
+One cache serves both servers. The two write the same artifact under the same
+name, and once their prepare versions agree ([conformance](conformance.md))
+each loads what the other built: the Python server loaded an engine the Swift
+server had prepared, with the converted model the Swift server deletes after
+compiling already gone, and served it at 29.7 ms p50 with no frame over 50 ms.
+
 ## How the default runs
 
 The default (`--device ane`, which `auto` picks on Apple silicon) runs the

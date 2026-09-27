@@ -11,6 +11,11 @@ Unreleased
   * A Benchmark tab: one or ten minutes at the comma's pace, a verdict, the run in ten-second windows with the phone's temperature, and the `bench_link.py` and `verify_parity.py` commands filled in
   * A Logs screen, a Memory tile, log lines for memory pressure, heat and the app going to the background, a banner while the app is not on screen, and an alert when the comma asks to shut down
   * Signing from a git-ignored `Local.xcconfig`, Release when run from Xcode, and a help page on connecting the comma
+* Mac
+  * Settings > Server can run the Swift server, the one the iPhone app runs, inside the app with no Python; the Python server stays the default until it is measured with a comma on USB
+  * The Swift server opens the comma's USB link through macOS's own USB framework, finds the link by its interface class, and waits quietly while the comma has nothing serving the link
+  * A Benchmark page for the Swift server, with the iPhone app's verdict
+  * `jetlink-serve --usb` runs the Swift server as the USB host from a checkout
 
 Jetlink v0.4.3
 ==============
