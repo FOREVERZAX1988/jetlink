@@ -17,6 +17,10 @@ takes ~21 ms of it. Sends real-sized payloads at the real rate and reports the t
     # returns the spec of a model it already has, so its identity is enough
     python3 scripts/bench_link.py --ffs --sha256 <hex> --nbytes <n>
     python3 scripts/bench_link.py --ffs --spec spec.json
+
+    # from a Mac standing in for the comma: wait for one phone to dial us
+    # (the app dials whatever answers on its cable network), then bench it
+    python3 scripts/bench_link.py --listen 5599 --onnx big_model.onnx
 """
 from __future__ import annotations
 
@@ -72,6 +76,26 @@ def pct(a: np.ndarray, q: float) -> float:
   return float(np.percentile(a, q))
 
 
+def parse_listen(spec: str, default_host: str = '0.0.0.0') -> tuple[str, int]:
+  """'[HOST:]PORT' for --listen."""
+  host, _, port = spec.rpartition(':')
+  try:
+    return host or default_host, int(port)
+  except ValueError:
+    raise SystemExit(f"--listen wants [HOST:]PORT, not {spec!r}") from None
+
+
+def open_listen(spec: str, timeout: float):
+  """Take one incoming dial and run the session over it, the way the comma
+  takes a phone's; see docs/transport.md."""
+  from jetlink.transport.tcp import TcpTransport
+  host, port = parse_listen(spec)
+  print(f"waiting up to {timeout:.0f}s for a peer to dial {host}:{port}...")
+  transport, addr = TcpTransport.listen_once(host, port, timeout)
+  print(f"peer dialed in from {addr[0]}:{addr[1]}")
+  return JetlinkClient(transport)
+
+
 def main() -> int:
   p = argparse.ArgumentParser()
   g = p.add_mutually_exclusive_group(required=True)
@@ -80,6 +104,11 @@ def main() -> int:
                  help='this end is the USB host (libusb)')
   g.add_argument('--ffs', action='store_true',
                  help='this end is the USB gadget (FunctionFS) - use this on a comma')
+  g.add_argument('--listen', metavar='[HOST:]PORT',
+                 help='accept one incoming dial (a phone over the cable network dials the comma; '
+                      'from a Mac this stands in for it) and bench over that connection')
+  p.add_argument('--listen-timeout', type=float, default=120.0, metavar='SECONDS',
+                 help='--listen: how long to wait for the dial')
   p.add_argument('--port', type=int, default=5599)
   p.add_argument('--ffs-mount', default='/dev/ffs-jetlink')
   p.add_argument('--gadget', default='/sys/kernel/config/usb_gadget/jetlink')
@@ -98,6 +127,8 @@ def main() -> int:
   elif args.ffs:
     # opening this writes the descriptors and binds the UDC, so the Jetson can enumerate us
     client = JetlinkClient.open_ffs(args.ffs_mount, gadget=args.gadget)
+  elif args.listen:
+    client = open_listen(args.listen, args.listen_timeout)
   else:
     client = JetlinkClient.open_tcp(args.host, args.port)
   try:
@@ -167,7 +198,7 @@ def _run(args, client) -> int:
   # a USB write returns once the host has taken the data, so send is wire time there;
   # a TCP send is a memcpy and the whole wire cost lands in recv
   snd, rcv = np.array(send_ms[10:]), np.array(recv_ms[10:])
-  if args.host:
+  if args.host or args.listen:
     print("  split (TCP): send is the copy into the socket buffer; both directions of wire time are in recv")
   else:
     print("  split (USB): the write blocks until the host has read, so send is request wire time, "

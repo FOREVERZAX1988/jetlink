@@ -26,6 +26,8 @@ CONSTANT_FRACTION say what a correlation can judge from that, and
     #    the server returns the spec of a model it already has, so only the
     #    model's identity is needed; --spec overrides it
     python3 scripts/verify_parity.py capture --ffs --dir out --sha256 <hex> --nbytes <n>
+    #    or from a Mac standing in for the comma, with a phone dialing us
+    python3 scripts/verify_parity.py capture --listen 5599 --dir out --sha256 <hex> --nbytes <n>
 
     # 2. anywhere with onnxruntime, on the ONNX the engine was built from
     python3 scripts/verify_parity.py reference --onnx big.onnx --dir out
@@ -123,6 +125,27 @@ def make_inputs(spec: ModelSpec, n: int, seed: int = 0) -> list[tuple[np.ndarray
 
 # -- capture: what actually comes back over the link -------------------------
 
+def parse_listen(spec: str, default_host: str = '0.0.0.0') -> tuple[str, int]:
+  """'[HOST:]PORT' for --listen."""
+  host, _, port = spec.rpartition(':')
+  try:
+    return host or default_host, int(port)
+  except ValueError:
+    raise SystemExit(f"--listen wants [HOST:]PORT, not {spec!r}") from None
+
+
+def open_listen(spec: str, timeout: float):
+  """Take one incoming dial and capture over it, the way the comma takes a
+  phone's; see docs/transport.md."""
+  from jetlink.client import JetlinkClient
+  from jetlink.transport.tcp import TcpTransport
+  host, port = parse_listen(spec)
+  print(f"waiting up to {timeout:.0f}s for a peer to dial {host}:{port}...")
+  transport, addr = TcpTransport.listen_once(host, port, timeout)
+  print(f"peer dialed in from {addr[0]}:{addr[1]}")
+  return JetlinkClient(transport)
+
+
 def capture(args) -> int:
   from jetlink.client import JetlinkClient
 
@@ -140,6 +163,8 @@ def capture(args) -> int:
     client = JetlinkClient.open_ffs(args.ffs_mount, gadget=args.gadget)
   elif args.host:
     client = JetlinkClient.open_tcp(args.host, args.port)
+  elif args.listen:
+    client = open_listen(args.listen, args.listen_timeout)
   else:
     client = JetlinkClient.open_usb()
 
@@ -417,7 +442,15 @@ def main() -> int:
   p.add_argument('--gadget', default='/sys/kernel/config/usb_gadget/jetlink')
   p.add_argument('--host', help='capture mode: TCP host instead of USB')
   p.add_argument('--port', type=int, default=5599)
+  p.add_argument('--listen', metavar='[HOST:]PORT',
+                 help='capture mode: accept one incoming dial (a phone over the cable network '
+                      'dials the comma; from a Mac this stands in for it) instead of USB or --host')
+  p.add_argument('--listen-timeout', type=float, default=120.0, metavar='SECONDS',
+                 help='--listen: how long to wait for the dial')
   args = p.parse_args()
+
+  if args.listen and (args.host or args.ffs):
+    p.error('--listen takes the place of --host and --ffs')
 
   if args.mode == 'reference' and not args.onnx:
     raise SystemExit('reference mode needs --onnx')
