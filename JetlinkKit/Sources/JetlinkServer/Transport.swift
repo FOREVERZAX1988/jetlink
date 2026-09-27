@@ -54,8 +54,10 @@ public final class TCPTransport: @unchecked Sendable {
     rx.deallocate()
   }
 
-  /// A client's end: what the comma opens. For tests and benches.
-  public static func connect(host: String, port: UInt16) throws -> TCPTransport {
+  /// A client's end: what the comma opens, and what a phone dialing the
+  /// comma opens. With a `timeout`, a connect that takes longer fails
+  /// rather than sit in SYN retries for a minute.
+  public static func connect(host: String, port: UInt16, timeout: TimeInterval? = nil) throws -> TCPTransport {
     let fd = socket(AF_INET, SOCK_STREAM, 0)
     guard fd >= 0 else { throw LinkError.closed("socket: \(String(cString: strerror(errno)))") }
     var address = sockaddr_in()
@@ -63,13 +65,35 @@ public final class TCPTransport: @unchecked Sendable {
     address.sin_family = sa_family_t(AF_INET)
     address.sin_port = port.bigEndian
     address.sin_addr.s_addr = inet_addr(host)
-    let connected = withUnsafePointer(to: &address) {
+    let flags = fcntl(fd, F_GETFL)
+    if timeout != nil {
+      _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
+    }
+    var connected = withUnsafePointer(to: &address) {
       $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+    }
+    if connected != 0, let timeout, errno == EINPROGRESS {
+      var poller = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+      let ready = poll(&poller, 1, Int32(max(1, timeout * 1000)))
+      if ready == 0 {
+        Darwin.close(fd)
+        throw LinkError.timedOut("could not connect to \(host):\(port) in \(timeout) s")
+      }
+      var error: Int32 = 0
+      var length = socklen_t(MemoryLayout<Int32>.size)
+      if ready > 0 && getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &length) == 0 && error == 0 {
+        connected = 0
+      } else {
+        errno = error != 0 ? error : errno
+      }
     }
     guard connected == 0 else {
       let reason = String(cString: strerror(errno))
       Darwin.close(fd)
       throw LinkError.closed("could not connect to \(host):\(port): \(reason)")
+    }
+    if timeout != nil {
+      _ = fcntl(fd, F_SETFL, flags)
     }
     return TCPTransport(fd: fd, peer: "\(host):\(port)")
   }

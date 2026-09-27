@@ -16,6 +16,7 @@ struct Options {
   var keepAlive = true
   var keepCPUWarm = true
   var preload = true
+  var dial: DialTarget?
 }
 
 func parse() -> Options {
@@ -36,6 +37,13 @@ func parse() -> Options {
     case "--no-keepalive": options.keepAlive = false
     case "--no-cpu-keepwarm": options.keepCPUWarm = false
     case "--no-preload": options.preload = false
+    case "--dial":
+      let text = value(arg)
+      guard let target = DialTarget(text) else {
+        FileHandle.standardError.write(Data("--dial wants HOST or HOST:PORT, not \(text)\n".utf8))
+        exit(2)
+      }
+      options.dial = target
     default:
       FileHandle.standardError.write(Data("unknown argument \(arg)\n".utf8))
       exit(2)
@@ -74,7 +82,7 @@ guard let cache = options.cache else {
 do {
   let server = try Server(
     configuration: Server.Configuration(port: options.port, cacheRoot: cache, device: options.device, keepAlive: options.keepAlive, keepCPUWarm: options.keepCPUWarm,
-      preload: options.preload),
+      preload: options.preload, dial: options.dial),
     preparer: ONNXPreparer())
   server.host.subscribe { event in
     switch event {

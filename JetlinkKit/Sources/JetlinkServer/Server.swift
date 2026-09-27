@@ -3,6 +3,32 @@ import Foundation
 import JetlinkKit
 import os
 
+/// Where a server dials to serve: the comma's end of a USB network link,
+/// which listens for the phone (192.168.60.1:5599 on the composite gadget).
+public struct DialTarget: Sendable, Equatable, CustomStringConvertible {
+  public let host: String
+  public let port: UInt16
+
+  public init(host: String, port: UInt16 = Wire.defaultPort) {
+    self.host = host
+    self.port = port
+  }
+
+  /// "host:port", or "host" for the default port.
+  public init?(_ text: String) {
+    let parts = text.split(separator: ":", maxSplits: 1).map(String.init)
+    guard let host = parts.first, !host.isEmpty else { return nil }
+    var port = Wire.defaultPort
+    if parts.count == 2 {
+      guard let parsed = UInt16(parts[1]) else { return nil }
+      port = parsed
+    }
+    self.init(host: host, port: port)
+  }
+
+  public var description: String { "\(host):\(port)" }
+}
+
 /// The jetlink server over TCP: a listener, one comma at a time, and the
 /// engine host they share. The Swift form of `server/main.py`'s `_serve`.
 ///
@@ -10,6 +36,12 @@ import os
 /// being served instead of waiting behind it. A comma only ever has one
 /// connection open, so a second one means the first is dead (a pulled cable
 /// the keepalive has not noticed yet), and the reconnect must not wait for it.
+///
+/// A connection comes from the listener, or from dialing: over a USB network
+/// link the comma listens and the phone dials it, so an accepted connection
+/// on the comma is the proof of a phone. A dialed connection is served the
+/// same way, and the listener stays open beside it for benches and a Mac on
+/// the LAN.
 public final class Server: @unchecked Sendable {
   public struct Configuration: Sendable {
     public var host: String
@@ -23,10 +55,12 @@ public final class Server: @unchecked Sendable {
     public var keepCPUWarm: Bool
     /// Start loading the engine that was loaded last, before a comma asks.
     public var preload: Bool
+    /// Dial this end and serve the connection; `setDial` changes it later.
+    public var dial: DialTarget?
 
     public init(
       host: String = "0.0.0.0", port: UInt16 = Wire.defaultPort, cacheRoot: URL, device: CoreMLBackend.Device = .ane, keepAlive: Bool = true,
-      keepCPUWarm: Bool = true, preload: Bool = true
+      keepCPUWarm: Bool = true, preload: Bool = true, dial: DialTarget? = nil
     ) {
       self.host = host
       self.port = port
@@ -35,10 +69,14 @@ public final class Server: @unchecked Sendable {
       self.keepAlive = keepAlive
       self.keepCPUWarm = keepCPUWarm
       self.preload = preload
+      self.dial = dial
     }
   }
 
   public static let statsInterval: TimeInterval = 1.0
+  /// A dial that takes longer has no comma behind it.
+  public static let dialTimeout: TimeInterval = 1.0
+  public static let dialInterval: TimeInterval = 0.5
   /// Between attempts to listen again after the socket went away.
   static let relistenBackoff: ClosedRange<TimeInterval> = 0.5...5.0
 
@@ -59,9 +97,12 @@ public final class Server: @unchecked Sendable {
   private var ticker: Ticker?
   private var started = false
   private var stopped = false
+  private var dial: DialTarget?
+  private var dialing = false
 
   public init(configuration: Configuration, preparer: any ModelPreparer) throws {
     self.configuration = configuration
+    self.dial = configuration.dial
     backend = CoreMLBackend(
       device: configuration.device, preparer: preparer, keepAlive: configuration.keepAlive, keepCPUWarm: configuration.keepCPUWarm)
     cache = try EngineCache(root: configuration.cacheRoot, backend: backend)
@@ -71,7 +112,7 @@ public final class Server: @unchecked Sendable {
     signal(SIGPIPE, SIG_IGN)
   }
 
-  /// Listens, and serves until `stop`. Returns once listening.
+  /// Listens, dials if configured, and serves until `stop`. Returns once listening.
   public func start() throws {
     try listen()
     lock.lock()
@@ -81,6 +122,7 @@ public final class Server: @unchecked Sendable {
       host.preload()
     }
     ticker = Ticker(interval: Server.statsInterval) { [weak self] _ in self?.tick() }
+    startDialing()
   }
 
   private func listen() throws {
@@ -182,7 +224,7 @@ public final class Server: @unchecked Sendable {
     host.frameStats.summary(window: window, framesTotal: framesServed)
   }
 
-  /// Stops listening and serving. The engine stays loaded, for a
+  /// Stops listening, dialing and serving. The engine stays loaded, for a
   /// server that will be started again; `shutdown()` releases it.
   public func stop() {
     lock.lock()
@@ -258,6 +300,73 @@ public final class Server: @unchecked Sendable {
     }
   }
 
+  // MARK: dialing
+
+  /// Where the server dials, if anywhere.
+  public var dialTarget: DialTarget? {
+    lock.lock()
+    defer { lock.unlock() }
+    return dial
+  }
+
+  /// Dial `target` from now on, or stop dialing with nil. A connection
+  /// being served is left alone either way.
+  public func setDial(_ target: DialTarget?) {
+    lock.lock()
+    let changed = dial != target
+    dial = target
+    lock.unlock()
+    if changed, let target {
+      log.info("dialing \(target.description, privacy: .public)")
+    } else if changed {
+      log.info("no longer dialing")
+    }
+    startDialing()
+  }
+
+  /// Starts the dial thread if there is a target and none is running.
+  private func startDialing() {
+    lock.lock()
+    guard started, !stopped, dial != nil, !dialing else {
+      lock.unlock()
+      return
+    }
+    dialing = true
+    lock.unlock()
+    let thread = Thread { [self] in dialLoop() }
+    thread.name = "jetlink-dial"
+    thread.qualityOfService = .userInteractive
+    thread.start()
+  }
+
+  /// Connects, serves, and dials again when the session ends; retries
+  /// every `dialInterval` while the target stands and the server runs.
+  private func dialLoop() {
+    var failed: DialTarget?
+    while true {
+      lock.lock()
+      guard !stopped, let target = dial else {
+        dialing = false
+        lock.unlock()
+        return
+      }
+      lock.unlock()
+      do {
+        let transport = try TCPTransport.connect(host: target.host, port: target.port, timeout: Server.dialTimeout)
+        failed = nil
+        log.info("dialed \(transport.peer, privacy: .public)")
+        takeover(transport).wait()
+      } catch {
+        // Once per outage, not twice a second.
+        if failed != target {
+          failed = target
+          log.info("cannot reach \(target.description, privacy: .public) yet: \(String(describing: error), privacy: .public)")
+        }
+      }
+      Thread.sleep(forTimeInterval: Server.dialInterval)
+    }
+  }
+
   private func setLink(_ event: LinkEvent) {
     lock.lock()
     link = event
@@ -282,7 +391,8 @@ public final class Server: @unchecked Sendable {
   }
 }
 
-/// Released once, waited on by any number of threads.
+/// Released once, waited on by any number of threads: the accept loop and
+/// the dial loop can both wait for the same session to end.
 final class Latch: @unchecked Sendable {
   private let condition = NSCondition()
   private var released = false

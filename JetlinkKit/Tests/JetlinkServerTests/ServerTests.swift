@@ -123,10 +123,10 @@ struct ServerTests {
 /// The listener beside the sessions: it heals, and stopping keeps the engine.
 @Suite("Server lifecycle", .serialized)
 struct ServerLifecycleTests {
-  func makeServer(_ cache: TemporaryDirectory) throws -> Server {
+  func makeServer(_ cache: TemporaryDirectory, dial: DialTarget? = nil) throws -> Server {
     try Server(
       configuration: Server.Configuration(
-        host: "127.0.0.1", port: 0, cacheRoot: cache.url, device: .cpu, keepAlive: false, preload: false),
+        host: "127.0.0.1", port: 0, cacheRoot: cache.url, device: .cpu, keepAlive: false, preload: false, dial: dial),
       preparer: ONNXPreparer())
   }
 
@@ -167,5 +167,52 @@ struct ServerLifecycleTests {
     defer { client.close(); server.shutdown() }
     try client.send(.ping)
     #expect(try client.recv().type == Wire.Msg.pong.rawValue)
+  }
+
+  @Test("A dialed connection is served like an accepted one, and dialed again after it ends")
+  func dials() throws {
+    let cache = try TemporaryDirectory()
+    // The comma's end: a listener the server dials.
+    let comma = try TCPListener(host: "127.0.0.1", port: 0)
+    let server = try makeServer(cache, dial: DialTarget(host: "127.0.0.1", port: comma.port))
+    try server.start()
+    defer { server.shutdown(); comma.close() }
+    for round in 0..<2 {
+      guard let transport = comma.accept() else { throw TestError("no dial in round \(round)") }
+      transport.setReceiveTimeout(10)
+      try transport.send(.ping, seq: UInt32(round + 1))
+      let reply = try transport.recv()
+      #expect(reply.msgType == Wire.Msg.pong.rawValue)
+      #expect(reply.seq == UInt32(round + 1))
+      transport.close()
+    }
+    // A listener keeps accepting beside the dialing.
+    let client = try TestClient(port: server.port!)
+    defer { client.close() }
+    try client.send(.ping)
+    #expect(try client.recv().type == Wire.Msg.pong.rawValue)
+    server.setDial(nil)
+    #expect(server.dialTarget == nil)
+  }
+
+  @Test("A dial target that does not answer is retried until it does")
+  func dialsUntilAnswered() throws {
+    let cache = try TemporaryDirectory()
+    // A port with nobody on it, until the listener opens below.
+    let probe = try TCPListener(host: "127.0.0.1", port: 0)
+    let port = probe.port
+    probe.close()
+    let server = try makeServer(cache)
+    try server.start()
+    defer { server.shutdown() }
+    server.setDial(DialTarget(host: "127.0.0.1", port: port))
+    Thread.sleep(forTimeInterval: 0.7)
+    let comma = try TCPListener(host: "127.0.0.1", port: port)
+    defer { comma.close() }
+    guard let transport = comma.accept() else { throw TestError("never dialed") }
+    transport.setReceiveTimeout(10)
+    try transport.send(.ping, seq: 1)
+    #expect(try transport.recv().msgType == Wire.Msg.pong.rawValue)
+    transport.close()
   }
 }
