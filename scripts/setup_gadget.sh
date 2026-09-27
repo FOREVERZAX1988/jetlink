@@ -42,11 +42,12 @@ PID=${JETLINK_PID:-0x0001}
 # NCM first: it batches packets, which a 460 KB frame benefits from. ECM is
 # the older class and the fallback.
 NET_FUNCTIONS=${JETLINK_NET_FUNCTIONS:-"ncm ecm"}
-NET_IF=usb0
+NET_IF=usb0    # the function name suffix only; see net_ifname for the netdev
 COMMA_ADDR=${JETLINK_COMMA_ADDR:-192.168.60.1}
 COMMA_PREFIX=24
 DHCP_RANGE=${JETLINK_DHCP_RANGE:-192.168.60.2,192.168.60.9,1h}
 DNSMASQ_PID=/dev/shm/jetlink-dnsmasq.pid
+DNSMASQ_IF=/dev/shm/jetlink-dnsmasq.if
 DNSMASQ_LEASES=/dev/shm/jetlink-usb0.leases
 
 status() {
@@ -82,55 +83,76 @@ dnsmasq_alive() {
   [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
 }
 
+# The interface the kernel gave the network function. The function is named
+# ncm.usb0 but the netdev is not usb0: the modem already holds that name on a
+# comma, so ours comes up as usb1 or later, and the number can change from one
+# bind to the next. u_ether records the real name in the function's ifname,
+# readable only while the gadget is bound.
+net_ifname() {
+  local kind name
+  kind=$(net_function)
+  [[ -n "$kind" ]] || return 1
+  name=$(cat "$GADGET/functions/$kind.$NET_IF/ifname" 2>/dev/null || true)
+  [[ -n "$name" && -d "/sys/class/net/$name" ]] || return 1
+  echo "$name"
+}
+
 # The comma's end of the cable network. Idempotent, and never fatal: the gadget
 # is usable by a Jetson or a Mac with no network at all. Called at the end of
-# setup, where usb0 usually does not exist yet, and by the owner through --net
-# once it has bound the UDC and the interface has appeared.
+# setup, where the netdev usually does not exist yet, and by the owner through
+# --net once it has bound the UDC and the interface has appeared.
 net_up() {
-  local kind why
+  local kind dev why
   kind=$(net_function)
   if [[ -z "$kind" ]]; then
     net_status "net: unavailable"
     echo "no network function in the gadget; the cable link is USB only" >&2
     return 0
   fi
-  if [[ ! -d "/sys/class/net/$NET_IF" ]]; then
-    net_status "error: no $NET_IF yet; it appears when the owner binds the UDC (then run --net)"
-    echo "$kind function present, $NET_IF not yet created (appears at bind); run --net after binding" >&2
+  if ! dev=$(net_ifname); then
+    net_status "error: no netdev yet; it appears when the owner binds the UDC (then run --net)"
+    echo "$kind function present, its netdev not yet created (appears at bind); run --net after binding" >&2
     return 0
   fi
-  # NetworkManager manages every device on AGNOS and would DHCP on usb0 itself
-  nmcli dev set "$NET_IF" managed no >/dev/null 2>&1 || true
-  if ! ip addr replace "$COMMA_ADDR/$COMMA_PREFIX" dev "$NET_IF" 2>/dev/null; then
-    why="could not set $COMMA_ADDR/$COMMA_PREFIX on $NET_IF"
+  # NetworkManager manages every device on AGNOS and would DHCP on it itself
+  nmcli dev set "$dev" managed no >/dev/null 2>&1 || true
+  if ! ip addr replace "$COMMA_ADDR/$COMMA_PREFIX" dev "$dev" 2>/dev/null; then
+    why="could not set $COMMA_ADDR/$COMMA_PREFIX on $dev"
     net_status "error: $why"; echo "jetlink: $why" >&2
     return 0
   fi
-  if ! ip link set "$NET_IF" up 2>/dev/null; then
-    why="could not bring $NET_IF up"
+  if ! ip link set "$dev" up 2>/dev/null; then
+    why="could not bring $dev up"
     net_status "error: $why"; echo "jetlink: $why" >&2
     return 0
   fi
   # Steer receive processing onto the big cores: the comma's little cores add
   # milliseconds to a 460 KB frame. Not every kernel exposes it.
-  if [[ -w "/sys/class/net/$NET_IF/queues/rx-0/rps_cpus" ]]; then
-    echo f0 > "/sys/class/net/$NET_IF/queues/rx-0/rps_cpus" 2>/dev/null || true
+  if [[ -w "/sys/class/net/$dev/queues/rx-0/rps_cpus" ]]; then
+    echo f0 > "/sys/class/net/$dev/queues/rx-0/rps_cpus" 2>/dev/null || true
   fi
   # DHCP for the phone, and only that: no router (option 3) and no DNS (option 6),
   # so the phone keeps its default route over Wi-Fi. No DNS service (--port=0).
+  # dnsmasq binds the interface by name, so a netdev that came back under a new
+  # name after a rebind needs a fresh dnsmasq: the running one is on a ghost.
+  if dnsmasq_alive && [[ "$(cat "$DNSMASQ_IF" 2>/dev/null || true)" != "$dev" ]]; then
+    kill "$(cat "$DNSMASQ_PID")" 2>/dev/null || true
+    sleep 0.2
+  fi
   if ! dnsmasq_alive; then
     rm -f "$DNSMASQ_PID" 2>/dev/null || true
-    if ! dnsmasq --conf-file=/dev/null --bind-interfaces --interface="$NET_IF" \
+    if ! dnsmasq --conf-file=/dev/null --bind-interfaces --interface="$dev" \
         --except-interface=lo --port=0 --dhcp-range="$DHCP_RANGE" \
         --dhcp-option=3 --dhcp-option=6 --dhcp-leasefile="$DNSMASQ_LEASES" \
         --pid-file="$DNSMASQ_PID" 2>/dev/null; then
-      why="dnsmasq would not start on $NET_IF"
+      why="dnsmasq would not start on $dev"
       net_status "error: $why"; echo "jetlink: $why" >&2
       return 0
     fi
+    echo "$dev" > "$DNSMASQ_IF"
   fi
-  net_status "ok $COMMA_ADDR"
-  echo "$NET_IF ($kind) at $COMMA_ADDR/$COMMA_PREFIX, DHCP $DHCP_RANGE"
+  net_status "ok $COMMA_ADDR $dev"
+  echo "$dev ($kind) at $COMMA_ADDR/$COMMA_PREFIX, DHCP $DHCP_RANGE"
   return 0
 }
 
@@ -201,10 +223,10 @@ check() {
     else
       echo "network gadget functions: none"
     fi
-    if [[ -d "/sys/class/net/$NET_IF" ]]; then
-      echo "$NET_IF: $(cat "/sys/class/net/$NET_IF/operstate" 2>/dev/null || echo unknown), $(ip -4 -o addr show dev "$NET_IF" 2>/dev/null | awk '{print $4}' | tr '\n' ' ')"
+    if dev=$(net_ifname); then
+      echo "$dev: $(cat "/sys/class/net/$dev/operstate" 2>/dev/null || echo unknown), $(ip -4 -o addr show dev "$dev" 2>/dev/null | awk '{print $4}' | tr '\n' ' ')"
     else
-      echo "$NET_IF: absent (it appears when the owner binds the UDC)"
+      echo "netdev: absent (it appears when the owner binds the UDC)"
     fi
     echo "network status: $(cat "$NET_STATUS_FILE" 2>/dev/null || echo unknown)"
     if dnsmasq_alive; then echo "dnsmasq: running"; else echo "dnsmasq: not running"; fi
