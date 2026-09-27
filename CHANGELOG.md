@@ -1,4 +1,4 @@
-Jetlink v0.4.1
+Jetlink v0.4.2
 ==============
 * Mac
   * The app is signed with a Developer ID and notarized, so it opens without the Gatekeeper workaround
