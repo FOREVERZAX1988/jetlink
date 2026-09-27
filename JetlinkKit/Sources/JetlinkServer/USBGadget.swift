@@ -1,0 +1,315 @@
+#if os(macOS)
+  import Foundation
+  import IOKit
+  import IOUSBHost
+
+  /// The comma's USB gadget as a Mac sees it, through IOUSBHost: the Swift
+  /// form of `UsbBulkTransport.open` and `.present`.
+  ///
+  /// The gadget is found by vendor and product ID, and the link by its
+  /// interface's class, FF/FF/FF, wherever the composite gadget put it (the
+  /// comma also presents a network interface for a phone). A gadget with no
+  /// vendor-class interface falls back to interface 0, where the gadget script
+  /// links the link first. Endpoint addresses are read from the descriptors,
+  /// never assumed: FunctionFS renumbers them at bind.
+  ///
+  /// No driver claims a vendor-class interface, so opening one needs no
+  /// entitlement and no root. Another program holding it (the Python server,
+  /// say) makes the open fail with exclusive access.
+  public enum USBGadget {
+    /// pid.codes' test allocation, as `usbbulk.JETLINK_VID/PID`.
+    public static let vendorID = 0x1209
+    public static let productID = 0x0001
+
+    /// Is a jetlink gadget on the bus? Opens nothing; cheap enough to poll.
+    public static func present(vendorID: Int = vendorID, productID: Int = productID) -> Bool {
+      guard let device = findDevice(vendorID: vendorID, productID: productID) else { return false }
+      IOObjectRelease(device)
+      return true
+    }
+
+    /// The bus speed the gadget enumerated at, as a phrase for the log.
+    public static func speed(vendorID: Int = vendorID, productID: Int = productID) -> String? {
+      guard let device = findDevice(vendorID: vendorID, productID: productID) else { return nil }
+      defer { IOObjectRelease(device) }
+      guard let value = property(device, "USBSpeed") else { return nil }
+      switch value {
+      case 1: return "full speed (USB 1)"
+      case 2: return "low speed (USB 1)"
+      case 3: return "high speed (USB 2)"
+      case 4: return "super speed (USB 3, 5 Gb/s)"
+      case 5, 6: return "super speed plus (USB 3, 10 Gb/s or more)"
+      default: return nil
+      }
+    }
+
+    /// Opens the gadget's link interface and its bulk pair.
+    static func open(vendorID: Int = vendorID, productID: Int = productID) throws -> USBTransport {
+      guard let device = findDevice(vendorID: vendorID, productID: productID) else {
+        throw LinkError.closed(String(format: "no jetlink gadget at %04x:%04x", vendorID, productID))
+      }
+      defer { IOObjectRelease(device) }
+      guard let service = linkInterface(of: device) else {
+        throw LinkError.closed("the gadget has no vendor interface yet")
+      }
+      defer { IOObjectRelease(service) }
+      return USBTransport(pipes: try IOUSBHostPipes(service: service), peer: "usb")
+    }
+
+    // MARK: the registry
+
+    private static func findDevice(vendorID: Int, productID: Int) -> io_service_t? {
+      guard let matching = IOServiceMatching(kIOUSBHostDeviceClassName) as NSMutableDictionary? else { return nil }
+      matching["idVendor"] = vendorID
+      matching["idProduct"] = productID
+      let service = IOServiceGetMatchingService(kIOMainPortDefault, matching)
+      return service == 0 ? nil : service
+    }
+
+    /// The vendor-class interface under `device`, else interface 0.
+    private static func linkInterface(of device: io_service_t) -> io_service_t? {
+      var iterator: io_iterator_t = 0
+      guard IORegistryEntryGetChildIterator(device, kIOServicePlane, &iterator) == KERN_SUCCESS else { return nil }
+      defer { IOObjectRelease(iterator) }
+      var vendor: io_service_t?
+      var first: io_service_t?
+      while case let child = IOIteratorNext(iterator), child != 0 {
+        guard IOObjectConformsTo(child, kIOUSBHostInterfaceClassName) != 0 else {
+          IOObjectRelease(child)
+          continue
+        }
+        let triple = (property(child, "bInterfaceClass"), property(child, "bInterfaceSubClass"), property(child, "bInterfaceProtocol"))
+        if vendor == nil && triple == (0xFF, 0xFF, 0xFF) {
+          vendor = child
+        } else if first == nil && property(child, "bInterfaceNumber") == 0 {
+          first = child
+        } else {
+          IOObjectRelease(child)
+        }
+      }
+      if let vendor {
+        if let first { IOObjectRelease(first) }
+        return vendor
+      }
+      return first
+    }
+
+    private static func property(_ entry: io_registry_entry_t, _ key: String) -> Int? {
+      guard let value = IORegistryEntryCreateCFProperty(entry, key as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue() else {
+        return nil
+      }
+      return (value as? NSNumber)?.intValue
+    }
+  }
+
+  /// The server's view of the gadget on a Mac.
+  struct IOKitGadget: GadgetSource {
+    func present() -> Bool { USBGadget.present() }
+    func open() throws -> USBTransport { try USBGadget.open() }
+    func speed() -> String? { USBGadget.speed() }
+  }
+
+  /// The link interface's bulk IN and OUT pipes, opened through IOUSBHost.
+  ///
+  /// Each transfer is queued and waited for, so the byte count comes back on
+  /// every completion, a timeout included. The completions run on a queue of
+  /// the session's priority, so the wakeup is not the slow part of a frame.
+  final class IOUSBHostPipes: BulkPipes, @unchecked Sendable {
+    private let interface: IOUSBHostInterface
+    private let input: IOUSBHostPipe
+    private let output: IOUSBHostPipe
+    private let lock = NSLock()
+    private var closing = false
+    private var gone = false
+    private var destroyed = false
+
+    private static let queue = DispatchQueue(label: "io.zoompilot.jetlink.usb", qos: .userInteractive)
+    /// kIOMessageServiceIsTerminated, a function-like macro Swift cannot see.
+    private static let terminated: UInt32 = 0xE000_0010
+
+    init(service: io_service_t) throws {
+      let flag = TerminationFlag()
+      do {
+        interface = try IOUSBHostInterface(
+          __ioService: service, options: [], queue: IOUSBHostPipes.queue,
+          interestHandler: { _, message, _ in
+            if message == IOUSBHostPipes.terminated { flag.set() }
+          })
+      } catch {
+        throw LinkError.closed("could not open the gadget's interface: \(IOUSBHostPipes.describe(error))")
+      }
+      var pair: (input: Int, output: Int) = (0, 0)
+      let configuration = interface.configurationDescriptor
+      let descriptor = interface.interfaceDescriptor
+      var current = UnsafeRawPointer(descriptor).assumingMemoryBound(to: IOUSBDescriptorHeader.self)
+      while let endpoint = IOUSBGetNextEndpointDescriptor(configuration, descriptor, current) {
+        let address = Int(endpoint.pointee.bEndpointAddress)
+        if endpoint.pointee.bmAttributes & 0x03 == 0x02 {
+          if address & 0x80 != 0 { pair.input = address } else { pair.output = address }
+        }
+        current = UnsafeRawPointer(endpoint).assumingMemoryBound(to: IOUSBDescriptorHeader.self)
+      }
+      guard pair.input != 0, pair.output != 0 else {
+        interface.destroy()
+        throw LinkError.closed("the gadget's interface has no bulk IN/OUT pair")
+      }
+      do {
+        input = try interface.copyPipe(withAddress: pair.input)
+        output = try interface.copyPipe(withAddress: pair.output)
+      } catch {
+        interface.destroy()
+        throw LinkError.closed("could not open the gadget's endpoints: \(IOUSBHostPipes.describe(error))")
+      }
+      flag.onSet = { [weak self] in self?.lost() }
+    }
+
+    deinit {
+      close()
+    }
+
+    func read(into buffer: UnsafeMutableRawPointer, count: Int, timeout: TimeInterval) throws -> Int {
+      try transfer(input, buffer, count, timeout, "read")
+    }
+
+    func write(from buffer: UnsafeRawPointer, count: Int, timeout: TimeInterval) throws -> Int {
+      try transfer(output, UnsafeMutableRawPointer(mutating: buffer), count, timeout, "write")
+    }
+
+    private func transfer(_ pipe: IOUSBHostPipe, _ buffer: UnsafeMutableRawPointer, _ count: Int, _ timeout: TimeInterval, _ what: String)
+      throws -> Int
+    {
+      lock.lock()
+      let stopped = closing || gone
+      lock.unlock()
+      if stopped {
+        throw LinkError.closed(gone ? "the gadget went away" : "link closed")
+      }
+      let data = NSMutableData(bytesNoCopy: buffer, length: count, freeWhenDone: false)
+      let completion = Completion()
+      do {
+        try pipe.enqueueIORequest(with: data, completionTimeout: timeout) { status, transferred in
+          completion.finish(status, transferred)
+        }
+      } catch {
+        throw LinkError.closed("usb bulk \(what) could not start: \(IOUSBHostPipes.describe(error))")
+      }
+      let (status, transferred) = completion.wait()
+      withExtendedLifetime(data) {}
+      switch UInt32(bitPattern: status) {
+      case UInt32(bitPattern: kIOReturnSuccess), IOUSBHostPipes.underrun:
+        return transferred
+      case IOUSBHostPipes.timeout, IOUSBHostPipes.transactionTimeout:
+        // Whatever arrived before the deadline is part of the stream.
+        return transferred
+      case IOUSBHostPipes.aborted:
+        lock.lock()
+        let reason = gone ? "the gadget went away" : closing ? "link closed" : "usb bulk \(what) aborted"
+        lock.unlock()
+        throw LinkError.closed(reason)
+      default:
+        throw LinkError.closed("usb bulk \(what) failed: \(IOUSBHostPipes.describe(status))")
+      }
+    }
+
+    func abort() {
+      lock.lock()
+      closing = true
+      lock.unlock()
+      try? input.__abort(with: .asynchronous)
+      try? output.__abort(with: .asynchronous)
+    }
+
+    func close() {
+      lock.lock()
+      let first = !destroyed
+      destroyed = true
+      closing = true
+      lock.unlock()
+      guard first else { return }
+      try? input.__abort(with: .synchronous)
+      try? output.__abort(with: .synchronous)
+      interface.destroy()
+    }
+
+    /// The device was unplugged or re-enumerated: whatever is in flight ends.
+    private func lost() {
+      lock.lock()
+      gone = true
+      lock.unlock()
+      try? input.__abort(with: .asynchronous)
+      try? output.__abort(with: .asynchronous)
+    }
+
+    // MARK: status codes
+
+    private static let timeout: UInt32 = 0xE000_02D6  // kIOReturnTimeout
+    private static let underrun: UInt32 = 0xE000_02E7  // kIOReturnUnderrun: a short packet, not an error
+    private static let aborted: UInt32 = 0xE000_02EB  // kIOReturnAborted
+    private static let transactionTimeout: UInt32 = 0xE000_4051  // kIOUSBTransactionTimeout
+
+    static func describe(_ status: IOReturn) -> String {
+      let names: [UInt32: String] = [
+        0xE000_02C0: "no such device", 0xE000_02C5: "another program has the interface open",
+        0xE000_02CA: "I/O error", 0xE000_02CD: "not open", 0xE000_02D7: "offline",
+        0xE000_02D9: "not attached", 0xE000_02E8: "overrun", 0xE000_02ED: "not responding",
+        0xE000_5000: "the endpoint stalled", timeout: "timed out", aborted: "aborted",
+      ]
+      let code = UInt32(bitPattern: status)
+      let hex = String(format: "0x%08x", code)
+      return names[code].map { "\($0) (\(hex))" } ?? hex
+    }
+
+    static func describe(_ error: any Error) -> String {
+      let ns = error as NSError
+      if ns.domain == IOUSBHostErrorDomain || ns.domain == NSMachErrorDomain || ns.domain == NSOSStatusErrorDomain {
+        return describe(IOReturn(truncatingIfNeeded: ns.code))
+      }
+      return ns.localizedDescription
+    }
+  }
+
+  /// One transfer's result, handed from IOUSBHost's queue to the waiting thread.
+  private final class Completion: @unchecked Sendable {
+    private let done = DispatchSemaphore(value: 0)
+    private var status: IOReturn = 0
+    private var transferred = 0
+
+    func finish(_ status: IOReturn, _ transferred: Int) {
+      self.status = status
+      self.transferred = transferred
+      done.signal()
+    }
+
+    func wait() -> (IOReturn, Int) {
+      done.wait()
+      return (status, transferred)
+    }
+  }
+
+  /// Set from the interface's interest handler, which is registered before the
+  /// pipes exist; `onSet` is wired once they do.
+  private final class TerminationFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isSet = false
+    private var handler: (() -> Void)?
+
+    var onSet: (() -> Void)? {
+      get { nil }
+      set {
+        lock.lock()
+        handler = newValue
+        let fire = isSet
+        lock.unlock()
+        if fire { newValue?() }
+      }
+    }
+
+    func set() {
+      lock.lock()
+      isSet = true
+      let handler = handler
+      lock.unlock()
+      handler?()
+    }
+  }
+#endif
