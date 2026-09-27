@@ -454,3 +454,16 @@ class TestOversizeMessageDoesNotStall:
   def test_the_real_host_transport_has_slack(self):
     from jetlink.transport.usbbulk import MAX_PACKET, UsbBulkTransport
     assert UsbBulkTransport.read_slack >= MAX_PACKET
+
+
+def test_a_closed_client_is_dead():
+  """Whoever still holds a closed client must open a new one: a big model
+  retired after a link loss closes its client, and modeld's link reused it."""
+  from jetlink.client import JetlinkClient
+
+  a, b = make_pair()
+  client = JetlinkClient(a)
+  assert not client.dead
+  client.close()
+  b.close()
+  assert client.dead

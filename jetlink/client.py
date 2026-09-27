@@ -395,6 +395,9 @@ class JetlinkClient:
     return self.t.release_endpoints()
 
   def close(self) -> None:
+    # a closed client is as dead as a failed one: whoever still holds it must
+    # open a new one rather than reuse a closed socket or endpoint file
+    self.dead = True
     self.t.close()
 
 
