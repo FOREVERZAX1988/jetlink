@@ -46,9 +46,9 @@ the GPU; tinygrad is Python only.
 **Fork** (`openpilot/sunnypilot/accelerators/jetlink/`): the phone dials the
 owner on 192.168.60.1:5599 over the composite gadget's network link, the loan
 carries the socket, and (new) `usbport.Port` holds the comma's USB-C port as
-the device for any host that is not a chestnut, with USB PD off during the
-hold, so a C-to-C host (Mac or iPhone) gets the host role. See the fork commits
-for the charger voter it uses.
+the device for any host that is not a chestnut, so a C-to-C host (Mac or
+iPhone) gets the host role. It forces the charger's DISABLE_POWER_ROLE_SWITCH
+voter and leaves USB PD alone (fork f216abb5d2). See the fork commits.
 
 ## Verified, and how
 
@@ -91,8 +91,10 @@ for the charger voter it uses.
    cable and model. Pass: Swift's p99 no worse and no frame dropped. Then merge
    `mac-swift-only` and release it as its own version.
 3. **Nothing has run on an iPhone.**
-4. **C-to-C cables**: the fork's port hold is untested with a Mac and with an
-   iPhone. Watch the comma's `/sys/class/usbpd/usbpd0/current_pr` and
+4. **C-to-C with an iPhone.** The other session's Mac bench (comma four, M1 Pro)
+   found the comma comes up as the device on every plug with a USB 3 C-to-C
+   cable, at 5 Gb/s, so the hold never fired; three cables whose e-markers say
+   USB 2 only stayed at 480 Mb/s. Nobody has tried an iPhone. Watch the comma's `/sys/class/usbpd/usbpd0/current_pr` and
    `current_dr` and the owner log while plugging in.
 5. Latency parity over the cable link on a Linux host (+8 ms a frame).
 6. One odd session: right after the Debug app built the engine itself, with
@@ -126,7 +128,7 @@ Jetson runs its normal service. Nothing is cabled to the Mac.
    whose `jetlink_repo` has the composite gadget works; the plain gadget works
    too, the Swift host falls back to interface 0.)
 2. Unplug the comma from the Jetson and plug it into the Mac: a USB-A port on a
-   hub or adapter with an A-to-C cable, or C-to-C once the port hold is proven.
+   hub or adapter with an A-to-C cable, or a USB 3 C-to-C cable.
 3. Mac app, Settings > Server > Python, Restart Server; wait for the link; on
    the comma, parked, run the live bench for 180 s. Then Swift, restart, the
    same. Record both in `mac-performance.md`.

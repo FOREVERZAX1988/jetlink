@@ -29,10 +29,12 @@ for comma**. Connect the comma to continue.
 Complete [comma setup](../README.md#comma-setup-all-platforms), including the
 branch installation and **Accelerator Link** toggle. Then connect the
 **Mac's USB-A port to the comma's USB-C port**, using a USB-A port
-on a hub or dock, or a USB-C-to-A adapter. A plain C-to-C cable may not give the
-Mac the host role. The zoompilot `iphone` branch makes the comma hold its port
-as the device for a C-to-C host, which should fix that; it has not been tried
-with a Mac yet.
+on a hub or dock, or a USB-C-to-A adapter. A C-to-C cable also works: on
+2026-09-27 an M1 Pro enumerated a comma four as its device at 5 Gb/s over a
+USB 3 C-to-C cable. The cable must be a USB 3 one; C-to-C cables marked for
+USB 2 run at 480 Mb/s, about 10 ms slower a frame. If a C-to-C cable ever gives
+the comma the host role instead, the zoompilot branch's port hold makes it the
+device within a few seconds.
 
 The Status screen then shows:
 
