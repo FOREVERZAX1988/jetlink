@@ -1,5 +1,6 @@
 import Foundation
 import JetlinkKit
+import JetlinkServer
 import Observation
 import os
 
@@ -39,8 +40,10 @@ enum ServerStoreError: Error, LocalizedError, Equatable {
   }
 }
 
-/// Owns the server process, the control connection, and everything the Status
-/// view shows.
+/// Owns the server, and everything the Status view shows. The server is the
+/// embedded Python runtime in a process of its own, behind a control socket,
+/// or the Swift server in this process (`AppSettings.serverEngine`); either
+/// way the views see the same control events.
 @MainActor
 @Observable
 final class ServerStore: ServerControlling {
@@ -52,6 +55,10 @@ final class ServerStore: ServerControlling {
   private(set) var statsHistory: [StatsSample] = []
   var stats: StatsEvent? { statsHistory.last?.stats }
   private(set) var startedAt: Date?
+  /// The benchmark running or last run, if any. The Swift server only.
+  private(set) var benchmark: BenchmarkEvent?
+  /// The server that is running, which may differ from the setting until a restart.
+  private(set) var runningServer: ServerEngine?
   var lastFailure: String?
 
   let settings: AppSettings
@@ -66,6 +73,7 @@ final class ServerStore: ServerControlling {
   @ObservationIgnored private let isLive: Bool
   @ObservationIgnored private let log = Logger(subsystem: "io.zoompilot.jetlink", category: "server")
   @ObservationIgnored private var client: ControlClient?
+  @ObservationIgnored private var embedded: EmbeddedServer?
   @ObservationIgnored private var connectTask: Task<Void, Never>?
   @ObservationIgnored private var consumeTask: Task<Void, Never>?
   @ObservationIgnored private var restartTask: Task<Void, Never>?
@@ -106,6 +114,10 @@ final class ServerStore: ServerControlling {
     lastFailure = nil
     stopRequested = false
     suppressExitHandling = false
+    if settings.serverEngine == .swift {
+      startEmbedded()
+      return
+    }
 
     let runtime: PythonRuntime
     switch PythonRuntime.locate(settings: settings) {
@@ -172,6 +184,10 @@ final class ServerStore: ServerControlling {
     if case .stopped = runState { return }
     runState = .stopping
     stopRequested = true
+    if let embedded {
+      stopEmbedded(embedded)
+      return
+    }
     if let client, client.isConnected {
       _ = try? await client.send(.shutdown, timeout: .seconds(3))
     }
@@ -192,6 +208,9 @@ final class ServerStore: ServerControlling {
   }
 
   func send(_ command: ControlCommand) async throws -> ReplyEvent {
+    if let embedded {
+      return await embedded.handle(command)
+    }
     guard let client, client.isConnected else { throw ServerStoreError.notRunning }
     return try await client.send(command)
   }
@@ -241,6 +260,7 @@ final class ServerStore: ServerControlling {
         cache: hello.cache,
         transport: hello.transport,
         port: hello.port)
+      runningServer = .python
       runState = .serving
       startedAt = Date()
       pruneRestartHistory()
@@ -266,11 +286,97 @@ final class ServerStore: ServerControlling {
       engine = value
     case .stats(let value):
       statsHistory = StatsSample.appending(value, to: statsHistory)
+    case .benchmark(let value):
+      benchmark = value
+    case .shutdownRequest(let value):
+      log.warning("the comma asked this Mac to power off (\(value.reason, privacy: .public)); a Mac does not")
     case .reply:
       break
     default:
       modelEventsContinuation.yield(event)
     }
+  }
+
+  // MARK: the Swift server
+
+  /// The Swift server in this process: no runtime to find, no socket to
+  /// reach, and the same events. It cannot crash apart from the app, so
+  /// there is nothing to restart.
+  private func startEmbedded() {
+    let buffer = logs
+    let file = logFile
+    Log.sink = { level, category, message in
+      let line = EmbeddedServer.logLine(level, category, message)
+      Task { @MainActor in buffer.append(line) }
+      if let file { Task { await file.append(line) } }
+    }
+    let configuration = ServerStore.embeddedConfiguration(
+      backend: settings.backend, transport: settings.transport, tcpPort: settings.tcpPort, cacheDirectory: settings.cacheDirectory)
+    do {
+      let embedded = try EmbeddedServer(configuration: configuration)
+      self.embedded = embedded
+      consumeTask = Task { [weak self] in
+        for await event in embedded.events {
+          self?.apply(event)
+        }
+      }
+      let described = embedded.server.backend.describe()
+      info = ServerInfo(
+        pid: getpid(),
+        version: ServerStore.appVersion,
+        python: "",
+        backend: described["backend"] ?? "",
+        runtimeVersion: described["runtime_version"] ?? "",
+        device: described["device"] ?? "",
+        cache: settings.cacheDirectory.path(percentEncoded: false),
+        transport: settings.transport.rawValue,
+        port: configuration.listen ? Int(configuration.port) : nil)
+      try embedded.start()
+      if settings.backend == .tinygrad {
+        logs.append(
+          EmbeddedServer.logLine(.warning, "app", "tinygrad needs the Python server; the Swift server runs CoreML with the Neural Engine instead"))
+      }
+      runningServer = .swift
+      runState = .serving
+      startedAt = Date()
+    } catch {
+      Log.sink = nil
+      embedded?.stop(releasingEngine: true)
+      embedded = nil
+      consumeTask?.cancel()
+      consumeTask = nil
+      info = nil
+      failStartup("The Swift server could not start: \(error)")
+      return
+    }
+    updateSleepAssertion()
+  }
+
+  private func stopEmbedded(_ embedded: EmbeddedServer) {
+    embedded.stop(releasingEngine: true)
+    self.embedded = nil
+    cancelTasks()
+    Log.sink = nil
+    runState = .stopped
+    resetLiveState()
+    updateSleepAssertion()
+  }
+
+  /// What the Swift server is asked to be, from the settings the Python
+  /// server also reads. Automatic is the Neural Engine with the GPU (the
+  /// split, the Mac's fastest); tinygrad has no Swift form, so it gets the same.
+  nonisolated static func embeddedConfiguration(backend: BackendChoice, transport: TransportChoice, tcpPort: Int, cacheDirectory: URL)
+    -> Server.Configuration
+  {
+    let device: CoreMLBackend.Device = backend == .coreml ? .coreml : .ane
+    let port = UInt16(clamping: tcpPort > 0 ? tcpPort : AppSettings.defaultTCPPort)
+    return Server.Configuration(
+      port: port, cacheRoot: cacheDirectory, device: device, keepAlive: true, keepCPUWarm: true, preload: true,
+      listen: transport == .tcp, usb: transport == .usb)
+  }
+
+  nonisolated static var appVersion: String {
+    Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
   }
 
   private func handleConnectFailure(_ error: any Error) async {
@@ -372,6 +478,7 @@ final class ServerStore: ServerControlling {
     engine = .none
     statsHistory = []
     startedAt = nil
+    runningServer = nil
   }
 
   private func updateSleepAssertion() {
