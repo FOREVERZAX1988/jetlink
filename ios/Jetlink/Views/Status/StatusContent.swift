@@ -140,7 +140,7 @@ struct StatusContent: View {
   /// Under the Link tile: why there is none, or that a slow one costs frames.
   private var linkNote: String {
     guard let medium = state.linkMedium else { return state.cableAddress == nil ? "Waiting" : "Dialing" }
-    return medium.isSlow ? "Slow: use a USB 3 cable" : "Connected"
+    return medium.isSlow ? "Slow: needs USB 3 end to end" : "Connected"
   }
 }
 

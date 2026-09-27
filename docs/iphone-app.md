@@ -24,7 +24,7 @@ For a Mac, see [Jetlink for Mac](macos-app.md). For a Jetson or PC, see the
 
 | What you need | Why |
 | --- | --- |
-| An iPhone with USB-C on iOS 26.1 or later | The cable goes into it. A Pro model's USB 3 port leaves room in the frame budget that USB 2 does not |
+| An iPhone with USB-C on iOS 26.1 or later, ideally a Pro model from the iPhone 15 Pro on | The cable goes into it. Only those Pro models have a USB 3 port; the other USB-C iPhones are USB 2, which leaves less room in the frame budget |
 | A USB 3 hub with USB-C power passthrough, and a USB 3 A-to-C data cable | The comma plugs into the hub's A port; see [Connect the comma](#connect-the-comma) for why not straight into the phone. The phone runs the model 20 times a second and belongs on power |
 | About 3 GB of free space per model | A 766 MB download plus the prepared CoreML engine |
 | A Mac with Xcode 26 and the iOS 26 platform | There is no App Store or TestFlight build; you build and install it yourself. A free Apple account is enough |
@@ -77,8 +77,8 @@ either end. See [What the comma presents](transport.md#what-the-comma-presents).
    cable.
 4. The title reads **Connected over USB 3** once the comma is on. Settings shows
    the phone's address on the cable under **Connection**. **USB 2** there, and
-   on the Link tile, means the hub or the cable is not USB 3: expect about 10 ms
-   more a frame, and change it.
+   on the Link tile, means the phone, the hub or the cable is not USB 3; the
+   title turns orange. See [USB 3 matters](#usb-3-matters).
 
 Open the app before plugging in. It dials while the cable is in, so an app
 opened afterwards connects when it opens; it just connects later.
@@ -95,11 +95,20 @@ tried an iPhone yet; use the hub until the [status page](apple-status.md) says
 it works. When trying it, use a USB 3 C-to-C cable: one whose e-marker says
 USB 2 runs at 480 Mb/s.
 
-**USB 3 matters.** A frame is about 460 KB: around 1 ms on USB 3 and around
-11 ms on USB 2, which is most of the room in the 50 ms budget. Use a USB 3 hub
-and a USB 3 cable. On the comma, the negotiated speed is in
-`/sys/class/udc/*/current_speed`: `super-speed` is USB 3 and `high-speed` is
-USB 2. `sudo scripts/setup_gadget.sh --check` prints it.
+### USB 3 matters
+
+Every hop has to be USB 3: the phone, the hub and the cable. Apple lists USB 3
+only for the Pro models from the iPhone 15 Pro on; the other USB-C iPhones run
+at USB 2, and the cable in the box is a USB 2 cable
+([Apple](https://support.apple.com/en-us/105099)).
+
+A frame is about 393 KB up and 74 KB back. At USB 3 the cable costs it about
+8.4 ms there and back (p50, 11.2 ms p99), measured with a Mac standing in for
+the phone; the comma's USB network driver is the limit, not the wire. USB 2 is
+expected to add another 4 to 6 ms; that is an estimate, not yet measured. On
+the comma, the negotiated speed is in `/sys/class/udc/*/current_speed`:
+`super-speed` is USB 3 and `high-speed` is USB 2.
+`sudo scripts/setup_gadget.sh --check` prints it.
 
 ### Ethernet adapter, the manual fallback
 

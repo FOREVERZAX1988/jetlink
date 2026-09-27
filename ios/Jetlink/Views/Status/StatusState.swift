@@ -89,8 +89,9 @@ struct StatusState: Equatable {
     }
     switch link.state {
     case .connected:
+      // orange over USB 2: the title is the one line both orientations show
       return engine.state == .ready
-        ? Summary(title: "Connected", symbol: "car.fill", tone: .good)
+        ? Summary(title: "Connected", symbol: "car.fill", tone: linkMedium?.isSlow == true ? .warning : .good)
         : Summary(title: "No Model", symbol: "shippingbox.fill", tone: .warning)
     case .waiting:
       return Summary(title: "Waiting", symbol: "cable.connector", tone: .neutral)

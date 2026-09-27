@@ -20,7 +20,7 @@ struct ConnectHelpScreen: View {
       }
       Section {
         Text(
-          "A frame is about 460 KB: around 1 ms on USB 3 and around 11 ms on USB 2. On the comma, the negotiated speed is in /sys/class/udc/*/current_speed: super-speed is USB 3, high-speed is USB 2."
+          "Only the Pro iPhones, from the iPhone 15 Pro on, have a USB 3 port. The others, and the cable in the box, are USB 2. At USB 3 the cable costs a frame about 8 ms there and back, measured with a Mac standing in for the phone; USB 2 is expected to add a few milliseconds more. The title turns orange on USB 2. On the comma, the negotiated speed is in /sys/class/udc/*/current_speed: super-speed is USB 3, high-speed is USB 2."
         )
         .font(.subheadline)
         .foregroundStyle(.secondary)
