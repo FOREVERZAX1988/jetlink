@@ -7,20 +7,22 @@
 # anything opens the link. The comma is the USB device and the Jetson the host;
 # docs/transport.md says why.
 #
-# The gadget is composite: the FunctionFS vendor interface first, so it stays
-# interface 0 for the hosts that open it by number, and a CDC-NCM network
-# interface (ECM where the kernel lacks NCM) after it. A Jetson or a Mac uses
-# the vendor interface and can ignore the network one. An iPhone can only use
-# the network one: it gets 192.168.60.x by DHCP from the dnsmasq this script
-# starts on usb0, and dials the comma at 192.168.60.1:5599.
+# Two gadgets, chosen by the comma's Accelerator Link setting. For a Jetson or
+# a Mac (USB), the FunctionFS vendor interface alone. For an iPhone (iOS, with
+# --ios), a composite: the vendor interface first, so it stays interface 0,
+# and a CDC-NCM network interface (ECM where the kernel lacks NCM) after it,
+# since an iPhone app can only use the network: the phone gets 192.168.60.x by
+# DHCP from the dnsmasq this script starts on usb0, and dials the comma at
+# 192.168.60.1:5599.
 #
 # Does not bind the UDC: a FunctionFS gadget cannot attach to a controller until
 # its descriptors are written, and whoever opens ep0 writes them and binds. The
 # NCM function rides on that bind, and its usb0 exists only from the first bind
 # on, so the network part of setup is repeated by whoever binds:
 #
-#   sudo scripts/setup_gadget.sh            # at boot
-#   sudo scripts/setup_gadget.sh --net      # after a bind: usb0 address, DHCP
+#   sudo scripts/setup_gadget.sh            # at boot: a Jetson or a Mac
+#   sudo scripts/setup_gadget.sh --ios      # at boot: an iPhone
+#   sudo scripts/setup_gadget.sh --net      # after a bind, iOS only: usb0 address, DHCP
 #   sudo scripts/setup_gadget.sh --check    # what this comma can do
 #   sudo scripts/setup_gadget.sh --teardown
 #
@@ -296,6 +298,9 @@ fi
 
 [[ $EUID -eq 0 ]] || fail "setup_gadget.sh must run as root"
 
+IOS=0
+[[ "${1:-}" == "--ios" ]] && IOS=1
+
 # set -e alone exits without going through fail, leaving last boot's "ok" in
 # $STATUS_FILE for the openpilot side to read.
 trap 'fail "line $LINENO: $BASH_COMMAND failed"' ERR
@@ -341,16 +346,24 @@ cd "$GADGET"
 
 echo "$VID"   > idVendor
 echo "$PID"   > idProduct
-# 0x0101: bumped when the gadget became composite, so hosts that cache
-# descriptors by VID/PID/bcdDevice (macOS, Windows) fetch the new ones
-echo 0x0101   > bcdDevice
 echo 0x0320   > bcdUSB            # 3.2: advertise SuperSpeed
-# Miscellaneous / Common Class / IAD: the composite device class, which tells a
-# host to bind a driver per interface association (the vendor interface for
-# jetlink, CDC-NCM for the network) rather than one for the whole device
-echo 0xEF     > bDeviceClass
-echo 0x02     > bDeviceSubClass
-echo 0x01     > bDeviceProtocol
+if [[ $IOS -eq 1 ]]; then
+  # its own bcdDevice, so hosts that cache descriptors by VID/PID/bcdDevice
+  # (macOS, Windows) fetch the composite ones rather than the plain gadget's
+  echo 0x0101 > bcdDevice
+  # Miscellaneous / Common Class / IAD: the composite device class, which tells
+  # a host to bind a driver per interface association (the vendor interface
+  # for jetlink, CDC-NCM for the network) rather than one for the whole device
+  echo 0xEF   > bDeviceClass
+  echo 0x02   > bDeviceSubClass
+  echo 0x01   > bDeviceProtocol
+else
+  # the plain gadget, as it has always been: class per interface
+  echo 0x0100 > bcdDevice
+  echo 0x00   > bDeviceClass
+  echo 0x00   > bDeviceSubClass
+  echo 0x00   > bDeviceProtocol
+fi
 
 # The device tree carries a serial on some commas and not others; any stable
 # string will do, and it also seeds the network interface's MAC addresses.
@@ -379,10 +392,18 @@ mkdir -p "functions/ffs.$FFS_NAME" ||
   ln -s "$GADGET/functions/ffs.$FFS_NAME" "configs/c.1/ffs.$FFS_NAME" ||
   fail "could not link ffs.$FFS_NAME into configs/c.1"
 
-# The network interface, for a phone. Optional: a kernel with neither function
-# still serves a Jetson or a Mac over the vendor interface.
+# The network interface, for an iPhone only. A USB gadget left with one from an
+# iOS boot loses it here: unlinking it force-unbinds the UDC, which is why the
+# owner switches only while parked.
 net_kind=$(net_function)
-if [[ -z "$net_kind" ]]; then
+if [[ $IOS -eq 0 ]]; then
+  if [[ -n "$net_kind" ]]; then
+    net_down
+    rm -f "configs/c.1/$net_kind.$NET_IF" 2>/dev/null || true
+    rmdir "functions/$net_kind.$NET_IF" 2>/dev/null || true
+    net_kind=""
+  fi
+elif [[ -z "$net_kind" ]]; then
   for kind in $NET_FUNCTIONS; do
     if mkdir "functions/$kind.$NET_IF" 2>/dev/null; then
       net_kind=$kind
@@ -405,7 +426,7 @@ if [[ -n "$net_kind" ]]; then
     ln -s "$GADGET/functions/$net_kind.$NET_IF" "configs/c.1/$net_kind.$NET_IF" ||
     fail "could not link $net_kind.$NET_IF into configs/c.1"
 else
-  echo "jetlink: kernel has none of the '$NET_FUNCTIONS' gadget functions; no cable network" >&2
+  [[ $IOS -eq 1 ]] && echo "jetlink: kernel has none of the '$NET_FUNCTIONS' gadget functions; no cable network" >&2
 fi
 
 mkdir -p "$FFS_MOUNT"
@@ -439,5 +460,9 @@ echo "available UDCs: $(ls /sys/class/udc | tr '\n' ' ')"
 echo "now start the server; it writes the descriptors and binds the UDC"
 # usb0 usually does not exist yet (it is created at bind), so this mostly
 # records why and leaves the rest to --net; on a re-run after a bind it is
-# the whole thing
-net_up
+# the whole thing. A USB gadget has no network to bring up.
+if [[ $IOS -eq 1 ]]; then
+  net_up
+else
+  net_status "net: off"
+fi
