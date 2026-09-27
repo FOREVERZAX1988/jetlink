@@ -70,7 +70,7 @@ struct StatusAccessory: View {
 
   private var detail: String {
     if let recent = state.recent, state.isServingFrames {
-      return FrameBudgetView.headroomText(p99: recent.served.p99)
+      return FrameBudgetView.headroomText(p99: recent.servedMs.p99)
     }
     return state.modelName ?? ""
   }

@@ -41,16 +41,16 @@ struct HeroCard: View {
   // MARK: serving
 
   private func headroom(_ stats: StatsEvent?) -> some View {
-    let room = stats.map { FrameBudgetView.Room(headroomMs: FrameBudgetView.budgetMs - $0.served.p99) }
-    return SummaryCard(title: "Headroom", systemImage: "gauge.with.needle.fill", tint: room?.color ?? .secondary, trailing: "Last 10 s") {
+    let room = stats.map { FrameBudgetView.Room(headroomMs: FrameBudgetView.budgetMs - $0.servedMs.p99) }
+    return SummaryCard(title: "Headroom", systemImage: "gauge.with.needle.fill", tint: room?.tone.color ?? .secondary, trailing: "Last 10 s") {
       VStack(spacing: compact ? 12 : 20) {
-        HeadroomRing(p99: stats?.served.p99, lineWidth: compact ? 16 : 22)
+        HeadroomRing(p99: stats?.servedMs.p99, lineWidth: compact ? 16 : 22)
           .frame(maxWidth: compact ? 210 : 290)
           .frame(maxWidth: .infinity)
         HStack(spacing: 0) {
-          figure("P99", stats?.served.p99)
+          figure("P99", stats?.servedMs.p99)
           Divider().frame(height: 32)
-          figure("Max", stats?.served.max)
+          figure("Max", stats?.servedMs.max)
         }
       }
     }
