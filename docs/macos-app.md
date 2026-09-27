@@ -121,31 +121,19 @@ downloaded or prepared again.
 
 | Setting | What it does |
 | --- | --- |
-| Server | **Python (bundled runtime)**, the default, or **Swift (built in)**, the server the iPhone app runs, inside the app with no Python. See [The Swift server](#the-swift-server). |
-| Backend | Which runtime prepares and runs the model. See [Backends](#backends). |
+| Backend | Where the model runs. See [Backends](#backends). |
 | Connection | **USB (the comma)** for driving, or **TCP** for testing without a comma. |
 | Port | The TCP port, 5599 by default. Only shown for TCP. |
-| Log level | **Normal (INFO)** or **Verbose (DEBUG)**. Use verbose when reporting a problem. |
-| Python interpreter override | For development only. Leave it empty to use the bundled runtime. Shown for the Python server only. |
 
 Click **Restart Server** to apply these settings.
 
-### The Swift server
-
-**Settings > Server > Swift (built in)** runs the server the iPhone app runs,
-inside Jetlink: nothing to find or start, the same models and cache folder,
-and the same Status, Models and Logs. It opens the comma's USB link itself
+The server is built into the app: it is the same Swift server the iPhone app
+runs, with no Python to install or start. It opens the comma's USB link itself
 through macOS's USB framework, or listens on the TCP port for a bench client.
-On an M1 Pro it is about 1 ms faster a frame than the Python server
-([measurements](mac-performance.md#the-python-server-and-the-swift-server)).
 
-- It has **Automatic** and **CoreML on the GPU**. tinygrad is Python only; with
-  it selected, the Swift server runs Automatic and says so in Logs.
-- The **Benchmark** page (Command-3) runs the loaded model at the comma's pace
-  on the Mac alone and gives the same verdict as the iPhone app. It works with
-  the Swift server only, and only while no comma is connected.
-- It has not yet driven with a comma on USB. Until that is measured, the Python
-  server stays the default.
+The **Benchmark** page (Command-3) runs the loaded model at the comma's pace on
+the Mac alone and gives the same verdict as the iPhone app. It runs only while
+no comma is connected.
 
 ## Backends
 
@@ -157,16 +145,17 @@ were measured on an M1 Pro; other Macs may differ.
 | --- | --- | --- |
 | Automatic (recommended) | The fastest | Use this by default. |
 | CoreML on the GPU | About a third slower | Another app keeps the Neural Engine busy. |
-| tinygrad on Metal | Over the 50 ms budget every frame | Test tinygrad; it exceeds the driving frame budget on this Mac. |
 
 If you previously chose **CoreML on the GPU**, select **Automatic** to switch
-back. See [backend measurements](backends.md#mac-measured) for details.
+back. A tinygrad choice from an earlier version reads as Automatic: tinygrad
+went with the Python runtime the app no longer bundles. See [backend
+measurements](backends.md#mac-measured) for details.
 
 ## Troubleshooting
 
 | Problem | What to do |
 | --- | --- |
-| The server failed to start | Open **Logs**. The last lines say why. The usual causes are another server already holding the USB device, and a cache folder that is not writable. |
+| The server failed to start | Open **Logs**. The last lines say why. The usual causes are another program already holding the comma's USB interface (a `scripts/run-mac.sh` server, say), and a cache folder that is not writable. |
 | The app stays on Waiting for comma | Use a USB-A port on a hub, dock or adapter, use a USB 3 data cable, and check that **Accelerator Link** is on under Settings > Models on the comma. |
 | Use Model takes a long time | CoreML should take about 20 seconds to prepare and up to about 10 seconds to load. If it takes minutes, right-click the model in **Models**, choose **Delete Prepared Engines…**, then use it again. Close other large applications to free memory. |
 | The comma says **Big Model Lost** | Check the cable first. Then check that the Mac did not sleep: turn on **Keep the Mac awake while serving** and keep the Mac on power. |
@@ -198,7 +187,8 @@ Login Items**.
 
 ## For developers
 
-Building the app, the embedded Python runtime, signing and notarizing are
-covered in the [Mac developer guide](../macos/README.md).
+Building, signing and notarizing the app are covered in the [Mac developer
+guide](../macos/README.md). The Python server still runs on a Mac from a
+checkout, with `scripts/run-mac.sh`, for work on the Python side.
 
 For scripting, see the [model CLI](model-cli.md) and [control protocol](control-protocol.md).

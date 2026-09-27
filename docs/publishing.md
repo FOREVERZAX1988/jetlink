@@ -19,9 +19,9 @@ git tag v0.3.0
 git push origin v0.3.0
 ```
 
-3. Watch **Actions > Release**. The macOS job takes about 20 minutes (the
-   embedded runtime, the build, notarization); each image builds on a native
-   runner for its architecture.
+3. Watch **Actions > Release**. The macOS job builds, smoke-tests and
+   notarizes the app; each image builds on a native runner for its
+   architecture.
 4. Check the release page. It should include `Jetlink-0.3.0-macOS.dmg`,
    `SHA256SUMS`, the sdist and the wheel, and notes that
    are the changelog section followed by the installer command and the GHCR

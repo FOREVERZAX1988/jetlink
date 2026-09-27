@@ -14,7 +14,7 @@ GPU. `--device coreml` runs everything on the GPU. It is slower, but use it if
 another app keeps the Neural Engine busy: the default assumes Jetlink is the
 only thing using it. tinygrad exceeds the budget.
 
-| | Default: Neural Engine and GPU | GPU only (`--device coreml`) | tinygrad METAL |
+| | Default: Neural Engine and GPU | GPU only (`--device coreml`) | tinygrad METAL (Python server only) |
 | --- | ---: | ---: | ---: |
 | V3 round trip at 20 Hz through the server, mean / p99 / max | 30.6 / 33.8 to 34.8 / 40.1 ms | 43.7 / 44.5 to 45.0 / 52.1 ms | not measured |
 | V2 round trip at 20 Hz through the server, mean / p99 / max | 30.7 / 32.1 to 37.2 / 39.7 ms | 41.5 / 41.7 to 50.2 / 73.3 ms | not measured |
@@ -23,7 +23,9 @@ only thing using it. tinygrad exceeds the budget.
 | build / load in a fresh process | about 20 s / 0.6 to 11 s | about 10 s / 1.8 to 4.7 s | 13 s / 1.1 s |
 | artifact on disk | 2.1 GB | 2.3 GB | 777 MB |
 
-The tinygrad column is an earlier measurement of Cinque Terre at 20 Hz: 66.2 ms
+These are the Python server's numbers; the app has run the Swift server since
+it stopped bundling Python, and tinygrad went with it. The tinygrad column
+stays as history. It is an earlier measurement of Cinque Terre at 20 Hz: 66.2 ms
 mean, 67.6 ms p99, against 43.3 ms and 44.4 ms for the GPU in the same run. The
 default and GPU columns were measured on 2026-09-26 in 300-frame blocks, each
 against the code before the change it measures, alternating between the two
@@ -40,11 +42,11 @@ frames complete. The maximum is the slowest frame.
 
 ## The Python server and the Swift server
 
-The app can run either server (Settings > Server). Both run the same prepared
-graph through onnxruntime's CoreML provider, so the difference is everything
-around the model: the queues, the copies and the process layout. The Python
-server runs the model in a worker process; the Swift server runs it in the
-app's own process.
+The measurements behind the app's move from the Python server to the Swift
+one. Both run the same prepared graph through onnxruntime's CoreML provider,
+so the difference is everything around the model: the queues, the copies and
+the process layout. The Python server runs the model in a worker process; the
+Swift server runs it in the app's own process.
 
 Measured 2026-09-27 on the same M1 Pro with Cinque Terre V3, the default
 Neural Engine and GPU split, `bench_link.py --rate 20 --n 1200` over TCP
@@ -65,11 +67,16 @@ the Swift server is about 1 ms faster a frame at p50 and 0.6 to 1 ms at p99.
 That is the server alone: loopback TCP adds about 1.4 ms either way.
 
 Not yet measured: the same A/B over USB with a comma, which is the gate for
-making the Swift server the default (its p99 no worse than the Python
-server's, and no frame dropped). To run it, plug the comma into the Mac, set
-Settings > Server to each in turn (or run `jetlink-serve --usb` from
-`JetlinkKit/.build/release`), and on the parked comma run
-`jetlink_repo/scripts/comma/jetlink_live_bench.sh 180` for each.
+the release that drops the Python server from the app (the Swift server's p99
+no worse than the Python server's, and no frame dropped). To run it, plug the
+comma into the Mac and on the parked comma run
+`jetlink_repo/scripts/comma/jetlink_live_bench.sh 180` twice: once with the
+app (or `JetlinkKit/.build/release/jetlink-serve --usb`), once with
+`scripts/run-mac.sh`, the Python server from a checkout.
+
+The Swift-only app, built for release and ad hoc signed, served the same model
+over loopback TCP at 29.83 ms p50, 32.87 ms p99 and 33.70 ms max, with none of
+190 frames over 50 ms, loading the engine in 9.2 s.
 
 One cache serves both servers. The two write the same artifact under the same
 name, and once their prepare versions agree ([conformance](conformance.md))

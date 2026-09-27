@@ -1,7 +1,8 @@
 # Server control protocol
 
-Use the control channel to manage a running server from a script. The Mac app
-uses the same protocol.
+Use the control channel to manage a running Python server from a script. The
+Mac and iPhone apps run the Swift server in process, which publishes the same
+events and answers the same commands without a socket.
 
 ## Starting a server with a control socket
 

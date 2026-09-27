@@ -7,6 +7,11 @@ For installation, see [platform setup](platforms.md).
 Use this page to compare runtimes and check their requirements. Detailed Mac
 measurements are in the [performance reference](mac-performance.md).
 
+The table below is the Python server's, which runs on Jetsons, Linux PCs and
+from a checkout on a Mac. The Mac app runs the Swift server instead (the one
+the iPhone app runs): ONNX Runtime with CoreML only, in the `ane` and `coreml`
+layouts described below, and no tinygrad.
+
 ## Runtime comparison
 
 | Backend | Devices | Prepared files | Requirements |
@@ -35,7 +40,7 @@ see [how the default runs](mac-performance.md#how-the-default-runs) for why.
 | Jetson Orin | TensorRT | USB-A host with libusb | Tegra sensors | Suspend and poweroff |
 | Linux with NVIDIA GPU | TensorRT; tinygrad or ONNX Runtime as alternatives | libusb with `scripts/99-jetlink-host.rules` | NVML | `--sleep-after` requires `/sys/power`; USB wake depends on hardware |
 | Windows with NVIDIA GPU | TensorRT in WSL2 | Requires `usbipd-win` | NVML | None |
-| macOS with Apple silicon | ONNX Runtime with CoreML on the Neural Engine and GPU | USB-A hub, dock, or adapter with libusb | Not available | `scripts/run-mac.sh` prevents idle sleep on AC power |
+| macOS with Apple silicon | ONNX Runtime with CoreML on the Neural Engine and GPU | USB-A hub, dock, or adapter; the app opens it through macOS's USB framework, a checkout's Python server through libusb | Not available | The app, or `scripts/run-mac.sh`, prevents idle sleep on AC power |
 
 See [performance and operating limits](status.md) for timing and power considerations.
 
@@ -47,8 +52,9 @@ See [performance and operating limits](status.md) for timing and power considera
 ## Mac, measured
 
 On a 16 GB M1 Pro, the default Neural Engine/GPU backend averaged about 31 ms
-per frame in paced 20 Hz tests, and GPU-only 41 to 44 ms. tinygrad averaged
-66 ms and missed every 50 ms deadline in its test.
+per frame in paced 20 Hz tests (about 30 ms in the app's Swift server), and
+GPU-only 41 to 44 ms. tinygrad, in the Python server, averaged 66 ms and
+missed every 50 ms deadline in its test.
 
 These are bench measurements. Some CoreML runs still had individual frames
 over the deadline; averages alone do not establish driving reliability.

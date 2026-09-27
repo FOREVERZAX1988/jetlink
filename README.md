@@ -66,7 +66,8 @@ You need Apple silicon and macOS 15 or later; 16 GB of memory is recommended.
 3. Open Jetlink. **Waiting for comma** means the server is ready to connect.
 4. Keep the Mac powered and awake, then complete comma setup below.
 
-The app includes its dependencies.
+The server is built into the app, the same Swift server the iPhone app runs;
+there is no Python or anything else to install.
 
 ### iPhone (experimental)
 

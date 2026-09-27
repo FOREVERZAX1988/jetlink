@@ -27,7 +27,7 @@ cd jetlink
 
 Use the Mac app for setup without terminal commands. Download it from
 [Releases](https://github.com/zoompilot/jetlink/releases), open it, and leave it
-running. It includes Python and does not require Homebrew. The [Mac
+running. It needs no Python and no Homebrew: the server is built in. The [Mac
 guide](macos-app.md) covers installing it, preparing a model ahead of a drive,
 and its settings.
 
