@@ -18,7 +18,7 @@ server's own staging: PolicyQueues for the queued graph, each next_state_
 output fed back for the stateful one. The Swift server runs the same prepared
 graph on the same provider, so its outputs must match bit for bit.
 
-  PYTHONPATH=. .venv/bin/python JetlinkKit/Scripts/make_server_fixtures.py [--out DIR]
+  .venv/bin/python JetlinkKit/Scripts/make_server_fixtures.py [--out DIR]
 
 from the root of this checkout, so the fixtures pin the Python beside them.
 tests/test_conformance.py runs it into a temporary directory and compares.
@@ -35,7 +35,9 @@ import onnx
 import onnxruntime as ort
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.append(str(ROOT))   # for tests.tiny_model; jetlink comes from PYTHONPATH
+# This checkout's jetlink and tests, ahead of any jetlink the environment has
+# installed: a venv's editable install can point at another checkout.
+sys.path.insert(0, str(ROOT))
 from tests import tiny_model  # noqa: E402
 
 from jetlink.queues import PolicyQueues  # noqa: E402

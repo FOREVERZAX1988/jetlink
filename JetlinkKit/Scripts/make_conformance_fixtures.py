@@ -22,7 +22,7 @@ from the Python's own code paths, run on fixed inputs:
             parsing and merging, and the catalog and inventory payloads the
             Registry makes of one cache directory
 
-  PYTHONPATH=. .venv/bin/python JetlinkKit/Scripts/make_conformance_fixtures.py [--root DIR]
+  .venv/bin/python JetlinkKit/Scripts/make_conformance_fixtures.py [--root DIR]
 
 from the root of this checkout. --root writes the same tree somewhere else;
 tests/test_conformance.py does that and compares byte for byte.
@@ -39,8 +39,9 @@ from types import SimpleNamespace
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[2]
-if str(ROOT) not in sys.path:
-  sys.path.append(str(ROOT))   # for tests.tiny_model; jetlink comes from PYTHONPATH
+# This checkout's jetlink and tests, ahead of any jetlink the environment has
+# installed: a venv's editable install can point at another checkout.
+sys.path.insert(0, str(ROOT))
 
 SERVER = Path('JetlinkKit/Tests/JetlinkServerTests/Fixtures/conformance')
 CONTROL = Path('JetlinkKit/Tests/JetlinkKitTests/Fixtures/python_control_events.jsonl')

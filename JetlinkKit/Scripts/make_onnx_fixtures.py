@@ -7,10 +7,11 @@ See the LICENSE file in the root directory for more details.
 Writes the small ONNX graphs JetlinkONNX's tests read, and what the Python
 preparation makes of them, into Tests/JetlinkONNXTests/Fixtures/.
 
-    PYTHONPATH=. .venv/bin/python JetlinkKit/Scripts/make_onnx_fixtures.py [--out DIR]
+    .venv/bin/python JetlinkKit/Scripts/make_onnx_fixtures.py [--out DIR]
 
-from the jetlink checkout whose preparation the fixtures should pin (the
-script imports jetlink.onnx_patch, the ORT backend and tests.test_ane_whole).
+from the root of the checkout whose preparation the fixtures pin. It imports
+that checkout's jetlink.onnx_patch, ORT backend and tests.test_ane_whole,
+whatever jetlink the environment has installed.
 
 The graphs are shaped like the driving models, shrunk: the same input names,
 uint8 images behind the head Cast, a tinygrad Contiguous (with the local
@@ -52,6 +53,10 @@ import numpy as np
 import onnx
 from onnx import TensorProto, helper, numpy_helper, shape_inference
 
+ROOT = Path(__file__).resolve().parents[2]
+# This checkout's jetlink and tests, ahead of any jetlink the environment has
+# installed: a venv's editable install can point at another checkout.
+sys.path.insert(0, str(ROOT))
 FIXTURES = Path(__file__).resolve().parents[1] / 'Tests' / 'JetlinkONNXTests' / 'Fixtures'
 KEY_PREFIX = 'fixture'
 F, H, U8, I64 = TensorProto.FLOAT, TensorProto.FLOAT16, TensorProto.UINT8, TensorProto.INT64

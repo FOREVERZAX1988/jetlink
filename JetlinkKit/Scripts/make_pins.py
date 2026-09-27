@@ -8,7 +8,7 @@ See the LICENSE file in the root directory for more details.
 Writes JetlinkKit/Sources/JetlinkKit/Pinned.swift: the constants the Swift and
 Python implementations must agree on, as the Python defines them.
 
-  PYTHONPATH=. .venv/bin/python JetlinkKit/Scripts/make_pins.py [--out FILE]
+  .venv/bin/python JetlinkKit/Scripts/make_pins.py [--out FILE]
 
 Python is the source. The Swift constants (Wire.version, Wire.maxMessage,
 CoreMLBackend.prepareVersion and the rest) are tested against Pinned in the
@@ -18,9 +18,13 @@ not what this script writes now. docs/conformance.md has the whole story.
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+# This checkout's jetlink and tests, ahead of any jetlink the environment has
+# installed: a venv's editable install can point at another checkout.
+sys.path.insert(0, str(ROOT))
 OUT = ROOT / 'JetlinkKit' / 'Sources' / 'JetlinkKit' / 'Pinned.swift'
 
 
