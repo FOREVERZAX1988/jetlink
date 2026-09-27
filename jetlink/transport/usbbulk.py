@@ -27,6 +27,10 @@ JETLINK_PID = 0x0001
 # that does not exist fails with LIBUSB_ERROR_IO and looks like a bad cable.
 USB_ENDPOINT_DIR_IN = 0x80
 USB_TRANSFER_TYPE_BULK = 0x02
+# The vendor interface's class triple. The gadget is composite (the link and a
+# CDC-NCM network interface for a phone), so the link is found by class and
+# not by a number that a reordered config could move.
+VENDOR_CLASS = (0xFF, 0xFF, 0xFF)
 MAX_PACKET = 1024   # SuperSpeed bulk
 READ_CHUNK = 256 * MAX_PACKET
 DEFAULT_TIMEOUT_MS = 2000
@@ -59,7 +63,9 @@ class UsbBulkTransport(StreamTransport):
 
   @classmethod
   def open(cls, vid: int = JETLINK_VID, pid: int = JETLINK_PID,
-           timeout_ms: int = DEFAULT_TIMEOUT_MS, interface: int = 0) -> UsbBulkTransport:
+           timeout_ms: int = DEFAULT_TIMEOUT_MS, interface: int | None = None) -> UsbBulkTransport:
+    """`interface` None picks the vendor-class interface (0 if none is marked);
+    a number overrides that."""
     import usb1
     context = usb1.USBContext()
     context.open()
@@ -69,7 +75,7 @@ class UsbBulkTransport(StreamTransport):
                      if (d.getVendorID(), d.getProductID()) == (vid, pid)), None)
       if device is None:
         raise LinkError(f"no jetlink gadget at {vid:04x}:{pid:04x}")
-      ep_in, ep_out = _find_bulk_endpoints(device, interface)
+      ep_in, ep_out, interface = _find_bulk_endpoints(device, interface)
       # An enumerated gadget whose owning process has exited fails open with
       # EIO. Everything here must surface as LinkError, or it escapes the
       # server's accept loop and kills the process instead of retrying.
@@ -191,12 +197,34 @@ def _close_quietly(handle, context) -> None:
       pass
 
 
-def _find_bulk_endpoints(device, interface: int) -> tuple[int, int]:
-  """(IN, OUT) bulk endpoint addresses for `interface`, from its descriptors."""
+def _find_bulk_endpoints(device, interface: int | None = None) -> tuple[int, int, int]:
+  """(IN, OUT, interface number) of the link's bulk endpoint pair.
+
+  With `interface` None the vendor-class alternate setting is the link, wherever
+  the composite gadget put it; a config with none marked falls back to number
+  0, where the gadget script links ffs first. A number matches that number only.
+  """
+  if interface is None:
+    for found in (_bulk_pair(device, lambda s: _class_triple(s) == VENDOR_CLASS),
+                  _bulk_pair(device, lambda s: s.getNumber() == 0)):
+      if found is not None:
+        return found
+    raise LinkError("no vendor interface with a bulk IN/OUT endpoint pair")
+  found = _bulk_pair(device, lambda s: s.getNumber() == interface)
+  if found is None:
+    raise LinkError(f"interface {interface} has no bulk IN/OUT endpoint pair")
+  return found
+
+
+def _class_triple(setting) -> tuple[int, int, int]:
+  return setting.getClass(), setting.getSubClass(), setting.getProtocol()
+
+
+def _bulk_pair(device, wanted) -> tuple[int, int, int] | None:
   for cfg in device.iterConfigurations():
     for iface in cfg:
       for setting in iface:
-        if setting.getNumber() != interface:
+        if not wanted(setting):
           continue
         ep_in = ep_out = None
         for ep in setting:
@@ -207,5 +235,5 @@ def _find_bulk_endpoints(device, interface: int) -> tuple[int, int]:
           else:
             ep_out = ep.getAddress()
         if ep_in is not None and ep_out is not None:
-          return ep_in, ep_out
-  raise LinkError(f"interface {interface} has no bulk IN/OUT endpoint pair")
+          return ep_in, ep_out, setting.getNumber()
+  return None

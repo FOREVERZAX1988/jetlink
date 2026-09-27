@@ -4,10 +4,15 @@ Copyright (c) 2026-, Zeph Leggett.
 This file is part of jetlink and is licensed under the MIT License.
 See the LICENSE file in the root directory for more details.
 
-TCP transport, for ethernet and benchmarking.
+TCP transport, for ethernet, a phone over the cable, and benchmarking.
 
-Not usable over the USB cable: AGNOS has no host-side USB-ethernet driver, so
-an ethernet gadget will not enumerate there. See docs/transport.md.
+Over the USB cable it rides the CDC-NCM interface of the comma's composite
+gadget: the comma is 192.168.60.1 and a phone dials it. A Jetson or a Mac uses
+the vendor interface instead. See docs/transport.md.
+
+One sendmsg per message (header and body in one segment train, NODELAY set)
+and reads straight into the reusable receive buffer, so the steady state does
+not allocate on the wire.
 """
 from __future__ import annotations
 
@@ -40,6 +45,24 @@ class TcpTransport(StreamTransport):
   @classmethod
   def accept(cls, srv: socket.socket) -> tuple[TcpTransport, tuple]:
     conn, addr = srv.accept()
+    return cls(conn), addr
+
+  @classmethod
+  def listen_once(cls, host: str = '0.0.0.0', port: int = DEFAULT_PORT,
+                  timeout: float | None = None) -> tuple[TcpTransport, tuple]:
+    """Take exactly one incoming connection and stop listening: a phone that
+    dials us, for the bench and parity scripts run from a Mac."""
+    srv = cls.listen(host, port)
+    try:
+      srv.settimeout(timeout)
+      try:
+        conn, addr = srv.accept()
+      except TimeoutError as e:
+        raise LinkError(f"nobody dialed {host}:{port} in {timeout:.0f}s") from e
+      except OSError as e:
+        raise LinkError(f"accept on {host}:{port} failed: {e}") from e
+    finally:
+      srv.close()
     return cls(conn), addr
 
   def _set_timeout(self, timeout: float | None) -> None:

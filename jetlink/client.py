@@ -120,6 +120,14 @@ class JetlinkClient:
     from jetlink.transport.tcp import TcpTransport
     return cls(TcpTransport.connect(host, port), **kw)
 
+  @classmethod
+  def open_socket(cls, sock, **kw) -> JetlinkClient:
+    """Over a socket somebody else connected: a phone that dialed the comma
+    over the cable's network interface, accepted by the gadget owner and
+    handed to the borrower. The same session as open_tcp from here on."""
+    from jetlink.transport.tcp import TcpTransport
+    return cls(TcpTransport(sock), **kw)
+
   # -- plumbing -------------------------------------------------------------
 
   def _next_seq(self) -> int:
