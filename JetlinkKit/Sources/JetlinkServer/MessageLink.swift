@@ -54,6 +54,6 @@ func withBuffers<R>(_ data: [Data], _ body: ([UnsafeRawBufferPointer]) throws ->
 }
 
 extension TCPTransport: MessageLink {
-  public var medium: LinkMedium? { .tcp }
+  public var medium: LinkMedium? { LinkMedium(tcpPeer: peer) }
   public var connectsOnOpen: Bool { true }
 }
