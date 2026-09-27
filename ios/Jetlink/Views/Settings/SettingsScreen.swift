@@ -7,10 +7,20 @@ import SwiftUI
 struct SettingsScreen: View {
   @Environment(AppModel.self) private var app
   @State private var portText = ""
+  @State private var path: [Destination] = SettingsScreen.initialPath
+
+  enum Destination: Hashable {
+    case logs, connect
+  }
+
+  /// `-tab logs` opens Settings with the Logs screen pushed, for screenshots.
+  static var initialPath: [Destination] {
+    UserDefaults.standard.string(forKey: "tab") == "logs" ? [.logs] : []
+  }
 
   var body: some View {
     @Bindable var settings = app.settings
-    NavigationStack {
+    NavigationStack(path: $path) {
       Form {
         connection
         Section {
@@ -44,6 +54,12 @@ struct SettingsScreen: View {
         about
       }
       .navigationTitle("Settings")
+      .navigationDestination(for: Destination.self) { destination in
+        switch destination {
+        case .logs: LogsScreen()
+        case .connect: ConnectHelpScreen()
+        }
+      }
       .onAppear { portText = String(settings.port) }
       .onChange(of: settings.device) { app.server.restart() }
       .onChange(of: settings.keepGPUAwake) { app.server.restart() }
@@ -116,8 +132,8 @@ struct SettingsScreen: View {
 
   private var help: some View {
     Section("Help") {
-      NavigationLink("Connecting the Comma") { ConnectHelpScreen() }
-      NavigationLink("Logs") { LogsScreen() }
+      NavigationLink("Connecting the Comma", value: Destination.connect)
+      NavigationLink("Logs", value: Destination.logs)
     }
   }
 

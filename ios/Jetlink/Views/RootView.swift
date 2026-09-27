@@ -45,13 +45,13 @@ struct RootView: View {
     }
   }
 
-  /// `-tab models`, `-tab benchmark` or `-tab settings` on the command line
-  /// opens there, for screenshots from the simulator.
+  /// `-tab models`, `-tab benchmark`, `-tab settings` or `-tab logs` on the
+  /// command line opens there, for screenshots from the simulator.
   static var initialTab: Tab {
     switch UserDefaults.standard.string(forKey: "tab") {
     case "models": .models
     case "benchmark": .benchmark
-    case "settings": .settings
+    case "settings", "logs": .settings
     default: .status
     }
   }

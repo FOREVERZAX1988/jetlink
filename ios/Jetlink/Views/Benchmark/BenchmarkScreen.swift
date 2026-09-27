@@ -10,6 +10,9 @@ struct BenchmarkScreen: View {
   @Environment(AppModel.self) private var app
   @State private var refusal: String?
   @State private var starting = false
+  /// `-benchmark 60` on the command line runs one once a model is loaded,
+  /// for screenshots from the simulator.
+  @State private var scripted: Double? = UserDefaults.standard.double(forKey: "benchmark") > 0 ? UserDefaults.standard.double(forKey: "benchmark") : nil
 
   var body: some View {
     NavigationStack {
@@ -43,6 +46,12 @@ struct BenchmarkScreen: View {
       .contentMargins(.horizontal, StatusContent.margin, for: .scrollContent)
       .background(Color.groupedBackground)
       .navigationTitle("Benchmark")
+      .onChange(of: sha256, initial: true) {
+        if let seconds = scripted, blocker == nil {
+          scripted = nil
+          start(seconds: seconds)
+        }
+      }
       .toolbar {
         if let report {
           ToolbarItem(placement: .topBarTrailing) {
