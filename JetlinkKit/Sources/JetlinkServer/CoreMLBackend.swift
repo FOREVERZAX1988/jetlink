@@ -225,14 +225,14 @@ public final class CoreMLBackend: EngineBackend {
       "device": deviceTag(),
       "sessions": manifest,
       "providers": engine.providers,
-      "build_seconds": (Date().timeIntervalSince(started) * 10).rounded() / 10,
+      "build_seconds": pythonRound(Date().timeIntervalSince(started), 1),
       "onnx": model.lastPathComponent,
       "prepare": CoreMLBackend.prepareVersion,
       "preparer": "swift",
       "built_at": formatter.string(from: Date()),
       "convert_bytes": converted,
       "compile_bytes": compiled,
-      "compile_seconds": (compileSeconds * 10).rounded() / 10,
+      "compile_seconds": pythonRound(compileSeconds, 1),
       "freed_bytes": freed,
     ]
     for (key, value) in metaExtra { meta[key] = value }
@@ -322,7 +322,7 @@ public final class CoreMLBackend: EngineBackend {
     report("load", 1, "loaded in \(Int(seconds.rounded())) s")
     if !meta.isEmpty {
       var updated = meta
-      updated["load_seconds"] = (seconds * 10).rounded() / 10
+      updated["load_seconds"] = pythonRound(seconds, 1)
       try? writeSidecar(artifact, updated)
     }
     return engine

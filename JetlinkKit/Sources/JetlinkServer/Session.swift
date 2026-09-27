@@ -73,7 +73,7 @@ final class Session: @unchecked Sendable {
   /// Sent from the job thread. The comma may have given up and fallen back;
   /// the build continues either way.
   func progress(_ stage: String, _ frac: Double, _ msg: String) {
-    try? sendJSON(.progress, seq: 0, ["stage": stage, "frac": (frac * 10_000).rounded() / 10_000, "msg": msg])
+    try? sendJSON(.progress, seq: 0, ["stage": stage, "frac": pythonRound(frac, 4), "msg": msg])
   }
 
   /// The worker finished. Tell the client that is here now, whoever it is.

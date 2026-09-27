@@ -125,12 +125,13 @@ final class FrameStats: @unchecked Sendable {
       servedMs: spread(rows.map { $0.totalUs + $0.sendUs }),
       stagesMs: StatsEvent.Stages(queue: round2(queue), gpu: round2(gpu), other: round2(max(0, total - gpu - queue)), send: round2(mean(\.sendUs))),
       slow: rows.filter { $0.totalUs > FrameStats.slowUs }.count,
-      windowS: (seconds * 10).rounded() / 10)
+      windowS: pythonRound(seconds, 1))
   }
 }
 
+/// `round(value, 2)`, as the Python server rounds what it publishes.
 func round2(_ value: Double) -> Double {
-  (value * 100).rounded() / 100
+  pythonRound(value, 2)
 }
 
 /// Process-wide owner of the loaded engine and of the build in flight: the
@@ -497,7 +498,7 @@ public final class EngineHost: @unchecked Sendable {
     lastStage = (stage, frac, msg)
     let session = self.session
     lock.unlock()
-    emit(.progress(stage: stage, frac: (frac * 10_000).rounded() / 10_000, msg: msg))
+    emit(.progress(stage: stage, frac: pythonRound(frac, 4), msg: msg))
     session?.progress(stage, frac, msg)
   }
 }
