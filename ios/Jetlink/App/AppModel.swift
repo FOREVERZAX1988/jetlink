@@ -53,7 +53,7 @@ final class AppModel {
       state.endpoint = "\(address.address):\(port)"
     }
     state.cableAddress = network.cable?.address
-    state.linkKind = server.linkKind
+    state.linkMedium = server.linkMedium
     state.health = device.health
     state.needsForeground = !sceneActive && server.runState == .serving
     state.defaultModel = models.rows.first { $0.isDefault }

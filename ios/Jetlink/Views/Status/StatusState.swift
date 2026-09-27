@@ -21,8 +21,8 @@ struct StatusState: Equatable {
   var endpoint: String?
   /// The phone's address on the comma's cable network, while the cable is in.
   var cableAddress: String?
-  /// What the connected comma is on: the cable, or an Ethernet adapter.
-  var linkKind: PhoneServer.LinkKind?
+  /// What the connected comma's link is carried over: USB 3, USB 2 or TCP.
+  var linkMedium: LinkMedium?
   var health = DeviceHealth()
   /// The model a comma nobody changed asks for, for the empty state.
   var defaultModel: ModelRow?
@@ -99,10 +99,10 @@ struct StatusState: Equatable {
     }
   }
 
-  /// The summary with the link it is over: "Connected over USB".
+  /// The summary with the link it is over: "Connected over USB 3".
   var headline: String {
-    if summary.title == "Connected", let linkKind {
-      return "Connected over \(linkKind.title)"
+    if summary.title == "Connected", let linkMedium {
+      return "Connected over \(linkMedium.title)"
     }
     return summary.title
   }

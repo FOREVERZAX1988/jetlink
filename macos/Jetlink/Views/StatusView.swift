@@ -116,6 +116,11 @@ struct StatusView: View {
               .font(.callout)
               .foregroundStyle(.secondary)
           }
+          if let advice = server.link.connectedMedium?.advice {
+            Text(advice)
+              .font(.callout)
+              .foregroundStyle(.orange)
+          }
         }
       }
       if server.link.state == .connected, let stats = server.stats {
@@ -160,10 +165,8 @@ struct StatusView: View {
     case .waiting:
       return "Waiting for comma"
     case .connected:
-      let peer = server.link.peer ?? ""
-      if peer.isEmpty || peer == "usb" {
-        return "Connected over USB"
-      }
+      let medium = server.link.connectedMedium ?? .usb
+      guard medium == .tcp, let peer = server.link.peer, !peer.isEmpty else { return "Connected over \(medium.title)" }
       return "Connected over TCP from \(peer)"
     case .disconnected:
       return "Disconnected"
@@ -184,7 +187,7 @@ struct StatusView: View {
   private var linkTone: StatusBadge.Tone {
     switch server.link.state {
     case .waiting: .neutral
-    case .connected: .good
+    case .connected: server.link.connectedMedium?.isSlow == true ? .warning : .good
     case .disconnected: .warning
     }
   }

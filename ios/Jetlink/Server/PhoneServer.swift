@@ -82,23 +82,8 @@ final class PhoneServer: ServerControlling {
   /// Over the cable the comma listens and the phone dials.
   static let commaDial = DialTarget(host: NetworkInterfaces.commaAddress, port: Wire.defaultPort)
 
-  /// What the served connection runs over, from the peer's address.
-  enum LinkKind: Equatable {
-    case usb, ethernet
-
-    var title: String {
-      switch self {
-      case .usb: "USB"
-      case .ethernet: "Ethernet"
-      }
-    }
-  }
-
-  /// The kind of link the comma is on, while one is connected.
-  var linkKind: LinkKind? {
-    guard link.state == .connected, let peer = link.peer else { return nil }
-    return peer.hasPrefix(NetworkInterfaces.cableNetwork) ? .usb : .ethernet
-  }
+  /// What the connected comma's link is carried over: USB 3, USB 2 or TCP.
+  var linkMedium: LinkMedium? { link.connectedMedium }
 
   /// Follows the phone's addresses: the comma is dialed while the cable's
   /// lease is there, and left alone once it is gone.

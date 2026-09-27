@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import JetlinkKit
 import Network
 import Observation
 
@@ -15,8 +16,8 @@ import Observation
 @Observable
 final class NetworkInterfaces {
   /// The comma's network over the cable, and its own address on it.
-  static let cableNetwork = "192.168.60."
-  static let commaAddress = "192.168.60.1"
+  static let cableNetwork = LinkMedium.cableNetwork
+  static let commaAddress = Pinned.cableAddress
 
   struct Address: Identifiable, Equatable, Sendable {
     enum Kind: Int, Comparable, Sendable {
