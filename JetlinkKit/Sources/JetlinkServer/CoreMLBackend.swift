@@ -1,4 +1,5 @@
 import Foundation
+import JetlinkKit
 import JetlinkONNX
 import Metal
 
@@ -57,10 +58,12 @@ public final class CoreMLBackend: EngineBackend {
     case cpu
   }
 
-  /// What a CoreML build writes, as the Python's PREPARE_VERSION: 5 is every
-  /// graph split on `ane` and Expand as Tile on both; 6 adds the `ane-whole`
-  /// layout, one program with the norms prescaled and the heads in fp32.
-  public static let prepareVersion = 6
+  /// What a CoreML build writes, the Python's PREPARE_VERSION: 5 is every
+  /// graph split on `ane` and Expand as Tile on both. `ane-whole` is a layout
+  /// under a device tag of its own, so adding it changed no artifact and took
+  /// no bump. The same number on both sides is what lets one Mac cache serve
+  /// both servers; `Pinned` carries it from the Python.
+  public static let prepareVersion = Pinned.prepareVersion
   static let manifestName = "sessions.json"
 
   public let name = "ort"
