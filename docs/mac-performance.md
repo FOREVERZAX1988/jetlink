@@ -64,7 +64,17 @@ runs; the third ran under the same load as the Swift runs. On the clean runs
 the Swift server is about 1 ms faster a frame at p50 and 0.6 to 1 ms at p99.
 That is the server alone: loopback TCP adds about 1.4 ms either way.
 
-Not yet measured: the same A/B over USB with a comma, which is the gate for
+Over USB with a comma, only the Python server has been measured so far. On
+2026-09-27, with a comma four, the Jetlink v0.4.3 app (the Python server,
+Neural Engine) on this M1 Pro and a live bench while parked (big model frame
+times, as the comma sees them):
+
+| Cable | p50 | p99 | Dropped |
+| --- | ---: | ---: | ---: |
+| USB 3 C-to-C | 36.9 ms | 45.7 ms | 0 |
+| USB 2 C-to-C | 46.7 ms | 54.3 ms | 0.88% |
+
+Not yet measured: the Swift server over USB, which is the gate for
 making the Swift server the default (its p99 no worse than the Python
 server's, and no frame dropped). To run it, plug the comma into the Mac, set
 Settings > Server to each in turn (or run `jetlink-serve --usb` from
