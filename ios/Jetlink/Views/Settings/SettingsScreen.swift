@@ -117,6 +117,7 @@ struct SettingsScreen: View {
   private var help: some View {
     Section("Help") {
       NavigationLink("Connecting the Comma") { ConnectHelpScreen() }
+      NavigationLink("Logs") { LogsScreen() }
     }
   }
 

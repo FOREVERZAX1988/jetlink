@@ -18,6 +18,15 @@ struct StatusScreen: View {
         .navigationTitle("Jetlink")
         .navigationSubtitle(state.subtitle)
         .toolbarTitleDisplayMode(landscape ? .inline : .large)
+        .toolbar {
+          ToolbarItem(placement: .topBarTrailing) {
+            NavigationLink {
+              LogsScreen()
+            } label: {
+              Label("Logs", systemImage: "doc.text")
+            }
+          }
+        }
     }
     // On its side the phone is a dashboard: nothing but the numbers.
     .toolbarVisibility(landscape ? .hidden : .automatic, for: .tabBar)
