@@ -1,21 +1,14 @@
 import Foundation
 
 /// Copies with the casts the model's inputs need, into whatever type the engine
-/// declared. The Swift form of `queues.store`.
+/// declared. The Swift form of `queues.store`, the bulk casts through vImage.
 enum Stage {
-  /// uint8 to float16 through a lookup: only 256 inputs exist, so a table
-  /// gives the same bits as a conversion at memcpy speed.
-  static let u8ToF16: [UInt16] = (0..<256).map { Float16(Float($0)).bitPattern }
-
   static func store(u8 source: UnsafeRawPointer, count: Int, into dest: UnsafeMutableRawPointer, as type: ElementType) {
-    let src = source.assumingMemoryBound(to: UInt8.self)
     switch type {
     case .float16:
-      let out = dest.assumingMemoryBound(to: UInt16.self)
-      u8ToF16.withUnsafeBufferPointer { table in
-        for i in 0..<count { out[i] = table[Int(src[i])] }
-      }
+      Convert.u8ToF16(source, dest, count: count)
     case .float:
+      let src = source.assumingMemoryBound(to: UInt8.self)
       let out = dest.assumingMemoryBound(to: Float.self)
       for i in 0..<count { out[i] = Float(src[i]) }
     case .uint8:
@@ -31,10 +24,7 @@ enum Stage {
     case .float:
       dest.copyMemory(from: source, byteCount: count * 4)
     case .float16:
-      let out = dest.assumingMemoryBound(to: UInt16.self)
-      for i in 0..<count {
-        out[i] = Float16(source.loadUnaligned(fromByteOffset: i * 4, as: Float.self)).bitPattern
-      }
+      Convert.f32ToF16(source, dest, count: count)
     default:
       preconditionFailure("scalars staged as \(type.name)")
     }
@@ -46,8 +36,7 @@ enum Stage {
     case .float16:
       dest.copyMemory(from: source, byteCount: count * 2)
     case .float:
-      let out = dest.assumingMemoryBound(to: Float.self)
-      for i in 0..<count { out[i] = Float(Float16(bitPattern: source[i])) }
+      Convert.f16ToF32(source, dest, count: count)
     default:
       preconditionFailure("queue staged as \(type.name)")
     }

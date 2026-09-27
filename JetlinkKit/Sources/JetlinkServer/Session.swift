@@ -308,8 +308,7 @@ final class Session: @unchecked Sendable {
       case .float:
         outputBuffer.update(from: out.assumingMemoryBound(to: Float.self), count: count)
       case .float16:
-        let half = out.assumingMemoryBound(to: UInt16.self)
-        for i in 0..<count { outputBuffer[i] = Float(Float16(bitPattern: half[i])) }
+        Convert.f16ToF32(out, outputBuffer, count: count)
       default:
         status = .inferFailed
       }
