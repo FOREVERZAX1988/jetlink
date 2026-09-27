@@ -32,4 +32,5 @@ then use troubleshooting in your platform guide.
 | Test a server without a comma | [Benchmark setup](platforms.md#test-without-a-comma) |
 | Build or develop the Mac app | [Mac development](../macos/README.md) |
 | Build or develop the iPhone app | [iPhone development](../ios/README.md) |
+| Keep the Swift and Python servers in step | [Conformance](conformance.md) |
 | Publish release artifacts | [Publishing](publishing.md) |
