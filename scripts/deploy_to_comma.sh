@@ -22,6 +22,8 @@ echo "==> syncing $here -> $HOST:$DEST"
 rsync -a --delete \
   --exclude '.git' --exclude '__pycache__' --exclude '.pytest_cache' \
   --exclude 'tests' --exclude 'docker' \
+  --exclude 'JetlinkKit' --exclude 'ios' --exclude 'macos' --exclude 'plans' \
+  --exclude '.build' --exclude 'build' --exclude '*.egg-info' \
   "$here/" "$HOST:$DEST/"
 
 root="$(dirname "$DEST")"
