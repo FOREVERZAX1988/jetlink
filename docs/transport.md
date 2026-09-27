@@ -42,6 +42,28 @@ On the comma, the negotiated speed is in `/sys/class/udc/*/current_speed`:
 `super-speed` is USB 3 and `high-speed` is USB 2. `sudo scripts/setup_gadget.sh
 --check` prints it along with what the gadget can present.
 
+### The network link on a Linux host
+
+The comma's kernel (4.9, Qualcomm's u_ether) sends NCM transfer blocks slowly
+when the host lets it pack several packets into one block. Measured on the
+bench mici at SuperSpeed with a Jetson as the host, comma to host: 16 KB
+blocks (the Linux default) carry 22 Mbit/s, 2 KB blocks carry 190 Mbit/s. The
+other direction is unaffected (340 Mbit/s), and CPU is not the limit. So a
+Linux host that wants to use the network link (a bench standing in for a
+phone, or a PC over the cable network) should cap the block size:
+
+    echo 2048 > /sys/class/net/<interface>/cdc_ncm/rx_max
+
+`scripts/99-jetlink-host.rules` does that on plug-in. Apple's NCM driver picks
+its own block size and did not show the slow path in the reference phone
+measurement (393 KB up in under 19 ms). With the cap, the parked live bench on
+the comma (Cinque Terre V3, 180 s, 3,416 big frames) runs at 36.4 ms p50 and
+40.6 ms p99 over the network link, every frame delivered, against 28.6 and
+30.3 ms over the vendor interface: about 8 ms more per frame, all of it in the
+comma's send of the 393 KB frame (`bench_link.py` sees 26 ms of transport
+against 8.6 ms). That is the network link's floor on this kernel; the vendor
+interface stays the link for every host that can open it.
+
 ## Power requirements
 
 Use separate power for the Jetson and comma. The Jetson's supply and cable
