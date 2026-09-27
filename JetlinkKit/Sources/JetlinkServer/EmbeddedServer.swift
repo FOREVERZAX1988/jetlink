@@ -13,6 +13,14 @@ public final class EmbeddedServer: @unchecked Sendable {
   /// The control channel's events, as the Python server's socket sends them.
   public var events: AsyncStream<ControlEvent> { controller.events }
 
+  /// Held while serving. The system throttles an app nobody is looking at
+  /// (App Nap on a Mac), and in process the server is throttled with it: on
+  /// the bench, the Mac app behind a locked screen ran the model at a p50 of
+  /// 75 ms and dropped 45% of frames, where the same server as a command-line
+  /// process ran at 36 ms. Idle sleep stays allowed; frames are not user input.
+  private let activityLock = NSLock()
+  private var activity: NSObjectProtocol?
+
   /// Builds the server on `configuration`, creating its cache directory.
   public init(configuration: Server.Configuration) throws {
     try FileManager.default.createDirectory(at: configuration.cacheRoot, withIntermediateDirectories: true)
@@ -24,6 +32,7 @@ public final class EmbeddedServer: @unchecked Sendable {
   /// Subscribe to `events` first: nothing published before is kept.
   public func start() throws {
     try server.start()
+    holdActivity(true)
     controller.publishInitialState()
   }
 
@@ -35,11 +44,25 @@ public final class EmbeddedServer: @unchecked Sendable {
   /// let go at once, as when the app ends; without it the engine goes with
   /// the last reference to this server.
   public func stop(releasingEngine: Bool) {
+    holdActivity(false)
     controller.finish()
     if releasingEngine {
       server.shutdown()
     } else {
       server.stop()
+    }
+  }
+
+  private func holdActivity(_ hold: Bool) {
+    activityLock.lock()
+    defer { activityLock.unlock() }
+    if hold, activity == nil {
+      activity = ProcessInfo.processInfo.beginActivity(
+        options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical],
+        reason: "serving the comma's model")
+    } else if !hold, let held = activity {
+      ProcessInfo.processInfo.endActivity(held)
+      activity = nil
     }
   }
 
