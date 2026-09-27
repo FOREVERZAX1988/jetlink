@@ -1,4 +1,5 @@
 import AppKit
+import JetlinkKit
 import JetlinkUI
 import SwiftUI
 

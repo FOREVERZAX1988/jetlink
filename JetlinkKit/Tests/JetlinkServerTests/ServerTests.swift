@@ -204,6 +204,18 @@ struct ServerLifecycleTests {
     #expect(server.host.loadedSHA() == nil)
   }
 
+  @Test("The log sink hears what the server logs")
+  func logSink() throws {
+    let lines = LockedLines()
+    Log.sink = { level, category, message in lines.append("\(level.rawValue) \(category): \(message)") }
+    defer { Log.sink = nil }
+    let cache = try TemporaryDirectory()
+    let server = try makeServer(cache)
+    try server.start()
+    server.shutdown()
+    #expect(lines.all.contains { $0.hasPrefix("info server: listening on 127.0.0.1:") })
+  }
+
   @Test("A listener that goes away is opened again")
   func listenerHeals() throws {
     let cache = try TemporaryDirectory()
@@ -284,4 +296,15 @@ final class LockedEvents: @unchecked Sendable {
   }
 
   var all: [BenchmarkEvent] { lock.withLock { events } }
+}
+
+final class LockedLines: @unchecked Sendable {
+  private let lock = NSLock()
+  private var lines: [String] = []
+
+  func append(_ line: String) {
+    lock.withLock { lines.append(line) }
+  }
+
+  var all: [String] { lock.withLock { lines } }
 }

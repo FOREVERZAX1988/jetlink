@@ -1,6 +1,5 @@
 import Foundation
 import JetlinkKit
-import os
 
 /// One client's connection: the request loop, the Swift form of
 /// `session.Session`. One message at a time; builds run on the host's job
@@ -10,7 +9,7 @@ final class Session: @unchecked Sendable {
   private let transport: TCPTransport
   private let host: EngineHost
   private let telemetry: () -> [String: Any]
-  private let log = Logger(subsystem: "io.zoompilot.jetlink", category: "session")
+  private let log = ServerLog(category: "session")
   private var client = ""
   private var lastSeq: UInt32 = 0
   private(set) var request: Request?
@@ -51,7 +50,7 @@ final class Session: @unchecked Sendable {
   }
 
   private func error(_ seq: UInt32, _ error: String, _ detail: String = "") throws {
-    log.error("\(error, privacy: .public): \(detail, privacy: .public)")
+    log.error("\(error): \(detail)")
     try sendJSON(.error, seq: seq, ["error": error, "detail": detail])
   }
 
@@ -91,7 +90,7 @@ final class Session: @unchecked Sendable {
         message = try transport.recv()
       } catch let error as LinkError {
         if case .timedOut = error { continue }
-        log.info("link closed: \(error.description, privacy: .public)")
+        log.info("link closed: \(error.description)")
         return error.description
       } catch {
         return String(describing: error)
@@ -102,7 +101,7 @@ final class Session: @unchecked Sendable {
         return error.description
       } catch {
         // A bad request must not take the server down.
-        log.error("handler failed: \(String(describing: error), privacy: .public)")
+        log.error("handler failed: \(String(describing: error))")
         if (try? self.error(message.seq, String(describing: type(of: error)), String(describing: error))) == nil {
           return "could not report an error to the client"
         }
@@ -124,7 +123,7 @@ final class Session: @unchecked Sendable {
     // Seqs never repeat on a connection, so anything at or below the last one
     // is a replay; running it would push the same image into the queues twice.
     if message.seq <= lastSeq {
-      log.warning("dropping replayed message type=\(message.msgType) seq=\(message.seq) (last \(self.lastSeq))")
+      log.warning("dropping replayed message type=\(message.msgType) seq=\(message.seq) (last \(lastSeq))")
       return
     }
     lastSeq = message.seq
@@ -153,13 +152,13 @@ final class Session: @unchecked Sendable {
       who = "\(name)/\(nonce)"
     }
     if !client.isEmpty && who != client {
-      log.info("session handed from \(self.client, privacy: .public) to \(who.isEmpty ? "an unnamed client" : who, privacy: .public)")
+      log.info("session handed from \(client) to \(who.isEmpty ? "an unnamed client" : who)")
     }
     client = who
     lastSeq = message.seq
     request = nil
     frames = 0
-    log.info("hello from \(who.isEmpty ? "an unnamed client" : who, privacy: .public) (seq \(message.seq))")
+    log.info("hello from \(who.isEmpty ? "an unnamed client" : who) (seq \(message.seq))")
   }
 
   private func onHello(_ message: Message) throws {
@@ -290,7 +289,7 @@ final class Session: @unchecked Sendable {
       queueUs = microseconds(since: started)
       try loaded.engine.run()
     } catch {
-      log.error("inference failed: \(String(describing: error), privacy: .public)")
+      log.error("inference failed: \(String(describing: error))")
       status = .inferFailed
     }
 

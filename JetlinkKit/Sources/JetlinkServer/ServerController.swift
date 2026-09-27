@@ -1,6 +1,5 @@
 import Foundation
 import JetlinkKit
-import os
 
 /// What the control layer needs from the model registry: the catalog, the
 /// bytes, and what is on disk. JetlinkRegistry's `Registry` is the one the
@@ -37,7 +36,7 @@ public final class ServerController: @unchecked Sendable {
 
   private let registry: any ModelRegistry
   private let continuation: AsyncStream<ControlEvent>.Continuation
-  private let log = Logger(subsystem: "io.zoompilot.jetlink", category: "control")
+  private let log = ServerLog(category: "control")
   private let lock = NSLock()
   private var link: LinkEvent = .waiting
   private var active: [String: Download] = [:]
@@ -192,7 +191,7 @@ public final class ServerController: @unchecked Sendable {
     } catch let error as ControlError {
       return ReplyEvent(id: nil, ok: false, error: error.description)
     } catch {
-      log.error("the \(command.name, privacy: .public) command failed: \(String(describing: error), privacy: .public)")
+      log.error("the \(command.name) command failed: \(String(describing: error))")
       return ReplyEvent(id: nil, ok: false, error: "\(type(of: error)): \(error)")
     }
   }
@@ -267,7 +266,7 @@ public final class ServerController: @unchecked Sendable {
       do {
         _ = try server.host.benchmark(seconds: seconds, run: run)
       } catch {
-        log.warning("benchmark failed: \(String(describing: error), privacy: .public)")
+        log.warning("benchmark failed: \(String(describing: error))")
       }
       lock.withLock {
         if benchmark === run { benchmark = nil }
@@ -371,7 +370,7 @@ public final class ServerController: @unchecked Sendable {
       if state.cancel {
         downloadEvent(state, "cancelled")
       } else {
-        log.warning("downloading \(state.sha256.prefix(16), privacy: .public) failed: \(String(describing: error), privacy: .public)")
+        log.warning("downloading \(state.sha256.prefix(16)) failed: \(String(describing: error))")
         downloadEvent(state, "failed", detail: "\(type(of: error)): \(error)")
       }
       forgetDownload(state)
@@ -398,14 +397,14 @@ public final class ServerController: @unchecked Sendable {
     let wanted = server.host.session?.request?.sha256
     server.host.lock.unlock()
     if currentLink.state == .connected, let wanted, wanted != state.sha256, !state.prepareOverComma {
-      log.info("downloaded \(state.sha256.prefix(16), privacy: .public); not preparing it over the model the comma is using")
+      log.info("downloaded \(state.sha256.prefix(16)); not preparing it over the model the comma is using")
       return
     }
     do {
       let request = try Request(sha256: state.sha256, nbytes: nbytes(state.sha256), frameSkip: frameSkip)
       _ = server.host.request(request, session: nil)
     } catch {
-      log.error("preparing \(state.sha256.prefix(16), privacy: .public) after its download failed: \(String(describing: error), privacy: .public)")
+      log.error("preparing \(state.sha256.prefix(16)) after its download failed: \(String(describing: error))")
     }
   }
 
@@ -484,7 +483,7 @@ public final class ServerController: @unchecked Sendable {
       importEvent(path, "done", frac: 1, sha256: sha)
       publishInventory()
     } catch {
-      log.warning("importing \(path, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+      log.warning("importing \(path) failed: \(String(describing: error))")
       importEvent(path, "failed", frac: 1, detail: "\(type(of: error)): \(error)")
     }
   }

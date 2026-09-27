@@ -1,7 +1,6 @@
 import CryptoKit
 import Foundation
 import JetlinkKit
-import os
 
 /// An engine resident on the device, with the state that goes with it.
 final class Loaded {
@@ -150,7 +149,7 @@ public final class EngineHost: @unchecked Sendable {
   /// A benchmark owns the engine: frames from a comma are answered NOT_READY.
   var benchmarking = false
   let frameStats = FrameStats()
-  let log = Logger(subsystem: "io.zoompilot.jetlink", category: "server")
+  let log = ServerLog(category: "server")
 
   private var lastProgress: TimeInterval = 0
   private var lastStage: (stage: String?, frac: Double, msg: String) = (nil, 0, "")
@@ -301,7 +300,7 @@ public final class EngineHost: @unchecked Sendable {
   func cachedSpec(_ entry: CacheEntry) -> [String: Any]? {
     guard entry.exists else { return nil }
     guard let meta = try? entry.meta() else {
-      log.warning("unreadable sidecar for \(entry.path.lastPathComponent, privacy: .public)")
+      log.warning("unreadable sidecar for \(entry.path.lastPathComponent)")
       return nil
     }
     return meta["spec"] as? [String: Any]
@@ -322,7 +321,7 @@ public final class EngineHost: @unchecked Sendable {
     guard let d = cachedSpec(entry), let spec = try? ModelSpec.from(d).withFrameSkip(frameSkip),
       let request = try? Request(sha256: sha256, nbytes: 0, frameSkip: frameSkip)
     else { return }
-    log.info("preloading the engine loaded last: \(entry.path.lastPathComponent, privacy: .public)")
+    log.info("preloading the engine loaded last: \(entry.path.lastPathComponent)")
     start(Job(sha256: sha256, loadOnly: true), request: request, entry: entry, modelPath: cache.modelPath(sha256), spec: spec)
   }
 
@@ -336,7 +335,7 @@ public final class EngineHost: @unchecked Sendable {
       do {
         return try backend.deriveSpec(model: modelPath, sha256: request.sha256, nbytes: request.nbytes, frameSkip: request.frameSkip)
       } catch {
-        log.error("could not derive a spec from \(modelPath.lastPathComponent, privacy: .public): \(String(describing: error), privacy: .public)")
+        log.error("could not derive a spec from \(modelPath.lastPathComponent): \(String(describing: error))")
       }
     }
     return nil
@@ -376,7 +375,7 @@ public final class EngineHost: @unchecked Sendable {
       } catch let invalid as ArtifactInvalid {
         // Wrong on disk, not wrong here. Replace it from the ONNX when there is
         // one, else let the client upload again.
-        log.warning("discarding \(entry.path.lastPathComponent, privacy: .public): \(invalid.description, privacy: .public)")
+        log.warning("discarding \(entry.path.lastPathComponent): \(invalid.description)")
         entry.remove()
         let size = fileSize(modelPath)
         let have = size > 0 && (request.nbytes == 0 || size == request.nbytes)
@@ -397,9 +396,9 @@ public final class EngineHost: @unchecked Sendable {
       lock.unlock()
       cache.rememberLoaded(request.sha256, frameSkip: request.frameSkip)
       progress("load", 1, "ready", force: true)
-      log.info("engine ready: \(entry.path.lastPathComponent, privacy: .public)")
+      log.info("engine ready: \(entry.path.lastPathComponent)")
     } catch {
-      log.error("engine preparation failed: \(String(describing: error), privacy: .public)")
+      log.error("engine preparation failed: \(String(describing: error))")
       engine?.close()
       lock.lock()
       job.state = .failed
@@ -456,7 +455,7 @@ public final class EngineHost: @unchecked Sendable {
       }
     }
     let warmed = try engine.warm()
-    log.info("\(warmed, privacy: .public)")
+    log.info("\(warmed)")
     staging.reset()
     return Loaded(sha256: spec.sha256, spec: spec, engine: engine, staging: staging)
   }
@@ -469,7 +468,7 @@ public final class EngineHost: @unchecked Sendable {
     lock.unlock()
     if let old {
       old.engine.close()
-      log.info("engine \(old.sha256.prefix(16), privacy: .public) unloaded")
+      log.info("engine \(old.sha256.prefix(16)) unloaded")
       emit(.engine(snapshot()))
     }
   }

@@ -37,9 +37,19 @@ final class PhoneServer: ServerControlling {
   @ObservationIgnored private var recentTask: Task<Void, Never>?
   @ObservationIgnored private let log = Logger(subsystem: "io.zoompilot.jetlink", category: "app")
 
+  /// What the in-process server logs, for a Logs view.
+  let logs = LogBuffer()
+
   init(settings: PhoneSettings) {
     self.settings = settings
     (modelEvents, modelEventsContinuation) = AsyncStream.makeStream(bufferingPolicy: .unbounded)
+    let logs = self.logs
+    let clock = ISO8601DateFormatter()
+    clock.formatOptions = [.withFullTime, .withFractionalSeconds]
+    Log.sink = { level, category, message in
+      let line = "\(clock.string(from: Date())) \(level.rawValue.uppercased()) \(category): \(message)"
+      Task { @MainActor in logs.append(line) }
+    }
   }
 
   // MARK: lifecycle

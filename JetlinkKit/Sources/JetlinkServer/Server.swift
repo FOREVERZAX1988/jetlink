@@ -1,7 +1,6 @@
 import Darwin
 import Foundation
 import JetlinkKit
-import os
 
 /// Where a server dials to serve: the comma's end of a USB network link,
 /// which listens for the phone (192.168.60.1:5599 on the composite gadget).
@@ -87,7 +86,7 @@ public final class Server: @unchecked Sendable {
   /// The piggybacked telemetry: what the comma logs about its accelerator.
   public var telemetry: @Sendable () -> [String: Any] = { [:] }
 
-  private let log = Logger(subsystem: "io.zoompilot.jetlink", category: "server")
+  private let log = ServerLog(category: "server")
   private let lock = NSLock()
   /// Internal so a test can end it under the accept loop.
   var listener: TCPListener?
@@ -136,7 +135,7 @@ public final class Server: @unchecked Sendable {
     }
     self.listener = listener
     lock.unlock()
-    log.info("listening on \(self.configuration.host, privacy: .public):\(listener.port)")
+    log.info("listening on \(configuration.host):\(listener.port)")
     if currentLink.state != .connected {
       setLink(LinkEvent(state: .waiting, detail: "listening on \(configuration.host):\(listener.port)", peer: nil))
     }
@@ -193,7 +192,7 @@ public final class Server: @unchecked Sendable {
         try listen()
         return
       } catch {
-        log.warning("cannot listen yet: \(String(describing: error), privacy: .public)")
+        log.warning("cannot listen yet: \(String(describing: error))")
         backoff = min(backoff * 2, Server.relistenBackoff.upperBound)
       }
     }
@@ -261,7 +260,7 @@ public final class Server: @unchecked Sendable {
     let previousDone = currentDone
     lock.unlock()
     if let previous {
-      log.info("a new connection from \(transport.peer, privacy: .public) takes over from \(previous.peer, privacy: .public)")
+      log.info("a new connection from \(transport.peer) takes over from \(previous.peer)")
       previous.interrupt()
       previousDone?.wait()
     }
@@ -282,7 +281,7 @@ public final class Server: @unchecked Sendable {
   }
 
   private func serve(_ session: Session) {
-    log.info("client connected from \(session.peer, privacy: .public)")
+    log.info("client connected from \(session.peer)")
     setLink(LinkEvent(state: .connected, detail: "", peer: session.peer))
     let reason = session.serveForever()
     session.close()
@@ -294,7 +293,7 @@ public final class Server: @unchecked Sendable {
     }
     let isStopped = stopped
     lock.unlock()
-    log.info("client disconnected: \(reason, privacy: .public)")
+    log.info("client disconnected: \(reason)")
     if isCurrent && !isStopped {
       setLink(LinkEvent(state: .disconnected, detail: reason, peer: nil))
     }
@@ -317,7 +316,7 @@ public final class Server: @unchecked Sendable {
     dial = target
     lock.unlock()
     if changed, let target {
-      log.info("dialing \(target.description, privacy: .public)")
+      log.info("dialing \(target.description)")
     } else if changed {
       log.info("no longer dialing")
     }
@@ -354,13 +353,13 @@ public final class Server: @unchecked Sendable {
       do {
         let transport = try TCPTransport.connect(host: target.host, port: target.port, timeout: Server.dialTimeout)
         failed = nil
-        log.info("dialed \(transport.peer, privacy: .public)")
+        log.info("dialed \(transport.peer)")
         takeover(transport).wait()
       } catch {
         // Once per outage, not twice a second.
         if failed != target {
           failed = target
-          log.info("cannot reach \(target.description, privacy: .public) yet: \(String(describing: error), privacy: .public)")
+          log.info("cannot reach \(target.description) yet: \(String(describing: error))")
         }
       }
       Thread.sleep(forTimeInterval: Server.dialInterval)

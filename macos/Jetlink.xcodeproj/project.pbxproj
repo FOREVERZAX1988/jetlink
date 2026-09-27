@@ -25,7 +25,6 @@
 		5F2C446BE10555BEBEF9A9AF /* ModelsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C6279207493AD7D245284F1 /* ModelsView.swift */; };
 		6386F65E1957704F8DB80A89 /* LogFileWriterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D092AAA6AC91B0C7C9DAA915 /* LogFileWriterTests.swift */; };
 		8B167F9986DACB4E316DC397 /* JetlinkApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 868D0C6D327E8A2A54106C5C /* JetlinkApp.swift */; };
-		8E703503A6C0E602F02662B6 /* LogBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33A7504DAFF87796EB25AEC5 /* LogBuffer.swift */; };
 		A16EA313C504C7BBDDCED9CC /* StatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3047F8C242F98154043E594 /* StatusView.swift */; };
 		A4264BF79835688E9CAEA77C /* ControlClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C57E483412BDAB8FAA753B3 /* ControlClient.swift */; };
 		AD3E2507E4A2AF42BAE2468D /* MainWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF0AFDE7D421142462A1EAC2 /* MainWindow.swift */; };
@@ -54,7 +53,6 @@
 		0C6279207493AD7D245284F1 /* ModelsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelsView.swift; sourceTree = "<group>"; };
 		1E4EAEB195364585F1758B21 /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettings.swift; sourceTree = "<group>"; };
 		298B7562E3BC072DD1917643 /* ServerProcess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerProcess.swift; sourceTree = "<group>"; };
-		33A7504DAFF87796EB25AEC5 /* LogBuffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogBuffer.swift; sourceTree = "<group>"; };
 		6B6101A302AB815094A1A71B /* ControlClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlClientTests.swift; sourceTree = "<group>"; };
 		6B71A2709AC0F259D4486CB6 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		6C222FAF13C281576384E67A /* EmbeddedPythonTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmbeddedPythonTests.swift; sourceTree = "<group>"; };
@@ -143,7 +141,6 @@
 			children = (
 				9C57E483412BDAB8FAA753B3 /* ControlClient.swift */,
 				76ABE66B0A28D17CFE0293FF /* EmbeddedPython.swift */,
-				33A7504DAFF87796EB25AEC5 /* LogBuffer.swift */,
 				E3D152F2F5F59D549213C13E /* LogFileWriter.swift */,
 				298B7562E3BC072DD1917643 /* ServerProcess.swift */,
 				82A2945D6E8878EB2CB9BE0C /* ServerStore.swift */,
@@ -367,7 +364,6 @@
 				A4264BF79835688E9CAEA77C /* ControlClient.swift in Sources */,
 				CE640B2C1591BF205429F1E2 /* EmbeddedPython.swift in Sources */,
 				8B167F9986DACB4E316DC397 /* JetlinkApp.swift in Sources */,
-				8E703503A6C0E602F02662B6 /* LogBuffer.swift in Sources */,
 				16F27CC89C19E59E5F00C3FC /* LogFileWriter.swift in Sources */,
 				58B18912208E84CE63333B27 /* LoginItem.swift in Sources */,
 				C5BD297534DB35414E8EE4A4 /* LogsView.swift in Sources */,

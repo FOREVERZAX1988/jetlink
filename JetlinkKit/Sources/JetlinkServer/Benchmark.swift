@@ -116,7 +116,7 @@ extension EngineHost {
           BenchmarkEvent(
             state: report.cancelled ? "cancelled" : "done", elapsed: report.seconds, total: seconds, frames: report.frames, frame: report.frame,
             report: report, detail: "")))
-      log.info("benchmark done:\n\(report.text, privacy: .public)")
+      log.info("benchmark done:\n\(report.text)")
       return report
     } catch {
       emit(.benchmark(BenchmarkEvent(state: "failed", elapsed: 0, total: seconds, frames: 0, frame: nil, report: nil, detail: "\(error)")))
@@ -127,7 +127,7 @@ extension EngineHost {
   private func measure(_ l: Loaded, seconds: Double, run: BenchmarkRun) throws -> BenchmarkReport {
     let spec = l.spec
     let device = backend.describe()["device"] ?? ""
-    log.info("benchmark: \(device, privacy: .public), \(Int(seconds)) s at \(ModelConstants.runFrequency) Hz")
+    log.info("benchmark: \(device), \(Int(seconds)) s at \(ModelConstants.runFrequency) Hz")
 
     var generator = SystemRandomNumberGenerator()
     let warped = (0..<spec.warpedBytes).map { _ in UInt8.random(in: 0...255, using: &generator) }

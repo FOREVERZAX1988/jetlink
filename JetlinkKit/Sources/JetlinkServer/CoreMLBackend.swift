@@ -1,7 +1,6 @@
 import Foundation
 import JetlinkONNX
 import Metal
-import os
 
 /// What a model preparation produced: the parts to run as a chain, in order.
 public struct PreparedModel: Sendable {
@@ -64,7 +63,7 @@ public final class CoreMLBackend: EngineBackend {
   public let keepCPUWarm: Bool
   private let preparer: any ModelPreparer
   private let chip: String
-  private let log = Logger(subsystem: "io.zoompilot.jetlink", category: "coreml")
+  private let log = ServerLog(category: "coreml")
 
   public init(device: Device = .ane, preparer: any ModelPreparer, keepAlive: Bool = true, keepCPUWarm: Bool = true) {
     self.device = device
@@ -142,7 +141,7 @@ public final class CoreMLBackend: EngineBackend {
     let prepared = try preparer.prepare(model: model, into: staged, split: sessions.count > 1) {
       CoreMLBackend.cacheKey(artifact: artifact, part: $0)
     }
-    log.info("prepared \(model.lastPathComponent, privacy: .public): \(prepared.summary, privacy: .public)")
+    log.info("prepared \(model.lastPathComponent): \(prepared.summary)")
     guard prepared.parts.map(\.name) == sessions.map(\.name) else {
       throw HostError.failed("the preparation wrote \(prepared.parts.map(\.name)), expected \(sessions.map(\.name))")
     }
@@ -191,7 +190,7 @@ public final class CoreMLBackend: EngineBackend {
     // outputs bit for bit the same. A phone has no room for both.
     let freed = CoreMLBackend.dropConvertedModels(caches)
     if freed > 0 {
-      log.info("removed \(formatBytes(freed), privacy: .public) of converted model the compiled one replaces")
+      log.info("removed \(formatBytes(freed)) of converted model the compiled one replaces")
     }
 
     if FileManager.default.fileExists(atPath: artifact.path) {
@@ -299,7 +298,7 @@ public final class CoreMLBackend: EngineBackend {
     defer { ticker.stop() }
     let engine = try OrtEngine(plans: plans(artifact, manifest), device: deviceTag(), keepAlive: keepAlive, keepCPUWarm: keepCPUWarm)
     let seconds = Date().timeIntervalSince(started)
-    log.info("onnxruntime sessions on \(self.device.rawValue, privacy: .public) in \(seconds, format: .fixed(precision: 1)) s")
+    log.info("onnxruntime sessions on \(device.rawValue) in \(String(format: "%.1f", seconds)) s")
     report("load", 1, "loaded in \(Int(seconds.rounded())) s")
     if !meta.isEmpty {
       var updated = meta
