@@ -1,67 +1,13 @@
 import Foundation
+import JetlinkUI
 import SwiftUI
 
 /// What the phone itself is doing, for the tiles under the frame budget. A
 /// phone in a car mount in the sun throttles, and a throttled phone misses
 /// frames long before the numbers above say why.
 struct DeviceHealth: Equatable, Sendable {
-  enum Thermal: Equatable, Sendable {
-    case nominal, fair, serious, critical
-
-    init(_ state: ProcessInfo.ThermalState) {
-      switch state {
-      case .nominal: self = .nominal
-      case .fair: self = .fair
-      case .serious: self = .serious
-      case .critical: self = .critical
-      @unknown default: self = .fair
-      }
-    }
-
-    /// From the word a benchmark report carries: nominal, fair, serious, critical.
-    init(label: String) {
-      switch label {
-      case "nominal": self = .nominal
-      case "serious": self = .serious
-      case "critical": self = .critical
-      default: self = .fair
-      }
-    }
-
-    var title: String {
-      switch self {
-      case .nominal: "Normal"
-      case .fair: "Warm"
-      case .serious: "Hot"
-      case .critical: "Critical"
-      }
-    }
-
-    /// Said only when the heat costs frames.
-    var note: String? {
-      switch self {
-      case .nominal, .fair: nil
-      case .serious, .critical: "Throttling"
-      }
-    }
-
-    var symbol: String {
-      switch self {
-      case .nominal: "thermometer.low"
-      case .fair: "thermometer.medium"
-      case .serious: "thermometer.high"
-      case .critical: "flame.fill"
-      }
-    }
-
-    var tone: Color {
-      switch self {
-      case .nominal, .fair: .secondary
-      case .serious: .orange
-      case .critical: .red
-      }
-    }
-  }
+  /// The shared thermal levels, in JetlinkUI so the Mac reads a report the same way.
+  typealias Thermal = ThermalLevel
 
   enum Power: Equatable, Sendable {
     case unknown, unplugged, charging, full
