@@ -21,6 +21,10 @@ final class Session: @unchecked Sendable {
   /// The packed scalars, copied out of the receive buffer to align them.
   private var packedBuffer: UnsafeMutableRawPointer
   private var packedCapacity: Int
+  /// The reply's fixed head, packed in place every frame.
+  private let responseHead: UnsafeMutableRawPointer
+  /// The reply's parts: head, outputs, and the telemetry when asked for.
+  private let parts: UnsafeMutablePointer<UnsafeRawBufferPointer>
 
   init(transport: TCPTransport, host: EngineHost, telemetry: @escaping () -> [String: Any]) {
     self.transport = transport
@@ -30,11 +34,16 @@ final class Session: @unchecked Sendable {
     outputBuffer = .allocate(capacity: outputCapacity)
     packedCapacity = 1 << 16
     packedBuffer = .allocate(byteCount: packedCapacity, alignment: 16)
+    responseHead = .allocate(byteCount: Wire.inferRespSize, alignment: 8)
+    parts = .allocate(capacity: 3)
+    parts.initialize(repeating: UnsafeRawBufferPointer(start: nil, count: 0), count: 3)
   }
 
   deinit {
     outputBuffer.deallocate()
     packedBuffer.deallocate()
+    responseHead.deallocate()
+    parts.deallocate()
   }
 
   var peer: String { transport.peer }
@@ -253,10 +262,28 @@ final class Session: @unchecked Sendable {
     host.lock.lock()
     defer { host.lock.unlock() }
     guard let loaded = host.loaded, loaded.sha256 == sha, loaded.spec.frameSkip == skip, !host.benchmarking else {
-      try Wire.inferResp(status: .notReady).withUnsafeBytes { try send(.inferResp, seq: message.seq, parts: [$0]) }
+      try respond(message.seq, frameID: 0, status: .notReady, gpuUs: 0, queueUs: 0, totalUs: 0, outputBytes: 0, state: nil)
       return
     }
     try infer(loaded, message)
+  }
+
+  /// INFER_RESP: the head, `outputBytes` of the output buffer, and the
+  /// telemetry, in one write from buffers this session owns.
+  private func respond(
+    _ seq: UInt32, frameID: UInt32, status: Wire.Status, gpuUs: UInt32, queueUs: UInt32, totalUs: UInt32, outputBytes: Int, state: Data?
+  ) throws {
+    Wire.packInferResp(frameID: frameID, status: status, gpuUs: gpuUs, queueUs: queueUs, totalUs: totalUs, into: responseHead)
+    parts[0] = UnsafeRawBufferPointer(start: responseHead, count: Wire.inferRespSize)
+    parts[1] = UnsafeRawBufferPointer(start: outputBuffer, count: outputBytes)
+    if let state {
+      try state.withUnsafeBytes { bytes in
+        parts[2] = bytes
+        try transport.send(.inferResp, seq: seq, parts: UnsafeBufferPointer(start: parts, count: 3))
+      }
+    } else {
+      try transport.send(.inferResp, seq: seq, parts: UnsafeBufferPointer(start: parts, count: 2))
+    }
   }
 
   private func infer(_ loaded: Loaded, _ message: Message) throws {
@@ -265,7 +292,7 @@ final class Session: @unchecked Sendable {
     guard message.payload.count == spec.inferReqBytes else {
       // The offsets below come from the spec, not the wire: a client on
       // another model would have its scalars read out of the image.
-      try Wire.inferResp(status: .badShape).withUnsafeBytes { try send(.inferResp, seq: message.seq, parts: [$0]) }
+      try respond(message.seq, frameID: 0, status: .badShape, gpuUs: 0, queueUs: 0, totalUs: 0, outputBytes: 0, state: nil)
       return
     }
     let base = message.payload.baseAddress!
@@ -323,17 +350,11 @@ final class Session: @unchecked Sendable {
     }
 
     let totalUs = microseconds(since: started)
-    var response = Wire.inferResp(frameID: frameID, status: status, gpuUs: loaded.engine.lastGpuUs, queueUs: queueUs, totalUs: totalUs)
     let state: Data? = flags.contains(.wantState) ? JSONLine.encode(telemetry()) : nil
     let sendStarted = DispatchTime.now().uptimeNanoseconds
-    try response.withUnsafeMutableBytes { header in
-      let outputs = UnsafeRawBufferPointer(start: outputBuffer, count: status == .ok || status == .notFinite ? count * 4 : 0)
-      if let state {
-        try state.withUnsafeBytes { try send(.inferResp, seq: message.seq, parts: [UnsafeRawBufferPointer(header), outputs, $0]) }
-      } else {
-        try send(.inferResp, seq: message.seq, parts: [UnsafeRawBufferPointer(header), outputs])
-      }
-    }
+    try respond(
+      message.seq, frameID: frameID, status: status, gpuUs: loaded.engine.lastGpuUs, queueUs: queueUs, totalUs: totalUs,
+      outputBytes: status == .ok || status == .notFinite ? count * 4 : 0, state: state)
     let sendUs = microseconds(since: sendStarted)
     frames += 1
     if totalUs > FrameStats.slowUs || sendUs > 10_000 {

@@ -40,18 +40,27 @@ public final class TCPTransport: @unchecked Sendable {
   private let sendLock = NSLock()
   private let stateLock = NSLock()
   private var closed = false
+  /// The outgoing header, and the pad byte after it, packed in place for
+  /// every send; `vectors` is reused too, so a frame's reply allocates nothing.
+  private let tx: UnsafeMutableRawPointer
+  private var vectors: [iovec] = []
+  static let maxParts = 6
 
   init(fd: Int32, peer: String) {
     self.fd = fd
     self.peer = peer
     self.capacity = 1 << 20
     self.rx = UnsafeMutableRawPointer.allocate(byteCount: capacity, alignment: 64)
+    self.tx = UnsafeMutableRawPointer.allocate(byteCount: Wire.headerSize + 1, alignment: 8)
+    self.tx.initializeMemory(as: UInt8.self, repeating: 0, count: Wire.headerSize + 1)
+    self.vectors.reserveCapacity(TCPTransport.maxParts + 2)
     TCPTransport.tune(fd)
   }
 
   deinit {
     close()
     rx.deallocate()
+    tx.deallocate()
   }
 
   /// A client's end: what the comma opens, and what a phone dialing the
@@ -174,31 +183,34 @@ public final class TCPTransport: @unchecked Sendable {
 
   // MARK: sending
 
-  /// One message, `parts` concatenated as its payload, in one vectored write.
+  /// One message, `parts` concatenated as its payload, in one vectored write:
+  /// header, parts and the pad byte together, so the kernel never sees the
+  /// header as a segment of its own.
   public func send(_ type: Wire.Msg, seq: UInt32, parts: [UnsafeRawBufferPointer] = [], flags: Wire.Flag = []) throws {
+    try parts.withUnsafeBufferPointer { try send(type, seq: seq, parts: $0, flags: flags) }
+  }
+
+  /// The frame path's form: the parts in the caller's own storage.
+  func send(_ type: Wire.Msg, seq: UInt32, parts: UnsafeBufferPointer<UnsafeRawBufferPointer>, flags: Wire.Flag = []) throws {
     sendLock.lock()
     defer { sendLock.unlock() }
     var flags = flags
-    let length = parts.reduce(0) { $0 + $1.count }
+    var length = 0
+    for part in parts { length += part.count }
     let padded = (Wire.headerSize + length) % Wire.packetMultiple == 0
     if padded {
       flags.insert(.padded)
     }
-    var header = [UInt8](repeating: 0, count: Wire.headerSize)
-    var pad: UInt8 = 0
-    try header.withUnsafeMutableBytes { headerBytes in
-      Wire.packHeader(Wire.Header(msgType: type.rawValue, seq: seq, flags: flags.rawValue, length: UInt32(length)), into: headerBytes.baseAddress!)
-      try withUnsafeMutablePointer(to: &pad) { padPointer in
-        var vectors: [iovec] = [iovec(iov_base: headerBytes.baseAddress, iov_len: Wire.headerSize)]
-        for part in parts where part.count > 0 {
-          vectors.append(iovec(iov_base: UnsafeMutableRawPointer(mutating: part.baseAddress), iov_len: part.count))
-        }
-        if padded {
-          vectors.append(iovec(iov_base: UnsafeMutableRawPointer(padPointer), iov_len: 1))
-        }
-        try writeAll(&vectors)
-      }
+    Wire.packHeader(Wire.Header(msgType: type.rawValue, seq: seq, flags: flags.rawValue, length: UInt32(length)), into: tx)
+    vectors.removeAll(keepingCapacity: true)
+    vectors.append(iovec(iov_base: tx, iov_len: Wire.headerSize))
+    for part in parts where part.count > 0 {
+      vectors.append(iovec(iov_base: UnsafeMutableRawPointer(mutating: part.baseAddress), iov_len: part.count))
     }
+    if padded {
+      vectors.append(iovec(iov_base: tx + Wire.headerSize, iov_len: 1))
+    }
+    try writeAll(&vectors)
   }
 
   public func send(_ type: Wire.Msg, seq: UInt32, data: [Data], flags: Wire.Flag = []) throws {

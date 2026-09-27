@@ -90,7 +90,8 @@ final class FrameStats: @unchecked Sendable {
     let sample = Sample(at: ProcessInfo.processInfo.systemUptime, totalUs: totalUs, gpuUs: gpuUs, queueUs: queueUs, sendUs: sendUs)
     lock.lock()
     samples.append(sample)
-    if samples.count > capacity {
+    // Trimmed in chunks: one removeFirst a frame would shift the window every frame.
+    if samples.count > capacity + capacity / 4 {
       samples.removeFirst(samples.count - capacity)
     }
     lock.unlock()

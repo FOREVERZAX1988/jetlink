@@ -126,6 +126,13 @@ final class PolicyQueues: FrameStaging {
   private let featQueue: RingQueue
   private let desireQueue: RingQueue
   private let layout: [String: Range<Int>]
+  /// Resolved once: the queues gathered into inputs, and the scalars copied
+  /// straight in, so a frame builds no lists.
+  private let gathers: [(queue: RingQueue, name: String, type: ElementType)]
+  private let scalars: [(name: String, offset: Int, count: Int, type: ElementType)]
+  private let desireType: ElementType
+  private let desireOffset: Int
+  private let prevFeatOffset: Int
 
   init(spec: ModelSpec, engine: any Engine) throws {
     self.spec = spec
@@ -134,10 +141,20 @@ final class PolicyQueues: FrameStaging {
     bigImgQueue = RingQueue(shape: spec.imgBufShape)
     featQueue = RingQueue(shape: spec.featQShape)
     desireQueue = RingQueue(shape: spec.desireQShape)
-    layout = Dictionary(uniqueKeysWithValues: spec.packedLayout.map { ($0.name, $0.range) })
+    let layout = Dictionary(uniqueKeysWithValues: spec.packedLayout.map { ($0.name, $0.range) })
+    self.layout = layout
     for name in ["img", "big_img", "features_buffer", "desire_pulse", "traffic_convention", "action_t"] where engine.inputs[name] == nil {
       throw StagingError.missingInput(name)
     }
+    let queues = [("img", imgQueue), ("big_img", bigImgQueue), ("features_buffer", featQueue)]
+    gathers = queues.map { ($1, $0, engine.inputs[$0]!.type) }
+    scalars = ["traffic_convention", "action_t"].map { name in
+      let io = engine.inputs[name]!
+      return (name, layout[name]!.lowerBound * 4, io.count, io.type)
+    }
+    desireType = engine.inputs["desire_pulse"]!.type
+    desireOffset = layout["desire"]!.lowerBound * 4
+    prevFeatOffset = layout["prev_feat"]!.lowerBound * 4
   }
 
   func reset() {
@@ -150,18 +167,16 @@ final class PolicyQueues: FrameStaging {
     // rather than the whole sampled window later
     imgQueue.push(u8: warped)
     bigImgQueue.push(u8: warped + half)
-    desireQueue.push(f32: packed + layout["desire"]!.lowerBound * 4)
-    featQueue.push(f32: packed + layout["prev_feat"]!.lowerBound * 4)
+    desireQueue.push(f32: packed + desireOffset)
+    featQueue.push(f32: packed + prevFeatOffset)
 
     let skip = spec.frameSkip
-    for (name, queue) in [("img", imgQueue), ("big_img", bigImgQueue), ("features_buffer", featQueue)] {
-      let io = engine.inputs[name]!
-      queue.gather(step: skip, into: engine.hostInput(name)!, as: io.type)
+    for gather in gathers {
+      gather.queue.gather(step: skip, into: engine.hostInput(gather.name)!, as: gather.type)
     }
-    sampleDesire(into: engine.hostInput("desire_pulse")!, as: engine.inputs["desire_pulse"]!.type)
-    for name in ["traffic_convention", "action_t"] {
-      let io = engine.inputs[name]!
-      Stage.store(f32: packed + layout[name]!.lowerBound * 4, count: io.count, into: engine.hostInput(name)!, as: io.type)
+    sampleDesire(into: engine.hostInput("desire_pulse")!, as: desireType)
+    for scalar in scalars {
+      Stage.store(f32: packed + scalar.offset, count: scalar.count, into: engine.hostInput(scalar.name)!, as: scalar.type)
     }
   }
 
