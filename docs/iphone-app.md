@@ -65,17 +65,19 @@ For building and testing without a phone, see [iPhone development](../ios/README
 
 ## Connect the comma
 
-One cable. The comma's USB gadget is composite: beside the link a Jetson or a
-Mac uses, it presents a USB network adapter, which iOS drives itself. The comma
-is `192.168.60.1` on that network and gives the phone an address by DHCP, and
-the app dials the comma the moment it has one. There is nothing to type, on
-either end. See [What the comma presents](transport.md#what-the-comma-presents).
+One cable. Set to iOS, the comma presents a USB network adapter, which iOS
+drives itself. The comma is `192.168.60.1` on that network and gives the phone
+an address by DHCP, and the app dials the comma the moment it has one. There is
+nothing to type. See [What the comma presents](transport.md#what-the-comma-presents).
 
-1. Open Jetlink. The first time, allow **Local Network** access when iOS asks.
-2. Plug a USB 3 hub into the iPhone.
-3. Join the hub's USB-A port to the comma's USB-C port with a USB 3 A-to-C data
+1. On the comma, parked, set **Accelerator Link** to **iOS** in the models
+   settings. USB is for a Jetson or a Mac; the comma rebuilds its USB gadget
+   when the setting moves between the two.
+2. Open Jetlink. The first time, allow **Local Network** access when iOS asks.
+3. Plug a USB 3 hub into the iPhone.
+4. Join the hub's USB-A port to the comma's USB-C port with a USB 3 A-to-C data
    cable.
-4. The title reads **Connected over USB 3** once the comma is on. Settings shows
+5. The title reads **Connected over USB 3** once the comma is on. Settings shows
    the phone's address on the cable under **Connection**. **USB 2** there, and
    on the Link tile, means the phone, the hub or the cable is not USB 3; the
    title turns orange. See [USB 3 matters](#usb-3-matters).

@@ -45,11 +45,10 @@ The first run installs dependencies and starts the server. Plug the comma into a
 adapter. Going through USB-A makes the Mac take the host role reliably; a plain
 C-to-C cable may not.
 
-The comma's gadget is composite: besides the Jetlink link it presents a USB
-network interface for an iPhone, so the Mac (and a Jetson or a Linux PC) also
-gets a network interface named `jetlink` with a `192.168.60.x` address and no
-gateway. It carries nothing on these platforms and can be ignored; see [what
-the comma presents](transport.md#what-the-comma-presents).
+With the comma's **Accelerator Link** set to USB, the comma presents only the
+Jetlink link: no network interface appears on the Mac, a Jetson or a Linux PC.
+The network interface an iPhone needs appears only when it is set to iOS; see
+[what the comma presents](transport.md#what-the-comma-presents).
 
 Runtime and storage:
 

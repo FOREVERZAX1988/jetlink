@@ -1,8 +1,10 @@
 Unreleased
 ==========
-* The comma's USB gadget is composite: the Jetlink link plus a USB network interface (CDC-NCM) for an iPhone over one cable
-  * A Jetson, Mac or Linux PC plugged into the comma also gets a `jetlink` network interface with a 192.168.60.x address and no gateway; it can be ignored
-  * `scripts/setup_gadget.sh --net` sets up the comma's end of that network after a bind, `--check` prints what the comma can present and the negotiated USB speed
+* The comma's Accelerator Link setting is Off, USB or iOS
+  * USB, for a Jetson or a Mac, is the plain gadget as before, lent to modeld at once
+  * iOS adds a USB network interface (CDC-NCM) for an iPhone over one cable: `scripts/setup_gadget.sh --ios`, and `--net` sets up the comma's end of that network after a bind
+  * `--check` prints what the comma can present and the negotiated USB speed
+  * The cable's DHCP pool is the whole subnet with 10 minute leases
   * The server finds the link by its vendor interface class, wherever the gadget puts it
   * `bench_link.py` and `verify_parity.py` take a phone's dial with `--listen`
 * iPhone
@@ -16,7 +18,7 @@ Unreleased
   * The Swift server opens the comma's USB link through macOS's own USB framework, finds the link by its interface class, and waits quietly while the comma has nothing serving the link
   * A Benchmark page for the Swift server, with the iPhone app's verdict
   * `jetlink-serve --usb` runs the Swift server as the USB host from a checkout
-* Both apps say whether the comma is on USB 3, USB 2 or TCP, and warn on USB 2 (about 10 ms more a frame)
+* Both apps say whether the comma is on USB 3, USB 2 or TCP, and warn on USB 2; on the iPhone the title turns orange
   * The comma's hello names its link and the speed its USB controller negotiated; the server's link event carries it as `medium`
 
 Jetlink v0.4.3

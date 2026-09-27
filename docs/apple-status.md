@@ -1,4 +1,4 @@
-# Jetlink on Apple devices: where the work stands (2026-09-27)
+# Jetlink on Apple devices: where the work stands (2026-09-27, evening)
 
 Pickup notes for the iPhone app, the Mac's Swift server and the comma-side
 changes behind them. Read this before touching any of the branches below.
@@ -87,20 +87,59 @@ voter and leaves USB PD alone (fork f216abb5d2). See the fork commits.
   2 KB. The Jetson recipe, the relay and the traps are in the git history of
   this page (`iphone-cable-link-status.md` at 687a5da).
 
+## Verified on the bench (2026-09-27, evening)
+
+Comma four on the fork's `iphone` branch, Cinque Terre V3, the Mac (M1 Pro) on
+a USB 3 C-to-C cable, parked live bench `jetlink_live_bench.sh`:
+
+| Setup | p50 | p99 | Over 50 ms | Drops |
+| --- | ---: | ---: | ---: | ---: |
+| Python server, USB | 37.69 ms | 48.49 ms | 8 | up to 2.27% |
+| Swift server (`jetlink-serve --usb`), USB | 35.61 ms | 38.18 ms | 1 | 0 |
+| Swift-only Mac app, USB, screen locked, App Nap fix | 36.4 ms | 40.9 ms | 3 | 0 |
+| Swift `--dial` over the comma's cable network (phone stand-in) | 40.4 ms | 49.5 ms | | |
+
+The Mac gate passed, so `mac-swift-only` is ready to merge and release. The
+cable row is a whole frame with every frame logged (1,636 frames): comma warp
+and readback 4.2 ms, link 8.4 ms (p99 11.2), the Mac's model 27.8 ms. Over USB
+the link is about 3.3 ms. The iPhone app ran in the iOS 26.5 simulator, dialed
+the comma over the Mac's cable interface and showed the link; it has not run
+on a phone.
+
+Found and fixed on the way (fork `iphone`, jetlink `iphone`):
+- the comma guessed whether a phone was on the port, holding every Jetson or
+  Mac reconnect 5 to 10 s for a dial; the comma's **Accelerator Link** is now
+  Off, USB or iOS, USB is the plain gadget lent at once, and iOS never lends
+  the endpoint files (fork a40ec1e0da, jetlink 5ab13ec);
+- a borrower kept its first loan for the drive, so a phone that dialed later
+  was never used; the loan now asks again every attempt;
+- a run with nothing to do recorded "the far end sleeps"; it now keeps what
+  an earlier run learned, and an iOS gadget never goes dormant;
+- after a link loss the first join attempt reused the retired model's closed
+  client (EBADF, 5 s lost); a closed client is dead and is replaced;
+- over the cable modeld hands the socket the warp's GPU mapping instead of a
+  host copy: 0.6 ms off the comma's p50 and 2.2 ms off its p99 (two A/B pairs);
+- the comma's kernel gives the host a new MAC every bind, which ran the 8
+  address DHCP pool dry; it is the whole subnet now, with 10 minute leases;
+- the Swift USB read landed in a copy of the buffer (`NSMutableData(bytesNoCopy:)`
+  copies);
+- the Mac app's in-process server was throttled by App Nap behind a locked
+  screen (p50 75 ms, 45% drops); it holds a latency-critical activity while a
+  comma is connected.
+
+Traps: macOS names a new USB network interface only while the screen is
+unlocked, and the comma's gadget brings a new MAC every bind, so keep the Mac
+awake (`caffeinate -d -u`). Little Snitch held `jetlink-serve`'s traffic on
+the cable behind prompts nobody answered: the handshake worked and no data
+moved. Each rebuilt binary can prompt again.
+
 ## Not verified
 
-1. **The Swift server as the Mac's USB host has never met a comma.** Nothing was
-   plugged into the Mac. Unknowns: IOUSBHost opening the vendor interface of
-   the composite gadget, what an unserved gadget's first read returns on macOS,
-   re-enumeration during a handover, and the latency.
-2. **The Mac gate for step 4.** Python server against Swift server over USB,
-   parked, `jetlink_repo/scripts/comma/jetlink_live_bench.sh 180` each, same
-   cable and model. Pass: Swift's p99 no worse and no frame dropped. The
-   Python side has a number already: 36.9 / 45.7 ms p50 / p99 on a USB 3
-   C-to-C cable ([mac-performance.md](mac-performance.md#the-python-server-and-the-swift-server)). Then merge
-   `mac-swift-only` and release it as its own version.
-3. **Nothing has run on an iPhone.**
-4. **C-to-C with an iPhone.** On the other session's Mac bench (comma four,
+1. **Nothing has run on an iPhone.** See [Timing the model on an
+   iPhone](#timing-the-model-on-an-iphone) for the procedure.
+2. **USB 2 on the cable.** The cost at USB 2 is an estimate (4 to 6 ms a
+   frame). Measure it with the Mac stand-in on a USB 2 cable.
+3. **C-to-C with an iPhone.** On the other session's Mac bench (comma four,
    M1 Pro, the v0.4.3 app) the comma came up as the device on every plug with
    a USB 3 C-to-C cable, at 5 Gb/s. With the comma's Try.SNK forced off it came
    up as the host on 2 of 7 plugs, and the hold made the Mac the host about
@@ -108,13 +147,35 @@ voter and leaves USB PD alone (fork f216abb5d2). See the fork commits.
    USB 2 cable cost about 10 ms a frame and 0.88% dropped frames. Nobody has
    tried an iPhone. Watch the comma's `/sys/class/usbpd/usbpd0/current_pr` and
    `current_dr` and the owner log while plugging in.
-5. Latency parity over the cable link on a Linux host (+8 ms a frame).
-6. One odd session: right after the Debug app built the engine itself, with
+4. One odd session: right after the Debug app built the engine itself, with
    about 2 GB of disk free, it served 78 ms a frame until the app restarted;
    the reload served 30.7 ms. Not reproduced.
-7. The hello's link info has only run in tests. The comma sends it once its
-   `jetlink_repo` is at this branch (the fork's `iphone` pin); until then the
-   apps show the server's own view of the link.
+5. The owner's sleep record is global, not per host: a phone's or a Mac's
+   "stays up" outlives it, so a Jetson that sleeps, plugged in later in the
+   same boot with its engine ready, stays awake parked.
+
+## Timing the model on an iPhone
+
+The phone's model time (about 18 ms on an iPhone 17 Pro in PR #9) is the
+largest term in a frame. On the phone, charging on the hub, Low Power Mode off:
+
+1. **Benchmark tab**, 1 minute then 10 minutes (or launch with `-benchmark N`).
+   Record p50, p99, max, frames over 50 ms, the first and last window's p99,
+   and the thermal state at start and end.
+2. **Live bench.** Connect the comma, then on it, parked:
+   `OUTPUT=/data/tmp/phone-<setting>-<n> jetlink_repo/scripts/comma/jetlink_live_bench.sh 180`.
+   `summary.json`'s `big` has frames, `exec_p50_p99_p999_max_ms`, `over_50ms`,
+   `max_drop_pct`. For a per-frame split (warp, readback, send, reply, server
+   time) set `SLOW_FRAME = 0.0` in the fork's `model_state.py` for the run and
+   restore it after.
+3. **Settings to compare**, alternating A, B, A, B: Neural Engine (whole),
+   Neural Engine + GPU, GPU; CPU keep-warm on and off; GPU keep-alive on and
+   off. Then `verify_parity.py` on the winner.
+4. **Untried, and worth a look:** the whole model on `CPUAndNeuralEngine`
+   instead of `ALL` (needs its own device tag and a 32-frame parity check);
+   CoreML's compute plan, to see which ops leave the Neural Engine;
+   `SpecializationStrategy` Default against FastPrediction on the Neural Engine;
+   a back-to-back benchmark, to price the idle between frames.
 
 ## The simplify pass (2026-09-27, afternoon)
 
@@ -145,9 +206,9 @@ pinned), and moving the model output straight into the USB send buffer.
 
 ## Bench state after this session
 
-Untouched: the comma is on `danger-unstable` with `DisableUpdates=0` (it will
-pick up the USB-C port hold, which landed on `zoom/danger-unstable`), and the
-Jetson runs its normal service. Nothing is cabled to the Mac.
+The comma is on the fork's `iphone` branch with `DisableUpdates=1`, for more
+bench work; restore it with step 5 below. The Jetson runs its normal service.
+The comma is on the Mac's USB 3 C-to-C cable.
 
 ## How to bench the Mac over USB
 

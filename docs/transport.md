@@ -19,19 +19,23 @@ serve Jetlink and chestnut at the same time.
 
 ### What the comma presents
 
-The comma's USB gadget is composite. Interface 0 is the Jetlink link, a
-vendor-specific interface with one bulk endpoint pair, which the Jetson, Mac
-and Linux PC servers open through libusb. After it comes a CDC-NCM network
-interface (CDC-ECM on a kernel without NCM), for an iPhone: iOS gives apps no
-access to a vendor USB device, but drives a USB network adapter itself. The
-comma is `192.168.60.1` on that network and runs a DHCP server for it, so the
-phone gets a `192.168.60.x` address with no gateway and no DNS, keeps its own
-route to the internet over Wi-Fi, and dials the comma at `192.168.60.1:5599`.
+The comma presents one of two USB gadgets, chosen by its **Accelerator Link**
+setting (on the comma, in the models settings):
 
-A Jetson, Mac or Linux PC plugged into the comma also grows a network interface
-(named after the gadget, `jetlink`, or `usb0`/`enx...` on Linux) with a
-`192.168.60.x` lease. It carries no default route and needs no setup; ignore
-it. The link itself is still the vendor interface.
+- **USB**, for a Jetson, a Mac or a Linux PC: the plain gadget, one
+  vendor-specific interface with one bulk endpoint pair, which the servers open
+  through libusb (IOUSBHost on the Mac). There is no network interface.
+- **iOS**, for an iPhone: a composite gadget. Interface 0 is the same vendor
+  interface, and after it comes a CDC-NCM network interface (CDC-ECM on a
+  kernel without NCM), because iOS gives apps no access to a vendor USB device
+  but drives a USB network adapter itself. The comma is `192.168.60.1` on that
+  network and runs a DHCP server for it, so the phone gets a `192.168.60.x`
+  address with no gateway and no DNS, keeps its own route to the internet over
+  Wi-Fi, and dials the comma at `192.168.60.1:5599`. The vendor interface is
+  never used on iOS.
+
+Moving the setting between USB and iOS rebuilds the gadget, which is an unplug,
+so the comma applies it once the car is parked.
 
 ### Bus speed
 

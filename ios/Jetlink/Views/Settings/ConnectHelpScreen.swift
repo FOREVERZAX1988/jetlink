@@ -7,10 +7,11 @@ struct ConnectHelpScreen: View {
   var body: some View {
     List {
       Section {
-        step(1, "Open Jetlink first.", "The phone dials the comma as soon as the cable is in. An app opened afterwards dials when it opens.")
-        step(2, "Plug a USB 3 hub into the iPhone.", "One with power passthrough keeps the phone charged; the model runs 20 times a second.")
-        step(3, "Join the hub to the comma with a USB 3 A-to-C cable.", "The A end goes in the hub, the C end in the comma.")
-        step(4, "Wait for Connected over USB.", "The comma gives the phone an address over the cable. There is nothing to type.")
+        step(1, "Set the comma to iOS.", "On the comma, parked: Accelerator Link, iOS. USB is for a Jetson or a Mac.")
+        step(2, "Open Jetlink first.", "The phone dials the comma as soon as the cable is in. An app opened afterwards dials when it opens.")
+        step(3, "Plug a USB 3 hub into the iPhone.", "One with power passthrough keeps the phone charged; the model runs 20 times a second.")
+        step(4, "Join the hub to the comma with a USB 3 A-to-C cable.", "The A end goes in the hub, the C end in the comma.")
+        step(5, "Wait for Connected over USB.", "The comma gives the phone an address over the cable. There is nothing to type.")
       } header: {
         Text("One Cable")
       } footer: {

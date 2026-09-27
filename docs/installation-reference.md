@@ -66,19 +66,21 @@ sudo scripts/setup_gadget.sh
 
 The script creates the gadget configuration. `jetlinkd` opens `ep0`, writes
 FunctionFS descriptors, and binds the USB device controller. The setup script
-cannot bind the controller before those descriptors exist. The gadget is
-composite; the network part (`--net`) is repeated after each bind, because the
-`usb0` interface only exists from the first bind on. `--check` prints what the
-kernel can present and the negotiated bus speed.
+cannot bind the controller before those descriptors exist. With `--ios` (the
+comma's Accelerator Link set to iOS) the gadget is composite, with a network
+interface for an iPhone; its network part (`--net`) is repeated after each bind,
+because the `usb0` interface only exists from the first bind on. Without it the
+gadget is the vendor interface alone. `--check` prints what the kernel can
+present and the negotiated bus speed.
 
 | Descriptor | Value |
 | --- | --- |
 | idVendor:idProduct | `1209:0001` (pid.codes test allocation) |
-| bcdDevice | `0x0101` (bumped from `0x0100` when the gadget became composite, so hosts refetch cached descriptors) |
-| bDeviceClass/SubClass/Protocol | `0xEF/0x02/0x01`, Miscellaneous with interface association (composite) |
+| bcdDevice | `0x0100`; `0x0101` for iOS, so hosts refetch cached descriptors |
+| bDeviceClass/SubClass/Protocol | `0x00/0x00/0x00`, class per interface; for iOS `0xEF/0x02/0x01`, Miscellaneous with interface association (composite) |
 | Interface 0 | `0xFF/0xFF/0xFF` vendor specific, one bulk IN and one bulk OUT endpoint: the Jetlink link |
-| Interfaces 1 and 2 | CDC-NCM control and data (CDC-ECM where the kernel has no NCM): the network for an iPhone |
-| Network | comma `192.168.60.1/24`; DHCP `192.168.60.2` to `.254` with 10 minute leases from dnsmasq on `usb0`, no router or DNS options |
+| Interfaces 1 and 2 (iOS only) | CDC-NCM control and data (CDC-ECM where the kernel has no NCM): the network for an iPhone |
+| Network (iOS only) | comma `192.168.60.1/24`; DHCP `192.168.60.2` to `.254` with 10 minute leases from dnsmasq on `usb0`, no router or DNS options |
 
 On the Jetson, the installer sets up the server as a service; for a manual run,
 from a checkout:
