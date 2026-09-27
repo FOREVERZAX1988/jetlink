@@ -168,6 +168,8 @@ public final class ServerController: @unchecked Sendable {
       publish(.stats(stats))
     case .benchmark(let event):
       publish(.benchmark(event))
+    case .shutdownRequested(let reason):
+      publish(.shutdownRequest(ShutdownRequestEvent(reason: reason)))
     }
   }
 

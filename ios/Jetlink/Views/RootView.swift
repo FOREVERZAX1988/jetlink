@@ -12,6 +12,7 @@ struct RootView: View {
 
   @Environment(AppModel.self) private var app
   @State private var tab: Tab = RootView.initialTab
+  @State private var shutdownAlert = false
 
   var body: some View {
     TabView(selection: $tab) {
@@ -32,6 +33,15 @@ struct RootView: View {
     .tabViewBottomAccessory(isEnabled: tab != .status) {
       StatusAccessory(state: app.status)
         .onTapGesture { tab = .status }
+    }
+    .onChange(of: app.server.shutdownRequests) { _, count in
+      shutdownAlert = count > 0
+    }
+    .alert("The comma asked to shut down", isPresented: $shutdownAlert) {
+      Button("OK") {}
+    } message: {
+      let reason = app.server.shutdownRequest?.reason ?? ""
+      Text("Jetlink cannot power the phone off and told the comma so\(reason.isEmpty ? "" : " (\(reason))"). You can close Jetlink.")
     }
   }
 

@@ -366,8 +366,12 @@ final class Session: @unchecked Sendable {
   }
 
   private func onShutdown(_ message: Message) throws {
-    // A phone does not power itself off for the comma; say so rather than pretend.
+    // A phone does not power itself off for the comma; say so rather than
+    // pretend, and let the app tell the person the comma asked.
+    let reason = (JSONLine.decode(message.payload)?["reason"] as? String) ?? ""
+    log.warning("shutdown requested by the client: \(reason.isEmpty ? "no reason given" : reason)")
     try sendJSON(.shutdownResp, seq: message.seq, ["ok": false, "detail": "this server cannot power its device off"])
+    host.emit(.shutdownRequested(reason: reason))
   }
 
   private func onState(_ message: Message) throws {

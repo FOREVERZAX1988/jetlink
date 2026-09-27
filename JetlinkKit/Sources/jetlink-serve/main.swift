@@ -122,6 +122,7 @@ do {
     case .link(let link): line("link", encode(link))
     case .stats(let stats): line("stats", encode(stats))
     case .benchmark(let benchmark): line("benchmark", encode(benchmark))
+    case .shutdownRequested(let reason): line("shutdown_request", ["reason": reason])
     }
   }
   line("server", server.backend.describe())

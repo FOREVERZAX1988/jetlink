@@ -24,6 +24,10 @@ final class PhoneServer: ServerControlling {
   private(set) var lastFailure: String?
   /// The benchmark running or last run, if any.
   private(set) var benchmark: BenchmarkEvent?
+  /// The comma's last request to power the phone off, which the server
+  /// refused, and how many there have been, so each one is shown.
+  private(set) var shutdownRequest: ShutdownRequestEvent?
+  private(set) var shutdownRequests = 0
   let modelEvents: AsyncStream<ControlEvent>
 
   /// How far back the dashboard's headline reaches.
@@ -262,6 +266,9 @@ final class PhoneServer: ServerControlling {
       statsHistory = StatsSample.appending(value, to: statsHistory)
     case .benchmark(let value):
       benchmark = value
+    case .shutdownRequest(let value):
+      shutdownRequest = value
+      shutdownRequests += 1
     case .hello, .reply, .unknown:
       break
     case .inventory, .catalog, .download, .importEvent:

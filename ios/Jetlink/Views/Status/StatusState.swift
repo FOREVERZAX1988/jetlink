@@ -31,6 +31,8 @@ struct StatusState: Equatable {
   var catalogUnavailable = false
   /// iOS refuses Jetlink the local network, so the comma cannot connect.
   var localNetworkDenied = false
+  /// The scene is not in front while serving: iOS will suspend the app.
+  var needsForeground = false
 
   var isServingFrames: Bool {
     link.state == .connected && engine.state == .ready && recent != nil

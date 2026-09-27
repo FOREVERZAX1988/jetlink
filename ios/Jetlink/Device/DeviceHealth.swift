@@ -72,6 +72,28 @@ struct DeviceHealth: Equatable, Sendable {
   var batteryLevel: Double?
   var power: Power = .unknown
   var lowPowerMode = false
+  /// What the app may still allocate before iOS ends it, in bytes; nil
+  /// where the system does not say. A model and its CoreML compile take
+  /// most of the phone's share.
+  var availableMemory: Int64?
+
+  static let lowMemory: Int64 = 1 << 30
+
+  /// "2.4", in GB, beside the unit; "--" when unknown.
+  var memoryValue: String {
+    guard let availableMemory else { return "--" }
+    return (Double(availableMemory) / 1e9).formatted(.number.precision(.fractionLength(1)))
+  }
+
+  var memoryNote: String? {
+    guard let availableMemory else { return nil }
+    return availableMemory < DeviceHealth.lowMemory ? "Low" : "Free"
+  }
+
+  var memoryTone: Color {
+    guard let availableMemory else { return .secondary }
+    return availableMemory < DeviceHealth.lowMemory ? .orange : .secondary
+  }
 
   /// "82", the unit set beside it; "--" when unknown.
   var batteryValue: String {

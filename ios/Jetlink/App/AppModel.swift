@@ -12,6 +12,9 @@ final class AppModel {
   let device: DeviceMonitor
   let network: NetworkInterfaces
   let localNetwork: LocalNetworkAccess
+  /// Whether the scene is in front. A suspended app serves nothing, so the
+  /// Status tab says so as soon as the scene is not active.
+  var sceneActive = true
   @ObservationIgnored private var launched = false
 
   init() {
@@ -24,6 +27,7 @@ final class AppModel {
     self.device = DeviceMonitor()
     self.network = network
     self.localNetwork = LocalNetworkAccess()
+    device.warn = { [weak server] in server?.note(.warning, $0) }
   }
 
   /// The server starts with the app: an iPhone app has nothing else to do,
@@ -51,6 +55,7 @@ final class AppModel {
     state.cableAddress = network.cable?.address
     state.linkKind = server.linkKind
     state.health = device.health
+    state.needsForeground = !sceneActive && server.runState == .serving
     state.defaultModel = models.rows.first { $0.isDefault }
     state.hasPreparedModel = !(models.inventory?.artifacts.filter(\.current).isEmpty ?? true)
     state.catalogUnavailable = models.catalog?.error != nil && (models.catalog?.models.isEmpty ?? true)

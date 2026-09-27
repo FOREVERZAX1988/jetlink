@@ -522,6 +522,17 @@ public struct BenchmarkEvent: Codable, Sendable, Equatable {
   public var isFinished: Bool { state != "running" }
 }
 
+/// The comma asked the server to power its device off. The Swift server
+/// answers no (a phone does not power itself off for the comma) and tells
+/// the app, which tells the person.
+public struct ShutdownRequestEvent: Codable, Sendable, Equatable {
+  public let reason: String
+
+  public init(reason: String) {
+    self.reason = reason
+  }
+}
+
 public enum ControlEvent: Sendable, Equatable {
   case hello(HelloEvent)
   case server(ServerEvent)
@@ -533,6 +544,7 @@ public enum ControlEvent: Sendable, Equatable {
   case download(DownloadEvent)
   case importEvent(ImportEvent)
   case benchmark(BenchmarkEvent)
+  case shutdownRequest(ShutdownRequestEvent)
   case reply(ReplyEvent)
   case unknown(name: String)
 
@@ -560,6 +572,7 @@ public enum ControlEvent: Sendable, Equatable {
     case "download": self = .download(try decoder.decode(DownloadEvent.self, from: jsonLine))
     case "import": self = .importEvent(try decoder.decode(ImportEvent.self, from: jsonLine))
     case "benchmark": self = .benchmark(try decoder.decode(BenchmarkEvent.self, from: jsonLine))
+    case "shutdown_request": self = .shutdownRequest(try decoder.decode(ShutdownRequestEvent.self, from: jsonLine))
     case "reply": self = .reply(try decoder.decode(ReplyEvent.self, from: jsonLine))
     default: self = .unknown(name: name)
     }

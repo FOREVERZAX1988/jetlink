@@ -33,6 +33,9 @@ struct StatusContent: View {
 
   @ViewBuilder
   private var layout: some View {
+    if state.needsForeground {
+      foregroundBanner
+    }
     if landscape {
       HStack(alignment: .top, spacing: StatusContent.spacing) {
         HeroCard(state: state, compact: true, actions: actions)
@@ -61,6 +64,26 @@ struct StatusContent: View {
         phone
       }
     }
+  }
+
+  /// Shown while the scene is not active, so it is what the person sees
+  /// when they come back to a phone iOS was about to suspend.
+  private var foregroundBanner: some View {
+    Label {
+      VStack(alignment: .leading, spacing: 2) {
+        Text("Jetlink must stay on screen")
+          .font(.subheadline.weight(.semibold))
+        Text("iOS suspends an app that is not in front, and the comma loses the big model.")
+          .font(.footnote)
+      }
+    } icon: {
+      Image(systemName: "exclamationmark.triangle.fill")
+    }
+    .foregroundStyle(.white)
+    .padding(14)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(.orange, in: .rect(cornerRadius: cardCornerRadius, style: .continuous))
+    .padding(.top, 8)
   }
 
   private func latency(_ recent: StatsEvent, compact: Bool = false) -> some View {
@@ -100,6 +123,16 @@ struct StatusContent: View {
           title: "Battery", systemImage: health.batterySymbol, tint: .green,
           value: health.batteryValue, unit: health.batteryLevel == nil ? nil : "%",
           note: health.powerText, noteTone: health.batteryTone)
+      }
+      GridRow {
+        MetricTile(
+          title: "Memory", systemImage: "memorychip", tint: .indigo,
+          value: health.memoryValue, unit: health.availableMemory == nil ? nil : "GB",
+          note: health.memoryNote, noteTone: health.memoryTone)
+        MetricTile(
+          title: "Link", systemImage: state.linkKind == nil ? "cable.connector.slash" : "cable.connector", tint: .teal,
+          value: state.linkKind?.title ?? "None",
+          note: state.linkKind == nil ? (state.cableAddress == nil ? "Waiting" : "Dialing") : "Connected")
       }
     }
   }

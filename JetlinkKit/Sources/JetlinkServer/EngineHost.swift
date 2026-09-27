@@ -67,6 +67,8 @@ public enum HostEvent: Sendable {
   case stats(StatsEvent)
   /// A benchmark's progress and its report.
   case benchmark(BenchmarkEvent)
+  /// The comma asked for a power-off, which this server refused.
+  case shutdownRequested(reason: String)
 }
 
 /// A rolling window of served frames, for the stats event once a second.

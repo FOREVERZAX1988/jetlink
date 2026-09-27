@@ -227,6 +227,12 @@ struct ControlProtocolTests {
     #expect(decoded.report?.text.contains("over 35 ms: 3") == true)
   }
 
+  @Test func decodesShutdownRequest() throws {
+    let line = Data(#"{"event":"shutdown_request","t":1,"reason":"ignition off"}"#.utf8)
+    guard case .shutdownRequest(let request) = try ControlEvent(jsonLine: line) else { throw TestFailure("not a shutdown request") }
+    #expect(request.reason == "ignition off")
+  }
+
   @Test func decodesUnknownEvent() throws {
     guard case .unknown(let name) = try ControlEvent(jsonLine: events()[15]) else {
       Issue.record("expected an unknown event")
