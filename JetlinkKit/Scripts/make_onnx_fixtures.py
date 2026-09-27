@@ -7,7 +7,7 @@ See the LICENSE file in the root directory for more details.
 Writes the small ONNX graphs JetlinkONNX's tests read, and what the Python
 preparation makes of them, into Tests/JetlinkONNXTests/Fixtures/.
 
-    PYTHONPATH=. ../jetlink/.venv/bin/python JetlinkKit/Scripts/make_onnx_fixtures.py
+    PYTHONPATH=. .venv/bin/python JetlinkKit/Scripts/make_onnx_fixtures.py [--out DIR]
 
 from the jetlink checkout whose preparation the fixtures should pin (the
 script imports jetlink.onnx_patch, the ORT backend and tests.test_ane_whole).
@@ -40,6 +40,7 @@ The Swift tests hold the Swift preparation to those, byte for byte.
 """
 from __future__ import annotations
 
+import argparse
 import codecs
 import json
 import pickle
@@ -433,16 +434,16 @@ def python_prepare(path: Path, layout: str):
   return counts, out
 
 
-def main() -> None:
-  FIXTURES.mkdir(parents=True, exist_ok=True)
-  for old in FIXTURES.glob('*.onnx'):
+def generate(fixtures: Path = FIXTURES, echo: bool = False) -> None:
+  fixtures.mkdir(parents=True, exist_ok=True)
+  for old in fixtures.glob('*.onnx'):
     old.unlink()
   models = {'queued': queued(), 'stateful': stateful(), 'nocut': nocut(), 'noshape': noshape(),
             'unrecorded': unrecorded(), 'variants': variants(), 'notype': notype(), 'noentry': noentry(),
             **errors()}
   results = {}
   for name, model in models.items():
-    path = FIXTURES / f'{name}.onnx'
+    path = fixtures / f'{name}.onnx'
     onnx.save(model, str(path))
     for layout in LAYOUTS:
       try:
@@ -453,12 +454,19 @@ def main() -> None:
       entry = dict(counts)
       entry['parts'] = {}
       for part, m in parts.items():
-        onnx.save(m, str(FIXTURES / f'{name}.{layout}.{part}.expected.onnx'))
+        onnx.save(m, str(fixtures / f'{name}.{layout}.{part}.expected.onnx'))
         entry['parts'][part] = sum(len(t.raw_data) for t in m.graph.initializer)
       results[f'{name}.{layout}'] = entry
-  (FIXTURES / 'python.json').write_text(json.dumps(results, indent=2, sort_keys=True) + '\n')
-  for k, v in results.items():
-    print(f'{k:36} {v.get("error") or v}')
+  (fixtures / 'python.json').write_text(json.dumps(results, indent=2, sort_keys=True) + '\n')
+  if echo:
+    for k, v in results.items():
+      print(f'{k:36} {v.get("error") or v}')
+
+
+def main() -> None:
+  parser = argparse.ArgumentParser(description='The ONNX graphs JetlinkONNX tests read, and what Python prepares from them.')
+  parser.add_argument('--out', type=Path, default=FIXTURES, help="where to write (default: JetlinkONNXTests' Fixtures)")
+  generate(parser.parse_args().out, echo=True)
 
 
 if __name__ == '__main__':
