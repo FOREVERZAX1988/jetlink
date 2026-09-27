@@ -17,6 +17,31 @@ Use the USB-A connection shown above. The Jetson's USB-C port and a direct
 C-to-C cable on a Mac may not connect correctly. The comma's USB-C port cannot
 serve Jetlink and chestnut at the same time.
 
+### What the comma presents
+
+The comma's USB gadget is composite. Interface 0 is the Jetlink link, a
+vendor-specific interface with one bulk endpoint pair, which the Jetson, Mac
+and Linux PC servers open through libusb. After it comes a CDC-NCM network
+interface (CDC-ECM on a kernel without NCM), for an iPhone: iOS gives apps no
+access to a vendor USB device, but drives a USB network adapter itself. The
+comma is `192.168.60.1` on that network and runs a DHCP server for it, so the
+phone gets a `192.168.60.x` address with no gateway and no DNS, keeps its own
+route to the internet over Wi-Fi, and dials the comma at `192.168.60.1:5599`.
+
+A Jetson, Mac or Linux PC plugged into the comma also grows a network interface
+(named after the gadget, `jetlink`, or `usb0`/`enx...` on Linux) with a
+`192.168.60.x` lease. It carries no default route and needs no setup; ignore
+it. The link itself is still the vendor interface.
+
+### Bus speed
+
+Latency depends on the link enumerating at USB 3 (SuperSpeed). A frame is about
+460 KB: around 1 ms on USB 3 and around 11 ms on USB 2. That is why the cable
+must be a USB 3 A-to-C data cable, and why a phone goes through a USB 3 hub.
+On the comma, the negotiated speed is in `/sys/class/udc/*/current_speed`:
+`super-speed` is USB 3 and `high-speed` is USB 2. `sudo scripts/setup_gadget.sh
+--check` prints it along with what the gadget can present.
+
 ## Power requirements
 
 Use separate power for the Jetson and comma. The Jetson's supply and cable

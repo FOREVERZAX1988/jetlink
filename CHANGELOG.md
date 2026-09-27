@@ -1,3 +1,11 @@
+Unreleased
+==========
+* The comma's USB gadget is composite: the Jetlink link plus a USB network interface (CDC-NCM) for an iPhone over one cable
+  * A Jetson, Mac or Linux PC plugged into the comma also gets a `jetlink` network interface with a 192.168.60.x address and no gateway; it can be ignored
+  * `scripts/setup_gadget.sh --net` sets up the comma's end of that network after a bind, `--check` prints what the comma can present and the negotiated USB speed
+  * The server finds the link by its vendor interface class, wherever the gadget puts it
+  * `bench_link.py` and `verify_parity.py` take a phone's dial with `--listen`
+
 Jetlink v0.4.3
 ==============
 * Mac

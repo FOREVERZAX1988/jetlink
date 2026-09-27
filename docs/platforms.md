@@ -45,6 +45,12 @@ The first run installs dependencies and starts the server. Plug the comma into a
 adapter. Going through USB-A makes the Mac take the host role reliably; a plain
 C-to-C cable may not.
 
+The comma's gadget is composite: besides the Jetlink link it presents a USB
+network interface for an iPhone, so the Mac (and a Jetson or a Linux PC) also
+gets a network interface named `jetlink` with a `192.168.60.x` address and no
+gateway. It carries nothing on these platforms and can be ignored; see [what
+the comma presents](transport.md#what-the-comma-presents).
+
 Runtime and storage:
 
 - CoreML takes **about 20 seconds** to prepare the model the first time, and
