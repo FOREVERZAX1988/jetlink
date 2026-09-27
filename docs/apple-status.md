@@ -34,6 +34,13 @@ It replaces `iphone-cable-link-status.md`.
   ane-whole), `JetlinkRegistry`, `JetlinkUI` (the frame budget, the benchmark
   verdict and windows, the log colours).
 
+**The link's medium**: the comma's hello names its link (usb, cable or tcp)
+and the speed its USB controller negotiated (`Transport.link_info`); both
+servers put it in the link event as `medium`, and both apps show **USB 3**,
+**USB 2** or **TCP**, with USB 2 as a warning. Without the new comma code
+the server falls back to what it sees itself: the bus speed over USB, TCP
+otherwise, and USB of unknown speed for a phone's cable.
+
 **Mac app** (`macos/`, on `iphone`): Settings > Server picks Python (the
 default) or Swift. Swift runs `EmbeddedServer` in process over USB or TCP, logs
 in the Python server's format to the Logs view and `server.log`, and has a
@@ -88,18 +95,40 @@ voter and leaves USB PD alone (fork f216abb5d2). See the fork commits.
    re-enumeration during a handover, and the latency.
 2. **The Mac gate for step 4.** Python server against Swift server over USB,
    parked, `jetlink_repo/scripts/comma/jetlink_live_bench.sh 180` each, same
-   cable and model. Pass: Swift's p99 no worse and no frame dropped. Then merge
+   cable and model. Pass: Swift's p99 no worse and no frame dropped. The
+   Python side has a number already: 36.9 / 45.7 ms p50 / p99 on a USB 3
+   C-to-C cable ([mac-performance.md](mac-performance.md#the-python-server-and-the-swift-server)). Then merge
    `mac-swift-only` and release it as its own version.
 3. **Nothing has run on an iPhone.**
-4. **C-to-C with an iPhone.** The other session's Mac bench (comma four, M1 Pro)
-   found the comma comes up as the device on every plug with a USB 3 C-to-C
-   cable, at 5 Gb/s, so the hold never fired; three cables whose e-markers say
-   USB 2 only stayed at 480 Mb/s. Nobody has tried an iPhone. Watch the comma's `/sys/class/usbpd/usbpd0/current_pr` and
+4. **C-to-C with an iPhone.** On the other session's Mac bench (comma four,
+   M1 Pro, the v0.4.3 app) the comma came up as the device on every plug with
+   a USB 3 C-to-C cable, at 5 Gb/s. With the comma's Try.SNK forced off it came
+   up as the host on 2 of 7 plugs, and the hold made the Mac the host about
+   4.5 s after the plug, at super speed (p50 36.8 / p99 45.9 ms, no drops). A
+   USB 2 cable cost about 10 ms a frame and 0.88% dropped frames. Nobody has
+   tried an iPhone. Watch the comma's `/sys/class/usbpd/usbpd0/current_pr` and
    `current_dr` and the owner log while plugging in.
 5. Latency parity over the cable link on a Linux host (+8 ms a frame).
 6. One odd session: right after the Debug app built the engine itself, with
    about 2 GB of disk free, it served 78 ms a frame until the app restarted;
    the reload served 30.7 ms. Not reproduced.
+7. The hello's link info has only run in tests. The comma sends it once its
+   `jetlink_repo` is at this branch (the fork's `iphone` pin); until then the
+   apps show the server's own view of the link.
+
+## The simplify pass (2026-09-27, afternoon)
+
+A review for reuse, simplification, efficiency and altitude, and its fixes:
+TCP and USB share one frame reader; the session announces its link once and
+owns the medium; the USB gadget reads the pinned IDs and a steady-state read
+is one synchronous request; the reply is written after the host's lock is
+released; the drain after a desync lives in the USB transport; send helpers,
+test clients and test helpers exist once; the registry reads its catalog
+once per inventory; log lines reach the Logs view in order through one
+stream; the Mac starts its server off the main thread. Skipped, with the
+reason in the session: a module split for the Linux build, one structured
+log format for both apps, larger USB reads (the Python host's read sizes are
+pinned), and moving the model output straight into the USB send buffer.
 
 ## Two things learned the hard way
 

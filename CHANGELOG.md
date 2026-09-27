@@ -19,6 +19,8 @@ Unreleased
   * A Benchmark tab: one or ten minutes at the comma's pace, a verdict, the run in ten-second windows with the phone's temperature, and the `bench_link.py` and `verify_parity.py` commands filled in
   * A Logs screen, a Memory tile, log lines for memory pressure, heat and the app going to the background, a banner while the app is not on screen, and an alert when the comma asks to shut down
   * Signing from a git-ignored `Local.xcconfig`, Release when run from Xcode, and a help page on connecting the comma
+* Both apps say whether the comma is on USB 3, USB 2 or TCP, and warn on USB 2 (about 10 ms more a frame)
+  * The comma's hello names its link and the speed its USB controller negotiated; the server's link event carries it as `medium`
 
 Jetlink v0.4.3
 ==============

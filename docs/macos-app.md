@@ -38,7 +38,11 @@ device within a few seconds.
 
 The Status screen then shows:
 
-- **Connected over USB** on the Link row.
+- **Connected over USB 3** on the Link row. It names the link: **USB 3**,
+  **USB 2**, or **TCP** with the client's address. **USB 2** is shown as a
+  warning: a frame takes about 10 ms longer to cross, which on the bench cost
+  close to 1% of frames, near where the comma soft-disables. Use a USB 3 cable
+  and a USB 3 port. The menu bar says the same.
 - **Rate**, the frames per second the comma is sending. It should settle near
   20 per second.
 - **Slow frames**, the number of frames over 60 ms in the last second. This should stay at zero. A consistently higher count means the Mac is too slow, and the comma may drop back to its small model.
