@@ -27,12 +27,21 @@ CABLE_ADDRESS = '192.168.60.1'
 
 
 class TcpTransport(StreamTransport):
-  medium = 'tcp'
   def __init__(self, sock: socket.socket):
     super().__init__()
     self.sock = sock
     self._timeout: float | None = -1.0  # force the first settimeout
     _tune(sock)
+
+  @property
+  def medium(self) -> str:
+    """What a server names this link before a hello says more: the comma's
+    cable address at the far end is a phone's USB cable, of unknown speed."""
+    try:
+      peer = self.sock.getpeername()[0]
+    except (OSError, IndexError, TypeError, AttributeError):
+      return 'tcp'
+    return 'usb' if peer == CABLE_ADDRESS else 'tcp'
 
   def link_info(self) -> dict:
     try:

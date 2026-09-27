@@ -86,7 +86,7 @@ public struct LinkEvent: Codable, Sendable, Equatable {
     guard state == .connected else { return nil }
     if let linkMedium { return linkMedium }
     guard let peer, !peer.isEmpty, peer != "usb" else { return .usb }
-    return peer.hasPrefix(LinkMedium.cableNetwork) ? .usb : .tcp
+    return LinkMedium(tcpPeer: peer)
   }
 }
 
@@ -103,6 +103,12 @@ public enum LinkMedium: String, Codable, Sendable, CaseIterable {
   /// From a speed as Linux names it: super-speed, high-speed and so on.
   public init(usbSpeed: String?) {
     self = usbSpeed.flatMap { Pinned.usbSpeedMedia[$0] }.flatMap(LinkMedium.init(rawValue:)) ?? .usb
+  }
+
+  /// A TCP link, from its peer ("host:port") before a hello says more: a peer
+  /// on the comma's cable network is a phone's USB cable, of unknown speed.
+  public init(tcpPeer peer: String) {
+    self = peer.hasPrefix(LinkMedium.cableNetwork) ? .usb : .tcp
   }
 
   /// From a hello's `client.link`, or nil when it names none.

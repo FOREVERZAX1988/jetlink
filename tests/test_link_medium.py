@@ -79,9 +79,16 @@ def test_a_phones_dial_is_the_cable_and_a_lan_is_tcp(udc):
   cable.sock = SimpleNamespace(getsockname=lambda: (CABLE_ADDRESS, 5599))
   assert cable.link_info() == {'kind': 'cable', 'usb_speed': 'super-speed'}
   lan = TcpTransport.__new__(TcpTransport)
-  lan.sock = SimpleNamespace(getsockname=lambda: ('10.0.0.5', 40000))
+  lan.sock = SimpleNamespace(getsockname=lambda: ('10.0.0.5', 40000), getpeername=lambda: ('10.0.0.9', 5599))
   assert lan.link_info() == {'kind': 'tcp'}
   assert lan.medium == 'tcp'
+
+
+def test_a_server_names_a_dial_to_the_comma_the_cable_before_any_hello():
+  # the phone's end: its peer is the comma's cable address
+  t = TcpTransport.__new__(TcpTransport)
+  t.sock = SimpleNamespace(getpeername=lambda: (CABLE_ADDRESS, 5599))
+  assert t.medium == 'usb'
 
 
 def test_a_usb_host_reads_the_speed_libusb_negotiated():

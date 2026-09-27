@@ -23,6 +23,9 @@ struct LinkMediumTests {
     #expect(LinkMedium(link: ["kind": "cable", "usb_speed": "high-speed"]) == .usb2)
     #expect(LinkMedium(link: ["kind": "usb", "usb_speed": "super-speed"]) == .usb3)
     #expect(LinkMedium(link: ["kind": "usb"]) == .usb)
+    // before a hello: the comma's cable address at the far end is the cable
+    #expect(LinkMedium(tcpPeer: "192.168.60.1:5599") == .usb)
+    #expect(LinkMedium(tcpPeer: "10.0.0.5:40000") == .tcp)
     #expect(LinkMedium(link: ["kind": "tcp"]) == .tcp)
     #expect(LinkMedium(link: ["kind": "pigeon"]) == nil)
     #expect(LinkMedium(link: nil) == nil)
