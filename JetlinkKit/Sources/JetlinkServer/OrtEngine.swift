@@ -14,15 +14,22 @@ public struct SessionPlan: Sendable, Equatable {
     self.cacheDirectory = cacheDirectory
   }
 
+  static func usesNeuralEngine(_ computeUnits: String?) -> Bool {
+    computeUnits == "CPUAndNeuralEngine" || computeUnits == "ALL"
+  }
+
   /// The provider options the Python backend passes (backends/ort/__init__.py).
   var coreMLOptions: [String: String]? {
     guard let computeUnits else { return nil }
     var options = [
       "ModelFormat": "MLProgram",
       "MLComputeUnits": computeUnits,
-      // Apple's hint for a model that is predicted many times
-      "SpecializationStrategy": "FastPrediction",
     ]
+    if SessionPlan.usesNeuralEngine(computeUnits) {
+      // Apple's hint for a model that is predicted many times. Only where
+      // the Neural Engine is in play: on the GPU it changed nothing.
+      options["SpecializationStrategy"] = "FastPrediction"
+    }
     if let cacheDirectory {
       options["ModelCacheDirectory"] = cacheDirectory.path
     }
@@ -104,7 +111,7 @@ public final class OrtEngine: @unchecked Sendable {
     }
     let gpu = plans.contains { $0.computeUnits == "CPUAndGPU" || $0.computeUnits == "ALL" }
     self.keepAlive = keepAlive && gpu ? MetalKeepAlive.make() : nil
-    let ane = plans.contains { $0.computeUnits == "CPUAndNeuralEngine" || $0.computeUnits == "ALL" }
+    let ane = plans.contains { SessionPlan.usesNeuralEngine($0.computeUnits) }
     self.keepWarm = keepCPUWarm && ane ? CPUKeepWarm() : nil
     do {
       try rebind()

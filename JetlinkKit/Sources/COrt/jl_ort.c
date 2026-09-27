@@ -106,6 +106,21 @@ char *jl_session_create(jl_env *env, const char *model_path, const char *provide
     // errors only: the CoreML partitioner is chatty
     error = take(api()->SetSessionLogSeverityLevel(so, 3));
   }
+  // One thread each way, and none that spin between frames: the CPU's share
+  // of a CoreML session is a couple of nodes, and a pool spinning for the
+  // next frame burns a phone's battery and fights the frame path for cores.
+  if (error == NULL) {
+    error = take(api()->SetIntraOpNumThreads(so, 1));
+  }
+  if (error == NULL) {
+    error = take(api()->SetInterOpNumThreads(so, 1));
+  }
+  if (error == NULL) {
+    error = take(api()->AddSessionConfigEntry(so, "session.intra_op.allow_spinning", "0"));
+  }
+  if (error == NULL) {
+    error = take(api()->AddSessionConfigEntry(so, "session.inter_op.allow_spinning", "0"));
+  }
   if (error == NULL && provider != NULL) {
     const char **keys = calloc(n_options + 1, sizeof(char *));
     const char **values = calloc(n_options + 1, sizeof(char *));
