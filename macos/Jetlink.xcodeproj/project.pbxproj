@@ -16,6 +16,7 @@
 		2653FABCEBD3766AFC3CE2BA /* ServerProcess.swift in Sources */ = {isa = PBXBuildFile; fileRef = 298B7562E3BC072DD1917643 /* ServerProcess.swift */; };
 		2B7DC111B6109689AF080083 /* control_events.jsonl in Resources */ = {isa = PBXBuildFile; fileRef = 85DE5840CD097F1745ABF33E /* control_events.jsonl */; };
 		3BC8F854744460473631557A /* ServerStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82A2945D6E8878EB2CB9BE0C /* ServerStore.swift */; };
+		3C5BAA0B97B5459B6210EC7E /* EmbeddedPythonTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C222FAF13C281576384E67A /* EmbeddedPythonTests.swift */; };
 		3C8223A33CAC7A7666918F80 /* ControlProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2ADA99B4B335CC732D1EF4A4 /* ControlProtocol.swift */; };
 		3C9F2035F85C05A1F01D36AC /* FormattingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CED6B0A4A42A9AD8B7FD9EE1 /* FormattingTests.swift */; };
 		3D4B2EF59A059605926C4E6A /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE2AA8426482FBAC83449100 /* SettingsView.swift */; };
@@ -76,6 +77,7 @@
 		689D4ADF35CE9FC4F8FBB048 /* FrameBudgetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameBudgetView.swift; sourceTree = "<group>"; };
 		6B6101A302AB815094A1A71B /* ControlClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlClientTests.swift; sourceTree = "<group>"; };
 		6B71A2709AC0F259D4486CB6 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		6C222FAF13C281576384E67A /* EmbeddedPythonTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmbeddedPythonTests.swift; sourceTree = "<group>"; };
 		6C3E6AEE6E1472D196F90143 /* MenuBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarView.swift; sourceTree = "<group>"; };
 		76ABE66B0A28D17CFE0293FF /* EmbeddedPython.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmbeddedPython.swift; sourceTree = "<group>"; };
 		7BC689149B8F0405427AAC4C /* LoginItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LoginItem.swift; sourceTree = "<group>"; };
@@ -120,6 +122,7 @@
 			children = (
 				6B6101A302AB815094A1A71B /* ControlClientTests.swift */,
 				E0E3D4F93D2C373C82E2008F /* ControlProtocolTests.swift */,
+				6C222FAF13C281576384E67A /* EmbeddedPythonTests.swift */,
 				CED6B0A4A42A9AD8B7FD9EE1 /* FormattingTests.swift */,
 				D092AAA6AC91B0C7C9DAA915 /* LogFileWriterTests.swift */,
 				66576D026A6FECC7B3476028 /* ModelRowBuilderTests.swift */,
@@ -381,6 +384,7 @@
 			files = (
 				E50546AB6D1FFF4F633F1D7B /* ControlClientTests.swift in Sources */,
 				CCA1496ABFF1478E38C92D17 /* ControlProtocolTests.swift in Sources */,
+				3C5BAA0B97B5459B6210EC7E /* EmbeddedPythonTests.swift in Sources */,
 				3C9F2035F85C05A1F01D36AC /* FormattingTests.swift in Sources */,
 				6386F65E1957704F8DB80A89 /* LogFileWriterTests.swift in Sources */,
 				AF797B35047D971D2853C831 /* ModelRowBuilderTests.swift in Sources */,

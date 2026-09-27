@@ -25,9 +25,18 @@ struct PythonRuntime: Sendable, Equatable {
       return .success(PythonRuntime(executable: URL(filePath: override), source: .settings(override)))
     }
     guard let resources = Bundle.main.resourceURL else { return .failure(.notBundled) }
-    let bundled = resources.appending(path: "python/bin/python3")
+    let bundled = bundledInterpreter(resources: resources)
     guard isRunnable(bundled.path(percentEncoded: false)) else { return .failure(.notBundled) }
     return .success(PythonRuntime(executable: bundled, source: .bundled))
+  }
+
+  /// The interpreter under a Resources directory, as an absolute URL.
+  /// Bundle.resourceURL is relative ("Contents/Resources/" against the
+  /// bundle), and on macOS 15 path(percentEncoded:) drops the base, so the
+  /// check looked for Contents/Resources/python/bin/python3 under the working
+  /// directory: / for a Finder launch, where it is never found.
+  static func bundledInterpreter(resources: URL) -> URL {
+    resources.absoluteURL.appending(path: "python/bin/python3")
   }
 
   /// The embedded runtime's manifest, flattened for the About and Settings
@@ -36,7 +45,7 @@ struct PythonRuntime: Sendable, Equatable {
   /// Nil when there is no bundled runtime.
   static func manifest() -> [String: String]? {
     guard let resources = Bundle.main.resourceURL else { return nil }
-    let url = resources.appending(path: "python/MANIFEST.json")
+    let url = resources.absoluteURL.appending(path: "python/MANIFEST.json")
     guard let data = try? Data(contentsOf: url) else { return nil }
     guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
     var out: [String: String] = [:]
