@@ -227,7 +227,6 @@ STAGING_INPUTS = ('img', 'big_img', 'features_buffer', 'desire_pulse', 'traffic_
 
 
 def staging(root: Path) -> None:
-  import onnx
 
   from jetlink.queues import PolicyQueues
   from jetlink.spec import spec_from_onnx
@@ -238,8 +237,7 @@ def staging(root: Path) -> None:
   cases = []
   with tempfile.TemporaryDirectory() as tmp:
     path = Path(tmp) / 'tiny_queued.onnx'
-    tiny_model.write(path)
-    onnx.save(onnx.shape_inference.infer_shapes(onnx.load(str(path))), str(path))
+    tiny_model.write(path, shapes=True)
     for skip in (1, 2, 4):
       spec = spec_from_onnx(str(path), frame_skip=skip)
       rng = np.random.default_rng(20260927 + skip)
@@ -546,15 +544,11 @@ def control(root: Path) -> None:
   finally:
     C.time, S.time = real
 
-  text = b''.join(lines).decode()
-  text = text.replace(str(cache_root), '$ROOT')
   events = []
-  for line in text.splitlines():
-    event = json.loads(line)
+  for line in b''.join(lines).decode().splitlines():
+    event = _normalized(json.loads(line), cache_root)
     if event['event'] == 'hello':
       event['pid'] = 4242
-    if event['event'] == 'inventory':
-      event['disk']['free_bytes'] = 0
     events.append(json.dumps(event, separators=(',', ':')))
   out.write_text('\n'.join(events) + '\n')
 

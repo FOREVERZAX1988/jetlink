@@ -40,9 +40,8 @@ Swift once rounded halves away from zero and wrote 1.13 where Python wrote
   the pinned onnxruntime, and that CI regenerates with the pinned releases.
 - `swift test --package-path JetlinkKit` reads the fixtures on macOS (the
   `swift` CI job) and on Linux (the `swift-linux` job, below).
-- The `conformance-fixtures` CI job regenerates every fixture on an Apple
-  arm64 runner with the pinned releases and fails if `git status` shows any
-  change.
+- The `conformance-fixtures` CI job runs that test on an Apple arm64 runner
+  with the pinned releases installed, so none of its comparisons skip.
 
 Two kinds of file depend on tools as well as on this code. onnx serialises
 the graphs, so those files are compared only under the onnx release that made
