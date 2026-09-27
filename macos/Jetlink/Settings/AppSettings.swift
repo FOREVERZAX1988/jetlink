@@ -1,6 +1,35 @@
 import Foundation
 import Observation
 
+/// Which jetlink server the app runs. The Python server is the embedded
+/// runtime the app has shipped since 0.3; the Swift server is the one the
+/// iPhone runs, built into the app, with no Python at all.
+enum ServerEngine: String, CaseIterable, Codable, Sendable {
+  case python, swift
+
+  var title: String {
+    switch self {
+    case .python: "Python (bundled runtime)"
+    case .swift: "Swift (built in)"
+    }
+  }
+
+  var shortTitle: String {
+    switch self {
+    case .python: "Python"
+    case .swift: "Swift"
+    }
+  }
+
+  /// The backends this server has: tinygrad is Python only.
+  var backends: [BackendChoice] {
+    switch self {
+    case .python: BackendChoice.allCases
+    case .swift: [.auto, .coreml]
+    }
+  }
+}
+
 @MainActor
 @Observable
 final class AppSettings {
@@ -13,12 +42,17 @@ final class AppSettings {
     static let keepAwakeWhileServing = "keepAwakeWhileServing"
     static let logLevel = "logLevel"
     static let pythonOverride = "pythonOverride"
+    static let serverEngine = "serverEngine"
   }
 
   @ObservationIgnored private let defaults: UserDefaults
 
   var backend: BackendChoice {
     didSet { defaults.set(backend.rawValue, forKey: Key.backend) }
+  }
+
+  var serverEngine: ServerEngine {
+    didSet { defaults.set(serverEngine.rawValue, forKey: Key.serverEngine) }
   }
 
   var transport: TransportChoice {
@@ -58,6 +92,7 @@ final class AppSettings {
   init(defaults: UserDefaults = .standard) {
     self.defaults = defaults
     backend = BackendChoice(rawValue: defaults.string(forKey: Key.backend) ?? "") ?? .auto
+    serverEngine = ServerEngine(rawValue: defaults.string(forKey: Key.serverEngine) ?? "") ?? .python
     transport = TransportChoice(rawValue: defaults.string(forKey: Key.transport) ?? "") ?? .usb
     let storedPort = defaults.integer(forKey: Key.tcpPort)
     tcpPort = storedPort > 0 ? storedPort : AppSettings.defaultTCPPort

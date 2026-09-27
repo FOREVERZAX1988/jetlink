@@ -12,6 +12,7 @@
 		15023ACD3AC6BCE6E2D2CD0A /* JetlinkKit in Frameworks */ = {isa = PBXBuildFile; productRef = EE168AFAF92FF522E4DD799C /* JetlinkKit */; };
 		16F27CC89C19E59E5F00C3FC /* LogFileWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3D152F2F5F59D549213C13E /* LogFileWriter.swift */; };
 		1BA2A83D1E8AB9FCB9B9737F /* MenuBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C3E6AEE6E1472D196F90143 /* MenuBarView.swift */; };
+		1D114A660F1BB5CF7E850B68 /* EmbeddedServerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2213181CDEFFEAB02147CEC1 /* EmbeddedServerTests.swift */; };
 		24267CC89A6D9958C260D3F2 /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E4EAEB195364585F1758B21 /* AppSettings.swift */; };
 		2653FABCEBD3766AFC3CE2BA /* ServerProcess.swift in Sources */ = {isa = PBXBuildFile; fileRef = 298B7562E3BC072DD1917643 /* ServerProcess.swift */; };
 		3BC8F854744460473631557A /* ServerStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82A2945D6E8878EB2CB9BE0C /* ServerStore.swift */; };
@@ -29,6 +30,7 @@
 		A4264BF79835688E9CAEA77C /* ControlClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C57E483412BDAB8FAA753B3 /* ControlClient.swift */; };
 		AD3E2507E4A2AF42BAE2468D /* MainWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF0AFDE7D421142462A1EAC2 /* MainWindow.swift */; };
 		B3053E7EB6D907079B40FBE5 /* MenuBarGlyph.swift in Sources */ = {isa = PBXBuildFile; fileRef = B65A2518EE35072CBA30DA60 /* MenuBarGlyph.swift */; };
+		BC2C8BEE97C8C36333DCE538 /* JetlinkServer in Frameworks */ = {isa = PBXBuildFile; productRef = 18188F707063EC9D73EC6510 /* JetlinkServer */; };
 		C08CE8557902A92AA5FCD1EA /* ServerExitTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94CEA1B0200D0EBD755E9D1D /* ServerExitTests.swift */; };
 		C17ECDB8A4833CBCF16B9746 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6B71A2709AC0F259D4486CB6 /* Assets.xcassets */; };
 		C5BD297534DB35414E8EE4A4 /* LogsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C8A278FA961C026335DCFD8 /* LogsView.swift */; };
@@ -52,6 +54,7 @@
 /* Begin PBXFileReference section */
 		0C6279207493AD7D245284F1 /* ModelsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelsView.swift; sourceTree = "<group>"; };
 		1E4EAEB195364585F1758B21 /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettings.swift; sourceTree = "<group>"; };
+		2213181CDEFFEAB02147CEC1 /* EmbeddedServerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmbeddedServerTests.swift; sourceTree = "<group>"; };
 		298B7562E3BC072DD1917643 /* ServerProcess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerProcess.swift; sourceTree = "<group>"; };
 		6B6101A302AB815094A1A71B /* ControlClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlClientTests.swift; sourceTree = "<group>"; };
 		6B71A2709AC0F259D4486CB6 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -90,6 +93,7 @@
 			files = (
 				15023ACD3AC6BCE6E2D2CD0A /* JetlinkKit in Frameworks */,
 				D670F7279D6E2E827E607299 /* JetlinkUI in Frameworks */,
+				BC2C8BEE97C8C36333DCE538 /* JetlinkServer in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -109,6 +113,7 @@
 			children = (
 				6B6101A302AB815094A1A71B /* ControlClientTests.swift */,
 				6C222FAF13C281576384E67A /* EmbeddedPythonTests.swift */,
+				2213181CDEFFEAB02147CEC1 /* EmbeddedServerTests.swift */,
 				CED6B0A4A42A9AD8B7FD9EE1 /* FormattingTests.swift */,
 				D092AAA6AC91B0C7C9DAA915 /* LogFileWriterTests.swift */,
 				BB634CA9F18BF099D8D923B0 /* ServerConfigurationTests.swift */,
@@ -241,6 +246,7 @@
 			packageProductDependencies = (
 				EE168AFAF92FF522E4DD799C /* JetlinkKit */,
 				95031BC76E32EFCF41AB88C6 /* JetlinkUI */,
+				18188F707063EC9D73EC6510 /* JetlinkServer */,
 			);
 			productName = Jetlink;
 			productReference = C8ECBD9F702381594E2513CB /* Jetlink.app */;
@@ -346,6 +352,7 @@
 			files = (
 				E50546AB6D1FFF4F633F1D7B /* ControlClientTests.swift in Sources */,
 				3C5BAA0B97B5459B6210EC7E /* EmbeddedPythonTests.swift in Sources */,
+				1D114A660F1BB5CF7E850B68 /* EmbeddedServerTests.swift in Sources */,
 				3C9F2035F85C05A1F01D36AC /* FormattingTests.swift in Sources */,
 				6386F65E1957704F8DB80A89 /* LogFileWriterTests.swift in Sources */,
 				DB7F8DA71830ED1B08411E02 /* ServerConfigurationTests.swift in Sources */,
@@ -640,6 +647,10 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		18188F707063EC9D73EC6510 /* JetlinkServer */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = JetlinkServer;
+		};
 		95031BC76E32EFCF41AB88C6 /* JetlinkUI */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = JetlinkUI;

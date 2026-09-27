@@ -99,8 +99,19 @@ struct ServerSettingsView: View {
     Form {
       Section {
         VStack(alignment: .leading, spacing: 4) {
+          Picker("Server", selection: $settings.serverEngine) {
+            ForEach(ServerEngine.allCases, id: \.self) { engine in
+              Text(engine.title).tag(engine)
+            }
+          }
+          Text(ServerSettingsView.engineCaption(settings.serverEngine))
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        VStack(alignment: .leading, spacing: 4) {
           Picker("Backend", selection: $settings.backend) {
-            ForEach(BackendChoice.allCases, id: \.self) { choice in
+            ForEach(settings.serverEngine.backends, id: \.self) { choice in
               Text(choice == .auto ? "Automatic (\(choice.title))" : choice.title).tag(choice)
             }
           }
@@ -131,28 +142,45 @@ struct ServerSettingsView: View {
         }
       }
 
-      Section {
-        DisclosureGroup("Advanced", isExpanded: $advancedExpanded) {
-          VStack(alignment: .leading, spacing: 6) {
-            TextField(
-              "Python interpreter override",
-              text: Binding(
-                get: { settings.pythonOverride ?? "" },
-                set: { settings.pythonOverride = $0.isEmpty ? nil : $0 }
-              ))
-            Text("For development. Empty means the bundled runtime.")
-              .font(.callout)
-              .foregroundStyle(.secondary)
-            Text(bundledText)
-              .font(.callout)
-              .foregroundStyle(.secondary)
-              .textSelection(.enabled)
+      if settings.serverEngine == .python {
+        Section {
+          DisclosureGroup("Advanced", isExpanded: $advancedExpanded) {
+            VStack(alignment: .leading, spacing: 6) {
+              TextField(
+                "Python interpreter override",
+                text: Binding(
+                  get: { settings.pythonOverride ?? "" },
+                  set: { settings.pythonOverride = $0.isEmpty ? nil : $0 }
+                ))
+              Text("For development. Empty means the bundled runtime.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+              Text(bundledText)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+            }
+            .padding(.top, 4)
           }
-          .padding(.top, 4)
         }
       }
     }
     .formStyle(.grouped)
+    .onChange(of: settings.serverEngine) {
+      // tinygrad has no Swift form; the picker would show nothing selected
+      if !settings.serverEngine.backends.contains(settings.backend) {
+        settings.backend = .auto
+      }
+    }
+  }
+
+  static func engineCaption(_ engine: ServerEngine) -> String {
+    switch engine {
+    case .python:
+      "The server Jetlink has always run, in a Python runtime inside the app. Measured on a comma, and the default for now."
+    case .swift:
+      "The server the iPhone app runs, built into Jetlink: no Python to find or start, and about 1 ms faster a frame on an M1 Pro. Not yet measured with a comma on USB."
+    }
   }
 
   static func backendCaption(_ backend: BackendChoice) -> String {

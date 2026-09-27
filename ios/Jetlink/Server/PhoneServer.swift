@@ -1,6 +1,5 @@
 import Foundation
 import JetlinkKit
-import JetlinkRegistry
 import JetlinkServer
 import Observation
 import os
@@ -38,8 +37,9 @@ final class PhoneServer: ServerControlling {
   /// address on the comma's network.
   let network: NetworkInterfaces
   @ObservationIgnored private let modelEventsContinuation: AsyncStream<ControlEvent>.Continuation
-  @ObservationIgnored private var server: Server?
-  @ObservationIgnored private var controller: ServerController?
+  @ObservationIgnored private var embedded: EmbeddedServer?
+  private var server: Server? { embedded?.server }
+  private var controller: ServerController? { embedded?.controller }
   @ObservationIgnored private var consumeTask: Task<Void, Never>?
   @ObservationIgnored private var recentTask: Task<Void, Never>?
   @ObservationIgnored private let log = Logger(subsystem: "io.zoompilot.jetlink", category: "app")
@@ -126,21 +126,18 @@ final class PhoneServer: ServerControlling {
     lastFailure = nil
     do {
       let root = try PhoneServer.prepareCacheDirectory()
-      let server = try Server(
+      let embedded = try EmbeddedServer(
         configuration: Server.Configuration(
-          port: settings.port, cacheRoot: root, device: settings.device, keepAlive: settings.keepGPUAwake, keepCPUWarm: settings.keepCPUWarm),
-        preparer: ONNXPreparer())
-      let controller = ServerController(server: server, registry: Registry(layout: CacheLayout(root: root)))
-      self.server = server
-      self.controller = controller
+          port: settings.port, cacheRoot: root, device: settings.device, keepAlive: settings.keepGPUAwake, keepCPUWarm: settings.keepCPUWarm))
+      self.embedded = embedded
       consumeTask = Task { [weak self] in
-        for await event in controller.events {
+        for await event in embedded.events {
           self?.apply(event)
         }
       }
-      try server.start()
+      try embedded.start()
+      let server = embedded.server
       port = server.port
-      controller.publishInitialState()
       runState = .serving
       startRecentTicker()
       updateDial()
@@ -164,16 +161,10 @@ final class PhoneServer: ServerControlling {
   private func tearDown(release: Bool) {
     recentTask?.cancel()
     recentTask = nil
-    controller?.finish()
-    if release {
-      server?.shutdown()
-    } else {
-      server?.stop()
-    }
+    embedded?.stop(releasingEngine: release)
     consumeTask?.cancel()
     consumeTask = nil
-    server = nil
-    controller = nil
+    embedded = nil
     runState = .stopped
     resetLiveState()
   }
@@ -200,9 +191,8 @@ final class PhoneServer: ServerControlling {
     log.error("\(detail, privacy: .public)")
     lastFailure = detail
     runState = .failed(detail)
-    server?.stop()
-    server = nil
-    controller = nil
+    embedded?.stop(releasingEngine: false)
+    embedded = nil
     resetLiveState()
   }
 

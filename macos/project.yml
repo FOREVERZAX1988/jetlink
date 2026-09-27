@@ -34,11 +34,12 @@ targets:
     sources:
       - path: Jetlink
       - path: Resources/Assets.xcassets
-    # The control protocol's types, the model store and the views the iPhone app
-    # shares. The Mac keeps its Python server, so not JetlinkServer.
+    # The control protocol's types, the model store and the views the iPhone
+    # app shares, and the Swift server it runs, which the Mac runs in place of
+    # the embedded Python when Settings says so.
     dependencies:
       - package: JetlinkKit
-        products: [JetlinkKit, JetlinkUI]
+        products: [JetlinkKit, JetlinkUI, JetlinkServer]
     info:
       path: Resources/Info.plist
       properties:

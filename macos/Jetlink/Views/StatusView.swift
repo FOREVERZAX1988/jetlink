@@ -36,6 +36,9 @@ struct StatusView: View {
       LabeledContent("State") {
         StatusBadge(text: serverStateText, tone: serverStateTone, showsProgress: isBusy)
       }
+      LabeledContent("Server") {
+        Text((server.runningServer ?? settings.serverEngine).shortTitle)
+      }
       LabeledContent("Backend") {
         VStack(alignment: .trailing, spacing: 2) {
           Text(StatusView.backendDescription(backend: server.info?.backend, device: server.info?.device))
@@ -297,7 +300,7 @@ struct StatusView: View {
   /// reason itself: a build with no interpreter in it cannot start anything.
   private func failureDetail(_ reason: String) -> String {
     let overridden = settings.pythonOverride != nil || ProcessInfo.processInfo.environment["JETLINK_PYTHON"] != nil
-    if EmbeddedPython.manifest() == nil, !overridden {
+    if settings.serverEngine == .python, EmbeddedPython.manifest() == nil, !overridden {
       return StatusView.missingPythonMessage
     }
     let failure = server.lastFailure ?? reason
