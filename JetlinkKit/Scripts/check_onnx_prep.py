@@ -149,7 +149,7 @@ def compare(py: onnx.ModelProto, sw: onnx.ModelProto, limit: int = 8) -> list[st
   differ('quantization_annotation', len(pg.quantization_annotation), len(sg.quantization_annotation))
 
   differ('node count', len(pg.node), len(sg.node))
-  bad = [i for i, (a, b) in enumerate(zip(pg.node, sg.node)) if node_key(a) != node_key(b, strict=True)]
+  bad = [i for i, (a, b) in enumerate(zip(pg.node, sg.node, strict=False)) if node_key(a) != node_key(b)]
   for i in bad[:limit]:
     diffs.append(f'node {i}: python {short(node_key(pg.node[i]))} / swift {short(node_key(sg.node[i]))}')
   if len(bad) > limit:
