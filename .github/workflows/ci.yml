@@ -168,6 +168,60 @@ jobs:
         run: make -C ios typecheck
         # SwiftPM against the iPhone SDK, so it needs no iOS simulator runtime.
 
+  swift-linux:
+    name: Swift conformance on Linux
+    runs-on: ubuntu-24.04
+    container: swift:6.2-noble
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Run the portable modules' tests
+        run: swift test --package-path JetlinkKit
+        # Package.swift's Linux branch: JetlinkKit, JetlinkONNX, JetlinkRegistry
+        # and the portable part of JetlinkServer (the wire, the TCP and USB
+        # framing, the queues, the frame statistics), built with
+        # JETLINK_PORTABLE and swift-crypto. The conformance suites read the
+        # same Python-written fixtures here as on macOS, so the drift check
+        # holds on a second platform. Nothing deploys this build
+        # (docs/conformance.md).
+
+  conformance-fixtures:
+    name: Swift fixtures are what this Python makes
+    runs-on: macos-26
+    env:
+      # The releases the committed fixtures were made with: onnx serialises the
+      # graphs (FIXTURE_ONNX in tests/test_conformance.py) and onnxruntime's
+      # CPU provider on Apple arm64 computes the golden outputs
+      # (APPLE_ONNXRUNTIME, the release the Swift package links).
+      FIXTURE_PINS: numpy==2.5.3 onnx==1.22.0 onnxruntime==1.29.0 protobuf==7.36.1
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install the package and the fixture releases
+        run: pip install -e . $FIXTURE_PINS
+
+      - name: Regenerate every file the Swift tests read
+        run: |
+          python JetlinkKit/Scripts/make_pins.py
+          python JetlinkKit/Scripts/make_conformance_fixtures.py
+          python JetlinkKit/Scripts/make_server_fixtures.py
+          python JetlinkKit/Scripts/make_onnx_fixtures.py
+
+      - name: Check that nothing moved
+        run: |
+          git status --porcelain
+          test -z "$(git status --porcelain)"
+        # A Python change that moves what the Swift must match fails here.
+        # Regenerate, commit, and make the Swift pass against the new files;
+        # docs/conformance.md says how.
+
   app:
     name: App bundle and control channel smoke test
     runs-on: macos-26

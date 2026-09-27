@@ -110,6 +110,19 @@ def test_the_swift_package_links_the_pinned_onnxruntime():
     assert re.search(rf'^onnxruntime=={re.escape(APPLE_ONNXRUNTIME)}\b', requirements.read_text(), re.M)
 
 
+def test_ci_regenerates_with_the_releases_the_fixtures_record():
+  """The conformance-fixtures job installs FIXTURE_PINS, which must name the
+  onnx and onnxruntime these tests compare under, or it regenerates with
+  something else and fails for no reason, or passes for a wrong one."""
+  from jetlink.server.backends.ort import APPLE_ONNXRUNTIME
+  ci = (ROOT / '.github' / 'workflows' / 'ci.yml').read_text()
+  found = re.search(r'^\s*FIXTURE_PINS:\s*(.+)$', ci, re.M)
+  assert found, '.github/workflows/ci.yml has no FIXTURE_PINS'
+  pins = dict(p.split('==', 1) for p in found.group(1).split())
+  assert pins.get('onnx') == FIXTURE_ONNX
+  assert pins.get('onnxruntime') == APPLE_ONNXRUNTIME
+
+
 @pytest.mark.parametrize('part', ['wire', 'staging', 'stats', 'control', 'registry'])
 def test_conformance_fixtures_are_what_the_python_makes(tmp_path, part):
   if part == 'staging' and not _onnx_matches():
