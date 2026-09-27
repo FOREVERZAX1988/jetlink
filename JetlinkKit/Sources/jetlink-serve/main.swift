@@ -14,6 +14,7 @@ struct Options {
   var port: UInt16 = 5599
   var device: CoreMLBackend.Device = .ane
   var keepAlive = true
+  var keepCPUWarm = true
   var preload = true
 }
 
@@ -33,6 +34,7 @@ func parse() -> Options {
     case "--port": options.port = UInt16(value(arg)) ?? 5599
     case "--device": options.device = CoreMLBackend.Device(rawValue: value(arg)) ?? .ane
     case "--no-keepalive": options.keepAlive = false
+    case "--no-cpu-keepwarm": options.keepCPUWarm = false
     case "--no-preload": options.preload = false
     default:
       FileHandle.standardError.write(Data("unknown argument \(arg)\n".utf8))
@@ -71,7 +73,8 @@ guard let cache = options.cache else {
 
 do {
   let server = try Server(
-    configuration: Server.Configuration(port: options.port, cacheRoot: cache, device: options.device, keepAlive: options.keepAlive, preload: options.preload),
+    configuration: Server.Configuration(port: options.port, cacheRoot: cache, device: options.device, keepAlive: options.keepAlive, keepCPUWarm: options.keepCPUWarm,
+      preload: options.preload),
     preparer: ONNXPreparer())
   server.host.subscribe { event in
     switch event {

@@ -16,19 +16,24 @@ public final class Server: @unchecked Sendable {
     public var port: UInt16
     public var cacheRoot: URL
     public var device: CoreMLBackend.Device
+    /// Keep the GPU clocked up between frames (MetalKeepAlive).
     public var keepAlive: Bool
+    /// Keep a CPU core busy between frames while a Neural Engine session
+    /// runs (CPUKeepWarm).
+    public var keepCPUWarm: Bool
     /// Start loading the engine that was loaded last, before a comma asks.
     public var preload: Bool
 
     public init(
       host: String = "0.0.0.0", port: UInt16 = Wire.defaultPort, cacheRoot: URL, device: CoreMLBackend.Device = .ane, keepAlive: Bool = true,
-      preload: Bool = true
+      keepCPUWarm: Bool = true, preload: Bool = true
     ) {
       self.host = host
       self.port = port
       self.cacheRoot = cacheRoot
       self.device = device
       self.keepAlive = keepAlive
+      self.keepCPUWarm = keepCPUWarm
       self.preload = preload
     }
   }
@@ -53,7 +58,8 @@ public final class Server: @unchecked Sendable {
 
   public init(configuration: Configuration, preparer: any ModelPreparer) throws {
     self.configuration = configuration
-    backend = CoreMLBackend(device: configuration.device, preparer: preparer, keepAlive: configuration.keepAlive)
+    backend = CoreMLBackend(
+      device: configuration.device, preparer: preparer, keepAlive: configuration.keepAlive, keepCPUWarm: configuration.keepCPUWarm)
     cache = try EngineCache(root: configuration.cacheRoot, backend: backend)
     host = EngineHost(cache: cache)
     // A write to a socket the comma closed must be an error, not a signal
@@ -84,6 +90,8 @@ public final class Server: @unchecked Sendable {
       listenerEnded(listener)
     }
     thread.name = "jetlink-accept"
+    // The first receive of a new connection starts on this thread's priority.
+    thread.qualityOfService = .userInteractive
     thread.start()
   }
 

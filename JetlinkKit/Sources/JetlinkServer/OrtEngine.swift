@@ -47,6 +47,8 @@ public final class OrtEngine: @unchecked Sendable {
   /// How long the last `run()` took, the whole chain, in microseconds.
   public private(set) var lastGpuUs: UInt32 = 0
   public let providers: [String]
+  /// Whether a CPU keep-warm thread runs beside this engine.
+  public var keepsCPUWarm: Bool { keepWarm != nil }
 
   private let chain: [OrtSession]
   private var buffers: [String: UnsafeMutableRawPointer] = [:]
@@ -56,9 +58,12 @@ public final class OrtEngine: @unchecked Sendable {
   private var bindings: [[OrtBinding]] = []  // [parity][session]
   private var parity = 0
   private let keepAlive: MetalKeepAlive?
+  private let keepWarm: CPUKeepWarm?
   private var closed = false
 
-  public init(plans: [SessionPlan], device: String, keepAlive: Bool = true) throws {
+  /// `keepAlive` keeps the GPU clocked up between frames, `keepCPUWarm` the
+  /// CPU; each only where a plan runs on that unit.
+  public init(plans: [SessionPlan], device: String, keepAlive: Bool = true, keepCPUWarm: Bool = true) throws {
     self.device = device
     var chain: [OrtSession] = []
     for plan in plans {
@@ -99,6 +104,8 @@ public final class OrtEngine: @unchecked Sendable {
     }
     let gpu = plans.contains { $0.computeUnits == "CPUAndGPU" || $0.computeUnits == "ALL" }
     self.keepAlive = keepAlive && gpu ? MetalKeepAlive.make() : nil
+    let ane = plans.contains { $0.computeUnits == "CPUAndNeuralEngine" || $0.computeUnits == "ALL" }
+    self.keepWarm = keepCPUWarm && ane ? CPUKeepWarm() : nil
     do {
       try rebind()
     } catch {
@@ -186,6 +193,7 @@ public final class OrtEngine: @unchecked Sendable {
   public func run() throws {
     guard !closed else { throw OrtError("engine is closed") }
     keepAlive?.pulse()
+    keepWarm?.pulse()
     let started = DispatchTime.now().uptimeNanoseconds
     do {
       for binding in bindings[parity] {
@@ -213,6 +221,7 @@ public final class OrtEngine: @unchecked Sendable {
     guard !closed else { return }
     closed = true
     keepAlive?.close()
+    keepWarm?.close()
     release()
   }
 

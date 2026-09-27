@@ -61,14 +61,16 @@ public final class CoreMLBackend: EngineBackend {
   public let suffix = ".ortcache"
   public let device: Device
   public let keepAlive: Bool
+  public let keepCPUWarm: Bool
   private let preparer: any ModelPreparer
   private let chip: String
   private let log = Logger(subsystem: "io.zoompilot.jetlink", category: "coreml")
 
-  public init(device: Device = .ane, preparer: any ModelPreparer, keepAlive: Bool = true) {
+  public init(device: Device = .ane, preparer: any ModelPreparer, keepAlive: Bool = true, keepCPUWarm: Bool = true) {
     self.device = device
     self.preparer = preparer
     self.keepAlive = keepAlive
+    self.keepCPUWarm = keepCPUWarm
     self.chip = CoreMLBackend.chipName()
   }
 
@@ -169,7 +171,7 @@ public final class CoreMLBackend: EngineBackend {
     let engineStarted = Date()
     let engine: OrtEngine
     do {
-      engine = try OrtEngine(plans: plans(staged, manifest), device: deviceTag(), keepAlive: false)
+      engine = try OrtEngine(plans: plans(staged, manifest), device: deviceTag(), keepAlive: false, keepCPUWarm: false)
     } catch {
       ticker.stop()
       throw error
@@ -249,7 +251,7 @@ public final class CoreMLBackend: EngineBackend {
       }
     }
     defer { ticker.stop() }
-    let engine = try OrtEngine(plans: plans(artifact, manifest), device: deviceTag(), keepAlive: keepAlive)
+    let engine = try OrtEngine(plans: plans(artifact, manifest), device: deviceTag(), keepAlive: keepAlive, keepCPUWarm: keepCPUWarm)
     let seconds = Date().timeIntervalSince(started)
     log.info("onnxruntime sessions on \(self.device.rawValue, privacy: .public) in \(seconds, format: .fixed(precision: 1)) s")
     report("load", 1, "loaded in \(Int(seconds.rounded())) s")
