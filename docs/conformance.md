@@ -115,12 +115,17 @@ JetlinkServer, with `JETLINK_PORTABLE` defined:
   server loop, and JetlinkUI;
 - swift-crypto stands in for CryptoKit, and `JetlinkLog` gives `os.Logger`'s
   calls somewhere to go;
-- the tests are the conformance suites plus the wire, USB framing,
-  conversion, spec, JSON and cache layout tests. The registry's network tests
-  stay on macOS.
+- the tests are the conformance suites, all of JetlinkONNX's (the
+  preparation byte for byte among them), the control protocol and model row
+  tests, and the wire, USB framing, conversion, spec, JSON and cache layout
+  tests: 123 tests in 19 suites. The registry's network tests and everything
+  that runs the server loop stay on macOS.
+- the capped HTTP read fetches the whole body and cuts it, because Linux's
+  URLSession has no byte stream; this build never fetches a model.
 
-To run it the way CI does, from the root of the checkout, with the build in
-memory rather than in Docker's disk image:
+CI runs it in the `swift:6.2-noble` container. The same thing locally, from
+the root of the checkout, with the build in memory rather than in Docker's
+disk image:
 
 ```bash
 docker run --rm -v "$PWD":/src:ro --tmpfs /work:exec,size=6g swift:6.2-noble bash -c \
