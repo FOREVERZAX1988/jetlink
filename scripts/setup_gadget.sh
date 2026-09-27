@@ -45,7 +45,10 @@ NET_FUNCTIONS=${JETLINK_NET_FUNCTIONS:-"ncm ecm"}
 NET_IF=usb0    # the function name suffix only; see net_ifname for the netdev
 COMMA_ADDR=${JETLINK_COMMA_ADDR:-192.168.60.1}
 COMMA_PREFIX=24
-DHCP_RANGE=${JETLINK_DHCP_RANGE:-192.168.60.2,192.168.60.9,1h}
+# The whole subnet and short leases: the comma's 4.9 kernel gives the host a new
+# random MAC every bind, so each bind is a new DHCP client. With 8 addresses and
+# an hour's lease, eight rebinds in an hour left the next host without one.
+DHCP_RANGE=${JETLINK_DHCP_RANGE:-192.168.60.2,192.168.60.254,10m}
 DNSMASQ_PID=/dev/shm/jetlink-dnsmasq.pid
 DNSMASQ_IF=/dev/shm/jetlink-dnsmasq.if
 DNSMASQ_LEASES=/dev/shm/jetlink-usb0.leases
