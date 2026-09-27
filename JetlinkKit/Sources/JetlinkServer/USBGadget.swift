@@ -102,6 +102,12 @@
   /// the session's thread. A write, or a read with a deadline, is queued and
   /// waited for instead, because only a completion reports the bytes that
   /// went before a timeout, and those are part of the stream.
+  ///
+  /// Transfers go through one NSMutableData per direction, copied to and from
+  /// the transport's buffers. Not NSMutableData(bytesNoCopy:) over those
+  /// buffers: mutable data copies the bytes into storage of its own, so a
+  /// read landed in the copy and the transport read zeros ("bad magic 0x0"),
+  /// which only a real gadget showed.
   final class IOUSBHostPipes: BulkPipes, @unchecked Sendable {
     /// The interface's registry entry, held for as long as the interface is
     /// open rather than trusting IOUSBHost to hold its own.
@@ -113,6 +119,11 @@
     private var closing = false
     private var gone = false
     private var destroyed = false
+    /// What a read lands in and a write is sent from. Reads are one at a time
+    /// on the session's thread, writes one at a time under the transport's
+    /// send lock, so one each is enough.
+    private let inData = NSMutableData(length: USBTransport.readChunk)!
+    private let outData = NSMutableData()
 
     private static let queue = DispatchQueue(label: "io.zoompilot.jetlink.usb", qos: .userInteractive)
     /// kIOMessageServiceIsTerminated, a function-like macro Swift cannot see.
@@ -161,29 +172,33 @@
     }
 
     func read(into buffer: UnsafeMutableRawPointer, count: Int, timeout: TimeInterval) throws -> Int {
-      guard timeout == 0 else { return try transfer(input, buffer, count, timeout, "read") }
-      try checkRunning()
-      let data = NSMutableData(bytesNoCopy: buffer, length: count, freeWhenDone: false)
-      var transferred = 0
-      do {
-        try input.__sendIORequest(with: data, bytesTransferred: &transferred, completionTimeout: 0)
-      } catch {
-        let status = IOReturn(truncatingIfNeeded: (error as NSError).code)
-        if UInt32(bitPattern: status) == IOUSBHostPipes.underrun { return transferred }
-        throw failure(status, "read")
+      inData.length = count
+      let transferred: Int
+      if timeout == 0 {
+        try checkRunning()
+        var n = 0
+        do {
+          try input.__sendIORequest(with: inData, bytesTransferred: &n, completionTimeout: 0)
+        } catch {
+          let status = IOReturn(truncatingIfNeeded: (error as NSError).code)
+          guard UInt32(bitPattern: status) == IOUSBHostPipes.underrun else { throw failure(status, "read") }
+        }
+        transferred = n
+      } else {
+        transferred = try transfer(input, inData, timeout, "read")
       }
+      buffer.copyMemory(from: inData.bytes, byteCount: transferred)
       return transferred
     }
 
     func write(from buffer: UnsafeRawPointer, count: Int, timeout: TimeInterval) throws -> Int {
-      try transfer(output, UnsafeMutableRawPointer(mutating: buffer), count, timeout, "write")
+      outData.length = count
+      outData.mutableBytes.copyMemory(from: buffer, byteCount: count)
+      return try transfer(output, outData, timeout, "write")
     }
 
-    private func transfer(_ pipe: IOUSBHostPipe, _ buffer: UnsafeMutableRawPointer, _ count: Int, _ timeout: TimeInterval, _ what: String)
-      throws -> Int
-    {
+    private func transfer(_ pipe: IOUSBHostPipe, _ data: NSMutableData, _ timeout: TimeInterval, _ what: String) throws -> Int {
       try checkRunning()
-      let data = NSMutableData(bytesNoCopy: buffer, length: count, freeWhenDone: false)
       let completion = Completion()
       do {
         try pipe.enqueueIORequest(with: data, completionTimeout: timeout) { status, transferred in
@@ -193,7 +208,6 @@
         throw LinkError.closed("usb bulk \(what) could not start: \(IOUSBHostPipes.describe(error))")
       }
       let (status, transferred) = completion.wait()
-      withExtendedLifetime(data) {}
       switch UInt32(bitPattern: status) {
       case UInt32(bitPattern: kIOReturnSuccess), IOUSBHostPipes.underrun, IOUSBHostPipes.timeout, IOUSBHostPipes.transactionTimeout:
         // A short packet ends a transfer; whatever arrived before a deadline
