@@ -289,10 +289,9 @@ final class FakeGadget: GadgetSource, @unchecked Sendable {
       opened += 1
       return pending.isEmpty ? make() : pending.removeFirst()
     }
-    return USBTransport(pipes: pipes)
+    return USBTransport(pipes: pipes, medium: .usb3)
   }
 
-  func speed() -> String? { "super speed (USB 3, 5 Gb/s)" }
 }
 
 /// A gadget on the bus that nothing on the comma serves yet: every read fails
@@ -401,7 +400,7 @@ final class GadgetClient {
       #expect(hello["protocol"] as? Int == Int(Wire.version))
       client.send(.ping)
       _ = try client.recv(.pong)
-      #expect(links.all.contains { $0.state == .connected && $0.peer == "usb" })
+      #expect(links.all.contains { $0.state == .connected && $0.peer == "usb" && $0.linkMedium == .usb3 })
       comma.unplug()
       let deadline = Date().addingTimeInterval(5)
       while !links.all.contains(where: { $0.state == .disconnected }) && Date() < deadline {

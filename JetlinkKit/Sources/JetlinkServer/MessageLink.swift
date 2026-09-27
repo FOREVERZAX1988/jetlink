@@ -1,4 +1,5 @@
 import Foundation
+import JetlinkKit
 
 /// One framed, ordered message channel to one comma: a TCP connection, or bulk
 /// transfers to the comma's USB gadget. The session speaks to either the same
@@ -6,6 +7,13 @@ import Foundation
 protocol MessageLink: AnyObject, Sendable {
   /// Who is on the other end, for the link event and the log.
   var peer: String { get }
+  /// How the link is carried, as this end sees it; the comma's hello may say
+  /// better (a phone's cable is TCP over USB).
+  var medium: LinkMedium? { get }
+  /// Is the link up as soon as it is open? A TCP connection is someone
+  /// dialing; the USB gadget is on the bus whether or not anything on the
+  /// comma serves it, so over USB the link is up on the comma's first message.
+  var connectsOnOpen: Bool { get }
   /// The next message. Its payload is a view into the link's receive buffer,
   /// valid only until the next `recv()`.
   func recv() throws -> Message
@@ -30,6 +38,9 @@ extension MessageLink {
 }
 
 extension TCPTransport: MessageLink {
+  var medium: LinkMedium? { .tcp }
+  var connectsOnOpen: Bool { true }
+
   func sendParts(_ type: Wire.Msg, seq: UInt32, parts: UnsafeBufferPointer<UnsafeRawBufferPointer>, flags: Wire.Flag) throws {
     try send(type, seq: seq, parts: parts, flags: flags)
   }

@@ -1,4 +1,5 @@
 import Foundation
+import JetlinkKit
 
 /// The two bulk endpoints of the comma's vendor interface: IOUSBHost on a Mac,
 /// a fake in the tests. Both calls block.
@@ -25,8 +26,6 @@ protocol GadgetSource: Sendable {
   func present() -> Bool
   /// Opens the link interface's bulk pair.
   func open() throws -> USBTransport
-  /// The bus speed it enumerated at, as a phrase for the log.
-  func speed() -> String?
 }
 
 /// Framing over USB bulk transfers, the host's end: the Swift form of
@@ -60,6 +59,13 @@ final class USBTransport: MessageLink, @unchecked Sendable {
   static let writeTimeout: TimeInterval = 2
 
   let peer: String
+  /// The USB generation the bus negotiated, as the host read it.
+  let medium: LinkMedium?
+  var connectsOnOpen: Bool { false }
+  /// After a protocol error nothing resynchronises the stream, so `close`
+  /// drains what the comma is still sending, unless the link was interrupted.
+  static let drainTimeout: TimeInterval = 5.0
+  private var interrupted = false
   private let pipes: any BulkPipes
   private var rx: UnsafeMutableRawPointer
   private var capacity: Int
@@ -70,9 +76,10 @@ final class USBTransport: MessageLink, @unchecked Sendable {
   private var tx: UnsafeMutableRawPointer
   private var txCapacity: Int
 
-  init(pipes: any BulkPipes, peer: String = "usb") {
+  init(pipes: any BulkPipes, peer: String = "usb", medium: LinkMedium? = .usb) {
     self.pipes = pipes
     self.peer = peer
+    self.medium = medium
     capacity = 2 << 20
     rx = UnsafeMutableRawPointer.allocate(byteCount: capacity, alignment: 64)
     txCapacity = 1 << 20
@@ -214,10 +221,16 @@ final class USBTransport: MessageLink, @unchecked Sendable {
   // MARK: lifecycle
 
   func shutdown() {
+    interrupted = true
     pipes.abort()
   }
 
+  /// Closes the pipes. After a desync the comma is still mid-message; it is
+  /// let finish and time out first, rather than reopened under.
   func close() {
+    if desynced && !interrupted {
+      drain(USBTransport.drainTimeout)
+    }
     pipes.close()
   }
 }

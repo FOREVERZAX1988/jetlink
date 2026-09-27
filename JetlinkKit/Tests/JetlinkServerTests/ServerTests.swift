@@ -53,6 +53,24 @@ struct ServerTests {
     }
   }
 
+  @Test("The link names its medium: TCP until the comma's hello says it is a USB cable")
+  func linkMedium() throws {
+    let links = LockedLinks()
+    try serve { server, client in
+      server.host.subscribe { if case .link(let link) = $0 { links.append(link) } }
+      try client.send(.ping)
+      _ = try client.recv(.pong)
+      #expect(server.currentLink.linkMedium == .tcp)
+      let hello: [String: Any] = ["client": ["name": "modeld", "nonce": 1, "link": ["kind": "cable", "usb_speed": "high-speed"]]]
+      try client.send(.helloReq, JSONSerialization.data(withJSONObject: hello))
+      _ = try client.recv(.helloResp)
+      #expect(server.currentLink.linkMedium == .usb2)
+    }
+    let media = links.all.filter { $0.state == .connected }.compactMap(\.linkMedium)
+    #expect(media.last == .usb2)
+    #expect(media.dropLast().allSatisfy { $0 == .tcp })
+  }
+
   @Test("A replayed request is dropped, and pings are answered")
   func dropsReplays() throws {
     try serve { _, client in

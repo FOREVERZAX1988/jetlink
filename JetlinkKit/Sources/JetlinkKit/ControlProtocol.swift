@@ -63,14 +63,75 @@ public struct LinkEvent: Codable, Sendable, Equatable {
   public let state: LinkState
   public let detail: String
   public let peer: String?
+  /// How a connected link is carried, as `LinkMedium` names it; nil from a
+  /// server older than the field, or before it can tell.
+  public let medium: String?
 
-  public init(state: LinkState, detail: String, peer: String?) {
+  public init(state: LinkState, detail: String, peer: String?, medium: String? = nil) {
     self.state = state
     self.detail = detail
     self.peer = peer
+    self.medium = medium
   }
 
   public static let waiting = LinkEvent(state: .waiting, detail: "", peer: nil)
+
+  public var linkMedium: LinkMedium? { medium.flatMap(LinkMedium.init(rawValue:)) }
+
+  /// What a connected link is carried over, for display: the server's word,
+  /// or for a server or comma older than the field, a guess from the peer.
+  /// The Python server's USB host says "usb", and a peer on the comma's cable
+  /// network is a phone's cable: USB of unknown speed. Anything else is TCP.
+  public var connectedMedium: LinkMedium? {
+    guard state == .connected else { return nil }
+    if let linkMedium { return linkMedium }
+    guard let peer, !peer.isEmpty, peer != "usb" else { return .usb }
+    return peer.hasPrefix(LinkMedium.cableNetwork) ? .usb : .tcp
+  }
+}
+
+/// How the comma's link is carried: the USB generation its controller
+/// negotiated, USB of unknown speed, or TCP. The comma's hello says which
+/// (`Transport.link_info` in Python), since only its end always knows: a
+/// phone's cable is TCP over USB. Names and mapping are `Pinned`.
+public enum LinkMedium: String, Codable, Sendable, CaseIterable {
+  case usb3, usb2, usb1, usb, tcp
+
+  /// The comma's cable network, "192.168.60.", from its end's address.
+  public static let cableNetwork = String(Pinned.cableAddress[...Pinned.cableAddress.lastIndex(of: ".")!])
+
+  /// From a speed as Linux names it: super-speed, high-speed and so on.
+  public init(usbSpeed: String?) {
+    self = usbSpeed.flatMap { Pinned.usbSpeedMedia[$0] }.flatMap(LinkMedium.init(rawValue:)) ?? .usb
+  }
+
+  /// From a hello's `client.link`, or nil when it names none.
+  public init?(link: [String: Any]?) {
+    switch link?["kind"] as? String {
+    case "usb", "cable": self.init(usbSpeed: link?["usb_speed"] as? String)
+    case "tcp": self = .tcp
+    default: return nil
+    }
+  }
+
+  public var title: String {
+    switch self {
+    case .usb3: "USB 3"
+    case .usb2: "USB 2"
+    case .usb1: "USB 1"
+    case .usb: "USB"
+    case .tcp: "TCP"
+    }
+  }
+
+  /// A frame is about 460 KB: around 1 ms on USB 3, around 11 ms on USB 2,
+  /// enough to cost frames and bring the comma near its soft disable.
+  public var isSlow: Bool { self == .usb2 || self == .usb1 }
+
+  /// What to do about a slow link, in a sentence; nil when it is fast enough.
+  public var advice: String? {
+    isSlow ? "\(title) costs about 10 ms a frame more than USB 3. Use a USB 3 cable and port." : nil
+  }
 }
 
 public struct EngineEvent: Codable, Sendable, Equatable {

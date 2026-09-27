@@ -1,6 +1,7 @@
 #if os(macOS)
   import Foundation
   import IOKit
+  import JetlinkKit
   import IOUSBHost
 
   /// The comma's USB gadget as a Mac sees it, through IOUSBHost: the Swift
@@ -28,17 +29,12 @@
       return true
     }
 
-    /// The bus speed the gadget enumerated at, as a phrase for the log.
-    public static func speed(vendorID: Int = vendorID, productID: Int = productID) -> String? {
-      guard let device = findDevice(vendorID: vendorID, productID: productID) else { return nil }
-      defer { IOObjectRelease(device) }
-      guard let value = property(device, "USBSpeed") else { return nil }
-      switch value {
-      case 1: return "full speed (USB 1)"
-      case 2: return "low speed (USB 1)"
-      case 3: return "high speed (USB 2)"
-      case 4: return "super speed (USB 3, 5 Gb/s)"
-      case 5, 6: return "super speed plus (USB 3, 10 Gb/s or more)"
+    /// The USB generation the gadget enumerated at; nil without one.
+    static func medium(of device: io_service_t) -> LinkMedium? {
+      switch property(device, "USBSpeed") {
+      case 1, 2: return .usb1
+      case 3: return .usb2
+      case 4, 5, 6: return .usb3
       default: return nil
       }
     }
@@ -53,7 +49,7 @@
         throw LinkError.closed("the gadget has no vendor interface yet")
       }
       // The pipes own the reference from here, and let it go when they close.
-      return USBTransport(pipes: try IOUSBHostPipes(service: service), peer: "usb")
+      return USBTransport(pipes: try IOUSBHostPipes(service: service), peer: "usb", medium: medium(of: device) ?? .usb)
     }
 
     // MARK: the registry
@@ -106,7 +102,6 @@
   struct IOKitGadget: GadgetSource {
     func present() -> Bool { USBGadget.present() }
     func open() throws -> USBTransport { try USBGadget.open() }
-    func speed() -> String? { USBGadget.speed() }
   }
 
   /// The link interface's bulk IN and OUT pipes, opened through IOUSBHost.

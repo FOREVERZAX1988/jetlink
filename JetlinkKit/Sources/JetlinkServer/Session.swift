@@ -14,13 +14,16 @@ final class Session: @unchecked Sendable {
   private var lastSeq: UInt32 = 0
   private(set) var request: Request?
   private(set) var frames = 0
-  /// Messages received on this connection, of any kind. Zero at the end
-  /// means nothing on the other end was speaking: over USB, a gadget on the
-  /// bus that no comma process is serving yet.
-  private(set) var received = 0
-  /// Called once, on the first message: over USB the comma speaks first, so
-  /// that is when a link is really up.
-  var onFirstMessage: (() -> Void)?
+  /// Has this connection reported a link? At once for a connection someone
+  /// made, on the first message over USB (`MessageLink.connectsOnOpen`). A
+  /// session that ends unannounced was a gadget nobody on the comma served.
+  private(set) var announced = false
+  /// How the link is carried: the transport's view until the comma's hello
+  /// says better.
+  private(set) var medium: LinkMedium?
+  /// Hears the link event when the session announces it, and again when the
+  /// hello changes its medium.
+  var onLink: ((LinkEvent) -> Void)?
 
   /// The reply's float32 outputs, reused every frame.
   private var outputBuffer: UnsafeMutablePointer<Float>
@@ -35,6 +38,7 @@ final class Session: @unchecked Sendable {
 
   init(transport: any MessageLink, host: EngineHost, telemetry: @escaping () -> [String: Any]) {
     self.transport = transport
+    medium = transport.medium
     self.host = host
     self.telemetry = telemetry
     outputCapacity = 18_452
@@ -98,15 +102,26 @@ final class Session: @unchecked Sendable {
 
   // MARK: the loop
 
+  var linkEvent: LinkEvent {
+    LinkEvent(state: .connected, detail: "", peer: peer, medium: medium?.rawValue)
+  }
+
+  private func announce() {
+    announced = true
+    onLink?(linkEvent)
+  }
+
   /// Serves until the link fails, and returns why.
   func serveForever() -> String {
+    if transport.connectsOnOpen {
+      announce()
+    }
     while true {
       let message: Message
       do {
         message = try transport.recv()
-        received += 1
-        if received == 1, let onFirstMessage {
-          onFirstMessage()
+        if !announced {
+          announce()
         }
       } catch let error as LinkError {
         if case .timedOut = error { continue }
@@ -166,10 +181,16 @@ final class Session: @unchecked Sendable {
 
   private func greet(_ message: Message) {
     var who = ""
+    var said: LinkMedium?
     if let object = JSONLine.decode(message.payload), let d = object["client"] as? [String: Any] {
       let name = (d["name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "client"
       let nonce = d["nonce"].map { "\($0)" } ?? "?"
       who = "\(name)/\(nonce)"
+      said = LinkMedium(link: d["link"] as? [String: Any])
+    }
+    if let said, said != medium {
+      medium = said
+      if announced { onLink?(linkEvent) }
     }
     if !client.isEmpty && who != client {
       log.info("session handed from \(client) to \(who.isEmpty ? "an unnamed client" : who)")
