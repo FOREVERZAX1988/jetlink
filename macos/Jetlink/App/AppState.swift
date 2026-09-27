@@ -31,7 +31,7 @@ final class AppState {
   func launch() {
     guard !launched else { return }
     launched = true
-    guard settings.startServerOnLaunch else { return }
+    guard settings.startServerOnLaunch, !AppState.isTestHost else { return }
     log.info("starting the server on launch")
     server.start()
     Task { @MainActor in
@@ -42,6 +42,13 @@ final class AppState {
         log.error("the server did not come up on launch: \(error.localizedDescription, privacy: .public)")
       }
     }
+  }
+
+  /// Is this process the host of the unit tests? Then it starts no server:
+  /// a server in the test host would open the comma's USB link, and load (or
+  /// discard, on a prepare version change) engines in the user's real cache.
+  nonisolated static var isTestHost: Bool {
+    ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil || NSClassFromString("XCTestCase") != nil
   }
 
   /// The app delegate awaits this before replying to applicationShouldTerminate.

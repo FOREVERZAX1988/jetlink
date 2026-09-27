@@ -21,7 +21,9 @@ struct FormattingTests {
   func backendDescription() {
     #expect(StatusView.backendDescription(backend: "ort", device: "coreml-Apple_M1_Pro") == "CoreML on the GPU")
     #expect(StatusView.backendDescription(backend: "ort", device: "ane-Apple_M1_Pro") == "CoreML with the Neural Engine")
-    #expect(StatusView.backendDescription(backend: "tinygrad", device: "METAL") == "tinygrad on Metal")
+    // what the removed Python server's tinygrad backend reported, named plainly
+    #expect(StatusView.backendDescription(backend: "tinygrad", device: "METAL") == "tinygrad")
+    #expect(StatusView.backendDescription(backend: "ort", device: "cpu-Apple_M1_Pro") == "onnxruntime on cpu-Apple_M1_Pro")
     #expect(StatusView.backendDescription(backend: "trt", device: "cuda") == "trt")
     #expect(StatusView.backendDescription(backend: nil, device: nil) == "Unknown")
   }

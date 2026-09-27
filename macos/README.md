@@ -9,19 +9,20 @@ Run the commands from the repository root.
 ## Build
 
 ```
-brew install xcodegen libusb
+brew install xcodegen
 make -C macos app
 ```
 
-`make app` generates the Xcode project, builds `macos/build/python` (an
-embedded CPython 3.14.7 with the pinned wheels, tinygrad from git, the jetlink
-package and libusb), builds Release, and signs everything ad hoc. The result is
-`macos/build/Jetlink.app`. The first run downloads about 200 MB into
-`macos/build/downloads`, which `make clean` keeps.
+`make app` generates the Xcode project, builds Release for Apple silicon, and
+signs the app ad hoc. The result is `macos/build/Jetlink.app`. The server is
+the Swift one in `JetlinkKit` (the iPhone app runs the same code), linked into
+the app with onnxruntime's static xcframework, which Xcode downloads (61 MB)
+the first time it resolves the package. There is no Python in the app.
 
-Check the embedded runtime with `make -C macos smoke`: it runs
-`jetlink.server.main --list-backends` and opens a libusb context inside the
-bundle, under the same stripped environment the app uses.
+Check the built app with `make -C macos smoke`: it launches the bundle with TCP
+on a free port and a cache of its own, says hello and pings over the wire
+protocol, and stops it. Any `python3` runs the client; it uses only
+`jetlink/protocol.py` and the TCP transport from this checkout.
 
 ## Develop
 
@@ -29,15 +30,18 @@ bundle, under the same stripped environment the app uses.
 make -C macos dev
 ```
 
-This opens `Jetlink.xcodeproj` with `JETLINK_PYTHON` pointing at the repo's
-`.venv`. Xcode runs the app with that environment instead of the embedded runtime. Set the venv up once with
-`pip install -e ".[ort,usb]"` plus tinygrad from git (the commit in
-`Python/requirements-git.txt`; the PyPI wheel cannot parse the models).
+This opens `Jetlink.xcodeproj`. The Swift server itself lives in
+`JetlinkKit/Sources/JetlinkServer`; `swift test --package-path JetlinkKit`
+runs its tests, and `JetlinkKit/.build/release/jetlink-serve` (from
+`swift build -c release --package-path JetlinkKit`) runs it without the app.
 
 `make -C macos project` regenerates the project from `project.yml` alone;
-`make -C macos test` runs the Swift Testing suites. The generated
-`Jetlink.xcodeproj` is committed, so `open macos/Jetlink.xcodeproj` works
-without xcodegen installed.
+`make -C macos test` runs the Swift Testing suites. The test host starts no
+server. The generated `Jetlink.xcodeproj` is committed, so
+`open macos/Jetlink.xcodeproj` works without xcodegen installed.
+
+The Python server still runs on a Mac from a checkout, for work on the Python
+side: `scripts/run-mac.sh`.
 
 ## Sign, notarize, release
 
@@ -51,16 +55,13 @@ SIGN_IDENTITY="Developer ID Application: Name (TEAMID)" make -C macos dmg
 
 `SIGN_IDENTITY` defaults to `-` (ad hoc), which is all a machine without a
 Developer ID certificate can do; such a build runs locally but Gatekeeper will
-not accept it on another Mac. The hardened runtime is on either way, and the
-nested Python binaries are signed individually with
-`Resources/python.entitlements`.
+not accept it on another Mac. The hardened runtime is on either way.
 
 ## Outputs
 
-Everything lands in `macos/build/`: `Jetlink.app`, `python/` (the runtime
-before it is copied into the bundle), `downloads/` (the interpreter tarball and
-the wheels), `DerivedData/`, and from `make dmg` the `Jetlink-<version>-macOS.dmg`
-and `SHA256SUMS` (plus a `.zip` for an ad hoc build). None of it is committed.
+Everything lands in `macos/build/`: `Jetlink.app`, `DerivedData/`, and from
+`make dmg` the `Jetlink-<version>-macOS.dmg` and `SHA256SUMS` (plus a `.zip`
+for an ad hoc build). None of it is committed.
 
 The app icon is generated once by `scripts/make-icon.swift` and its output is
 committed under `Resources/Assets.xcassets`.

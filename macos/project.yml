@@ -35,8 +35,7 @@ targets:
       - path: Jetlink
       - path: Resources/Assets.xcassets
     # The control protocol's types, the model store and the views the iPhone
-    # app shares, and the Swift server it runs, which the Mac runs in place of
-    # the embedded Python when Settings says so.
+    # app shares, and the Swift server it runs, in process.
     dependencies:
       - package: JetlinkKit
         products: [JetlinkKit, JetlinkUI, JetlinkServer]
@@ -63,19 +62,6 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: io.zoompilot.jetlink
         ENABLE_APP_SANDBOX: NO
         ENABLE_USER_SCRIPT_SANDBOXING: NO
-    postBuildScripts:
-      # Copy the prebuilt runtime in on every build so Xcode's own Run has a
-      # working interpreter after `make python`. Not dependency analysed: the
-      # tree is thousands of files and rsync is cheap when nothing changed.
-      - name: Embed Python runtime
-        script: |
-          set -e
-          SRC="$SRCROOT/build/python"
-          DST="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/python"
-          if [ ! -d "$SRC" ]; then echo "warning: no embedded Python at $SRC; run make python (the app will need JETLINK_PYTHON)"; exit 0; fi
-          rm -rf "$DST"; mkdir -p "$(dirname "$DST")"
-          rsync -a --delete "$SRC/" "$DST/"
-        basedOnDependencyAnalysis: false
   JetlinkTests:
     type: bundle.unit-test
     platform: macOS
@@ -90,5 +76,5 @@ targets:
 schemes:
   Jetlink:
     build: { targets: { Jetlink: all, JetlinkTests: [test] } }
-    run: { config: Debug, environmentVariables: { JETLINK_PYTHON: "$(JETLINK_PYTHON)" } }
+    run: { config: Debug }
     test: { config: Debug, targets: [JetlinkTests] }

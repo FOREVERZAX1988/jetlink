@@ -36,9 +36,6 @@ struct StatusView: View {
       LabeledContent("State") {
         StatusBadge(text: serverStateText, tone: serverStateTone, showsProgress: isBusy)
       }
-      LabeledContent("Server") {
-        Text((server.runningServer ?? settings.serverEngine).shortTitle)
-      }
       LabeledContent("Backend") {
         VStack(alignment: .trailing, spacing: 2) {
           Text(StatusView.backendDescription(backend: server.info?.backend, device: server.info?.device))
@@ -296,21 +293,11 @@ struct StatusView: View {
 
   // MARK: Failures
 
-  /// What went wrong, in the server's own words, unless the app can see the
-  /// reason itself: a build with no interpreter in it cannot start anything.
+  /// What went wrong, in the server's own words.
   private func failureDetail(_ reason: String) -> String {
-    let overridden = settings.pythonOverride != nil || ProcessInfo.processInfo.environment["JETLINK_PYTHON"] != nil
-    if settings.serverEngine == .python, EmbeddedPython.manifest() == nil, !overridden {
-      return StatusView.missingPythonMessage
-    }
     let failure = server.lastFailure ?? reason
     return failure.isEmpty ? reason : failure
   }
-
-  static let missingPythonMessage = """
-    This build has no bundled Python runtime. Run `make python` in macos/, or set JETLINK_PYTHON to a Python 3.14 \
-    interpreter with the jetlink package installed.
-    """
 
   private var lastLogLines: [String] {
     Array(logs.lines.suffix(20))
@@ -325,7 +312,7 @@ struct StatusView: View {
     return settings.cacheDirectory
   }
 
-  /// "tinygrad 0.14.0, Apple M1 Pro": what is actually running, under the
+  /// "onnxruntime 1.29.0, Apple M1 Pro": what is actually running, under the
   /// backend's plain name. The device loses the backend prefix it repeats.
   static func runtimeLine(backend: String, version: String, device: String) -> String {
     let runtime =
@@ -344,8 +331,8 @@ struct StatusView: View {
     return hardware.isEmpty ? head : "\(head), \(hardware)"
   }
 
-  /// "CoreML with the Neural Engine", "CoreML on the GPU", "tinygrad on Metal",
-  /// or what the server reported when it is none of the app's choices.
+  /// "CoreML with the Neural Engine" or "CoreML on the GPU", or what the
+  /// server reported when it is neither of the app's choices.
   static func backendDescription(backend: String?, device: String?) -> String {
     BackendChoice(backend: backend, device: device)?.title ?? otherBackendName(backend, device: device)
   }

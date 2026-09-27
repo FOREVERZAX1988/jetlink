@@ -4,8 +4,8 @@ import JetlinkUI
 import SwiftUI
 
 /// Is this Mac fast enough, and does it stay fast enough? The loaded model at
-/// the comma's pace on the Mac alone: the Swift server's benchmark, the one
-/// the iPhone app runs, with the same verdict.
+/// the comma's pace on the Mac alone: the server's benchmark, the one the
+/// iPhone app runs, with the same verdict.
 struct BenchmarkView: View {
   @Environment(ServerStore.self) private var server
   @Environment(ModelStore.self) private var models
@@ -93,7 +93,6 @@ struct BenchmarkView: View {
   /// Why a run cannot start now, in a few words; nil when it can.
   private var blocker: String? {
     if server.runState != .serving { return "The server is not running." }
-    if server.runningServer != .swift { return "The benchmark is the Swift server's. Choose it in Settings > Server." }
     if sha256 == nil { return "Load a model first." }
     if server.link.state == .connected { return "Disconnect the comma to benchmark. Its live numbers are on Status." }
     return nil
