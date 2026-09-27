@@ -521,28 +521,6 @@ public final class Server: @unchecked Sendable {
   }
 }
 
-/// Released once, waited on by any number of threads: the accept loop and
-/// the dial loop can both wait for the same session to end.
-final class Latch: @unchecked Sendable {
-  private let condition = NSCondition()
-  private var released = false
-
-  func release() {
-    condition.lock()
-    released = true
-    condition.broadcast()
-    condition.unlock()
-  }
-
-  func wait() {
-    condition.lock()
-    while !released {
-      condition.wait()
-    }
-    condition.unlock()
-  }
-}
-
 /// Says why there is no comma once, then keeps quiet about it: the USB loop
 /// polls every half second, and a Mac parked overnight would otherwise fill
 /// its log with one line. A new reason gets its own line; a session resets it.

@@ -1,6 +1,38 @@
 import Foundation
 import JetlinkONNX
 
+/// What a model preparation produced: the parts to run as a chain, in order.
+public struct PreparedModel: Sendable {
+  public struct Part: Sendable {
+    public let name: String
+    public let file: String
+    public let weightBytes: Int64
+
+    public init(name: String, file: String, weightBytes: Int64) {
+      self.name = name
+      self.file = file
+      self.weightBytes = weightBytes
+    }
+  }
+
+  public let parts: [Part]
+  public let summary: String
+
+  public init(parts: [Part], summary: String) {
+    self.parts = parts
+    self.summary = summary
+  }
+}
+
+/// Reads and rewrites ONNX: what JetlinkONNX does, behind a seam so the
+/// server builds and tests without it.
+public protocol ModelPreparer: Sendable {
+  func readSpec(model: URL, sha256: String, nbytes: Int64, frameSkip: Int) throws -> ModelSpec
+  /// Writes the parts into `directory` in the device's layout.
+  func prepare(model: URL, into directory: URL, layout: CoreMLPreparation.Layout, cacheKey: @escaping (String) -> String) throws
+    -> PreparedModel
+}
+
 /// The server's reading and preparing of an ONNX, through JetlinkONNX: the
 /// spec from the graph's inputs, outputs and output_slices, and the CoreML
 /// preparation the Python backend does, streamed from a mapped file.
