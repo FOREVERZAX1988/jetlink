@@ -86,10 +86,12 @@ negotiate power, the comma ends up supplying the phone, and it reboots. Through
 a hub's A port the comma only ever draws.
 
 A direct cable is being worked on. The zoompilot `iphone` branch has the comma
-hold its USB-C port as the device, with USB power delivery off, whenever the
-far end of the cable is a host and not a chestnut, so the phone takes the host
-role as a hub gives it today. Nobody has tried it with an iPhone yet; use the
-hub until the [status page](apple-status.md) says it works.
+hold its USB-C port as the device whenever the far end of the cable is a host
+and not a chestnut, so the phone takes the host role as a hub gives it today.
+A Mac on a C-to-C cable already comes up as the host without it. Nobody has
+tried an iPhone yet; use the hub until the [status page](apple-status.md) says
+it works. When trying it, use a USB 3 C-to-C cable: one whose e-marker says
+USB 2 runs at 480 Mb/s.
 
 **USB 3 matters.** A frame is about 460 KB: around 1 ms on USB 3 and around
 11 ms on USB 2, which is most of the room in the 50 ms budget. Use a USB 3 hub
