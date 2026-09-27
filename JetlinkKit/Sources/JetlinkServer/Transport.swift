@@ -37,11 +37,7 @@ public struct Message {
 public final class TCPTransport: @unchecked Sendable {
   public let peer: String
   private let fd: Int32
-  private var rx: UnsafeMutableRawPointer
-  private var capacity: Int
-  private var start = 0
-  private var end = 0
-  private var desynced = false
+  private let reader = FrameReader(capacity: 1 << 20)
   private let sendLock = NSLock()
   private let stateLock = NSLock()
   private var closed = false
@@ -54,8 +50,6 @@ public final class TCPTransport: @unchecked Sendable {
   init(fd: Int32, peer: String) {
     self.fd = fd
     self.peer = peer
-    self.capacity = 1 << 20
-    self.rx = UnsafeMutableRawPointer.allocate(byteCount: capacity, alignment: 64)
     self.tx = UnsafeMutableRawPointer.allocate(byteCount: Wire.headerSize + 1, alignment: 8)
     self.tx.initializeMemory(as: UInt8.self, repeating: 0, count: Wire.headerSize + 1)
     self.vectors.reserveCapacity(TCPTransport.maxParts + 2)
@@ -64,7 +58,6 @@ public final class TCPTransport: @unchecked Sendable {
 
   deinit {
     close()
-    rx.deallocate()
     tx.deallocate()
   }
 
@@ -124,67 +117,17 @@ public final class TCPTransport: @unchecked Sendable {
   // MARK: receiving
 
   public func recv() throws -> Message {
-    if desynced {
-      throw LinkError.desynced("stream desynced; the link must be reopened")
-    }
-    try fill(Wire.headerSize)
-    let header: Wire.Header
-    do {
-      header = try Wire.unpackHeader(rx + start)
-      if Int(header.length) > Wire.maxMessage {
-        throw Wire.ProtocolError.tooLong(header.length)
-      }
-    } catch let error as Wire.ProtocolError {
-      // Nothing resynchronises a byte stream mid-message.
-      desynced = true
-      throw LinkError.desynced("protocol error, link unusable: \(error)")
-    }
-    let pad = Wire.Flag(rawValue: header.flags).contains(.padded) ? 1 : 0
-    let total = Wire.headerSize + Int(header.length) + pad
-    try fill(total)
-    let payload = UnsafeRawBufferPointer(start: rx + start + Wire.headerSize, count: Int(header.length))
-    start += total
-    if start == end {
-      start = 0
-      end = 0
-    }
-    return Message(msgType: header.msgType, seq: header.seq, flags: header.flags, payload: payload)
-  }
-
-  /// Read until `need` bytes of the current message are buffered.
-  private func fill(_ need: Int) throws {
-    reserve(need)
-    while end - start < need {
-      let want = need - (end - start)
-      let n = Sys.read(fd, rx + end, want)
-      if n > 0 {
-        end += n
-      } else if n == 0 {
-        throw LinkError.closed("peer closed the connection")
-      } else if errno == EINTR {
-        continue
-      } else if errno == EAGAIN || errno == EWOULDBLOCK {
-        throw LinkError.timedOut("only \(end - start) of \(need) bytes arrived in time")
-      } else {
+    try reader.recv(pad: { Wire.Flag(rawValue: $0.flags).contains(.padded) ? 1 : 0 }) { into, missing, _ in
+      while true {
+        let n = Sys.read(fd, into, missing)
+        if n > 0 { return n }
+        if n == 0 { throw LinkError.closed("peer closed the connection") }
+        if errno == EINTR { continue }
+        if errno == EAGAIN || errno == EWOULDBLOCK {
+          throw LinkError.timedOut("only part of a message arrived in time")
+        }
         throw LinkError.closed("recv failed: \(String(cString: strerror(errno)))")
       }
-    }
-  }
-
-  private func reserve(_ need: Int) {
-    if start > 0 && start + need > capacity {
-      memmove(rx, rx + start, end - start)
-      end -= start
-      start = 0
-    }
-    if need > capacity {
-      let grown = UnsafeMutableRawPointer.allocate(byteCount: max(need, capacity * 2), alignment: 64)
-      grown.copyMemory(from: rx + start, byteCount: end - start)
-      rx.deallocate()
-      rx = grown
-      capacity = max(need, capacity * 2)
-      end -= start
-      start = 0
     }
   }
 
@@ -199,7 +142,7 @@ public final class TCPTransport: @unchecked Sendable {
     var flags = flags
     var length = 0
     for part in parts { length += part.count }
-    let padded = (Wire.headerSize + length) % Wire.packetMultiple == 0
+    let padded = Wire.needsPad(length)
     if padded {
       flags.insert(.padded)
     }

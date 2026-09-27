@@ -22,7 +22,7 @@ import PackageDescription
   /// The server's files that build anywhere: the wire, the TCP and USB
   /// framing, the queues and the frame statistics.
   let portableServer = [
-    "WireProtocol.swift", "Transport.swift", "MessageLink.swift", "USBTransport.swift", "Queues.swift", "Convert.swift",
+    "WireProtocol.swift", "FrameReader.swift", "Transport.swift", "MessageLink.swift", "USBTransport.swift", "Queues.swift", "Convert.swift",
     "ModelSpec.swift", "ElementType.swift", "FrameStats.swift", "Log.swift", "Backend.swift", "Latch.swift", "ONNXPreparer.swift",
   ]
   let crypto: Target.Dependency = .product(name: "Crypto", package: "swift-crypto")

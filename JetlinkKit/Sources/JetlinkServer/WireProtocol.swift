@@ -19,6 +19,12 @@ public enum Wire {
   /// frames. A USB host reads each message to that boundary. Host to device
   /// keeps the one-byte pad instead. `protocol.GADGET_TX_ALIGN`.
   public static let gadgetTxAlign = 16 * packetMultiple
+
+  /// Does a sent message with a `length` byte payload need the pad byte and
+  /// Flag.padded? The rule every sender but the gadget keeps.
+  static func needsPad(_ length: Int) -> Bool {
+    (headerSize + length) % packetMultiple == 0
+  }
   /// Stops a corrupt length field making the receive buffer allocate
   /// gigabytes. A frame is about 460 KB.
   public static let maxMessage = 16 << 20
