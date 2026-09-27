@@ -19,6 +19,15 @@ measurements are in the [performance reference](mac-performance.md).
 tinygrad, then ONNX Runtime with an available device. Prepared files are cached
 separately for each runtime version and device.
 
+On a Mac, `--device` picks the CoreML layout: `ane` (the default on Apple
+silicon) runs the vision trunk on the Neural Engine and the rest on the GPU,
+`coreml` runs everything on the GPU, and `ane-whole` runs the whole model as
+one CoreML program with every compute unit allowed, prepared the way the
+iPhone prepares it (the policy's LayerNormalizations fed inputs scaled by 1/8
+so their fp16 squares do not overflow, and the small heads after the trunk in
+fp32). `ane-whole` is for comparing against the default, not for daily use;
+see [how the default runs](mac-performance.md#how-the-default-runs) for why.
+
 ## Platform matrix
 
 | Platform | Backend | USB | Telemetry | Sleep support |

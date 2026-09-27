@@ -52,7 +52,10 @@ for your computer's backend and device. Jetlink keeps both so it can reuse them.
 A runtime update may require another preparation; it keeps the download.
 
 Most model downloads are about 766 MB. Prepared engine sizes vary; on a Mac,
-allow about 3 GB total per model with the default backend.
+allow about 3 GB total per model with the default backend. Each `--device`
+layout on a Mac (`ane`, `coreml`, `ane-whole`) is a separate prepared engine,
+because each one prepares the ONNX differently; see
+[backends](backends.md#runtime-comparison).
 
 | Installation | Default cache folder |
 | --- | --- |
