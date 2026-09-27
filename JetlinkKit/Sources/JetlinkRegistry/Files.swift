@@ -1,5 +1,10 @@
-import Darwin
 import Foundation
+
+#if canImport(Darwin)
+  import Darwin
+#elseif canImport(Glibc)
+  import Glibc
+#endif
 
 /// The filesystem calls the registry makes, with Python's semantics where the
 /// port depends on them: `stat` follows a symlink as `Path.stat()` does, and a
@@ -17,7 +22,12 @@ enum Files {
     var info = stat()
     guard stat(url.path(percentEncoded: false), &info) == 0 else { return nil }
     let type = info.st_mode & S_IFMT
-    let modified = Double(info.st_mtimespec.tv_sec) + Double(info.st_mtimespec.tv_nsec) / 1e9
+    #if canImport(Darwin)
+      let time = info.st_mtimespec
+    #else
+      let time = info.st_mtim
+    #endif
+    let modified = Double(time.tv_sec) + Double(time.tv_nsec) / 1e9
     return Status(isFile: type == S_IFREG, isDirectory: type == S_IFDIR, size: Int64(info.st_size), modified: modified)
   }
 

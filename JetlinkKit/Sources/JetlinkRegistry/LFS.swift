@@ -1,7 +1,19 @@
-import CryptoKit
 import Foundation
 import Synchronization
-import os
+
+#if canImport(CryptoKit)
+  import CryptoKit
+#else
+  import Crypto
+#endif
+#if canImport(FoundationNetworking)
+  import FoundationNetworking
+#endif
+#if canImport(os)
+  import os
+#else
+  import JetlinkLog
+#endif
 
 /// A large model's ONNX, named by its git-lfs oid.
 public struct Pointer: Sendable, Equatable, Hashable {

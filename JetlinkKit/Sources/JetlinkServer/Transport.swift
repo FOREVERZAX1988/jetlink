@@ -1,5 +1,10 @@
-import Darwin
 import Foundation
+
+#if canImport(Darwin)
+  import Darwin
+#elseif canImport(Glibc)
+  import Glibc
+#endif
 
 /// The link is unusable. The comma treats this as "fall back to the small model".
 public enum LinkError: Error, CustomStringConvertible {
@@ -67,10 +72,12 @@ public final class TCPTransport: @unchecked Sendable {
   /// comma opens. With a `timeout`, a connect that takes longer fails
   /// rather than sit in SYN retries for a minute.
   public static func connect(host: String, port: UInt16, timeout: TimeInterval? = nil) throws -> TCPTransport {
-    let fd = socket(AF_INET, SOCK_STREAM, 0)
+    let fd = socket(AF_INET, Sys.stream, 0)
     guard fd >= 0 else { throw LinkError.closed("socket: \(String(cString: strerror(errno)))") }
     var address = sockaddr_in()
-    address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+    #if canImport(Darwin)
+      address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+    #endif
     address.sin_family = sa_family_t(AF_INET)
     address.sin_port = port.bigEndian
     address.sin_addr.s_addr = inet_addr(host)
@@ -79,13 +86,13 @@ public final class TCPTransport: @unchecked Sendable {
       _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
     }
     var connected = withUnsafePointer(to: &address) {
-      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Sys.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
     }
     if connected != 0, let timeout, errno == EINPROGRESS {
       var poller = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
       let ready = poll(&poller, 1, Int32(max(1, timeout * 1000)))
       if ready == 0 {
-        Darwin.close(fd)
+        Sys.close(fd)
         throw LinkError.timedOut("could not connect to \(host):\(port) in \(timeout) s")
       }
       var error: Int32 = 0
@@ -98,7 +105,7 @@ public final class TCPTransport: @unchecked Sendable {
     }
     guard connected == 0 else {
       let reason = String(cString: strerror(errno))
-      Darwin.close(fd)
+      Sys.close(fd)
       throw LinkError.closed("could not connect to \(host):\(port): \(reason)")
     }
     if timeout != nil {
@@ -110,7 +117,7 @@ public final class TCPTransport: @unchecked Sendable {
   /// A receive timeout, so a test waiting on a reply that never comes fails
   /// instead of hanging. The server's side never sets one.
   public func setReceiveTimeout(_ seconds: TimeInterval) {
-    var timeout = timeval(tv_sec: Int(seconds), tv_usec: Int32((seconds - Double(Int(seconds))) * 1_000_000))
+    var timeout = timeval(tv_sec: .init(seconds), tv_usec: .init((seconds - Double(Int(seconds))) * 1_000_000))
     _ = setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
   }
 
@@ -149,7 +156,7 @@ public final class TCPTransport: @unchecked Sendable {
     reserve(need)
     while end - start < need {
       let want = need - (end - start)
-      let n = Darwin.read(fd, rx + end, want)
+      let n = Sys.read(fd, rx + end, want)
       if n > 0 {
         end += n
       } else if n == 0 {
@@ -239,7 +246,7 @@ public final class TCPTransport: @unchecked Sendable {
     var index = 0
     while index < vectors.count {
       let n = vectors.withUnsafeBufferPointer { buffer in
-        Darwin.writev(fd, buffer.baseAddress! + index, Int32(min(vectors.count - index, Int(IOV_MAX))))
+        Sys.writev(fd, buffer.baseAddress! + index, min(vectors.count - index, Sys.iovMax))
       }
       if n < 0 {
         if errno == EINTR { continue }
@@ -272,7 +279,7 @@ public final class TCPTransport: @unchecked Sendable {
     stateLock.lock()
     defer { stateLock.unlock() }
     if !closed {
-      _ = Darwin.shutdown(fd, SHUT_RDWR)
+      _ = Sys.shutdown(fd)
     }
   }
 
@@ -281,8 +288,8 @@ public final class TCPTransport: @unchecked Sendable {
     defer { stateLock.unlock() }
     if !closed {
       closed = true
-      _ = Darwin.shutdown(fd, SHUT_RDWR)
-      _ = Darwin.close(fd)
+      _ = Sys.shutdown(fd)
+      _ = Sys.close(fd)
     }
   }
 
@@ -295,14 +302,17 @@ public final class TCPTransport: @unchecked Sendable {
       var value = value
       _ = setsockopt(fd, level, option, &value, socklen_t(MemoryLayout<Int32>.size))
     }
-    set(IPPROTO_TCP, TCP_NODELAY, 1)
+    set(Int32(IPPROTO_TCP), TCP_NODELAY, 1)
     set(SOL_SOCKET, SO_SNDBUF, 4 << 20)
     set(SOL_SOCKET, SO_RCVBUF, 4 << 20)
-    set(SOL_SOCKET, SO_NOSIGPIPE, 1)
+    #if canImport(Darwin)
+      // Linux has no such option; Sys.writev sends with MSG_NOSIGNAL there.
+      set(SOL_SOCKET, SO_NOSIGPIPE, 1)
+    #endif
     set(SOL_SOCKET, SO_KEEPALIVE, 1)
-    set(IPPROTO_TCP, TCP_KEEPALIVE, 5)
-    set(IPPROTO_TCP, TCP_KEEPINTVL, 2)
-    set(IPPROTO_TCP, TCP_KEEPCNT, 3)
+    set(Int32(IPPROTO_TCP), Sys.keepIdle, 5)
+    set(Int32(IPPROTO_TCP), TCP_KEEPINTVL, 2)
+    set(Int32(IPPROTO_TCP), TCP_KEEPCNT, 3)
     var timeout = timeval(tv_sec: 10, tv_usec: 0)
     _ = setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
   }
@@ -316,13 +326,17 @@ public final class TCPListener: @unchecked Sendable {
   private var closed = false
 
   public init(host: String = "0.0.0.0", port: UInt16 = Wire.defaultPort) throws {
-    let fd = socket(AF_INET, SOCK_STREAM, 0)
+    let fd = socket(AF_INET, Sys.stream, 0)
     guard fd >= 0 else { throw LinkError.closed("socket: \(String(cString: strerror(errno)))") }
     var yes: Int32 = 1
     _ = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout<Int32>.size))
-    _ = setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &yes, socklen_t(MemoryLayout<Int32>.size))
+    #if canImport(Darwin)
+      _ = setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &yes, socklen_t(MemoryLayout<Int32>.size))
+    #endif
     var address = sockaddr_in()
-    address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+    #if canImport(Darwin)
+      address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+    #endif
     address.sin_family = sa_family_t(AF_INET)
     address.sin_port = port.bigEndian
     address.sin_addr.s_addr = inet_addr(host)
@@ -331,7 +345,7 @@ public final class TCPListener: @unchecked Sendable {
     }
     guard bound == 0, listen(fd, 4) == 0 else {
       let reason = String(cString: strerror(errno))
-      Darwin.close(fd)
+      Sys.close(fd)
       throw LinkError.closed("could not listen on \(host):\(port): \(reason)")
     }
     var actual = sockaddr_in()
@@ -363,7 +377,7 @@ public final class TCPListener: @unchecked Sendable {
       var address = sockaddr_in()
       var length = socklen_t(MemoryLayout<sockaddr_in>.size)
       let client = withUnsafeMutablePointer(to: &address) {
-        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.accept(fd, $0, &length) }
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Sys.accept(fd, $0, &length) }
       }
       if client < 0 {
         if errno == EINTR || errno == ECONNABORTED || errno == EAGAIN { continue }
@@ -381,7 +395,7 @@ public final class TCPListener: @unchecked Sendable {
     defer { lock.unlock() }
     if !closed {
       closed = true
-      Darwin.close(fd)
+      Sys.close(fd)
     }
   }
 }
@@ -396,5 +410,74 @@ enum JSONLine {
     guard bytes.count > 0 else { return [:] }
     let data = Data(bytes)
     return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+  }
+}
+
+/// The socket calls whose names the transports' own methods shadow, and the
+/// few constants that differ between Darwin and glibc. Linux is where the
+/// conformance suite runs the portable modules (docs/conformance.md).
+enum Sys {
+  #if canImport(Darwin)
+    static let stream = SOCK_STREAM
+    static let keepIdle = TCP_KEEPALIVE
+    static let iovMax = Int(IOV_MAX)
+  #else
+    static let stream = Int32(SOCK_STREAM.rawValue)
+    static let keepIdle = TCP_KEEPIDLE
+    static let iovMax = 1024
+  #endif
+
+  @discardableResult
+  static func close(_ fd: Int32) -> Int32 {
+    #if canImport(Darwin)
+      Darwin.close(fd)
+    #else
+      Glibc.close(fd)
+    #endif
+  }
+
+  @discardableResult
+  static func shutdown(_ fd: Int32) -> Int32 {
+    #if canImport(Darwin)
+      Darwin.shutdown(fd, SHUT_RDWR)
+    #else
+      Glibc.shutdown(fd, Int32(SHUT_RDWR))
+    #endif
+  }
+
+  static func read(_ fd: Int32, _ buffer: UnsafeMutableRawPointer, _ count: Int) -> Int {
+    #if canImport(Darwin)
+      Darwin.read(fd, buffer, count)
+    #else
+      Glibc.read(fd, buffer, count)
+    #endif
+  }
+
+  /// A vectored write that is an error, never SIGPIPE, on a closed socket.
+  static func writev(_ fd: Int32, _ vectors: UnsafePointer<iovec>, _ count: Int) -> Int {
+    #if canImport(Darwin)
+      Darwin.writev(fd, vectors, Int32(count))
+    #else
+      var message = msghdr()
+      message.msg_iov = UnsafeMutablePointer(mutating: vectors)
+      message.msg_iovlen = count
+      return Glibc.sendmsg(fd, &message, Int32(MSG_NOSIGNAL))
+    #endif
+  }
+
+  static func connect(_ fd: Int32, _ address: UnsafePointer<sockaddr>, _ length: socklen_t) -> Int32 {
+    #if canImport(Darwin)
+      Darwin.connect(fd, address, length)
+    #else
+      Glibc.connect(fd, address, length)
+    #endif
+  }
+
+  static func accept(_ fd: Int32, _ address: UnsafeMutablePointer<sockaddr>, _ length: UnsafeMutablePointer<socklen_t>) -> Int32 {
+    #if canImport(Darwin)
+      Darwin.accept(fd, address, length)
+    #else
+      Glibc.accept(fd, address, length)
+    #endif
   }
 }

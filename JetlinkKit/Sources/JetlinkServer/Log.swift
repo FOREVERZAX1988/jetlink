@@ -1,5 +1,10 @@
 import Foundation
-import os
+
+#if canImport(os)
+  import os
+#else
+  import JetlinkLog
+#endif
 
 /// Where the server's log lines go besides the unified log: an app that
 /// runs the server in process installs a sink and shows the lines itself.

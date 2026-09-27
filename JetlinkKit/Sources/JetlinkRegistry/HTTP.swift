@@ -1,5 +1,9 @@
 import Foundation
 
+#if canImport(FoundationNetworking)
+  import FoundationNetworking
+#endif
+
 /// The registry's small requests: a catalog, a pointer, a patch head, a tree
 /// listing. Each failure is a RegistryError, and a 404 is `notFound` so a
 /// caller can tell a missing file from an outage.
