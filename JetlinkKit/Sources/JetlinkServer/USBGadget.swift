@@ -52,7 +52,7 @@
       guard let service = linkInterface(of: device) else {
         throw LinkError.closed("the gadget has no vendor interface yet")
       }
-      defer { IOObjectRelease(service) }
+      // The pipes own the reference from here, and let it go when they close.
       return USBTransport(pipes: try IOUSBHostPipes(service: service), peer: "usb")
     }
 
@@ -115,6 +115,9 @@
   /// every completion, a timeout included. The completions run on a queue of
   /// the session's priority, so the wakeup is not the slow part of a frame.
   final class IOUSBHostPipes: BulkPipes, @unchecked Sendable {
+    /// The interface's registry entry, held for as long as the interface is
+    /// open rather than trusting IOUSBHost to hold its own.
+    private let service: io_service_t
     private let interface: IOUSBHostInterface
     private let input: IOUSBHostPipe
     private let output: IOUSBHostPipe
@@ -127,7 +130,9 @@
     /// kIOMessageServiceIsTerminated, a function-like macro Swift cannot see.
     private static let terminated: UInt32 = 0xE000_0010
 
+    /// Takes ownership of `service`'s reference, also when it throws.
     init(service: io_service_t) throws {
+      self.service = service
       let flag = TerminationFlag()
       do {
         interface = try IOUSBHostInterface(
@@ -136,6 +141,7 @@
             if message == IOUSBHostPipes.terminated { flag.set() }
           })
       } catch {
+        IOObjectRelease(service)
         throw LinkError.closed("could not open the gadget's interface: \(IOUSBHostPipes.describe(error))")
       }
       var pair: (input: Int, output: Int) = (0, 0)
@@ -151,6 +157,7 @@
       }
       guard pair.input != 0, pair.output != 0 else {
         interface.destroy()
+        IOObjectRelease(service)
         throw LinkError.closed("the gadget's interface has no bulk IN/OUT pair")
       }
       do {
@@ -158,6 +165,7 @@
         output = try interface.copyPipe(withAddress: pair.output)
       } catch {
         interface.destroy()
+        IOObjectRelease(service)
         throw LinkError.closed("could not open the gadget's endpoints: \(IOUSBHostPipes.describe(error))")
       }
       flag.onSet = { [weak self] in self?.lost() }
@@ -229,6 +237,7 @@
       try? input.__abort(with: .synchronous)
       try? output.__abort(with: .synchronous)
       interface.destroy()
+      IOObjectRelease(service)
     }
 
     /// The device was unplugged or re-enumerated: whatever is in flight ends.
