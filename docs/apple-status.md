@@ -34,6 +34,13 @@ It replaces `iphone-cable-link-status.md`.
   ane-whole), `JetlinkRegistry`, `JetlinkUI` (the frame budget, the benchmark
   verdict and windows, the log colours).
 
+**The link's medium**: the comma's hello names its link (usb, cable or tcp)
+and the speed its USB controller negotiated (`Transport.link_info`); both
+servers put it in the link event as `medium`, and both apps show **USB 3**,
+**USB 2** or **TCP**, with USB 2 as a warning. Without the new comma code
+the server falls back to what it sees itself: the bus speed over USB, TCP
+otherwise, and USB of unknown speed for a phone's cable.
+
 **Mac app** (`macos/`, on `iphone`): Settings > Server picks Python (the
 default) or Swift. Swift runs `EmbeddedServer` in process over USB or TCP, logs
 in the Python server's format to the Logs view and `server.log`, and has a
@@ -100,6 +107,23 @@ voter and leaves USB PD alone (fork f216abb5d2). See the fork commits.
 6. One odd session: right after the Debug app built the engine itself, with
    about 2 GB of disk free, it served 78 ms a frame until the app restarted;
    the reload served 30.7 ms. Not reproduced.
+7. The hello's link info has only run in tests. The comma sends it once its
+   `jetlink_repo` is at this branch (the fork's `iphone` pin); until then the
+   apps show the server's own view of the link.
+
+## The simplify pass (2026-09-27, afternoon)
+
+A review for reuse, simplification, efficiency and altitude, and its fixes:
+TCP and USB share one frame reader; the session announces its link once and
+owns the medium; the USB gadget reads the pinned IDs and a steady-state read
+is one synchronous request; the reply is written after the host's lock is
+released; the drain after a desync lives in the USB transport; send helpers,
+test clients and test helpers exist once; the registry reads its catalog
+once per inventory; log lines reach the Logs view in order through one
+stream; the Mac starts its server off the main thread. Skipped, with the
+reason in the session: a module split for the Linux build, one structured
+log format for both apps, larger USB reads (the Python host's read sizes are
+pinned), and moving the model output straight into the USB send buffer.
 
 ## Two things learned the hard way
 
