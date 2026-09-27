@@ -30,6 +30,9 @@ final class PhoneServer: ServerControlling {
   static let recentWindow: TimeInterval = 10
 
   let settings: PhoneSettings
+  /// Where the cable is: the server dials the comma while the phone has an
+  /// address on the comma's network.
+  let network: NetworkInterfaces
   @ObservationIgnored private let modelEventsContinuation: AsyncStream<ControlEvent>.Continuation
   @ObservationIgnored private var server: Server?
   @ObservationIgnored private var controller: ServerController?
@@ -40,15 +43,72 @@ final class PhoneServer: ServerControlling {
   /// What the in-process server logs, for a Logs view.
   let logs = LogBuffer()
 
-  init(settings: PhoneSettings) {
+  init(settings: PhoneSettings, network: NetworkInterfaces) {
     self.settings = settings
+    self.network = network
     (modelEvents, modelEventsContinuation) = AsyncStream.makeStream(bufferingPolicy: .unbounded)
     let logs = self.logs
-    let clock = Date.ISO8601FormatStyle().time(includingFractionalSeconds: true)
     Log.sink = { level, category, message in
-      let line = "\(Date().formatted(clock)) \(level.rawValue.uppercased()) \(category): \(message)"
+      let line = PhoneServer.logLine(level, category, message)
       Task { @MainActor in logs.append(line) }
     }
+    watchCable()
+  }
+
+  nonisolated private static let clock = Date.ISO8601FormatStyle().time(includingFractionalSeconds: true)
+
+  /// One line as the sink writes them: time, level, category, message.
+  nonisolated static func logLine(_ level: Log.Level, _ category: String, _ message: String) -> String {
+    "\(Date().formatted(clock)) \(level.rawValue.uppercased()) \(category): \(message)"
+  }
+
+  /// A line from the app itself, beside the server's, so a Logs view has
+  /// the phone's story in one place.
+  func note(_ level: Log.Level, _ message: String) {
+    switch level {
+    case .info: log.info("\(message, privacy: .public)")
+    case .warning: log.warning("\(message, privacy: .public)")
+    case .error: log.error("\(message, privacy: .public)")
+    }
+    logs.append(PhoneServer.logLine(level, "app", message))
+  }
+
+  // MARK: the cable
+
+  /// Over the cable the comma listens and the phone dials.
+  static let commaDial = DialTarget(host: NetworkInterfaces.commaAddress, port: Wire.defaultPort)
+
+  /// What the served connection runs over, from the peer's address.
+  enum LinkKind: Equatable {
+    case usb, ethernet
+
+    var title: String {
+      switch self {
+      case .usb: "USB"
+      case .ethernet: "Ethernet"
+      }
+    }
+  }
+
+  /// The kind of link the comma is on, while one is connected.
+  var linkKind: LinkKind? {
+    guard link.state == .connected, let peer = link.peer else { return nil }
+    return peer.hasPrefix(NetworkInterfaces.cableNetwork) ? .usb : .ethernet
+  }
+
+  /// Follows the phone's addresses: the comma is dialed while the cable's
+  /// lease is there, and left alone once it is gone.
+  private func watchCable() {
+    withObservationTracking {
+      updateDial()
+    } onChange: { [weak self] in
+      Task { @MainActor in self?.watchCable() }
+    }
+  }
+
+  private func updateDial() {
+    let target = network.cable == nil ? nil : PhoneServer.commaDial
+    server?.setDial(target)
   }
 
   // MARK: lifecycle
@@ -79,6 +139,7 @@ final class PhoneServer: ServerControlling {
       controller.publishInitialState()
       runState = .serving
       startRecentTicker()
+      updateDial()
       log.info("serving on port \(server.port ?? 0)")
     } catch {
       fail("Jetlink could not start its server: \(error)")

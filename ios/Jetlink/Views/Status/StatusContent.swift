@@ -54,7 +54,7 @@ struct StatusContent: View {
           if state.history.count > 1 {
             history
           }
-          SectionHeader("Link")
+          SectionHeader("Link", detail: state.linkKind.map { "\($0.title) link" })
           link(recent)
         }
         SectionHeader("iPhone")
@@ -105,20 +105,31 @@ struct StatusContent: View {
   }
 }
 
-/// A section title over a group of cards, as Health and Fitness set them.
+/// A section title over a group of cards, as Health and Fitness set them,
+/// with a word or two on the right when there is something to say.
 struct SectionHeader: View {
   let title: String
+  var detail: String?
 
-  init(_ title: String) {
+  init(_ title: String, detail: String? = nil) {
     self.title = title
+    self.detail = detail
   }
 
   var body: some View {
-    Text(title)
-      .font(.title3.weight(.bold))
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .padding(.top, 8)
-      .padding(.bottom, -4)
-      .accessibilityAddTraits(.isHeader)
+    HStack(alignment: .firstTextBaseline) {
+      Text(title)
+        .font(.title3.weight(.bold))
+        .accessibilityAddTraits(.isHeader)
+      Spacer()
+      if let detail {
+        Text(detail)
+          .font(.subheadline)
+          .foregroundStyle(.secondary)
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .padding(.top, 8)
+    .padding(.bottom, -4)
   }
 }

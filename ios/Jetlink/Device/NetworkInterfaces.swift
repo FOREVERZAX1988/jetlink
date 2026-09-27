@@ -3,22 +3,30 @@ import Foundation
 import Network
 import Observation
 
-/// The phone's IPv4 addresses, and which one the comma should be pointed at.
+/// The phone's IPv4 addresses, and what each one is for.
 ///
-/// A comma reaches the phone over a USB-C Ethernet adapter, which iOS names
-/// en1, en2 and so on; en0 is Wi-Fi and bridge100 the Personal Hotspot. Wired
-/// is the one that meets the frame budget, so it comes first.
+/// Over one cable the comma is a USB network adapter to the phone, and hands
+/// it a 192.168.60.x address by DHCP; the app dials the comma over it, and
+/// nobody types anything. A USB-C Ethernet adapter, which iOS names en1, en2
+/// and so on, is the manual fallback: the comma dials the phone at the
+/// address the app shows. en0 is Wi-Fi and bridge100 the Personal Hotspot.
+/// Wired is what meets the frame budget, so it comes first.
 @MainActor
 @Observable
 final class NetworkInterfaces {
+  /// The comma's network over the cable, and its own address on it.
+  static let cableNetwork = "192.168.60."
+  static let commaAddress = "192.168.60.1"
+
   struct Address: Identifiable, Equatable, Sendable {
     enum Kind: Int, Comparable, Sendable {
-      case ethernet = 0, hotspot, wifi, other
+      case cable = 0, ethernet, hotspot, wifi, other
 
       static func < (a: Kind, b: Kind) -> Bool { a.rawValue < b.rawValue }
 
       var title: String {
         switch self {
+        case .cable: "USB"
         case .ethernet: "Ethernet"
         case .hotspot: "Personal Hotspot"
         case .wifi: "Wi-Fi"
@@ -28,7 +36,8 @@ final class NetworkInterfaces {
 
       var symbol: String {
         switch self {
-        case .ethernet: "cable.connector"
+        case .cable: "cable.connector"
+        case .ethernet: "network"
         case .hotspot: "personalhotspot"
         case .wifi: "wifi"
         case .other: "network"
@@ -53,9 +62,20 @@ final class NetworkInterfaces {
     monitor.start(queue: DispatchQueue(label: "io.zoompilot.jetlink.network"))
   }
 
-  /// The address to give the comma: wired first, then the hotspot, then Wi-Fi.
+  /// The phone's address on the comma's cable network, while the cable is in.
+  var cable: Address? {
+    addresses.first { $0.kind == .cable }
+  }
+
+  /// The address to give the comma when it dials the phone: an Ethernet
+  /// adapter first, then the hotspot, then Wi-Fi. Never the cable, over
+  /// which the phone dials.
   var preferred: Address? {
-    addresses.first
+    addresses.first { $0.kind != .cable }
+  }
+
+  var wifi: Address? {
+    addresses.first { $0.kind == .wifi }
   }
 
   func refresh() {
@@ -75,8 +95,13 @@ final class NetworkInterfaces {
         let socket = entry.pointee.ifa_addr, socket.pointee.sa_family == UInt8(AF_INET)
       else { continue }
       let name = String(cString: entry.pointee.ifa_name)
+      var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+      guard getnameinfo(socket, socklen_t(socket.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 else { continue }
+      let text = String(decoding: host.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
       let kind: Address.Kind
-      if name == "en0" {
+      if text.hasPrefix(NetworkInterfaces.cableNetwork) {
+        kind = .cable  // the comma's lease, whatever iOS names the interface
+      } else if name == "en0" {
         kind = .wifi
       } else if name.hasPrefix("en") {
         kind = .ethernet
@@ -87,9 +112,6 @@ final class NetworkInterfaces {
       } else {
         kind = .other
       }
-      var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-      guard getnameinfo(socket, socklen_t(socket.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 else { continue }
-      let text = String(decoding: host.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
       found.append(Address(interface: name, address: text, kind: kind))
     }
     return found.sorted { ($0.kind, $0.interface) < ($1.kind, $1.interface) }

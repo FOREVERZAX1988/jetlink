@@ -100,9 +100,13 @@ struct HeroCard: View {
         Label("Waiting for Comma", systemImage: "cable.connector")
           .symbolEffect(.pulse, options: .repeating)
       } description: {
-        Text(state.endpoint == nil ? "Connect an Ethernet adapter." : "Set the comma's endpoint to this address.")
+        if state.cableAddress != nil {
+          Text("Dialing the comma over USB.")
+        } else {
+          Text(state.endpoint == nil ? "Plug in the comma." : "Over USB, nothing to set. Over Ethernet, set the comma's endpoint to this address.")
+        }
       } actions: {
-        if let endpoint = state.endpoint {
+        if state.cableAddress == nil, let endpoint = state.endpoint {
           Button {
             actions.copyEndpoint(endpoint)
           } label: {

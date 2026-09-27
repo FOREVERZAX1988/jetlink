@@ -16,8 +16,13 @@ struct StatusState: Equatable {
   var recent: StatsEvent?
   /// One summary a second, for the history chart.
   var history: [StatsSample] = []
-  /// What the comma's JetlinkEndpoint should say to reach this phone.
+  /// What the comma's JetlinkEndpoint should say to reach this phone, over
+  /// an Ethernet adapter.
   var endpoint: String?
+  /// The phone's address on the comma's cable network, while the cable is in.
+  var cableAddress: String?
+  /// What the connected comma is on: the cable, or an Ethernet adapter.
+  var linkKind: PhoneServer.LinkKind?
   var health = DeviceHealth()
   /// The model a comma nobody changed asks for, for the empty state.
   var defaultModel: ModelRow?
@@ -92,8 +97,16 @@ struct StatusState: Equatable {
     }
   }
 
+  /// The summary with the link it is over: "Connected over USB".
+  var headline: String {
+    if summary.title == "Connected", let linkKind {
+      return "Connected over \(linkKind.title)"
+    }
+    return summary.title
+  }
+
   /// The line under the title: the summary and the model.
   var subtitle: String {
-    [summary.title, modelName].compactMap { $0 }.joined(separator: " · ")
+    [headline, modelName].compactMap { $0 }.joined(separator: " · ")
   }
 }

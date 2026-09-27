@@ -16,12 +16,13 @@ final class AppModel {
 
   init() {
     let settings = PhoneSettings()
-    let server = PhoneServer(settings: settings)
+    let network = NetworkInterfaces()
+    let server = PhoneServer(settings: settings, network: network)
     self.settings = settings
     self.server = server
     self.models = ModelStore(server: server)
     self.device = DeviceMonitor()
-    self.network = NetworkInterfaces()
+    self.network = network
     self.localNetwork = LocalNetworkAccess()
   }
 
@@ -47,6 +48,8 @@ final class AppModel {
     if let address = network.preferred, let port = server.port {
       state.endpoint = "\(address.address):\(port)"
     }
+    state.cableAddress = network.cable?.address
+    state.linkKind = server.linkKind
     state.health = device.health
     state.defaultModel = models.rows.first { $0.isDefault }
     state.hasPreparedModel = !(models.inventory?.artifacts.filter(\.current).isEmpty ?? true)
