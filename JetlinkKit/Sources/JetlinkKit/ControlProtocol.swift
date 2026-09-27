@@ -105,10 +105,11 @@ public enum LinkMedium: String, Codable, Sendable, CaseIterable {
     self = usbSpeed.flatMap { Pinned.usbSpeedMedia[$0] }.flatMap(LinkMedium.init(rawValue:)) ?? .usb
   }
 
-  /// A TCP link, from its peer ("host:port") before a hello says more: a peer
-  /// on the comma's cable network is a phone's USB cable, of unknown speed.
+  /// A TCP link, from its peer ("host:port") before a hello says more: the
+  /// comma's cable address is a phone's USB cable, of unknown speed. The same
+  /// rule as the Python transport's `on_the_cable`.
   public init(tcpPeer peer: String) {
-    self = peer.hasPrefix(LinkMedium.cableNetwork) ? .usb : .tcp
+    self = peer.hasPrefix(Pinned.cableAddress + ":") ? .usb : .tcp
   }
 
   /// From a hello's `client.link`, or nil when it names none.
