@@ -66,8 +66,8 @@ def write(out: Path, name: str, spec, frames: list[tuple[np.ndarray, np.ndarray]
       f.write(warped.tobytes())
       f.write(packed.tobytes())
   with open(out / f'{name}.expected.bin', 'wb') as f:
-    for out in outputs:
-      f.write(np.asarray(out, np.float32).reshape(-1).tobytes())
+    for output in outputs:
+      f.write(np.asarray(output, np.float32).reshape(-1).tobytes())
 
 
 def queued(out: Path, rng) -> None:
