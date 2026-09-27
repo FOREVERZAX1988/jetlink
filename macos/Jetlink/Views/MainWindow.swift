@@ -2,9 +2,9 @@ import JetlinkKit
 import JetlinkUI
 import SwiftUI
 
-/// The three places in the app.
+/// The places in the app.
 enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
-  case status, models, logs
+  case status, models, benchmark, logs
 
   var id: String { rawValue }
 
@@ -12,6 +12,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
     switch self {
     case .status: "Status"
     case .models: "Models"
+    case .benchmark: "Benchmark"
     case .logs: "Logs"
     }
   }
@@ -20,12 +21,13 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
     switch self {
     case .status: "gauge.with.dots.needle.33percent"
     case .models: "shippingbox"
+    case .benchmark: "stopwatch"
     case .logs: "doc.text"
     }
   }
 }
 
-/// Which of the three places the window is showing. The View menu sets it too,
+/// Which place the window is showing. The View menu sets it too,
 /// so it lives outside the window's own state.
 @MainActor
 @Observable
@@ -91,6 +93,7 @@ struct MainWindow: View {
     switch navigation.selection ?? .status {
     case .status: StatusView(selection: $navigation.selection)
     case .models: ModelsView()
+    case .benchmark: BenchmarkView()
     case .logs: LogsView()
     }
   }

@@ -38,6 +38,7 @@
 		D670F7279D6E2E827E607299 /* JetlinkUI in Frameworks */ = {isa = PBXBuildFile; productRef = 95031BC76E32EFCF41AB88C6 /* JetlinkUI */; };
 		DB7F8DA71830ED1B08411E02 /* ServerConfigurationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB634CA9F18BF099D8D923B0 /* ServerConfigurationTests.swift */; };
 		E2541FEB05BB69B0D4ED86FD /* ActivityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B668BFB7A68D7E8F0B5F93E2 /* ActivityView.swift */; };
+		E3E5E81C9DDEEE6634A62A34 /* BenchmarkView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95935759392B054144F7DC96 /* BenchmarkView.swift */; };
 		E50546AB6D1FFF4F633F1D7B /* ControlClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B6101A302AB815094A1A71B /* ControlClientTests.swift */; };
 /* End PBXBuildFile section */
 
@@ -69,6 +70,7 @@
 		8C8A278FA961C026335DCFD8 /* LogsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogsView.swift; sourceTree = "<group>"; };
 		901BFB4940E071EEF63F2889 /* PreviewData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewData.swift; sourceTree = "<group>"; };
 		94CEA1B0200D0EBD755E9D1D /* ServerExitTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerExitTests.swift; sourceTree = "<group>"; };
+		95935759392B054144F7DC96 /* BenchmarkView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BenchmarkView.swift; sourceTree = "<group>"; };
 		9C57E483412BDAB8FAA753B3 /* ControlClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlClient.swift; sourceTree = "<group>"; };
 		9EAA7A355D29E65398FE04D2 /* ModelDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelDetailView.swift; sourceTree = "<group>"; };
 		B65A2518EE35072CBA30DA60 /* MenuBarGlyph.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarGlyph.swift; sourceTree = "<group>"; };
@@ -167,6 +169,7 @@
 		7FDBA8385B1CDAAE7E427846 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				95935759392B054144F7DC96 /* BenchmarkView.swift */,
 				8C8A278FA961C026335DCFD8 /* LogsView.swift */,
 				EF0AFDE7D421142462A1EAC2 /* MainWindow.swift */,
 				6C3E6AEE6E1472D196F90143 /* MenuBarView.swift */,
@@ -368,6 +371,7 @@
 				5634F53893A20495B8E86369 /* AppDelegate.swift in Sources */,
 				24267CC89A6D9958C260D3F2 /* AppSettings.swift in Sources */,
 				092E93B3AA9F1FB05797B5C1 /* AppState.swift in Sources */,
+				E3E5E81C9DDEEE6634A62A34 /* BenchmarkView.swift in Sources */,
 				A4264BF79835688E9CAEA77C /* ControlClient.swift in Sources */,
 				CE640B2C1591BF205429F1E2 /* EmbeddedPython.swift in Sources */,
 				8B167F9986DACB4E316DC397 /* JetlinkApp.swift in Sources */,

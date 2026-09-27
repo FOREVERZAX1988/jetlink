@@ -139,7 +139,7 @@ struct BenchmarkScreen: View {
       ProgressView(value: min(event.elapsed / max(event.total, 1), 1))
         .tint(.blue)
       HStack {
-        Text("\(BenchmarkScreen.clock(event.elapsed)) of \(BenchmarkScreen.clock(event.total))")
+        Text("\(BenchmarkClock.text(event.elapsed)) of \(BenchmarkClock.text(event.total))")
         Spacer()
         Text("\(event.frames.formatted()) frames")
       }
@@ -179,12 +179,6 @@ struct BenchmarkScreen: View {
     Task { _ = try? await app.server.send(.cancelBenchmark) }
   }
 
-  /// "1:00" for 60 seconds.
-  static func clock(_ seconds: Double) -> String {
-    let whole = Int(seconds.rounded(.down))
-    return "\(whole / 60):\(String(format: "%02d", whole % 60))"
-  }
-
   // MARK: totals
 
   private func totals(_ report: BenchmarkReport) -> some View {
@@ -192,7 +186,7 @@ struct BenchmarkScreen: View {
       GridRow {
         MetricTile(
           title: "Frames", systemImage: "film.stack", tint: .teal, value: report.frames.formatted(),
-          note: "\(BenchmarkScreen.clock(report.seconds)) at 20 Hz")
+          note: "\(BenchmarkClock.text(report.seconds)) at 20 Hz")
         MetricTile(
           title: "Over Budget", systemImage: "tortoise.fill", tint: .pink, value: report.over50.formatted(),
           note: report.over35 > 0 ? "\(report.over35.formatted()) over 35 ms" : "None over 35 ms", noteTone: report.over50 > 0 ? .red : nil)
@@ -236,72 +230,10 @@ struct BenchmarkScreen: View {
 struct VerdictCard: View {
   let report: BenchmarkReport
 
-  enum Verdict {
-    case good, tight, slow
-
-    init(_ report: BenchmarkReport) {
-      if report.frame.p99 <= 35 && report.over50 == 0 {
-        self = .good
-      } else if report.frame.p99 <= 50 {
-        self = .tight
-      } else {
-        self = .slow
-      }
-    }
-
-    var title: String {
-      switch self {
-      case .good: "Fast Enough"
-      case .tight: "Tight"
-      case .slow: "Too Slow"
-      }
-    }
-
-    var detail: String {
-      switch self {
-      case .good: "Room for the cable in the 50 ms budget."
-      case .tight: "Little room left for the cable."
-      case .slow: "Misses 20 frames a second."
-      }
-    }
-
-    var symbol: String {
-      switch self {
-      case .good: "checkmark.seal.fill"
-      case .tight: "exclamationmark.triangle.fill"
-      case .slow: "xmark.octagon.fill"
-      }
-    }
-
-    var tone: Color {
-      switch self {
-      case .good: .green
-      case .tight: .orange
-      case .slow: .red
-      }
-    }
-  }
-
   var body: some View {
-    let verdict = Verdict(report)
+    let verdict = BenchmarkVerdict(report)
     SummaryCard(title: "Verdict", systemImage: verdict.symbol, tint: verdict.tone, trailing: report.cancelled ? "Stopped Early" : nil) {
-      VStack(alignment: .leading, spacing: 14) {
-        VStack(alignment: .leading, spacing: 4) {
-          Text(verdict.title)
-            .font(.system(.title, design: .rounded, weight: .bold))
-            .foregroundStyle(verdict.tone)
-          Text(verdict.detail)
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
-        }
-        HStack(spacing: 0) {
-          Figure("P99", ms: report.frame.p99, tone: verdict.tone)
-          Divider().frame(height: 32)
-          Figure("Max", ms: report.frame.max)
-          Divider().frame(height: 32)
-          Figure("Mean", ms: report.frame.mean)
-        }
-      }
+      BenchmarkVerdictSummary(report: report)
     }
   }
 }
@@ -312,27 +244,7 @@ struct WindowsCard: View {
 
   var body: some View {
     SummaryCard(title: "Windows", systemImage: "chart.bar.fill", tint: .indigo, trailing: "10 s each") {
-      VStack(spacing: 0) {
-        ForEach(windows, id: \.startSecond) { window in
-          let thermal = DeviceHealth.Thermal(label: window.thermal)
-          HStack {
-            Text(BenchmarkScreen.clock(Double(window.startSecond)))
-              .foregroundStyle(.secondary)
-              .frame(width: 44, alignment: .leading)
-            Text("P99 \(window.frame.p99.formatted(.number.precision(.fractionLength(1)))) ms")
-              .foregroundStyle(window.frame.p99 > 50 ? .red : (window.frame.p99 > 35 ? .orange : .primary))
-            Spacer()
-            Label(thermal.title, systemImage: thermal.symbol)
-              .foregroundStyle(thermal.tone)
-              .labelStyle(.titleAndIcon)
-          }
-          .font(.subheadline.monospacedDigit())
-          .padding(.vertical, 6)
-          if window.startSecond != windows.last?.startSecond {
-            Divider()
-          }
-        }
-      }
+      BenchmarkWindowRows(windows: windows)
     }
   }
 }

@@ -1,4 +1,5 @@
 import Foundation
+import JetlinkKit
 import JetlinkServer
 import SwiftUI
 import Testing
@@ -56,5 +57,13 @@ struct EmbeddedServerTests {
     #expect(EmbeddedServer.logLine(.warning, "server", "hello", at: date) == "2026-09-27 13:04:05,123 WARNING jetlink.server: hello")
     #expect(EmbeddedServer.logLine(.info, "usb", "x", at: date) == "2026-09-27 13:04:05,123 INFO    jetlink.usb: x")
     #expect(LogsView.tone(for: EmbeddedServer.logLine(.error, "session", "bad", at: date)) == .red)
+  }
+
+  @MainActor @Test func benchmarkEventsReachTheStore() {
+    let store = ServerStore.preview(link: .waiting, engine: .none)
+    let stats = BenchmarkStats(mean: 30, p50: 30, p90: 31, p99: 33, max: 36)
+    let event = BenchmarkEvent(state: "running", elapsed: 10, total: 60, frames: 200, frame: stats, report: nil, detail: "")
+    store.apply(.benchmark(event))
+    #expect(store.benchmark == event)
   }
 }
