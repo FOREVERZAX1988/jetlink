@@ -74,6 +74,10 @@ final class ServerStore: ServerControlling {
   @ObservationIgnored private let log = Logger(subsystem: "io.zoompilot.jetlink", category: "server")
   @ObservationIgnored private var client: ControlClient?
   @ObservationIgnored private var embedded: EmbeddedServer?
+  /// Building and starting the Swift server, off the main thread.
+  @ObservationIgnored private var startTask: Task<Void, Never>?
+  @ObservationIgnored private var logStream: LogStream?
+  @ObservationIgnored private var logTask: Task<Void, Never>?
   @ObservationIgnored private var connectTask: Task<Void, Never>?
   @ObservationIgnored private var consumeTask: Task<Void, Never>?
   @ObservationIgnored private var restartTask: Task<Void, Never>?
@@ -184,6 +188,7 @@ final class ServerStore: ServerControlling {
     if case .stopped = runState { return }
     runState = .stopping
     stopRequested = true
+    await startTask?.value
     if let embedded {
       stopEmbedded(embedded)
       return
@@ -303,63 +308,76 @@ final class ServerStore: ServerControlling {
   /// reach, and the same events. It cannot crash apart from the app, so
   /// there is nothing to restart.
   private func startEmbedded() {
+    let stream = LogStream()
+    logStream = stream
     let buffer = logs
     let file = logFile
-    Log.sink = { level, category, message in
-      let line = EmbeddedServer.logLine(level, category, message)
-      Task { @MainActor in buffer.append(line) }
-      if let file { Task { await file.append(line) } }
+    logTask = Task {
+      for await line in stream.lines {
+        buffer.append(line)
+        await file?.append(line)
+      }
     }
     let configuration = ServerStore.embeddedConfiguration(
       backend: settings.backend, transport: settings.transport, tcpPort: settings.tcpPort, cacheDirectory: settings.cacheDirectory)
-    do {
-      let embedded = try EmbeddedServer(configuration: configuration)
-      self.embedded = embedded
-      consumeTask = Task { [weak self] in
-        for await event in embedded.events {
-          self?.apply(event)
+    let seed = ServerInfo(
+      pid: getpid(), version: ServerStore.appVersion, python: "", backend: "", runtimeVersion: "", device: "",
+      cache: settings.cacheDirectory.path(percentEncoded: false), transport: settings.transport.rawValue,
+      port: configuration.listen ? Int(configuration.port) : nil)
+    let tinygrad = settings.backend == .tinygrad
+    // Creating the cache, the engine cache's first look at the disk and the
+    // first inventory are file work the main thread should not wait on.
+    startTask = Task { [weak self] in
+      let started = await Task.detached(priority: .userInitiated) {
+        Result {
+          let embedded = try EmbeddedServer(configuration: configuration)
+          try embedded.start()
+          return embedded
         }
+      }.value
+      guard let self else { return }
+      self.startTask = nil
+      switch started {
+      case .success(let embedded):
+        self.embedded = embedded
+        // The controller's .server event fills in the backend fields.
+        self.info = seed
+        self.consumeTask = Task { [weak self] in
+          for await event in embedded.events {
+            self?.apply(event)
+          }
+        }
+        if tinygrad {
+          Log.write(.warning, "app", "tinygrad needs the Python server; the Swift server runs CoreML with the Neural Engine instead")
+        }
+        self.runningServer = .swift
+        if !self.stopRequested {
+          self.runState = .serving
+          self.startedAt = Date()
+        }
+      case .failure(let error):
+        self.finishLogs()
+        self.failStartup("The Swift server could not start: \(error)")
+        return
       }
-      let described = embedded.server.backend.describe()
-      info = ServerInfo(
-        pid: getpid(),
-        version: ServerStore.appVersion,
-        python: "",
-        backend: described["backend"] ?? "",
-        runtimeVersion: described["runtime_version"] ?? "",
-        device: described["device"] ?? "",
-        cache: settings.cacheDirectory.path(percentEncoded: false),
-        transport: settings.transport.rawValue,
-        port: configuration.listen ? Int(configuration.port) : nil)
-      try embedded.start()
-      if settings.backend == .tinygrad {
-        logs.append(
-          EmbeddedServer.logLine(.warning, "app", "tinygrad needs the Python server; the Swift server runs CoreML with the Neural Engine instead"))
-      }
-      runningServer = .swift
-      runState = .serving
-      startedAt = Date()
-    } catch {
-      Log.sink = nil
-      embedded?.stop(releasingEngine: true)
-      embedded = nil
-      consumeTask?.cancel()
-      consumeTask = nil
-      info = nil
-      failStartup("The Swift server could not start: \(error)")
-      return
+      self.updateSleepAssertion()
     }
-    updateSleepAssertion()
   }
 
   private func stopEmbedded(_ embedded: EmbeddedServer) {
     embedded.stop(releasingEngine: true)
     self.embedded = nil
     cancelTasks()
-    Log.sink = nil
+    finishLogs()
     runState = .stopped
     resetLiveState()
     updateSleepAssertion()
+  }
+
+  private func finishLogs() {
+    logStream?.finish()
+    logStream = nil
+    logTask = nil
   }
 
   /// What the Swift server is asked to be, from the settings the Python

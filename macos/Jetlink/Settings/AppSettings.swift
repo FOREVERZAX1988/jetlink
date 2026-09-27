@@ -101,8 +101,10 @@ final class AppSettings {
     } else {
       cacheDirectory = AppSettings.defaultCacheDirectory
     }
-    startServerOnLaunch = defaults.object(forKey: Key.startServerOnLaunch) as? Bool ?? true
-    keepAwakeWhileServing = defaults.object(forKey: Key.keepAwakeWhileServing) as? Bool ?? true
+    // bool(forKey:) also reads "YES" and "NO" from launch arguments
+    // (-startServerOnLaunch NO), which an `as? Bool` cast ignores.
+    startServerOnLaunch = defaults.object(forKey: Key.startServerOnLaunch) == nil ? true : defaults.bool(forKey: Key.startServerOnLaunch)
+    keepAwakeWhileServing = defaults.object(forKey: Key.keepAwakeWhileServing) == nil ? true : defaults.bool(forKey: Key.keepAwakeWhileServing)
     logLevel = defaults.string(forKey: Key.logLevel) ?? "INFO"
     pythonOverride = defaults.string(forKey: Key.pythonOverride)
   }

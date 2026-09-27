@@ -51,9 +51,11 @@ final class PhoneServer: ServerControlling {
     self.network = network
     (modelEvents, modelEventsContinuation) = AsyncStream.makeStream(bufferingPolicy: .unbounded)
     let logs = self.logs
-    Log.sink = { level, category, message in
-      let line = PhoneServer.logLine(level, category, message)
-      Task { @MainActor in logs.append(line) }
+    let stream = LogStream(format: { PhoneServer.logLine($0, $1, $2) })
+    Task {
+      for await line in stream.lines {
+        logs.append(line)
+      }
     }
     watchCable()
   }
