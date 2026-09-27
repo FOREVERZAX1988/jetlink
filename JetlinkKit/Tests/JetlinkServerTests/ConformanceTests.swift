@@ -66,24 +66,12 @@ struct WireMessage {
   }
 
   func send(over link: any MessageLink) throws {
-    try withBuffers(parts) { try link.send(type, seq: seq, parts: $0, flags: flags) }
+    try link.send(type, seq: seq, data: parts, flags: flags)
   }
 
   func matches(_ message: Message) -> Bool {
     message.msgType == type.rawValue && message.seq == seq && Data(message.payload) == payload
   }
-}
-
-private func withBuffers<R>(_ data: [Data], _ body: ([UnsafeRawBufferPointer]) throws -> R) throws -> R {
-  var buffers: [UnsafeRawBufferPointer] = []
-  func recurse(_ index: Int) throws -> R {
-    if index == data.count { return try body(buffers) }
-    return try data[index].withUnsafeBytes { bytes in
-      buffers.append(bytes)
-      return try recurse(index + 1)
-    }
-  }
-  return try recurse(0)
 }
 
 @Suite("Conformance: the constants pinned to the Python")
@@ -128,10 +116,6 @@ struct PinnedConstantTests {
     #expect(Int(FrameStats.slowUs) == Pinned.slowFrameUs)
     #expect(USBTransport.packetSize == Pinned.usbMaxPacket)
     #expect(USBTransport.readChunk == Pinned.usbReadChunk)
-    #if os(macOS)
-      #expect(USBGadget.vendorID == Int(Pinned.usbVendorID))
-      #expect(USBGadget.productID == Int(Pinned.usbProductID))
-    #endif
   }
 
   #if canImport(COrt)
@@ -191,12 +175,7 @@ struct WireConformanceTests {
   /// A connected pair of stream sockets: `a` for the transport, `b` for the test.
   private func socketPair() throws -> (Int32, Int32) {
     var fds: [Int32] = [0, 0]
-    #if canImport(Glibc)
-      let kind = Int32(SOCK_STREAM.rawValue)
-    #else
-      let kind = SOCK_STREAM
-    #endif
-    guard socketpair(AF_UNIX, kind, 0, &fds) == 0 else { throw TestError("socketpair failed") }
+    guard socketpair(AF_UNIX, Sys.stream, 0, &fds) == 0 else { throw TestError("socketpair failed") }
     return (fds[0], fds[1])
   }
 

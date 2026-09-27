@@ -108,8 +108,8 @@ public final class Server: @unchecked Sendable {
   private let lock = NSLock()
   /// Internal so a test can end it under the accept loop.
   var listener: TCPListener?
-  private var current: Session?
-  private var currentDone: Latch?
+  /// The session being served, and the latch its end releases.
+  private var current: (session: Session, done: Latch)?
   private var link: LinkEvent = .waiting
   private var ticker: Ticker?
   private var started = false
@@ -128,7 +128,7 @@ public final class Server: @unchecked Sendable {
     cache = try EngineCache(root: configuration.cacheRoot, backend: backend)
     host = EngineHost(cache: cache)
     #if os(macOS)
-      gadget = IOKitGadget()
+      gadget = USBGadget()
     #endif
     // A write to a socket the comma closed must be an error, not a signal
     // that kills the app.
@@ -242,7 +242,7 @@ public final class Server: @unchecked Sendable {
   public var framesServed: Int {
     lock.lock()
     defer { lock.unlock() }
-    return current?.frames ?? 0
+    return current?.session.frames ?? 0
   }
 
   /// The frames served over the last `window` seconds, as one summary: the
@@ -257,7 +257,7 @@ public final class Server: @unchecked Sendable {
     lock.lock()
     stopped = true
     let listener = self.listener
-    let session = current
+    let session = current?.session
     self.listener = nil
     lock.unlock()
     ticker?.stop()
@@ -286,12 +286,11 @@ public final class Server: @unchecked Sendable {
   private func takeover(_ transport: any MessageLink) -> (done: Latch, session: Session) {
     lock.lock()
     let previous = current
-    let previousDone = currentDone
     lock.unlock()
     if let previous {
-      log.info("a new connection from \(transport.peer) takes over from \(previous.peer)")
-      previous.interrupt()
-      previousDone?.wait()
+      log.info("a new connection from \(transport.peer) takes over from \(previous.session.peer)")
+      previous.session.interrupt()
+      previous.done.wait()
     }
     let session = Session(transport: transport, host: host) { [weak self] in self?.telemetry() ?? [:] }
     session.onLink = { [weak self] event in
@@ -300,8 +299,7 @@ public final class Server: @unchecked Sendable {
     }
     let done = Latch()
     lock.lock()
-    current = session
-    currentDone = done
+    current = (session, done)
     lock.unlock()
     let thread = Thread { [self] in
       serve(session)
@@ -317,10 +315,9 @@ public final class Server: @unchecked Sendable {
     let reason = session.serveForever()
     session.close()
     lock.lock()
-    let isCurrent = current === session
+    let isCurrent = current?.session === session
     if isCurrent {
       current = nil
-      currentDone = nil
     }
     let isStopped = stopped
     lock.unlock()
@@ -416,7 +413,7 @@ public final class Server: @unchecked Sendable {
     thread.start()
   }
 
-  static let usbWaiting = String(format: "waiting for a jetlink gadget at %04x:%04x", 0x1209, 0x0001)
+  static let usbWaiting = String(format: "waiting for a jetlink gadget at %04x:%04x", Pinned.usbVendorID, Pinned.usbProductID)
 
   /// Opens the gadget whenever it is on the bus and serves it, one session
   /// at a time, until the server stops. The Swift form of the Python
@@ -485,7 +482,7 @@ public final class Server: @unchecked Sendable {
     lastTick = now
     lock.lock()
     let connected = link.state == .connected
-    let frames = current?.frames ?? 0
+    let frames = current?.session.frames ?? 0
     lock.unlock()
     guard connected, let stats = host.frameStats.summary(window: window, framesTotal: frames) else { return }
     host.emit(.stats(stats))

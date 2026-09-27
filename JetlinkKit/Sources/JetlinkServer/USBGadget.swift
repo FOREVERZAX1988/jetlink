@@ -1,14 +1,15 @@
 #if os(macOS)
   import Foundation
   import IOKit
-  import JetlinkKit
   import IOUSBHost
+  import JetlinkKit
 
   /// The comma's USB gadget as a Mac sees it, through IOUSBHost: the Swift
-  /// form of `UsbBulkTransport.open` and `.present`.
+  /// form of `UsbBulkTransport.open` and `.present`, and the server's
+  /// `GadgetSource` on a Mac.
   ///
-  /// The gadget is found by vendor and product ID, and the link by its
-  /// interface's class, FF/FF/FF, wherever the composite gadget put it (the
+  /// The gadget is found by the pinned vendor and product ID, and the link by
+  /// its interface's class, FF/FF/FF, wherever the composite gadget put it (the
   /// comma also presents a network interface for a phone). A gadget with no
   /// vendor-class interface falls back to interface 0, where the gadget script
   /// links the link first. Endpoint addresses are read from the descriptors,
@@ -17,16 +18,25 @@
   /// No driver claims a vendor-class interface, so opening one needs no
   /// entitlement and no root. Another program holding it (the Python server,
   /// say) makes the open fail with exclusive access.
-  public enum USBGadget {
-    /// pid.codes' test allocation, as `usbbulk.JETLINK_VID/PID`.
-    public static let vendorID = 0x1209
-    public static let productID = 0x0001
-
+  struct USBGadget: GadgetSource {
     /// Is a jetlink gadget on the bus? Opens nothing; cheap enough to poll.
-    public static func present(vendorID: Int = vendorID, productID: Int = productID) -> Bool {
-      guard let device = findDevice(vendorID: vendorID, productID: productID) else { return false }
+    func present() -> Bool {
+      guard let device = USBGadget.findDevice() else { return false }
       IOObjectRelease(device)
       return true
+    }
+
+    /// Opens the gadget's link interface and its bulk pair.
+    func open() throws -> USBTransport {
+      guard let device = USBGadget.findDevice() else {
+        throw LinkError.closed(String(format: "no jetlink gadget at %04x:%04x", Pinned.usbVendorID, Pinned.usbProductID))
+      }
+      defer { IOObjectRelease(device) }
+      guard let service = USBGadget.linkInterface(of: device) else {
+        throw LinkError.closed("the gadget has no vendor interface yet")
+      }
+      // The pipes own the reference from here, and let it go when they close.
+      return USBTransport(pipes: try IOUSBHostPipes(service: service), medium: USBGadget.medium(of: device) ?? .usb)
     }
 
     /// The USB generation the gadget enumerated at; nil without one.
@@ -39,25 +49,12 @@
       }
     }
 
-    /// Opens the gadget's link interface and its bulk pair.
-    static func open(vendorID: Int = vendorID, productID: Int = productID) throws -> USBTransport {
-      guard let device = findDevice(vendorID: vendorID, productID: productID) else {
-        throw LinkError.closed(String(format: "no jetlink gadget at %04x:%04x", vendorID, productID))
-      }
-      defer { IOObjectRelease(device) }
-      guard let service = linkInterface(of: device) else {
-        throw LinkError.closed("the gadget has no vendor interface yet")
-      }
-      // The pipes own the reference from here, and let it go when they close.
-      return USBTransport(pipes: try IOUSBHostPipes(service: service), peer: "usb", medium: medium(of: device) ?? .usb)
-    }
-
     // MARK: the registry
 
-    private static func findDevice(vendorID: Int, productID: Int) -> io_service_t? {
+    private static func findDevice() -> io_service_t? {
       guard let matching = IOServiceMatching(kIOUSBHostDeviceClassName) as NSMutableDictionary? else { return nil }
-      matching["idVendor"] = vendorID
-      matching["idProduct"] = productID
+      matching["idVendor"] = Int(Pinned.usbVendorID)
+      matching["idProduct"] = Int(Pinned.usbProductID)
       let service = IOServiceGetMatchingService(kIOMainPortDefault, matching)
       return service == 0 ? nil : service
     }
@@ -67,6 +64,7 @@
       var iterator: io_iterator_t = 0
       guard IORegistryEntryGetChildIterator(device, kIOServicePlane, &iterator) == KERN_SUCCESS else { return nil }
       defer { IOObjectRelease(iterator) }
+      let vendorClass = Pinned.usbVendorClass.map(Int.init)
       var vendor: io_service_t?
       var first: io_service_t?
       while case let child = IOIteratorNext(iterator), child != 0 {
@@ -74,8 +72,8 @@
           IOObjectRelease(child)
           continue
         }
-        let triple = (property(child, "bInterfaceClass"), property(child, "bInterfaceSubClass"), property(child, "bInterfaceProtocol"))
-        if vendor == nil && triple == (0xFF, 0xFF, 0xFF) {
+        let triple = ["bInterfaceClass", "bInterfaceSubClass", "bInterfaceProtocol"].map { property(child, $0) }
+        if vendor == nil && triple == vendorClass {
           vendor = child
         } else if first == nil && property(child, "bInterfaceNumber") == 0 {
           first = child
@@ -98,17 +96,12 @@
     }
   }
 
-  /// The server's view of the gadget on a Mac.
-  struct IOKitGadget: GadgetSource {
-    func present() -> Bool { USBGadget.present() }
-    func open() throws -> USBTransport { try USBGadget.open() }
-  }
-
   /// The link interface's bulk IN and OUT pipes, opened through IOUSBHost.
   ///
-  /// Each transfer is queued and waited for, so the byte count comes back on
-  /// every completion, a timeout included. The completions run on a queue of
-  /// the session's priority, so the wakeup is not the slow part of a frame.
+  /// A read with no deadline, the steady state, is one synchronous request on
+  /// the session's thread. A write, or a read with a deadline, is queued and
+  /// waited for instead, because only a completion reports the bytes that
+  /// went before a timeout, and those are part of the stream.
   final class IOUSBHostPipes: BulkPipes, @unchecked Sendable {
     /// The interface's registry entry, held for as long as the interface is
     /// open rather than trusting IOUSBHost to hold its own.
@@ -150,20 +143,17 @@
         }
         current = UnsafeRawPointer(endpoint).assumingMemoryBound(to: IOUSBDescriptorHeader.self)
       }
-      guard pair.input != 0, pair.output != 0 else {
-        interface.destroy()
-        IOObjectRelease(service)
-        throw LinkError.closed("the gadget's interface has no bulk IN/OUT pair")
-      }
       do {
+        guard pair.input != 0, pair.output != 0 else { throw LinkError.closed("the gadget's interface has no bulk IN/OUT pair") }
         input = try interface.copyPipe(withAddress: pair.input)
         output = try interface.copyPipe(withAddress: pair.output)
       } catch {
         interface.destroy()
         IOObjectRelease(service)
+        if let error = error as? LinkError { throw error }
         throw LinkError.closed("could not open the gadget's endpoints: \(IOUSBHostPipes.describe(error))")
       }
-      flag.onSet = { [weak self] in self?.lost() }
+      flag.notify { [weak self] in self?.lost() }
     }
 
     deinit {
@@ -171,7 +161,18 @@
     }
 
     func read(into buffer: UnsafeMutableRawPointer, count: Int, timeout: TimeInterval) throws -> Int {
-      try transfer(input, buffer, count, timeout, "read")
+      guard timeout == 0 else { return try transfer(input, buffer, count, timeout, "read") }
+      try checkRunning()
+      let data = NSMutableData(bytesNoCopy: buffer, length: count, freeWhenDone: false)
+      var transferred = 0
+      do {
+        try input.__sendIORequest(with: data, bytesTransferred: &transferred, completionTimeout: 0)
+      } catch {
+        let status = IOReturn(truncatingIfNeeded: (error as NSError).code)
+        if UInt32(bitPattern: status) == IOUSBHostPipes.underrun { return transferred }
+        throw failure(status, "read")
+      }
+      return transferred
     }
 
     func write(from buffer: UnsafeRawPointer, count: Int, timeout: TimeInterval) throws -> Int {
@@ -181,12 +182,7 @@
     private func transfer(_ pipe: IOUSBHostPipe, _ buffer: UnsafeMutableRawPointer, _ count: Int, _ timeout: TimeInterval, _ what: String)
       throws -> Int
     {
-      lock.lock()
-      let stopped = closing || gone
-      lock.unlock()
-      if stopped {
-        throw LinkError.closed(gone ? "the gadget went away" : "link closed")
-      }
+      try checkRunning()
       let data = NSMutableData(bytesNoCopy: buffer, length: count, freeWhenDone: false)
       let completion = Completion()
       do {
@@ -199,49 +195,57 @@
       let (status, transferred) = completion.wait()
       withExtendedLifetime(data) {}
       switch UInt32(bitPattern: status) {
-      case UInt32(bitPattern: kIOReturnSuccess), IOUSBHostPipes.underrun:
+      case UInt32(bitPattern: kIOReturnSuccess), IOUSBHostPipes.underrun, IOUSBHostPipes.timeout, IOUSBHostPipes.transactionTimeout:
+        // A short packet ends a transfer; whatever arrived before a deadline
+        // is part of the stream.
         return transferred
-      case IOUSBHostPipes.timeout, IOUSBHostPipes.transactionTimeout:
-        // Whatever arrived before the deadline is part of the stream.
-        return transferred
-      case IOUSBHostPipes.aborted:
-        lock.lock()
-        let reason = gone ? "the gadget went away" : closing ? "link closed" : "usb bulk \(what) aborted"
-        lock.unlock()
-        throw LinkError.closed(reason)
       default:
-        throw LinkError.closed("usb bulk \(what) failed: \(IOUSBHostPipes.describe(status))")
+        throw failure(status, what)
       }
     }
 
+    /// Why transfers stop now, if they do: the link was closed from this
+    /// end, or the gadget went away.
+    private var stopReason: String? {
+      lock.withLock { gone ? "the gadget went away" : closing ? "link closed" : nil }
+    }
+
+    private func checkRunning() throws {
+      if let stopReason { throw LinkError.closed(stopReason) }
+    }
+
+    private func failure(_ status: IOReturn, _ what: String) -> LinkError {
+      if UInt32(bitPattern: status) == IOUSBHostPipes.aborted {
+        return .closed(stopReason ?? "usb bulk \(what) aborted")
+      }
+      return .closed("usb bulk \(what) failed: \(IOUSBHostPipes.describe(status))")
+    }
+
+    private func abortPipes(_ option: IOUSBHostAbortOption) {
+      try? input.__abort(with: option)
+      try? output.__abort(with: option)
+    }
+
     func abort() {
-      lock.lock()
-      closing = true
-      lock.unlock()
-      try? input.__abort(with: .asynchronous)
-      try? output.__abort(with: .asynchronous)
+      lock.withLock { closing = true }
+      abortPipes(.asynchronous)
     }
 
     func close() {
-      lock.lock()
-      let first = !destroyed
-      destroyed = true
-      closing = true
-      lock.unlock()
+      let first = lock.withLock {
+        defer { destroyed = true; closing = true }
+        return !destroyed
+      }
       guard first else { return }
-      try? input.__abort(with: .synchronous)
-      try? output.__abort(with: .synchronous)
+      abortPipes(.synchronous)
       interface.destroy()
       IOObjectRelease(service)
     }
 
     /// The device was unplugged or re-enumerated: whatever is in flight ends.
     private func lost() {
-      lock.lock()
-      gone = true
-      lock.unlock()
-      try? input.__abort(with: .asynchronous)
-      try? output.__abort(with: .asynchronous)
+      lock.withLock { gone = true }
+      abortPipes(.asynchronous)
     }
 
     // MARK: status codes
@@ -272,7 +276,8 @@
     }
   }
 
-  /// One transfer's result, handed from IOUSBHost's queue to the waiting thread.
+  /// One queued transfer's result, handed from IOUSBHost's queue to the
+  /// waiting thread.
   private final class Completion: @unchecked Sendable {
     private let done = DispatchSemaphore(value: 0)
     private var status: IOReturn = 0
@@ -290,29 +295,27 @@
     }
   }
 
-  /// Set from the interface's interest handler, which is registered before the
-  /// pipes exist; `onSet` is wired once they do.
+  /// Set from the interface's interest handler, which IOUSBHost wants before
+  /// the pipes exist; `notify` is wired once they do, and fires at once if
+  /// the gadget already went.
   private final class TerminationFlag: @unchecked Sendable {
     private let lock = NSLock()
     private var isSet = false
     private var handler: (() -> Void)?
 
-    var onSet: (() -> Void)? {
-      get { nil }
-      set {
-        lock.lock()
-        handler = newValue
-        let fire = isSet
-        lock.unlock()
-        if fire { newValue?() }
+    func notify(_ handler: @escaping () -> Void) {
+      let fire = lock.withLock {
+        self.handler = handler
+        return isSet
       }
+      if fire { handler() }
     }
 
     func set() {
-      lock.lock()
-      isSet = true
-      let handler = handler
-      lock.unlock()
+      let handler = lock.withLock {
+        isSet = true
+        return self.handler
+      }
       handler?()
     }
   }
