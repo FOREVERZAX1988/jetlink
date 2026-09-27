@@ -95,9 +95,8 @@ struct PythonControlEventsTests {
   }
 
   @Test func theFixtureCoversEveryEventTheMacHears() throws {
-    let names = Set(try Fixture.lines("python_control_events.jsonl").map { line in
-      (try JSONSerialization.jsonObject(with: line) as! [String: Any])["event"] as! String
-    })
+    let lines = try Fixture.lines("python_control_events.jsonl")
+    let names = Set(try lines.map { line in (try JSONSerialization.jsonObject(with: line) as! [String: Any])["event"] as! String })
     #expect(names == ["hello", "server", "link", "engine", "stats", "inventory", "catalog", "download", "import", "reply"])
   }
 
