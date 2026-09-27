@@ -240,3 +240,5 @@ public final class OrtEngine: @unchecked Sendable {
     spare = [:]
   }
 }
+
+extension OrtEngine: Engine {}

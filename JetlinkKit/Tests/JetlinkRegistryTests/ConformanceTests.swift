@@ -1,0 +1,166 @@
+import Foundation
+import JetlinkKit
+import Testing
+
+@testable import JetlinkRegistry
+
+/// tests/fixtures/conformance/registry.json, which
+/// JetlinkKit/Scripts/make_conformance_fixtures.py writes from the Python
+/// registry: pointers, identities, catalog parsing and merging, and the
+/// catalog and inventory payloads the Python makes of one cache directory.
+extension JSON {
+  fileprivate var int64: Int64? {
+    if case .int(let value) = self { return value }
+    return nil
+  }
+
+  fileprivate var bool: Bool? {
+    if case .bool(let value) = self { return value }
+    return nil
+  }
+}
+
+struct RegistryConformanceTests {
+  private var fixture: JSON { Fixture.json("conformance/registry.json") }
+
+  @Test func pointersParseAsPythonParsesThem() throws {
+    let cases = try #require(fixture["pointers"]?.array)
+    #expect(cases.count > 10)
+    for c in cases {
+      let text = try #require(c["text"]?.string)
+      let expected = c["expected"]?.object.map { Pointer(oid: $0["oid"]!.string!, size: $0["size"]!.int64!) }
+      #expect(LFS.parsePointer(text) == expected, "\(text.prefix(60).debugDescription)")
+    }
+  }
+
+  @Test func identitiesAreWhatPythonCallsThem() throws {
+    for c in try #require(fixture["identities"]?.array) {
+      let value = try #require(c["value"]?.string)
+      #expect(CacheLayout.isRef(value) == c["is_ref"]?.bool, "\(value)")
+      #expect(CacheLayout.isSHA256(value) == c["is_sha256"]?.bool, "\(value)")
+    }
+  }
+
+  @Test func catalogsParseAsPythonParsesThem() throws {
+    let cases = try #require(fixture["parses"]?.array)
+    for c in cases {
+      let name = c["name"]?.string ?? "?"
+      let catalog = c["catalog_file"]?.string.map { Fixture.json($0) } ?? c["catalog"] ?? .null
+      let expected = (c["expected"]?.array ?? []).map { m in
+        Catalog.Entry(
+          name: m["name"]?.string ?? "", shortName: m["short_name"]?.string ?? "", ref: m["ref"]?.string ?? "",
+          buildTime: m["build_time"]?.string ?? "", index: Int(m["index"]?.int64 ?? -1))
+      }
+      #expect(Catalog.parse(catalog) == expected, "\(name)")
+    }
+  }
+
+  @Test func catalogsMergeAsPythonMergesThem() throws {
+    for c in try #require(fixture["merges"]?.array) {
+      let catalogs = (c["catalogs"]?.array ?? []).compactMap(\.object)
+      let merged = Catalog.merge(catalogs)
+      let expected = c["expected"]?.object ?? JSONObject()
+      #expect(merged == expected, "\(c["name"]?.string ?? "?")")
+    }
+  }
+
+  /// The cache directory the Python registry was shown, written again here.
+  private func writeTree(_ tree: JSONObject, under root: URL) throws {
+    for (relative, content) in tree {
+      let url = root.appending(path: relative)
+      try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+      if let file = content["raw_file"]?.string, var object = content["json"]?.object {
+        object["raw"] = Fixture.json(file)
+        try JSON.object(object).data().write(to: url)
+      } else if let json = content["json"] {
+        try json.data().write(to: url)
+      } else if let text = content["text"]?.string {
+        try Data(text.utf8).write(to: url)
+      } else {
+        try Data(count: Int(content["bytes"]?.int64 ?? 0)).write(to: url)
+      }
+    }
+  }
+
+  /// The payload as the Python fixture spells it: the root as $ROOT, no free space.
+  private func normalized<T: Encodable>(_ value: T, root: URL) throws -> Any {
+    let encoder = JSONEncoder()
+    encoder.keyEncodingStrategy = .convertToSnakeCase
+    encoder.outputFormatting = [.withoutEscapingSlashes]
+    var text = String(decoding: try encoder.encode(value), as: UTF8.self)
+    for prefix in [root.path, root.resolvingSymlinksInPath().path] {
+      text = text.replacingOccurrences(of: prefix, with: "$ROOT")
+    }
+    var object = try JSONSerialization.jsonObject(with: Data(text.utf8))
+    if var dict = object as? [String: Any], var disk = dict["disk"] as? [String: Any] {
+      disk["free_bytes"] = 0
+      dict["disk"] = disk
+      object = dict
+    }
+    return object
+  }
+
+  @Test func oneCacheDirectoryReadsTheSameFromBothSides() throws {
+    let raw = try Data(contentsOf: Fixture.directory.appending(path: "conformance/registry.json"))
+    let python = try #require((try JSONSerialization.jsonObject(with: raw) as? [String: Any])?["cache"] as? [String: Any])
+    let cache = try #require(fixture["cache"]?.object)
+    let tmp = try TempDir()
+    defer { tmp.remove() }
+    try writeTree(try #require(cache["tree"]?.object), under: tmp.url)
+    let registry = Registry(layout: tmp.layout)
+
+    let catalog = try #require(registry.cachedCatalog())
+    var comparison = RegistryJSONComparison()
+    comparison.compare(python: python["catalog"]!, swift: try normalized(catalog, root: tmp.url), at: "catalog")
+    let inventory = registry.inventory(
+      artifactTag: cache["artifact_tag"]?.string, artifactSuffix: cache["artifact_suffix"]?.string ?? "", loaded: nil)
+    comparison.compare(python: python["inventory"]!, swift: try normalized(inventory, root: tmp.url), at: "inventory")
+    #expect(comparison.differences.isEmpty, "\(comparison.differences)")
+  }
+}
+
+/// JetlinkKitTests' JSONComparison, for this target: a Swift key left out
+/// matches a Python null, and anything else must be equal.
+struct RegistryJSONComparison {
+  var differences: [String] = []
+
+  mutating func compare(python: Any, swift: Any, at path: String) {
+    switch (python, swift) {
+    case (let p as [String: Any], let s as [String: Any]):
+      for (key, value) in p where s[key] == nil && !(value is NSNull) {
+        differences.append("only Python sends \(path)/\(key)")
+      }
+      for (key, value) in s {
+        guard let theirs = p[key] else {
+          differences.append("only Swift has \(path)/\(key)")
+          continue
+        }
+        compare(python: theirs, swift: value, at: "\(path)/\(key)")
+      }
+    case (let p as [Any], let s as [Any]):
+      guard p.count == s.count else {
+        differences.append("\(path): \(p.count) items in Python, \(s.count) in Swift")
+        return
+      }
+      for (index, pair) in zip(p, s).enumerated() {
+        compare(python: pair.0, swift: pair.1, at: "\(path)/\(index)")
+      }
+    default:
+      let equal: Bool
+      if python is NSNull || swift is NSNull {
+        equal = python is NSNull && swift is NSNull
+      } else if let x = python as? String, let y = swift as? String {
+        equal = x == y
+      } else if let x = python as? NSNumber, let y = swift as? NSNumber {
+        equal = x.doubleValue == y.doubleValue
+      } else if let x = python as? Bool, let y = swift as? Bool {
+        equal = x == y
+      } else {
+        equal = false
+      }
+      if !equal {
+        differences.append("\(path): Python \(python), Swift \(swift)")
+      }
+    }
+  }
+}

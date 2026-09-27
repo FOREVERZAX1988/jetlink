@@ -105,8 +105,19 @@ PLAIN_SESSION = (('model', None),)
 # What a CoreML build writes, recorded in the sidecar. A load of an artifact
 # prepared under another version is refused as invalid, and the host rebuilds
 # it from the ONNX in seconds. Bump it with anything that changes the
-# preparation; 5 is every graph split on `ane` and Expand as Tile on both.
+# preparation of a layout that already exists; 5 is every graph split on
+# `ane` and Expand as Tile on both. `ane-whole` came later without a bump: a
+# new layout under a device tag of its own changes no artifact already on disk.
+# The Swift server writes the same artifacts under the same tags and reads this
+# number from JetlinkKit's Pinned.swift, so one Mac cache serves both servers.
 PREPARE_VERSION = 5
+
+# The onnxruntime release the Apple builds run: the Mac's Python server pins it
+# (macos/Python/requirements.txt) and the Swift package links its xcframework
+# (JetlinkKit/Package.swift). It is part of every artifact's tag, so the two
+# servers share a cache only while they agree; tests/test_conformance.py holds
+# both files to it.
+APPLE_ONNXRUNTIME = '1.29.0'
 
 # The last resort for the compile stage's fraction: only a first build of a
 # model, whose sidecar records nothing yet, and only if the compile writes

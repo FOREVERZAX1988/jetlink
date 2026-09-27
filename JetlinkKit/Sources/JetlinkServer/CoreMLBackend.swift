@@ -1,38 +1,7 @@
 import Foundation
+import JetlinkKit
 import JetlinkONNX
 import Metal
-
-/// What a model preparation produced: the parts to run as a chain, in order.
-public struct PreparedModel: Sendable {
-  public struct Part: Sendable {
-    public let name: String
-    public let file: String
-    public let weightBytes: Int64
-
-    public init(name: String, file: String, weightBytes: Int64) {
-      self.name = name
-      self.file = file
-      self.weightBytes = weightBytes
-    }
-  }
-
-  public let parts: [Part]
-  public let summary: String
-
-  public init(parts: [Part], summary: String) {
-    self.parts = parts
-    self.summary = summary
-  }
-}
-
-/// Reads and rewrites ONNX: what JetlinkONNX does, behind a seam so the
-/// server builds and tests without it.
-public protocol ModelPreparer: Sendable {
-  func readSpec(model: URL, sha256: String, nbytes: Int64, frameSkip: Int) throws -> ModelSpec
-  /// Writes the parts into `directory` in the device's layout.
-  func prepare(model: URL, into directory: URL, layout: CoreMLPreparation.Layout, cacheKey: @escaping (String) -> String) throws
-    -> PreparedModel
-}
 
 /// onnxruntime's CoreML provider in process: the Swift form of the Python ort
 /// backend on `--device ane` (the vision trunk on the Neural Engine, the rest
@@ -57,10 +26,12 @@ public final class CoreMLBackend: EngineBackend {
     case cpu
   }
 
-  /// What a CoreML build writes, as the Python's PREPARE_VERSION: 5 is every
-  /// graph split on `ane` and Expand as Tile on both; 6 adds the `ane-whole`
-  /// layout, one program with the norms prescaled and the heads in fp32.
-  public static let prepareVersion = 6
+  /// What a CoreML build writes, the Python's PREPARE_VERSION: 5 is every
+  /// graph split on `ane` and Expand as Tile on both. `ane-whole` is a layout
+  /// under a device tag of its own, so adding it changed no artifact and took
+  /// no bump. The same number on both sides is what lets one Mac cache serve
+  /// both servers; `Pinned` carries it from the Python.
+  public static let prepareVersion = Pinned.prepareVersion
   static let manifestName = "sessions.json"
 
   public let name = "ort"
@@ -222,14 +193,14 @@ public final class CoreMLBackend: EngineBackend {
       "device": deviceTag(),
       "sessions": manifest,
       "providers": engine.providers,
-      "build_seconds": (Date().timeIntervalSince(started) * 10).rounded() / 10,
+      "build_seconds": pythonRound(Date().timeIntervalSince(started), 1),
       "onnx": model.lastPathComponent,
       "prepare": CoreMLBackend.prepareVersion,
       "preparer": "swift",
       "built_at": formatter.string(from: Date()),
       "convert_bytes": converted,
       "compile_bytes": compiled,
-      "compile_seconds": (compileSeconds * 10).rounded() / 10,
+      "compile_seconds": pythonRound(compileSeconds, 1),
       "freed_bytes": freed,
     ]
     for (key, value) in metaExtra { meta[key] = value }
@@ -319,7 +290,7 @@ public final class CoreMLBackend: EngineBackend {
     report("load", 1, "loaded in \(Int(seconds.rounded())) s")
     if !meta.isEmpty {
       var updated = meta
-      updated["load_seconds"] = (seconds * 10).rounded() / 10
+      updated["load_seconds"] = pythonRound(seconds, 1)
       try? writeSidecar(artifact, updated)
     }
     return engine

@@ -1,10 +1,22 @@
-import CryptoKit
-import Darwin
 import Foundation
 import Synchronization
 import Testing
 
 @testable import JetlinkRegistry
+
+#if canImport(CryptoKit)
+  import CryptoKit
+#else
+  import Crypto
+#endif
+#if canImport(Darwin)
+  import Darwin
+#elseif canImport(Glibc)
+  import Glibc
+#endif
+#if canImport(FoundationNetworking)
+  import FoundationNetworking
+#endif
 
 // MARK: - fixtures
 
@@ -218,109 +230,113 @@ final class MockProtocol: URLProtocol, @unchecked Sendable {
   }
 }
 
-// MARK: - a real HTTP server on loopback
+// FetchTests' loopback server speaks Darwin sockets; the Linux build
+// (docs/conformance.md) runs the registry's conformance tests without it.
+#if !JETLINK_PORTABLE
+  // MARK: - a real HTTP server on loopback
 
-/// Serves `total` bytes of a repeating pattern to every GET, over a real
-/// socket, so a download goes through URLSession's own HTTP stack. Nothing is
-/// read from disk on the serving side.
-final class LocalServer: Sendable {
-  let port: UInt16
-  let total: Int64
-  let pattern: Data
-  private let listener: Int32
+  /// Serves `total` bytes of a repeating pattern to every GET, over a real
+  /// socket, so a download goes through URLSession's own HTTP stack. Nothing is
+  /// read from disk on the serving side.
+  final class LocalServer: Sendable {
+    let port: UInt16
+    let total: Int64
+    let pattern: Data
+    private let listener: Int32
 
-  init(total: Int64, patternBytes: Int = 1 << 20) throws {
-    self.total = total
-    var generator = SystemRandomNumberGenerator()
-    pattern = Data((0..<patternBytes).map { _ in UInt8.random(in: 0...255, using: &generator) })
+    init(total: Int64, patternBytes: Int = 1 << 20) throws {
+      self.total = total
+      var generator = SystemRandomNumberGenerator()
+      pattern = Data((0..<patternBytes).map { _ in UInt8.random(in: 0...255, using: &generator) })
 
-    let fd = socket(AF_INET, SOCK_STREAM, 0)
-    guard fd >= 0 else { throw POSIXError(.EIO) }
-    var yes: Int32 = 1
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout<Int32>.size))
-    var address = sockaddr_in()
-    address.sin_family = sa_family_t(AF_INET)
-    address.sin_addr.s_addr = inet_addr("127.0.0.1")
-    address.sin_port = 0
-    let bound = withUnsafePointer(to: &address) {
-      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
-    }
-    guard bound == 0, listen(fd, 8) == 0 else {
-      close(fd)
-      throw POSIXError(.EADDRINUSE)
-    }
-    var length = socklen_t(MemoryLayout<sockaddr_in>.size)
-    _ = withUnsafeMutablePointer(to: &address) {
-      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &length) }
-    }
-    port = UInt16(bigEndian: address.sin_port)
-    listener = fd
+      let fd = socket(AF_INET, SOCK_STREAM, 0)
+      guard fd >= 0 else { throw POSIXError(.EIO) }
+      var yes: Int32 = 1
+      setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout<Int32>.size))
+      var address = sockaddr_in()
+      address.sin_family = sa_family_t(AF_INET)
+      address.sin_addr.s_addr = inet_addr("127.0.0.1")
+      address.sin_port = 0
+      let bound = withUnsafePointer(to: &address) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+      }
+      guard bound == 0, listen(fd, 8) == 0 else {
+        close(fd)
+        throw POSIXError(.EADDRINUSE)
+      }
+      var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+      _ = withUnsafeMutablePointer(to: &address) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &length) }
+      }
+      port = UInt16(bigEndian: address.sin_port)
+      listener = fd
 
-    let pattern = self.pattern
-    Thread.detachNewThread {
-      while true {
-        let client = accept(fd, nil, nil)
-        if client < 0 { return }  // the listener was closed
-        Thread.detachNewThread { LocalServer.serve(client, total: total, pattern: pattern) }
+      let pattern = self.pattern
+      Thread.detachNewThread {
+        while true {
+          let client = accept(fd, nil, nil)
+          if client < 0 { return }  // the listener was closed
+          Thread.detachNewThread { LocalServer.serve(client, total: total, pattern: pattern) }
+        }
       }
     }
-  }
 
-  var url: String { "http://127.0.0.1:\(port)/object" }
+    var url: String { "http://127.0.0.1:\(port)/object" }
 
-  /// The SHA-256 of what is served, without holding it.
-  var sha256: String {
-    var hasher = SHA256()
-    var left = total
-    while left > 0 {
-      let n = Int(min(Int64(pattern.count), left))
-      hasher.update(data: pattern.prefix(n))
-      left -= Int64(n)
-    }
-    return hasher.finalize().map { String(format: "%02x", $0) }.joined()
-  }
-
-  func stop() {
-    shutdown(listener, SHUT_RDWR)
-    close(listener)
-  }
-
-  private static func serve(_ client: Int32, total: Int64, pattern: Data) {
-    defer { close(client) }
-    var yes: Int32 = 1
-    // A client that hangs up mid-body must not take the test process with SIGPIPE.
-    setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &yes, socklen_t(MemoryLayout<Int32>.size))
-    var request = Data()
-    var buffer = [UInt8](repeating: 0, count: 4096)
-    while request.range(of: Data("\r\n\r\n".utf8)) == nil {
-      let n = read(client, &buffer, buffer.count)
-      if n <= 0 { return }
-      request.append(buffer, count: n)
-    }
-    let header = "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: \(total)\r\nConnection: close\r\n\r\n"
-    guard send(client, Data(header.utf8)) else { return }
-    var left = total
-    while left > 0 {
-      let n = Int(min(Int64(pattern.count), left))
-      guard send(client, pattern.prefix(n)) else { return }
-      left -= Int64(n)
-    }
-  }
-
-  private static func send(_ fd: Int32, _ data: Data) -> Bool {
-    data.withUnsafeBytes { raw -> Bool in
-      guard var base = raw.baseAddress else { return true }
-      var left = raw.count
+    /// The SHA-256 of what is served, without holding it.
+    var sha256: String {
+      var hasher = SHA256()
+      var left = total
       while left > 0 {
-        let n = write(fd, base, left)
-        if n <= 0 { return false }
-        base += n
-        left -= n
+        let n = Int(min(Int64(pattern.count), left))
+        hasher.update(data: pattern.prefix(n))
+        left -= Int64(n)
       }
-      return true
+      return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    func stop() {
+      shutdown(listener, SHUT_RDWR)
+      close(listener)
+    }
+
+    private static func serve(_ client: Int32, total: Int64, pattern: Data) {
+      defer { close(client) }
+      var yes: Int32 = 1
+      // A client that hangs up mid-body must not take the test process with SIGPIPE.
+      setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &yes, socklen_t(MemoryLayout<Int32>.size))
+      var request = Data()
+      var buffer = [UInt8](repeating: 0, count: 4096)
+      while request.range(of: Data("\r\n\r\n".utf8)) == nil {
+        let n = read(client, &buffer, buffer.count)
+        if n <= 0 { return }
+        request.append(buffer, count: n)
+      }
+      let header = "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: \(total)\r\nConnection: close\r\n\r\n"
+      guard send(client, Data(header.utf8)) else { return }
+      var left = total
+      while left > 0 {
+        let n = Int(min(Int64(pattern.count), left))
+        guard send(client, pattern.prefix(n)) else { return }
+        left -= Int64(n)
+      }
+    }
+
+    private static func send(_ fd: Int32, _ data: Data) -> Bool {
+      data.withUnsafeBytes { raw -> Bool in
+        guard var base = raw.baseAddress else { return true }
+        var left = raw.count
+        while left > 0 {
+          let n = write(fd, base, left)
+          if n <= 0 { return false }
+          base += n
+          left -= n
+        }
+        return true
+      }
     }
   }
-}
+#endif
 
 /// Collects progress calls from whatever thread makes them.
 final class ProgressLog: Sendable {

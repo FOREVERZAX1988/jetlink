@@ -1,5 +1,10 @@
 import Foundation
-import os
+
+#if canImport(os)
+  import os
+#else
+  import JetlinkLog
+#endif
 
 /// The graph rewrites of jetlink/onnx_patch.py on the `simplify` branch, on
 /// the decoded model. Each one follows its Python function step by step,

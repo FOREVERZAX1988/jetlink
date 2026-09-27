@@ -5,12 +5,16 @@ This file is part of jetlink and is licensed under the MIT License.
 See the LICENSE file in the root directory for more details.
 
 Checks the Swift ONNX preparation (JetlinkONNX, through the jetlink-onnx CLI)
-against the Python one it ports: the `simplify` branch's
-`_prepared_model(for_coreml=True)`, then `split_vision_policy` unless
---whole, then `_with_cache_key` per part.
+against the Python one it ports, this checkout's: `_prepared_model(for_coreml=True)`
+with the layout's passes, then `split_vision_policy` for the split layout, then
+`_with_cache_key` per part. Real models are what the fixtures cannot be; the
+Swift tests pin the same thing on small graphs (docs/conformance.md).
 
-    PYTHONPATH=../jetlink-simplify ../jetlink/.venv/bin/python \\
-      JetlinkKit/Scripts/check_onnx_prep.py [--whole | --both] [--ort] [--cli PATH] model.onnx ...
+    .venv/bin/python JetlinkKit/Scripts/check_onnx_prep.py \\
+      [--layout split|whole|ane-whole ... | --all | --whole | --both] [--ort] [--cli PATH] model.onnx ...
+
+The layout is split unless one is given; --layout repeats, --all is all three,
+--whole and --both are short for the whole layout and for split plus whole.
 
 For each model and layout it compares, with the onnx package:
   - nodes, in order: op_type, name, domain, inputs, outputs, attributes by value;
@@ -29,11 +33,13 @@ The Python parts stay in memory; only the Swift side writes files, into a
 temporary directory removed after each model. Prepared real models are about
 0.8 GB, so free disk is checked first.
 
-Two of the test fixtures fail here on purpose, because Swift has no shape
+Some test fixtures fail here on purpose, because Swift has no shape or type
 inferrer: noshape.onnx [split] (the cut tensor's shape is not recorded; Python
-infers it, Swift refuses) and unrecorded.onnx [whole] (a Gather whose input
-shape is not recorded; Python infers it and rewrites the index, Swift leaves
-it). The Swift tests hold both to the Swift behaviour.
+infers it, Swift refuses), unrecorded.onnx [whole] and [ane-whole] (a Gather
+whose input shape is not recorded; Python infers it and rewrites the index,
+Swift leaves it), and notype.onnx and noentry.onnx [ane-whole] (a type left out where
+Python infers it; Swift refuses the layout). The Swift tests hold each to the
+Swift behaviour.
 """
 from __future__ import annotations
 
@@ -51,6 +57,10 @@ import onnx
 from onnx import helper, numpy_helper
 
 ROOT = Path(__file__).resolve().parents[1]
+# This checkout's jetlink, ahead of any jetlink the environment has installed:
+# a venv's editable install can point at another checkout.
+sys.path.insert(0, str(ROOT.parent))
+LAYOUTS = ('split', 'whole', 'ane-whole')
 DEFAULT_CLI = ROOT / '.build' / 'release' / 'jetlink-onnx'
 IMG_INPUTS = ('img', 'big_img', 'new_img', 'state_img_q')
 ORT_ALWAYS_BELOW = 64 << 20
@@ -63,18 +73,18 @@ def cache_key(stem: str, part: str) -> str:
   return re.sub(r'[^A-Za-z0-9]', '', stem + part)[:63]
 
 
-def python_parts(src: Path, whole: bool, prefix: str) -> dict[str, onnx.ModelProto]:
+def python_parts(src: Path, layout: str, prefix: str) -> dict[str, onnx.ModelProto]:
   from jetlink.onnx_patch import split_vision_policy
-  from jetlink.server.backends.ort import _prepared_model, _with_cache_key
-  model = _prepared_model(src, for_coreml=True)
-  names = ('model',) if whole else ('vision', 'policy')
-  parts = (model,) if whole else split_vision_policy(model)
+  from jetlink.server.backends.ort import ANE_WHOLE_LAYOUT, _prepared_model, _with_cache_key
+  model = _prepared_model(src, for_coreml=True, layout=ANE_WHOLE_LAYOUT if layout == ANE_WHOLE_LAYOUT else None)
+  names = ('vision', 'policy') if layout == 'split' else ('model',)
+  parts = split_vision_policy(model) if layout == 'split' else (model,)
   return {name: _with_cache_key(part, cache_key(prefix, name)) for name, part in zip(names, parts, strict=True)}
 
 
-def swift_parts(cli: Path, src: Path, out: Path, whole: bool, prefix: str) -> tuple[dict[str, Path], dict, str]:
+def swift_parts(cli: Path, src: Path, out: Path, layout: str, prefix: str) -> tuple[dict[str, Path], dict, str]:
   """(part files, {part: weight bytes}, the CLI's output); raises with the CLI's error."""
-  cmd = [str(cli), 'prepare', str(src), str(out), '--key-prefix', prefix] + (['--whole'] if whole else [])
+  cmd = [str(cli), 'prepare', str(src), str(out), '--key-prefix', prefix, '--layout', layout]
   run = subprocess.run(cmd, capture_output=True, text=True)
   if run.returncode != 0:
     raise SwiftFailed(run.stderr.strip().removeprefix('error: '))
@@ -244,15 +254,14 @@ def compare_runs(py: dict[str, np.ndarray], sw: dict[str, np.ndarray]) -> list[s
 
 # -- one model -----------------------------------------------------------------
 
-def check(src: Path, whole: bool, cli: Path, workdir: Path, prefix: str, ort_run: bool) -> bool:
-  layout = 'whole' if whole else 'split'
+def check(src: Path, layout: str, cli: Path, workdir: Path, prefix: str, ort_run: bool) -> bool:
   label = f'{src.name} [{layout}]'
   out = workdir / f'{src.stem}.{layout}'
   shutil.rmtree(out, ignore_errors=True)
   try:
     t0 = time.perf_counter()
     try:
-      py = python_parts(src, whole, prefix)
+      py = python_parts(src, layout, prefix)
       py_error = None
     except Exception as e:
       py, py_error = None, str(e)
@@ -260,7 +269,7 @@ def check(src: Path, whole: bool, cli: Path, workdir: Path, prefix: str, ort_run
 
     t0 = time.perf_counter()
     try:
-      files, weights, _ = swift_parts(cli, src, out, whole, prefix)
+      files, weights, _ = swift_parts(cli, src, out, layout, prefix)
       sw_error = None
     except SwiftFailed as e:
       files, weights, sw_error = {}, {}, str(e)
@@ -318,6 +327,8 @@ def main() -> int:
   ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
   ap.add_argument('models', nargs='+', type=Path)
   layout = ap.add_mutually_exclusive_group()
+  layout.add_argument('--layout', action='append', choices=LAYOUTS, help='a layout to check; repeat for more')
+  layout.add_argument('--all', action='store_true', help='all three layouts')
   layout.add_argument('--whole', action='store_true', help='the whole layout only')
   layout.add_argument('--both', action='store_true', help='the split and the whole layouts')
   ap.add_argument('--ort', action='store_true', help='also run onnxruntime on large models')
@@ -332,7 +343,14 @@ def main() -> int:
     return 2
   workdir = args.workdir or Path(tempfile.mkdtemp(prefix='check-onnx-prep-'))
   workdir.mkdir(parents=True, exist_ok=True)
-  layouts = (False, True) if args.both else ((True,) if args.whole else (False,))
+  if args.all:
+    layouts = LAYOUTS
+  elif args.both:
+    layouts = ('split', 'whole')
+  elif args.whole:
+    layouts = ('whole',)
+  else:
+    layouts = tuple(args.layout or ('split',))
   ok = True
   try:
     for src in args.models:
@@ -343,8 +361,8 @@ def main() -> int:
         print(f'SKIP {src.name}: {free / 2**30:.1f} GB free, need {(size + (2 << 30)) / 2**30:.1f}', file=sys.stderr)
         ok = False
         continue
-      for whole in layouts:
-        ok &= check(src, whole, args.cli, workdir, args.key_prefix, args.ort or size < ORT_ALWAYS_BELOW)
+      for layout_name in layouts:
+        ok &= check(src, layout_name, args.cli, workdir, args.key_prefix, args.ort or size < ORT_ALWAYS_BELOW)
   finally:
     if args.workdir is None:
       shutil.rmtree(workdir, ignore_errors=True)

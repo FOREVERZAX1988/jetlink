@@ -1,6 +1,11 @@
 import Foundation
 import Observation
-import os
+
+#if canImport(os)
+  import os
+#else
+  import JetlinkLog
+#endif
 
 /// The catalog, what is on disk, and what is happening to it right now.
 @MainActor

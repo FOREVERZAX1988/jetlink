@@ -28,8 +28,6 @@ public protocol Engine: AnyObject {
   func close()
 }
 
-extension OrtEngine: Engine {}
-
 /// Turns an ONNX file into an artifact it can load quickly, and loads one.
 /// The Swift form of `server/backends/base.Backend`.
 public protocol EngineBackend: AnyObject, Sendable {

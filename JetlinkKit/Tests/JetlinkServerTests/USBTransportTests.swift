@@ -357,100 +357,103 @@ final class GadgetClient {
   }
 }
 
-@Suite("Server over USB", .serialized)
-struct ServerUSBTests {
-  func makeServer(_ cache: TemporaryDirectory, gadget: FakeGadget) throws -> Server {
-    let server = try Server(
-      configuration: Server.Configuration(
-        host: "127.0.0.1", port: 0, cacheRoot: cache.url, device: .cpu, keepAlive: false, preload: false, listen: false, usb: true),
-      preparer: ONNXPreparer())
-    server.gadget = gadget
-    return server
-  }
-
-  @Test("A gadget nothing on the comma serves is retried quietly, with no link events")
-  func unservedGadget() throws {
-    let cache = try TemporaryDirectory()
-    let gadget = FakeGadget(then: unservedPipes)
-    let server = try makeServer(cache, gadget: gadget)
-    let links = LockedLinks()
-    server.host.subscribe { if case .link(let link) = $0 { links.append(link) } }
-    try server.start()
-    defer { server.shutdown() }
-    #expect(server.port == nil, "a USB server opens no port")
-    Thread.sleep(forTimeInterval: 1.6)
-    #expect(gadget.opens >= 3)
-    #expect(links.all.allSatisfy { $0.state == .waiting }, "\(links.all)")
-  }
-
-  @Test("The comma over USB is served as over TCP; the link is up on its first message and down when it goes")
-  func servesOverUSB() throws {
-    let cache = try TemporaryDirectory()
-    let comma = FakePipes()
-    let gadget = FakeGadget([unservedPipes(), comma], then: unservedPipes)
-    let server = try makeServer(cache, gadget: gadget)
-    let links = LockedLinks()
-    server.host.subscribe { if case .link(let link) = $0 { links.append(link) } }
-    try server.start()
-    defer { server.shutdown() }
-    let client = GadgetClient(comma)
-    try client.sendJSON(.helloReq, ["client": ["name": "modeld", "nonce": 1]])
-    let hello = client.json(try client.recv(.helloResp))
-    #expect(hello["protocol"] as? Int == Int(Wire.version))
-    client.send(.ping)
-    _ = try client.recv(.pong)
-    #expect(links.all.contains { $0.state == .connected && $0.peer == "usb" })
-    comma.unplug()
-    let deadline = Date().addingTimeInterval(5)
-    while !links.all.contains(where: { $0.state == .disconnected }) && Date() < deadline {
-      Thread.sleep(forTimeInterval: 0.05)
+// The server itself is Apple-only; the Linux build runs the framing above.
+#if !JETLINK_PORTABLE
+  @Suite("Server over USB", .serialized)
+  struct ServerUSBTests {
+    func makeServer(_ cache: TemporaryDirectory, gadget: FakeGadget) throws -> Server {
+      let server = try Server(
+        configuration: Server.Configuration(
+          host: "127.0.0.1", port: 0, cacheRoot: cache.url, device: .cpu, keepAlive: false, preload: false, listen: false, usb: true),
+        preparer: ONNXPreparer())
+      server.gadget = gadget
+      return server
     }
-    #expect(links.all.filter { $0.state == .connected }.count == 1)
-    #expect(links.all.contains { $0.state == .disconnected })
-  }
 
-  @Test("A comma over USB is served the outputs the Python server computes", arguments: ["tiny_queued", "tiny_stateful"])
-  func servesGoldenFramesOverUSB(_ name: String) throws {
-    let golden = try Golden(name)
-    let cache = try TemporaryDirectory()
-    let comma = FakePipes()
-    comma.burst = 5 * 1024
-    let server = try makeServer(cache, gadget: FakeGadget([comma], then: unservedPipes))
-    try server.start()
-    defer { server.shutdown() }
-    let client = GadgetClient(comma)
-    try client.sendJSON(.helloReq, ["client": ["name": "test", "nonce": 1]])
-    _ = try client.recv(.helloResp)
+    @Test("A gadget nothing on the comma serves is retried quietly, with no link events")
+    func unservedGadget() throws {
+      let cache = try TemporaryDirectory()
+      let gadget = FakeGadget(then: unservedPipes)
+      let server = try makeServer(cache, gadget: gadget)
+      let links = LockedLinks()
+      server.host.subscribe { if case .link(let link) = $0 { links.append(link) } }
+      try server.start()
+      defer { server.shutdown() }
+      #expect(server.port == nil, "a USB server opens no port")
+      Thread.sleep(forTimeInterval: 1.6)
+      #expect(gadget.opens >= 3)
+      #expect(links.all.allSatisfy { $0.state == .waiting }, "\(links.all)")
+    }
 
-    let bytes = try Data(contentsOf: golden.model)
-    try client.sendJSON(.engineReq, ["sha256": golden.sha256, "nbytes": bytes.count, "frame_skip": 4])
-    var state = client.json(try client.recv(.engineResp))
-    if state["state"] as? String == "need_upload" {
-      var payload = withUnsafeBytes(of: UInt64(0).littleEndian) { Data($0) }
-      payload.append(bytes)
-      client.send(.uploadChunk, payload)
-      try client.sendJSON(.uploadDone, ["sha256": golden.sha256])
-      state = client.json(try client.recv(.engineResp))
+    @Test("The comma over USB is served as over TCP; the link is up on its first message and down when it goes")
+    func servesOverUSB() throws {
+      let cache = try TemporaryDirectory()
+      let comma = FakePipes()
+      let gadget = FakeGadget([unservedPipes(), comma], then: unservedPipes)
+      let server = try makeServer(cache, gadget: gadget)
+      let links = LockedLinks()
+      server.host.subscribe { if case .link(let link) = $0 { links.append(link) } }
+      try server.start()
+      defer { server.shutdown() }
+      let client = GadgetClient(comma)
+      try client.sendJSON(.helloReq, ["client": ["name": "modeld", "nonce": 1]])
+      let hello = client.json(try client.recv(.helloResp))
+      #expect(hello["protocol"] as? Int == Int(Wire.version))
+      client.send(.ping)
+      _ = try client.recv(.pong)
+      #expect(links.all.contains { $0.state == .connected && $0.peer == "usb" })
+      comma.unplug()
+      let deadline = Date().addingTimeInterval(5)
+      while !links.all.contains(where: { $0.state == .disconnected }) && Date() < deadline {
+        Thread.sleep(forTimeInterval: 0.05)
+      }
+      #expect(links.all.filter { $0.state == .connected }.count == 1)
+      #expect(links.all.contains { $0.state == .disconnected })
     }
-    while state["state"] as? String == "building" {
-      state = client.json(try client.recv(.engineResp))
+
+    @Test("A comma over USB is served the outputs the Python server computes", arguments: ["tiny_queued", "tiny_stateful"])
+    func servesGoldenFramesOverUSB(_ name: String) throws {
+      let golden = try Golden(name)
+      let cache = try TemporaryDirectory()
+      let comma = FakePipes()
+      comma.burst = 5 * 1024
+      let server = try makeServer(cache, gadget: FakeGadget([comma], then: unservedPipes))
+      try server.start()
+      defer { server.shutdown() }
+      let client = GadgetClient(comma)
+      try client.sendJSON(.helloReq, ["client": ["name": "test", "nonce": 1]])
+      _ = try client.recv(.helloResp)
+
+      let bytes = try Data(contentsOf: golden.model)
+      try client.sendJSON(.engineReq, ["sha256": golden.sha256, "nbytes": bytes.count, "frame_skip": 4])
+      var state = client.json(try client.recv(.engineResp))
+      if state["state"] as? String == "need_upload" {
+        var payload = withUnsafeBytes(of: UInt64(0).littleEndian) { Data($0) }
+        payload.append(bytes)
+        client.send(.uploadChunk, payload)
+        try client.sendJSON(.uploadDone, ["sha256": golden.sha256])
+        state = client.json(try client.recv(.engineResp))
+      }
+      while state["state"] as? String == "building" {
+        state = client.json(try client.recv(.engineResp))
+      }
+      #expect(state["state"] as? String == "ready")
+      let spec = try ModelSpec.from(state["spec"] as! [String: Any])
+      let frameBytes = spec.warpedBytes + spec.packedBytes
+      let count = golden.frames.count / frameBytes
+      for i in 0..<count {
+        var request = withUnsafeBytes(of: UInt32(i).littleEndian) { Data($0) }
+        request.append(contentsOf: withUnsafeBytes(of: UInt32(0).littleEndian) { Data($0) })
+        request.append(golden.frames[(i * frameBytes)..<((i + 1) * frameBytes)])
+        client.send(.inferReq, request)
+        let reply = try client.recv(.inferResp)
+        let status = reply.payload.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 4, as: UInt32.self) }
+        #expect(status == Wire.Status.ok.rawValue)
+        let expected = golden.expected[(i * spec.outputBytes)..<((i + 1) * spec.outputBytes)]
+        #expect(Data(reply.payload[Wire.inferRespSize...]) == Data(expected), "frame \(i) differs from Python's")
+      }
+      #expect(comma.crossed == 0)
+      #expect(server.framesServed == count)
     }
-    #expect(state["state"] as? String == "ready")
-    let spec = try ModelSpec.from(state["spec"] as! [String: Any])
-    let frameBytes = spec.warpedBytes + spec.packedBytes
-    let count = golden.frames.count / frameBytes
-    for i in 0..<count {
-      var request = withUnsafeBytes(of: UInt32(i).littleEndian) { Data($0) }
-      request.append(contentsOf: withUnsafeBytes(of: UInt32(0).littleEndian) { Data($0) })
-      request.append(golden.frames[(i * frameBytes)..<((i + 1) * frameBytes)])
-      client.send(.inferReq, request)
-      let reply = try client.recv(.inferResp)
-      let status = reply.payload.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 4, as: UInt32.self) }
-      #expect(status == Wire.Status.ok.rawValue)
-      let expected = golden.expected[(i * spec.outputBytes)..<((i + 1) * spec.outputBytes)]
-      #expect(Data(reply.payload[Wire.inferRespSize...]) == Data(expected), "frame \(i) differs from Python's")
-    }
-    #expect(comma.crossed == 0)
-    #expect(server.framesServed == count)
   }
-}
+#endif

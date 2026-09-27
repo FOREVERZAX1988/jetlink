@@ -1,8 +1,13 @@
-import CryptoKit
 import Foundation
 import Testing
 
 @testable import JetlinkONNX
+
+#if canImport(CryptoKit)
+  import CryptoKit
+#else
+  import Crypto
+#endif
 
 /// The fp16 to fp32 widening heads_in_fp32 relies on, held to numpy's
 /// `astype(np.float32)` bit for bit.

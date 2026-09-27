@@ -1,6 +1,14 @@
-import CryptoKit
 import Foundation
 import Synchronization
+
+#if canImport(CryptoKit)
+  import CryptoKit
+#else
+  import Crypto
+#endif
+#if canImport(FoundationNetworking)
+  import FoundationNetworking
+#endif
 
 extension LFS {
   /// Streams one LFS object to `<dest>.part`, hashing as it arrives, and only

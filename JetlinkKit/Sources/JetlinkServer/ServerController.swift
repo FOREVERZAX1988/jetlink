@@ -434,8 +434,8 @@ public final class ServerController: @unchecked Sendable {
     }
     state.lastEvent = now
     let event = DownloadEvent(
-      sha256: state.sha256, ref: state.ref, state: kind, frac: (state.frac * 10_000).rounded() / 10_000,
-      bytes: done, total: state.total, rateBps: (state.rate * 10).rounded() / 10, detail: detail, source: nil)
+      sha256: state.sha256, ref: state.ref, state: kind, frac: pythonRound(state.frac, 4),
+      bytes: done, total: state.total, rateBps: pythonRound(state.rate, 1), detail: detail, source: nil)
     state.last = event
     lock.unlock()
     publish(.download(event))
@@ -491,7 +491,7 @@ public final class ServerController: @unchecked Sendable {
   }
 
   private func importEvent(_ path: String, _ state: String, frac: Double = 0, sha256: String? = nil, detail: String = "") {
-    publish(.importEvent(ImportEvent(path: path, state: state, frac: (frac * 10_000).rounded() / 10_000, sha256: sha256, detail: detail)))
+    publish(.importEvent(ImportEvent(path: path, state: state, frac: pythonRound(frac, 4), sha256: sha256, detail: detail)))
   }
 
   // MARK: prepare, forget

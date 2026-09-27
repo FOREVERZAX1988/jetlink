@@ -18,10 +18,14 @@ server's own staging: PolicyQueues for the queued graph, each next_state_
 output fed back for the stateful one. The Swift server runs the same prepared
 graph on the same provider, so its outputs must match bit for bit.
 
-  PYTHONPATH=../jetlink-simplify ../jetlink/.venv/bin/python JetlinkKit/Scripts/make_server_fixtures.py
+  .venv/bin/python JetlinkKit/Scripts/make_server_fixtures.py [--out DIR]
+
+from the root of this checkout, so the fixtures pin the Python beside them.
+tests/test_conformance.py runs it into a temporary directory and compares.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -31,7 +35,9 @@ import onnx
 import onnxruntime as ort
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.append(str(ROOT))   # for tests.tiny_model; jetlink comes from PYTHONPATH
+# This checkout's jetlink and tests, ahead of any jetlink the environment has
+# installed: a venv's editable install can point at another checkout.
+sys.path.insert(0, str(ROOT))
 from tests import tiny_model  # noqa: E402
 
 from jetlink.queues import PolicyQueues  # noqa: E402
@@ -53,21 +59,21 @@ def session(path: Path):
   return ort.InferenceSession(prepared.SerializeToString(), providers=['CPUExecutionProvider'])
 
 
-def write(name: str, spec, frames: list[tuple[np.ndarray, np.ndarray]], outputs: list[np.ndarray]) -> None:
-  (OUT / f'{name}.spec.json').write_text(json.dumps(spec.to_dict(), indent=2) + '\n')
-  with open(OUT / f'{name}.frames.bin', 'wb') as f:
+def write(out: Path, name: str, spec, frames: list[tuple[np.ndarray, np.ndarray]], outputs: list[np.ndarray]) -> None:
+  (out / f'{name}.spec.json').write_text(json.dumps(spec.to_dict(), indent=2) + '\n')
+  with open(out / f'{name}.frames.bin', 'wb') as f:
     for warped, packed in frames:
       assert warped.dtype == np.uint8 and warped.nbytes == spec.warped_nbytes
       assert packed.dtype == np.float32 and packed.nbytes == spec.packed_nbytes
       f.write(warped.tobytes())
       f.write(packed.tobytes())
-  with open(OUT / f'{name}.expected.bin', 'wb') as f:
-    for out in outputs:
-      f.write(np.asarray(out, np.float32).reshape(-1).tobytes())
+  with open(out / f'{name}.expected.bin', 'wb') as f:
+    for output in outputs:
+      f.write(np.asarray(output, np.float32).reshape(-1).tobytes())
 
 
-def queued(rng) -> None:
-  path = OUT / 'tiny_queued.onnx'
+def queued(out: Path, rng) -> None:
+  path = out / 'tiny_queued.onnx'
   tiny_model.write(path)
   with_shapes(path)
   spec = spec_from_onnx(str(path))
@@ -81,11 +87,11 @@ def queued(rng) -> None:
     feed = {n: v.astype(types[n]).reshape(spec.input_shapes[n]) for n, v in queues.step(warped, packed).items()}
     outputs.append(sess.run(['outputs'], feed)[0])
     frames.append((warped, packed))
-  write('tiny_queued', spec, frames, outputs)
+  write(out, 'tiny_queued', spec, frames, outputs)
 
 
-def stateful(rng) -> None:
-  path = OUT / 'tiny_stateful.onnx'
+def stateful(out: Path, rng) -> None:
+  path = out / 'tiny_stateful.onnx'
   tiny_model.write_stateful(path)
   with_shapes(path)
   spec = spec_from_onnx(str(path))
@@ -106,13 +112,20 @@ def stateful(rng) -> None:
     outputs.append(results['outputs'])
     state = {n: results[nxt].astype(types[n]) for n, nxt in pairs.items()}
     frames.append((warped, packed))
-  write('tiny_stateful', spec, frames, outputs)
+  write(out, 'tiny_stateful', spec, frames, outputs)
+
+
+def generate(out: Path = OUT) -> None:
+  out.mkdir(parents=True, exist_ok=True)
+  rng = np.random.default_rng(20260926)
+  queued(out, rng)
+  stateful(out, rng)
 
 
 if __name__ == '__main__':
-  OUT.mkdir(parents=True, exist_ok=True)
-  rng = np.random.default_rng(20260926)
-  queued(rng)
-  stateful(rng)
-  for p in sorted(OUT.iterdir()):
+  parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
+  parser.add_argument('--out', type=Path, default=OUT, help='where to write (default: the Swift tests\' Fixtures)')
+  out = parser.parse_args().out
+  generate(out)
+  for p in sorted(out.iterdir()):
     print(f'{p.stat().st_size:>8}  {p.name}')

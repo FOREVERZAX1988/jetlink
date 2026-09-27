@@ -1,8 +1,20 @@
-import CryptoKit
 import Foundation
 import JetlinkKit
 import Synchronization
-import os
+
+#if canImport(CryptoKit)
+  import CryptoKit
+#else
+  import Crypto
+#endif
+#if canImport(FoundationNetworking)
+  import FoundationNetworking
+#endif
+#if canImport(os)
+  import os
+#else
+  import JetlinkLog
+#endif
 
 /// A model imported from disk rather than fetched from the catalog.
 public struct LocalModel: Sendable, Equatable {

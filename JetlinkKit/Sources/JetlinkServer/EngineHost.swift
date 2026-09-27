@@ -71,68 +71,6 @@ public enum HostEvent: Sendable {
   case shutdownRequested(reason: String)
 }
 
-/// A rolling window of served frames, for the stats event once a second.
-final class FrameStats: @unchecked Sendable {
-  struct Sample {
-    let at: TimeInterval
-    let totalUs: UInt32
-    let gpuUs: UInt32
-    let queueUs: UInt32
-    let sendUs: UInt32
-  }
-
-  /// Frames over this count as slow, as the Python server counts them.
-  static let slowUs: UInt32 = 60_000
-
-  private let lock = NSLock()
-  private var samples: [Sample] = []
-  private let capacity = 2000
-
-  func record(totalUs: UInt32, gpuUs: UInt32, queueUs: UInt32, sendUs: UInt32) {
-    let sample = Sample(at: ProcessInfo.processInfo.systemUptime, totalUs: totalUs, gpuUs: gpuUs, queueUs: queueUs, sendUs: sendUs)
-    lock.lock()
-    samples.append(sample)
-    // Trimmed in chunks: one removeFirst a frame would shift the window every frame.
-    if samples.count > capacity + capacity / 4 {
-      samples.removeFirst(samples.count - capacity)
-    }
-    lock.unlock()
-  }
-
-  /// The `stats` event, or nil when no frame landed in the window.
-  func summary(window seconds: TimeInterval, framesTotal: Int) -> StatsEvent? {
-    let cutoff = ProcessInfo.processInfo.systemUptime - seconds
-    lock.lock()
-    let rows = samples.filter { $0.at >= cutoff }
-    lock.unlock()
-    guard !rows.isEmpty else { return nil }
-    let n = Double(rows.count)
-    func mean(_ value: (Sample) -> UInt32) -> Double {
-      rows.reduce(0.0) { $0 + Double(value($1)) } / n / 1000
-    }
-    func spread(_ values: [UInt32]) -> StatsEvent.Total {
-      let sorted = values.sorted()
-      let meanValue = sorted.reduce(0.0) { $0 + Double($1) } / Double(sorted.count) / 1000
-      let p99 = Double(sorted[Int(0.99 * Double(sorted.count - 1))]) / 1000
-      return StatsEvent.Total(mean: round2(meanValue), p99: round2(p99), max: round2(Double(sorted.last!) / 1000))
-    }
-    let total = mean(\.totalUs)
-    let gpu = mean(\.gpuUs)
-    let queue = mean(\.queueUs)
-    return StatsEvent(
-      frames: framesTotal,
-      fps: round2(n / seconds),
-      servedMs: spread(rows.map { $0.totalUs + $0.sendUs }),
-      stagesMs: StatsEvent.Stages(queue: round2(queue), gpu: round2(gpu), other: round2(max(0, total - gpu - queue)), send: round2(mean(\.sendUs))),
-      slow: rows.filter { $0.totalUs > FrameStats.slowUs }.count,
-      windowS: (seconds * 10).rounded() / 10)
-  }
-}
-
-func round2(_ value: Double) -> Double {
-  (value * 100).rounded() / 100
-}
-
 /// Process-wide owner of the loaded engine and of the build in flight: the
 /// Swift form of `session.EngineHost`.
 ///
@@ -497,7 +435,7 @@ public final class EngineHost: @unchecked Sendable {
     lastStage = (stage, frac, msg)
     let session = self.session
     lock.unlock()
-    emit(.progress(stage: stage, frac: (frac * 10_000).rounded() / 10_000, msg: msg))
+    emit(.progress(stage: stage, frac: pythonRound(frac, 4), msg: msg))
     session?.progress(stage, frac, msg)
   }
 }
