@@ -36,8 +36,13 @@ public struct CacheEntry: Sendable {
 ///     <root>/engines/<sha16>.<tag>.json       its sidecar: build facts and the model spec
 ///     <root>/models/<sha16>.onnx              the model as uploaded or downloaded
 public final class EngineCache: @unchecked Sendable {
-  /// One per registry entry: a rebuild costs a minute and 2 to 3 GB.
-  public static let keepPlans = 6
+  /// One per registry entry on a Mac: a rebuild costs a minute and 1 to 2
+  /// GB. A phone's disk holds two.
+  #if os(iOS)
+    public static let keepPlans = 2
+  #else
+    public static let keepPlans = 6
+  #endif
   public static let lastLoadedName = "last-loaded.json"
 
   public let root: URL

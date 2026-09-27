@@ -184,6 +184,15 @@ public final class CoreMLBackend: EngineBackend {
     report("compile", 1, "compiled in \(Int(compileSeconds.rounded())) s")
     // Prove it runs before calling it built.
     try engine.run()
+    engine.close()
+    // A load reads only the compiled model, so the MLProgram onnxruntime
+    // converted each session to is dead weight beside it: on an M1 Pro with
+    // 1.29.0 the artifact went from 2.2 GB to 1.4 GB, loading in 0.5 s with
+    // outputs bit for bit the same. A phone has no room for both.
+    let freed = CoreMLBackend.dropConvertedModels(caches)
+    if freed > 0 {
+      log.info("removed \(formatBytes(freed), privacy: .public) of converted model the compiled one replaces")
+    }
 
     if FileManager.default.fileExists(atPath: artifact.path) {
       try FileManager.default.removeItem(at: artifact)
@@ -205,10 +214,45 @@ public final class CoreMLBackend: EngineBackend {
       "convert_bytes": converted,
       "compile_bytes": compiled,
       "compile_seconds": (compileSeconds * 10).rounded() / 10,
+      "freed_bytes": freed,
     ]
     for (key, value) in metaExtra { meta[key] = value }
     try writeSidecar(artifact, meta)
     report("build", 1, "done in \(meta["build_seconds"]!)s")
+  }
+
+  /// Deletes each session's MLProgram `Data` directory once CoreML's
+  /// compile of it exists beside it. Returns the bytes freed.
+  static func dropConvertedModels(_ caches: [URL]) -> Int64 {
+    let fm = FileManager.default
+    var freed: Int64 = 0
+    for cache in caches {
+      guard let walker = fm.enumerator(at: cache, includingPropertiesForKeys: [.isDirectoryKey]) else { continue }
+      var converted: [URL] = []
+      for case let url as URL in walker where url.lastPathComponent == "Data" {
+        guard (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true else { continue }
+        let compiled = url.deletingLastPathComponent().appending(path: CoreMLProgress.compiledDir, directoryHint: .isDirectory)
+        if fm.fileExists(atPath: compiled.path) {
+          converted.append(url)
+        }
+        walker.skipDescendants()
+      }
+      for url in converted {
+        freed += treeBytes(url)
+        try? fm.removeItem(at: url)
+      }
+    }
+    return freed
+  }
+
+  private static func treeBytes(_ root: URL) -> Int64 {
+    guard let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey]) else { return 0 }
+    var total: Int64 = 0
+    for case let file as URL in walker {
+      guard let values = try? file.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey]), values.isRegularFile == true else { continue }
+      total += Int64(values.fileSize ?? 0)
+    }
+    return total
   }
 
   // MARK: load
@@ -231,7 +275,9 @@ public final class CoreMLBackend: EngineBackend {
         throw ArtifactInvalid("\(artifact.lastPathComponent): a session's model is missing")
       }
       // Without its compile, onnxruntime would recompile under a "loading"
-      // that never moves. Rebuild instead, which reports progress.
+      // that never moves. Rebuild instead, which reports progress. Only the
+      // compile is looked for: the converted MLProgram beside it is dropped
+      // after the build (dropConvertedModels).
       if let cache = entry["cache"] as? String {
         let directory = artifact.appending(path: cache, directoryHint: .isDirectory)
         let contents = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
