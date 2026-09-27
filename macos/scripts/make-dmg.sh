@@ -3,8 +3,11 @@
 # Build the release artifacts from a signed (and ideally stapled) app:
 #
 #   build/Jetlink-<version>-macOS.dmg   a compressed image with an /Applications link
-#   build/Jetlink-<version>-macOS.zip   the same app, for an appcast or a direct download
-#   build/SHA256SUMS                    checksums of both
+#   build/SHA256SUMS                    its checksum
+#
+# An ad hoc build (SIGN_IDENTITY "-") also gets build/Jetlink-<version>-macOS.zip:
+# a DMG of it would only invite people to install something Gatekeeper refuses,
+# so the release workflow ships that zip alone, labelled unsigned.
 #
 # "-macOS" tells them apart from the Python wheel and sdist on a release page.
 #
@@ -57,14 +60,19 @@ else
   echo "==> skipping notarization of the image (no credentials, or an ad hoc signature)"
 fi
 
-echo "==> building $ZIP"
 rm -f "$ZIP"
-ditto -c -k --keepParent "$APP" "$ZIP"
+SUMS=("$(basename "$DMG")")
+if [ "$SIGN_IDENTITY" = "-" ]; then
+  echo "==> building $ZIP (ad hoc build)"
+  ditto -c -k --keepParent "$APP" "$ZIP"
+  SUMS+=("$(basename "$ZIP")")
+fi
 
 echo "==> checksums"
-( cd "$OUT_DIR" && shasum -a 256 "$(basename "$DMG")" "$(basename "$ZIP")" > SHA256SUMS )
+( cd "$OUT_DIR" && shasum -a 256 "${SUMS[@]}" > SHA256SUMS )
 cat "$OUT_DIR/SHA256SUMS"
 
 rm -rf "$STAGE"
 echo "$DMG"
-echo "$ZIP"
+[ -f "$ZIP" ] && echo "$ZIP"
+exit 0

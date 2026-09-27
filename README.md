@@ -61,13 +61,12 @@ See [Linux setup](docs/platforms.md#linux-nvidia-gpu) for help.
 
 You need Apple silicon and macOS 15 or later; 16 GB of memory is recommended.
 
-1. Download the Mac ZIP from [Releases](https://github.com/zoompilot/jetlink/releases).
-2. Unzip it and drag **Jetlink.app** to **Applications**.
+1. Download the Mac DMG from [Releases](https://github.com/zoompilot/jetlink/releases).
+2. Open it and drag **Jetlink** to **Applications**.
 3. Open Jetlink. **Waiting for comma** means the server is ready to connect.
 4. Keep the Mac powered and awake, then complete comma setup below.
 
-The app includes its dependencies. If macOS blocks an unsigned build, follow
-[the Mac install guide](docs/macos-app.md#if-the-build-is-not-signed).
+The app includes its dependencies.
 
 ## Comma setup (all platforms)
 

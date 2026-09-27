@@ -17,33 +17,12 @@ the steps in the [README](../README.md#quick-start).
 
 ## Install
 
-1. Download the Mac ZIP from [Releases](https://github.com/zoompilot/jetlink/releases).
-2. Double-click the ZIP to unzip it, then drag Jetlink.app to Applications.
+1. Download the Mac DMG from [Releases](https://github.com/zoompilot/jetlink/releases).
+2. Open it and drag Jetlink to Applications.
 3. Open Jetlink from Applications.
 
 On first launch the server starts by itself and the Status screen says **Waiting
 for comma**. Connect the comma to continue.
-
-### If the build is not signed
-
-Pre-release builds and builds from a fork are not signed by an identified
-developer. macOS refuses to open them the first time and says:
-
-> Apple could not verify "Jetlink" is free of malware that may harm your Mac or
-> compromise your privacy.
-
-For an unsigned build you trust, use either method:
-
-- Right-click Jetlink in Applications, choose **Open**, and confirm. On recent
-  macOS versions you instead open **System Settings > Privacy & Security**,
-  find the message about Jetlink, and click **Open Anyway**.
-- Or remove the quarantine flag in Terminal:
-
-```bash
-xattr -d com.apple.quarantine /Applications/Jetlink.app
-```
-
-Signed releases need none of this.
 
 ## Plug in
 
