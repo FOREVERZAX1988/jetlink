@@ -87,6 +87,10 @@ Unix seconds, as shown by each field.
 
 {"event":"link","t":0,"state":"waiting","detail":"waiting for a jetlink gadget at 1209:0001","peer":null}
 // state: "waiting" | "connected" | "disconnected". peer: "usb" or "host:port" when connected.
+// medium, when connected and known: "usb3" | "usb2" | "usb1" | "usb" (speed unknown) | "tcp".
+// It starts from what the server sees and follows the comma's hello, which names its
+// link and the USB speed its controller negotiated (a phone's cable is TCP over USB),
+// with one more "connected" event if that changes it. Older servers leave it out.
 // Emitted on transitions only, never on every 2 s poll.
 
 {"event":"engine","t":0,"state":"none","sha256":null,"detail":"","stage":null,"frac":0.0,"msg":"","load_only":false}

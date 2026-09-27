@@ -16,6 +16,8 @@ Unreleased
   * The Swift server opens the comma's USB link through macOS's own USB framework, finds the link by its interface class, and waits quietly while the comma has nothing serving the link
   * A Benchmark page for the Swift server, with the iPhone app's verdict
   * `jetlink-serve --usb` runs the Swift server as the USB host from a checkout
+* Both apps say whether the comma is on USB 3, USB 2 or TCP, and warn on USB 2 (about 10 ms more a frame)
+  * The comma's hello names its link and the speed its USB controller negotiated; the server's link event carries it as `medium`
 
 Jetlink v0.4.3
 ==============

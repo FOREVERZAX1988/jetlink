@@ -75,8 +75,10 @@ either end. See [What the comma presents](transport.md#what-the-comma-presents).
 2. Plug a USB 3 hub into the iPhone.
 3. Join the hub's USB-A port to the comma's USB-C port with a USB 3 A-to-C data
    cable.
-4. The title reads **Connected over USB** once the comma is on. Settings shows
-   the phone's address on the cable under **Connection**.
+4. The title reads **Connected over USB 3** once the comma is on. Settings shows
+   the phone's address on the cable under **Connection**. **USB 2** there, and
+   on the Link tile, means the hub or the cable is not USB 3: expect about 10 ms
+   more a frame, and change it.
 
 Open the app before plugging in. It dials while the cable is in, so an app
 opened afterwards connects when it opens; it just connects later.
@@ -115,7 +117,7 @@ over Ethernet instead, as a Jetson on an Ethernet adapter does.
    shows under **Connection**, such as `10.0.0.2:5599`. See
    [Ethernet (TCP)](transport.md#ethernet-tcp).
 
-The title then reads **Connected over Ethernet**. Wi-Fi works for testing,
+The title then reads **Connected over TCP**. Wi-Fi works for testing,
 including the iPhone's Personal Hotspot, but it does not meet the frame budget.
 
 The app's Settings has these steps under **Help > Connecting the Comma**.
@@ -174,8 +176,8 @@ from the loaded model and the phone's addresses:
 
 Mount the phone where you can see it, in either orientation. The screen stays
 on while Jetlink is open. The title's subtitle says where things stand:
-**Connected over USB**, **Waiting**, **Preparing**, **Disconnected**, or what
-is wrong.
+**Connected over USB 3** (or **USB 2**, or **TCP**), **Waiting**, **Preparing**,
+**Disconnected**, or what is wrong.
 
 - **Headroom** is the 50 ms frame budget as a ring, filled to the slowest 1%
   of frames (P99) over the last 10 seconds. The number inside is the room
