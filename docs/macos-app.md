@@ -27,7 +27,7 @@ for comma**. Connect the comma to continue.
 ## Plug in
 
 Complete [comma setup](../README.md#comma-setup-all-platforms), including the
-branch installation and **Accelerator Link** toggle. Then connect the
+branch installation and **Accelerator Link** set to **USB**. Then connect the
 **Mac's USB-A port to the comma's USB-C port**, using a USB-A port
 on a hub or dock, or a USB-C-to-A adapter. A C-to-C cable also connects: on
 2026-09-27 an M1 Pro enumerated a comma four as its device at 5 Gb/s over a
@@ -173,7 +173,7 @@ back. See [backend measurements](backends.md#mac-measured) for details.
 | Problem | What to do |
 | --- | --- |
 | The server failed to start | Open **Logs**. The last lines say why. The usual causes are another server already holding the USB device, and a cache folder that is not writable. |
-| The app stays on Waiting for comma | Use a USB-A port on a hub, dock or adapter, use a USB 3 data cable, and check that **Accelerator Link** is on under Settings > Models on the comma. |
+| The app stays on Waiting for comma | Use a USB-A port on a hub, dock or adapter, use a USB 3 data cable, and check that **Accelerator Link** is set to **USB** under Settings > Models on the comma. |
 | Use Model takes a long time | CoreML should take about 20 seconds to prepare and up to about 10 seconds to load. If it takes minutes, right-click the model in **Models**, choose **Delete Prepared Engines…**, then use it again. Close other large applications to free memory. |
 | The comma says **Big Model Lost** | Check the cable first. Then check that the Mac did not sleep: turn on **Keep the Mac awake while serving** and keep the Mac on power. |
 | Everything rebuilt after an update | A new runtime version means a new prepared engine, so the model is prepared again. The download is kept and is not fetched twice. |

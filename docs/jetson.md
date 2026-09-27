@@ -77,7 +77,7 @@ rest. Allow 10–30 minutes and leave it running until it finishes.
    **`zoompilot/jetson-trt`** as the install URL. If you already use zoompilot,
    select **jetson-trt** under **Settings > Software > Target Branch >
    Non-Prebuilt Branches**. Wait for installation and any reboot to finish.
-2. **Enable Jetlink.** Under **Settings > Models**, turn on **Accelerator Link**.
+2. **Enable Jetlink.** Under **Settings > Models**, set **Accelerator Link** to **USB**.
    Leave **Big Model** at its default.
 3. **Connect the cable.** Jetson **USB-A** → comma **USB-C**.
 4. **Wait for the green icon** on the comma. The model downloads automatically,

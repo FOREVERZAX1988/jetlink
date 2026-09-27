@@ -30,7 +30,8 @@ For a Mac, see [Jetlink for Mac](macos-app.md). For a Jetson or PC, see the
 | A Mac with Xcode 26 and the iOS 26 platform | There is no App Store or TestFlight build; you build and install it yourself. A free Apple account is enough |
 
 You also need a comma running a zoompilot build with Jetlink, set up as in the
-[README](../README.md#comma-setup-all-platforms).
+[README](../README.md#comma-setup-all-platforms). The **iOS** option of
+**Accelerator Link** is on the zoompilot `iphone` branch only, for now.
 
 ## Install
 

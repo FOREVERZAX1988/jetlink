@@ -170,6 +170,19 @@ net_down() {
   rm -f "$DNSMASQ_PID" 2>/dev/null || true
 }
 
+# The network function and its DHCP server, gone: for teardown, and for a USB
+# gadget left with one by an iOS boot. Unlinking it force-unbinds the UDC.
+net_remove() {
+  local f
+  net_down
+  for f in "$GADGET"/configs/c.1/*."$NET_IF"; do
+    [[ -L "$f" ]] && { rm -f "$f" 2>/dev/null || true; }
+  done
+  for f in "$GADGET"/functions/*."$NET_IF"; do
+    [[ -d "$f" ]] && { rmdir "$f" 2>/dev/null || true; }
+  done
+}
+
 check() {
   local ok=1 u g port kind found=""
   echo "kernel: $(uname -r)"
@@ -260,13 +273,10 @@ if [[ "${1:-}" == "--net" ]]; then
 fi
 
 if [[ "${1:-}" == "--teardown" ]]; then
-  net_down
+  net_remove
   if [[ -d "$GADGET" ]]; then
     echo "" > "$GADGET/UDC" 2>/dev/null || true
     rm -f "$GADGET/configs/c.1/ffs.$FFS_NAME" 2>/dev/null || true
-    for f in "$GADGET"/configs/c.1/*."$NET_IF"; do
-      [[ -L "$f" ]] && { rm -f "$f" 2>/dev/null || true; }
-    done
     rmdir "$GADGET/configs/c.1/strings/0x409" 2>/dev/null || true
     # a config with a function still linked cannot go, and trying is a
     # configfs error worth not making
@@ -280,9 +290,6 @@ if [[ "${1:-}" == "--teardown" ]]; then
       echo "jetlink: configs/c.1 still has a function linked; left in place" >&2
     fi
     rmdir "$GADGET/functions/ffs.$FFS_NAME" 2>/dev/null || true
-    for f in "$GADGET"/functions/*."$NET_IF"; do
-      [[ -d "$f" ]] && { rmdir "$f" 2>/dev/null || true; }
-    done
     rmdir "$GADGET/strings/0x409" 2>/dev/null || true
     rmdir "$GADGET" 2>/dev/null || true
   fi
@@ -397,12 +404,8 @@ mkdir -p "functions/ffs.$FFS_NAME" ||
 # owner switches only while parked.
 net_kind=$(net_function)
 if [[ $IOS -eq 0 ]]; then
-  if [[ -n "$net_kind" ]]; then
-    net_down
-    rm -f "configs/c.1/$net_kind.$NET_IF" 2>/dev/null || true
-    rmdir "functions/$net_kind.$NET_IF" 2>/dev/null || true
-    net_kind=""
-  fi
+  [[ -n "$net_kind" ]] && net_remove
+  net_kind=""
 elif [[ -z "$net_kind" ]]; then
   for kind in $NET_FUNCTIONS; do
     if mkdir "functions/$kind.$NET_IF" 2>/dev/null; then

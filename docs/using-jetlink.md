@@ -62,7 +62,7 @@ server's internet connection. This is optional.
 ## Update or stop using Jetlink
 
 Follow [updates and rollback](releasing.md) to update both the comma and server.
-To stop using Jetlink, turn off **Settings > Models > Accelerator Link**.
+To stop using Jetlink, set **Settings > Models > Accelerator Link** to **Off**.
 
 If the link does not become ready, start with
 [troubleshooting](../README.md#if-something-is-wrong).

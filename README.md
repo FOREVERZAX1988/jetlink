@@ -83,8 +83,9 @@ measured on a phone yet; see [Jetlink for iPhone](docs/iphone-app.md).
    If you already use zoompilot, you can instead open
    **Settings > Software > Target Branch > Non-Prebuilt Branches** and select
    **jetson-trt**, then let it update, reboot, and finish building.
-2. **Enable Jetlink.** Open **Settings > Models** and turn on
-   **Accelerator Link**. Leave **Big Model** on its default for the first run.
+2. **Enable Jetlink.** Open **Settings > Models** and set **Accelerator Link**
+   to **USB** (**iOS** is for an iPhone). Leave **Big Model** on its default for
+   the first run.
 3. **Connect USB.** Connect the computer's **USB-A port** to the comma's
    **USB-C port** with a USB 3 data cable. On Mac, use a USB-A hub, dock, or
    USB-C-to-A adapter. On Jetson, use its USB-A port. Charge-only cables will
@@ -111,10 +112,10 @@ for startup, model changes, and reconnection behavior.
 
 | Problem | First check |
 | --- | --- |
-| No Accelerator Link toggle | Confirm the `jetson-trt` branch in Settings > Software. |
+| No Accelerator Link setting | Confirm the `jetson-trt` branch in Settings > Software. |
 | Server stays waiting; icon never pulses | Check the server is running, use a USB-A port, and try another USB 3 data cable. |
 | Model list is empty | Connect the comma to the internet and use Refresh Model List. |
-| Setup alert or orange icon | Read the home-screen alert. Check internet access, then toggle Accelerator Link off and on. |
+| Setup alert or orange icon | Read the home-screen alert. Check internet access, then set Accelerator Link to Off and back to USB. |
 | Link drops repeatedly | Check the cable, separate power supplies, cooling, and whether the computer slept. |
 
 For logs and more checks, use the [Jetson guide](docs/jetson.md#troubleshooting),

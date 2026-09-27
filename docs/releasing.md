@@ -22,7 +22,7 @@ parked.
 
 ## Rolling back
 
-Turn off **Settings > Models > Accelerator Link** to stop using Jetlink
+Set **Settings > Models > Accelerator Link** to **Off** to stop using Jetlink
 immediately. To roll back, restore the previous comma build and the previous
 server together; restoring one side can leave them incompatible. Keep the model
 cache.

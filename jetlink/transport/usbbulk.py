@@ -27,9 +27,9 @@ JETLINK_PID = 0x0001
 # that does not exist fails with LIBUSB_ERROR_IO and looks like a bad cable.
 USB_ENDPOINT_DIR_IN = 0x80
 USB_TRANSFER_TYPE_BULK = 0x02
-# The vendor interface's class triple. The gadget is composite (the link and a
-# CDC-NCM network interface for a phone), so the link is found by class and
-# not by a number that a reordered config could move.
+# The vendor interface's class triple. The comma set to iOS presents a
+# composite gadget (the link and a CDC-NCM network interface for a phone), so
+# the link is found by class and not by a number a reordered config could move.
 VENDOR_CLASS = (0xFF, 0xFF, 0xFF)
 MAX_PACKET = 1024   # SuperSpeed bulk
 READ_CHUNK = 256 * MAX_PACKET
