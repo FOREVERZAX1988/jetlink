@@ -7,8 +7,10 @@ See the LICENSE file in the root directory for more details.
 Writes the small ONNX graphs JetlinkONNX's tests read, and what the Python
 preparation makes of them, into Tests/JetlinkONNXTests/Fixtures/.
 
-    PYTHONPATH=../jetlink-simplify ../jetlink/.venv/bin/python \\
-      JetlinkKit/Scripts/make_onnx_fixtures.py
+    PYTHONPATH=. ../jetlink/.venv/bin/python JetlinkKit/Scripts/make_onnx_fixtures.py
+
+from the jetlink checkout whose preparation the fixtures should pin (the
+script imports jetlink.onnx_patch, the ORT backend and tests.test_ane_whole).
 
 The graphs are shaped like the driving models, shrunk: the same input names,
 uint8 images behind the head Cast, a tinygrad Contiguous (with the local
@@ -19,14 +21,21 @@ on nodes, value infos and the graph, and fields the preparation does not know.
 The arithmetic is float32 except one fp16 head, so onnxruntime's CPU provider
 runs all of them.
 
+variants.onnx is tests/test_ane_whole.py's graph, built to take every branch
+of the ane-whole passes (a shared LayerNorm input, a norm without a bias, an
+fp32 norm, an Expand that must stay, a head weight the policy reads too).
+
 noshape.onnx and unrecorded.onnx leave a shape out of value_info, where
 Python's preparation asks onnx's shape inferrer and Swift, which has none,
-refuses the split or skips the rewrite. Every other graph must come out the
+refuses the split or skips the rewrite. notype.onnx and noentry.onnx leave a
+type out (a policy LayerNorm's input, a head's entry), where Python infers it
+and Swift refuses the ane-whole layout. Every other graph must come out the
 same from both.
 
-Next to each graph go the files Python's preparation writes for it
-(<name>.<layout>.<part>.expected.onnx, cache keys from the prefix "fixture")
-and python.json: the counts, the weight bytes, or the error Python raised.
+Next to each graph go the files Python's preparation writes for it in each
+layout, split, whole and ane-whole (<name>.<layout>.<part>.expected.onnx, cache
+keys from the prefix "fixture") and python.json: the counts, the weight bytes,
+or the error Python raised.
 The Swift tests hold the Swift preparation to those, byte for byte.
 """
 from __future__ import annotations
@@ -286,8 +295,34 @@ def nocut() -> onnx.ModelProto:
 def noshape() -> onnx.ModelProto:
   """queued without the trunk's recorded shape. Python asks onnx's shape
   inferrer; Swift has none and refuses the split."""
-  model = queued()
-  [vi] = [vi for vi in model.graph.value_info if vi.name == 'trunk']
+  return without_value_info(queued(), 'trunk')
+
+
+def variants() -> onnx.ModelProto:
+  """tests/test_ane_whole.py's graph, the one the Python tests pin the
+  ane-whole passes on: comma's layout with every branch of the preparation
+  in it (see its docstring). Imported, not copied, so the bytes the Swift
+  port is held to are the ones those tests check."""
+  from tests.test_ane_whole import variants as build
+  return build()
+
+
+def notype() -> onnx.ModelProto:
+  """variants without the recorded type of p, the input three policy
+  LayerNorms share. Python's prescale_layernorm asks the inferrer and scales
+  them; Swift refuses the ane-whole layout. The other layouts never look."""
+  return without_value_info(variants(), 'p')
+
+
+def noentry() -> onnx.ModelProto:
+  """variants without the recorded type of vm, the tensor the heads read
+  from the trunk. Python's heads_in_fp32 asks the inferrer; Swift refuses the
+  ane-whole layout."""
+  return without_value_info(variants(), 'vm')
+
+
+def without_value_info(model: onnx.ModelProto, name: str) -> onnx.ModelProto:
+  [vi] = [vi for vi in model.graph.value_info if vi.name == name]
   model.graph.value_info.remove(vi)
   return model
 
@@ -366,11 +401,14 @@ def errors() -> dict[str, onnx.ModelProto]:
 
 # -- what Python makes of them ------------------------------------------------
 
+LAYOUTS = ('split', 'whole', 'ane-whole')
+
+
 def python_prepare(path: Path, layout: str):
   """The Python preparation as the ORT backend's _stage runs it, with the
   counts _prepared_model logs."""
   from jetlink import onnx_patch as p
-  from jetlink.server.backends.ort import _prepared_model, _with_cache_key
+  from jetlink.server.backends.ort import ANE_WHOLE_LAYOUT, _prepared_model, _with_cache_key
 
   model = onnx.load(str(path))
   counts = {'stripped': p.strip_tinygrad_ops(model)}
@@ -380,11 +418,14 @@ def python_prepare(path: Path, layout: str):
   counts['gathers'] = p.normalize_gather_indices(model)
   counts['gemms'] = p.gemm_with_transposed_weight(model)
   counts['tiles'] = p.expand_to_tile(model)
+  if layout == ANE_WHOLE_LAYOUT:
+    counts['norms'] = p.prescale_layernorm(model)
+    counts['heads'] = p.heads_in_fp32(model)
 
-  prepared = _prepared_model(path, for_coreml=True)
+  prepared = _prepared_model(path, for_coreml=True, layout=ANE_WHOLE_LAYOUT if layout == ANE_WHOLE_LAYOUT else None)
   assert prepared.SerializeToString() == model.SerializeToString()
-  names = ('model',) if layout == 'whole' else ('vision', 'policy')
-  parts = (prepared,) if layout == 'whole' else p.split_vision_policy(prepared)
+  names = ('vision', 'policy') if layout == 'split' else ('model',)
+  parts = p.split_vision_policy(prepared) if layout == 'split' else (prepared,)
   out = {}
   for name, part in zip(names, parts, strict=True):
     key = re.sub(r'[^A-Za-z0-9]', '', KEY_PREFIX + name)[:63]
@@ -397,12 +438,13 @@ def main() -> None:
   for old in FIXTURES.glob('*.onnx'):
     old.unlink()
   models = {'queued': queued(), 'stateful': stateful(), 'nocut': nocut(), 'noshape': noshape(),
-            'unrecorded': unrecorded(), **errors()}
+            'unrecorded': unrecorded(), 'variants': variants(), 'notype': notype(), 'noentry': noentry(),
+            **errors()}
   results = {}
   for name, model in models.items():
     path = FIXTURES / f'{name}.onnx'
     onnx.save(model, str(path))
-    for layout in ('split', 'whole'):
+    for layout in LAYOUTS:
       try:
         counts, parts = python_prepare(path, layout)
       except Exception as e:

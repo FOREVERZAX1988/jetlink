@@ -17,6 +17,8 @@ import Testing
     let gathers: Int?
     let gemms: Int?
     let tiles: Int?
+    let norms: Int?
+    let heads: Int?
     let parts: [String: Int64]?
   }
 
@@ -30,17 +32,20 @@ import Testing
   /// "<fixture>.<layout>" for every case Python ran.
   static let cases: [String] = python.keys.sorted()
 
+  static let layouts: [String: CoreMLPreparation.Layout] = ["split": .split, "whole": .whole, "ane-whole": .aneWhole]
+
   @Test func fixturesArePresent() {
-    #expect(Self.cases.count == 30)
+    #expect(Self.cases.count == 54)
     #expect(Self.cases.contains("stateful.split"))
+    #expect(Self.cases.contains("variants.ane-whole"))
   }
 
   @Test(arguments: cases)
   func matchesPython(_ name: String) throws {
     let expected = try #require(Self.python[name])
     let fixture = String(name.split(separator: ".")[0])
-    let layout: CoreMLPreparation.Layout = name.hasSuffix(".split") ? .split : .whole
-    let layoutName = layout == .split ? "split" : "whole"
+    let layoutName = String(name.split(separator: ".")[1])
+    let layout = try #require(Self.layouts[layoutName])
     let out = try TemporaryDirectory()
     defer { out.cleanup() }
 
@@ -50,7 +55,7 @@ import Testing
         cacheKey: { CoreMLPreparation.cacheKey(stem: "fixture", part: $0) })
     }
 
-    if fixture == "unrecorded", layout == .whole {
+    if fixture == "unrecorded", layout != .split {
       // The one place the two differ by design: Python asks onnx's shape
       // inferrer for the Gather's input and rewrites it; Swift has no
       // inferrer and leaves a Gather whose input shape is not recorded alone.
@@ -68,6 +73,18 @@ import Testing
       #expect(try FileManager.default.contentsOfDirectory(atPath: out.url.path).isEmpty)
       return
     }
+    if fixture == "notype" || fixture == "noentry", layout == .aneWhole {
+      // Python asks onnx's shape inferrer for the type of a policy norm's
+      // input (notype) or a head's entry (noentry) and carries on; Swift
+      // refuses rather than prepare something else.
+      #expect(expected.norms == 3 && expected.heads == 6)
+      let tensor = fixture == "notype" ? "p" : "vm"
+      #expect(throws: OnnxError("the export records no type for \(tensor); this model cannot be prepared on iPhone")) {
+        try prepare()
+      }
+      #expect(try FileManager.default.contentsOfDirectory(atPath: out.url.path).isEmpty)
+      return
+    }
     if let message = expected.error {
       #expect(throws: OnnxError(message)) { try prepare() }
       #expect(try FileManager.default.contentsOfDirectory(atPath: out.url.path).isEmpty)
@@ -80,6 +97,8 @@ import Testing
     #expect(report.gathers == expected.gathers)
     #expect(report.gemms == expected.gemms)
     #expect(report.tiles == expected.tiles)
+    #expect(report.norms == (expected.norms ?? 0))
+    #expect(report.heads == (expected.heads ?? 0))
     #expect(report.parts.map(\.name) == (layout == .split ? ["vision", "policy"] : ["model"]))
     for part in report.parts {
       #expect(part.weightBytes == expected.parts?[part.name], "\(part.name)")
@@ -88,6 +107,41 @@ import Testing
       let theirs = try Data(contentsOf: Fixtures.url("\(fixture).\(layoutName).\(part.name).expected.onnx"))
       #expect(mine == theirs, "\(name) \(part.name): \(mine.count) bytes against Python's \(theirs.count)")
     }
+  }
+
+  /// The names and order tests/test_ane_whole.py pins, read back from the
+  /// file the Swift preparation wrote (the bytes are checked above).
+  @Test func aneWholeVariantsLayout() throws {
+    let out = try TemporaryDirectory()
+    defer { out.cleanup() }
+    let report = try CoreMLPreparation.prepare(
+      source: Fixtures.url("variants.onnx"), into: out.url, layout: .aneWhole, cacheKey: { $0 })
+    #expect(report.norms == 3 && report.heads == 6)
+    let data = try Data(contentsOf: report.parts[0].url)
+    let model = try data.withUnsafeBytes { try Decode.model(Source(bytes: $0)) }
+    let g = try #require(model.graph)
+    let names = g.nodes.map(\.displayName)
+    let i = try #require(names.firstIndex(of: "vm"))
+    #expect(
+      Array(names[(i + 1)..<(i + 10)]) == [
+        "vm__cast_fp32", "hln", "h1mm__gemm", "hg", "h2", "hres", "hres__cast_fp16", "hsc", "hsc__cast_fp16",
+      ])
+    #expect(names.firstIndex(of: "p__prescale") == names.firstIndex(of: "ln1")! - 1)
+    let node = { (name: String) in g.nodes.first { $0.displayName == name }! }
+    #expect(node("ln1").inputs[0] == "p__scaled" && node("ln3").inputs[0] == "p__scaled" && node("ln4").inputs[0] == "p32")
+    #expect(node("hln").inputs == ["vm__fp32", "hs__fp32", "hb__fp32"])
+    #expect(node("h1mm__gemm").inputs == ["hln", "h1mm__wt__fp32", "hb1__fp32"])
+    #expect(node("hsc").inputs == ["hres__fp32", "s__fp32"] && node("hsc").outputs == ["hsc__fp32"])
+    #expect(node("vm__cast_fp32").attribute("to")?.i == 1 && node("hres__cast_fp16").attribute("to")?.i == 10)
+    #expect(node("pre").inputs.suffix(2) == ["hres", "hsc"])
+    let inits = g.initializers.map(\.key)
+    #expect(inits.filter { $0.hasSuffix("__fp32") } == ["h1mm__wt__fp32", "hW2__fp32", "hb__fp32", "hb1__fp32", "hs__fp32", "s__fp32"])
+    #expect(inits.contains("s") && !inits.contains("hW2") && !inits.contains("h1mm__wt"))
+    #expect(inits.last == "s__fp32")
+    let const = try #require(g.initializers.first { $0.key == "__layernorm_prescale_8" })
+    #expect(const.dims.isEmpty && const.elementType == DataType.float16)
+    let vi = Set(g.valueInfo.map(\.key))
+    #expect(vi.isDisjoint(with: ["hln", "hg", "h2"]) && vi.isSuperset(of: ["vm", "hres", "hsc"]))
   }
 
   @Test func progressRisesToOne() throws {
