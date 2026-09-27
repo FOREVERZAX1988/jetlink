@@ -106,7 +106,8 @@ the bench and in the car, and the Swift server has no TensorRT backend.
 The Swift package builds on Linux only as the drift check's second platform,
 never as a deployment. `Package.swift` has a Linux branch that builds
 JetlinkKit, JetlinkONNX, JetlinkRegistry and the portable part of
-JetlinkServer, with `JETLINK_PORTABLE` defined:
+JetlinkServer; the few tests that need Apple's frameworks sit behind
+`canImport(Darwin)` or `canImport(COrt)`:
 
 - in: the wire protocol, the TCP transport, the USB framing (not the IOUSBHost
   gadget), the queues, the conversions (element loops in place of vImage),

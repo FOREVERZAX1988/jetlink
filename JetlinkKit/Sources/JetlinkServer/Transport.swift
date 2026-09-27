@@ -192,13 +192,8 @@ public final class TCPTransport: @unchecked Sendable {
 
   /// One message, `parts` concatenated as its payload, in one vectored write:
   /// header, parts and the pad byte together, so the kernel never sees the
-  /// header as a segment of its own.
-  public func send(_ type: Wire.Msg, seq: UInt32, parts: [UnsafeRawBufferPointer] = [], flags: Wire.Flag = []) throws {
-    try parts.withUnsafeBufferPointer { try send(type, seq: seq, parts: $0, flags: flags) }
-  }
-
-  /// The frame path's form: the parts in the caller's own storage.
-  func send(_ type: Wire.Msg, seq: UInt32, parts: UnsafeBufferPointer<UnsafeRawBufferPointer>, flags: Wire.Flag = []) throws {
+  /// header as a segment of its own. `MessageLink` has the other forms.
+  func sendParts(_ type: Wire.Msg, seq: UInt32, parts: UnsafeBufferPointer<UnsafeRawBufferPointer>, flags: Wire.Flag) throws {
     sendLock.lock()
     defer { sendLock.unlock() }
     var flags = flags
@@ -218,28 +213,6 @@ public final class TCPTransport: @unchecked Sendable {
       vectors.append(iovec(iov_base: tx + Wire.headerSize, iov_len: 1))
     }
     try writeAll(&vectors)
-  }
-
-  public func send(_ type: Wire.Msg, seq: UInt32, data: [Data], flags: Wire.Flag = []) throws {
-    try Self.withBuffers(data) { try send(type, seq: seq, parts: $0, flags: flags) }
-  }
-
-  public func sendJSON(_ type: Wire.Msg, seq: UInt32, _ object: [String: Any], flags: Wire.Flag = []) throws {
-    try send(type, seq: seq, data: [JSONLine.encode(object)], flags: flags)
-  }
-
-  private static func withBuffers<R>(_ data: [Data], _ body: ([UnsafeRawBufferPointer]) throws -> R) throws -> R {
-    var buffers: [UnsafeRawBufferPointer] = []
-    func recurse(_ index: Int) throws -> R {
-      if index == data.count {
-        return try body(buffers)
-      }
-      return try data[index].withUnsafeBytes { bytes in
-        buffers.append(bytes)
-        return try recurse(index + 1)
-      }
-    }
-    return try recurse(0)
   }
 
   private func writeAll(_ vectors: inout [iovec]) throws {

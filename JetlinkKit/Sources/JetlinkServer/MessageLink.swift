@@ -29,19 +29,31 @@ extension MessageLink {
     try parts.withUnsafeBufferPointer { try sendParts(type, seq: seq, parts: $0, flags: flags) }
   }
 
+  func send(_ type: Wire.Msg, seq: UInt32, data: [Data], flags: Wire.Flag = []) throws {
+    try withBuffers(data) { try send(type, seq: seq, parts: $0, flags: flags) }
+  }
+
   func sendJSON(_ type: Wire.Msg, seq: UInt32, _ object: [String: Any], flags: Wire.Flag = []) throws {
-    let data = JSONLine.encode(object)
-    try data.withUnsafeBytes { bytes in
-      try send(type, seq: seq, parts: [bytes], flags: flags)
+    try send(type, seq: seq, data: [JSONLine.encode(object)], flags: flags)
+  }
+}
+
+/// `data`'s bytes as raw buffers, valid inside `body`.
+func withBuffers<R>(_ data: [Data], _ body: ([UnsafeRawBufferPointer]) throws -> R) throws -> R {
+  var buffers: [UnsafeRawBufferPointer] = []
+  func recurse(_ index: Int) throws -> R {
+    if index == data.count {
+      return try body(buffers)
+    }
+    return try data[index].withUnsafeBytes { bytes in
+      buffers.append(bytes)
+      return try recurse(index + 1)
     }
   }
+  return try recurse(0)
 }
 
 extension TCPTransport: MessageLink {
   var medium: LinkMedium? { .tcp }
   var connectsOnOpen: Bool { true }
-
-  func sendParts(_ type: Wire.Msg, seq: UInt32, parts: UnsafeBufferPointer<UnsafeRawBufferPointer>, flags: Wire.Flag) throws {
-    try send(type, seq: seq, parts: parts, flags: flags)
-  }
 }

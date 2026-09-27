@@ -181,7 +181,7 @@ jobs:
         # Package.swift's Linux branch: JetlinkKit, JetlinkONNX, JetlinkRegistry
         # and the portable part of JetlinkServer (the wire, the TCP and USB
         # framing, the queues, the frame statistics), built with
-        # JETLINK_PORTABLE and swift-crypto. The conformance suites read the
+        # swift-crypto. The conformance suites read the
         # same Python-written fixtures here as on macOS, so the drift check
         # holds on a second platform. Nothing deploys this build
         # (docs/conformance.md).

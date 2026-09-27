@@ -357,7 +357,7 @@ final class GadgetClient {
 }
 
 // The server itself is Apple-only; the Linux build runs the framing above.
-#if !JETLINK_PORTABLE
+#if canImport(COrt)
   @Suite("Server over USB", .serialized)
   struct ServerUSBTests {
     func makeServer(_ cache: TemporaryDirectory, gadget: FakeGadget) throws -> Server {
