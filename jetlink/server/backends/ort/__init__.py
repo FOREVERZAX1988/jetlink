@@ -23,6 +23,13 @@ trunk. On V2 that one session was about 1 ms faster with its policy's norms
 forced to fp32 and a CPU core spinning; one layout for every graph is worth
 more than that.
 
+`--device ane-whole` is that one session, for A/B runs against what the
+iPhone does: the whole graph in one CoreML program with every compute unit
+allowed, its policy LayerNormalizations fed inputs scaled by 1/8 so their
+fp16 squares do not overflow, and the heads after the trunk in fp32
+(`onnx_patch.prescale_layernorm`, `onnx_patch.heads_in_fp32`). The Mac's
+default stays the split.
+
 Every CoreML build rewrites two Expands CoreML will not take as the
 equivalent Tiles (`onnx_patch.expand_to_tile`, from #8), or the policy
 splits into two CoreML programs with a CPU step between, and the GPU work
@@ -74,6 +81,7 @@ MANIFEST = 'sessions.json'
 PROVIDERS = {
   'coreml': 'CoreMLExecutionProvider',
   'ane': 'CoreMLExecutionProvider',
+  'ane-whole': 'CoreMLExecutionProvider',
   'cuda': 'CUDAExecutionProvider',
   'cpu': 'CPUExecutionProvider',
 }
@@ -81,10 +89,17 @@ PROVIDERS = {
 # The sessions each device runs, in order, as (name, CoreML compute units).
 # The name is the model file's stem and so part of its COREML_CACHE_KEY.
 # `ane` is the vision trunk on the Neural Engine and the rest on the GPU.
+# `ane-whole` is the whole graph in one program with every unit allowed,
+# prepared for the Neural Engine (ANE_WHOLE_LAYOUT); its artifact directory
+# carries the device, so its `model` keys a compile cache of its own.
 COREML_SESSIONS = {
   'coreml': (('model', 'CPUAndGPU'),),
   'ane': (('vision', 'CPUAndNeuralEngine'), ('policy', 'CPUAndGPU')),
+  'ane-whole': (('model', 'ALL'),),
 }
+# The `layout` `_prepared_model` takes for `ane-whole`: the two passes after
+# expand_to_tile that keep the whole graph accurate on the Neural Engine.
+ANE_WHOLE_LAYOUT = 'ane-whole'
 PLAIN_SESSION = (('model', None),)
 
 # What a CoreML build writes, recorded in the sidecar. A load of an artifact
@@ -193,18 +208,30 @@ def _cache_key(out_path: Path, part: str) -> str:
   return re.sub(r'[^A-Za-z0-9]', '', out_path.stem + part)[:63]
 
 
-def _prepared_model(onnx_path: Path, for_coreml: bool = False):
-  """The ONNX as onnxruntime will see it, in memory."""
+def _prepared_model(onnx_path: Path, for_coreml: bool = False, layout: str | None = None):
+  """The ONNX as onnxruntime will see it, in memory.
+
+  The passes run in this order, which a port has to keep to produce the same
+  bytes: strip_tinygrad_ops, patch_uint8_inputs, normalize_gather_indices,
+  then for CoreML gemm_with_transposed_weight and expand_to_tile, then for
+  `layout='ane-whole'` prescale_layernorm and heads_in_fp32.
+  """
   import onnx
 
   from jetlink.onnx_patch import (
     expand_to_tile,
     gemm_with_transposed_weight,
+    heads_in_fp32,
     needs_patch,
     normalize_gather_indices,
     patch_uint8_inputs,
+    prescale_layernorm,
     strip_tinygrad_ops,
   )
+  if layout not in (None, ANE_WHOLE_LAYOUT):
+    raise ValueError(f"layout must be None or {ANE_WHOLE_LAYOUT!r}, not {layout!r}")
+  if layout == ANE_WHOLE_LAYOUT and not for_coreml:
+    raise ValueError(f"layout {ANE_WHOLE_LAYOUT!r} is a CoreML preparation")
   model = onnx.load(str(onnx_path))
   stripped = strip_tinygrad_ops(model)
   patched = needs_patch(model)
@@ -222,6 +249,15 @@ def _prepared_model(onnx_path: Path, for_coreml: bool = False):
            "%d MatMul+Add rewritten as Gemm(transB=1), %d Expand(s) as Tile",
            onnx_path.name, stripped,
            'images retyped to fp16' if patched else 'inputs left as declared', gathers, gemms, tiles)
+  if layout == ANE_WHOLE_LAYOUT:
+    # The whole graph on the Neural Engine: the policy's norms fed inputs
+    # that do not overflow fp16, and the heads after the trunk in fp32,
+    # which keeps them off it (onnx_patch, "the whole graph on the Neural
+    # Engine").
+    norms = prescale_layernorm(model)
+    heads = heads_in_fp32(model)
+    log.info("prepared %s for the whole Neural Engine: %d policy LayerNormalization(s) prescaled, "
+             "%d vision head node(s) in fp32", onnx_path.name, norms, heads)
   return model
 
 
@@ -468,7 +504,8 @@ class OrtBackend:
 
     from jetlink.onnx_patch import split_vision_policy
     sessions = COREML_SESSIONS.get(self.device, PLAIN_SESSION)
-    model = _prepared_model(onnx_path, for_coreml=self._on_coreml)
+    model = _prepared_model(onnx_path, for_coreml=self._on_coreml,
+                            layout=ANE_WHOLE_LAYOUT if self.device == 'ane-whole' else None)
     parts = split_vision_policy(model) if len(sessions) > 1 else (model,)
     del model
     # What the convert stage is working towards: onnxruntime writes the

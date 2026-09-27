@@ -69,6 +69,7 @@ def test_device_selection(monkeypatch):
   assert _pick_device(cpu_only + ['CUDAExecutionProvider'], 'auto') == 'cuda'
   with_coreml = cpu_only + ['CoreMLExecutionProvider']
   assert _pick_device(with_coreml, 'ane') == 'ane'
+  assert _pick_device(with_coreml, 'ane-whole') == 'ane-whole'
   assert _pick_device(with_coreml, 'coreml') == 'coreml'
   # auto on a Mac: the Neural Engine split on Apple silicon, the GPU on
   # Intel, and never the CPU, so auto moves on to tinygrad instead
@@ -290,7 +291,9 @@ def _with_policy_layernorm(path):
 def test_each_device_stages_its_sessions(tmp_path):
   """`coreml` is one session on the GPU. `ane` is the trunk on the Neural
   Engine and the rest on the GPU, whether the server queues the graph's
-  history or the graph keeps its own, each keyed for its own compile cache."""
+  history or the graph keeps its own, each keyed for its own compile cache.
+  `ane-whole` is one session with every unit allowed; its key differs from
+  `coreml`'s through the artifact's name, which carries the device."""
   queued = tiny_model.write(tmp_path / 'tiny.onnx')
   stateful = tiny_model.write_stateful(tmp_path / 'stateful.onnx')
   split = [{'model': 'vision.onnx', 'units': 'CPUAndNeuralEngine', 'cache': 'coreml-vision'},
@@ -299,12 +302,13 @@ def test_each_device_stages_its_sessions(tmp_path):
     ('coreml', queued, [{'model': 'model.onnx', 'units': 'CPUAndGPU', 'cache': 'coreml-model'}]),
     ('ane', queued, split),
     ('ane', stateful, split),
+    ('ane-whole', queued, [{'model': 'model.onnx', 'units': 'ALL', 'cache': 'coreml-model'}]),
   ]
   for k, (device, path, manifest_want) in enumerate(cases):
     backend = OrtBackend(device, providers=COREML_PROVIDERS)
     staged = tmp_path / f'staged_{k}'
     staged.mkdir()
-    out = tmp_path / f'{k}.ortcache'
+    out = tmp_path / f'{k}.{backend.tag()}.ortcache'
     manifest = backend._stage(path, staged, out)
     assert manifest == manifest_want == json.loads((staged / MANIFEST).read_text()), (device, path.name)
     for entry in manifest:
