@@ -41,6 +41,11 @@ XCODEBUILD_ARGS=(
   build
   "MARKETING_VERSION=$JETLINK_VERSION"
   "CURRENT_PROJECT_VERSION=$JETLINK_BUILD"
+  # Apple silicon only, for the package's targets too: with no destination a
+  # Release build makes them universal, and the Swift server's preparation
+  # uses Float16, which Intel Macs do not have.
+  "ARCHS=arm64"
+  "ONLY_ACTIVE_ARCH=NO"
   "CODE_SIGN_IDENTITY=${SIGN_IDENTITY:--}"
   CODE_SIGNING_ALLOWED=YES
 )
