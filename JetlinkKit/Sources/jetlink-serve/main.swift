@@ -5,9 +5,34 @@ import JetlinkServer
 // The Swift server on a Mac, for benches: the same code the iPhone runs, over
 // TCP, against scripts/bench_link.py or a comma on the LAN.
 //
-//   jetlink-serve --cache DIR [--port 5599] [--device ane|coreml] [--no-keepalive] [--no-preload]
+//   jetlink-serve --cache DIR [options]
 //
-// Events print as JSON lines on stdout, as the control channel would send them.
+// Events print as JSON lines on stdout, as the control channel would send
+// them. `--help` lists the options.
+
+let usage = """
+  usage: jetlink-serve --cache DIR [options]
+
+  The jetlink server in Swift, the one the iPhone app runs, on a Mac for
+  benches: serves a comma or scripts/bench_link.py over TCP and prints the
+  control channel's events as JSON lines.
+
+  options:
+    --cache DIR         where models and built engines live (required)
+    --port PORT         TCP port to listen on (default 5599)
+    --device ane|coreml|cpu
+                        ane: the vision trunk on the Neural Engine, the rest on
+                        the GPU (default); coreml: the whole graph on the GPU;
+                        cpu: onnxruntime's CPU provider, for tests
+    --dial HOST[:PORT]  also dial this end and serve the connection, as the
+                        phone dials the comma over a USB network link; the
+                        listener stays open beside it
+    --no-keepalive      do not keep the GPU clocked up between frames
+    --no-cpu-keepwarm   do not keep a CPU core busy between frames while a
+                        Neural Engine session runs
+    --no-preload        do not load the engine loaded last before a comma asks
+    --help              this text
+  """
 
 struct Options {
   var cache: URL?
@@ -37,6 +62,9 @@ func parse() -> Options {
     case "--no-keepalive": options.keepAlive = false
     case "--no-cpu-keepwarm": options.keepCPUWarm = false
     case "--no-preload": options.preload = false
+    case "--help", "-h":
+      print(usage)
+      exit(0)
     case "--dial":
       let text = value(arg)
       guard let target = DialTarget(text) else {
@@ -45,7 +73,7 @@ func parse() -> Options {
       }
       options.dial = target
     default:
-      FileHandle.standardError.write(Data("unknown argument \(arg)\n".utf8))
+      FileHandle.standardError.write(Data("unknown argument \(arg); --help lists the options\n".utf8))
       exit(2)
     }
   }
@@ -75,13 +103,14 @@ func encode<T: Encodable>(_ value: T) -> [String: Any] {
 
 let options = parse()
 guard let cache = options.cache else {
-  FileHandle.standardError.write(Data("usage: jetlink-serve --cache DIR [--port 5599] [--device ane|coreml] [--no-keepalive] [--no-preload]\n".utf8))
+  FileHandle.standardError.write(Data((usage + "\n").utf8))
   exit(2)
 }
 
 do {
   let server = try Server(
-    configuration: Server.Configuration(port: options.port, cacheRoot: cache, device: options.device, keepAlive: options.keepAlive, keepCPUWarm: options.keepCPUWarm,
+    configuration: Server.Configuration(
+      port: options.port, cacheRoot: cache, device: options.device, keepAlive: options.keepAlive, keepCPUWarm: options.keepCPUWarm,
       preload: options.preload, dial: options.dial),
     preparer: ONNXPreparer())
   server.host.subscribe { event in
