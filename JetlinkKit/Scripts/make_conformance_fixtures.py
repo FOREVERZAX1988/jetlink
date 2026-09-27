@@ -503,7 +503,7 @@ def control(root: Path) -> None:
       server._catalog_kicked = True    # the catalog is on disk; no fetch to kick
       server._on_connect(client)
       tick()
-      server._on_host('link', {'state': 'connected', 'detail': '', 'peer': 'usb'})
+      server._on_host('link', {'state': 'connected', 'detail': '', 'peer': 'usb', 'medium': 'usb3'})
       tick()
       host.job = S.Job(SHA_A, load_only=False)
       host._last_stage = ('build', 0.42, 'compiling the graph')

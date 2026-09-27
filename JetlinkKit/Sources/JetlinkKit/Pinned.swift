@@ -65,6 +65,18 @@ public enum Pinned {
   public static let usbVendorClass: [UInt8] = [0xFF, 0xFF, 0xFF]
   /// jetlink.transport.usbbulk.MAX_PACKET
   public static let usbMaxPacket: Int = 1024
+  /// jetlink.transport.base.LINK_MEDIA
+  public static let linkMedia: [String] = ["usb3", "usb2", "usb1", "usb", "tcp"]
+  /// jetlink.transport.base.USB_MEDIA
+  public static let usbSpeedMedia: [String: String] = [
+    "super-speed-plus": "usb3",
+    "super-speed": "usb3",
+    "high-speed": "usb2",
+    "full-speed": "usb1",
+    "low-speed": "usb1",
+  ]
+  /// jetlink.transport.tcp.CABLE_ADDRESS
+  public static let cableAddress: String = "192.168.60.1"
   /// jetlink.transport.usbbulk.READ_CHUNK
   public static let usbReadChunk: Int = 262144
   /// jetlink.spec.MODEL_RUN_FREQ

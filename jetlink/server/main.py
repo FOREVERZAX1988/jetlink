@@ -88,8 +88,8 @@ def _serve(cache: EngineCache, open_transport, sleeper: Sleeper | None = None,
       if sleeper is not None:
         sleeper.touch()
       link = 'connected'
-      host.emit('link', {'state': 'connected', 'detail': '', 'peer': getattr(transport, 'peer', None)})
       session = Session(transport, host)
+      host.emit('link', session.link_event())
       detail = ''
       try:
         session.serve_forever()

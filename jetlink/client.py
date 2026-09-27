@@ -178,7 +178,16 @@ class JetlinkClient:
     so this is also how a new owner of the gadget takes over one the server
     never saw end; see Session._greet."""
     seq = self._next_seq()
-    self.t.send_json(P.Msg.HELLO_REQ, seq, {'client': {'nonce': self.nonce, 'name': self.name}})
+    client = {'nonce': self.nonce, 'name': self.name}
+    try:
+      link = self.t.link_info()
+    except Exception:
+      link = {}   # never worth a failed hello
+    if link:
+      # Which link this is and how fast: the server shows it (USB 3, USB 2,
+      # TCP), and only this end always knows. See Transport.link_info.
+      client['link'] = link
+    self.t.send_json(P.Msg.HELLO_REQ, seq, {'client': client})
     return json.loads(bytes(self._expect(P.Msg.HELLO_RESP, seq, timeout).payload))
 
   def state(self, timeout: float = 2.0) -> dict:

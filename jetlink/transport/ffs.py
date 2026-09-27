@@ -28,7 +28,7 @@ import time
 from collections import deque
 
 from jetlink import protocol as P
-from jetlink.transport.base import LinkError, LinkTimeout, StreamTransport, take
+from jetlink.transport.base import LinkError, LinkTimeout, StreamTransport, take, medium_from_usb_speed, udc_speed, usb_link_info
 from jetlink.transport.priority import background_thread, widen_affinity
 from jetlink.transport.watchdog import WriteWatchdog
 
@@ -168,6 +168,13 @@ class FfsTransport(StreamTransport):
     except BaseException:
       self.close()   # otherwise a failed bring-up leaks the descriptors it did open
       raise
+
+  def link_info(self) -> dict:
+    return usb_link_info('usb', udc_speed(self.bound_udc))
+
+  @property
+  def medium(self) -> str:
+    return medium_from_usb_speed(udc_speed(self.bound_udc))
 
   @classmethod
   def borrowed(cls, mount: str, udc: str, bounce=None, owner_gadget: str | None = None) -> FfsTransport:

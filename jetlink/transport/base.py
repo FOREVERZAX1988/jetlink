@@ -18,6 +18,49 @@ MAX_MESSAGE = 16 << 20
 _PAD = bytes(P.GADGET_TX_ALIGN)
 
 
+# How a link is carried, as a server's link event names it: the USB generation
+# the comma's controller negotiated, 'usb' when that is unknown, or 'tcp'. The
+# comma's hello says which (Transport.link_info), because only its end always
+# knows: a phone's cable is TCP over USB, and a host may not see the bus speed.
+LINK_MEDIA = ('usb3', 'usb2', 'usb1', 'usb', 'tcp')
+USB_MEDIA = {'super-speed-plus': 'usb3', 'super-speed': 'usb3', 'high-speed': 'usb2',
+             'full-speed': 'usb1', 'low-speed': 'usb1'}
+UDC_SYSFS = '/sys/class/udc'
+
+
+def medium_from_usb_speed(speed: str | None) -> str:
+  """'usb3', 'usb2' or 'usb1' for a speed as Linux names it, else 'usb'."""
+  return USB_MEDIA.get(speed or '', 'usb')
+
+
+def link_medium(info) -> str | None:
+  """The medium a hello's client.link names, or None when it names none."""
+  if not isinstance(info, dict):
+    return None
+  if info.get('kind') in ('usb', 'cable'):
+    return medium_from_usb_speed(info.get('usb_speed'))
+  return 'tcp' if info.get('kind') == 'tcp' else None
+
+
+def udc_speed(udc: str | None = None, root: str | None = None) -> str | None:
+  """The speed a device controller negotiated with its host, as Linux names it
+  (super-speed, high-speed, ...), from `udc` or the first controller; None
+  without one, or before a host has configured it."""
+  import os
+  root = root or UDC_SYSFS
+  try:
+    name = udc or sorted(os.listdir(root))[0]
+    with open(os.path.join(root, name, 'current_speed')) as f:
+      speed = f.read().strip()
+  except (OSError, IndexError):
+    return None
+  return speed if speed in USB_MEDIA else None
+
+
+def usb_link_info(kind: str, speed: str | None) -> dict:
+  return {'kind': kind, **({'usb_speed': speed} if speed else {})}
+
+
 class LinkError(IOError):
   """The link is unusable. Callers treat this as 'fall back to the small model'."""
 
@@ -40,6 +83,16 @@ class Transport(ABC):
   Implementations must preserve message boundaries and ordering. recv() hands
   back a view into a reusable buffer: copy anything you need to keep.
   """
+
+  # How this end sees the link, for the server's link event: 'tcp', a USB
+  # generation, 'usb', or None where it cannot tell.
+  medium: str | None = None
+
+  def link_info(self) -> dict:
+    """What the comma's hello says about this link: its kind (usb, cable or
+    tcp) and, over USB, the speed the controller negotiated. Empty when there
+    is nothing to say."""
+    return {}
 
   @abstractmethod
   def send(self, msg_type: int, seq: int, parts=(), flags: int = 0, timeout: float | None = None) -> None:
