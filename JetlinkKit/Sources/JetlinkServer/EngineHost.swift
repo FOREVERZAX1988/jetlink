@@ -87,9 +87,16 @@ final class FrameStats: @unchecked Sendable {
   private let lock = NSLock()
   private var samples: [Sample] = []
   private let capacity = 2000
+  /// The clock samples are stamped and windowed by; a test replays the
+  /// Python's sample times on one of its own.
+  private let now: @Sendable () -> TimeInterval
+
+  init(now: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
+    self.now = now
+  }
 
   func record(totalUs: UInt32, gpuUs: UInt32, queueUs: UInt32, sendUs: UInt32) {
-    let sample = Sample(at: ProcessInfo.processInfo.systemUptime, totalUs: totalUs, gpuUs: gpuUs, queueUs: queueUs, sendUs: sendUs)
+    let sample = Sample(at: now(), totalUs: totalUs, gpuUs: gpuUs, queueUs: queueUs, sendUs: sendUs)
     lock.lock()
     samples.append(sample)
     // Trimmed in chunks: one removeFirst a frame would shift the window every frame.
@@ -101,7 +108,7 @@ final class FrameStats: @unchecked Sendable {
 
   /// The `stats` event, or nil when no frame landed in the window.
   func summary(window seconds: TimeInterval, framesTotal: Int) -> StatsEvent? {
-    let cutoff = ProcessInfo.processInfo.systemUptime - seconds
+    let cutoff = now() - seconds
     lock.lock()
     let rows = samples.filter { $0.at >= cutoff }
     lock.unlock()
