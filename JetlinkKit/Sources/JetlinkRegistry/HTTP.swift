@@ -33,18 +33,27 @@ struct HTTP: Sendable {
         try HTTP.check(response, url: url)
         return data
       }
-      let (bytes, response) = try await session.bytes(for: request)
-      defer { bytes.task.cancel() }
-      try HTTP.check(response, url: url)
-      var data = Data()
-      data.reserveCapacity(min(limit, 64 << 10))
-      if limit > 0 {
-        for try await byte in bytes {
-          data.append(byte)
-          if data.count >= limit { break }
+      #if canImport(FoundationNetworking)
+        // swift-corelibs-foundation has no bytes(for:). The Linux build is a
+        // drift check that never fetches a model, so it reads the whole body
+        // and keeps the first `limit` bytes.
+        let (whole, response) = try await session.data(for: request)
+        try HTTP.check(response, url: url)
+        return Data(whole.prefix(max(0, limit)))
+      #else
+        let (bytes, response) = try await session.bytes(for: request)
+        defer { bytes.task.cancel() }
+        try HTTP.check(response, url: url)
+        var data = Data()
+        data.reserveCapacity(min(limit, 64 << 10))
+        if limit > 0 {
+          for try await byte in bytes {
+            data.append(byte)
+            if data.count >= limit { break }
+          }
         }
-      }
-      return data
+        return data
+      #endif
     } catch let error as RegistryError {
       throw error
     } catch {
