@@ -100,9 +100,7 @@ struct LogsView: View {
 
   /// The server logs as "%(asctime)s %(levelname)-7s %(name)s: %(message)s".
   static func tone(for line: String) -> Color {
-    if line.contains(" ERROR ") { return .red }
-    if line.contains(" WARNING") { return .orange }
-    return .primary
+    LogTone.color(for: line)
   }
 }
 

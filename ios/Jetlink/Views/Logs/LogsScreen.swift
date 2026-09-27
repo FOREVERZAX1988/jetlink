@@ -1,4 +1,5 @@
 import JetlinkKit
+import JetlinkUI
 import SwiftUI
 
 /// What the server and the app have logged, newest at the bottom, following
@@ -65,8 +66,6 @@ struct LogsScreen: View {
 
   /// Lines read "time LEVEL category: message".
   static func tone(for line: String) -> Color {
-    if line.contains(" ERROR ") { return .red }
-    if line.contains(" WARNING ") { return .orange }
-    return .primary
+    LogTone.color(for: line)
   }
 }
