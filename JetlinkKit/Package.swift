@@ -46,14 +46,16 @@ import PackageDescription
       .target(name: "JetlinkRegistry", dependencies: ["JetlinkKit", "JetlinkLog", crypto]),
       .target(
         name: "JetlinkServer", dependencies: ["JetlinkKit", "JetlinkONNX", "JetlinkLog"], sources: portableServer),
+      .target(name: "JetlinkTestSupport", path: "Tests/JetlinkTestSupport"),
       .testTarget(
-        name: "JetlinkKitTests", dependencies: ["JetlinkKit"], exclude: ["FormattingTests.swift"], resources: [.copy("Fixtures")]),
-      .testTarget(name: "JetlinkONNXTests", dependencies: ["JetlinkONNX", crypto], exclude: ["Fixtures"]),
+        name: "JetlinkKitTests", dependencies: ["JetlinkKit", "JetlinkTestSupport"], exclude: ["FormattingTests.swift"],
+        resources: [.copy("Fixtures")]),
+      .testTarget(name: "JetlinkONNXTests", dependencies: ["JetlinkONNX", "JetlinkTestSupport", crypto], exclude: ["Fixtures"]),
       .testTarget(
-        name: "JetlinkRegistryTests", dependencies: ["JetlinkRegistry", crypto],
+        name: "JetlinkRegistryTests", dependencies: ["JetlinkRegistry", "JetlinkTestSupport", crypto],
         sources: ["ConformanceTests.swift", "Support.swift", "JSONTests.swift", "CacheLayoutTests.swift"]),
       .testTarget(
-        name: "JetlinkServerTests", dependencies: ["JetlinkServer"], exclude: ["Fixtures"],
+        name: "JetlinkServerTests", dependencies: ["JetlinkServer", "JetlinkTestSupport"], exclude: ["Fixtures"],
         sources: ["ConformanceTests.swift", "Support.swift", "WireTests.swift", "USBTransportTests.swift", "ConvertTests.swift", "SpecTests.swift"]),
     ]
   )
@@ -98,11 +100,13 @@ import PackageDescription
         linkerSettings: [.linkedFramework("Metal")]),
       .executableTarget(name: "jetlink-serve", dependencies: ["JetlinkKit", "JetlinkServer"]),
       .executableTarget(name: "jetlink-onnx", dependencies: ["JetlinkONNX"]),
-      .testTarget(name: "JetlinkKitTests", dependencies: ["JetlinkKit", "JetlinkUI"], resources: [.copy("Fixtures")]),
+      // Helpers more than one test target uses: JSON comparison, hex.
+      .target(name: "JetlinkTestSupport", path: "Tests/JetlinkTestSupport"),
+      .testTarget(name: "JetlinkKitTests", dependencies: ["JetlinkKit", "JetlinkUI", "JetlinkTestSupport"], resources: [.copy("Fixtures")]),
       // The fixtures are read in place through #filePath, so they are not resources.
-      .testTarget(name: "JetlinkONNXTests", dependencies: ["JetlinkONNX"], exclude: ["Fixtures"]),
-      .testTarget(name: "JetlinkRegistryTests", dependencies: ["JetlinkRegistry"]),
-      .testTarget(name: "JetlinkServerTests", dependencies: ["JetlinkServer"], exclude: ["Fixtures"]),
+      .testTarget(name: "JetlinkONNXTests", dependencies: ["JetlinkONNX", "JetlinkTestSupport"], exclude: ["Fixtures"]),
+      .testTarget(name: "JetlinkRegistryTests", dependencies: ["JetlinkRegistry", "JetlinkTestSupport"]),
+      .testTarget(name: "JetlinkServerTests", dependencies: ["JetlinkServer", "JetlinkTestSupport"], exclude: ["Fixtures"]),
     ]
   )
 #endif

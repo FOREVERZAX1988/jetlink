@@ -313,8 +313,8 @@ final class LockedLinks: @unchecked Sendable {
   var all: [LinkEvent] { lock.withLock { links } }
 }
 
-/// The comma's side over the fake pipes, as client.py speaks it.
-final class GadgetClient {
+/// The comma over the fake USB pipes.
+final class GadgetClient: CommaClient {
   let pipes: FakePipes
   private var seq: UInt32 = 0
   private var seen = 0
@@ -323,36 +323,26 @@ final class GadgetClient {
     self.pipes = pipes
   }
 
-  @discardableResult
-  func send(_ type: Wire.Msg, _ payload: Data = Data()) -> UInt32 {
-    seq += 1
-    pipes.push(type, seq: seq, payload: payload)
+  func sendMessage(_ type: Wire.Msg, _ payload: Data, flags: Wire.Flag, seq explicit: UInt32?) throws -> UInt32 {
+    if explicit == nil { seq += 1 }
+    let seq = explicit ?? self.seq
+    pipes.push(type, seq: seq, payload: payload, flags: flags)
     return seq
   }
 
-  func sendJSON(_ type: Wire.Msg, _ object: [String: Any]) throws {
-    send(type, try JSONSerialization.data(withJSONObject: object))
-  }
-
-  /// The next message of `type` the server wrote, skipping progress.
-  func recv(_ type: Wire.Msg, timeout: TimeInterval = 60) throws -> HostFrames.Frame {
-    let deadline = Date().addingTimeInterval(timeout)
+  /// The next message the server wrote to the pipes, waiting up to a minute.
+  func recv() throws -> Reply {
+    let deadline = Date().addingTimeInterval(60)
     while Date() < deadline {
       let frames = try HostFrames.parse(pipes.written)
-      while seen < frames.count {
+      if seen < frames.count {
         let frame = frames[seen]
         seen += 1
-        if frame.type == type.rawValue { return frame }
-        if frame.type == Wire.Msg.progress.rawValue { continue }
-        throw TestError("expected \(type), got message type \(frame.type): \(String(decoding: frame.payload, as: UTF8.self))")
+        return Reply(type: frame.type, seq: frame.seq, payload: frame.payload)
       }
       _ = pipes.waitForWritten(pipes.written.count + 1, timeout: 0.2)
     }
-    throw TestError("no \(type) in \(timeout) s")
-  }
-
-  func json(_ frame: HostFrames.Frame) -> [String: Any] {
-    (try? JSONSerialization.jsonObject(with: frame.payload)) as? [String: Any] ?? [:]
+    throw TestError("nothing from the server in 60 s")
   }
 }
 
@@ -396,9 +386,9 @@ final class GadgetClient {
       defer { server.shutdown() }
       let client = GadgetClient(comma)
       try client.sendJSON(.helloReq, ["client": ["name": "modeld", "nonce": 1]])
-      let hello = client.json(try client.recv(.helloResp))
+      let hello = try client.recv(.helloResp).json
       #expect(hello["protocol"] as? Int == Int(Wire.version))
-      client.send(.ping)
+      try client.send(.ping)
       _ = try client.recv(.pong)
       #expect(links.all.contains { $0.state == .connected && $0.peer == "usb" && $0.linkMedium == .usb3 })
       comma.unplug()
@@ -419,38 +409,7 @@ final class GadgetClient {
       let server = try makeServer(cache, gadget: FakeGadget([comma], then: unservedPipes))
       try server.start()
       defer { server.shutdown() }
-      let client = GadgetClient(comma)
-      try client.sendJSON(.helloReq, ["client": ["name": "test", "nonce": 1]])
-      _ = try client.recv(.helloResp)
-
-      let bytes = try Data(contentsOf: golden.model)
-      try client.sendJSON(.engineReq, ["sha256": golden.sha256, "nbytes": bytes.count, "frame_skip": 4])
-      var state = client.json(try client.recv(.engineResp))
-      if state["state"] as? String == "need_upload" {
-        var payload = withUnsafeBytes(of: UInt64(0).littleEndian) { Data($0) }
-        payload.append(bytes)
-        client.send(.uploadChunk, payload)
-        try client.sendJSON(.uploadDone, ["sha256": golden.sha256])
-        state = client.json(try client.recv(.engineResp))
-      }
-      while state["state"] as? String == "building" {
-        state = client.json(try client.recv(.engineResp))
-      }
-      #expect(state["state"] as? String == "ready")
-      let spec = try ModelSpec.from(state["spec"] as! [String: Any])
-      let frameBytes = spec.warpedBytes + spec.packedBytes
-      let count = golden.frames.count / frameBytes
-      for i in 0..<count {
-        var request = withUnsafeBytes(of: UInt32(i).littleEndian) { Data($0) }
-        request.append(contentsOf: withUnsafeBytes(of: UInt32(0).littleEndian) { Data($0) })
-        request.append(golden.frames[(i * frameBytes)..<((i + 1) * frameBytes)])
-        client.send(.inferReq, request)
-        let reply = try client.recv(.inferResp)
-        let status = reply.payload.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 4, as: UInt32.self) }
-        #expect(status == Wire.Status.ok.rawValue)
-        let expected = golden.expected[(i * spec.outputBytes)..<((i + 1) * spec.outputBytes)]
-        #expect(Data(reply.payload[Wire.inferRespSize...]) == Data(expected), "frame \(i) differs from Python's")
-      }
+      let (_, count) = try GadgetClient(comma).replay(golden)
       #expect(comma.crossed == 0)
       #expect(server.framesServed == count)
     }

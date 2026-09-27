@@ -1,5 +1,6 @@
 import Foundation
 import JetlinkKit
+import JetlinkTestSupport
 import Testing
 
 @testable import JetlinkServer
@@ -129,17 +130,6 @@ struct PinnedConstantTests {
 
 @Suite("Conformance: wire bytes against protocol.py and StreamTransport")
 struct WireConformanceTests {
-  private func bytes(_ hex: String) -> [UInt8] {
-    var out: [UInt8] = []
-    var index = hex.startIndex
-    while index < hex.endIndex {
-      let next = hex.index(index, offsetBy: 2)
-      out.append(UInt8(hex[index..<next], radix: 16)!)
-      index = next
-    }
-    return out
-  }
-
   @Test("Headers pack and unpack as protocol.pack_header does")
   func headers() throws {
     for h in try Conformance.json("wire.json")["headers"] as! [[String: Any]] {
@@ -148,8 +138,8 @@ struct WireConformanceTests {
         reserved: (h["reserved"] as! NSNumber).uint64Value)
       var packed = [UInt8](repeating: 0xEE, count: Wire.headerSize)
       packed.withUnsafeMutableBytes { Wire.packHeader(header, into: $0.baseAddress!) }
-      #expect(packed == bytes(h["hex"] as! String), "\(h["name"]!)")
-      let read = try bytes(h["hex"] as! String).withUnsafeBytes { try Wire.unpackHeader($0.baseAddress!) }
+      #expect(packed == hex(h["hex"] as! String), "\(h["name"]!)")
+      let read = try hex(h["hex"] as! String).withUnsafeBytes { try Wire.unpackHeader($0.baseAddress!) }
       #expect(read == header, "\(h["name"]!)")
     }
   }
@@ -158,7 +148,7 @@ struct WireConformanceTests {
   func inferBodies() throws {
     let wire = try Conformance.json("wire.json")
     for r in wire["infer_req"] as! [[String: Any]] {
-      let raw = bytes(r["hex"] as! String)
+      let raw = hex(r["hex"] as! String)
       raw.withUnsafeBytes {
         #expect(UInt32(littleEndian: $0.loadUnaligned(as: UInt32.self)) == UInt32(int(r["frame_id"])))
         #expect(UInt32(littleEndian: $0.loadUnaligned(fromByteOffset: 4, as: UInt32.self)) == UInt32(int(r["flags"])))
@@ -168,7 +158,7 @@ struct WireConformanceTests {
       let packed = Wire.inferResp(
         frameID: UInt32(int(r["frame_id"])), status: Wire.Status(rawValue: UInt32(int(r["status"])))!, gpuUs: UInt32(int(r["gpu_us"])),
         queueUs: UInt32(int(r["queue_us"])), totalUs: UInt32(int(r["total_us"])))
-      #expect(packed == bytes(r["hex"] as! String))
+      #expect(packed == hex(r["hex"] as! String))
     }
   }
 

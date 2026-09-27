@@ -26,29 +26,10 @@ struct ServerTests {
   func servesGoldenFrames(_ name: String) throws {
     let golden = try Golden(name)
     try serve { server, client in
-      try client.send(.helloReq, JSONSerialization.data(withJSONObject: ["client": ["name": "test", "nonce": 1]]))
-      let hello = try client.recv(.helloResp).json
+      let (hello, count) = try client.replay(golden)
       #expect(hello["protocol"] as? Int == 2)
       #expect(hello["backend"] as? String == "ort")
-
-      let ready = try client.ensureEngine(model: golden.model, sha256: golden.sha256)
-      let spec = try ModelSpec.from(ready["spec"] as! [String: Any])
-      let frameBytes = spec.warpedBytes + spec.packedBytes
-      let count = golden.frames.count / frameBytes
       #expect(count == 8)
-
-      for i in 0..<count {
-        var request = withUnsafeBytes(of: UInt32(i).littleEndian) { Data($0) }
-        request.append(contentsOf: withUnsafeBytes(of: UInt32(0).littleEndian) { Data($0) })
-        request.append(golden.frames[(i * frameBytes)..<((i + 1) * frameBytes)])
-        try client.send(.inferReq, request)
-        let reply = try client.recv(.inferResp)
-        let status = reply.payload.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 4, as: UInt32.self) }
-        #expect(status == Wire.Status.ok.rawValue)
-        let outputs = reply.payload[Wire.inferRespSize...]
-        let expected = golden.expected[(i * spec.outputBytes)..<((i + 1) * spec.outputBytes)]
-        #expect(Data(outputs) == Data(expected), "frame \(i) differs from Python's")
-      }
       #expect(server.framesServed == count)
     }
   }
@@ -89,8 +70,7 @@ struct ServerTests {
     try serve { _, client in
       try client.send(.inferReq, Data(count: 64))
       let reply = try client.recv(.inferResp)
-      let status = reply.payload.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 4, as: UInt32.self) }
-      #expect(status == Wire.Status.notReady.rawValue)
+      #expect(reply.status == Wire.Status.notReady.rawValue)
     }
   }
 
