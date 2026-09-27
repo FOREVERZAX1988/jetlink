@@ -259,6 +259,7 @@ public final class Server: @unchecked Sendable {
     let listener = self.listener
     let session = current?.session
     self.listener = nil
+    endServing()  // a session that ends after a stop says nothing
     lock.unlock()
     ticker?.stop()
     listener?.close()
@@ -468,8 +469,34 @@ public final class Server: @unchecked Sendable {
   private func setLink(_ event: LinkEvent) {
     lock.lock()
     link = event
+    if event.state == .connected {
+      beginServing()
+    } else {
+      endServing()
+    }
     lock.unlock()
     host.emit(.link(event))
+  }
+
+  /// Held while a comma is connected. The system throttles an app nobody is
+  /// looking at (App Nap on a Mac), and an in-process server with it: behind a
+  /// locked screen the Mac app ran the model at a p50 of 75 ms and dropped 45%
+  /// of frames, where the same server as a command-line process ran at 36 ms.
+  /// Not held while idle, and idle sleep stays allowed; frames are not user input.
+  private var servingActivity: NSObjectProtocol?
+
+  /// Under `lock`.
+  private func beginServing() {
+    guard servingActivity == nil else { return }
+    servingActivity = ProcessInfo.processInfo.beginActivity(
+      options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical], reason: "serving the comma's model")
+  }
+
+  /// Under `lock`.
+  private func endServing() {
+    guard let held = servingActivity else { return }
+    ProcessInfo.processInfo.endActivity(held)
+    servingActivity = nil
   }
 
   private var lastTick = ProcessInfo.processInfo.systemUptime

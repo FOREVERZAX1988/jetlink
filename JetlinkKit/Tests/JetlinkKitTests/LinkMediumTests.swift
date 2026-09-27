@@ -26,6 +26,7 @@ struct LinkMediumTests {
     // before a hello: the comma's cable address at the far end is the cable
     #expect(LinkMedium(tcpPeer: "192.168.60.1:5599") == .usb)
     #expect(LinkMedium(tcpPeer: "10.0.0.5:40000") == .tcp)
+    #expect(LinkMedium(tcpPeer: "192.168.60.4:50000") == .tcp)
     #expect(LinkMedium(link: ["kind": "tcp"]) == .tcp)
     #expect(LinkMedium(link: ["kind": "pigeon"]) == nil)
     #expect(LinkMedium(link: nil) == nil)

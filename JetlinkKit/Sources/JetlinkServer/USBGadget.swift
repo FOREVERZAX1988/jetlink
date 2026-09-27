@@ -173,17 +173,15 @@
 
     func read(into buffer: UnsafeMutableRawPointer, count: Int, timeout: TimeInterval) throws -> Int {
       inData.length = count
-      let transferred: Int
+      var transferred = 0
       if timeout == 0 {
         try checkRunning()
-        var n = 0
         do {
-          try input.__sendIORequest(with: inData, bytesTransferred: &n, completionTimeout: 0)
+          try input.__sendIORequest(with: inData, bytesTransferred: &transferred, completionTimeout: 0)
         } catch {
           let status = IOReturn(truncatingIfNeeded: (error as NSError).code)
           guard UInt32(bitPattern: status) == IOUSBHostPipes.underrun else { throw failure(status, "read") }
         }
-        transferred = n
       } else {
         transferred = try transfer(input, inData, timeout, "read")
       }
@@ -192,8 +190,8 @@
     }
 
     func write(from buffer: UnsafeRawPointer, count: Int, timeout: TimeInterval) throws -> Int {
-      outData.length = count
-      outData.mutableBytes.copyMemory(from: buffer, byteCount: count)
+      outData.length = 0  // keeps the capacity, and the append does not zero what it copies over
+      outData.append(buffer, length: count)
       return try transfer(output, outData, timeout, "write")
     }
 

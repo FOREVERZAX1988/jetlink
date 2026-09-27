@@ -33,24 +33,23 @@ class TcpTransport(StreamTransport):
     self._timeout: float | None = -1.0  # force the first settimeout
     _tune(sock)
 
+  def on_the_cable(self) -> bool:
+    """Is either end the comma's cable address? Then this is a phone's USB
+    cable: from the comma the local end, from a server the peer. Swift's
+    LinkMedium(tcpPeer:) is the same rule."""
+    try:
+      return CABLE_ADDRESS in (self.sock.getsockname()[0], self.sock.getpeername()[0])
+    except OSError:
+      return False
+
   @property
   def medium(self) -> str:
-    """What a server names this link before a hello says more: the comma's
-    cable address at the far end is a phone's USB cable, of unknown speed."""
-    try:
-      peer = self.sock.getpeername()[0]
-    except (OSError, IndexError, TypeError, AttributeError):
-      return 'tcp'
-    return 'usb' if peer == CABLE_ADDRESS else 'tcp'
+    """What a server names this link before a hello says more: the cable is
+    USB of unknown speed until the comma says which."""
+    return 'usb' if self.on_the_cable() else 'tcp'
 
   def link_info(self) -> dict:
-    try:
-      local = self.sock.getsockname()[0]
-    except (OSError, IndexError, TypeError):
-      return {'kind': 'tcp'}
-    if local == CABLE_ADDRESS:
-      return usb_link_info('cable', udc_speed())
-    return {'kind': 'tcp'}
+    return usb_link_info('cable', udc_speed()) if self.on_the_cable() else {'kind': 'tcp'}
 
   @classmethod
   def connect(cls, host: str, port: int = DEFAULT_PORT, timeout: float = 5.0) -> TcpTransport:

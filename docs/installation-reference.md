@@ -78,7 +78,7 @@ kernel can present and the negotiated bus speed.
 | bDeviceClass/SubClass/Protocol | `0xEF/0x02/0x01`, Miscellaneous with interface association (composite) |
 | Interface 0 | `0xFF/0xFF/0xFF` vendor specific, one bulk IN and one bulk OUT endpoint: the Jetlink link |
 | Interfaces 1 and 2 | CDC-NCM control and data (CDC-ECM where the kernel has no NCM): the network for an iPhone |
-| Network | comma `192.168.60.1/24`; DHCP `192.168.60.2` to `.9` from dnsmasq on `usb0`, no router or DNS options |
+| Network | comma `192.168.60.1/24`; DHCP `192.168.60.2` to `.254` with 10 minute leases from dnsmasq on `usb0`, no router or DNS options |
 
 On the Jetson, the installer sets up the server as a service; for a manual run,
 from a checkout:
