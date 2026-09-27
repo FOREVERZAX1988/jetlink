@@ -205,7 +205,9 @@ jobs:
           python-version: "3.14"
 
       - name: Install the package and the fixture releases
-        run: pip install -e . $FIXTURE_PINS
+        run: pip install -e . pytest $FIXTURE_PINS
+        # pytest because make_onnx_fixtures builds one graph with
+        # tests/test_ane_whole.py's own builder, and that module imports it.
 
       - name: Regenerate every file the Swift tests read
         run: |
