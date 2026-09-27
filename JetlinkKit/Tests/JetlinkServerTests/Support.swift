@@ -1,4 +1,5 @@
 import Foundation
+import Testing
 
 @testable import JetlinkServer
 
@@ -33,46 +34,40 @@ final class TemporaryDirectory {
   }
 }
 
-/// The comma's side of the wire, as much of it as the tests need: jetlink's
-/// client.py, message by message.
-final class TestClient {
-  let transport: TCPTransport
-  private var seq: UInt32 = 0
+/// A message the server sent.
+struct Reply {
+  let type: UInt16
+  let seq: UInt32
+  let payload: Data
 
-  init(port: UInt16) throws {
-    transport = try TCPTransport.connect(host: "127.0.0.1", port: port)
-    transport.setReceiveTimeout(60)
+  var json: [String: Any] {
+    (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any] ?? [:]
   }
 
+  var status: UInt32 {
+    payload.withUnsafeBytes { $0.loadUnaligned(fromByteOffset: 4, as: UInt32.self) }
+  }
+}
+
+/// The comma's side of the wire, as much of it as the tests need: jetlink's
+/// client.py, message by message, over TCP (`TestClient`) or the fake USB
+/// pipes (`GadgetClient`).
+protocol CommaClient: AnyObject {
+  /// Sends one message with the next seq, or `explicit`; returns the seq.
+  func sendMessage(_ type: Wire.Msg, _ payload: Data, flags: Wire.Flag, seq explicit: UInt32?) throws -> UInt32
+  /// The next message the server sent, whatever it is.
+  func recv() throws -> Reply
+}
+
+extension CommaClient {
   @discardableResult
   func send(_ type: Wire.Msg, _ payload: Data = Data(), flags: Wire.Flag = [], seq explicit: UInt32? = nil) throws -> UInt32 {
-    let seq =
-      explicit
-      ?? {
-        self.seq += 1; return self.seq
-      }()
-    try transport.send(type, seq: seq, data: [payload], flags: flags)
-    return seq
+    try sendMessage(type, payload, flags: flags, seq: explicit)
   }
 
   @discardableResult
   func sendJSON(_ type: Wire.Msg, _ object: [String: Any]) throws -> UInt32 {
     try send(type, try JSONSerialization.data(withJSONObject: object))
-  }
-
-  struct Reply {
-    let type: UInt16
-    let seq: UInt32
-    let payload: Data
-
-    var json: [String: Any] {
-      (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any] ?? [:]
-    }
-  }
-
-  func recv() throws -> Reply {
-    let message = try transport.recv()
-    return Reply(type: message.msgType, seq: message.seq, payload: Data(message.payload))
   }
 
   /// The next reply of `type`, skipping progress on the way.
@@ -108,6 +103,56 @@ final class TestClient {
       throw TestError("engine not ready: \(state)")
     }
     return state
+  }
+
+  /// Hello, the model, then Python's golden frames, each reply checked bit
+  /// for bit against Python's output. Returns the hello and the frames sent.
+  @discardableResult
+  func replay(_ golden: Golden) throws -> (hello: [String: Any], frames: Int) {
+    try send(.helloReq, JSONSerialization.data(withJSONObject: ["client": ["name": "test", "nonce": 1]]))
+    let hello = try recv(.helloResp).json
+    let ready = try ensureEngine(model: golden.model, sha256: golden.sha256)
+    let spec = try ModelSpec.from(ready["spec"] as! [String: Any])
+    let frameBytes = spec.warpedBytes + spec.packedBytes
+    let count = golden.frames.count / frameBytes
+    for i in 0..<count {
+      var request = withUnsafeBytes(of: UInt32(i).littleEndian) { Data($0) }
+      request.append(contentsOf: withUnsafeBytes(of: UInt32(0).littleEndian) { Data($0) })
+      request.append(golden.frames[(i * frameBytes)..<((i + 1) * frameBytes)])
+      try send(.inferReq, request)
+      let reply = try recv(.inferResp)
+      #expect(reply.status == Wire.Status.ok.rawValue)
+      let expected = golden.expected[(i * spec.outputBytes)..<((i + 1) * spec.outputBytes)]
+      #expect(Data(reply.payload[Wire.inferRespSize...]) == Data(expected), "frame \(i) differs from Python's")
+    }
+    return (hello, count)
+  }
+}
+
+/// The comma over TCP.
+final class TestClient: CommaClient {
+  let transport: TCPTransport
+  private var seq: UInt32 = 0
+
+  init(port: UInt16) throws {
+    transport = try TCPTransport.connect(host: "127.0.0.1", port: port)
+    transport.setReceiveTimeout(60)
+  }
+
+  func sendMessage(_ type: Wire.Msg, _ payload: Data, flags: Wire.Flag, seq explicit: UInt32?) throws -> UInt32 {
+    let seq =
+      explicit
+      ?? {
+        self.seq += 1
+        return self.seq
+      }()
+    try transport.send(type, seq: seq, data: [payload], flags: flags)
+    return seq
+  }
+
+  func recv() throws -> Reply {
+    let message = try transport.recv()
+    return Reply(type: message.msgType, seq: message.seq, payload: Data(message.payload))
   }
 
   func close() {

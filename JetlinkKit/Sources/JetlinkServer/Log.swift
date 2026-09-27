@@ -23,7 +23,8 @@ public enum Log {
   private static let lock = NSLock()
   nonisolated(unsafe) private static var stored: (@Sendable (Level, String, String) -> Void)?
 
-  static func write(_ level: Level, _ category: String, _ message: String) {
+  /// A line into the sink, for an app writing beside the server.
+  public static func write(_ level: Level, _ category: String, _ message: String) {
     sink?(level, category, message)
   }
 }

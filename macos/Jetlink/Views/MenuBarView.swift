@@ -38,7 +38,8 @@ struct MenuBarView: View {
   private var statusLine: String {
     let (text, _) = StatusBadge.summary(runState: server.runState, link: server.link, engine: server.engine)
     if server.link.state == .connected, let stats = server.stats, stats.fps > 0 {
-      return "Comma connected, \(stats.fps.formatted(.number.precision(.fractionLength(1)))) fps"
+      let over = server.link.connectedMedium.map { " over \($0.title)" } ?? ""
+      return "Comma connected\(over), \(stats.fps.formatted(.number.precision(.fractionLength(1)))) fps"
     }
     return text
   }
@@ -60,6 +61,6 @@ struct MenuBarView: View {
 
   private var loadedName: String {
     guard let sha = server.engine.sha256 else { return "unknown model" }
-    return models.rows.first { $0.sha256 == sha }?.displayName ?? String(sha.prefix(16))
+    return models.row(for: sha)?.displayName ?? String(sha.prefix(16))
   }
 }

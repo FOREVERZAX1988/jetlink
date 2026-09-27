@@ -232,7 +232,7 @@ final class MockProtocol: URLProtocol, @unchecked Sendable {
 
 // FetchTests' loopback server speaks Darwin sockets; the Linux build
 // (docs/conformance.md) runs the registry's conformance tests without it.
-#if !JETLINK_PORTABLE
+#if canImport(Darwin)
   // MARK: - a real HTTP server on loopback
 
   /// Serves `total` bytes of a repeating pattern to every GET, over a real

@@ -1,4 +1,5 @@
 import Foundation
+import JetlinkKit
 
 /// The two bulk endpoints of the comma's vendor interface: IOUSBHost on a Mac,
 /// a fake in the tests. Both calls block.
@@ -25,8 +26,6 @@ protocol GadgetSource: Sendable {
   func present() -> Bool
   /// Opens the link interface's bulk pair.
   func open() throws -> USBTransport
-  /// The bus speed it enumerated at, as a phrase for the log.
-  func speed() -> String?
 }
 
 /// Framing over USB bulk transfers, the host's end: the Swift form of
@@ -60,58 +59,45 @@ final class USBTransport: MessageLink, @unchecked Sendable {
   static let writeTimeout: TimeInterval = 2
 
   let peer: String
+  /// The USB generation the bus negotiated, as the host read it.
+  let medium: LinkMedium?
+  var connectsOnOpen: Bool { false }
+  /// After a protocol error nothing resynchronises the stream, so `close`
+  /// drains what the comma is still sending, unless the link was interrupted.
+  static let drainTimeout: TimeInterval = 5.0
+  private var interrupted = false
   private let pipes: any BulkPipes
-  private var rx: UnsafeMutableRawPointer
-  private var capacity: Int
-  private var start = 0
-  private var end = 0
-  private(set) var desynced = false
+  private let reader = FrameReader(capacity: 2 << 20, slack: USBTransport.readSlack)
+  var desynced: Bool { reader.desynced }
   private let sendLock = NSLock()
   private var tx: UnsafeMutableRawPointer
   private var txCapacity: Int
 
-  init(pipes: any BulkPipes, peer: String = "usb") {
+  init(pipes: any BulkPipes, peer: String = "usb", medium: LinkMedium? = .usb) {
     self.pipes = pipes
     self.peer = peer
-    capacity = 2 << 20
-    rx = UnsafeMutableRawPointer.allocate(byteCount: capacity, alignment: 64)
+    self.medium = medium
     txCapacity = 1 << 20
     tx = UnsafeMutableRawPointer.allocate(byteCount: txCapacity, alignment: 64)
   }
 
   deinit {
     pipes.close()
-    rx.deallocate()
     tx.deallocate()
   }
 
   // MARK: receiving
 
   func recv() throws -> Message {
-    if desynced {
-      throw LinkError.desynced("stream desynced; the link must be reopened")
-    }
-    try fill(Wire.headerSize)
-    let header: Wire.Header
-    do {
-      header = try Wire.unpackHeader(rx + start)
-      if Int(header.length) > Wire.maxMessage {
-        throw Wire.ProtocolError.tooLong(header.length)
+    try reader.recv(pad: { USBTransport.gadgetPad(Wire.headerSize + Int($0.length)) }) { into, missing, room in
+      let size = USBTransport.readSize(missing: missing, room: room)
+      if size == 0 {
+        // Every read would return nothing and the loop would spin while the
+        // comma blocks. Say so rather than hang.
+        throw LinkError.closed("no room to read the rest of a message (\(missing) bytes to come)")
       }
-    } catch let error as Wire.ProtocolError {
-      desynced = true
-      throw LinkError.desynced("protocol error, link unusable: \(error)")
+      return try pipes.read(into: into, count: size, timeout: 0)
     }
-    let body = Wire.headerSize + Int(header.length)
-    let total = body + USBTransport.gadgetPad(body)
-    try fill(total)
-    let payload = UnsafeRawBufferPointer(start: rx + start + Wire.headerSize, count: Int(header.length))
-    start += total
-    if start == end {
-      start = 0
-      end = 0
-    }
-    return Message(msgType: header.msgType, seq: header.seq, flags: header.flags, payload: payload)
   }
 
   /// The pad the gadget put after a message of `body` bytes.
@@ -124,38 +110,6 @@ final class USBTransport: MessageLink, @unchecked Sendable {
   static func readSize(missing: Int, room: Int) -> Int {
     let wanted = (missing + packetSize - 1) / packetSize * packetSize
     return min(wanted, room, readChunk) / packetSize * packetSize
-  }
-
-  /// Reads until `need` bytes of the current message are buffered.
-  private func fill(_ need: Int) throws {
-    reserve(need + USBTransport.readSlack)
-    while end - start < need {
-      let size = USBTransport.readSize(missing: need - (end - start), room: capacity - end)
-      if size == 0 {
-        // Every read would return nothing and this loop would spin while the
-        // comma blocks. Say so rather than hang.
-        throw LinkError.closed("no room to read the rest of a \(need) byte message (\(end - start) in hand)")
-      }
-      end += try pipes.read(into: rx + end, count: size, timeout: 0)
-    }
-  }
-
-  private func reserve(_ need: Int) {
-    if start > 0 && start + need > capacity {
-      memmove(rx, rx + start, end - start)
-      end -= start
-      start = 0
-    }
-    if need > capacity {
-      let grown = max(need, capacity * 2)
-      let buffer = UnsafeMutableRawPointer.allocate(byteCount: grown, alignment: 64)
-      buffer.copyMemory(from: rx + start, byteCount: end - start)
-      rx.deallocate()
-      rx = buffer
-      capacity = grown
-      end -= start
-      start = 0
-    }
   }
 
   /// After a desync, reads and drops what the comma is still sending until it
@@ -182,7 +136,7 @@ final class USBTransport: MessageLink, @unchecked Sendable {
     var flags = flags
     var length = 0
     for part in parts { length += part.count }
-    let padded = (Wire.headerSize + length) % Wire.packetMultiple == 0
+    let padded = Wire.needsPad(length)
     if padded {
       flags.insert(.padded)
     }
@@ -214,10 +168,16 @@ final class USBTransport: MessageLink, @unchecked Sendable {
   // MARK: lifecycle
 
   func shutdown() {
+    interrupted = true
     pipes.abort()
   }
 
+  /// Closes the pipes. After a desync the comma is still mid-message; it is
+  /// let finish and time out first, rather than reopened under.
   func close() {
+    if desynced && !interrupted {
+      drain(USBTransport.drainTimeout)
+    }
     pipes.close()
   }
 }

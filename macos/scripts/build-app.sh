@@ -42,8 +42,8 @@ XCODEBUILD_ARGS=(
   "MARKETING_VERSION=$JETLINK_VERSION"
   "CURRENT_PROJECT_VERSION=$JETLINK_BUILD"
   # Apple silicon only, for the package's targets too: with no destination a
-  # Release build makes them universal, and the Swift server's preparation
-  # uses Float16, which Intel Macs do not have.
+  # Release build makes them universal. The app is for the Neural Engine, and
+  # JetlinkONNX says so with an #error on Intel (its Float16 does not exist there).
   "ARCHS=arm64"
   "ONLY_ACTIVE_ARCH=NO"
   "CODE_SIGN_IDENTITY=${SIGN_IDENTITY:--}"

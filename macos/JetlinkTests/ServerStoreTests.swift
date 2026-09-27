@@ -1,6 +1,7 @@
 import Foundation
 import JetlinkKit
 import JetlinkServer
+import JetlinkUI
 import SwiftUI
 import Testing
 
@@ -23,8 +24,10 @@ struct ServerStoreTests {
     #expect(AppSettings(defaults: defaults).backend == .coreml)
   }
 
-  @Test func theTestHostStartsNoServer() {
-    #expect(AppState.isTestHost)
+  /// The scheme's test action passes -startServerOnLaunch NO, so the app
+  /// hosting these tests opens no USB link and loads no engine.
+  @MainActor @Test func theTestHostStartsNoServer() {
+    #expect(!AppSettings().startServerOnLaunch)
   }
 
   @Test func usbServesTheGadgetAndOpensNoPort() {
@@ -55,7 +58,7 @@ struct ServerStoreTests {
     let date = try #require(Calendar.current.date(from: parts))
     #expect(EmbeddedServer.logLine(.warning, "server", "hello", at: date) == "2026-09-27 13:04:05,123 WARNING jetlink.server: hello")
     #expect(EmbeddedServer.logLine(.info, "usb", "x", at: date) == "2026-09-27 13:04:05,123 INFO    jetlink.usb: x")
-    #expect(LogsView.tone(for: EmbeddedServer.logLine(.error, "session", "bad", at: date)) == .red)
+    #expect(LogTone.color(for: EmbeddedServer.logLine(.error, "session", "bad", at: date)) == .red)
   }
 
   @MainActor @Test func benchmarkEventsReachTheStore() {
@@ -77,7 +80,7 @@ struct ServerStoreTests {
     settings.tcpPort = Int.random(in: 50_000..<60_000)
     settings.cacheDirectory = cache
     let store = ServerStore(settings: settings, logs: LogBuffer(), logFile: nil)
-    store.start()
+    try await store.startIfNeeded()
     #expect(store.runState == .serving)
     #expect(store.info?.port == settings.tcpPort)
     let transport = try TCPTransport.connect(host: "127.0.0.1", port: UInt16(settings.tcpPort), timeout: 2)

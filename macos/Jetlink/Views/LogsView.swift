@@ -57,7 +57,7 @@ struct LogsView: View {
           ForEach(Array(visibleLines.enumerated()), id: \.offset) { _, line in
             Text(line)
               .font(.system(.caption, design: .monospaced))
-              .foregroundStyle(LogsView.tone(for: line))
+              .foregroundStyle(LogTone.color(for: line))
               .textSelection(.enabled)
               .frame(maxWidth: .infinity, alignment: .leading)
           }
@@ -98,10 +98,6 @@ struct LogsView: View {
     FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Logs/Jetlink/server.log")
   }
 
-  /// The server logs as "%(asctime)s %(levelname)-7s %(name)s: %(message)s".
-  static func tone(for line: String) -> Color {
-    LogTone.color(for: line)
-  }
 }
 
 #Preview {

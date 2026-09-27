@@ -39,7 +39,7 @@ from jetlink.spec import (
   sha256_file,
   spec_from_onnx,
 )
-from jetlink.transport.base import LinkError, LinkTimeout, Message, Transport
+from jetlink.transport.base import LinkError, LinkTimeout, Message, Transport, link_medium
 
 log = logging.getLogger('jetlink.server')
 
@@ -561,6 +561,8 @@ class Session:
   def __init__(self, transport: Transport, host: EngineHost):
     self.t = transport
     self.host = host
+    # How the link is carried: what this end sees until the hello says better.
+    self.medium: str | None = getattr(transport, 'medium', None)
     self.telemetry = host.telemetry
     self.send_lock = threading.Lock()
     self.client = ''   # who said hello; see _greet
@@ -669,16 +671,28 @@ class Session:
   def _greet(self, msg: Message) -> None:
     """Start the session over for whoever just said hello."""
     who = ''
+    medium = None
     try:
       d = json.loads(bytes(msg.payload) or b'{}').get('client') or {}
       who = f"{d.get('name') or 'client'}/{d.get('nonce') or '?'}"
+      medium = link_medium(d.get('link'))
     except (ValueError, AttributeError):
       pass
+    if medium is not None and medium != self.medium:
+      self.medium = medium
+      self.host.emit('link', self.link_event())
     if self.client and who != self.client:
       log.info("session handed from %s to %s", self.client, who or 'an unnamed client')
     self.client = who
     self._reset(msg.seq)
     log.info("hello from %s (seq %d)", who or 'an unnamed client', msg.seq)
+
+  def link_event(self) -> dict:
+    """The control channel's link event for this connection."""
+    event = {'state': 'connected', 'detail': '', 'peer': getattr(self.t, 'peer', None)}
+    if self.medium:
+      event['medium'] = self.medium
+    return event
 
   def on_hello(self, msg: Message) -> None:
     info = self.host.backend.describe()

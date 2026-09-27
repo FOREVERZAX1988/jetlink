@@ -181,7 +181,7 @@ jobs:
         # Package.swift's Linux branch: JetlinkKit, JetlinkONNX, JetlinkRegistry
         # and the portable part of JetlinkServer (the wire, the TCP and USB
         # framing, the queues, the frame statistics), built with
-        # JETLINK_PORTABLE and swift-crypto. The conformance suites read the
+        # swift-crypto. The conformance suites read the
         # same Python-written fixtures here as on macOS, so the drift check
         # holds on a second platform. Nothing deploys this build
         # (docs/conformance.md).
@@ -209,20 +209,13 @@ jobs:
         # pytest because make_onnx_fixtures builds one graph with
         # tests/test_ane_whole.py's own builder, and that module imports it.
 
-      - name: Regenerate every file the Swift tests read
-        run: |
-          python JetlinkKit/Scripts/make_pins.py
-          python JetlinkKit/Scripts/make_conformance_fixtures.py
-          python JetlinkKit/Scripts/make_server_fixtures.py
-          python JetlinkKit/Scripts/make_onnx_fixtures.py
-
-      - name: Check that nothing moved
-        run: |
-          git status --porcelain
-          test -z "$(git status --porcelain)"
-        # A Python change that moves what the Swift must match fails here.
-        # Regenerate, commit, and make the Swift pass against the new files;
-        # docs/conformance.md says how.
+      - name: Check every file the Swift tests read is what this Python makes
+        run: python -m pytest -q tests/test_conformance.py
+        # Each generator writes into a temporary directory and the result is
+        # compared byte for byte with the committed files, under the releases
+        # they were made with, so nothing here skips. A Python change that
+        # moves what the Swift must match fails here: regenerate, commit, and
+        # make the Swift pass against the new files (docs/conformance.md).
 
   app:
     name: App bundle and smoke test

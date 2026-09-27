@@ -4,25 +4,16 @@ import JetlinkServer
 import Observation
 import os
 
-/// What the running server says about itself, for Status and the menu bar.
+/// What the running server is, for Status and the menu bar: the choice it
+/// was started with, and what its backend reports once it is up.
 struct ServerInfo: Equatable, Sendable {
   let version: String
-  let backend: String
-  let runtimeVersion: String
-  let device: String
+  let choice: BackendChoice
+  var runtimeVersion: String
+  var device: String
   let cache: String
   let transport: String
   let port: Int?
-
-  init(version: String, backend: String, runtimeVersion: String, device: String, cache: String, transport: String, port: Int?) {
-    self.version = version
-    self.backend = backend
-    self.runtimeVersion = runtimeVersion
-    self.device = device
-    self.cache = cache
-    self.transport = transport
-    self.port = port
-  }
 }
 
 enum ServerStoreError: Error, LocalizedError, Equatable {
@@ -68,7 +59,11 @@ final class ServerStore: ServerControlling {
   @ObservationIgnored private let isLive: Bool
   @ObservationIgnored private let log = Logger(subsystem: "io.zoompilot.jetlink", category: "server")
   @ObservationIgnored private var embedded: EmbeddedServer?
+  /// Building and starting the server, off the main thread.
+  @ObservationIgnored private var startTask: Task<Void, Never>?
   @ObservationIgnored private var consumeTask: Task<Void, Never>?
+  @ObservationIgnored private var logStream: LogStream?
+  @ObservationIgnored private var logTask: Task<Void, Never>?
 
   init(settings: AppSettings, logs: LogBuffer, logFile: LogFileWriter? = LogFileWriter(), isLive: Bool = true) {
     self.settings = settings
@@ -95,43 +90,60 @@ final class ServerStore: ServerControlling {
     }
     runState = .starting
     lastFailure = nil
+    // One ordered stream of log lines, drained by one task into the Logs
+    // view and server.log; a task per line could reorder them.
+    let stream = LogStream()
+    logStream = stream
     let buffer = logs
     let file = logFile
-    Log.sink = { level, category, message in
-      let line = EmbeddedServer.logLine(level, category, message)
-      Task { @MainActor in buffer.append(line) }
-      if let file { Task { await file.append(line) } }
+    logTask = Task {
+      for await line in stream.lines {
+        buffer.append(line)
+        await file?.append(line)
+      }
     }
     let configuration = ServerStore.configuration(
       backend: settings.backend, transport: settings.transport, tcpPort: settings.tcpPort, cacheDirectory: settings.cacheDirectory)
-    do {
-      let embedded = try EmbeddedServer(configuration: configuration)
-      self.embedded = embedded
-      consumeTask = Task { [weak self] in
-        for await event in embedded.events {
-          self?.apply(event)
+    // The controller's first .server event fills in the backend fields.
+    let seed = ServerInfo(
+      version: ServerStore.appVersion, choice: settings.backend, runtimeVersion: "", device: "", cache: settings.cacheDirectory.path(percentEncoded: false),
+      transport: settings.transport.rawValue, port: configuration.listen ? Int(configuration.port) : nil)
+    // Creating the cache, the engine cache's first look at the disk and the
+    // first inventory are file work the main thread should not wait on.
+    startTask = Task { [weak self] in
+      let started = await Task.detached(priority: .userInitiated) {
+        Result {
+          let embedded = try EmbeddedServer(configuration: configuration)
+          try embedded.start()
+          return embedded
         }
+      }.value
+      guard let self else { return }
+      self.startTask = nil
+      switch started {
+      case .success(let embedded):
+        self.embedded = embedded
+        self.info = seed
+        self.consumeTask = Task { [weak self] in
+          for await event in embedded.events {
+            self?.apply(event)
+          }
+        }
+        // A stop that came while starting is waiting on this task, and
+        // stops the server itself.
+        if self.runState == .starting {
+          self.runState = .serving
+          self.startedAt = Date()
+        }
+      case .failure(let error):
+        self.tearDown()
+        let detail = "The server could not start: \(error)"
+        self.log.error("\(detail, privacy: .public)")
+        self.lastFailure = detail
+        self.runState = .failed(detail)
       }
-      let described = embedded.server.backend.describe()
-      info = ServerInfo(
-        version: ServerStore.appVersion,
-        backend: described["backend"] ?? "",
-        runtimeVersion: described["runtime_version"] ?? "",
-        device: described["device"] ?? "",
-        cache: settings.cacheDirectory.path(percentEncoded: false),
-        transport: settings.transport.rawValue,
-        port: configuration.listen ? Int(configuration.port) : nil)
-      try embedded.start()
-      runState = .serving
-      startedAt = Date()
-    } catch {
-      tearDown()
-      let detail = "The server could not start: \(error)"
-      log.error("\(detail, privacy: .public)")
-      lastFailure = detail
-      runState = .failed(detail)
+      self.updateSleepAssertion()
     }
-    updateSleepAssertion()
   }
 
   func stop() {
@@ -147,6 +159,7 @@ final class ServerStore: ServerControlling {
     default: break
     }
     runState = .stopping
+    await startTask?.value
     if let embedded {
       await Task.detached { embedded.stop(releasingEngine: true) }.value
     }
@@ -159,7 +172,9 @@ final class ServerStore: ServerControlling {
     embedded = nil
     consumeTask?.cancel()
     consumeTask = nil
-    Log.sink = nil
+    logStream?.finish()
+    logStream = nil
+    logTask = nil
     resetLiveState()
   }
 
@@ -200,16 +215,8 @@ final class ServerStore: ServerControlling {
   func apply(_ event: ControlEvent) {
     switch event {
     case .server(let server):
-      if let current = info {
-        info = ServerInfo(
-          version: current.version,
-          backend: server.backend ?? current.backend,
-          runtimeVersion: server.runtimeVersion ?? current.runtimeVersion,
-          device: server.device ?? current.device,
-          cache: current.cache,
-          transport: current.transport,
-          port: current.port)
-      }
+      if let version = server.runtimeVersion { info?.runtimeVersion = version }
+      if let device = server.device { info?.device = device }
     case .link(let value):
       link = value
       if value.state != .connected { statsHistory = [] }

@@ -9,7 +9,7 @@ extension PreviewData {
 
   static let serverInfo = ServerInfo(
     version: "0.5.0",
-    backend: "ort",
+    choice: .coreml,
     runtimeVersion: "1.29.0",
     device: "coreml-Apple_M1_Pro",
     cache: "/Users/me/Library/Application Support/Jetlink/cache",

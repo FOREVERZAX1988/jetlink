@@ -96,9 +96,6 @@ public final class Server: @unchecked Sendable {
   static let usbPoll: TimeInterval = 0.5
   static let usbQuietRetry: TimeInterval = 2.0
   static let usbQuickRetries = 5
-  /// After a protocol error, how long to keep reading what the comma is still
-  /// sending; longer than its frame timeout, so it is the one that gives up.
-  static let drainTimeout: TimeInterval = 5.0
 
   public let configuration: Configuration
   public let host: EngineHost
@@ -111,8 +108,8 @@ public final class Server: @unchecked Sendable {
   private let lock = NSLock()
   /// Internal so a test can end it under the accept loop.
   var listener: TCPListener?
-  private var current: Session?
-  private var currentDone: Latch?
+  /// The session being served, and the latch its end releases.
+  private var current: (session: Session, done: Latch)?
   private var link: LinkEvent = .waiting
   private var ticker: Ticker?
   private var started = false
@@ -123,14 +120,6 @@ public final class Server: @unchecked Sendable {
   /// Internal so a test can hand it a fake before `start`.
   var gadget: (any GadgetSource)?
 
-  /// How a new session reports the link: at once for a connection someone
-  /// made, or on its first message for the USB gadget, which is on the bus
-  /// whether or not anything on the comma is serving it.
-  enum Announce {
-    case now
-    case onFirstMessage(String)
-  }
-
   public init(configuration: Configuration, preparer: any ModelPreparer) throws {
     self.configuration = configuration
     self.dial = configuration.dial
@@ -139,7 +128,7 @@ public final class Server: @unchecked Sendable {
     cache = try EngineCache(root: configuration.cacheRoot, backend: backend)
     host = EngineHost(cache: cache)
     #if os(macOS)
-      gadget = IOKitGadget()
+      gadget = USBGadget()
     #endif
     // A write to a socket the comma closed must be an error, not a signal
     // that kills the app.
@@ -253,7 +242,7 @@ public final class Server: @unchecked Sendable {
   public var framesServed: Int {
     lock.lock()
     defer { lock.unlock() }
-    return current?.frames ?? 0
+    return current?.session.frames ?? 0
   }
 
   /// The frames served over the last `window` seconds, as one summary: the
@@ -268,7 +257,7 @@ public final class Server: @unchecked Sendable {
     lock.lock()
     stopped = true
     let listener = self.listener
-    let session = current
+    let session = current?.session
     self.listener = nil
     lock.unlock()
     ticker?.stop()
@@ -294,30 +283,26 @@ public final class Server: @unchecked Sendable {
   /// served, if any, has been interrupted and has ended. Returns the latch
   /// the new session's end releases, and the session.
   @discardableResult
-  private func takeover(_ transport: any MessageLink, announce: Announce = .now) -> (done: Latch, session: Session) {
+  private func takeover(_ transport: any MessageLink) -> (done: Latch, session: Session) {
     lock.lock()
     let previous = current
-    let previousDone = currentDone
     lock.unlock()
     if let previous {
-      log.info("a new connection from \(transport.peer) takes over from \(previous.peer)")
-      previous.interrupt()
-      previousDone?.wait()
+      log.info("a new connection from \(transport.peer) takes over from \(previous.session.peer)")
+      previous.session.interrupt()
+      previous.done.wait()
     }
     let session = Session(transport: transport, host: host) { [weak self] in self?.telemetry() ?? [:] }
-    if case .onFirstMessage(let detail) = announce {
-      session.onFirstMessage = { [weak self, unowned session] in
-        self?.log.info("client connected \(detail)")
-        self?.setLink(LinkEvent(state: .connected, detail: "", peer: session.peer))
-      }
+    session.onLink = { [weak self] event in
+      self?.log.info("client connected from \(event.peer ?? "?") over \(event.linkMedium?.title ?? "an unknown link")")
+      self?.setLink(event)
     }
     let done = Latch()
     lock.lock()
-    current = session
-    currentDone = done
+    current = (session, done)
     lock.unlock()
     let thread = Thread { [self] in
-      serve(session, transport, announce)
+      serve(session)
       done.release()
     }
     thread.name = "jetlink-session"
@@ -326,29 +311,19 @@ public final class Server: @unchecked Sendable {
     return (done, session)
   }
 
-  private func serve(_ session: Session, _ transport: any MessageLink, _ announce: Announce) {
-    if case .now = announce {
-      log.info("client connected from \(session.peer)")
-      setLink(LinkEvent(state: .connected, detail: "", peer: session.peer))
-    }
+  private func serve(_ session: Session) {
     let reason = session.serveForever()
-    if let usb = transport as? USBTransport, usb.desynced {
-      // The comma is still mid-message. Let it finish and time out rather
-      // than reopening under it.
-      usb.drain(Server.drainTimeout)
-    }
     session.close()
     lock.lock()
-    let isCurrent = current === session
+    let isCurrent = current?.session === session
     if isCurrent {
       current = nil
-      currentDone = nil
     }
     let isStopped = stopped
     lock.unlock()
     // A gadget nobody on the comma was serving never connected, so it does
     // not disconnect either: the USB loop says so once, and retries quietly.
-    guard session.received > 0 || { if case .now = announce { return true } else { return false } }() else { return }
+    guard session.announced else { return }
     log.info("client disconnected: \(reason)")
     if isCurrent && !isStopped {
       setLink(LinkEvent(state: .disconnected, detail: reason, peer: nil))
@@ -438,7 +413,7 @@ public final class Server: @unchecked Sendable {
     thread.start()
   }
 
-  static let usbWaiting = String(format: "waiting for a jetlink gadget at %04x:%04x", 0x1209, 0x0001)
+  static let usbWaiting = String(format: "waiting for a jetlink gadget at %04x:%04x", Pinned.usbVendorID, Pinned.usbProductID)
 
   /// Opens the gadget whenever it is on the bus and serves it, one session
   /// at a time, until the server stops. The Swift form of the Python
@@ -469,16 +444,9 @@ public final class Server: @unchecked Sendable {
         Thread.sleep(forTimeInterval: Server.usbQuietRetry)
         continue
       }
-      var detail = "over usb"
-      if let speed = gadget.speed() {
-        detail += " at \(speed)"
-        if speed.contains("USB 2") || speed.contains("USB 1") {
-          detail += "; expect about 10 ms more a frame than on USB 3"
-        }
-      }
-      let (done, session) = takeover(transport, announce: .onFirstMessage(detail))
+      let (done, session) = takeover(transport)
       done.wait()
-      if session.received > 0 {
+      if session.announced {
         // The comma closes the link between runs; the next run's hello is
         // already on its way, so open again at once.
         waiting.reset()
@@ -514,7 +482,7 @@ public final class Server: @unchecked Sendable {
     lastTick = now
     lock.lock()
     let connected = link.state == .connected
-    let frames = current?.frames ?? 0
+    let frames = current?.session.frames ?? 0
     lock.unlock()
     guard connected, let stats = host.frameStats.summary(window: window, framesTotal: frames) else { return }
     host.emit(.stats(stats))

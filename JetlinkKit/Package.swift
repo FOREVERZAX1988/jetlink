@@ -13,8 +13,7 @@
 //
 // jetlink-onnx is the preparation on its own, for checking it against Python.
 //
-// On Linux the package is the portable part only, built with JETLINK_PORTABLE:
-// no onnxruntime, CoreML, Metal, vImage or SwiftUI, and swift-crypto for
+// On Linux the package is the portable part only: no onnxruntime, CoreML, Metal, vImage or SwiftUI, and swift-crypto for
 // CryptoKit. It runs the conformance suite against the Python's fixtures on a
 // second platform (docs/conformance.md); nothing deploys it.
 import PackageDescription
@@ -23,10 +22,9 @@ import PackageDescription
   /// The server's files that build anywhere: the wire, the TCP and USB
   /// framing, the queues and the frame statistics.
   let portableServer = [
-    "WireProtocol.swift", "Transport.swift", "MessageLink.swift", "USBTransport.swift", "Queues.swift", "Convert.swift",
+    "WireProtocol.swift", "FrameReader.swift", "Transport.swift", "MessageLink.swift", "USBTransport.swift", "Queues.swift", "Convert.swift",
     "ModelSpec.swift", "ElementType.swift", "FrameStats.swift", "Log.swift", "Backend.swift", "Latch.swift", "ONNXPreparer.swift",
   ]
-  let portable: [SwiftSetting] = [.define("JETLINK_PORTABLE")]
   let crypto: Target.Dependency = .product(name: "Crypto", package: "swift-crypto")
 
   let package = Package(
@@ -43,23 +41,22 @@ import PackageDescription
     targets: [
       // os.Logger's shape, for the modules that log through it.
       .target(name: "JetlinkLog"),
-      .target(name: "JetlinkKit", dependencies: ["JetlinkLog"], swiftSettings: portable),
-      .target(name: "JetlinkONNX", dependencies: ["JetlinkLog"], swiftSettings: portable),
-      .target(name: "JetlinkRegistry", dependencies: ["JetlinkKit", "JetlinkLog", crypto], swiftSettings: portable),
+      .target(name: "JetlinkKit", dependencies: ["JetlinkLog"]),
+      .target(name: "JetlinkONNX", dependencies: ["JetlinkLog"]),
+      .target(name: "JetlinkRegistry", dependencies: ["JetlinkKit", "JetlinkLog", crypto]),
       .target(
-        name: "JetlinkServer", dependencies: ["JetlinkKit", "JetlinkONNX", "JetlinkLog"], sources: portableServer,
-        swiftSettings: portable),
+        name: "JetlinkServer", dependencies: ["JetlinkKit", "JetlinkONNX", "JetlinkLog"], sources: portableServer),
+      .target(name: "JetlinkTestSupport", path: "Tests/JetlinkTestSupport"),
       .testTarget(
-        name: "JetlinkKitTests", dependencies: ["JetlinkKit"], exclude: ["FormattingTests.swift"], resources: [.copy("Fixtures")],
-        swiftSettings: portable),
-      .testTarget(name: "JetlinkONNXTests", dependencies: ["JetlinkONNX", crypto], exclude: ["Fixtures"], swiftSettings: portable),
+        name: "JetlinkKitTests", dependencies: ["JetlinkKit", "JetlinkTestSupport"], exclude: ["FormattingTests.swift"],
+        resources: [.copy("Fixtures")]),
+      .testTarget(name: "JetlinkONNXTests", dependencies: ["JetlinkONNX", "JetlinkTestSupport", crypto], exclude: ["Fixtures"]),
       .testTarget(
-        name: "JetlinkRegistryTests", dependencies: ["JetlinkRegistry", crypto],
-        sources: ["ConformanceTests.swift", "Support.swift", "JSONTests.swift", "CacheLayoutTests.swift"], swiftSettings: portable),
+        name: "JetlinkRegistryTests", dependencies: ["JetlinkRegistry", "JetlinkTestSupport", crypto],
+        sources: ["ConformanceTests.swift", "Support.swift", "JSONTests.swift", "CacheLayoutTests.swift"]),
       .testTarget(
-        name: "JetlinkServerTests", dependencies: ["JetlinkServer"], exclude: ["Fixtures"],
-        sources: ["ConformanceTests.swift", "Support.swift", "WireTests.swift", "USBTransportTests.swift", "ConvertTests.swift", "SpecTests.swift"],
-        swiftSettings: portable),
+        name: "JetlinkServerTests", dependencies: ["JetlinkServer", "JetlinkTestSupport"], exclude: ["Fixtures"],
+        sources: ["ConformanceTests.swift", "Support.swift", "WireTests.swift", "USBTransportTests.swift", "ConvertTests.swift", "SpecTests.swift"]),
     ]
   )
 #else
@@ -103,11 +100,13 @@ import PackageDescription
         linkerSettings: [.linkedFramework("Metal")]),
       .executableTarget(name: "jetlink-serve", dependencies: ["JetlinkKit", "JetlinkServer"]),
       .executableTarget(name: "jetlink-onnx", dependencies: ["JetlinkONNX"]),
-      .testTarget(name: "JetlinkKitTests", dependencies: ["JetlinkKit", "JetlinkUI"], resources: [.copy("Fixtures")]),
+      // Helpers more than one test target uses: JSON comparison, hex.
+      .target(name: "JetlinkTestSupport", path: "Tests/JetlinkTestSupport"),
+      .testTarget(name: "JetlinkKitTests", dependencies: ["JetlinkKit", "JetlinkUI", "JetlinkTestSupport"], resources: [.copy("Fixtures")]),
       // The fixtures are read in place through #filePath, so they are not resources.
-      .testTarget(name: "JetlinkONNXTests", dependencies: ["JetlinkONNX"], exclude: ["Fixtures"]),
-      .testTarget(name: "JetlinkRegistryTests", dependencies: ["JetlinkRegistry"]),
-      .testTarget(name: "JetlinkServerTests", dependencies: ["JetlinkServer"], exclude: ["Fixtures"]),
+      .testTarget(name: "JetlinkONNXTests", dependencies: ["JetlinkONNX", "JetlinkTestSupport"], exclude: ["Fixtures"]),
+      .testTarget(name: "JetlinkRegistryTests", dependencies: ["JetlinkRegistry", "JetlinkTestSupport"]),
+      .testTarget(name: "JetlinkServerTests", dependencies: ["JetlinkServer", "JetlinkTestSupport"], exclude: ["Fixtures"]),
     ]
   )
 #endif

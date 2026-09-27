@@ -15,18 +15,6 @@ enum BackendChoice: String, CaseIterable, Codable, Sendable {
     }
   }
 
-  /// The choice a running server's backend and device describe, if any.
-  init?(backend: String?, device: String?) {
-    let device = device ?? ""
-    if backend == "ane" || device.hasPrefix("ane") {
-      self = .auto
-    } else if backend == "ort", device.isEmpty || device.hasPrefix("coreml") {
-      self = .coreml
-    } else {
-      return nil
-    }
-  }
-
   var title: String {
     switch self {
     case .auto: "CoreML with the Neural Engine"
@@ -98,8 +86,10 @@ final class AppSettings {
     } else {
       cacheDirectory = AppSettings.defaultCacheDirectory
     }
-    startServerOnLaunch = defaults.object(forKey: Key.startServerOnLaunch) as? Bool ?? true
-    keepAwakeWhileServing = defaults.object(forKey: Key.keepAwakeWhileServing) as? Bool ?? true
+    // bool(forKey:) also reads "YES" and "NO" from launch arguments
+    // (-startServerOnLaunch NO), which an `as? Bool` cast ignores.
+    startServerOnLaunch = defaults.object(forKey: Key.startServerOnLaunch) == nil ? true : defaults.bool(forKey: Key.startServerOnLaunch)
+    keepAwakeWhileServing = defaults.object(forKey: Key.keepAwakeWhileServing) == nil ? true : defaults.bool(forKey: Key.keepAwakeWhileServing)
   }
 
   nonisolated static let defaultTCPPort = 5599

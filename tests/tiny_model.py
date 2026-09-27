@@ -41,7 +41,7 @@ def weights(seed: int = 7) -> tuple[np.ndarray, np.ndarray]:
   return w, b
 
 
-def write(path: Path, with_contiguous: bool = True) -> Path:
+def write(path: Path, with_contiguous: bool = True, shapes: bool = False) -> Path:
   from onnx import TensorProto, helper, numpy_helper
 
   w, b = weights()
@@ -72,7 +72,7 @@ def write(path: Path, with_contiguous: bool = True) -> Path:
   opsets = [helper.make_opsetid('', 17)]
   if with_contiguous:
     opsets.append(helper.make_opsetid('org.tinygrad', 1))
-  return _save(graph, opsets, SLICES, 'tiny-test', path)
+  return _with_shapes(_save(graph, opsets, SLICES, 'tiny-test', path), shapes)
 
 
 def _save(graph, opsets, slices: dict, checkpoint: str, path: Path) -> Path:
@@ -143,7 +143,7 @@ def stateful_weights(seed: int = 11) -> tuple[np.ndarray, np.ndarray]:
   return w, b
 
 
-def write_stateful(path: Path) -> Path:
+def write_stateful(path: Path, shapes: bool = False) -> Path:
   from onnx import TensorProto, helper, numpy_helper
 
   def elem(name):
@@ -198,7 +198,7 @@ def write_stateful(path: Path) -> Path:
   graph = helper.make_graph(nodes, 'tiny_stateful', inputs, outputs,
                             initializer=[numpy_helper.from_array(w, 'W'), numpy_helper.from_array(b, 'B')]
                             + [numpy_helper.from_array(v, k) for k, v in const.items()])
-  return _save(graph, [helper.make_opsetid('', 17)], STATEFUL_SLICES, 'tiny-stateful-test', path)
+  return _with_shapes(_save(graph, [helper.make_opsetid('', 17)], STATEFUL_SLICES, 'tiny-stateful-test', path), shapes)
 
 
 def empty_state() -> dict[str, np.ndarray]:
@@ -234,3 +234,12 @@ def stateful_frames(n: int, seed: int = 0) -> list[dict[str, np.ndarray]]:
                    'traffic_convention': np.array([[1, 0]], np.float32),
                    'action_t': rng.standard_normal((1, 2)).astype(np.float32) * 0.1})
   return frames
+
+
+def _with_shapes(path: Path, shapes: bool) -> Path:
+  """With `shapes`, the model again with the shapes onnx infers recorded, as
+  the fixture generators want: the Swift preparation has no shape inferrer."""
+  if shapes:
+    import onnx
+    onnx.save(onnx.shape_inference.infer_shapes(onnx.load(str(path))), str(path))
+  return path

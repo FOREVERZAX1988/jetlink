@@ -31,7 +31,6 @@ import sys
 from pathlib import Path
 
 import numpy as np
-import onnx
 import onnxruntime as ort
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -47,11 +46,6 @@ from jetlink.spec import spec_from_onnx  # noqa: E402
 OUT = ROOT / 'JetlinkKit' / 'Tests' / 'JetlinkServerTests' / 'Fixtures'
 FRAMES = 8
 ORT_DTYPES = {'tensor(float16)': np.float16, 'tensor(float)': np.float32, 'tensor(uint8)': np.uint8}
-
-
-def with_shapes(path: Path) -> None:
-  model = onnx.load(str(path))
-  onnx.save(onnx.shape_inference.infer_shapes(model), str(path))
 
 
 def session(path: Path):
@@ -74,8 +68,7 @@ def write(out: Path, name: str, spec, frames: list[tuple[np.ndarray, np.ndarray]
 
 def queued(out: Path, rng) -> None:
   path = out / 'tiny_queued.onnx'
-  tiny_model.write(path)
-  with_shapes(path)
+  tiny_model.write(path, shapes=True)
   spec = spec_from_onnx(str(path))
   sess = session(path)
   types = {i.name: ORT_DTYPES[i.type] for i in sess.get_inputs()}
@@ -92,8 +85,7 @@ def queued(out: Path, rng) -> None:
 
 def stateful(out: Path, rng) -> None:
   path = out / 'tiny_stateful.onnx'
-  tiny_model.write_stateful(path)
-  with_shapes(path)
+  tiny_model.write_stateful(path, shapes=True)
   spec = spec_from_onnx(str(path))
   sess = session(path)
   types = {i.name: ORT_DTYPES[i.type] for i in sess.get_inputs()}

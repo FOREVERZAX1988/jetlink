@@ -18,17 +18,30 @@ from __future__ import annotations
 
 import socket
 
-from jetlink.transport.base import LinkError, StreamTransport
+from jetlink.transport.base import LinkError, StreamTransport, udc_speed, usb_link_info
 
 DEFAULT_PORT = 5599
+# The comma's end of the USB network link a phone dials (setup_gadget.sh).
+# A connection whose local address is this one is a cable, not a LAN.
+CABLE_ADDRESS = '192.168.60.1'
 
 
 class TcpTransport(StreamTransport):
+  medium = 'tcp'
   def __init__(self, sock: socket.socket):
     super().__init__()
     self.sock = sock
     self._timeout: float | None = -1.0  # force the first settimeout
     _tune(sock)
+
+  def link_info(self) -> dict:
+    try:
+      local = self.sock.getsockname()[0]
+    except (OSError, IndexError, TypeError):
+      return {'kind': 'tcp'}
+    if local == CABLE_ADDRESS:
+      return usb_link_info('cable', udc_speed())
+    return {'kind': 'tcp'}
 
   @classmethod
   def connect(cls, host: str, port: int = DEFAULT_PORT, timeout: float = 5.0) -> TcpTransport:

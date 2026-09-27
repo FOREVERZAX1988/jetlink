@@ -39,7 +39,6 @@ final class PhoneServer: ServerControlling {
   @ObservationIgnored private let modelEventsContinuation: AsyncStream<ControlEvent>.Continuation
   @ObservationIgnored private var embedded: EmbeddedServer?
   private var server: Server? { embedded?.server }
-  private var controller: ServerController? { embedded?.controller }
   @ObservationIgnored private var consumeTask: Task<Void, Never>?
   @ObservationIgnored private var recentTask: Task<Void, Never>?
   @ObservationIgnored private let log = Logger(subsystem: "io.zoompilot.jetlink", category: "app")
@@ -52,9 +51,11 @@ final class PhoneServer: ServerControlling {
     self.network = network
     (modelEvents, modelEventsContinuation) = AsyncStream.makeStream(bufferingPolicy: .unbounded)
     let logs = self.logs
-    Log.sink = { level, category, message in
-      let line = PhoneServer.logLine(level, category, message)
-      Task { @MainActor in logs.append(line) }
+    let stream = LogStream(format: { PhoneServer.logLine($0, $1, $2) })
+    Task {
+      for await line in stream.lines {
+        logs.append(line)
+      }
     }
     watchCable()
   }
@@ -82,23 +83,8 @@ final class PhoneServer: ServerControlling {
   /// Over the cable the comma listens and the phone dials.
   static let commaDial = DialTarget(host: NetworkInterfaces.commaAddress, port: Wire.defaultPort)
 
-  /// What the served connection runs over, from the peer's address.
-  enum LinkKind: Equatable {
-    case usb, ethernet
-
-    var title: String {
-      switch self {
-      case .usb: "USB"
-      case .ethernet: "Ethernet"
-      }
-    }
-  }
-
-  /// The kind of link the comma is on, while one is connected.
-  var linkKind: LinkKind? {
-    guard link.state == .connected, let peer = link.peer else { return nil }
-    return peer.hasPrefix(NetworkInterfaces.cableNetwork) ? .usb : .ethernet
-  }
+  /// What the connected comma's link is carried over: USB 3, USB 2 or TCP.
+  var linkMedium: LinkMedium? { link.connectedMedium }
 
   /// Follows the phone's addresses: the comma is dialed while the cable's
   /// lease is there, and left alone once it is gone.
@@ -220,8 +206,8 @@ final class PhoneServer: ServerControlling {
   // MARK: ServerControlling
 
   func send(_ command: ControlCommand) async throws -> ReplyEvent {
-    guard let controller else { throw ServerUnavailable() }
-    return await controller.handle(command)
+    guard let embedded else { throw ServerUnavailable() }
+    return await embedded.handle(command)
   }
 
   func startIfNeeded() async throws {

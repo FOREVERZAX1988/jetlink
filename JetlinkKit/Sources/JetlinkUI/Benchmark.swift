@@ -7,10 +7,18 @@ import SwiftUI
 public enum BenchmarkVerdict: Equatable, Sendable {
   case good, tight, slow
 
+  /// A P99 at or under this, with no frame over the budget, leaves room for
+  /// the cable in the 50 ms budget (`FrameBudgetView.budgetMs`).
+  public static let roomyP99Ms = 35.0
+
   public init(_ report: BenchmarkReport) {
-    if report.frame.p99 <= 35 && report.over50 == 0 {
+    self.init(p99: report.frame.p99, over50: report.over50)
+  }
+
+  public init(p99: Double, over50: Int = 0) {
+    if p99 <= BenchmarkVerdict.roomyP99Ms && over50 == 0 {
       self = .good
-    } else if report.frame.p99 <= 50 {
+    } else if p99 <= FrameBudgetView.budgetMs {
       self = .tight
     } else {
       self = .slow
@@ -110,6 +118,17 @@ public enum ThermalLevel: Equatable, Sendable {
   }
 }
 
+/// Why a benchmark cannot start now, in a sentence; nil when it can. The
+/// server refuses the same things; this says so before the button is pressed.
+public enum BenchmarkBlocker {
+  public static func reason(serving: Bool, modelLoaded: Bool, commaConnected: Bool) -> String? {
+    if !serving { return "The server is not running." }
+    if !modelLoaded { return "Load a model first." }
+    if commaConnected { return "Disconnect the comma to benchmark. Its live numbers are on Status." }
+    return nil
+  }
+}
+
 public enum BenchmarkClock {
   /// "1:00" for 60 seconds.
   public static func text(_ seconds: Double) -> String {
@@ -196,8 +215,9 @@ public struct BenchmarkWindowRows: View {
           Text(BenchmarkClock.text(Double(window.startSecond)))
             .foregroundStyle(.secondary)
             .frame(width: 44, alignment: .leading)
-          Text("P99 \(window.frame.p99.formatted(.number.precision(.fractionLength(1)))) ms")
-            .foregroundStyle(window.frame.p99 > 50 ? .red : (window.frame.p99 > 35 ? .orange : .primary))
+          let verdict = BenchmarkVerdict(p99: window.frame.p99)
+          Text("P99 \(FrameBudgetView.ms(window.frame.p99))")
+            .foregroundStyle(verdict == .good ? .primary : verdict.tone)
           Spacer()
           Label(thermal.title, systemImage: thermal.symbol)
             .foregroundStyle(thermal.tone)

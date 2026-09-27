@@ -16,7 +16,7 @@ import logging
 from pathlib import Path
 
 from jetlink import protocol as P
-from jetlink.transport.base import LinkError, StreamTransport
+from jetlink.transport.base import LinkError, StreamTransport, medium_from_usb_speed, usb_link_info
 
 # pid.codes test allocation. Get a real PID before distributing this.
 JETLINK_VID = 0x1209
@@ -34,6 +34,8 @@ VENDOR_CLASS = (0xFF, 0xFF, 0xFF)
 MAX_PACKET = 1024   # SuperSpeed bulk
 READ_CHUNK = 256 * MAX_PACKET
 DEFAULT_TIMEOUT_MS = 2000
+# libusb's speed codes, as Linux names the speeds (base.USB_MEDIA).
+LIBUSB_SPEEDS = {1: 'low-speed', 2: 'full-speed', 3: 'high-speed', 4: 'super-speed', 5: 'super-speed-plus'}
 
 log = logging.getLogger('jetlink.usb')
 
@@ -57,6 +59,7 @@ class UsbBulkTransport(StreamTransport):
     self.ep_in = ep_in
     self.ep_out = ep_out
     self._zero_copy_reads = True
+    self.usb_speed: str | None = None   # as the bus negotiated it; see open()
     # libusb has no vectored bulk write, so messages are gathered here. Reused
     # so the steady state does not allocate half a megabyte per frame.
     self._tx = bytearray(1 << 20)
@@ -87,7 +90,12 @@ class UsbBulkTransport(StreamTransport):
     except Exception as e:
       _close_quietly(handle, context)
       raise LinkError(f"could not open {vid:04x}:{pid:04x}: {e}") from e
-    return cls(handle, context, timeout_ms, interface, ep_in, ep_out)
+    transport = cls(handle, context, timeout_ms, interface, ep_in, ep_out)
+    try:
+      transport.usb_speed = LIBUSB_SPEEDS.get(device.getDeviceSpeed())
+    except Exception:
+      pass   # a python-libusb1 without it; the comma's hello says anyway
+    return transport
 
   @staticmethod
   def present(vid: int = JETLINK_VID, pid: int = JETLINK_PID) -> bool:
@@ -115,6 +123,13 @@ class UsbBulkTransport(StreamTransport):
     except Exception as e:
       log.warning("cannot enumerate USB devices: %s", e)
       return False
+
+  @property
+  def medium(self) -> str:
+    return medium_from_usb_speed(self.usb_speed)
+
+  def link_info(self) -> dict:
+    return usb_link_info('usb', self.usb_speed)
 
   def _ms(self, timeout: float | None) -> int:
     return self.timeout_ms if timeout is None else max(1, int(timeout * 1000))

@@ -1,5 +1,6 @@
 import Foundation
 import JetlinkKit
+import JetlinkTestSupport
 import Testing
 
 @testable import JetlinkRegistry
@@ -110,57 +111,11 @@ struct RegistryConformanceTests {
     let registry = Registry(layout: tmp.layout)
 
     let catalog = try #require(registry.cachedCatalog())
-    var comparison = RegistryJSONComparison()
+    var comparison = JSONComparison()
     comparison.compare(python: python["catalog"]!, swift: try normalized(catalog, root: tmp.url), at: "catalog")
     let inventory = registry.inventory(
       artifactTag: cache["artifact_tag"]?.string, artifactSuffix: cache["artifact_suffix"]?.string ?? "", loaded: nil)
     comparison.compare(python: python["inventory"]!, swift: try normalized(inventory, root: tmp.url), at: "inventory")
     #expect(comparison.differences.isEmpty, "\(comparison.differences)")
-  }
-}
-
-/// JetlinkKitTests' JSONComparison, for this target: a Swift key left out
-/// matches a Python null, and anything else must be equal.
-struct RegistryJSONComparison {
-  var differences: [String] = []
-
-  mutating func compare(python: Any, swift: Any, at path: String) {
-    switch (python, swift) {
-    case (let p as [String: Any], let s as [String: Any]):
-      for (key, value) in p where s[key] == nil && !(value is NSNull) {
-        differences.append("only Python sends \(path)/\(key)")
-      }
-      for (key, value) in s {
-        guard let theirs = p[key] else {
-          differences.append("only Swift has \(path)/\(key)")
-          continue
-        }
-        compare(python: theirs, swift: value, at: "\(path)/\(key)")
-      }
-    case (let p as [Any], let s as [Any]):
-      guard p.count == s.count else {
-        differences.append("\(path): \(p.count) items in Python, \(s.count) in Swift")
-        return
-      }
-      for (index, pair) in zip(p, s).enumerated() {
-        compare(python: pair.0, swift: pair.1, at: "\(path)/\(index)")
-      }
-    default:
-      let equal: Bool
-      if python is NSNull || swift is NSNull {
-        equal = python is NSNull && swift is NSNull
-      } else if let x = python as? String, let y = swift as? String {
-        equal = x == y
-      } else if let x = python as? NSNumber, let y = swift as? NSNumber {
-        equal = x.doubleValue == y.doubleValue
-      } else if let x = python as? Bool, let y = swift as? Bool {
-        equal = x == y
-      } else {
-        equal = false
-      }
-      if !equal {
-        differences.append("\(path): Python \(python), Swift \(swift)")
-      }
-    }
   }
 }

@@ -71,7 +71,7 @@ struct SettingsScreen: View {
 
   private var connection: some View {
     Section {
-      LabeledContent("Link", value: app.server.linkKind?.title ?? (app.network.cable == nil ? "Not Connected" : "Dialing"))
+      LabeledContent("Link", value: app.server.linkMedium?.title ?? (app.network.cable == nil ? "Not Connected" : "Dialing"))
       LabeledContent("Port") {
         TextField("5599", text: $portText)
           .keyboardType(.numberPad)

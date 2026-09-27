@@ -77,4 +77,6 @@ schemes:
   Jetlink:
     build: { targets: { Jetlink: all, JetlinkTests: [test] } }
     run: { config: Debug }
-    test: { config: Debug, targets: [JetlinkTests] }
+    # The app hosts the tests; it must not start a server (a USB link, the
+    # user's cache) while it does.
+    test: { config: Debug, targets: [JetlinkTests], commandLineArguments: { "-startServerOnLaunch NO": true } }

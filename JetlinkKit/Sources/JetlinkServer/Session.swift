@@ -14,13 +14,16 @@ final class Session: @unchecked Sendable {
   private var lastSeq: UInt32 = 0
   private(set) var request: Request?
   private(set) var frames = 0
-  /// Messages received on this connection, of any kind. Zero at the end
-  /// means nothing on the other end was speaking: over USB, a gadget on the
-  /// bus that no comma process is serving yet.
-  private(set) var received = 0
-  /// Called once, on the first message: over USB the comma speaks first, so
-  /// that is when a link is really up.
-  var onFirstMessage: (() -> Void)?
+  /// Has this connection reported a link? At once for a connection someone
+  /// made, on the first message over USB (`MessageLink.connectsOnOpen`). A
+  /// session that ends unannounced was a gadget nobody on the comma served.
+  private(set) var announced = false
+  /// How the link is carried: the transport's view until the comma's hello
+  /// says better.
+  private(set) var medium: LinkMedium?
+  /// Hears the link event when the session announces it, and again when the
+  /// hello changes its medium.
+  var onLink: ((LinkEvent) -> Void)?
 
   /// The reply's float32 outputs, reused every frame.
   private var outputBuffer: UnsafeMutablePointer<Float>
@@ -35,6 +38,7 @@ final class Session: @unchecked Sendable {
 
   init(transport: any MessageLink, host: EngineHost, telemetry: @escaping () -> [String: Any]) {
     self.transport = transport
+    medium = transport.medium
     self.host = host
     self.telemetry = telemetry
     outputCapacity = 18_452
@@ -98,15 +102,26 @@ final class Session: @unchecked Sendable {
 
   // MARK: the loop
 
+  var linkEvent: LinkEvent {
+    LinkEvent(state: .connected, detail: "", peer: peer, medium: medium?.rawValue)
+  }
+
+  private func announce() {
+    announced = true
+    onLink?(linkEvent)
+  }
+
   /// Serves until the link fails, and returns why.
   func serveForever() -> String {
+    if transport.connectsOnOpen {
+      announce()
+    }
     while true {
       let message: Message
       do {
         message = try transport.recv()
-        received += 1
-        if received == 1, let onFirstMessage {
-          onFirstMessage()
+        if !announced {
+          announce()
         }
       } catch let error as LinkError {
         if case .timedOut = error { continue }
@@ -166,10 +181,16 @@ final class Session: @unchecked Sendable {
 
   private func greet(_ message: Message) {
     var who = ""
+    var said: LinkMedium?
     if let object = JSONLine.decode(message.payload), let d = object["client"] as? [String: Any] {
       let name = (d["name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "client"
       let nonce = d["nonce"].map { "\($0)" } ?? "?"
       who = "\(name)/\(nonce)"
+      said = LinkMedium(link: d["link"] as? [String: Any])
+    }
+    if let said, said != medium {
+      medium = said
+      if announced { onLink?(linkEvent) }
     }
     if !client.isEmpty && who != client {
       log.info("session handed from \(client) to \(who.isEmpty ? "an unnamed client" : who)")
@@ -268,25 +289,54 @@ final class Session: @unchecked Sendable {
 
   // MARK: the hot path
 
+  /// Runs the frame under the host's lock, then replies outside it: over USB
+  /// the write waits for the comma to read, and nothing else that needs the
+  /// host (status, a build's progress, the control channel) should wait with it.
   private func onInfer(_ message: Message) throws {
     let (sha, skip) = wanted()
     host.lock.lock()
-    defer { host.lock.unlock() }
     guard let loaded = host.loaded, loaded.sha256 == sha, loaded.spec.frameSkip == skip, !host.benchmarking else {
-      try respond(message.seq, frameID: 0, status: .notReady, gpuUs: 0, queueUs: 0, totalUs: 0, outputBytes: 0, state: nil)
+      host.lock.unlock()
+      try respond(message.seq, InferReply(status: .notReady))
       return
     }
-    try infer(loaded, message)
+    let reply = infer(loaded, message)
+    host.lock.unlock()
+
+    let state: Data? = reply.wantsState ? JSONLine.encode(telemetry()) : nil
+    let sendStarted = DispatchTime.now().uptimeNanoseconds
+    try respond(message.seq, reply, state: state)
+    guard reply.ran else { return }
+    let sendUs = microseconds(since: sendStarted)
+    frames += 1
+    if reply.totalUs > FrameStats.slowUs || sendUs > 10_000 {
+      log.warning(
+        "slow frame \(reply.frameID): gpu \(Double(reply.gpuUs) / 1000) queue \(Double(reply.queueUs) / 1000) total \(Double(reply.totalUs) / 1000) send \(Double(sendUs) / 1000) ms"
+      )
+    }
+    host.frameStats.record(totalUs: reply.totalUs, gpuUs: reply.gpuUs, queueUs: reply.queueUs, sendUs: sendUs)
+  }
+
+  /// What an INFER_RESP says; the outputs are in `outputBuffer`.
+  private struct InferReply {
+    var frameID: UInt32 = 0
+    var status: Wire.Status
+    var gpuUs: UInt32 = 0
+    var queueUs: UInt32 = 0
+    var totalUs: UInt32 = 0
+    var outputBytes = 0
+    var wantsState = false
+    /// The model ran, so the frame counts and is timed.
+    var ran = false
   }
 
   /// INFER_RESP: the head, `outputBytes` of the output buffer, and the
   /// telemetry, in one write from buffers this session owns.
-  private func respond(
-    _ seq: UInt32, frameID: UInt32, status: Wire.Status, gpuUs: UInt32, queueUs: UInt32, totalUs: UInt32, outputBytes: Int, state: Data?
-  ) throws {
-    Wire.packInferResp(frameID: frameID, status: status, gpuUs: gpuUs, queueUs: queueUs, totalUs: totalUs, into: responseHead)
+  private func respond(_ seq: UInt32, _ reply: InferReply, state: Data? = nil) throws {
+    Wire.packInferResp(
+      frameID: reply.frameID, status: reply.status, gpuUs: reply.gpuUs, queueUs: reply.queueUs, totalUs: reply.totalUs, into: responseHead)
     parts[0] = UnsafeRawBufferPointer(start: responseHead, count: Wire.inferRespSize)
-    parts[1] = UnsafeRawBufferPointer(start: outputBuffer, count: outputBytes)
+    parts[1] = UnsafeRawBufferPointer(start: outputBuffer, count: reply.outputBytes)
     if let state {
       try state.withUnsafeBytes { bytes in
         parts[2] = bytes
@@ -297,14 +347,14 @@ final class Session: @unchecked Sendable {
     }
   }
 
-  private func infer(_ loaded: Loaded, _ message: Message) throws {
+  /// The frame itself: stage, run, read the output back. Caller holds `host.lock`.
+  private func infer(_ loaded: Loaded, _ message: Message) -> InferReply {
     let started = DispatchTime.now().uptimeNanoseconds
     let spec = loaded.spec
     guard message.payload.count == spec.inferReqBytes else {
       // The offsets below come from the spec, not the wire: a client on
       // another model would have its scalars read out of the image.
-      try respond(message.seq, frameID: 0, status: .badShape, gpuUs: 0, queueUs: 0, totalUs: 0, outputBytes: 0, state: nil)
-      return
+      return InferReply(status: .badShape)
     }
     let base = message.payload.baseAddress!
     let frameID = UInt32(littleEndian: base.loadUnaligned(as: UInt32.self))
@@ -360,20 +410,9 @@ final class Session: @unchecked Sendable {
       status = .inferFailed
     }
 
-    let totalUs = microseconds(since: started)
-    let state: Data? = flags.contains(.wantState) ? JSONLine.encode(telemetry()) : nil
-    let sendStarted = DispatchTime.now().uptimeNanoseconds
-    try respond(
-      message.seq, frameID: frameID, status: status, gpuUs: loaded.engine.lastGpuUs, queueUs: queueUs, totalUs: totalUs,
-      outputBytes: status == .ok || status == .notFinite ? count * 4 : 0, state: state)
-    let sendUs = microseconds(since: sendStarted)
-    frames += 1
-    if totalUs > FrameStats.slowUs || sendUs > 10_000 {
-      log.warning(
-        "slow frame \(frameID): gpu \(Double(loaded.engine.lastGpuUs) / 1000) queue \(Double(queueUs) / 1000) total \(Double(totalUs) / 1000) send \(Double(sendUs) / 1000) ms"
-      )
-    }
-    host.frameStats.record(totalUs: totalUs, gpuUs: loaded.engine.lastGpuUs, queueUs: queueUs, sendUs: sendUs)
+    return InferReply(
+      frameID: frameID, status: status, gpuUs: loaded.engine.lastGpuUs, queueUs: queueUs, totalUs: microseconds(since: started),
+      outputBytes: status == .ok || status == .notFinite ? count * 4 : 0, wantsState: flags.contains(.wantState), ran: true)
   }
 
   private func onShutdown(_ message: Message) throws {

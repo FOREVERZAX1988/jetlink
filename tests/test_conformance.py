@@ -25,6 +25,7 @@ compared on Apple arm64 under the onnxruntime the Swift package links.
 from __future__ import annotations
 
 import importlib.metadata
+import importlib.util
 import os
 import platform
 import re
@@ -40,13 +41,25 @@ SCRIPTS = ROOT / 'JetlinkKit' / 'Scripts'
 FIXTURE_ONNX = '1.22.0'
 
 
+def _script(name: str):
+  """A generator, imported, for where it writes by default. Only the ones
+  whose top level is light: numpy at most."""
+  spec = importlib.util.spec_from_file_location(name, SCRIPTS / f'{name}.py')
+  module = importlib.util.module_from_spec(spec)
+  spec.loader.exec_module(module)
+  return module
+
+
 # where each generator writes by default, relative to the checkout
+CONFORMANCE_SCRIPT = _script('make_conformance_fixtures')
+CONFORMANCE = CONFORMANCE_SCRIPT.SERVER
+CONTROL = CONFORMANCE_SCRIPT.CONTROL
+REGISTRY = CONFORMANCE_SCRIPT.REGISTRY
+PINNED = _script('make_pins').OUT.relative_to(ROOT)
+# Not imported: those two load onnxruntime, which this process must not
+# (test_ort_backend checks).
 SERVER_FIXTURES = Path('JetlinkKit/Tests/JetlinkServerTests/Fixtures')
 ONNX_FIXTURES = Path('JetlinkKit/Tests/JetlinkONNXTests/Fixtures')
-PINNED = Path('JetlinkKit/Sources/JetlinkKit/Pinned.swift')
-CONFORMANCE = SERVER_FIXTURES / 'conformance'
-CONTROL = Path('JetlinkKit/Tests/JetlinkKitTests/Fixtures/python_control_events.jsonl')
-REGISTRY = Path('tests/fixtures/conformance/registry.json')
 
 
 def _run(script: str, *args) -> None:
@@ -123,7 +136,7 @@ def test_ci_regenerates_with_the_releases_the_fixtures_record():
   assert pins.get('onnxruntime') == APPLE_ONNXRUNTIME
 
 
-@pytest.mark.parametrize('part', ['wire', 'staging', 'stats', 'control', 'registry'])
+@pytest.mark.parametrize('part', list(CONFORMANCE_SCRIPT.PARTS))
 def test_conformance_fixtures_are_what_the_python_makes(tmp_path, part):
   if part == 'staging' and not _onnx_matches():
     pytest.skip(f'the staging spec comes from onnx shape inference; fixtures made with onnx {FIXTURE_ONNX}')
@@ -134,8 +147,7 @@ def test_conformance_fixtures_are_what_the_python_makes(tmp_path, part):
     assert made.read_bytes() == committed.read_bytes(), f'{where} differs; see docs/conformance.md'
     return
   # wire, staging and stats share one directory: compare what this part writes
-  prefix = {'wire': 'wire', 'staging': 'staging', 'stats': 'stats'}[part]
-  problems = _same_tree(tmp_path / where, ROOT / where, skip=lambda name: not name.startswith(prefix))
+  problems = _same_tree(tmp_path / where, ROOT / where, skip=lambda name: not name.startswith(part))
   assert not problems, problems
 
 

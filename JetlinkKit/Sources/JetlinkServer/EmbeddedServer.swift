@@ -67,3 +67,25 @@ public final class EmbeddedServer: @unchecked Sendable {
       Int(parts.tm_min), Int(parts.tm_sec), min(millis, 999))
   }
 }
+
+/// The server's log lines as one ordered stream. The sink only formats and
+/// yields; one consumer appends to a Logs view or a file. A task per line
+/// hopped to the main actor for each line and could reorder them.
+public final class LogStream: Sendable {
+  public let lines: AsyncStream<String>
+  private let continuation: AsyncStream<String>.Continuation
+
+  /// Installs `Log.sink`, formatting each line with `format`.
+  public init(format: @escaping @Sendable (Log.Level, String, String) -> String = { EmbeddedServer.logLine($0, $1, $2) }) {
+    let (lines, continuation) = AsyncStream<String>.makeStream(bufferingPolicy: .bufferingNewest(5000))
+    self.lines = lines
+    self.continuation = continuation
+    Log.sink = { level, category, message in continuation.yield(format(level, category, message)) }
+  }
+
+  /// Removes the sink and ends `lines`.
+  public func finish() {
+    Log.sink = nil
+    continuation.finish()
+  }
+}

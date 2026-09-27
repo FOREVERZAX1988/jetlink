@@ -57,7 +57,7 @@ struct StatusContent: View {
           if state.history.count > 1 {
             history
           }
-          SectionHeader("Link", detail: state.linkKind.map { "\($0.title) link" })
+          SectionHeader("Link", detail: state.linkMedium.map { "\($0.title) link" })
           link(recent)
         }
         SectionHeader("iPhone")
@@ -130,11 +130,17 @@ struct StatusContent: View {
           value: health.memoryValue, unit: health.availableMemory == nil ? nil : "GB",
           note: health.memoryNote, noteTone: health.memoryTone)
         MetricTile(
-          title: "Link", systemImage: state.linkKind == nil ? "cable.connector.slash" : "cable.connector", tint: .teal,
-          value: state.linkKind?.title ?? "None",
-          note: state.linkKind == nil ? (state.cableAddress == nil ? "Waiting" : "Dialing") : "Connected")
+          title: "Link", systemImage: state.linkMedium == nil ? "cable.connector.slash" : "cable.connector", tint: .teal,
+          value: state.linkMedium?.title ?? "None",
+          note: linkNote, noteTone: state.linkMedium?.isSlow == true ? .orange : nil)
       }
     }
+  }
+
+  /// Under the Link tile: why there is none, or that a slow one costs frames.
+  private var linkNote: String {
+    guard let medium = state.linkMedium else { return state.cableAddress == nil ? "Waiting" : "Dialing" }
+    return medium.isSlow ? "Slow: use a USB 3 cable" : "Connected"
   }
 }
 

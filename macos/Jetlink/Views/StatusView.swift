@@ -38,9 +38,9 @@ struct StatusView: View {
       }
       LabeledContent("Backend") {
         VStack(alignment: .trailing, spacing: 2) {
-          Text(StatusView.backendDescription(backend: server.info?.backend, device: server.info?.device))
+          Text((server.info?.choice ?? settings.backend).title)
           if let info = server.info {
-            Text(StatusView.runtimeLine(backend: info.backend, version: info.runtimeVersion, device: info.device))
+            Text(StatusView.runtimeLine(version: info.runtimeVersion, device: info.device))
               .font(.callout)
               .foregroundStyle(.secondary)
           }
@@ -113,6 +113,11 @@ struct StatusView: View {
               .font(.callout)
               .foregroundStyle(.secondary)
           }
+          if let advice = server.link.connectedMedium?.advice {
+            Text(advice)
+              .font(.callout)
+              .foregroundStyle(.orange)
+          }
         }
       }
       if server.link.state == .connected, let stats = server.stats {
@@ -157,10 +162,8 @@ struct StatusView: View {
     case .waiting:
       return "Waiting for comma"
     case .connected:
-      let peer = server.link.peer ?? ""
-      if peer.isEmpty || peer == "usb" {
-        return "Connected over USB"
-      }
+      let medium = server.link.connectedMedium ?? .usb
+      guard medium == .tcp, let peer = server.link.peer, !peer.isEmpty else { return "Connected over \(medium.title)" }
       return "Connected over TCP from \(peer)"
     case .disconnected:
       return "Disconnected"
@@ -181,7 +184,7 @@ struct StatusView: View {
   private var linkTone: StatusBadge.Tone {
     switch server.link.state {
     case .waiting: .neutral
-    case .connected: .good
+    case .connected: server.link.connectedMedium?.isSlow == true ? .warning : .good
     case .disconnected: .warning
     }
   }
@@ -269,7 +272,7 @@ struct StatusView: View {
 
   private var loadedModelName: String {
     guard let sha = server.engine.sha256 else { return "None" }
-    return models.rows.first { $0.sha256 == sha }?.displayName ?? "Unknown model"
+    return models.row(for: sha)?.displayName ?? "Unknown model"
   }
 
   private var engineStateText: String {
@@ -312,41 +315,17 @@ struct StatusView: View {
     return settings.cacheDirectory
   }
 
-  /// "onnxruntime 1.29.0, Apple M1 Pro": what is actually running, under the
-  /// backend's plain name. The device loses the backend prefix it repeats.
-  static func runtimeLine(backend: String, version: String, device: String) -> String {
-    let runtime =
-      switch backend {
-      case "ort": "onnxruntime"
-      case "trt": "TensorRT"
-      default: backend
-      }
+  /// "onnxruntime 1.29.0, Apple M1 Pro": what is actually running. The
+  /// device loses the backend prefix it repeats.
+  static func runtimeLine(version: String, device: String) -> String {
     let version = version.split(separator: "+", maxSplits: 1).first.map(String.init) ?? version
     var hardware = device
     if let dash = device.firstIndex(of: "-") {
       hardware = String(device[device.index(after: dash)...])
     }
     hardware = hardware.replacingOccurrences(of: "_", with: " ")
-    let head = version.isEmpty ? runtime : "\(runtime) \(version)"
+    let head = version.isEmpty ? "onnxruntime" : "onnxruntime \(version)"
     return hardware.isEmpty ? head : "\(head), \(hardware)"
-  }
-
-  /// "CoreML with the Neural Engine" or "CoreML on the GPU", or what the
-  /// server reported when it is neither of the app's choices.
-  static func backendDescription(backend: String?, device: String?) -> String {
-    BackendChoice(backend: backend, device: device)?.title ?? otherBackendName(backend, device: device)
-  }
-
-  /// The same in a word or two, for the toolbar's activity view.
-  static func backendShortName(backend: String?, device: String?) -> String {
-    BackendChoice(backend: backend, device: device)?.shortTitle ?? otherBackendName(backend, device: nil)
-  }
-
-  /// "onnxruntime on cpu", or the raw backend name.
-  private static func otherBackendName(_ backend: String?, device: String?) -> String {
-    guard let backend else { return "Unknown" }
-    guard backend == "ort" else { return backend }
-    return device.map { "onnxruntime on \($0)" } ?? "onnxruntime"
   }
 
   static func uptimeText(from start: Date, to now: Date) -> String {
