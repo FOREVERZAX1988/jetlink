@@ -30,7 +30,9 @@ Complete [comma setup](../README.md#comma-setup-all-platforms), including the
 branch installation and **Accelerator Link** toggle. Then connect the
 **Mac's USB-A port to the comma's USB-C port**, using a USB-A port
 on a hub or dock, or a USB-C-to-A adapter. A plain C-to-C cable may not give the
-Mac the host role.
+Mac the host role. The zoompilot `iphone` branch makes the comma hold its port
+as the device for a C-to-C host, which should fix that; it has not been tried
+with a Mac yet.
 
 The Status screen then shows:
 
