@@ -44,7 +44,13 @@ struct WireMessage {
     } else {
       let lengths = (d["parts"] as! [NSNumber]).map(\.intValue)
       let seq = Int(seq)
-      let body = Data((0..<lengths.reduce(0, +)).map { UInt8((seq * 31 + $0 * 7) % 251) })
+      // In steps: as one expression Linux's type checker gives up on it.
+      let total: Int = lengths.reduce(0, +)
+      var bytes = [UInt8](repeating: 0, count: total)
+      for i in 0..<total {
+        bytes[i] = UInt8((seq * 31 + i * 7) % 251)
+      }
+      let body = Data(bytes)
       var at = 0
       var parts: [Data] = []
       for n in lengths {
