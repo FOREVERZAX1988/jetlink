@@ -29,7 +29,7 @@ for comma**. Connect the comma to continue.
 Complete [comma setup](../README.md#comma-setup-all-platforms), including the
 branch installation and **Accelerator Link** toggle. Then connect the
 **Mac's USB-A port to the comma's USB-C port**, using a USB-A port
-on a hub or dock, or a USB-C-to-A adapter. A C-to-C cable also works: on
+on a hub or dock, or a USB-C-to-A adapter. A C-to-C cable also connects: on
 2026-09-27 an M1 Pro enumerated a comma four as its device at 5 Gb/s over a
 USB 3 C-to-C cable. The cable must be a USB 3 one; C-to-C cables marked for
 USB 2 run at 480 Mb/s, about 10 ms slower a frame. If a C-to-C cable ever gives

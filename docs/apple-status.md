@@ -11,7 +11,7 @@ It replaces `iphone-cable-link-status.md`.
 | jetlink | `iphone` | `../jetlink-iphone`, pushed to `zoom` | the iPhone app, the Swift server as the Mac's USB host, the Mac's Server setting and Benchmark page, the conformance suite (merged from `conformance`) |
 | jetlink | `conformance` | `../jetlink-conformance`, pushed to `zoom` | merged into `iphone`; CI green on macOS and Linux. Kept only as the record of that work |
 | jetlink | `mac-swift-only` | `../jetlink-mac-swift`, pushed to `zoom` | stacked on `iphone`, NOT merged: the Mac app with the Swift server only and no embedded Python. Merge it only after the USB gate below passes |
-| zoompilot fork | `iphone` | `../sunnypilot-iphone`, pushed to `zoom` | the phone's dial and the cable link, plus the USB-C port hold picked from the `usbc-device-role` work (fork 1fd0f8d234, e79072d594, 0673caf11a on `zoom/danger-unstable`); `jetlink_repo` pinned to the jetlink `iphone` tip |
+| zoompilot fork | `iphone` | `../sunnypilot-iphone`, pushed to `zoom` | the phone's dial and the cable link, plus the USB-C port hold picked from the `usbc-device-role` work (fork 1fd0f8d234, e79072d594, 0673caf11a, f216abb5d2 on `zoom/danger-unstable`); `jetlink_repo` pinned to the jetlink `iphone` tip |
 | jetlink | `pr-9` | local only | the other contributor's iPhone PR, for reference |
 
 `main` and `jetson-trt` are untouched by all of this.
