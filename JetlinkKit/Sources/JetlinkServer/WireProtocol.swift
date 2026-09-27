@@ -14,6 +14,11 @@ public enum Wire {
   /// multiple of the packet size gets a pad byte and Flag.padded. TCP keeps
   /// the rule so one client speaks to every transport the same way.
   public static let packetMultiple = 1024
+  /// The gadget pads every message it sends to a whole burst, so none ends on
+  /// a short packet: dwc3 flushed its TX FIFO past one about once in 400
+  /// frames. A USB host reads each message to that boundary. Host to device
+  /// keeps the one-byte pad instead. `protocol.GADGET_TX_ALIGN`.
+  public static let gadgetTxAlign = 16 * packetMultiple
   /// Stops a corrupt length field making the receive buffer allocate
   /// gigabytes. A frame is about 460 KB.
   public static let maxMessage = 16 << 20

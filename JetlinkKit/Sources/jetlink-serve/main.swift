@@ -2,8 +2,9 @@ import Foundation
 import JetlinkKit
 import JetlinkServer
 
-// The Swift server on a Mac, for benches: the same code the iPhone runs, over
-// TCP, against scripts/bench_link.py or a comma on the LAN.
+// The Swift server on a Mac: the same code the iPhone runs and the Mac app
+// embeds, over USB to a comma, or over TCP to scripts/bench_link.py or a
+// comma on the LAN.
 //
 //   jetlink-serve --cache DIR [options]
 //
@@ -13,13 +14,17 @@ import JetlinkServer
 let usage = """
   usage: jetlink-serve --cache DIR [options]
 
-  The jetlink server in Swift, the one the iPhone app runs, on a Mac for
-  benches: serves a comma or scripts/bench_link.py over TCP and prints the
+  The jetlink server in Swift, the one the iPhone app runs, on a Mac: serves
+  a comma over USB or TCP, or scripts/bench_link.py over TCP, and prints the
   control channel's events as JSON lines.
 
   options:
     --cache DIR         where models and built engines live (required)
     --port PORT         TCP port to listen on (default 5599)
+    --usb               be the USB host: serve the comma's gadget whenever it is
+                        on the bus, as the Mac app does; no TCP listener unless
+                        --listen is given too
+    --listen            listen on --port as well as serving USB
     --device ane|ane-whole|coreml|cpu
                         ane: the vision trunk on the Neural Engine, the rest on
                         the GPU (default); ane-whole: the whole graph on the
@@ -44,6 +49,8 @@ struct Options {
   var keepCPUWarm = true
   var preload = true
   var dial: DialTarget?
+  var usb = false
+  var listen: Bool?
 }
 
 func parse() -> Options {
@@ -64,6 +71,8 @@ func parse() -> Options {
     case "--no-keepalive": options.keepAlive = false
     case "--no-cpu-keepwarm": options.keepCPUWarm = false
     case "--no-preload": options.preload = false
+    case "--usb": options.usb = true
+    case "--listen": options.listen = true
     case "--help", "-h":
       print(usage)
       exit(0)
@@ -113,7 +122,7 @@ do {
   let server = try Server(
     configuration: Server.Configuration(
       port: options.port, cacheRoot: cache, device: options.device, keepAlive: options.keepAlive, keepCPUWarm: options.keepCPUWarm,
-      preload: options.preload, dial: options.dial),
+      preload: options.preload, dial: options.dial, listen: options.listen ?? !options.usb, usb: options.usb),
     preparer: ONNXPreparer())
   server.host.subscribe { event in
     switch event {

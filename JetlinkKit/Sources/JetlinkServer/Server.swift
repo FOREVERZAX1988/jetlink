@@ -36,11 +36,13 @@ public struct DialTarget: Sendable, Equatable, CustomStringConvertible {
 /// connection open, so a second one means the first is dead (a pulled cable
 /// the keepalive has not noticed yet), and the reconnect must not wait for it.
 ///
-/// A connection comes from the listener, or from dialing: over a USB network
-/// link the comma listens and the phone dials it, so an accepted connection
-/// on the comma is the proof of a phone. A dialed connection is served the
-/// same way, and the listener stays open beside it for benches and a Mac on
-/// the LAN.
+/// A connection comes from the listener, from dialing, or from the comma's
+/// USB gadget. Over a USB network link the comma listens and the phone dials
+/// it, so an accepted connection on the comma is the proof of a phone. A
+/// dialed connection is served the same way, and the listener stays open
+/// beside it for benches and a Mac on the LAN. On a Mac the server can be the
+/// USB host instead, as the Python server is with `--transport usb`: it opens
+/// the gadget's vendor interface whenever the comma is on the bus.
 public final class Server: @unchecked Sendable {
   public struct Configuration: Sendable {
     public var host: String
@@ -56,10 +58,16 @@ public final class Server: @unchecked Sendable {
     public var preload: Bool
     /// Dial this end and serve the connection; `setDial` changes it later.
     public var dial: DialTarget?
+    /// Listen on `host:port`. Off for a Mac serving the comma over USB, which
+    /// has no reason to open a port.
+    public var listen: Bool
+    /// Be the USB host: open the comma's gadget whenever it is on the bus.
+    /// macOS only.
+    public var usb: Bool
 
     public init(
       host: String = "0.0.0.0", port: UInt16 = Wire.defaultPort, cacheRoot: URL, device: CoreMLBackend.Device = .ane, keepAlive: Bool = true,
-      keepCPUWarm: Bool = true, preload: Bool = true, dial: DialTarget? = nil
+      keepCPUWarm: Bool = true, preload: Bool = true, dial: DialTarget? = nil, listen: Bool = true, usb: Bool = false
     ) {
       self.host = host
       self.port = port
@@ -69,6 +77,8 @@ public final class Server: @unchecked Sendable {
       self.keepCPUWarm = keepCPUWarm
       self.preload = preload
       self.dial = dial
+      self.listen = listen
+      self.usb = usb
     }
   }
 
@@ -78,6 +88,17 @@ public final class Server: @unchecked Sendable {
   public static let dialInterval: TimeInterval = 0.5
   /// Between attempts to listen again after the socket went away.
   static let relistenBackoff: ClosedRange<TimeInterval> = 0.5...5.0
+  /// How often to look for the gadget, and to retry one that is on the bus but
+  /// not served: the comma's owner holds it between runs, and a run's hello
+  /// waits on this end reading. Quick for the first few, then every 2 s as
+  /// the Python server does, so a comma parked with nothing to run does not
+  /// have its interface opened and closed twice a second all night.
+  static let usbPoll: TimeInterval = 0.5
+  static let usbQuietRetry: TimeInterval = 2.0
+  static let usbQuickRetries = 5
+  /// After a protocol error, how long to keep reading what the comma is still
+  /// sending; longer than its frame timeout, so it is the one that gives up.
+  static let drainTimeout: TimeInterval = 5.0
 
   public let configuration: Configuration
   public let host: EngineHost
@@ -98,6 +119,17 @@ public final class Server: @unchecked Sendable {
   private var stopped = false
   private var dial: DialTarget?
   private var dialing = false
+  /// Where the USB loop finds the comma: IOKit on a Mac, none elsewhere.
+  /// Internal so a test can hand it a fake before `start`.
+  var gadget: (any GadgetSource)?
+
+  /// How a new session reports the link: at once for a connection someone
+  /// made, or on its first message for the USB gadget, which is on the bus
+  /// whether or not anything on the comma is serving it.
+  enum Announce {
+    case now
+    case onFirstMessage(String)
+  }
 
   public init(configuration: Configuration, preparer: any ModelPreparer) throws {
     self.configuration = configuration
@@ -106,14 +138,20 @@ public final class Server: @unchecked Sendable {
       device: configuration.device, preparer: preparer, keepAlive: configuration.keepAlive, keepCPUWarm: configuration.keepCPUWarm)
     cache = try EngineCache(root: configuration.cacheRoot, backend: backend)
     host = EngineHost(cache: cache)
+    #if os(macOS)
+      gadget = IOKitGadget()
+    #endif
     // A write to a socket the comma closed must be an error, not a signal
     // that kills the app.
     signal(SIGPIPE, SIG_IGN)
   }
 
-  /// Listens, dials if configured, and serves until `stop`. Returns once listening.
+  /// Listens, dials and opens the USB gadget as configured, and serves until
+  /// `stop`. Returns once listening.
   public func start() throws {
-    try listen()
+    if configuration.listen {
+      try listen()
+    }
     lock.lock()
     started = true
     lock.unlock()
@@ -122,6 +160,7 @@ public final class Server: @unchecked Sendable {
     }
     ticker = Ticker(interval: Server.statsInterval) { [weak self] _ in self?.tick() }
     startDialing()
+    startUSB()
   }
 
   private func listen() throws {
@@ -247,14 +286,15 @@ public final class Server: @unchecked Sendable {
 
   private func acceptLoop(_ listener: TCPListener) {
     while let transport = listener.accept() {
-      _ = takeover(transport)
+      takeover(transport)
     }
   }
 
   /// Serves `transport` on a thread of its own, after the session being
   /// served, if any, has been interrupted and has ended. Returns the latch
-  /// the new session's end releases.
-  private func takeover(_ transport: TCPTransport) -> Latch {
+  /// the new session's end releases, and the session.
+  @discardableResult
+  private func takeover(_ transport: any MessageLink, announce: Announce = .now) -> (done: Latch, session: Session) {
     lock.lock()
     let previous = current
     let previousDone = currentDone
@@ -265,25 +305,38 @@ public final class Server: @unchecked Sendable {
       previousDone?.wait()
     }
     let session = Session(transport: transport, host: host) { [weak self] in self?.telemetry() ?? [:] }
+    if case .onFirstMessage(let detail) = announce {
+      session.onFirstMessage = { [weak self, unowned session] in
+        self?.log.info("client connected \(detail)")
+        self?.setLink(LinkEvent(state: .connected, detail: "", peer: session.peer))
+      }
+    }
     let done = Latch()
     lock.lock()
     current = session
     currentDone = done
     lock.unlock()
     let thread = Thread { [self] in
-      serve(session)
+      serve(session, transport, announce)
       done.release()
     }
     thread.name = "jetlink-session"
     thread.qualityOfService = .userInteractive
     thread.start()
-    return done
+    return (done, session)
   }
 
-  private func serve(_ session: Session) {
-    log.info("client connected from \(session.peer)")
-    setLink(LinkEvent(state: .connected, detail: "", peer: session.peer))
+  private func serve(_ session: Session, _ transport: any MessageLink, _ announce: Announce) {
+    if case .now = announce {
+      log.info("client connected from \(session.peer)")
+      setLink(LinkEvent(state: .connected, detail: "", peer: session.peer))
+    }
     let reason = session.serveForever()
+    if let usb = transport as? USBTransport, usb.desynced {
+      // The comma is still mid-message. Let it finish and time out rather
+      // than reopening under it.
+      usb.drain(Server.drainTimeout)
+    }
     session.close()
     lock.lock()
     let isCurrent = current === session
@@ -293,6 +346,9 @@ public final class Server: @unchecked Sendable {
     }
     let isStopped = stopped
     lock.unlock()
+    // A gadget nobody on the comma was serving never connected, so it does
+    // not disconnect either: the USB loop says so once, and retries quietly.
+    guard session.received > 0 || { if case .now = announce { return true } else { return false } }() else { return }
     log.info("client disconnected: \(reason)")
     if isCurrent && !isStopped {
       setLink(LinkEvent(state: .disconnected, detail: reason, peer: nil))
@@ -354,7 +410,7 @@ public final class Server: @unchecked Sendable {
         let transport = try TCPTransport.connect(host: target.host, port: target.port, timeout: Server.dialTimeout)
         failed = nil
         log.info("dialed \(transport.peer)")
-        takeover(transport).wait()
+        takeover(transport).done.wait()
       } catch {
         // Once per outage, not twice a second.
         if failed != target {
@@ -364,6 +420,81 @@ public final class Server: @unchecked Sendable {
       }
       Thread.sleep(forTimeInterval: Server.dialInterval)
     }
+  }
+
+  // MARK: USB
+
+  /// Starts the USB loop if the configuration asks for one.
+  private func startUSB() {
+    guard configuration.usb else { return }
+    guard let gadget else {
+      log.warning("serving over USB needs a Mac; this server only listens and dials")
+      return
+    }
+    setLink(LinkEvent(state: .waiting, detail: Server.usbWaiting, peer: nil))
+    let thread = Thread { [self] in usbLoop(gadget) }
+    thread.name = "jetlink-usb"
+    thread.qualityOfService = .userInteractive
+    thread.start()
+  }
+
+  static let usbWaiting = String(format: "waiting for a jetlink gadget at %04x:%04x", 0x1209, 0x0001)
+
+  /// Opens the gadget whenever it is on the bus and serves it, one session
+  /// at a time, until the server stops. The Swift form of the Python
+  /// server's `_usb_opener` in its serve loop.
+  ///
+  /// Presence is not readiness: the comma's owner keeps the gadget on the
+  /// bus while no process on the comma is serving it, and then a read fails
+  /// within milliseconds. Such a session never reported a connection, so
+  /// it is retried without a link event, and said once in the log.
+  private func usbLoop(_ gadget: any GadgetSource) {
+    var waiting = WaitLog(log: log)
+    var quiet = 0
+    while !isStopped {
+      guard gadget.present() else {
+        quiet = 0
+        waiting.say(Server.usbWaiting)
+        if currentLink.state == .disconnected {
+          setLink(LinkEvent(state: .waiting, detail: Server.usbWaiting, peer: nil))
+        }
+        Thread.sleep(forTimeInterval: Server.usbPoll)
+        continue
+      }
+      let transport: USBTransport
+      do {
+        transport = try gadget.open()
+      } catch {
+        waiting.say("could not open the gadget: \(String(describing: error))")
+        Thread.sleep(forTimeInterval: Server.usbQuietRetry)
+        continue
+      }
+      var detail = "over usb"
+      if let speed = gadget.speed() {
+        detail += " at \(speed)"
+        if speed.contains("USB 2") || speed.contains("USB 1") {
+          detail += "; expect about 10 ms more a frame than on USB 3"
+        }
+      }
+      let (done, session) = takeover(transport, announce: .onFirstMessage(detail))
+      done.wait()
+      if session.received > 0 {
+        // The comma closes the link between runs; the next run's hello is
+        // already on its way, so open again at once.
+        waiting.reset()
+        quiet = 0
+        continue
+      }
+      quiet += 1
+      waiting.say("the comma's gadget is on the bus, but nothing on the comma is serving it yet")
+      Thread.sleep(forTimeInterval: quiet <= Server.usbQuickRetries ? Server.usbPoll : Server.usbQuietRetry)
+    }
+  }
+
+  private var isStopped: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return stopped
   }
 
   private func setLink(_ event: LinkEvent) {
@@ -409,5 +540,27 @@ final class Latch: @unchecked Sendable {
       condition.wait()
     }
     condition.unlock()
+  }
+}
+
+/// Says why there is no comma once, then keeps quiet about it: the USB loop
+/// polls every half second, and a Mac parked overnight would otherwise fill
+/// its log with one line. A new reason gets its own line; a session resets it.
+struct WaitLog {
+  let log: ServerLog
+  private var last: String?
+
+  init(log: ServerLog) {
+    self.log = log
+  }
+
+  mutating func say(_ message: String) {
+    guard message != last else { return }
+    last = message
+    log.warning(message)
+  }
+
+  mutating func reset() {
+    last = nil
   }
 }

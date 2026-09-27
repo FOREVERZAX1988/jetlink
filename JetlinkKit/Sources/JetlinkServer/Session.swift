@@ -6,7 +6,7 @@ import JetlinkKit
 /// thread so progress keeps flowing. The inference path neither allocates
 /// nor logs on the way to the reply.
 final class Session: @unchecked Sendable {
-  private let transport: TCPTransport
+  private let transport: any MessageLink
   private let host: EngineHost
   private let telemetry: () -> [String: Any]
   private let log = ServerLog(category: "session")
@@ -14,6 +14,13 @@ final class Session: @unchecked Sendable {
   private var lastSeq: UInt32 = 0
   private(set) var request: Request?
   private(set) var frames = 0
+  /// Messages received on this connection, of any kind. Zero at the end
+  /// means nothing on the other end was speaking: over USB, a gadget on the
+  /// bus that no comma process is serving yet.
+  private(set) var received = 0
+  /// Called once, on the first message: over USB the comma speaks first, so
+  /// that is when a link is really up.
+  var onFirstMessage: (() -> Void)?
 
   /// The reply's float32 outputs, reused every frame.
   private var outputBuffer: UnsafeMutablePointer<Float>
@@ -26,7 +33,7 @@ final class Session: @unchecked Sendable {
   /// The reply's parts: head, outputs, and the telemetry when asked for.
   private let parts: UnsafeMutablePointer<UnsafeRawBufferPointer>
 
-  init(transport: TCPTransport, host: EngineHost, telemetry: @escaping () -> [String: Any]) {
+  init(transport: any MessageLink, host: EngineHost, telemetry: @escaping () -> [String: Any]) {
     self.transport = transport
     self.host = host
     self.telemetry = telemetry
@@ -97,6 +104,10 @@ final class Session: @unchecked Sendable {
       let message: Message
       do {
         message = try transport.recv()
+        received += 1
+        if received == 1, let onFirstMessage {
+          onFirstMessage()
+        }
       } catch let error as LinkError {
         if case .timedOut = error { continue }
         log.info("link closed: \(error.description)")
@@ -279,10 +290,10 @@ final class Session: @unchecked Sendable {
     if let state {
       try state.withUnsafeBytes { bytes in
         parts[2] = bytes
-        try transport.send(.inferResp, seq: seq, parts: UnsafeBufferPointer(start: parts, count: 3))
+        try transport.sendParts(.inferResp, seq: seq, parts: UnsafeBufferPointer(start: parts, count: 3), flags: [])
       }
     } else {
-      try transport.send(.inferResp, seq: seq, parts: UnsafeBufferPointer(start: parts, count: 2))
+      try transport.sendParts(.inferResp, seq: seq, parts: UnsafeBufferPointer(start: parts, count: 2), flags: [])
     }
   }
 
