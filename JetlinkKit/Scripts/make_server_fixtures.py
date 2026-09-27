@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import json
 import sys
-import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -100,7 +99,7 @@ def stateful(rng) -> None:
     packed = (rng.standard_normal(spec.packed_nelem) * 0.5).astype(np.float32)
     feed = dict(state)
     feed['new_img'] = warped.astype(types['new_img'])
-    for name, (s, shape) in spec.packed_layout.items():
+    for name, (s, _shape) in spec.packed_layout.items():
       feed[name] = packed[s].reshape(spec.input_shapes[name]).astype(types[name])
     names = ['outputs'] + list(pairs.values())
     results = dict(zip(names, sess.run(names, feed), strict=True))
