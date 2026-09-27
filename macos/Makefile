@@ -43,17 +43,17 @@ python:
 	$(MACOS_DIR)/Python/embed-python.sh
 
 app: project python
-	SIGN_IDENTITY=$(SIGN_IDENTITY) $(MACOS_DIR)/scripts/build-app.sh
-	SIGN_IDENTITY=$(SIGN_IDENTITY) $(MACOS_DIR)/scripts/sign.sh $(APP)
+	SIGN_IDENTITY="$(SIGN_IDENTITY)" $(MACOS_DIR)/scripts/build-app.sh
+	SIGN_IDENTITY="$(SIGN_IDENTITY)" $(MACOS_DIR)/scripts/sign.sh $(APP)
 
 sign:
-	SIGN_IDENTITY=$(SIGN_IDENTITY) $(MACOS_DIR)/scripts/sign.sh $(APP)
+	SIGN_IDENTITY="$(SIGN_IDENTITY)" $(MACOS_DIR)/scripts/sign.sh $(APP)
 
 notarize:
 	$(MACOS_DIR)/scripts/notarize.sh $(APP)
 
 dmg:
-	SIGN_IDENTITY=$(SIGN_IDENTITY) $(MACOS_DIR)/scripts/make-dmg.sh $(APP)
+	SIGN_IDENTITY="$(SIGN_IDENTITY)" $(MACOS_DIR)/scripts/make-dmg.sh $(APP)
 
 test: project
 	xcodebuild test -project $(MACOS_DIR)/Jetlink.xcodeproj -scheme Jetlink \
