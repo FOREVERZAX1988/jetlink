@@ -116,3 +116,36 @@ struct MetricGrid<Content: View>: View {
     .fixedSize(horizontal: false, vertical: true)
   }
 }
+
+/// A label over a number in milliseconds, three or so to a row under a ring
+/// or a verdict.
+struct Figure: View {
+  let label: String
+  let ms: Double?
+  var tone: Color = .primary
+
+  init(_ label: String, ms: Double?, tone: Color = .primary) {
+    self.label = label
+    self.ms = ms
+    self.tone = tone
+  }
+
+  var body: some View {
+    VStack(spacing: 2) {
+      Text(label)
+        .font(.footnote.weight(.medium))
+        .foregroundStyle(.secondary)
+      HStack(alignment: .firstTextBaseline, spacing: 2) {
+        Text(ms.map { $0.formatted(.number.precision(.fractionLength(1))) } ?? "--")
+          .font(.system(.title3, design: .rounded, weight: .semibold))
+          .foregroundStyle(tone)
+          .contentTransition(.numericText(value: ms ?? 0))
+        Text("ms")
+          .font(.system(.footnote, design: .rounded, weight: .semibold))
+          .foregroundStyle(.secondary)
+      }
+    }
+    .frame(maxWidth: .infinity)
+    .accessibilityElement(children: .combine)
+  }
+}

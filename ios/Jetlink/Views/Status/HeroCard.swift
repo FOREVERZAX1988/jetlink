@@ -48,30 +48,12 @@ struct HeroCard: View {
           .frame(maxWidth: compact ? 210 : 290)
           .frame(maxWidth: .infinity)
         HStack(spacing: 0) {
-          figure("P99", stats?.servedMs.p99)
+          Figure("P99", ms: stats?.servedMs.p99)
           Divider().frame(height: 32)
-          figure("Max", stats?.servedMs.max)
+          Figure("Max", ms: stats?.servedMs.max)
         }
       }
     }
-  }
-
-  private func figure(_ label: String, _ ms: Double?) -> some View {
-    VStack(spacing: 2) {
-      Text(label)
-        .font(.footnote.weight(.medium))
-        .foregroundStyle(.secondary)
-      HStack(alignment: .firstTextBaseline, spacing: 2) {
-        Text(ms.map { $0.formatted(.number.precision(.fractionLength(1))) } ?? "--")
-          .font(.system(.title3, design: .rounded, weight: .semibold))
-          .contentTransition(.numericText(value: ms ?? 0))
-        Text("ms")
-          .font(.system(.footnote, design: .rounded, weight: .semibold))
-          .foregroundStyle(.secondary)
-      }
-    }
-    .frame(maxWidth: .infinity)
-    .accessibilityElement(children: .combine)
   }
 
   // MARK: preparing

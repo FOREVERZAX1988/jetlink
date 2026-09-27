@@ -2,12 +2,12 @@ import JetlinkKit
 import JetlinkUI
 import SwiftUI
 
-/// Three tabs: Status, Models and Settings. Away from Status, the state rides
+/// Four tabs: Status, Models, Benchmark and Settings. Away from Status, the state rides
 /// along in a pill above the tab bar, the way Music keeps what is playing in
 /// view, and a tap on it goes back.
 struct RootView: View {
   enum Tab: Hashable {
-    case status, models, settings
+    case status, models, benchmark, settings
   }
 
   @Environment(AppModel.self) private var app
@@ -21,6 +21,9 @@ struct RootView: View {
       SwiftUI.Tab("Models", systemImage: "shippingbox.fill", value: .models) {
         ModelsScreen()
       }
+      SwiftUI.Tab("Benchmark", systemImage: "stopwatch.fill", value: .benchmark) {
+        BenchmarkScreen()
+      }
       SwiftUI.Tab("Settings", systemImage: "gearshape.fill", value: .settings) {
         SettingsScreen()
       }
@@ -32,11 +35,12 @@ struct RootView: View {
     }
   }
 
-  /// `-tab models` or `-tab settings` on the command line opens there, for
-  /// screenshots from the simulator.
+  /// `-tab models`, `-tab benchmark` or `-tab settings` on the command line
+  /// opens there, for screenshots from the simulator.
   static var initialTab: Tab {
     switch UserDefaults.standard.string(forKey: "tab") {
     case "models": .models
+    case "benchmark": .benchmark
     case "settings": .settings
     default: .status
     }

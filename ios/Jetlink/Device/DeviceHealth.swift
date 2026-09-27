@@ -18,6 +18,16 @@ struct DeviceHealth: Equatable, Sendable {
       }
     }
 
+    /// From the word a benchmark report carries: nominal, fair, serious, critical.
+    init(label: String) {
+      switch label {
+      case "nominal": self = .nominal
+      case "serious": self = .serious
+      case "critical": self = .critical
+      default: self = .fair
+      }
+    }
+
     var title: String {
       switch self {
       case .nominal: "Normal"
