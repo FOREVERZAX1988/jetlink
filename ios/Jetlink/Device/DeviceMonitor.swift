@@ -1,4 +1,5 @@
 import Foundation
+import JetlinkUI
 import Observation
 import UIKit
 import os
@@ -58,7 +59,7 @@ final class DeviceMonitor {
       case .unknown: .unknown
       @unknown default: .unknown
       }
-    let thermal = DeviceHealth.Thermal(ProcessInfo.processInfo.thermalState)
+    let thermal = ThermalLevel(ProcessInfo.processInfo.thermalState)
     if thermal.note != nil && health.thermal.note == nil {
       warn("the phone is \(thermal.title.lowercased()); iOS slows the chip to cool it, and frames may miss 50 ms")
     }

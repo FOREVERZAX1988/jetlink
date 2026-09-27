@@ -46,8 +46,8 @@ struct FormattingTests {
 
   @Test("Log lines are coloured by their level")
   func logTone() {
-    #expect(LogsView.tone(for: PreviewData.logLines[5]) == .red)
-    #expect(LogsView.tone(for: PreviewData.logLines[3]) == .orange)
-    #expect(LogsView.tone(for: PreviewData.logLines[0]) == .primary)
+    #expect(LogTone.color(for: PreviewData.logLines[5]) == .red)
+    #expect(LogTone.color(for: PreviewData.logLines[3]) == .orange)
+    #expect(LogTone.color(for: PreviewData.logLines[0]) == .primary)
   }
 }

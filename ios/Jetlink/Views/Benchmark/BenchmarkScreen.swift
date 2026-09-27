@@ -77,10 +77,7 @@ struct BenchmarkScreen: View {
 
   /// Why a run cannot start now, in a few words; nil when it can.
   private var blocker: String? {
-    if app.server.runState != .serving { return "The server is not running." }
-    if sha256 == nil { return "Load a model first." }
-    if connected { return "Disconnect the comma to benchmark. Its live numbers are on Status." }
-    return nil
+    BenchmarkBlocker.reason(serving: app.server.runState == .serving, modelLoaded: sha256 != nil, commaConnected: connected)
   }
 
   // MARK: the run
@@ -193,10 +190,10 @@ struct BenchmarkScreen: View {
       }
       GridRow {
         MetricTile(
-          title: "Temperature", systemImage: DeviceHealth.Thermal(label: report.thermalAtEnd).symbol, tint: .orange,
-          value: DeviceHealth.Thermal(label: report.thermalAtEnd).title,
-          note: report.thermalAtStart == report.thermalAtEnd ? "Throughout" : "From \(DeviceHealth.Thermal(label: report.thermalAtStart).title.lowercased())",
-          noteTone: DeviceHealth.Thermal(label: report.thermalAtEnd).tone)
+          title: "Temperature", systemImage: ThermalLevel(label: report.thermalAtEnd).symbol, tint: .orange,
+          value: ThermalLevel(label: report.thermalAtEnd).title,
+          note: report.thermalAtStart == report.thermalAtEnd ? "Throughout" : "From \(ThermalLevel(label: report.thermalAtStart).title.lowercased())",
+          noteTone: ThermalLevel(label: report.thermalAtEnd).tone)
         MetricTile(
           title: "Model", systemImage: "cpu", tint: .purple, value: report.accelerator.mean.formatted(.number.precision(.fractionLength(1))), unit: "ms",
           note: "Mean, model alone")

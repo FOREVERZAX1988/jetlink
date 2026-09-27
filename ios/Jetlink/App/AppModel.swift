@@ -71,8 +71,7 @@ final class AppModel {
   }
 
   func modelName(_ sha256: String?) -> String? {
-    guard let sha256 else { return nil }
-    guard let row = models.rows.first(where: { $0.sha256 == sha256 }) else { return nil }
+    guard let row = models.row(for: sha256) else { return nil }
     // A model the comma sent that no catalog names has only its hash.
     return row.isOrphan ? "Uploaded Model" : row.displayName
   }

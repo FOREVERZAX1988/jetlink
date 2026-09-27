@@ -1,6 +1,7 @@
 import Foundation
 import JetlinkKit
 import JetlinkServer
+import JetlinkUI
 import SwiftUI
 import Testing
 
@@ -56,7 +57,7 @@ struct EmbeddedServerTests {
     let date = try #require(Calendar.current.date(from: parts))
     #expect(EmbeddedServer.logLine(.warning, "server", "hello", at: date) == "2026-09-27 13:04:05,123 WARNING jetlink.server: hello")
     #expect(EmbeddedServer.logLine(.info, "usb", "x", at: date) == "2026-09-27 13:04:05,123 INFO    jetlink.usb: x")
-    #expect(LogsView.tone(for: EmbeddedServer.logLine(.error, "session", "bad", at: date)) == .red)
+    #expect(LogTone.color(for: EmbeddedServer.logLine(.error, "session", "bad", at: date)) == .red)
   }
 
   @MainActor @Test func benchmarkEventsReachTheStore() {

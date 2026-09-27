@@ -24,7 +24,7 @@ struct LogsScreen: View {
           ForEach(Array(logs.lines.enumerated()), id: \.offset) { _, line in
             Text(line)
               .font(.caption.monospaced())
-              .foregroundStyle(LogsScreen.tone(for: line))
+              .foregroundStyle(LogTone.color(for: line))
               .textSelection(.enabled)
               .frame(maxWidth: .infinity, alignment: .leading)
           }
@@ -65,7 +65,4 @@ struct LogsScreen: View {
   }
 
   /// Lines read "time LEVEL category: message".
-  static func tone(for line: String) -> Color {
-    LogTone.color(for: line)
-  }
 }

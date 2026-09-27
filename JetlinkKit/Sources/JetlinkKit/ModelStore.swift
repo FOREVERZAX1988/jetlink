@@ -46,6 +46,12 @@ public final class ModelStore {
 
   // MARK: events
 
+  /// The row for a model, by its sha256.
+  public func row(for sha256: String?) -> ModelRow? {
+    guard let sha256 else { return nil }
+    return rows.first { $0.sha256 == sha256 }
+  }
+
   public func apply(_ event: ControlEvent) {
     switch event {
     case .inventory(let value):

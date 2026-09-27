@@ -61,6 +61,6 @@ struct MenuBarView: View {
 
   private var loadedName: String {
     guard let sha = server.engine.sha256 else { return "unknown model" }
-    return models.rows.first { $0.sha256 == sha }?.displayName ?? String(sha.prefix(16))
+    return models.row(for: sha)?.displayName ?? String(sha.prefix(16))
   }
 }

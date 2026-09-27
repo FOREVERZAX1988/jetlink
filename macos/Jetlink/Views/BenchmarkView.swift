@@ -50,7 +50,7 @@ struct BenchmarkView: View {
           LabeledContent("Frames", value: "\(report.frames.formatted()) in \(BenchmarkClock.text(report.seconds))")
           LabeledContent("Over 50 ms", value: report.over50.formatted())
           LabeledContent("Over 35 ms", value: report.over35.formatted())
-          LabeledContent("Model alone", value: "\(report.accelerator.mean.formatted(.number.precision(.fractionLength(1)))) ms mean")
+          LabeledContent("Model alone", value: "\(FrameBudgetView.ms(report.accelerator.mean)) mean")
           LabeledContent("Temperature") {
             let end = ThermalLevel(label: report.thermalAtEnd)
             Label(end.title, systemImage: end.symbol)
@@ -87,16 +87,15 @@ struct BenchmarkView: View {
 
   private var modelName: String {
     guard let sha256 else { return "None loaded" }
-    return models.rows.first { $0.sha256 == sha256 }?.displayName ?? "Unknown model \(sha256.prefix(16))"
+    return models.row(for: sha256)?.displayName ?? "Unknown model \(sha256.prefix(16))"
   }
 
   /// Why a run cannot start now, in a few words; nil when it can.
   private var blocker: String? {
-    if server.runState != .serving { return "The server is not running." }
-    if server.runningServer != .swift { return "The benchmark is the Swift server's. Choose it in Settings > Server." }
-    if sha256 == nil { return "Load a model first." }
-    if server.link.state == .connected { return "Disconnect the comma to benchmark. Its live numbers are on Status." }
-    return nil
+    if server.runState == .serving && server.runningServer != .swift {
+      return "The benchmark is the Swift server's. Choose it in Settings > Server."
+    }
+    return BenchmarkBlocker.reason(serving: server.runState == .serving, modelLoaded: sha256 != nil, commaConnected: server.link.state == .connected)
   }
 
   private func progress(_ event: BenchmarkEvent) -> some View {

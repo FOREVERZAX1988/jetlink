@@ -6,14 +6,11 @@ import SwiftUI
 /// phone in a car mount in the sun throttles, and a throttled phone misses
 /// frames long before the numbers above say why.
 struct DeviceHealth: Equatable, Sendable {
-  /// The shared thermal levels, in JetlinkUI so the Mac reads a report the same way.
-  typealias Thermal = ThermalLevel
-
   enum Power: Equatable, Sendable {
     case unknown, unplugged, charging, full
   }
 
-  var thermal: Thermal = .nominal
+  var thermal: ThermalLevel = .nominal
   /// 0 to 1, nil where the level is not known.
   var batteryLevel: Double?
   var power: Power = .unknown

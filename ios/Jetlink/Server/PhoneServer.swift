@@ -39,7 +39,6 @@ final class PhoneServer: ServerControlling {
   @ObservationIgnored private let modelEventsContinuation: AsyncStream<ControlEvent>.Continuation
   @ObservationIgnored private var embedded: EmbeddedServer?
   private var server: Server? { embedded?.server }
-  private var controller: ServerController? { embedded?.controller }
   @ObservationIgnored private var consumeTask: Task<Void, Never>?
   @ObservationIgnored private var recentTask: Task<Void, Never>?
   @ObservationIgnored private let log = Logger(subsystem: "io.zoompilot.jetlink", category: "app")
@@ -205,8 +204,8 @@ final class PhoneServer: ServerControlling {
   // MARK: ServerControlling
 
   func send(_ command: ControlCommand) async throws -> ReplyEvent {
-    guard let controller else { throw ServerUnavailable() }
-    return await controller.handle(command)
+    guard let embedded else { throw ServerUnavailable() }
+    return await embedded.handle(command)
   }
 
   func startIfNeeded() async throws {

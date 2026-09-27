@@ -101,7 +101,7 @@ struct ToolbarActivityView: View {
 
   private var modelName: String {
     guard let sha = server.engine.sha256 else { return "No model" }
-    return models.rows.first { $0.sha256 == sha }?.displayName ?? "Model \(sha.prefix(8))"
+    return models.row(for: sha)?.displayName ?? "Model \(sha.prefix(8))"
   }
 
   /// Short enough for the crumb; Status has the full description.

@@ -275,7 +275,7 @@ struct StatusView: View {
 
   private var loadedModelName: String {
     guard let sha = server.engine.sha256 else { return "None" }
-    return models.rows.first { $0.sha256 == sha }?.displayName ?? "Unknown model"
+    return models.row(for: sha)?.displayName ?? "Unknown model"
   }
 
   private var engineStateText: String {
