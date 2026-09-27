@@ -168,6 +168,9 @@ struct ControllerTests {
       ControlCommand.download(ref: nil, sha256: nil),
       ControlCommand.cancelDownload(sha256: String(repeating: "c", count: 64)),
       ControlCommand.importModel(path: "/no/such/file.onnx"),
+      ControlCommand.benchmark(seconds: 10),
+      ControlCommand.benchmark(seconds: 0),
+      ControlCommand.cancelBenchmark,
     ])
   func refusals(_ command: ControlCommand) async throws {
     try await withController { controller, _, _ in

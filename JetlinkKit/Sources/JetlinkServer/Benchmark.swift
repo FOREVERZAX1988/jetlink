@@ -1,0 +1,240 @@
+import Foundation
+import JetlinkKit
+
+/// The loaded engine, run the way the car will run it, for deciding at home
+/// whether a model is fast enough and stays fast enough.
+///
+/// Frames come at 20 a second with the accelerator idle between them, as
+/// scripts/bench_link.py paces them, because a paced stream and not a
+/// back-to-back one is what the comma asks for (docs/backends.md). Each frame
+/// is the server's whole share of it: the queues, the model, and reading the
+/// output back, with the hidden state fed back as modeld does. The link is
+/// not in it; run bench_link.py on the comma for that. The run is reported
+/// in windows, so a phone that slows as it heats shows it.
+
+/// A benchmark in flight: `cancel()` stops it at the next frame.
+public final class BenchmarkRun: @unchecked Sendable {
+  private let lock = NSLock()
+  private var stop = false
+
+  public init() {}
+
+  public func cancel() {
+    lock.lock()
+    stop = true
+    lock.unlock()
+  }
+
+  public var cancelled: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return stop
+  }
+}
+
+extension BenchmarkStats {
+  /// Percentiles by nearest rank over the sorted values, as the Python
+  /// bench prints them.
+  static func of(_ ms: [Double]) -> BenchmarkStats {
+    guard !ms.isEmpty else { return .empty }
+    let sorted = ms.sorted()
+    func percentile(_ q: Double) -> Double { sorted[Int((q * Double(sorted.count - 1)).rounded())] }
+    return BenchmarkStats(
+      mean: round2(ms.reduce(0, +) / Double(ms.count)), p50: round2(percentile(0.5)), p90: round2(percentile(0.9)), p99: round2(percentile(0.99)),
+      max: round2(sorted.last!))
+  }
+}
+
+func thermalLabel(_ state: ProcessInfo.ThermalState) -> String {
+  switch state {
+  case .nominal: return "nominal"
+  case .fair: return "fair"
+  case .serious: return "serious"
+  case .critical: return "critical"
+  @unknown default: return "unknown"
+  }
+}
+
+extension EngineHost {
+  /// Windows the run is reported in, seconds.
+  public static let benchmarkWindow = 10
+  /// Frames dropped at the start: CoreML settles over the first few.
+  public static let benchmarkWarmup = 5
+
+  /// How this build was compiled and what ran beside it, for comparing reports.
+  static func buildLine(_ engine: any Engine) -> String {
+    #if DEBUG
+      let config = "Debug build (unoptimized)"
+    #else
+      let config = "Release build"
+    #endif
+    let qos: String
+    switch Thread.current.qualityOfService {
+    case .userInteractive: qos = "user-interactive"
+    case .userInitiated: qos = "user-initiated"
+    case .utility: qos = "utility"
+    case .background: qos = "background"
+    default: qos = "default"
+    }
+    let warm = (engine as? OrtEngine)?.keepsCPUWarm == true ? "on" : "off"
+    return "\(config), frame thread \(qos), CPU keep-warm \(warm)"
+  }
+
+  /// Runs the loaded engine at 20 Hz for `seconds`, through the real queues
+  /// on random camera bytes and zeroed scalars, and emits `.benchmark`
+  /// events as it goes: running progress, then done, cancelled or failed.
+  /// Refuses while a comma is connected; a comma that connects meanwhile is
+  /// told the engine is not ready until the run ends, rather than have its
+  /// frames mixed into the benchmark's history. Blocks; call it off the
+  /// main thread.
+  public func benchmark(seconds: Double, run: BenchmarkRun) throws -> BenchmarkReport {
+    lock.lock()
+    guard let l = loaded else {
+      lock.unlock()
+      throw HostError.invalid("no model is loaded; prepare one first")
+    }
+    if session != nil {
+      lock.unlock()
+      throw HostError.invalid("a comma is connected; disconnect it to benchmark")
+    }
+    if benchmarking {
+      lock.unlock()
+      throw HostError.invalid("a benchmark is already running")
+    }
+    benchmarking = true
+    lock.unlock()
+    defer {
+      lock.lock()
+      benchmarking = false
+      loaded?.staging.reset()
+      lock.unlock()
+    }
+    do {
+      let report = try measure(l, seconds: seconds, run: run)
+      emit(
+        .benchmark(
+          BenchmarkEvent(
+            state: report.cancelled ? "cancelled" : "done", elapsed: report.seconds, total: seconds, frames: report.frames, frame: report.frame,
+            report: report, detail: "")))
+      log.info("benchmark done:\n\(report.text, privacy: .public)")
+      return report
+    } catch {
+      emit(.benchmark(BenchmarkEvent(state: "failed", elapsed: 0, total: seconds, frames: 0, frame: nil, report: nil, detail: "\(error)")))
+      throw error
+    }
+  }
+
+  private func measure(_ l: Loaded, seconds: Double, run: BenchmarkRun) throws -> BenchmarkReport {
+    let spec = l.spec
+    let device = backend.describe()["device"] ?? ""
+    log.info("benchmark: \(device, privacy: .public), \(Int(seconds)) s at \(ModelConstants.runFrequency) Hz")
+
+    var generator = SystemRandomNumberGenerator()
+    let warped = (0..<spec.warpedBytes).map { _ in UInt8.random(in: 0...255, using: &generator) }
+    var packed = [Float](repeating: 0, count: spec.packedCount)
+    var output = [Float](repeating: 0, count: spec.outputCount)
+    // prev_feat is the last of the packed inputs, as modeld feeds it; a
+    // stateful graph keeps its own history and has neither.
+    let hidden = spec.outputSlices.first { $0.name == "hidden_state" }?.range
+    let prevFeat = spec.packedLayout.first { $0.name == "prev_feat" }?.range
+    let feedback: (Range<Int>, Range<Int>)? = {
+      guard let hidden, let prevFeat, hidden.count == prevFeat.count, hidden.upperBound <= spec.outputCount else { return nil }
+      return (hidden, prevFeat)
+    }()
+    guard let io = l.engine.outputs[ModelConstants.drivingOutput], io.type == .float || io.type == .float16 else {
+      throw HostError.failed("the engine's driving output is not float")
+    }
+
+    var frameMs: [Double] = [], accelMs: [Double] = [], queueMs: [Double] = [], outMs: [Double] = []
+    var windows: [BenchmarkWindow] = []
+    var windowFrames: [Double] = []
+    let thermalAtStart = ProcessInfo.processInfo.thermalState
+    let period = 1.0 / Double(ModelConstants.runFrequency)
+    let warmup = EngineHost.benchmarkWarmup
+    let build = EngineHost.buildLine(l.engine)
+    let t0 = ProcessInfo.processInfo.systemUptime
+    var next = t0
+    var windowStart = 0
+    var i = 0
+    lock.lock()
+    l.staging.reset()
+    lock.unlock()
+    func progress(_ last: BenchmarkWindow?) {
+      emit(
+        .benchmark(
+          BenchmarkEvent(
+            state: "running", elapsed: round2(ProcessInfo.processInfo.systemUptime - t0), total: seconds, frames: frameMs.count,
+            frame: BenchmarkStats.of(frameMs), report: nil, detail: last.map { "window \($0.startSecond) s: \($0.thermal)" } ?? "")))
+    }
+    while !run.cancelled {
+      let elapsed = ProcessInfo.processInfo.systemUptime - t0
+      if elapsed >= seconds + Double(warmup) * period { break }
+      let wait = next - ProcessInfo.processInfo.systemUptime
+      if wait > 0 { Thread.sleep(forTimeInterval: wait) }
+      next += period
+
+      lock.lock()
+      guard loaded === l else {
+        lock.unlock()
+        throw HostError.failed("the engine was unloaded during the benchmark")
+      }
+      let started = DispatchTime.now().uptimeNanoseconds
+      var queueUs: UInt32 = 0
+      do {
+        try warped.withUnsafeBytes { w in
+          try packed.withUnsafeBytes { p in try l.staging.stage(warped: w.baseAddress!, packed: p.baseAddress!) }
+        }
+        queueUs = microseconds(since: started)
+        try l.engine.run()
+      } catch {
+        lock.unlock()
+        throw error
+      }
+      let readStarted = DispatchTime.now().uptimeNanoseconds
+      let out = l.engine.output(ModelConstants.drivingOutput)!
+      output.withUnsafeMutableBytes { o in
+        if io.type == .float16 {
+          Convert.f16ToF32(out, o.baseAddress!, count: spec.outputCount)
+        } else {
+          o.baseAddress!.copyMemory(from: out, byteCount: spec.outputCount * 4)
+        }
+      }
+      let finite = !output.contains { !$0.isFinite }
+      let outputUs = microseconds(since: readStarted)
+      let totalUs = microseconds(since: started)
+      let accel = l.engine.lastGpuUs
+      if finite, let (from, to) = feedback {
+        for k in 0..<from.count { packed[to.lowerBound + k] = output[from.lowerBound + k] }
+      }
+      lock.unlock()
+
+      i += 1
+      if i <= warmup { continue }
+      frameMs.append(Double(totalUs) / 1000)
+      accelMs.append(Double(accel) / 1000)
+      queueMs.append(Double(queueUs) / 1000)
+      outMs.append(Double(outputUs) / 1000)
+      windowFrames.append(Double(totalUs) / 1000)
+      let second = Int(ProcessInfo.processInfo.systemUptime - t0)
+      if second - windowStart >= EngineHost.benchmarkWindow {
+        let window = BenchmarkWindow(
+          startSecond: windowStart, frame: BenchmarkStats.of(windowFrames), thermal: thermalLabel(ProcessInfo.processInfo.thermalState))
+        windows.append(window)
+        windowFrames.removeAll(keepingCapacity: true)
+        windowStart = second
+        progress(window)
+      } else if frameMs.count % ModelConstants.runFrequency == 0 {
+        progress(windows.last)
+      }
+    }
+    if !windowFrames.isEmpty {
+      windows.append(
+        BenchmarkWindow(startSecond: windowStart, frame: BenchmarkStats.of(windowFrames), thermal: thermalLabel(ProcessInfo.processInfo.thermalState)))
+    }
+    return BenchmarkReport(
+      sha256: l.sha256, device: device, seconds: round2(ProcessInfo.processInfo.systemUptime - t0), frames: frameMs.count,
+      frame: BenchmarkStats.of(frameMs), accelerator: BenchmarkStats.of(accelMs), queues: BenchmarkStats.of(queueMs), output: BenchmarkStats.of(outMs),
+      build: build, over35: frameMs.filter { $0 > 35 }.count, over50: frameMs.filter { $0 > 50 }.count, windows: windows,
+      thermalAtStart: thermalLabel(thermalAtStart), thermalAtEnd: thermalLabel(ProcessInfo.processInfo.thermalState), cancelled: run.cancelled)
+  }
+}

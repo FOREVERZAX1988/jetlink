@@ -253,7 +253,7 @@ final class Session: @unchecked Sendable {
     let (sha, skip) = wanted()
     host.lock.lock()
     defer { host.lock.unlock() }
-    guard let loaded = host.loaded, loaded.sha256 == sha, loaded.spec.frameSkip == skip else {
+    guard let loaded = host.loaded, loaded.sha256 == sha, loaded.spec.frameSkip == skip, !host.benchmarking else {
       try Wire.inferResp(status: .notReady).withUnsafeBytes { try send(.inferResp, seq: message.seq, parts: [$0]) }
       return
     }

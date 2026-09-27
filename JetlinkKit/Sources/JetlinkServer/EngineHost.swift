@@ -66,6 +66,8 @@ public enum HostEvent: Sendable {
   case link(LinkEvent)
   /// Once a second while a comma is connected and sending.
   case stats(StatsEvent)
+  /// A benchmark's progress and its report.
+  case benchmark(BenchmarkEvent)
 }
 
 /// A rolling window of served frames, for the stats event once a second.
@@ -145,6 +147,8 @@ public final class EngineHost: @unchecked Sendable {
   var job: Job?
   /// Who hears about progress and completion over the link.
   var session: Session?
+  /// A benchmark owns the engine: frames from a comma are answered NOT_READY.
+  var benchmarking = false
   let frameStats = FrameStats()
   let log = Logger(subsystem: "io.zoompilot.jetlink", category: "server")
 

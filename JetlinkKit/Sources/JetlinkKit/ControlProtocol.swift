@@ -395,6 +395,133 @@ public enum JSONValue: Codable, Sendable, Equatable {
   }
 }
 
+/// mean, p50, p90, p99 and max of one measure over a benchmark, in ms.
+public struct BenchmarkStats: Codable, Sendable, Equatable {
+  public let mean: Double
+  public let p50: Double
+  public let p90: Double
+  public let p99: Double
+  public let max: Double
+
+  public init(mean: Double, p50: Double, p90: Double, p99: Double, max: Double) {
+    self.mean = mean
+    self.p50 = p50
+    self.p90 = p90
+    self.p99 = p99
+    self.max = max
+  }
+
+  public static let empty = BenchmarkStats(mean: 0, p50: 0, p90: 0, p99: 0, max: 0)
+}
+
+/// One window of a benchmark, with the device's thermal state as it closed.
+public struct BenchmarkWindow: Codable, Sendable, Equatable {
+  public let startSecond: Int
+  public let frame: BenchmarkStats
+  public let thermal: String
+
+  public init(startSecond: Int, frame: BenchmarkStats, thermal: String) {
+    self.startSecond = startSecond
+    self.frame = frame
+    self.thermal = thermal
+  }
+}
+
+/// A finished benchmark: the loaded engine run at the comma's pace with
+/// nothing on the link, so a phone's numbers can be read at home.
+public struct BenchmarkReport: Codable, Sendable, Equatable {
+  public let sha256: String
+  public let device: String
+  public let seconds: Double
+  public let frames: Int
+  /// The server's share of each frame: queues, model, output.
+  public let frame: BenchmarkStats
+  /// The model alone: the gpu_us the comma is told.
+  public let accelerator: BenchmarkStats
+  /// The history queues building the model's inputs, and the output read back.
+  public let queues: BenchmarkStats
+  public let output: BenchmarkStats
+  /// How this build was compiled and what ran beside it, for comparing reports.
+  public let build: String
+  public let over35: Int
+  public let over50: Int
+  public let windows: [BenchmarkWindow]
+  public let thermalAtStart: String
+  public let thermalAtEnd: String
+  public let cancelled: Bool
+
+  public init(
+    sha256: String, device: String, seconds: Double, frames: Int, frame: BenchmarkStats, accelerator: BenchmarkStats, queues: BenchmarkStats,
+    output: BenchmarkStats, build: String, over35: Int, over50: Int, windows: [BenchmarkWindow], thermalAtStart: String, thermalAtEnd: String,
+    cancelled: Bool
+  ) {
+    self.sha256 = sha256
+    self.device = device
+    self.seconds = seconds
+    self.frames = frames
+    self.frame = frame
+    self.accelerator = accelerator
+    self.queues = queues
+    self.output = output
+    self.build = build
+    self.over35 = over35
+    self.over50 = over50
+    self.windows = windows
+    self.thermalAtStart = thermalAtStart
+    self.thermalAtEnd = thermalAtEnd
+    self.cancelled = cancelled
+  }
+
+  /// The report as text, to paste into an issue or a note.
+  public var text: String {
+    func f(_ s: BenchmarkStats) -> String {
+      String(format: "mean %.1f  p50 %.1f  p90 %.1f  p99 %.1f  max %.1f ms", s.mean, s.p50, s.p90, s.p99, s.max)
+    }
+    var lines = [
+      "Jetlink benchmark, \(device)",
+      "model \(sha256.prefix(16)), \(frames) frames at 20 Hz over \(Int(seconds)) s\(cancelled ? " (stopped early)" : "")",
+      build,
+      "frame        \(f(frame))",
+      "accelerator  \(f(accelerator))",
+      "queues       \(f(queues))",
+      "output       \(f(output))",
+      "over 35 ms: \(over35)   over 50 ms: \(over50)",
+      "temperature: \(thermalAtStart) at start, \(thermalAtEnd) at end",
+    ]
+    if !windows.isEmpty {
+      lines.append("by window:")
+      for w in windows {
+        lines.append(String(format: "  %4d s  mean %5.1f  p99 %5.1f  max %5.1f ms  ", w.startSecond, w.frame.mean, w.frame.p99, w.frame.max) + w.thermal)
+      }
+    }
+    return lines.joined(separator: "\n")
+  }
+}
+
+/// A benchmark's progress, and at its end the report. `state` is running,
+/// done, cancelled or failed; `frame` is the running frame stats so far.
+public struct BenchmarkEvent: Codable, Sendable, Equatable {
+  public let state: String
+  public let elapsed: Double
+  public let total: Double
+  public let frames: Int
+  public let frame: BenchmarkStats?
+  public let report: BenchmarkReport?
+  public let detail: String
+
+  public init(state: String, elapsed: Double, total: Double, frames: Int, frame: BenchmarkStats?, report: BenchmarkReport?, detail: String) {
+    self.state = state
+    self.elapsed = elapsed
+    self.total = total
+    self.frames = frames
+    self.frame = frame
+    self.report = report
+    self.detail = detail
+  }
+
+  public var isFinished: Bool { state != "running" }
+}
+
 public enum ControlEvent: Sendable, Equatable {
   case hello(HelloEvent)
   case server(ServerEvent)
@@ -405,6 +532,7 @@ public enum ControlEvent: Sendable, Equatable {
   case catalog(CatalogEvent)
   case download(DownloadEvent)
   case importEvent(ImportEvent)
+  case benchmark(BenchmarkEvent)
   case reply(ReplyEvent)
   case unknown(name: String)
 
@@ -431,6 +559,7 @@ public enum ControlEvent: Sendable, Equatable {
     case "catalog": self = .catalog(try decoder.decode(CatalogEvent.self, from: jsonLine))
     case "download": self = .download(try decoder.decode(DownloadEvent.self, from: jsonLine))
     case "import": self = .importEvent(try decoder.decode(ImportEvent.self, from: jsonLine))
+    case "benchmark": self = .benchmark(try decoder.decode(BenchmarkEvent.self, from: jsonLine))
     case "reply": self = .reply(try decoder.decode(ReplyEvent.self, from: jsonLine))
     default: self = .unknown(name: name)
     }
@@ -453,6 +582,9 @@ public enum ControlCommand: Sendable, Equatable {
   case forget(sha256: String, artifacts: Bool, model: Bool)
   case inventory
   case shutdown
+  /// Run the loaded engine at the comma's pace for `seconds`, with no comma.
+  case benchmark(seconds: Double)
+  case cancelBenchmark
 
   public var name: String {
     switch self {
@@ -466,6 +598,8 @@ public enum ControlCommand: Sendable, Equatable {
     case .forget: return "forget"
     case .inventory: return "inventory"
     case .shutdown: return "shutdown"
+    case .benchmark: return "benchmark"
+    case .cancelBenchmark: return "cancel_benchmark"
     }
   }
 
@@ -473,8 +607,10 @@ public enum ControlCommand: Sendable, Equatable {
   // section 4 of the contract describes the whole protocol.
   private var arguments: [String: Any] {
     switch self {
-    case .status, .unload, .inventory, .shutdown:
+    case .status, .unload, .inventory, .shutdown, .cancelBenchmark:
       return [:]
+    case .benchmark(let seconds):
+      return ["seconds": seconds]
     case .catalog(let refresh):
       return ["refresh": refresh]
     case .download(let ref, let sha256):

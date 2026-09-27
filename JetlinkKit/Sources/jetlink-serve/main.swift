@@ -90,6 +90,7 @@ do {
     case .engine(let engine): line("engine", encode(engine))
     case .link(let link): line("link", encode(link))
     case .stats(let stats): line("stats", encode(stats))
+    case .benchmark(let benchmark): line("benchmark", encode(benchmark))
     }
   }
   line("server", server.backend.describe())

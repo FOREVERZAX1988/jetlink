@@ -46,6 +46,7 @@ public final class ServerController: @unchecked Sendable {
   private var catalogKicked = false
   private var inventoryPayload: InventoryEvent?
   private var inventoryAt: TimeInterval = 0
+  private var benchmark: BenchmarkRun?
 
   /// One download, queued or running, and the last event it published.
   final class Download: @unchecked Sendable {
@@ -166,6 +167,8 @@ public final class ServerController: @unchecked Sendable {
       publish(.link(value))
     case .stats(let stats):
       publish(.stats(stats))
+    case .benchmark(let event):
+      publish(.benchmark(event))
     }
   }
 
@@ -232,7 +235,48 @@ public final class ServerController: @unchecked Sendable {
     case .shutdown:
       publish(.server(serverEvent("stopping")))
       return [:]
+    case .benchmark(let seconds):
+      try startBenchmark(seconds: seconds)
+      return ["queued": .bool(true)]
+    case .cancelBenchmark:
+      let run = lock.withLock { benchmark }
+      guard let run else { throw ControlError.refused("no benchmark is running") }
+      run.cancel()
+      return [:]
     }
+  }
+
+  // MARK: benchmark
+
+  /// The run itself emits its events through the host; this only refuses
+  /// what cannot run and gives it a thread.
+  private func startBenchmark(seconds: Double) throws {
+    guard seconds > 0 && seconds <= 3600 else { throw ControlError.refused("a benchmark runs for 1 to 3600 seconds") }
+    if currentLink.state == .connected {
+      throw ControlError.refused("a comma is connected; disconnect it to benchmark, or watch the live numbers")
+    }
+    guard server.host.loadedSHA() != nil else { throw ControlError.refused("no model is loaded; prepare one first") }
+    let run = BenchmarkRun()
+    let started = lock.withLock {
+      if benchmark != nil { return false }
+      benchmark = run
+      return true
+    }
+    guard started else { throw ControlError.refused("a benchmark is already running") }
+    let thread = Thread { [self] in
+      do {
+        _ = try server.host.benchmark(seconds: seconds, run: run)
+      } catch {
+        log.warning("benchmark failed: \(String(describing: error), privacy: .public)")
+      }
+      lock.withLock {
+        if benchmark === run { benchmark = nil }
+      }
+    }
+    thread.name = "jetlink-benchmark"
+    // The frame path's priority, so the numbers are the car's.
+    thread.qualityOfService = .userInteractive
+    thread.start()
   }
 
   private func refreshCatalog(_ refresh: Bool) async {

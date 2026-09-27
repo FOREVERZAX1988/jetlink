@@ -22,6 +22,8 @@ final class PhoneServer: ServerControlling {
   /// The last two minutes of `stats`, oldest first, while the comma stays connected.
   private(set) var statsHistory: [StatsSample] = []
   private(set) var lastFailure: String?
+  /// The benchmark running or last run, if any.
+  private(set) var benchmark: BenchmarkEvent?
   let modelEvents: AsyncStream<ControlEvent>
 
   /// How far back the dashboard's headline reaches.
@@ -188,6 +190,8 @@ final class PhoneServer: ServerControlling {
       engine = value
     case .stats(let value):
       statsHistory = StatsSample.appending(value, to: statsHistory)
+    case .benchmark(let value):
+      benchmark = value
     case .hello, .reply, .unknown:
       break
     case .inventory, .catalog, .download, .importEvent:

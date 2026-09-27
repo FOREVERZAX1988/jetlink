@@ -199,6 +199,34 @@ struct ControlProtocolTests {
     #expect(!noID.ok)
   }
 
+  @Test func decodesBenchmark() throws {
+    let running = Data(
+      #"{"event":"benchmark","t":1,"state":"running","elapsed":12.5,"total":60,"frames":240,"frame":{"mean":31.2,"p50":30.9,"p90":33.1,"p99":36.4,"max":41.0},"report":null,"detail":""}"#
+        .utf8)
+    guard case .benchmark(let progress) = try ControlEvent(jsonLine: running) else { throw TestFailure("not a benchmark event") }
+    #expect(progress.state == "running")
+    #expect(progress.frames == 240)
+    #expect(progress.frame?.p99 == 36.4)
+    #expect(progress.report == nil)
+    #expect(!progress.isFinished)
+    let report = BenchmarkReport(
+      sha256: String(repeating: "a", count: 64), device: "ane-Apple A19 Pro", seconds: 60, frames: 1195, frame: BenchmarkStats.empty,
+      accelerator: BenchmarkStats.empty, queues: BenchmarkStats.empty, output: BenchmarkStats.empty, build: "Release build, CPU keep-warm on",
+      over35: 3, over50: 0, windows: [BenchmarkWindow(startSecond: 0, frame: BenchmarkStats.empty, thermal: "nominal")], thermalAtStart: "nominal",
+      thermalAtEnd: "fair", cancelled: false)
+    let done = BenchmarkEvent(state: "done", elapsed: 60, total: 60, frames: 1195, frame: nil, report: report, detail: "")
+    let encoder = JSONEncoder()
+    encoder.keyEncodingStrategy = .convertToSnakeCase
+    var object = try JSONSerialization.jsonObject(with: encoder.encode(done)) as! [String: Any]
+    object["event"] = "benchmark"
+    object["t"] = 1
+    #expect((object["report"] as? [String: Any])?["thermal_at_end"] as? String == "fair")
+    let line = try JSONSerialization.data(withJSONObject: object)
+    guard case .benchmark(let decoded) = try ControlEvent(jsonLine: line) else { throw TestFailure("not a benchmark event") }
+    #expect(decoded == done)
+    #expect(decoded.report?.text.contains("over 35 ms: 3") == true)
+  }
+
   @Test func decodesUnknownEvent() throws {
     guard case .unknown(let name) = try ControlEvent(jsonLine: events()[15]) else {
       Issue.record("expected an unknown event")
@@ -235,6 +263,8 @@ struct ControlProtocolTests {
       ),
       (.inventory, 11, #"{"cmd":"inventory","id":11}"#),
       (.shutdown, 12, #"{"cmd":"shutdown","id":12}"#),
+      (.benchmark(seconds: 60), 13, #"{"cmd":"benchmark","id":13,"seconds":60}"#),
+      (.cancelBenchmark, 14, #"{"cmd":"cancel_benchmark","id":14}"#),
     ]
     for (command, id, expected) in cases {
       let data = command.jsonLine(id: id)
@@ -243,4 +273,9 @@ struct ControlProtocolTests {
       #expect(text == expected)
     }
   }
+}
+
+struct TestFailure: Error {
+  let message: String
+  init(_ message: String) { self.message = message }
 }

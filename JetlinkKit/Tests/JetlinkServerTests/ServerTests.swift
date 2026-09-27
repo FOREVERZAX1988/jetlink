@@ -1,4 +1,5 @@
 import Foundation
+import JetlinkKit
 import Testing
 
 @testable import JetlinkServer
@@ -102,6 +103,63 @@ struct ServerTests {
       try second.send(.ping)
       #expect(try second.recv().type == Wire.Msg.pong.rawValue)
       #expect(throws: LinkError.self) { try first.recv() }
+    }
+  }
+
+  @Test("A benchmark runs the loaded engine at the comma's pace and reports in windows")
+  func benchmarks() throws {
+    let golden = try Golden("tiny_queued")
+    try serve { server, client in
+      _ = try client.ensureEngine(model: golden.model, sha256: golden.sha256)
+      // Refused with a comma on the line.
+      #expect(throws: HostError.self) { try server.host.benchmark(seconds: 1, run: BenchmarkRun()) }
+      client.close()
+      let deadline = Date().addingTimeInterval(5)
+      while server.host.lock.withLock({ server.host.session != nil }) && Date() < deadline {
+        Thread.sleep(forTimeInterval: 0.02)
+      }
+      let events = LockedEvents()
+      server.host.subscribe { event in
+        if case .benchmark(let value) = event { events.append(value) }
+      }
+      let report = try server.host.benchmark(seconds: 2, run: BenchmarkRun())
+      #expect(report.sha256 == golden.sha256)
+      #expect(report.device == server.backend.deviceTag())
+      #expect(report.frames >= 30 && report.frames <= 45, "\(report.frames) frames in 2 s at 20 Hz")
+      #expect(report.frame.mean > 0 && report.frame.p99 >= report.frame.p50 && report.frame.max >= report.frame.p99)
+      #expect(report.windows.count == 1)
+      #expect(report.windows[0].startSecond == 0)
+      #expect(report.over50 <= report.over35)
+      #expect(!report.cancelled)
+      #expect(report.build.contains("CPU keep-warm off"))
+      #expect(report.thermalAtStart != "")
+      #expect(report.text.contains("frame        mean"))
+      let seen = events.all
+      #expect(seen.first?.state == "running")
+      #expect(seen.last?.state == "done")
+      #expect(seen.last?.report == report)
+      #expect(!server.host.lock.withLock { server.host.benchmarking })
+    }
+  }
+
+  @Test("A benchmark can be cancelled")
+  func cancelsABenchmark() throws {
+    let golden = try Golden("tiny_stateful")
+    try serve { server, client in
+      _ = try client.ensureEngine(model: golden.model, sha256: golden.sha256)
+      client.close()
+      let deadline = Date().addingTimeInterval(5)
+      while server.host.lock.withLock({ server.host.session != nil }) && Date() < deadline {
+        Thread.sleep(forTimeInterval: 0.02)
+      }
+      let run = BenchmarkRun()
+      Thread {
+        Thread.sleep(forTimeInterval: 0.6)
+        run.cancel()
+      }.start()
+      let report = try server.host.benchmark(seconds: 60, run: run)
+      #expect(report.cancelled)
+      #expect(report.seconds < 5)
     }
   }
 
@@ -215,4 +273,15 @@ struct ServerLifecycleTests {
     #expect(try transport.recv().msgType == Wire.Msg.pong.rawValue)
     transport.close()
   }
+}
+
+final class LockedEvents: @unchecked Sendable {
+  private let lock = NSLock()
+  private var events: [BenchmarkEvent] = []
+
+  func append(_ event: BenchmarkEvent) {
+    lock.withLock { events.append(event) }
+  }
+
+  var all: [BenchmarkEvent] { lock.withLock { events } }
 }
