@@ -29,8 +29,9 @@ public struct PreparedModel: Sendable {
 /// server builds and tests without it.
 public protocol ModelPreparer: Sendable {
   func readSpec(model: URL, sha256: String, nbytes: Int64, frameSkip: Int) throws -> ModelSpec
-  /// Writes the parts into `directory`; `split` cuts at the vision trunk.
-  func prepare(model: URL, into directory: URL, split: Bool, cacheKey: @escaping (String) -> String) throws -> PreparedModel
+  /// Writes the parts into `directory` in the device's layout.
+  func prepare(model: URL, into directory: URL, layout: CoreMLPreparation.Layout, cacheKey: @escaping (String) -> String) throws
+    -> PreparedModel
 }
 
 /// onnxruntime's CoreML provider in process: the Swift form of the Python ort
@@ -46,14 +47,20 @@ public final class CoreMLBackend: EngineBackend {
     case ane
     /// The whole graph on the GPU, for when something else holds the Neural Engine.
     case coreml
+    /// The whole graph as one CoreML program with every compute unit allowed,
+    /// prepared for the Neural Engine (the policy's norms prescaled, the vision
+    /// heads in fp32): what a phone, whose GPU is far weaker than its Neural
+    /// Engine, wants.
+    case aneWhole = "ane-whole"
     /// onnxruntime's CPU provider and no CoreML at all: for tests, and nowhere
     /// near the frame budget with a real model.
     case cpu
   }
 
   /// What a CoreML build writes, as the Python's PREPARE_VERSION: 5 is every
-  /// graph split on `ane` and Expand as Tile on both.
-  public static let prepareVersion = 5
+  /// graph split on `ane` and Expand as Tile on both; 6 adds the `ane-whole`
+  /// layout, one program with the norms prescaled and the heads in fp32.
+  public static let prepareVersion = 6
   static let manifestName = "sessions.json"
 
   public let name = "ort"
@@ -109,7 +116,17 @@ public final class CoreMLBackend: EngineBackend {
     switch device {
     case .ane: [("vision", "CPUAndNeuralEngine"), ("policy", "CPUAndGPU")]
     case .coreml: [("model", "CPUAndGPU")]
+    case .aneWhole: [("model", "ALL")]
     case .cpu: [("model", nil)]
+    }
+  }
+
+  /// How the preparation lays the graph out for the device's sessions.
+  var layout: CoreMLPreparation.Layout {
+    switch device {
+    case .ane: .split
+    case .coreml, .cpu: .whole
+    case .aneWhole: .aneWhole
     }
   }
 
@@ -138,7 +155,7 @@ public final class CoreMLBackend: EngineBackend {
 
     report("patch", 0, "preparing the model for CoreML")
     let sessions = self.sessions
-    let prepared = try preparer.prepare(model: model, into: staged, split: sessions.count > 1) {
+    let prepared = try preparer.prepare(model: model, into: staged, layout: layout) {
       CoreMLBackend.cacheKey(artifact: artifact, part: $0)
     }
     log.info("prepared \(model.lastPathComponent): \(prepared.summary)")

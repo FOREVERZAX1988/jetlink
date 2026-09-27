@@ -6,15 +6,17 @@ import JetlinkONNX
 //
 //   jetlink-onnx meta <file>
 //   jetlink-onnx slices <file>
-//   jetlink-onnx prepare <src> <outdir> [--whole] [--key-prefix P]
+//   jetlink-onnx prepare <src> <outdir> [--layout split|whole|ane-whole] [--key-prefix P]
 
 let usage = """
   usage:
     jetlink-onnx meta <file>                   inputs, outputs and metadata_props
     jetlink-onnx slices <file>                 openpilot's output_slices
-    jetlink-onnx prepare <src> <outdir> [--whole] [--key-prefix P]
-                                               prepare for CoreML: vision.onnx and policy.onnx,
-                                               or model.onnx with --whole. Each part's
+    jetlink-onnx prepare <src> <outdir> [--layout L] [--key-prefix P]
+                                               prepare for CoreML: vision.onnx and policy.onnx
+                                               (--layout split, the default), or model.onnx
+                                               (--layout whole, or ane-whole for the whole graph
+                                               on the Neural Engine; --whole is whole). Each part's
                                                COREML_CACHE_KEY is the server's _cache_key with
                                                P (default: the source's file name stem) as the stem.
   """
@@ -59,13 +61,22 @@ func slices(_ path: String) throws {
 
 func prepare(_ args: [String]) throws {
   var positional: [String] = []
-  var whole = false
+  var layout: CoreMLPreparation.Layout = .split
   var prefix: String?
   var i = 0
   while i < args.count {
     switch args[i] {
     case "--whole":
-      whole = true
+      layout = .whole
+    case "--layout":
+      guard i + 1 < args.count else { fail("--layout needs a value") }
+      switch args[i + 1] {
+      case "split": layout = .split
+      case "whole": layout = .whole
+      case "ane-whole": layout = .aneWhole
+      default: fail("--layout must be split, whole or ane-whole, not \(args[i + 1])")
+      }
+      i += 1
     case "--key-prefix":
       guard i + 1 < args.count else { fail("--key-prefix needs a value") }
       prefix = args[i + 1]
@@ -84,7 +95,7 @@ func prepare(_ args: [String]) throws {
   let clock = ContinuousClock()
   let start = clock.now
   let report = try CoreMLPreparation.prepare(
-    source: source, into: out, layout: whole ? .whole : .split,
+    source: source, into: out, layout: layout,
     cacheKey: { CoreMLPreparation.cacheKey(stem: stem, part: $0) })
   let elapsed = clock.now - start
 
@@ -93,6 +104,11 @@ func prepare(_ args: [String]) throws {
       + (report.retypedImages ? "images retyped to fp16" : "inputs left as declared")
       + ", \(report.gathers) negative Gather index(es) normalized, \(report.gemms) MatMul+Add rewritten as "
       + "Gemm(transB=1), \(report.tiles) Expand(s) as Tile")
+  if layout == .aneWhole {
+    print(
+      "for the whole Neural Engine: \(report.norms) policy LayerNormalization(s) prescaled, "
+        + "\(report.heads) vision head node(s) in fp32")
+  }
   for part in report.parts {
     let size = (try? FileManager.default.attributesOfItem(atPath: part.url.path)[.size] as? Int64) ?? 0
     print(

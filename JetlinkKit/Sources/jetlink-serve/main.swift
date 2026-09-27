@@ -20,10 +20,12 @@ let usage = """
   options:
     --cache DIR         where models and built engines live (required)
     --port PORT         TCP port to listen on (default 5599)
-    --device ane|coreml|cpu
+    --device ane|ane-whole|coreml|cpu
                         ane: the vision trunk on the Neural Engine, the rest on
-                        the GPU (default); coreml: the whole graph on the GPU;
-                        cpu: onnxruntime's CPU provider, for tests
+                        the GPU (default); ane-whole: the whole graph on the
+                        Neural Engine, the iPhone's layout; coreml: the whole
+                        graph on the GPU; cpu: onnxruntime's CPU provider, for
+                        tests
     --dial HOST[:PORT]  also dial this end and serve the connection, as the
                         phone dials the comma over a USB network link; the
                         listener stays open beside it

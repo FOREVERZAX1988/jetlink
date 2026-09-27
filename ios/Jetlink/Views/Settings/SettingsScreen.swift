@@ -15,6 +15,7 @@ struct SettingsScreen: View {
         connection
         Section {
           Picker("Compute", selection: $settings.device) {
+            Text(CoreMLBackend.Device.aneWhole.title).tag(CoreMLBackend.Device.aneWhole)
             Text(CoreMLBackend.Device.ane.title).tag(CoreMLBackend.Device.ane)
             Text(CoreMLBackend.Device.coreml.title).tag(CoreMLBackend.Device.coreml)
             #if targetEnvironment(simulator)
