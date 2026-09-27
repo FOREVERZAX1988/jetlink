@@ -4,7 +4,7 @@ import JetlinkKit
 /// One framed, ordered message channel to one comma: a TCP connection, or bulk
 /// transfers to the comma's USB gadget. The session speaks to either the same
 /// way; only how the bytes are framed on the way differs.
-protocol MessageLink: AnyObject, Sendable {
+public protocol MessageLink: AnyObject, Sendable {
   /// Who is on the other end, for the link event and the log.
   var peer: String { get }
   /// How the link is carried, as this end sees it; the comma's hello may say
@@ -25,15 +25,15 @@ protocol MessageLink: AnyObject, Sendable {
 }
 
 extension MessageLink {
-  func send(_ type: Wire.Msg, seq: UInt32, parts: [UnsafeRawBufferPointer] = [], flags: Wire.Flag = []) throws {
+  public func send(_ type: Wire.Msg, seq: UInt32, parts: [UnsafeRawBufferPointer] = [], flags: Wire.Flag = []) throws {
     try parts.withUnsafeBufferPointer { try sendParts(type, seq: seq, parts: $0, flags: flags) }
   }
 
-  func send(_ type: Wire.Msg, seq: UInt32, data: [Data], flags: Wire.Flag = []) throws {
+  public func send(_ type: Wire.Msg, seq: UInt32, data: [Data], flags: Wire.Flag = []) throws {
     try withBuffers(data) { try send(type, seq: seq, parts: $0, flags: flags) }
   }
 
-  func sendJSON(_ type: Wire.Msg, seq: UInt32, _ object: [String: Any], flags: Wire.Flag = []) throws {
+  public func sendJSON(_ type: Wire.Msg, seq: UInt32, _ object: [String: Any], flags: Wire.Flag = []) throws {
     try send(type, seq: seq, data: [JSONLine.encode(object)], flags: flags)
   }
 }
@@ -54,6 +54,6 @@ func withBuffers<R>(_ data: [Data], _ body: ([UnsafeRawBufferPointer]) throws ->
 }
 
 extension TCPTransport: MessageLink {
-  var medium: LinkMedium? { .tcp }
-  var connectsOnOpen: Bool { true }
+  public var medium: LinkMedium? { .tcp }
+  public var connectsOnOpen: Bool { true }
 }

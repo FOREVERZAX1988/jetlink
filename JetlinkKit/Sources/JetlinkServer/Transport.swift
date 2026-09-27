@@ -136,7 +136,7 @@ public final class TCPTransport: @unchecked Sendable {
   /// One message, `parts` concatenated as its payload, in one vectored write:
   /// header, parts and the pad byte together, so the kernel never sees the
   /// header as a segment of its own. `MessageLink` has the other forms.
-  func sendParts(_ type: Wire.Msg, seq: UInt32, parts: UnsafeBufferPointer<UnsafeRawBufferPointer>, flags: Wire.Flag) throws {
+  public func sendParts(_ type: Wire.Msg, seq: UInt32, parts: UnsafeBufferPointer<UnsafeRawBufferPointer>, flags: Wire.Flag) throws {
     sendLock.lock()
     defer { sendLock.unlock() }
     var flags = flags
