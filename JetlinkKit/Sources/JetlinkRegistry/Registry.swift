@@ -231,15 +231,25 @@ public final class Registry: Sendable {
 
   /// A human name and the catalog ref for a model identity; either may be nil.
   public func name(for sha256: String) -> (name: String?, ref: String?) {
-    if let match = pointers().first(where: { $0.pointer.oid == sha256 }) {
-      let raw = Files.readJSON(layout.catalogURL)?["raw"] ?? [:]
-      let entry = Catalog.parse(raw.truthy ? raw : [:]).first { $0.ref == match.ref }
-      return (entry?.name, match.ref)
+    nameLookup()(sha256)
+  }
+
+  /// `name(for:)` with the pointers, the cached catalog and the local models
+  /// read once, for a loop over many models.
+  private func nameLookup() -> (String) -> (name: String?, ref: String?) {
+    let pointers = pointers()
+    let raw = Files.readJSON(layout.catalogURL)?["raw"] ?? [:]
+    let entries = Catalog.parse(raw.truthy ? raw : [:])
+    let locals = localModels()
+    return { sha256 in
+      if let match = pointers.first(where: { $0.pointer.oid == sha256 }) {
+        return (entries.first { $0.ref == match.ref }?.name, match.ref)
+      }
+      if let local = locals.first(where: { $0.sha256 == sha256 }) {
+        return (local.name, nil)
+      }
+      return (nil, nil)
     }
-    if let local = localModels().first(where: { $0.sha256 == sha256 }) {
-      return (local.name, nil)
-    }
-    return (nil, nil)
   }
 
   /// The catalog ref whose model has this identity, from the pointers or the
@@ -467,6 +477,7 @@ public final class Registry: Sendable {
   /// would load. With no tag nothing is current.
   public func inventory(artifactTag: String?, artifactSuffix: String, loaded: String?) -> InventoryEvent {
     let known = knownSHAs()
+    let name = nameLookup()
     var models: [InventoryModel] = []
     var modelsBytes: Int64 = 0
     for fileName in Files.names(in: layout.models) where fileName.hasSuffix(".onnx") {
@@ -475,8 +486,8 @@ public final class Registry: Sendable {
       let url = layout.models.appending(path: fileName)
       guard let status = Files.status(url) else { continue }
       let sha256 = known[stem] ?? stem
-      let (name, ref) = sha256.utf8.count == 64 ? self.name(for: sha256) : (nil, nil)
-      models.append(InventoryModel(sha256: sha256, bytes: status.size, path: url.path(percentEncoded: false), name: name, ref: ref))
+      let (modelName, ref) = sha256.utf8.count == 64 ? name(sha256) : (nil, nil)
+      models.append(InventoryModel(sha256: sha256, bytes: status.size, path: url.path(percentEncoded: false), name: modelName, ref: ref))
       modelsBytes += status.size
     }
 
