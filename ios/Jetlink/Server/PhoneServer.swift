@@ -44,10 +44,9 @@ final class PhoneServer: ServerControlling {
     self.settings = settings
     (modelEvents, modelEventsContinuation) = AsyncStream.makeStream(bufferingPolicy: .unbounded)
     let logs = self.logs
-    let clock = ISO8601DateFormatter()
-    clock.formatOptions = [.withFullTime, .withFractionalSeconds]
+    let clock = Date.ISO8601FormatStyle().time(includingFractionalSeconds: true)
     Log.sink = { level, category, message in
-      let line = "\(clock.string(from: Date())) \(level.rawValue.uppercased()) \(category): \(message)"
+      let line = "\(Date().formatted(clock)) \(level.rawValue.uppercased()) \(category): \(message)"
       Task { @MainActor in logs.append(line) }
     }
   }
