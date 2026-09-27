@@ -9,9 +9,13 @@ import Foundation
 /// 3. write negative constant Gather indices from the front;
 /// 4. rewrite MatMul+Add as Gemm with a transposed weight (transB=1);
 /// 5. rewrite repeat-only Expands as Tiles;
-/// 6. cut the graph where the vision trunk ends (`.split`, writing
-///    vision.onnx and policy.onnx), or keep it whole (`.whole`, model.onnx);
-/// 7. give each file a COREML_CACHE_KEY in its metadata_props.
+/// 6. for `.aneWhole` only (`layout='ane-whole'`), feed the policy's fp16
+///    LayerNormalizations their input times 1/8 and run the heads after the
+///    vision trunk in fp32;
+/// 7. cut the graph where the vision trunk ends (`.split`, writing
+///    vision.onnx and policy.onnx), or keep it whole (`.whole` and
+///    `.aneWhole`, model.onnx);
+/// 8. give each file a COREML_CACHE_KEY in its metadata_props.
 ///
 /// The files are what Python's onnx.save writes for the same model: field
 /// for field, and byte for byte on a model Python wrote.
@@ -19,8 +23,8 @@ import Foundation
 /// Memory is the point, because an iPhone runs this. The source is
 /// memory-mapped and only the graph's structure is decoded; each weight stays
 /// a range of the mapped file until it is copied to the output. The
-/// transposed Gemm weights, about 671 MB on the big models, are made a few
-/// MB at a time while they are written. Every message's length is known
+/// transposed Gemm weights, about 671 MB on the big models, and the fp32
+/// head weights are made a few MB at a time while they are written. Every message's length is known
 /// before it is written, so the output streams to disk in one pass.
 public enum CoreMLPreparation {
   public enum Layout: Sendable {
@@ -28,6 +32,10 @@ public enum CoreMLPreparation {
     case split
     /// One model: model.onnx.
     case whole
+    /// One model prepared for the whole graph on the Neural Engine
+    /// (`--device ane-whole`): model.onnx, with the policy's norms prescaled
+    /// and the vision heads in fp32.
+    case aneWhole
   }
 
   public struct Part: Sendable, Equatable {
@@ -52,6 +60,10 @@ public enum CoreMLPreparation {
     public let gemms: Int
     /// Expands rewritten as Tile.
     public let tiles: Int
+    /// Policy LayerNormalizations prescaled; 0 unless the layout is `.aneWhole`.
+    public let norms: Int
+    /// Vision head nodes moved to fp32; 0 unless the layout is `.aneWhole`.
+    public let heads: Int
     public let parts: [Part]
   }
 
@@ -60,7 +72,9 @@ public enum CoreMLPreparation {
   public static let cacheKeyProp = "COREML_CACHE_KEY"
 
   /// The Python server's `_cache_key(out_path, part)` with `stem` for the
-  /// path's stem: ASCII letters and digits only, at most 63 characters.
+  /// path's stem: ASCII letters and digits only, at most 63 characters. The
+  /// stem is the artifact directory's, which carries the device tag, so the
+  /// `ane`, `coreml` and `ane-whole` layouts key compile caches of their own.
   public static func cacheKey(stem: String, part: String) -> String {
     let kept = (stem + part).unicodeScalars.filter {
       ("A"..."Z").contains($0) || ("a"..."z").contains($0) || ("0"..."9").contains($0)
@@ -98,6 +112,12 @@ public enum CoreMLPreparation {
     let gathers = try Patches.normalizeGatherIndices(&g, src)
     let gemms = try Patches.gemmWithTransposedWeight(&g, src)
     let tiles = try Patches.expandToTile(&g, src)
+    var norms = 0
+    var heads = 0
+    if layout == .aneWhole {
+      norms = try Patches.prescaleLayerNorm(&g)
+      heads = try Patches.headsInFP32(&g, src)
+    }
     model.graph = g
 
     var parts: [(name: String, model: Model)]
@@ -105,7 +125,7 @@ public enum CoreMLPreparation {
     case .split:
       let (vision, policy) = try Split.visionPolicy(model)
       parts = [("vision", vision), ("policy", policy)]
-    case .whole:
+    case .whole, .aneWhole:
       parts = [("model", model)]
     }
     for i in parts.indices {
@@ -146,20 +166,20 @@ public enum CoreMLPreparation {
     progress?(1.0)
     return Report(
       stripped: stripped, retypedImages: retyped, gathers: gathers, gemms: gemms, tiles: tiles,
-      parts: reported)
+      norms: norms, heads: heads, parts: reported)
   }
 }
 
 // MARK: writing a part
 
 /// Streams an encoded model to a file: owned bytes through a 1 MB buffer,
-/// weights straight from the mapped source, transposed weights a block at a
-/// time.
+/// weights straight from the mapped source, transposed and widened weights a
+/// block at a time.
 final class PartWriter {
   private static let bufferSize = 1 << 20
   /// Weights go to the file in pieces of this size, so progress moves.
   private static let chunkSize = 8 << 20
-  /// A transposed weight is produced this many bytes at a time, at most.
+  /// A transposed or widened weight is produced this many bytes at a time, at most.
   private static let blockSize = 4 << 20
 
   private let handle: FileHandle
@@ -184,6 +204,7 @@ final class PartWriter {
         case .bytes(let b): try b.withUnsafeBytes { try writer.write($0) }
         case .source(let r): try writer.write(src.slice(r))
         case .transposed(let t): try writer.transpose(t, src)
+        case .widened(let w): try writer.widen(w, src)
         }
       }
       try writer.flush()
@@ -225,23 +246,24 @@ final class PartWriter {
     onWrite(written)
   }
 
-  private func transpose(_ t: Transpose, _ src: Source) throws {
+  /// Each produced band goes to `sink`: the file, or the widening.
+  private func transpose(_ t: Transpose, _ src: Source, sink: ((UnsafeRawBufferPointer) throws -> Void)? = nil) throws {
     switch t.elements {
     case .source(let r):
-      try transpose(src.slice(r), t)
+      try transpose(src.slice(r), t, sink: sink)
     case .owned(let bytes):
-      try bytes.withUnsafeBytes { try transpose($0, t) }
+      try bytes.withUnsafeBytes { try transpose($0, t, sink: sink) }
     case .typed(let tensor):
       // Only this one weight is decoded, and it goes when this returns.
       let bytes = try Elements.littleEndian(tensor, src)
-      try bytes.withUnsafeBytes { try transpose($0, t) }
+      try bytes.withUnsafeBytes { try transpose($0, t, sink: sink) }
     }
   }
 
   /// Writes the [cols, rows] transpose of a row-major [rows, cols] matrix, a
   /// block of output rows at a time. Each block reads a narrow column band
   /// of every source row, so the reads stay sequential within a row.
-  private func transpose(_ elements: UnsafeRawBufferPointer, _ t: Transpose) throws {
+  private func transpose(_ elements: UnsafeRawBufferPointer, _ t: Transpose, sink: ((UnsafeRawBufferPointer) throws -> Void)?) throws {
     let rows = t.rows
     let cols = t.cols
     let size = t.elementSize
@@ -271,11 +293,72 @@ final class PartWriter {
           }
         }
         let n = (j1 - j0) * rowBytes
+        let band = UnsafeRawBufferPointer(start: to, count: n)
+        if let sink {
+          try sink(band)
+        } else {
+          try handle.write(contentsOf: band)
+          written += n
+          onWrite(written)
+        }
+        j0 = j1
+      }
+    }
+  }
+
+  private func widen(_ w: Widen, _ src: Source) throws {
+    switch w.elements {
+    case .source(let r):
+      try widen(src.slice(r), w.sourceByteCount)
+    case .owned(let bytes):
+      try bytes.withUnsafeBytes { try widen($0, w.sourceByteCount) }
+    case .typed(let tensor):
+      let bytes = try Elements.littleEndian(tensor, src)
+      try bytes.withUnsafeBytes { try widen($0, w.sourceByteCount) }
+    case .transposed(let t):
+      guard t.byteCount == w.sourceByteCount, t.elementSize == 2 else {
+        throw OnnxError("a weight has \(t.byteCount) bytes where its fp32 copy expects \(w.sourceByteCount)")
+      }
+      try flush()
+      try transpose(t, src) { band in try self.widen(band, band.count) }
+    }
+  }
+
+  /// Writes the fp32 of `expected` bytes of little-endian fp16, a band at a time.
+  private func widen(_ elements: UnsafeRawBufferPointer, _ expected: Int) throws {
+    guard elements.count == expected else {
+      throw OnnxError("a weight has \(elements.count) bytes where its fp32 copy expects \(expected)")
+    }
+    guard elements.count > 0, let from = elements.baseAddress else { return }
+    let count = elements.count / 2
+    let band = max(1, min(count, PartWriter.blockSize / 4))
+    var scratch = [UInt8](repeating: 0, count: band * 4)
+    try flush()
+    try scratch.withUnsafeMutableBytes { scratchBytes in
+      let to = scratchBytes.baseAddress!
+      var i0 = 0
+      while i0 < count {
+        let i1 = min(count, i0 + band)
+        PartWriter.widenBand(from + i0 * 2, to, i1 - i0)
+        let n = (i1 - i0) * 4
         try handle.write(contentsOf: UnsafeRawBufferPointer(start: to, count: n))
         written += n
         onWrite(written)
-        j0 = j1
+        i0 = i1
       }
+    }
+  }
+
+  /// `count` little-endian fp16 values at `from` as little-endian fp32 at
+  /// `to`: numpy's `astype(np.float32)`, which is exact. Subnormals widen to
+  /// normals, an infinity stays one, and a NaN keeps its payload shifted up
+  /// 13 bits with the quiet bit set, as numpy's cast does on Apple silicon.
+  @inline(__always)
+  static func widenBand(_ from: UnsafeRawPointer, _ to: UnsafeMutableRawPointer, _ count: Int) {
+    for i in 0..<count {
+      let bits = UInt16(littleEndian: from.loadUnaligned(fromByteOffset: i * 2, as: UInt16.self))
+      let value = Float(Float16(bitPattern: bits))
+      to.storeBytes(of: value.bitPattern.littleEndian, toByteOffset: i * 4, as: UInt32.self)
     }
   }
 

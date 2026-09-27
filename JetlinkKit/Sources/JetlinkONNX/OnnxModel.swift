@@ -159,18 +159,44 @@ struct Transpose {
   var byteCount: Int { rows * cols * elementSize }
 }
 
+/// An fp16 weight's fp32 copy (`numpy_helper.to_array(w).astype(np.float32)`
+/// in heads_in_fp32), produced a band at a time while it is written.
+struct Widen {
+  enum Elements {
+    /// Little-endian fp16 elements in the source: raw_data.
+    case source(Range<Int>)
+    /// Little-endian fp16 elements the preparation holds.
+    case owned([UInt8])
+    /// A weight in the typed fields (int32_data holds fp16 bit patterns),
+    /// decoded when it is written.
+    indirect case typed(Tensor)
+    /// A weight the Gemm rewrite transposes, widened band by band as the
+    /// transpose produces it.
+    indirect case transposed(Transpose)
+  }
+
+  let elements: Elements
+  /// How many fp16 values the source holds.
+  let count: Int
+
+  var sourceByteCount: Int { count * 2 }
+  var byteCount: Int { count * 4 }
+}
+
 /// A TensorProto. The header is decoded; the data stays where it is.
 struct Tensor {
   enum Data {
     case source(Range<Int>)
     case owned([UInt8])
     case transposed(Transpose)
+    case widened(Widen)
 
     var count: Int {
       switch self {
       case .source(let r): r.count
       case .owned(let b): b.count
       case .transposed(let t): t.byteCount
+      case .widened(let w): w.byteCount
       }
     }
   }
@@ -676,6 +702,7 @@ enum Encode {
       case .source(let r): out.source(r, src)
       case .owned(let b): out.bytes(b)
       case .transposed(let tr): out.transposed(tr)
+      case .widened(let w): out.widened(w)
       }
     }
     packed(10, t, &out, src)

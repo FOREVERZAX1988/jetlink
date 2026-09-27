@@ -33,6 +33,7 @@ enum Elements {
       case .source(let r): bytes = Array(src.slice(r))
       case .owned(let b): bytes = b
       case .transposed: throw OnnxError("initializer \(t.key) is being transposed and has no bytes yet")
+      case .widened: throw OnnxError("initializer \(t.key) is being widened to fp32 and has no bytes yet")
       }
     } else if let field = typedField(type), let ranges = t.typed[field] {
       bytes = []

@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// The graph rewrites of jetlink/onnx_patch.py on the `simplify` branch, on
 /// the decoded model. Each one follows its Python function step by step,
@@ -8,9 +9,11 @@ import Foundation
 ///
 /// There is no shape inferrer in Swift. Where the Python asks onnx's shape
 /// inferrer for a shape the file does not record, the rewrite that needed it
-/// is skipped here, as the Python skips it when the inferrer finds none. The
-/// driving models' exports record every tensor's shape, so on them nothing
-/// is skipped and the output is the Python's byte for byte.
+/// is skipped here, as the Python skips it when the inferrer finds none;
+/// where it asks for a type (the ane-whole passes), the preparation refuses,
+/// since the pass would otherwise go a different way. The driving models'
+/// exports record every tensor's shape and type, so on them nothing is
+/// skipped or refused and the output is the Python's byte for byte.
 enum Patches {
   /// Where the vision trunk starts (onnx_patch.IMG_INPUTS).
   static let imageInputs = ["img", "big_img", "new_img", "state_img_q"]
@@ -23,6 +26,19 @@ enum Patches {
   static let passthroughOps: Set<String> = ["Contiguous"]
   /// A weight smaller than this stays as it is (onnx_patch.BLOB_MIN_ELEMENTS).
   static let blobMinElements: Int64 = 1024
+  /// LayerNorm(x / k) is LayerNorm(x) with epsilon scaled by k^2
+  /// (onnx_patch.LAYERNORM_PRESCALE).
+  static let layerNormPrescale = 8
+  /// The ops heads_in_fp32 moves to fp32 (onnx_patch.HEAD_OPS).
+  static let headOps: Set<String> = [
+    "Gemm", "MatMul", "LayerNormalization", "Gelu", "Add", "Sub", "Mul", "Div", "Relu", "Sigmoid", "Tanh",
+  ]
+  /// Larger than that is the trunk itself (onnx_patch.HEAD_MAX_NODES).
+  static let headMaxNodes = 64
+
+  /// Where the Python's `log.warning` lines go: the cases a pass declines
+  /// and leaves the graph as it was.
+  private static let log = Logger(subsystem: "io.zoompilot.jetlink", category: "onnx")
 
   // MARK: strip_tinygrad_ops
 
@@ -347,6 +363,8 @@ enum Patches {
       elements = .owned(bytes)
     case .transposed:
       throw OnnxError("\(weight.key): a transposed weight cannot be transposed again")
+    case .widened:
+      throw OnnxError("\(weight.key): a widened weight cannot be transposed")
     case nil:
       // float_data and double_data, packed in one run, are already the raw
       // layout. Anything else is decoded when it is written.
@@ -371,6 +389,243 @@ enum Patches {
     OnnxError("initializer \(t.key) has \(have) bytes of data where its dims \(t.dims) need \(want)")
   }
 
+  // MARK: prescale_layernorm
+
+  /// Feeds every fp16 LayerNormalization on the policy side its input times
+  /// 1/k, one Mul per distinct input, and returns how many norms.
+  ///
+  /// Python looks a norm's input type up in the file and asks the shape
+  /// inferrer for one the file does not record; Swift has no inferrer, so a
+  /// policy norm whose input type is not recorded is an error rather than a
+  /// silent difference. The driving models' exports record every tensor's.
+  static func prescaleLayerNorm(_ g: inout Graph, k: Int = layerNormPrescale) throws -> Int {
+    let const = "__layernorm_prescale_\(k)"
+    let mask = try Split.visionMask(g)
+    var norms = Set<Int>()
+    for (i, node) in g.nodes.enumerated() where node.op == "LayerNormalization" && !mask[i] {
+      norms.insert(i)
+    }
+    var already = Set<String>()
+    for node in g.nodes where node.op == "Mul" && node.inputs.count == 2 && node.inputs[1] == const {
+      if let out = node.outputs.first { already.insert(out) }
+    }
+    let types = staticTypes(g)
+    var new: [Node] = []
+    new.reserveCapacity(g.nodes.count + norms.count)
+    var scaled: [String: String] = [:]
+    var done = 0
+    for (i, node) in g.nodes.enumerated() {
+      var node = node
+      if norms.contains(i), let x = node.inputs.first, !already.contains(x) {
+        guard let type = types[x] else {
+          throw OnnxError("the export records no type for \(x); this model cannot be prepared on iPhone")
+        }
+        if type == DataType.float16 {
+          if scaled[x] == nil {
+            scaled[x] = "\(x)__scaled"
+            new.append(Node(inputs: [x, const], outputs: ["\(x)__scaled"], name: "\(x)__prescale", opType: "Mul"))
+          }
+          node.inputs[0] = scaled[x]!
+          done += 1
+        }
+      }
+      new.append(node)
+    }
+    if done > 0 {
+      // np.float16(1 / k), a scalar: no dims, the two bytes as raw_data.
+      let bits = Float16(1 / Float(k)).bitPattern.littleEndian
+      g.initializers.append(
+        Tensor(
+          name: const, dims: [], dataType: DataType.float16,
+          raw: .owned([UInt8(truncatingIfNeeded: bits), UInt8(truncatingIfNeeded: bits >> 8)])))
+      g.nodes = new
+    }
+    return done
+  }
+
+  // MARK: vision_heads
+
+  /// The indices, in graph order, of the heads that end the vision trunk:
+  /// grown backwards to a fixed point from the Concats that make a graph
+  /// output. Empty when there is no such Concat or the set would exceed
+  /// headMaxNodes.
+  static func visionHeads(_ g: Graph) throws -> [Int] {
+    let mask = try Split.visionMask(g)
+    let outputs = Set(g.outputs.map(\.key))
+    var ends = Set<Int>()
+    for (i, n) in g.nodes.enumerated() where n.op == "Concat" && n.outputs.contains(where: outputs.contains) {
+      ends.insert(i)
+    }
+    guard !ends.isEmpty else { return [] }
+    var readers: [String: Set<Int>] = [:]
+    for (i, n) in g.nodes.enumerated() {
+      for x in n.inputs {
+        readers[x, default: []].insert(i)
+      }
+    }
+    var region = Set<Int>()
+    var grew = true
+    while grew {
+      grew = false
+      for i in g.nodes.indices.reversed() {
+        let n = g.nodes[i]
+        if region.contains(i) || !mask[i] || !headOps.contains(n.op) || n.outputs.contains(where: outputs.contains) {
+          continue
+        }
+        let allowed = region.union(ends)
+        let joins = n.outputs.allSatisfy { o in
+          guard let r = readers[o], !r.isEmpty else { return false }
+          return r.isSubset(of: allowed)
+        }
+        if joins {
+          region.insert(i)
+          grew = true
+        }
+      }
+    }
+    return region.count <= headMaxNodes ? region.sorted() : []
+  }
+
+  // MARK: heads_in_fp32
+
+  /// Runs `visionHeads` in fp32: a Cast up before the first head reads each
+  /// entry, fp32 copies of the fp16 head weights, a Cast down after each
+  /// exit. Returns how many nodes moved, 0 with a warning when it found no
+  /// heads it could move.
+  ///
+  /// The fp32 copies are not made here: each is a recipe over the fp16
+  /// bytes, carried out band by band when the part is written.
+  static func headsInFP32(_ g: inout Graph, _ src: Source) throws -> Int {
+    let index = try visionHeads(g)
+    guard !index.isEmpty else {
+      log.warning(
+        "heads_in_fp32: no heads found after the vision trunk (no output Concat they feed, or more than \(headMaxNodes) nodes); the whole graph stays fp16"
+      )
+      return 0
+    }
+    let heads = Set(index)
+    let initializers = lastIndexByName(g.initializers)
+    var produced = Set<String>()
+    for i in index {
+      produced.formUnion(g.nodes[i].outputs)
+    }
+    var entries = Set<String>()
+    var weights = Set<String>()
+    for i in index {
+      for x in g.nodes[i].inputs where !x.isEmpty {
+        if initializers[x] != nil {
+          weights.insert(x)
+        } else if !produced.contains(x) {
+          entries.insert(x)
+        }
+      }
+    }
+    let types = staticTypes(g)
+    // Python asks the shape inferrer for an entry the file does not type;
+    // Swift has none (see prescaleLayerNorm).
+    if let untyped = entries.filter({ types[$0] == nil }).sorted(by: pyLess).first {
+      throw OnnxError("the export records no type for \(untyped); this model cannot be prepared on iPhone")
+    }
+    let notFP16 = entries.filter { types[$0] != DataType.float16 }.sorted(by: pyLess)
+    guard notFP16.isEmpty else {
+      log.warning("heads_in_fp32: a head reads \(pyStrList(notFP16)), which is not fp16; the whole graph stays fp16")
+      return 0
+    }
+    let odd = weights.filter {
+      let type = g.initializers[initializers[$0]!].elementType
+      return type != DataType.float16 && type != DataType.float
+    }.sorted(by: pyLess)
+    guard odd.isEmpty else {
+      log.warning("heads_in_fp32: head weights \(pyStrList(odd)) are neither fp16 nor fp32; the whole graph stays fp16")
+      return 0
+    }
+    var readOutside = Set<String>()
+    for (j, n) in g.nodes.enumerated() where !heads.contains(j) {
+      readOutside.formUnion(n.inputs)
+    }
+    let exits = produced.intersection(readOutside)
+    var wide: [String: String] = [:]
+    for w in weights.sorted(by: pyLess) {
+      let weight = g.initializers[initializers[w]!]
+      guard weight.elementType == DataType.float16 else { continue }
+      wide[w] = "\(w)__fp32"
+      if initializers[wide[w]!] == nil {
+        g.initializers.append(try widenedTensor(weight, wide[w]!, src))
+      }
+    }
+    var new: [Node] = []
+    new.reserveCapacity(g.nodes.count + entries.count + exits.count)
+    var cast = Set<String>()
+    for (j, node) in g.nodes.enumerated() {
+      guard heads.contains(j) else {
+        new.append(node)
+        continue
+      }
+      var n = node
+      for i in n.inputs.indices {
+        let x = n.inputs[i]
+        if entries.contains(x) {
+          if !cast.contains(x) {
+            cast.insert(x)
+            new.append(
+              Node(
+                inputs: [x], outputs: ["\(x)__fp32"], name: "\(x)__cast_fp32", opType: "Cast",
+                attributes: [.int("to", Int64(DataType.float))]))
+          }
+          n.inputs[i] = "\(x)__fp32"
+        } else if exits.contains(x) {
+          n.inputs[i] = "\(x)__fp32"
+        } else if let w = wide[x] {
+          n.inputs[i] = w
+        }
+      }
+      let back = n.outputs.filter(exits.contains)
+      for i in n.outputs.indices where exits.contains(n.outputs[i]) {
+        n.outputs[i] = "\(n.outputs[i])__fp32"
+      }
+      new.append(n)
+      for o in back {
+        new.append(
+          Node(
+            inputs: ["\(o)__fp32"], outputs: [o], name: "\(o)__cast_fp16", opType: "Cast",
+            attributes: [.int("to", Int64(DataType.float16))]))
+      }
+    }
+    g.nodes = new
+    // The fp16 originals, unless something outside the heads reads them too.
+    g.initializers.removeAll { wide[$0.key] != nil && !readOutside.contains($0.key) }
+    // What the heads compute inside is fp32 now; the value infos said fp16.
+    let inside = produced.subtracting(exits)
+    g.valueInfo.removeAll { inside.contains($0.key) }
+    return index.count
+  }
+
+  /// `numpy_helper.from_array(numpy_helper.to_array(w).astype(np.float32),
+  /// name)`: the same dims, FLOAT, the data as raw_data.
+  private static func widenedTensor(_ weight: Tensor, _ name: String, _ src: Source) throws -> Tensor {
+    let count = weight.elementCount
+    let expected = count * 2
+    let elements: Widen.Elements
+    switch weight.raw {
+    case .source(let r):
+      guard r.count == expected else { throw sizeMismatch(weight, r.count, expected) }
+      elements = .source(r)
+    case .owned(let bytes):
+      guard bytes.count == expected else { throw sizeMismatch(weight, bytes.count, expected) }
+      elements = .owned(bytes)
+    case .transposed(let t):
+      guard t.byteCount == expected, t.elementSize == 2 else { throw sizeMismatch(weight, t.byteCount, expected) }
+      elements = .transposed(t)
+    case .widened:
+      throw OnnxError("\(weight.key): a widened weight cannot be widened again")
+    case nil:
+      let have = try Elements.typedCount(weight, src)
+      guard have == count else { throw sizeMismatch(weight, have * 2, expected) }
+      elements = .typed(weight)
+    }
+    return Tensor(name: name, dims: weight.dims, dataType: DataType.float, raw: .widened(Widen(elements: elements, count: count)))
+  }
+
   // MARK: helpers
 
   /// Static shapes from what the file carries (_static_dims), inputs first,
@@ -384,6 +639,16 @@ enum Patches {
       }
     }
     return dims
+  }
+
+  /// Element types from what the file carries (_static_types), in the same
+  /// order as `staticDims`. A value info without an element type is absent.
+  static func staticTypes(_ g: Graph) -> [String: Int32] {
+    var types: [String: Int32] = [:]
+    for vi in g.inputs + g.valueInfo + g.outputs where vi.elemType != 0 {
+      types[vi.key] = vi.elemType
+    }
+    return types
   }
 
   /// `{t.name: t for t in g.initializer}` as positions: a repeated name maps
@@ -458,6 +723,11 @@ func pyList(_ values: [Int64], _ dims: [Int64]) -> String {
     return pyList(Array(values[(i * stride)..<((i + 1) * stride)]), rest)
   }
   return "[" + items.joined(separator: ", ") + "]"
+}
+
+/// Python's print of a list of str.
+func pyStrList(_ values: [String]) -> String {
+  "[" + values.map(pyRepr).joined(separator: ", ") + "]"
 }
 
 /// Python's sort order for str: by code point, with no normalisation.

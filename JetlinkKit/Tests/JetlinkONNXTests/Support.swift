@@ -48,6 +48,7 @@ func flatten(_ e: Encoded, _ src: Source) -> [UInt8] {
     case .bytes(let b): out += b
     case .source(let r): out += Array(src.slice(r))
     case .transposed: fatalError("no transposes in these tests")
+    case .widened: fatalError("no widenings in these tests")
     }
   }
   return out

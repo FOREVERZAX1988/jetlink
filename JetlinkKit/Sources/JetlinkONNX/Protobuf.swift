@@ -250,14 +250,15 @@ struct FieldCursor {
 
 /// A message being encoded, held as its bytes except for the weights. Small
 /// fields are copied into owned bytes; a weight stays a range of the source,
-/// and a transposed weight stays a recipe, until the writer streams it. Its
-/// size is always known, so a parent can write the length prefix before the
-/// content without holding the content in memory.
+/// and a transposed or widened weight stays a recipe, until the writer streams
+/// it. Its size is always known, so a parent can write the length prefix
+/// before the content without holding the content in memory.
 struct Encoded {
   enum Piece {
     case bytes([UInt8])
     case source(Range<Int>)
     case transposed(Transpose)
+    case widened(Widen)
   }
 
   /// Ranges of the source shorter than this are copied rather than referenced:
@@ -330,6 +331,12 @@ struct Encoded {
     flush()
     pieces.append(.transposed(t))
     count += t.byteCount
+  }
+
+  mutating func widened(_ w: Widen) {
+    flush()
+    pieces.append(.widened(w))
+    count += w.byteCount
   }
 
   /// A nested message: its tag, its length, and then it.
