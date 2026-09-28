@@ -112,13 +112,6 @@ PLAIN_SESSION = (('model', None),)
 # number from JetlinkKit's Pinned.swift, so one Mac cache serves both servers.
 PREPARE_VERSION = 5
 
-# The onnxruntime release the Apple builds run: the Mac's Python server pins it
-# (macos/Python/requirements.txt) and the Swift package links its xcframework
-# (JetlinkKit/Package.swift). It is part of every artifact's tag, so the two
-# servers share a cache only while they agree; tests/test_conformance.py holds
-# both files to it.
-APPLE_ONNXRUNTIME = '1.29.0'
-
 # The last resort for the compile stage's fraction: only a first build of a
 # model, whose sidecar records nothing yet, and only if the compile writes
 # nothing the walk below can see. The big model's compile measured 3.9 s on an

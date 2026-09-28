@@ -19,8 +19,9 @@ to that module's state.
 
 Two kinds of file depend on the tools as well as on this code, and are
 compared only where the tools match what made them: anything onnx serialises
-or shape-infers (FIXTURE_ONNX), and onnxruntime's CPU outputs, which are
-compared on Apple arm64 under the onnxruntime the Swift package links.
+or shape-infers, and onnxruntime's CPU outputs, which are compared on Apple
+arm64 under the onnxruntime the Swift package links. Both releases come from
+JetlinkKit/Scripts/fixture-pins.txt.
 """
 from __future__ import annotations
 
@@ -37,8 +38,6 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / 'JetlinkKit' / 'Scripts'
-# the onnx release the committed ONNX fixtures were written with
-FIXTURE_ONNX = '1.22.0'
 
 
 def _script(name: str):
@@ -55,7 +54,13 @@ CONFORMANCE_SCRIPT = _script('make_conformance_fixtures')
 CONFORMANCE = CONFORMANCE_SCRIPT.SERVER
 CONTROL = CONFORMANCE_SCRIPT.CONTROL
 REGISTRY = CONFORMANCE_SCRIPT.REGISTRY
-PINNED = _script('make_pins').OUT.relative_to(ROOT)
+PINS_SCRIPT = _script('make_pins')
+PINNED = PINS_SCRIPT.OUT.relative_to(ROOT)
+# the releases the committed fixtures were made with
+FIXTURE_PINS = PINS_SCRIPT.FIXTURE_PINS.relative_to(ROOT)
+PINS = PINS_SCRIPT.fixture_pins()
+FIXTURE_ONNX = PINS['onnx']
+APPLE_ONNXRUNTIME = PINS['onnxruntime']
 # Not imported: those two load onnxruntime, which this process must not
 # (test_ort_backend checks).
 SERVER_FIXTURES = Path('JetlinkKit/Tests/JetlinkServerTests/Fixtures')
@@ -99,7 +104,6 @@ def _onnx_matches() -> bool:
 
 def _apple_runtime() -> str | None:
   """Why golden onnxruntime outputs cannot be compared here, or None if they can."""
-  from jetlink.server.backends.ort import APPLE_ONNXRUNTIME
   if sys.platform != 'darwin' or platform.machine() != 'arm64':
     return 'onnxruntime CPU outputs are pinned on Apple arm64'
   if _version('onnxruntime') != APPLE_ONNXRUNTIME:
@@ -115,7 +119,6 @@ def test_pinned_swift_is_current(tmp_path):
 
 
 def test_the_swift_package_links_the_pinned_onnxruntime():
-  from jetlink.server.backends.ort import APPLE_ONNXRUNTIME
   package = (ROOT / 'JetlinkKit' / 'Package.swift').read_text()
   assert f'pod-archive-onnxruntime-c-{APPLE_ONNXRUNTIME}.zip' in package
   requirements = ROOT / 'macos' / 'Python' / 'requirements.txt'
@@ -124,16 +127,11 @@ def test_the_swift_package_links_the_pinned_onnxruntime():
 
 
 def test_ci_regenerates_with_the_releases_the_fixtures_record():
-  """The conformance-fixtures job installs FIXTURE_PINS, which must name the
-  onnx and onnxruntime these tests compare under, or it regenerates with
-  something else and fails for no reason, or passes for a wrong one."""
-  from jetlink.server.backends.ort import APPLE_ONNXRUNTIME
+  """CI's macOS test job installs the pins file, or it regenerates with
+  something else and fails for no reason, or skips what it should compare."""
   ci = (ROOT / '.github' / 'workflows' / 'ci.yml').read_text()
-  found = re.search(r'^\s*FIXTURE_PINS:\s*(.+)$', ci, re.M)
-  assert found, '.github/workflows/ci.yml has no FIXTURE_PINS'
-  pins = dict(p.split('==', 1) for p in found.group(1).split())
-  assert pins.get('onnx') == FIXTURE_ONNX
-  assert pins.get('onnxruntime') == APPLE_ONNXRUNTIME
+  assert f'-r {FIXTURE_PINS}' in ci, f'.github/workflows/ci.yml does not install {FIXTURE_PINS}'
+  assert {'numpy', 'onnx', 'onnxruntime', 'protobuf'} <= set(PINS)
 
 
 @pytest.mark.parametrize('part', list(CONFORMANCE_SCRIPT.PARTS))

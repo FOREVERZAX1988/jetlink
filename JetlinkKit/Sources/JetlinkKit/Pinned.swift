@@ -93,6 +93,6 @@ public enum Pinned {
   public static let controlProtocol: Int = 1
   /// jetlink.server.backends.ort.PREPARE_VERSION
   public static let prepareVersion: Int = 5
-  /// jetlink.server.backends.ort.APPLE_ONNXRUNTIME
+  /// JetlinkKit/Scripts/fixture-pins.txt: onnxruntime
   public static let onnxruntimeVersion: String = "1.29.0"
 }

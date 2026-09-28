@@ -26,10 +26,23 @@ ROOT = Path(__file__).resolve().parents[2]
 # installed: a venv's editable install can point at another checkout.
 sys.path.insert(0, str(ROOT))
 OUT = ROOT / 'JetlinkKit' / 'Sources' / 'JetlinkKit' / 'Pinned.swift'
+# The releases the fixtures were made with, onnxruntime's among them
+FIXTURE_PINS = Path(__file__).resolve().parent / 'fixture-pins.txt'
+
+
+def fixture_pins(path: Path = FIXTURE_PINS) -> dict[str, str]:
+  """{package: version} from the pins file's `name==version` lines."""
+  pins = {}
+  for line in path.read_text().splitlines():
+    line = line.split('#', 1)[0].strip()
+    if line:
+      name, _, version = line.partition('==')
+      pins[name.strip()] = version.strip()
+  return pins
 
 
 def values() -> list[tuple[str, str, str, str]]:
-  """(swift name, swift type, swift literal, where the Python keeps it)."""
+  """(swift name, swift type, swift literal, where it is kept)."""
   from jetlink import protocol as P
   from jetlink.server import control
   from jetlink.server import session
@@ -46,36 +59,37 @@ def values() -> list[tuple[str, str, str, str]]:
     return f'[\n{rows}  ]'
 
   return [
-    ('magic', 'UInt32', hex32(P.MAGIC), 'protocol.MAGIC'),
-    ('protocolVersion', 'UInt16', str(P.VERSION), 'protocol.VERSION'),
-    ('headerSize', 'Int', str(P.HEADER_SIZE), 'protocol.HEADER_SIZE'),
-    ('packetMultiple', 'Int', str(P.PACKET_MULTIPLE), 'protocol.PACKET_MULTIPLE'),
-    ('gadgetTxAlign', 'Int', str(P.GADGET_TX_ALIGN), 'protocol.GADGET_TX_ALIGN'),
-    ('inferReqSize', 'Int', str(P.INFER_REQ_SIZE), 'protocol.INFER_REQ_SIZE'),
-    ('inferRespSize', 'Int', str(P.INFER_RESP_SIZE), 'protocol.INFER_RESP_SIZE'),
-    ('maxMessage', 'Int', str(base.MAX_MESSAGE), 'transport.base.MAX_MESSAGE'),
-    ('defaultPort', 'UInt16', str(tcp.DEFAULT_PORT), 'transport.tcp.DEFAULT_PORT'),
-    ('messageTypes', '[(name: String, value: UInt16)]', pairs(P.Msg), 'protocol.Msg'),
-    ('flags', '[(name: String, value: UInt32)]', pairs(P.Flag), 'protocol.Flag'),
-    ('statuses', '[(name: String, value: UInt32)]', pairs(P.Status), 'protocol.Status'),
-    ('usbVendorID', 'UInt16', f'0x{usbbulk.JETLINK_VID:04X}', 'transport.usbbulk.JETLINK_VID'),
-    ('usbProductID', 'UInt16', f'0x{usbbulk.JETLINK_PID:04X}', 'transport.usbbulk.JETLINK_PID'),
+    ('magic', 'UInt32', hex32(P.MAGIC), 'jetlink.protocol.MAGIC'),
+    ('protocolVersion', 'UInt16', str(P.VERSION), 'jetlink.protocol.VERSION'),
+    ('headerSize', 'Int', str(P.HEADER_SIZE), 'jetlink.protocol.HEADER_SIZE'),
+    ('packetMultiple', 'Int', str(P.PACKET_MULTIPLE), 'jetlink.protocol.PACKET_MULTIPLE'),
+    ('gadgetTxAlign', 'Int', str(P.GADGET_TX_ALIGN), 'jetlink.protocol.GADGET_TX_ALIGN'),
+    ('inferReqSize', 'Int', str(P.INFER_REQ_SIZE), 'jetlink.protocol.INFER_REQ_SIZE'),
+    ('inferRespSize', 'Int', str(P.INFER_RESP_SIZE), 'jetlink.protocol.INFER_RESP_SIZE'),
+    ('maxMessage', 'Int', str(base.MAX_MESSAGE), 'jetlink.transport.base.MAX_MESSAGE'),
+    ('defaultPort', 'UInt16', str(tcp.DEFAULT_PORT), 'jetlink.transport.tcp.DEFAULT_PORT'),
+    ('messageTypes', '[(name: String, value: UInt16)]', pairs(P.Msg), 'jetlink.protocol.Msg'),
+    ('flags', '[(name: String, value: UInt32)]', pairs(P.Flag), 'jetlink.protocol.Flag'),
+    ('statuses', '[(name: String, value: UInt32)]', pairs(P.Status), 'jetlink.protocol.Status'),
+    ('usbVendorID', 'UInt16', f'0x{usbbulk.JETLINK_VID:04X}', 'jetlink.transport.usbbulk.JETLINK_VID'),
+    ('usbProductID', 'UInt16', f'0x{usbbulk.JETLINK_PID:04X}', 'jetlink.transport.usbbulk.JETLINK_PID'),
     ('usbVendorClass', '[UInt8]', '[' + ', '.join(f'0x{v:02X}' for v in usbbulk.VENDOR_CLASS) + ']',
-     'transport.usbbulk.VENDOR_CLASS'),
-    ('usbMaxPacket', 'Int', str(usbbulk.MAX_PACKET), 'transport.usbbulk.MAX_PACKET'),
-    ('linkMedia', '[String]', '[' + ', '.join(f'"{m}"' for m in base.LINK_MEDIA) + ']', 'transport.base.LINK_MEDIA'),
+     'jetlink.transport.usbbulk.VENDOR_CLASS'),
+    ('usbMaxPacket', 'Int', str(usbbulk.MAX_PACKET), 'jetlink.transport.usbbulk.MAX_PACKET'),
+    ('linkMedia', '[String]', '[' + ', '.join(f'"{m}"' for m in base.LINK_MEDIA) + ']', 'jetlink.transport.base.LINK_MEDIA'),
     ('usbSpeedMedia', '[String: String]',
-     '[\n' + ''.join(f'    "{k}": "{v}",\n' for k, v in base.USB_MEDIA.items()) + '  ]', 'transport.base.USB_MEDIA'),
-    ('cableAddress', 'String', f'"{tcp.CABLE_ADDRESS}"', 'transport.tcp.CABLE_ADDRESS'),
-    ('usbReadChunk', 'Int', str(usbbulk.READ_CHUNK), 'transport.usbbulk.READ_CHUNK'),
-    ('modelRunFrequency', 'Int', str(MODEL_RUN_FREQ), 'spec.MODEL_RUN_FREQ'),
-    ('modelContextFrequency', 'Int', str(MODEL_CONTEXT_FREQ), 'spec.MODEL_CONTEXT_FREQ'),
-    ('defaultFrameSkip', 'Int', str(DEFAULT_FRAME_SKIP), 'spec.DEFAULT_FRAME_SKIP'),
-    ('uploadChunk', 'Int', str(CHUNK), 'spec.CHUNK'),
-    ('slowFrameUs', 'Int', str(session.SLOW_FRAME_US), 'server.session.SLOW_FRAME_US'),
-    ('controlProtocol', 'Int', str(control.PROTOCOL), 'server.control.PROTOCOL'),
-    ('prepareVersion', 'Int', str(ort.PREPARE_VERSION), 'server.backends.ort.PREPARE_VERSION'),
-    ('onnxruntimeVersion', 'String', f'"{ort.APPLE_ONNXRUNTIME}"', 'server.backends.ort.APPLE_ONNXRUNTIME'),
+     '[\n' + ''.join(f'    "{k}": "{v}",\n' for k, v in base.USB_MEDIA.items()) + '  ]', 'jetlink.transport.base.USB_MEDIA'),
+    ('cableAddress', 'String', f'"{tcp.CABLE_ADDRESS}"', 'jetlink.transport.tcp.CABLE_ADDRESS'),
+    ('usbReadChunk', 'Int', str(usbbulk.READ_CHUNK), 'jetlink.transport.usbbulk.READ_CHUNK'),
+    ('modelRunFrequency', 'Int', str(MODEL_RUN_FREQ), 'jetlink.spec.MODEL_RUN_FREQ'),
+    ('modelContextFrequency', 'Int', str(MODEL_CONTEXT_FREQ), 'jetlink.spec.MODEL_CONTEXT_FREQ'),
+    ('defaultFrameSkip', 'Int', str(DEFAULT_FRAME_SKIP), 'jetlink.spec.DEFAULT_FRAME_SKIP'),
+    ('uploadChunk', 'Int', str(CHUNK), 'jetlink.spec.CHUNK'),
+    ('slowFrameUs', 'Int', str(session.SLOW_FRAME_US), 'jetlink.server.session.SLOW_FRAME_US'),
+    ('controlProtocol', 'Int', str(control.PROTOCOL), 'jetlink.server.control.PROTOCOL'),
+    ('prepareVersion', 'Int', str(ort.PREPARE_VERSION), 'jetlink.server.backends.ort.PREPARE_VERSION'),
+    ('onnxruntimeVersion', 'String', f'"{fixture_pins()["onnxruntime"]}"',
+     f'{FIXTURE_PINS.relative_to(ROOT)}: onnxruntime'),
   ]
 
 
@@ -91,7 +105,7 @@ def render() -> str:
     'public enum Pinned {',
   ]
   for name, kind, literal, source in values():
-    lines.append(f'  /// jetlink.{source}')
+    lines.append(f'  /// {source}')
     lines.append(f'  public static let {name}: {kind} = {literal}')
   lines.append('}')
   return '\n'.join(lines) + '\n'

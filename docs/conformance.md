@@ -40,16 +40,17 @@ Swift once rounded halves away from zero and wrote 1.13 where Python wrote
   the pinned onnxruntime, and that CI regenerates with the pinned releases.
 - `swift test --package-path JetlinkKit` reads the fixtures on macOS (the
   `swift` CI job) and on Linux (the `swift-linux` job, below).
-- The `conformance-fixtures` CI job runs that test on an Apple arm64 runner
+- The `python-test-macos` CI job runs that test on an Apple arm64 runner
   with the pinned releases installed, so none of its comparisons skip.
 
 Two kinds of file depend on tools as well as on this code. onnx serialises
 the graphs, so those files are compared only under the onnx release that made
-them (`FIXTURE_ONNX` in `tests/test_conformance.py`, 1.22.0). onnxruntime's
-CPU provider computes the golden outputs, so those are compared only on Apple
-arm64 under the release the Swift package links (`APPLE_ONNXRUNTIME` in the
-ort backend, 1.29.0). Elsewhere those comparisons skip; the
-`conformance-fixtures` job installs exactly those releases, so it never skips.
+them. onnxruntime's CPU provider computes the golden outputs, so those are
+compared only on Apple arm64 under the release the Swift package links. Both
+releases, with the numpy and protobuf they ran with, are in one file,
+`JetlinkKit/Scripts/fixture-pins.txt`, which the test, `make_pins.py` and CI
+all read. Elsewhere those comparisons skip; `python-test-macos` installs
+exactly those releases, so it never skips.
 
 Real models are too big for fixtures. `JetlinkKit/Scripts/check_onnx_prep.py`
 compares the two preparations on any ONNX, in any layout
@@ -71,8 +72,8 @@ byte-identical in the ane-whole layout.
    ```
 
    The venv needs the pinned onnx, onnxruntime, numpy and protobuf
-   (`FIXTURE_PINS` in `.github/workflows/ci.yml`) for the ONNX and output
-   files to come out the same.
+   (`pip install -r JetlinkKit/Scripts/fixture-pins.txt`) for the ONNX and
+   output files to come out the same.
 3. Change the Swift until `swift test --package-path JetlinkKit` passes.
 4. Commit the Python, the fixtures and the Swift together.
 
