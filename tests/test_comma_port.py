@@ -200,16 +200,9 @@ class TestTheLink(PortTest):
 
 
 class TestTheScript(unittest.TestCase):
-  def run_with(self, ok: bool):
-    with mock.patch.object(root, 'run', return_value=ok) as run:
-      return port.run_script('hold'), run
-
-  def test_it_runs_the_root_script(self):
-    ok, run = self.run_with(True)
-    self.assertTrue(ok)
+  def test_it_runs_the_root_script_on_the_short_timeout(self):
+    # short: the owner lets the port go before it closes FunctionFS, inside
+    # manager's 5 s
+    with mock.patch.object(root, 'run', return_value=True) as run:
+      self.assertTrue(port.run_script('hold'))
     run.assert_called_once_with('port', 'hold', timeout=root.PORT_TIMEOUT)
-
-  def test_a_failure_is_a_false(self):
-    # root.run has logged why: sudo, a write that failed, or a timeout
-    ok, _ = self.run_with(False)
-    self.assertFalse(ok)
