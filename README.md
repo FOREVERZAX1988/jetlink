@@ -30,11 +30,7 @@ powered and awake.
 
 ### Jetson
 
-Follow the **[Jetson setup guide](docs/jetson.md)**.
-
-Recommended: **always-on 12 V power with deep sleep**. The Jetson sleeps with
-the ignition off; the comma wakes it when you start the car. If your socket
-turns off with the ignition, choose **Switched** in the installer.
+Follow the **[Jetson setup guide](docs/jetson.md)** (power, JetPack, installer).
 
 <details>
 <summary>Watch the installer</summary>
@@ -60,7 +56,6 @@ Takes 10–30 minutes. Help: [Linux setup](docs/platforms.md#linux-nvidia-gpu).
 <a href="docs/images/mac-demo.mp4"><img src="docs/images/mac-demo.webp" width="100%" alt="Jetlink for Mac: Use Model downloads and prepares a model, the comma connects over USB, and Status shows each frame against the 50 ms budget"></a>
 
 Needs Apple silicon and macOS 15 or later (16 GB memory recommended).
-Dependencies are included.
 
 1. Download the Mac DMG from [Releases](https://github.com/zoompilot/jetlink/releases).
 2. Drag **Jetlink** to **Applications** and open it.
@@ -96,10 +91,8 @@ Only tested with a Mac standing in for the phone. You need:
 3. **Connect USB.** A USB 3 USB-C cable, or a USB-A to USB-C cable with a
    USB-C adapter. Jetson: use its USB-A port. Charge-only cables won't work.
 4. **Wait for green.** The home-button icon pulses while the model downloads
-   and prepares, then turns green. Stay offroad and online until then.
-
-First prepare of the default model: about 3 minutes on a Jetson, 20 seconds on
-an M1 Pro. Later loads are cached.
+   and prepares (first time: about 3 minutes on a Jetson, 20 seconds on an
+   M1 Pro). Stay offroad and online until it turns green.
 
 ## What to expect when driving
 

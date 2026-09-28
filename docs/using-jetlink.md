@@ -19,15 +19,13 @@ to the comma.
 
 ## What to expect when driving
 
-- The small model drives while the server starts. Jetson on switched power with
-  a cached engine: 65 to 96 seconds.
+- The small model drives while the server starts (switched-power Jetson with a
+  cached engine: 65 to 96 seconds).
 - The large model takes over only when nothing is steering: **at a stop with
   cruise off, or with lateral control off**. Until then the icon is dimmed and
   the comma says **Big Model Available** at every stop. With lateral control
   always on, disengaging alone is not enough.
 - **Big Model Ready** chime: it has taken over.
-- New model: the comma downloads it while offroad and online. While it
-  prepares, the small model drives and the comma shows progress.
 - **Big Model Lost** while engaged is a soft disable: take over. The small model
   drives; Jetlink reconnects and switches back at the next chance.
 
@@ -45,17 +43,13 @@ Adapter and installer choices: [power setup](transport.md#recommended-jetson-pow
 
 ## Choose a model
 
-Offroad and online, open **Settings > Models > Big Model**. Start with the
-default. The comma downloads your pick and sends it to the server. New models
-appear without a Jetlink update; use **Refresh Model List** if the list is
-empty or out of date.
-
-Jetson: prefer the 766 MB models. The 1.7 GB Lebowski leaves little margin in
-the 50 ms frame budget and needs swap to prepare. See
-[measurements](status.md#measured-performance).
-
-Optional: [download and prepare models ahead of time](models.md) over the
-server's internet connection.
+- Offroad and online, open **Settings > Models > Big Model**. Start with the
+  default.
+- The comma downloads your pick; the small model drives while it prepares.
+- List empty or out of date? Use **Refresh Model List**.
+- Jetson: prefer the 766 MB models; the 1.7 GB Lebowski leaves little margin
+  ([measurements](status.md#measured-performance)).
+- Optional: [prepare models ahead of time](models.md).
 
 ## Update or stop using Jetlink
 

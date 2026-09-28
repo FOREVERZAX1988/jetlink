@@ -19,7 +19,6 @@ Orin Nano Super 8 GB, TensorRT 10.3 FP16, USB 3, recorded-segment replay:
 | TGC v2, 766 MB | ~20 ms | 31.1 / 33.5 ms | 166 s |
 | Lebowski, 1757 MB | 36.2 ms | 46.3 / 49.5 ms | 290 s |
 
-* Full modeld includes image processing, transport, inference, and parsing.
 * The frame budget is 50 ms; Lebowski leaves little margin.
 * Sustained use at high temperatures is untested.
 
@@ -32,7 +31,5 @@ Mac numbers: [Mac performance](mac-performance.md).
 * Use separate power supplies for the comma and server. Voltage drops can
   reboot the server and drop the link.
 * Keep laptops powered, awake, and cooled.
-* Always-on power: the Jetson sleeps with the ignition off and the comma wakes
-  it when the car starts. See [power setup](transport.md#power-requirements).
-* Link over USB. TCP is for testing only: it has no client authentication
-  (trusted networks only), and Wi-Fi missed the frame budget.
+* Power and sleep details: [power setup](transport.md#power-requirements).
+* Link over USB. TCP is for testing only ([TCP](transport.md#tcp)).

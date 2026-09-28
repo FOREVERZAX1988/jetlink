@@ -24,8 +24,7 @@ Pick the installer option for your car's power socket:
 | Yes | **Always on** (recommended) | Jetson sleeps after a few minutes, using about **0.3 W** on 12 V. | The comma wakes it. |
 | No | **Switched** | Jetson loses power. | It boots; the large model takes about 1–2 minutes. |
 
-Not sure? If the socket turns off a few minutes after parking, choose
-**Switched**.
+Socket turns off a few minutes after parking? Choose **Switched**.
 
 **Battery protection** (installer question):
 
@@ -83,11 +82,7 @@ Answer the power questions as above. Takes 10–30 minutes; leave it running.
 Always-on power: leave both cables connected. The Jetson sleeps when parked and
 wakes when you start the car.
 
-Before driving, read [daily use](using-jetlink.md):
-
-- The small model drives until the large model is ready.
-- It switches **at a stop with cruise off, or with lateral control off**.
-- **Big Model Lost** while engaged: take over.
+Read [daily use](using-jetlink.md) before driving.
 
 <a id="troubleshooting"></a>
 
@@ -116,9 +111,9 @@ jetlink setup      # change power settings
 jetlink uninstall  # remove Jetlink
 ```
 
-When asking for help, include `jetlink status` output, the model name, the
-exact alert, and when it happened. Installer log:
-`/var/log/jetlink-install.log`. Save the server log with:
+Asking for help? Include `jetlink status` output, the model name, the exact
+alert, and when it happened. Installer log: `/var/log/jetlink-install.log`.
+Server log:
 
 ```bash
 sudo journalctl -u jetlink-server -b --no-pager > jetson.log
