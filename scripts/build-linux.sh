@@ -1,31 +1,37 @@
 #!/usr/bin/env bash
-# Builds jetlink for Linux: the TensorRT shim, its selftest, and the server
-# tarball. One entry point for CI, local containers and a build on a device.
+# Builds jetlink for Linux: the server tarball the installer takes, the
+# TensorRT shim and its selftest. One entry point for CI (plain ubuntu-22.04
+# and ubuntu-22.04-arm runners), local Docker or podman, and a device.
 #
-#   scripts/build-linux.sh [--container] <aarch64|x86_64> [step...]
+#   scripts/build-linux.sh [--release] [--container] <linux-aarch64|linux-x86_64> [step...]
 #
 # Steps, run in the order given (default: server):
 #   headers    fetch and unpack the flavor's pinned TensorRT + CUDA headers
 #   shim       compile CTrt/jl_trt.cpp against them, and check it links
 #              nothing of NVIDIA's (everything is dlopened at run time)
 #   selftest   link tools/jl_trt_selftest against the shim; run it on a GPU
-#   fake-test  build and run the fake shim's tests, and the selftest on it
-#   server     swift build -c release --static-swift-stdlib, then
-#              dist/jetlink-server-<version>-linux-<flavor>.tar.gz + .sha256
+#   fake-test  build the selftest against the fake shim and run it
+#   server     dist/jetlink-server-<version>-<flavor>.tar.gz and .sha256
 #
-# aarch64 is TensorRT 10 for the Jetson, compiled against 10.3 (JetPack 6.2's,
-# the oldest it runs on); x86_64 is TensorRT 11.3 for PCs. --container runs
-# the steps in a container of the flavor's platform (docker, else podman):
-# ubuntu:22.04 for the C and C++ steps, $JETLINK_SWIFT_IMAGE (swift:6.3-jammy)
-# for the server. Downloads are cached in $JETLINK_BUILD_CACHE, by default
-# ${XDG_CACHE_HOME:-~/.cache}/jetlink-build: NVIDIA's headers never enter the
-# repo. Objects go to build/linux-<flavor>, tarballs to dist/.
+# linux-aarch64 is TensorRT 10 for the Jetson, compiled against 10.3 (JetPack
+# 6.2's, the oldest it runs on); linux-x86_64 is TensorRT 11.3 for PCs.
+#
+# The version is jetlink/__init__.py's __version__ for a release (--release,
+# or HEAD tagged v<__version__>), else <__version__>-dev.<short sha>.
+#
+# A step runs where its tools are: `server` in $JETLINK_SWIFT_IMAGE
+# (swift:6.3-jammy) unless already inside it, the C and C++ steps in
+# ubuntu:22.04 unless this is a Linux host of the flavor's architecture.
+# --container sends every step but `headers` to a container. Downloads are
+# cached in $JETLINK_BUILD_CACHE, by default ${XDG_CACHE_HOME:-~/.cache}/jetlink-build:
+# NVIDIA's headers never enter the repo. Objects go to build/, tarballs to dist/.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 CACHE=${JETLINK_BUILD_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/jetlink-build}
 CTRT=$ROOT/JetlinkKit/Sources/CTrt
 SWIFT_IMAGE=${JETLINK_SWIFT_IMAGE:-swift:6.3-jammy}
+SWIFT_VERSION=6.3
 C_IMAGE=ubuntu:22.04
 
 die() {
@@ -34,7 +40,7 @@ die() {
 }
 
 usage() {
-  sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'
   exit 2
 }
 
@@ -79,6 +85,16 @@ sha256() {
   fi
 }
 
+fetch() {
+  if command -v curl >/dev/null; then
+    curl -fsSL --retry 3 -o "$2" "$1"
+  elif command -v wget >/dev/null; then
+    wget -q -O "$2" "$1"
+  else
+    python3 -c 'import sys, urllib.request; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])' "$1" "$2"
+  fi
+}
+
 # A deb's files into $2: dpkg-deb where there is one, else bsdtar (macOS),
 # which reads the ar archive a deb is.
 unpack_deb() {
@@ -89,13 +105,8 @@ unpack_deb() {
   fi
 }
 
-bundle_dir() {
-  echo "$CACHE/$BUNDLE"
-}
-
 step_headers() {
-  local dir stamp
-  dir=$(bundle_dir)
+  local dir=$CACHE/$BUNDLE stamp entry url want file
   stamp=$(printf '%s\n' "${DEBS[@]}")
   if [[ -f $dir/.complete && $(cat "$dir/.complete") == "$stamp" ]]; then
     echo "headers: $dir/include"
@@ -104,14 +115,13 @@ step_headers() {
   mkdir -p "$CACHE/debs"
   rm -rf "$dir" "$dir.tmp"
   mkdir -p "$dir.tmp" "$dir/include"
-  local entry url want file
   for entry in "${DEBS[@]}"; do
     url=${entry% *}
     want=${entry#* }
     file=$CACHE/debs/$(basename "$url")
     if [[ ! -f $file || $(sha256 "$file") != "$want" ]]; then
       echo "headers: fetching $(basename "$url")"
-      curl -fsSL --retry 3 -o "$file.part" "$url"
+      fetch "$url" "$file.part"
       mv "$file.part" "$file"
     fi
     [[ $(sha256 "$file") == "$want" ]] || die "$(basename "$url") does not match its pinned sha256"
@@ -130,24 +140,11 @@ step_headers() {
 
 # --- the shim -----------------------------------------------------------------------
 
-native_or_die() {
-  local arch
-  arch=$(uname -m)
-  [[ $arch == arm64 ]] && arch=aarch64
-  if [[ $arch != "$FLAVOR" && -z ${CXX:-} ]]; then
-    die "this is $arch: build $FLAVOR with --container, or set CXX and CC to a cross compiler"
-  fi
-  [[ $(uname -s) == Linux ]] || die "the shim builds on Linux; use --container"
-}
-
 step_shim() {
-  native_or_die
-  local out=$ROOT/build/linux-$FLAVOR inc
-  inc=$(bundle_dir)/include
-  [[ -f $(bundle_dir)/.complete ]] || step_headers
+  local out=$ROOT/build/linux-$FLAVOR inc=$CACHE/$BUNDLE/include cxx=${CXX:-g++}
+  [[ -f $CACHE/$BUNDLE/.complete ]] || step_headers
   mkdir -p "$out"
-  local cxx=${CXX:-g++}
-  echo "shim: $cxx $($cxx -dumpversion) against $(basename "$(bundle_dir)")"
+  echo "shim: $cxx $($cxx -dumpversion) against $BUNDLE"
   "$cxx" -std=c++17 -O2 -fPIC -Wall -Wextra -Werror -I"$CTRT/include" -isystem "$inc" \
     -c "$CTRT/jl_trt.cpp" -o "$out/jl_trt.o"
   # Everything of NVIDIA's comes through dlopen: a reference here would make
@@ -159,10 +156,8 @@ step_shim() {
 }
 
 step_selftest() {
-  native_or_die
-  local out=$ROOT/build/linux-$FLAVOR
+  local out=$ROOT/build/linux-$FLAVOR cc=${CC:-gcc} cxx=${CXX:-g++}
   [[ -f $out/jl_trt.o ]] || step_shim
-  local cc=${CC:-gcc} cxx=${CXX:-g++}
   "$cc" -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror -I"$CTRT/include" -c "$CTRT/tools/jl_trt_selftest.c" \
     -o "$out/jl_trt_selftest.o"
   "$cxx" "$out/jl_trt_selftest.o" "$out/jl_trt.o" -ldl -pthread -o "$out/jl_trt_selftest"
@@ -178,116 +173,154 @@ step_fake_test() {
   local out cc=${CC:-cc}
   out=$ROOT/build/fake-$(uname -s)-$(uname -m)
   mkdir -p "$out"
-  local flags=(-std=c11 -O1 -g -Wall -Wextra -Wpedantic -Werror -I"$CTRT/include")
+  local flags=(-std=c11 -O1 -g -Wall -Wextra -Wpedantic -Werror -DJL_TRT_FAKE -I"$CTRT/include")
   if [[ ${JETLINK_SANITIZE:-1} == 1 ]]; then
-    flags+=("-fsanitize=address,undefined" -fno-omit-frame-pointer)
+    flags+=("-fsanitize=address,undefined" -fno-omit-frame-pointer -fno-sanitize-recover=all)
   fi
-  "$cc" "${flags[@]}" "$CTRT/jl_trt_fake.c" "$CTRT/tools/jl_trt_fake_test.c" -pthread -o "$out/jl_trt_fake_test"
-  "$cc" "${flags[@]}" -DJL_TRT_FAKE "$CTRT/jl_trt_fake.c" "$CTRT/tools/jl_trt_selftest.c" -pthread \
-    -o "$out/jl_trt_selftest_fake"
   echo "fake-test: $(uname -s) $(uname -m), $("$cc" --version | head -1)"
-  "$out/jl_trt_fake_test" "$out"
+  "$cc" "${flags[@]}" "$CTRT/jl_trt_fake.c" "$CTRT/tools/jl_trt_selftest.c" -pthread -lm -o "$out/jl_trt_selftest_fake"
   TMPDIR=$out "$out/jl_trt_selftest_fake"
 }
 
 # --- the server ---------------------------------------------------------------------
 
+version() {
+  if [[ -n ${JETLINK_VERSION:-} ]]; then
+    echo "$JETLINK_VERSION"
+    return
+  fi
+  local base tag sha
+  base=$(sed -n "s/^__version__ = '\(.*\)'$/\1/p" "$ROOT/jetlink/__init__.py")
+  [[ -n $base ]] || die "no __version__ in jetlink/__init__.py"
+  tag=$(git -C "$ROOT" -c safe.directory='*' describe --exact-match --tags HEAD 2>/dev/null || true)
+  if [[ $RELEASE == 1 || $tag == "v$base" ]]; then
+    echo "$base"
+    return
+  fi
+  sha=$(git -C "$ROOT" -c safe.directory='*' rev-parse --short HEAD 2>/dev/null) ||
+    die "no git here to name a dev build: pass --release or set JETLINK_VERSION"
+  echo "$base-dev.$sha"
+}
+
 step_server() {
-  [[ $(uname -s) == Linux ]] || die "the server builds on Linux; use --container"
-  [[ -f $(bundle_dir)/.complete ]] || step_headers
-  local version name stage
-  version=$(sed -n "s/^__version__ = '\(.*\)'$/\1/p" "$ROOT/jetlink/__init__.py")
-  [[ -n $version ]] || die "no __version__ in jetlink/__init__.py"
+  [[ -f $CACHE/$BUNDLE/.complete ]] || step_headers
+  local version name stage bin scratch=$ROOT/build/swift-linux-$FLAVOR
+  version=$(version)
   name=jetlink-server-$version-linux-$FLAVOR
-  JETLINK_TENSORRT=$(bundle_dir)/include swift build --package-path "$ROOT/JetlinkKit" -c release \
-    --static-swift-stdlib --product jetlink-server
-  local bin
-  bin=$(swift build --package-path "$ROOT/JetlinkKit" -c release --show-bin-path)
+  # its own scratch path, so a Mac's JetlinkKit/.build is never touched
+  JETLINK_TENSORRT=$CACHE/$BUNDLE/include swift build --package-path "$ROOT/JetlinkKit" --scratch-path "$scratch" \
+    -c release --static-swift-stdlib --product jetlink-server
+  bin=$(swift build --package-path "$ROOT/JetlinkKit" --scratch-path "$scratch" -c release --show-bin-path)
   stage=$ROOT/dist/$name
   rm -rf "$stage"
   mkdir -p "$stage/bin" "$stage/share/jetlink/systemd" "$stage/share/jetlink/udev" "$stage/share/jetlink/web"
   cp "$bin/jetlink-server" "$stage/bin/"
   # SwiftPM looks for a target's resources in a bundle beside the executable
   find "$bin" -maxdepth 1 -name '*.resources' -exec cp -R {} "$stage/bin/" \;
-  cp "$ROOT"/scripts/*.service "$stage/share/jetlink/systemd/"
-  cp "$ROOT"/scripts/*.rules "$stage/share/jetlink/udev/"
+  # the installer's own unit and rules, as they are in this tree
+  cp "$ROOT/scripts/jetlink-server.service" "$stage/share/jetlink/systemd/"
+  cp "$ROOT"/scripts/99-jetlink-*.rules "$stage/share/jetlink/udev/"
   if [[ -d $ROOT/JetlinkKit/Sources/JetlinkStatusPage/Resources ]]; then
     cp -R "$ROOT/JetlinkKit/Sources/JetlinkStatusPage/Resources/." "$stage/share/jetlink/web/"
   fi
   cp "$ROOT/LICENSE" "$stage/"
   echo "$version" >"$stage/VERSION"
+  # no onnxruntime: a TensorRT host needs none
   tar -C "$ROOT/dist" -czf "$ROOT/dist/$name.tar.gz" "$name"
-  (cd "$ROOT/dist" && sha256 "$name.tar.gz" | sed "s/\$/  $name.tar.gz/" >"$name.tar.gz.sha256")
+  (cd "$ROOT/dist" && echo "$(sha256 "$name.tar.gz")  $name.tar.gz" >"$name.tar.gz.sha256")
   rm -rf "$stage"
   echo "server: dist/$name.tar.gz"
 }
 
-# --- containers ---------------------------------------------------------------------
+# --- where each step runs -------------------------------------------------------------
 
-container() {
-  local image=$1
-  shift
-  local engine
-  engine=$(command -v docker || command -v podman) || die "no docker or podman for --container"
-  local platform=linux/arm64
-  [[ $FLAVOR == x86_64 ]] && platform=linux/amd64
-  local prepare=true
-  if [[ $image == "$C_IMAGE" ]]; then
-    prepare="apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends g++ binutils >/dev/null"
-  fi
-  mkdir -p "$CACHE"
-  "$engine" run --rm --platform "$platform" -v "$ROOT:/src" -v "$CACHE:/cache" -e JETLINK_BUILD_CACHE=/cache \
-    -e JETLINK_SANITIZE="${JETLINK_SANITIZE:-1}" -w /src "$image" \
-    bash -c "$prepare && scripts/build-linux.sh $FLAVOR $*"
+in_swift_container() {
+  [[ ${JETLINK_IN_CONTAINER:-} == 1 ]] && return 0
+  [[ -f /.dockerenv || -f /run/.containerenv ]] && command -v swift >/dev/null &&
+    swift --version 2>/dev/null | grep -q "Swift version $SWIFT_VERSION"
 }
 
-IN_CONTAINER=0
-if [[ ${1:-} == --container ]]; then
-  IN_CONTAINER=1
+native_c() {
+  local arch
+  arch=$(uname -m)
+  [[ ${JETLINK_IN_CONTAINER:-} == 1 ]] ||
+    { [[ $(uname -s) == Linux && ${arch/arm64/aarch64} == "$FLAVOR" ]] && command -v "${CXX:-g++}" >/dev/null; }
+}
+
+# The image a step needs, or "" to run it here.
+image_for() {
+  case $1 in
+  headers) echo "" ;;
+  server) in_swift_container && echo "" || echo "$SWIFT_IMAGE" ;;
+  fake-test) [[ $FORCE_CONTAINER == 1 ]] && echo "$C_IMAGE" || echo "" ;;
+  *) [[ $FORCE_CONTAINER == 0 ]] && native_c && echo "" || echo "$C_IMAGE" ;;
+  esac
+}
+
+container() {
+  local image=$1 engine platform=linux/arm64 prepare=true swift=()
   shift
-fi
-FLAVOR=${1:-}
-[[ $FLAVOR == aarch64 || $FLAVOR == x86_64 ]] || usage
+  engine=$(command -v docker || command -v podman) || die "$* needs docker or podman, or a matching host"
+  [[ $FLAVOR == x86_64 ]] && platform=linux/amd64
+  if [[ $image == "$C_IMAGE" ]]; then
+    prepare="apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends g++ binutils >/dev/null"
+  else
+    # Swift needs no packages, so it runs as the caller and leaves files the
+    # caller owns; the version comes from here, where git is
+    swift=(--user "$(id -u):$(id -g)" -e HOME=/tmp/home -e JETLINK_VERSION="$(version)")
+  fi
+  mkdir -p "$CACHE"
+  # ${a[@]+...}: bash 3.2, the Mac's, calls an empty array unbound
+  "$engine" run --rm --platform "$platform" ${swift[@]+"${swift[@]}"} -v "$ROOT:/src" -v "$CACHE:/cache" \
+    -e JETLINK_BUILD_CACHE=/cache -e JETLINK_IN_CONTAINER=1 -e JETLINK_SANITIZE="${JETLINK_SANITIZE:-1}" -w /src "$image" \
+    bash -c "$prepare && scripts/build-linux.sh linux-$FLAVOR $*"
+}
+
+RELEASE=0
+FORCE_CONTAINER=0
+while [[ ${1:-} == --* ]]; do
+  case $1 in
+  --release) RELEASE=1 ;;
+  --container) FORCE_CONTAINER=1 ;;
+  *) usage ;;
+  esac
+  shift
+done
+case ${1:-} in
+linux-aarch64 | aarch64) FLAVOR=aarch64 ;;
+linux-x86_64 | x86_64) FLAVOR=x86_64 ;;
+*) usage ;;
+esac
 shift
 pins
 STEPS=("$@")
 [[ ${#STEPS[@]} -gt 0 ]] || STEPS=(server)
-
 for step in "${STEPS[@]}"; do
   case $step in
   headers | shim | selftest | fake-test | server) ;;
   *) usage ;;
   esac
 done
-
-if [[ $IN_CONTAINER == 1 ]]; then
-  # the headers come down on this side, where curl is; each run of steps
-  # goes to the container its tools are in
-  group=()
-  group_image=
-  for step in "${STEPS[@]}"; do
-    case $step in
-    headers)
-      step_headers
-      continue
-      ;;
-    server) image=$SWIFT_IMAGE ;;
-    *) image=$C_IMAGE ;;
-    esac
-    [[ $step == shim || $step == selftest || $step == server ]] && step_headers >/dev/null
-    if [[ -n $group_image && $image != "$group_image" ]]; then
-      container "$group_image" "${group[@]}"
-      group=()
-    fi
-    group_image=$image
-    group+=("$step")
-  done
+# Consecutive steps for the same container go in one run of it.
+group=()
+group_image=
+flush() {
   if [[ ${#group[@]} -gt 0 ]]; then
     container "$group_image" "${group[@]}"
   fi
-  exit 0
-fi
-
+  group=()
+}
 for step in "${STEPS[@]}"; do
-  "step_${step//-/_}"
+  image=$(image_for "$step")
+  if [[ -z $image ]]; then
+    flush
+    "step_${step//-/_}"
+    continue
+  fi
+  # the headers come down here, where curl is, before the container needs them
+  [[ $step == fake-test ]] || step_headers >/dev/null
+  [[ $image == "$group_image" ]] || flush
+  group_image=$image
+  group+=("$step")
 done
+flush
