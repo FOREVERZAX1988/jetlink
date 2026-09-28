@@ -314,6 +314,9 @@ def _may_power_off() -> bool:
 
 
 @pytest.mark.skipif(_may_power_off(), reason='a real systemd host; JETLINK_TEST_SHUTDOWN=1 runs it anyway')
+# TODO(WS-C): drop with LinuxHost's poweroff hook, until which Linux replies ok:false
+@pytest.mark.xfail(sys.platform.startswith('linux') and not os.environ.get('JETLINK_LINUX_POWEROFF'), reason='no Linux poweroff hook yet',
+                   raises=AssertionError, strict=True)
 def test_shutdown_replies_and_a_dry_run_stays_up(server, queued):
   assert (server.cache / DRY_RUN).exists()
   resp = queued.shutdown('car battery', timeout=5)

@@ -31,26 +31,26 @@ public enum Log {
 
 /// A category's logger: the unified log, and the sink when one is installed.
 /// Messages are public: nothing the server logs is a person's.
-struct ServerLog: Sendable {
-  let category: String
+package struct ServerLog: Sendable {
+  package let category: String
   private let logger: Logger
 
-  init(category: String) {
+  package init(category: String) {
     self.category = category
     logger = Logger(subsystem: "io.zoompilot.jetlink", category: category)
   }
 
-  func info(_ message: String) {
+  package func info(_ message: String) {
     logger.info("\(message, privacy: .public)")
     Log.write(.info, category, message)
   }
 
-  func warning(_ message: String) {
+  package func warning(_ message: String) {
     logger.warning("\(message, privacy: .public)")
     Log.write(.warning, category, message)
   }
 
-  func error(_ message: String) {
+  package func error(_ message: String) {
     logger.error("\(message, privacy: .public)")
     Log.write(.error, category, message)
   }

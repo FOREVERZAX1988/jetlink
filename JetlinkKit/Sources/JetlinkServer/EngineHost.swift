@@ -1,10 +1,6 @@
-#if canImport(CryptoKit)
-  import CryptoKit
-#else
-  import Crypto
-#endif
 import Foundation
 import JetlinkKit
+import JetlinkRegistry
 
 /// An engine resident on the device, with the state that goes with it.
 final class Loaded {
@@ -43,7 +39,7 @@ struct Request: Equatable {
   let frameSkip: Int
 
   init(sha256: String, nbytes: Int64, frameSkip: Int) throws {
-    guard EngineCache.isSHA256(sha256) else { throw HostError.invalid("model identity must be a lowercase SHA-256 digest") }
+    guard CacheLayout.isSHA256(sha256) else { throw HostError.invalid("model identity must be a lowercase SHA-256 digest") }
     guard nbytes >= 0, frameSkip > 0 else { throw HostError.invalid("invalid model size or frame skip") }
     self.sha256 = sha256
     self.nbytes = nbytes
@@ -51,11 +47,11 @@ struct Request: Equatable {
   }
 }
 
-enum HostError: Error, CustomStringConvertible {
+package enum HostError: Error, CustomStringConvertible {
   case invalid(String)
   case failed(String)
 
-  var description: String {
+  package var description: String {
     switch self {
     case .invalid(let detail), .failed(let detail): return detail
     }
@@ -71,7 +67,8 @@ public enum HostEvent: Sendable {
   case stats(StatsEvent)
   /// A benchmark's progress and its report.
   case benchmark(BenchmarkEvent)
-  /// The comma asked for a power-off, which this server refused.
+  /// The comma asked for a power-off, which this server refused: the host
+  /// passed no shutdown hook, or its hook declined.
   case shutdownRequested(reason: String)
 }
 
@@ -85,7 +82,7 @@ public enum HostEvent: Sendable {
 public final class EngineHost: @unchecked Sendable {
   static let progressInterval: TimeInterval = 0.25
 
-  let cache: EngineCache
+  let cache: ServerCache
   let lock = NSLock()
   var loaded: Loaded?
   var job: Job?
@@ -103,12 +100,12 @@ public final class EngineHost: @unchecked Sendable {
   private var listeners: [@Sendable (HostEvent) -> Void] = []
   private let emitLock = NSLock()
 
-  /// The device's thermal state for the benchmark's reports; the platform's
-  /// own unless the host knows better. Set before a benchmark runs.
-  public var thermal: @Sendable () -> String = { platformThermal() }
+  /// The host's telemetry, thermal state, sleep and power: `ServerHooks`.
+  let hooks: ServerHooks
 
-  public init(cache: EngineCache) {
+  public init(cache: ServerCache, hooks: ServerHooks = ServerHooks()) {
     self.cache = cache
+    self.hooks = hooks
   }
 
   var backend: any EngineBackend { cache.backend }
@@ -188,7 +185,7 @@ public final class EngineHost: @unchecked Sendable {
     if let job, job.state == .building {
       return ["state": "building", "sha256": sha256, "chunk": chunk, "detail": "another build is in progress (\(job.sha256.prefix(16)))"]
     }
-    if cachedSpec(cache.entry(sha256)) != nil {
+    if let entry = try? cache.entry(sha256), cachedSpec(entry) != nil {
       // Built already, just not loaded. modeld, which never carries the ONNX,
       // would read need_upload as an engine that is gone.
       return ["state": "building", "sha256": sha256, "chunk": chunk, "detail": "engine cached, not loaded yet"]
@@ -223,8 +220,8 @@ public final class EngineHost: @unchecked Sendable {
       return status
     }
     lock.unlock()
-    let entry = cache.entry(request.sha256)
-    let modelPath = cache.modelPath(request.sha256)
+    let entry = cache.entry(request)
+    let modelPath = cache.modelPath(request)
     let spec = specOnDisk(entry, modelPath: modelPath, request: request)
     if entry.exists, let spec {
       start(Job(sha256: request.sha256, loadOnly: true), request: request, entry: entry, modelPath: modelPath, spec: spec)
@@ -256,7 +253,7 @@ public final class EngineHost: @unchecked Sendable {
   }
 
   private func modelBytes(_ sha256: String) -> Int64 {
-    fileSize(cache.modelPath(sha256))
+    (try? cache.modelPath(sha256)).map { Files.size(of: $0) } ?? 0
   }
 
   /// Start loading whatever was loaded last, before a client asks for it.
@@ -266,12 +263,11 @@ public final class EngineHost: @unchecked Sendable {
     let busy = loaded != nil || job != nil
     lock.unlock()
     if busy { return }
-    let entry = cache.entry(sha256)
-    guard let d = cachedSpec(entry), let spec = try? ModelSpec.from(d).withFrameSkip(frameSkip),
-      let request = try? Request(sha256: sha256, nbytes: 0, frameSkip: frameSkip)
-    else { return }
+    guard let request = try? Request(sha256: sha256, nbytes: 0, frameSkip: frameSkip) else { return }
+    let entry = cache.entry(request)
+    guard let d = cachedSpec(entry), let spec = try? ModelSpec.from(d).withFrameSkip(frameSkip) else { return }
     log.info("preloading the engine loaded last: \(entry.path.lastPathComponent)")
-    start(Job(sha256: sha256, loadOnly: true), request: request, entry: entry, modelPath: cache.modelPath(sha256), spec: spec)
+    start(Job(sha256: sha256, loadOnly: true), request: request, entry: entry, modelPath: cache.modelPath(request), spec: spec)
   }
 
   /// The spec for a cached artifact, from its sidecar or failing that the ONNX.
@@ -322,11 +318,13 @@ public final class EngineHost: @unchecked Sendable {
       do {
         engine = try backend.load(artifact: entry.path, report: progressFn)
       } catch let invalid as ArtifactInvalid {
-        // Wrong on disk, not wrong here. Replace it from the ONNX when there is
-        // one, else let the client upload again.
+        // Wrong on disk, not wrong here, whichever backend says so. Replace it
+        // once from the ONNX when that is on disk, else let the client upload
+        // again. A preload names no size; a client's request does, and the
+        // model has to match it.
         log.warning("discarding \(entry.path.lastPathComponent): \(invalid.description)")
         entry.remove()
-        let size = fileSize(modelPath)
+        let size = Files.size(of: modelPath)
         let have = size > 0 && (request.nbytes == 0 || size == request.nbytes)
         if job.loadOnly && !have {
           throw HostError.failed("artifact invalid and the model is not on disk: \(invalid.description)")
@@ -474,26 +472,8 @@ func checkShapes(_ engine: any Engine, spec: ModelSpec) throws {
   }
 }
 
-func fileSize(_ url: URL) -> Int64 {
-  ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? NSNumber)?.int64Value ?? 0
-}
-
 /// Uploads land in place chunk by chunk, so the model file is only the model
 /// once it is the size the client declared.
 func modelComplete(_ url: URL, nbytes: Int64) -> Bool {
-  var isDirectory: ObjCBool = false
-  return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) && !isDirectory.boolValue && fileSize(url) == nbytes
-}
-
-/// The file's SHA-256 and size, read a megabyte at a time.
-func sha256File(_ url: URL) throws -> (String, Int64) {
-  let handle = try FileHandle(forReadingFrom: url)
-  defer { try? handle.close() }
-  var hasher = SHA256()
-  var total: Int64 = 0
-  while let chunk = try handle.read(upToCount: 1 << 20), !chunk.isEmpty {
-    hasher.update(data: chunk)
-    total += Int64(chunk.count)
-  }
-  return (hasher.finalize().map { String(format: "%02x", $0) }.joined(), total)
+  Files.status(url).map { $0.isFile && $0.size == nbytes } ?? false
 }
