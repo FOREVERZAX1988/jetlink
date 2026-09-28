@@ -15,11 +15,15 @@ the standard library.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+from jetlink import protocol as P
+from jetlink.transport import ffs
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -72,3 +76,11 @@ def test_a_comma_module_loads_only_what_the_comma_has(module):
   assert found['server'] == [], f"{module} loads {found['server']}"
   assert found['foreign'] == [], f"{module} needs {found['foreign']}; the comma has numpy and the standard library"
 
+
+def test_the_gadget_presents_what_a_host_looks_for():
+  # The server finds the comma by these; nothing on the comma reads protocol.py's copy.
+  script = (ROOT / 'scripts' / 'comma' / 'jetlink-root.sh').read_text()
+  ids = {k: int(v, 16) for k, v in re.findall(r'^(VID|PID)=(0x[0-9a-fA-F]+)', script, re.M)}
+  assert ids == {'VID': P.USB_VID, 'PID': P.USB_PID}
+  assert tuple(ffs._interface_desc()[5:8]) == P.USB_VENDOR_CLASS
+  assert ffs.SS_MAX_PACKET == P.USB_MAX_PACKET

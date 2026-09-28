@@ -18,9 +18,9 @@ from pathlib import Path
 from jetlink import protocol as P
 from jetlink.transport.base import LinkError, StreamTransport, medium_from_usb_speed, usb_link_info
 
-# pid.codes test allocation. Get a real PID before distributing this.
-JETLINK_VID = 0x1209
-JETLINK_PID = 0x0001
+# The gadget's IDs, class and packet size are the comma's (protocol.py).
+JETLINK_VID = P.USB_VID
+JETLINK_PID = P.USB_PID
 
 # Endpoint addresses are discovered, never assumed: FunctionFS renumbers them at
 # bind, so a declared 0x01/0x82 can appear as 0x01/0x81. A hardcoded address
@@ -30,9 +30,9 @@ USB_TRANSFER_TYPE_BULK = 0x02
 # The vendor interface's class triple. The comma set to iOS presents a
 # composite gadget (the link and a CDC-NCM network interface for a phone), so
 # the link is found by class and not by a number a reordered config could move.
-VENDOR_CLASS = (0xFF, 0xFF, 0xFF)
-MAX_PACKET = 1024   # SuperSpeed bulk
-READ_CHUNK = 256 * MAX_PACKET
+VENDOR_CLASS = P.USB_VENDOR_CLASS
+MAX_PACKET = P.USB_MAX_PACKET
+READ_CHUNK = P.USB_READ_CHUNK
 DEFAULT_TIMEOUT_MS = 2000
 # libusb's speed codes, as Linux names the speeds (base.USB_MEDIA).
 LIBUSB_SPEEDS = {1: 'low-speed', 2: 'full-speed', 3: 'high-speed', 4: 'super-speed', 5: 'super-speed-plus'}
