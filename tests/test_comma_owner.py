@@ -775,6 +775,63 @@ class TestSwitchingMode(OwnerTest):
     self.setup_gadget.assert_called_once()
     self.assertFalse(o.built_ios)
 
+  def test_a_run_in_flight_is_not_unplugged(self):
+    # the rebuild is an unplug, and a run may be mid-upload or mid-build
+    o = self.switched()
+    o.worker = mock.Mock(**{'poll.return_value': None})
+    o.step()
+    self.setup_gadget.assert_not_called()
+    o.close_link.assert_not_called()
+    o.worker.poll.return_value = 0
+    o.worker.returncode = 0
+    o.step()
+    self.setup_gadget.assert_called_once()
+    self.assertTrue(o.built_ios)
+
+
+class TestTheLoop(OwnerTest):
+  """What run() does around each step: nothing may escape it, since manager
+  restarting the owner in a loop is worse than sitting out a cycle."""
+
+  def run_steps(self, o, step) -> None:
+    """run(), with `step` for the owner's step and no wait between cycles."""
+    with mock.patch.object(o, 'step', side_effect=step), mock.patch.object(owner, 'POLL', 0.0):
+      o.run()
+
+  def test_an_error_lets_the_link_go_backs_off_and_carries_on(self):
+    o = self.owner()
+    seen = []
+
+    def step():
+      seen.append((o.next_attempt, o.close_link.call_count))
+      if len(seen) == 1:
+        raise RuntimeError('a step that fails')
+      o.stop = True
+
+    started = time.monotonic()
+    with mock.patch.object(gadget, 'log') as log:
+      self.run_steps(o, step)
+    self.assertEqual(len(seen), 2, 'the loop ended at the error')
+    next_attempt, closed = seen[1]
+    self.assertEqual(closed, 1, 'the link was not let go after the error')
+    self.assertGreaterEqual(next_attempt, started + owner.RECONNECT_BACKOFF)
+    log.exception.assert_called_once()
+
+  def test_a_previous_owners_record_is_cleared_before_the_first_step(self):
+    # the record is this process's to write; one a killed owner left says
+    # nothing about the gadget now
+    gadget.note_link('cable', '192.168.60.3')
+    o = self.owner()
+    seen = []
+
+    def step():
+      seen.append(gadget.link_peer())
+      o.stop = True
+
+    self.run_steps(o, step)
+    self.assertEqual(seen, [None])
+    self.assertFalse(gadget.LINK.exists())
+
 
 class TestSetup(OwnerTest):
   def test_the_owner_creates_the_gadget_when_there_is_none(self):
