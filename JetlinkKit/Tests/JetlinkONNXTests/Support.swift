@@ -6,7 +6,7 @@ import JetlinkTestSupport
 /// The fixtures sit next to this file. The test target declares no resources,
 /// so they are found through the source path rather than a bundle.
 enum Fixtures {
-  static let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures")
+  static let directory = SourceTree.root().appendingPathComponent("JetlinkKit/Tests/JetlinkONNXTests/Fixtures")
 
   static func url(_ name: String) -> URL {
     directory.appendingPathComponent(name)

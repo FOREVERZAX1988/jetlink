@@ -1,4 +1,5 @@
 import Foundation
+import JetlinkTestSupport
 import Synchronization
 import Testing
 
@@ -23,12 +24,7 @@ import Testing
 /// The Python suite's fixtures, read from the repo so both suites test against
 /// the same bytes: <repo>/tests/fixtures.
 enum Fixture {
-  static let directory = URL(filePath: #filePath)
-    .deletingLastPathComponent()  // JetlinkRegistryTests
-    .deletingLastPathComponent()  // Tests
-    .deletingLastPathComponent()  // JetlinkKit
-    .deletingLastPathComponent()  // the repo
-    .appending(path: "tests/fixtures")
+  static let directory = SourceTree.root().appending(path: "tests/fixtures")
 
   static func data(_ name: String) -> Data {
     do {

@@ -7,6 +7,8 @@ import Testing
 
 #if canImport(Glibc)
   import Glibc
+#elseif canImport(Android)
+  import Android
 #endif
 
 /// What the Python does, as JetlinkKit/Scripts/make_conformance_fixtures.py
@@ -120,9 +122,12 @@ struct PinnedConstantTests {
   }
 
   #if canImport(COrt)
-    @Test("CoreML builds carry the Python's prepare version, on the Python's onnxruntime")
+    @Test("Builds carry the Python's prepare version, on the Python's onnxruntime")
     func preparation() {
-      #expect(CoreMLBackend.prepareVersion == Pinned.prepareVersion)
+      #if canImport(Metal)
+        #expect(CoreMLBackend.prepareVersion == Pinned.prepareVersion)
+      #endif
+      #expect(QNNBackend.prepareVersion == Pinned.prepareVersion)
       #expect(OrtRuntime.version == Pinned.onnxruntimeVersion)
     }
   #endif

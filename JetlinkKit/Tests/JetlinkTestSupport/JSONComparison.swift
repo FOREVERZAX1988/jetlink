@@ -46,7 +46,11 @@ public struct JSONComparison {
   public static func leavesEqual(_ a: Any, _ b: Any) -> Bool {
     if a is NSNull || b is NSNull { return a is NSNull && b is NSNull }
     if let x = a as? String, let y = b as? String { return x == y }
-    if let x = a as? NSNumber, let y = b as? NSNumber { return x.doubleValue == y.doubleValue }
+    if let x = a as? NSNumber, let y = b as? NSNumber {
+      // Outside Apple's Foundation a long number can parse as a Decimal, whose
+      // doubleValue is not the nearest double; its own digits parse exactly.
+      return x.doubleValue == y.doubleValue || (Double(x.description).map { $0 == Double(y.description) } ?? false)
+    }
     if let x = a as? Bool, let y = b as? Bool { return x == y }
     return false
   }

@@ -1,11 +1,12 @@
 import Foundation
+import JetlinkTestSupport
 import Testing
 
 @testable import JetlinkServer
 
 /// The golden files make_server_fixtures.py writes, read in place.
 enum Fixture {
-  static let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appending(path: "Fixtures", directoryHint: .isDirectory)
+  static let directory = SourceTree.root().appending(path: "JetlinkKit/Tests/JetlinkServerTests/Fixtures", directoryHint: .isDirectory)
 
   static func url(_ name: String) -> URL {
     directory.appending(path: name)
@@ -122,8 +123,18 @@ extension CommaClient {
       try send(.inferReq, request)
       let reply = try recv(.inferResp)
       #expect(reply.status == Wire.Status.ok.rawValue)
-      let expected = golden.expected[(i * spec.outputBytes)..<((i + 1) * spec.outputBytes)]
-      #expect(Data(reply.payload[Wire.inferRespSize...]) == Data(expected), "frame \(i) differs from Python's")
+      let expected = Data(golden.expected[(i * spec.outputBytes)..<((i + 1) * spec.outputBytes)])
+      let got = Data(reply.payload[Wire.inferRespSize...])
+      #if os(Android)
+        // onnxruntime for Android arm64 runs an fp16 graph's MatMul and
+        // ReduceMean in fp16 where the Mac's build does not, so tiny_queued
+        // (all fp16) lands within about 3% of Python's and tiny_stateful (fp32)
+        // bit for bit. Held to what verify_parity asks of a phone instead.
+        let correlation = Golden.correlation(got, expected)
+        #expect(correlation >= 0.999, "frame \(i) correlates \(correlation) with Python's, differing by up to \(Golden.worstDifference(got, expected))")
+      #else
+        #expect(got == expected, "frame \(i) differs from Python's by up to \(Golden.worstDifference(got, expected))")
+      #endif
     }
     return (hello, count)
   }
@@ -170,6 +181,38 @@ struct TestError: Error, CustomStringConvertible {
 
 /// A tiny model, its identity, and the frames and outputs Python recorded.
 struct Golden {
+  /// Pearson correlation of two runs of float32 outputs, as verify_parity
+  /// computes it.
+  static func correlation(_ a: Data, _ b: Data) -> Double {
+    guard a.count == b.count, !a.isEmpty else { return 0 }
+    let x = a.withUnsafeBytes { $0.bindMemory(to: Float.self).map(Double.init) }
+    let y = b.withUnsafeBytes { $0.bindMemory(to: Float.self).map(Double.init) }
+    let mx = x.reduce(0, +) / Double(x.count)
+    let my = y.reduce(0, +) / Double(y.count)
+    var sxy = 0.0, sxx = 0.0, syy = 0.0
+    for (p, q) in zip(x, y) {
+      sxy += (p - mx) * (q - my)
+      sxx += (p - mx) * (p - mx)
+      syy += (q - my) * (q - my)
+    }
+    return sxx == 0 || syy == 0 ? (x == y ? 1 : 0) : sxy / (sxx * syy).squareRoot()
+  }
+
+  /// The largest difference between two runs of float32 outputs, relative to
+  /// the larger magnitude where that is over 1.
+  static func worstDifference(_ a: Data, _ b: Data) -> Float {
+    guard a.count == b.count else { return .infinity }
+    let x = a.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
+    let y = b.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
+    var worst: Float = 0
+    for (p, q) in zip(x, y) {
+      if p.isNaN != q.isNaN { return .infinity }
+      if p.isNaN { continue }
+      worst = max(worst, abs(p - q) / max(1, max(abs(p), abs(q))))
+    }
+    return worst
+  }
+
   let name: String
   let model: URL
   let sha256: String
