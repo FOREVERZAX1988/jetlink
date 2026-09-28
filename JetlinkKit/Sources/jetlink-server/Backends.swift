@@ -58,7 +58,8 @@
     var keepAlive = true
     var keepCPUWarm = true
 
-    /// TensorRT, if it loads here and this build has its backend.
+    /// TensorRT, if it loads here and the GPU answers. A build without
+    /// TensorRT's headers has the fake shim, which never loads.
     func trt() throws -> any EngineBackend {
       #if os(Linux)
         var index = 0
@@ -66,13 +67,11 @@
           guard let parsed = Int(device), parsed >= 0 else { throw BackendUnusable("--device \(device) is not a CUDA device index") }
           index = parsed
         }
-        let found: String
         do {
-          found = try TensorRT.probe(device: index)
+          return try TrtBackend(device: index)
         } catch {
           throw BackendUnusable(String(describing: error))
         }
-        throw BackendUnusable("\(found) loads, but this build has no TensorRT backend yet")
       #else
         throw BackendUnusable("TensorRT runs on Linux only")
       #endif

@@ -17,6 +17,10 @@ import Foundation
 ///    `.aneWhole`, model.onnx);
 /// 8. give each file a COREML_CACHE_KEY in its metadata_props.
 ///
+/// `.trt` is TensorRT's preparation (`onnx_patch.patch_file`, what
+/// trt/build.py parsed): steps 1 and 2 only, the whole graph, no cache key.
+/// The other steps work around CoreML's provider, which TensorRT does not need.
+///
 /// The files are what Python's onnx.save writes for the same model: field
 /// for field, and byte for byte on a model Python wrote.
 ///
@@ -36,6 +40,9 @@ public enum CoreMLPreparation {
     /// (`--device ane-whole`): model.onnx, with the policy's norms prescaled
     /// and the vision heads in fp32.
     case aneWhole
+    /// One model for TensorRT: model.onnx, tinygrad's ops stripped and the
+    /// images fp16, nothing else changed.
+    case trt
   }
 
   public struct Part: Sendable, Equatable {
@@ -109,9 +116,14 @@ public enum CoreMLPreparation {
     if retyped {
       try Patches.patchUint8Inputs(&g)
     }
-    let gathers = try Patches.normalizeGatherIndices(&g, src)
-    let gemms = try Patches.gemmWithTransposedWeight(&g, src)
-    let tiles = try Patches.expandToTile(&g, src)
+    var gathers = 0
+    var gemms = 0
+    var tiles = 0
+    if layout != .trt {
+      gathers = try Patches.normalizeGatherIndices(&g, src)
+      gemms = try Patches.gemmWithTransposedWeight(&g, src)
+      tiles = try Patches.expandToTile(&g, src)
+    }
     var norms = 0
     var heads = 0
     if layout == .aneWhole {
@@ -125,10 +137,10 @@ public enum CoreMLPreparation {
     case .split:
       let (vision, policy) = try Split.visionPolicy(model)
       parts = [("vision", vision), ("policy", policy)]
-    case .whole, .aneWhole:
+    case .whole, .aneWhole, .trt:
       parts = [("model", model)]
     }
-    for i in parts.indices {
+    for i in parts.indices where layout != .trt {
       // _with_cache_key: any key already there goes, the part's own is added last.
       parts[i].model.props.removeAll { $0.key == cacheKeyProp || $0.key == "CACHE_KEY" }
       parts[i].model.props.append(Prop(raw: nil, key: cacheKeyProp, value: cacheKey(parts[i].name)))
