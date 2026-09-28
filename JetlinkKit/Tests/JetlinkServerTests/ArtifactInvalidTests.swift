@@ -61,8 +61,8 @@ struct ArtifactInvalidTests {
   }
 
   /// A host with `golden`'s model built and cached, then unloaded.
-  func cached(_ golden: Golden, in tmp: TemporaryDirectory, backend: FlakyBackend) throws -> (EngineCache, Request) {
-    let cache = try EngineCache(root: tmp.url, backend: backend)
+  func cached(_ golden: Golden, in tmp: TemporaryDirectory, backend: FlakyBackend) throws -> (ServerCache, Request) {
+    let cache = try ServerCache(root: tmp.url, backend: backend)
     let model = try Data(contentsOf: golden.model)
     let request = try Request(sha256: golden.sha256, nbytes: Int64(model.count), frameSkip: 4)
     try model.write(to: cache.modelPath(request))

@@ -98,7 +98,7 @@ public final class Server: @unchecked Sendable {
 
   public let configuration: Configuration
   public let host: EngineHost
-  public let cache: EngineCache
+  public let cache: ServerCache
   public let backend: any EngineBackend
   /// The piggybacked telemetry: what the comma logs about its accelerator.
   public var telemetry: @Sendable () -> [String: Any] = { [:] }
@@ -127,7 +127,7 @@ public final class Server: @unchecked Sendable {
     self.dial = configuration.dial
     self.backend = backend
     self.gadget = gadget
-    cache = try EngineCache(root: configuration.cacheRoot, backend: backend)
+    cache = try ServerCache(root: configuration.cacheRoot, backend: backend)
     host = EngineHost(cache: cache)
     // A write to a socket the comma closed must be an error, not a signal
     // that kills the app.

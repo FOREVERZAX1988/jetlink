@@ -8,7 +8,7 @@ import JetlinkRegistry
 ///     <root>/engines/<sha16>.<tag><suffix>    the artifact
 ///     <root>/engines/<sha16>.<tag>.json       its sidecar: build facts and the model spec
 ///     <root>/models/<sha16>.onnx              the model as uploaded or downloaded
-public final class EngineCache: Sendable {
+public final class ServerCache: Sendable {
   /// One per registry entry on a Mac or a Jetson: a rebuild costs minutes
   /// and 1 to 2 GB. A phone's disk holds two.
   #if os(iOS) || os(Android)
@@ -19,7 +19,7 @@ public final class EngineCache: Sendable {
 
   public let layout: CacheLayout
   public let backend: any EngineBackend
-  private let store: JetlinkRegistry.EngineCache
+  private let store: EngineCache
 
   public init(root: URL, backend: any EngineBackend) throws {
     layout = CacheLayout(root: root)
@@ -27,7 +27,7 @@ public final class EngineCache: Sendable {
     for directory in [layout.engines, layout.models] {
       try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }
-    store = JetlinkRegistry.EngineCache(
+    store = EngineCache(
       layout: layout, tag: backend.tag(), suffix: backend.suffix, backend: backend.name, kind: backend.artifactKind)
   }
 
@@ -70,7 +70,7 @@ public final class EngineCache: Sendable {
 
   /// Keep the newest few artifacts of this backend's kind. `protect` is never
   /// pruned whatever its mtime says.
-  public func prune(keep: Int = EngineCache.keepPlans, protect: URL? = nil) {
+  public func prune(keep: Int = ServerCache.keepPlans, protect: URL? = nil) {
     store.prune(keep: keep, protect: protect)
   }
 

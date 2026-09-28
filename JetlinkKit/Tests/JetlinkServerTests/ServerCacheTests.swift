@@ -30,8 +30,8 @@ final class NamingBackend: EngineBackend {
   }
 }
 
-@Suite("Engine cache")
-struct EngineCacheTests {
+@Suite("Server cache")
+struct ServerCacheTests {
   let sha = String(repeating: "c", count: 64)
 
   /// One artifact of `kind` and its sidecar, stamped at `mtime`.
@@ -48,12 +48,12 @@ struct EngineCacheTests {
   @Test("The artifact is a file or a directory as the backend says, named as before")
   func naming() throws {
     let tmp = try TemporaryDirectory()
-    let plans = try EngineCache(root: tmp.url, backend: NamingBackend(kind: .file))
+    let plans = try ServerCache(root: tmp.url, backend: NamingBackend(kind: .file))
     let plan = try plans.entry(sha)
     #expect(plan.path.lastPathComponent == "cccccccccccccccc.trt10.3.0.Orin-sm87.plan")
     #expect(!plan.path.hasDirectoryPath)
     #expect(plan.metaPath.lastPathComponent == "cccccccccccccccc.trt10.3.0.Orin-sm87.json")
-    let ort = try EngineCache(root: tmp.url, backend: NamingBackend(kind: .directory)).entry(sha)
+    let ort = try ServerCache(root: tmp.url, backend: NamingBackend(kind: .directory)).entry(sha)
     #expect(ort.path.hasDirectoryPath)
     #expect(Artifact.sidecarURL(ort.path) == ort.metaPath)
     #expect(Artifact.sidecarURL(plan.path) == plan.metaPath)
@@ -68,7 +68,7 @@ struct EngineCacheTests {
   func pruneProtects(kind: ArtifactKind) throws {
     let tmp = try TemporaryDirectory()
     let backend = NamingBackend(kind: kind)
-    let cache = try EngineCache(root: tmp.url, backend: backend)
+    let cache = try ServerCache(root: tmp.url, backend: backend)
     for i in 0..<3 {
       try artifact(cache.layout.engines.appending(path: "old\(i)\(backend.suffix)"), kind: kind, mtime: 2_000_000 + Double(i))
     }
@@ -85,7 +85,7 @@ struct EngineCacheTests {
   @Test("sweepTemp drops build directories older than six hours, and only those")
   func sweep() throws {
     let tmp = try TemporaryDirectory()
-    let cache = try EngineCache(root: tmp.url, backend: NamingBackend(kind: .file))
+    let cache = try ServerCache(root: tmp.url, backend: NamingBackend(kind: .file))
     let stale = cache.layout.engines.appending(path: "tmpstale")
     let fresh = cache.layout.engines.appending(path: "tmpfresh")
     for directory in [stale, fresh] {

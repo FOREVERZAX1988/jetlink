@@ -81,7 +81,7 @@ public enum HostEvent: Sendable {
 public final class EngineHost: @unchecked Sendable {
   static let progressInterval: TimeInterval = 0.25
 
-  let cache: EngineCache
+  let cache: ServerCache
   let lock = NSLock()
   var loaded: Loaded?
   var job: Job?
@@ -103,7 +103,7 @@ public final class EngineHost: @unchecked Sendable {
   /// own unless the host knows better. Set before a benchmark runs.
   public var thermal: @Sendable () -> String = { platformThermal() }
 
-  public init(cache: EngineCache) {
+  public init(cache: ServerCache) {
     self.cache = cache
   }
 
