@@ -112,8 +112,8 @@ class Borrowing(LendingTest):
     assert lender.lent and lender.borrower == 'modeld'
 
   def test_nobody_listening_is_not_an_error(self):
-    # the link was only just turned on, or the daemon died. The caller opens
-    # the gadget itself, as it always did
+    # the link was only just turned on, or the owner died. The caller asks
+    # again later: only the owner ever holds ep0
     assert self.take(timeout=0.1) is None
 
   def test_the_daemon_is_told_to_get_off_the_endpoints_before_it_says_yes(self):
@@ -122,7 +122,6 @@ class Borrowing(LendingTest):
     self.free = False
     lender = self.lender()
     got = []
-    import threading
     t = threading.Thread(target=lambda: got.append(self.take(timeout=3.0)), daemon=True)
     t.start()
     assert self.until(lambda: lender.lent), 'the daemon was never told to let go'

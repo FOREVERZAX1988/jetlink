@@ -770,7 +770,8 @@ class TestSwitchingMode(OwnerTest):
 
 
 class TestSetup(OwnerTest):
-  def test_a_gadget_boot_did_not_make_is_created(self):
+  def test_the_owner_creates_the_gadget_when_there_is_none(self):
+    # nothing sets it up at boot any more
     o = self.owner(presented=False)
     with mock.patch.object(gadget, 'link_configured', return_value=False), \
          mock.patch.object(gadget, 'setup_gadget', return_value=True) as setup:
