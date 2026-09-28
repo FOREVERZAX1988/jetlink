@@ -20,7 +20,7 @@ object Native {
     /** One control command, `{"cmd": "prepare", ...}`; returns its reply. Blocks. */
     external fun command(command: String): String
 
-    /** The app's state once its version passes [after], or after [timeoutMs]. Blocks. */
+    /** The app's state once its version passes [after], or after [timeoutMs]; empty when nothing changed. Blocks. */
     external fun snapshot(after: Long, timeoutMs: Int): String
 
     /** Log lines numbered after [after]: `{"next": n, "lines": [...]}`. */
@@ -36,12 +36,9 @@ object Native {
     /** The gadget is going; returns once nothing uses the descriptor. */
     external fun usbDetach()
 
-    /** "nominal", "fair", "serious" or "critical". */
+    /** "nominal", "fair", "serious" or "critical", for the benchmark's reports. */
     external fun reportThermal(label: String)
 
-    /** What the comma logs about its accelerator with each reply, as JSON. */
-    external fun reportTelemetry(telemetry: String)
-
-    /** The runtime and chip, for About. */
-    external fun info(): String
+    /** The onnxruntime version, for Settings before the server has said it. */
+    external fun runtimeVersion(): String
 }

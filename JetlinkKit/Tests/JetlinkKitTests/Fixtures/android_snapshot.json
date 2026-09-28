@@ -128,7 +128,6 @@
     "peer" : "usb",
     "state" : "connected"
   },
-  "loaded" : "a086d5249fc308bb7c0ffbcbb2b8a53c3f6b1f0a1d2c3b4a5e6f7081920304050",
   "medium" : {
     "name" : "usb3",
     "slow" : false,
@@ -217,7 +216,6 @@
     "runtime_version" : "1.29.0",
     "state" : "serving"
   },
-  "shutdown_request" : null,
   "shutdown_requests" : 0,
   "version" : 10
 }

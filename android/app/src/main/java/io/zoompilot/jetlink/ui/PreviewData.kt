@@ -126,7 +126,6 @@ object PreviewData {
         models = listOf(downloading, loaded, available, orphan),
         catalog = CatalogInfo(fetchedAt = 1_759_000_000.0, defaultRef = "37bfa1413edcdc2e8844984b83727c33f81d8f46", count = 3),
         disk = Disk(modelsBytes = 765_953_504, enginesBytes = 800_000_000, freeBytes = 40_000_000_000),
-        loaded = BIG_MODEL_SHA,
         benchmark = Benchmark(state = "done", elapsed = 60.1, total = 60.0, frames = 1195, report = report, reportText = "Jetlink benchmark"),
     )
 
@@ -137,7 +136,7 @@ object PreviewData {
         models = listOf(downloading.copy(status = RowStatus(kind = "preparing", stage = "compile", frac = 0.27)), available),
     )
 
-    val empty = waiting.copy(engine = Engine(), models = listOf(downloading.copy(status = RowStatus(kind = "not_downloaded"), canUse = true), available), loaded = null)
+    val empty = waiting.copy(engine = Engine(), models = listOf(downloading.copy(status = RowStatus(kind = "not_downloaded"), canUse = true), available))
 
     val health = DeviceHealth(
         thermal = "fair",

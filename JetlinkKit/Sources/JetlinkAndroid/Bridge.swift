@@ -29,6 +29,10 @@ func string(_ env: Env, _ value: jstring?) -> String {
 /// JSON the app parses, as a Java string. JNI takes modified UTF-8, so
 /// anything outside the Basic Multilingual Plane goes as a \u escape pair.
 func jstring(_ env: Env, _ text: String) -> jstring? {
+  // A four-byte UTF-8 sequence starts 0xF0 or above; JSON has escaped any NUL.
+  guard text.utf8.contains(where: { $0 >= 0xF0 || $0 == 0 }) else {
+    return text.withCString { env.pointee!.pointee.NewStringUTF(env, $0) }
+  }
   var safe = ""
   safe.reserveCapacity(text.utf8.count)
   for scalar in text.unicodeScalars {
@@ -84,15 +88,15 @@ public func nativeCommand(_ env: Env, _ cls: jclass?, _ command: jstring?) -> js
   jstring(env, json(Host.shared.command(parse(string(env, command)))))
 }
 
-/// The app's state once its version is past `after`, or after `timeoutMs`
-/// either way.
+/// The app's state once its version is past `after`, or after `timeoutMs`;
+/// empty when nothing changed.
 @_cdecl("Java_io_zoompilot_jetlink_server_Native_snapshot")
 public func nativeSnapshot(_ env: Env, _ cls: jclass?, _ after: jlong, _ timeoutMs: jint) -> jstring? {
   let server = Host.shared.running?.server
   let snapshot = Host.shared.state.snapshot(after: Int(after), timeout: Double(timeoutMs) / 1000, port: server?.port.map { Int($0) }) {
     server?.recentStats(window: AppSnapshot.recentWindow)
   }
-  return jstring(env, json(snapshot))
+  return jstring(env, snapshot.map(json) ?? "")
 }
 
 /// Log lines numbered past `after`: `{"next": n, "lines": [...]}`.
@@ -106,7 +110,7 @@ public func nativeLogs(_ env: Env, _ cls: jclass?, _ after: jlong) -> jstring? {
 @_cdecl("Java_io_zoompilot_jetlink_server_Native_usbAttach")
 public func nativeUSBAttach(_ env: Env, _ cls: jclass?, _ fd: jint, _ inEndpoint: jint, _ outEndpoint: jint) -> jstring? {
   do {
-    try AndroidGadget.shared.attach(
+    try Host.shared.gadget.attach(
       fd: fd, inEndpoint: UInt8(truncatingIfNeeded: inEndpoint), outEndpoint: UInt8(truncatingIfNeeded: outEndpoint))
     return nil
   } catch {
@@ -118,34 +122,20 @@ public func nativeUSBAttach(_ env: Env, _ cls: jclass?, _ fd: jint, _ inEndpoint
 /// can close the connection after.
 @_cdecl("Java_io_zoompilot_jetlink_server_Native_usbDetach")
 public func nativeUSBDetach(_ env: Env, _ cls: jclass?) {
-  AndroidGadget.shared.detach()
+  Host.shared.gadget.detach()
 }
 
-/// "nominal", "fair", "serious" or "critical", from PowerManager.
+/// "nominal", "fair", "serious" or "critical", from PowerManager, for the
+/// benchmark's reports.
 @_cdecl("Java_io_zoompilot_jetlink_server_Native_reportThermal")
 public func nativeReportThermal(_ env: Env, _ cls: jclass?, _ label: jstring?) {
-  DeviceThermal.report(string(env, label))
+  Host.shared.thermal = string(env, label)
 }
 
-/// What the comma logs about its accelerator with each reply: the phone's
-/// temperatures and the like, as JSON.
-@_cdecl("Java_io_zoompilot_jetlink_server_Native_reportTelemetry")
-public func nativeReportTelemetry(_ env: Env, _ cls: jclass?, _ telemetry: jstring?) {
-  Host.shared.telemetry.set(parse(string(env, telemetry)))
-}
-
-/// Versions and names the About screen shows: the runtime, the chip, the
-/// devices this build can run on.
-@_cdecl("Java_io_zoompilot_jetlink_server_Native_info")
-public func nativeInfo(_ env: Env, _ cls: jclass?) -> jstring? {
-  jstring(
-    env,
-    json([
-      "onnxruntime": OrtRuntime.version,
-      "chip": QNNBackend.chipName(),
-      "devices": QNNBackend.Device.allCases.map(\.rawValue),
-      "prepare_version": QNNBackend.prepareVersion,
-    ] as [String: Any]))
+/// The onnxruntime version, for Settings before the server has said it.
+@_cdecl("Java_io_zoompilot_jetlink_server_Native_runtimeVersion")
+public func nativeRuntimeVersion(_ env: Env, _ cls: jclass?) -> jstring? {
+  jstring(env, OrtRuntime.version)
 }
 
 // MARK: the server
@@ -156,15 +146,21 @@ final class Host: @unchecked Sendable {
 
   let state = AppSnapshot()
   let logs = LogRing(capacity: 5000)
-  let telemetry = Locked<[String: Any]>([:])
+  /// The comma's descriptor, from the app's USB permission flow.
+  let gadget = UsbfsGadget()
+  private let encoder = ControlJSONEncoder()
   private let lock = NSLock()
   private var embedded: EmbeddedServer?
   private var stream: LogStream?
+  private var thermalLabel = "unknown"
 
   var running: EmbeddedServer? {
-    lock.lock()
-    defer { lock.unlock() }
-    return embedded
+    lock.withLock { embedded }
+  }
+
+  var thermal: String {
+    get { lock.withLock { thermalLabel } }
+    set { lock.withLock { thermalLabel = newValue } }
   }
 
   func start(_ config: [String: Any]) throws {
@@ -173,9 +169,6 @@ final class Host: @unchecked Sendable {
       // Where the QNN provider finds the NPU's skel libraries: the app's own,
       // then the system's DSP directories.
       setenv("ADSP_LIBRARY_PATH", "\(dir);/system/lib/rfsa/adsp;/system/vendor/lib/rfsa/adsp;/dsp", 1)
-    }
-    if let chip = config["chip"] as? String {
-      QNNBackend.reportChip(chip)
     }
     guard let cache = config["cache"] as? String, !cache.isEmpty else {
       throw HostFailure("no cache directory")
@@ -193,9 +186,17 @@ final class Host: @unchecked Sendable {
       preload: (config["preload"] as? Bool) ?? true,
       listen: (config["listen"] as? Bool) ?? true,
       usb: (config["usb"] as? Bool) ?? true)
+    let backend = QNNBackend(
+      device: device, preparer: ONNXPreparer(), keepAlive: configuration.keepAlive, keepCPUWarm: configuration.keepCPUWarm,
+      chip: config["chip"] as? String ?? "")
 
     let logs = self.logs
-    let stream = LogStream()
+    // logcat too, where `adb logcat -s jetlink` finds it
+    let stream = LogStream { level, category, message in
+      let line = EmbeddedServer.logLine(level, category, message)
+      _ = __android_log_write(level.logcatPriority, "jetlink", line)
+      return line
+    }
     Task.detached {
       for await line in stream.lines {
         logs.append(line)
@@ -203,9 +204,8 @@ final class Host: @unchecked Sendable {
     }
     let server: EmbeddedServer
     do {
-      server = try EmbeddedServer(configuration: configuration)
-      let telemetry = self.telemetry
-      server.server.telemetry = { telemetry.get() }
+      server = try EmbeddedServer(configuration: configuration, backend: backend, gadget: gadget)
+      server.server.host.thermal = { Host.shared.thermal }
       state.reset()
       let events = server.events
       let state = self.state
@@ -219,20 +219,20 @@ final class Host: @unchecked Sendable {
       stream.finish()
       throw error
     }
-    lock.lock()
-    embedded = server
-    self.stream = stream
-    lock.unlock()
+    lock.withLock {
+      embedded = server
+      self.stream = stream
+    }
     state.serverStarted()
   }
 
   func stop() {
-    lock.lock()
-    let server = embedded
-    let stream = self.stream
-    embedded = nil
-    self.stream = nil
-    lock.unlock()
+    let (server, stream) = lock.withLock { () -> (EmbeddedServer?, LogStream?) in
+      let current = (embedded, self.stream)
+      embedded = nil
+      self.stream = nil
+      return current
+    }
     server?.stop(releasingEngine: true)
     stream?.finish()
     if server != nil {
@@ -240,55 +240,24 @@ final class Host: @unchecked Sendable {
     }
   }
 
-  func command(_ request: [String: Any]) -> [String: Any] {
+  func command(_ request: [String: Any]) -> Any {
     guard let server = running else {
       return ["ok": false, "error": "The server is not running."]
     }
     let command: ControlCommand
     do {
-      command = try decode(request)
+      command = try ControlCommand(object: request)
     } catch {
       return ["ok": false, "error": String(describing: error)]
     }
-    let box = Locked<ReplyEvent?>(nil)
+    nonisolated(unsafe) var reply: ReplyEvent?
     let done = DispatchSemaphore(value: 0)
     Task.detached {
-      box.set(await server.handle(command))
+      reply = await server.handle(command)
       done.signal()
     }
     done.wait()
-    guard let reply = box.get() else { return ["ok": false, "error": "no reply"] }
-    var out: [String: Any] = ["ok": reply.ok]
-    if let error = reply.error { out["error"] = error }
-    for (key, value) in reply.extras {
-      out[key] = controlJSON(value)
-    }
-    return out
-  }
-
-  /// The control protocol's command object as the server's command.
-  func decode(_ request: [String: Any]) throws -> ControlCommand {
-    let name = request["cmd"] as? String ?? ""
-    func text(_ key: String) throws -> String {
-      guard let value = request[key] as? String, !value.isEmpty else { throw HostFailure("\(name) needs \(key)") }
-      return value
-    }
-    func flag(_ key: String, _ fallback: Bool) -> Bool { (request[key] as? Bool) ?? fallback }
-    switch name {
-    case "status": return .status
-    case "catalog": return .catalog(refresh: flag("refresh", false))
-    case "download": return .download(ref: request["ref"] as? String, sha256: request["sha256"] as? String)
-    case "cancel_download": return .cancelDownload(sha256: try text("sha256"))
-    case "import": return .importModel(path: try text("path"))
-    case "prepare":
-      return .prepare(sha256: try text("sha256"), frameSkip: (request["frame_skip"] as? NSNumber)?.intValue ?? Pinned.defaultFrameSkip)
-    case "unload": return .unload
-    case "forget": return .forget(sha256: try text("sha256"), artifacts: flag("artifacts", true), model: flag("model", false))
-    case "inventory": return .inventory
-    case "benchmark": return .benchmark(seconds: (request["seconds"] as? NSNumber)?.doubleValue ?? 60)
-    case "cancel_benchmark": return .cancelBenchmark
-    default: throw HostFailure("unknown command \(name)")
-    }
+    return encoder.object(reply)
   }
 }
 
@@ -297,28 +266,8 @@ struct HostFailure: Error, CustomStringConvertible {
   init(_ description: String) { self.description = description }
 }
 
-/// A value behind a lock.
-final class Locked<Value>: @unchecked Sendable {
-  private let lock = NSLock()
-  private var value: Value
-
-  init(_ value: Value) { self.value = value }
-
-  func get() -> Value {
-    lock.lock()
-    defer { lock.unlock() }
-    return value
-  }
-
-  func set(_ newValue: Value) {
-    lock.lock()
-    value = newValue
-    lock.unlock()
-  }
-}
-
-/// The last `capacity` log lines, numbered so the Logs screen asks only for
-/// what it has not shown.
+/// The last `capacity` log lines or a few more, numbered so the Logs screen
+/// asks only for what it has not shown.
 final class LogRing: @unchecked Sendable {
   private let lock = NSLock()
   private var kept: [String] = []
@@ -328,32 +277,34 @@ final class LogRing: @unchecked Sendable {
   init(capacity: Int) { self.capacity = capacity }
 
   func append(_ line: String) {
-    lock.lock()
-    kept.append(line)
-    if kept.count > capacity {
-      kept.removeFirst(kept.count - capacity)
+    lock.withLock {
+      kept.append(line)
+      // in chunks, not a copy of the whole ring per line
+      if kept.count >= capacity + capacity / 4 {
+        kept.removeFirst(kept.count - capacity)
+      }
+      total += 1
     }
-    total += 1
-    lock.unlock()
-    AndroidLog.write(line)
   }
 
   /// Lines numbered after `after` (0 for all kept), and the number to ask
   /// after next time.
   func lines(after: Int) -> [String: Any] {
-    lock.lock()
-    defer { lock.unlock() }
-    let oldest = total - kept.count
-    let start = min(max(after, oldest) - oldest, kept.count)
-    return ["next": total, "lines": Array(kept[start...])]
+    lock.withLock {
+      let oldest = total - kept.count
+      let start = min(max(after, oldest) - oldest, kept.count)
+      return ["next": total, "lines": Array(kept[start...])]
+    }
   }
 }
 
-/// The server's log in logcat too, where `adb logcat -s jetlink` finds it.
-enum AndroidLog {
-  static func write(_ line: String) {
-    // ANDROID_LOG_ERROR, WARN, INFO
-    let priority: Int32 = line.contains(" ERROR ") ? 6 : line.contains(" WARNING ") ? 5 : 4
-    _ = __android_log_write(priority, "jetlink", line)
+extension Log.Level {
+  /// ANDROID_LOG_INFO, WARN and ERROR.
+  var logcatPriority: Int32 {
+    switch self {
+    case .info: 4
+    case .warning: 5
+    case .error: 6
+    }
   }
 }

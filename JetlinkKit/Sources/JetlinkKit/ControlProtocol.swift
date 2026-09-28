@@ -717,4 +717,37 @@ public enum ControlCommand: Sendable, Equatable {
     data.append(0x0A)
     return data
   }
+
+  /// The command a control-protocol object names, `jsonLine(id:)` read back:
+  /// what the Android app sends, as the server's command. Absent arguments
+  /// take the Python server's defaults.
+  public init(object: [String: Any]) throws {
+    let name = object["cmd"] as? String ?? ""
+    func text(_ key: String) throws -> String {
+      guard let value = object[key] as? String, !value.isEmpty else { throw Invalid(description: "\(name) needs \(key)") }
+      return value
+    }
+    func flag(_ key: String, _ fallback: Bool) -> Bool { (object[key] as? Bool) ?? fallback }
+    func number(_ key: String) -> NSNumber? { object[key] as? NSNumber }
+    switch name {
+    case "status": self = .status
+    case "catalog": self = .catalog(refresh: flag("refresh", false))
+    case "download": self = .download(ref: object["ref"] as? String, sha256: object["sha256"] as? String)
+    case "cancel_download": self = .cancelDownload(sha256: try text("sha256"))
+    case "import": self = .importModel(path: try text("path"))
+    case "prepare": self = .prepare(sha256: try text("sha256"), frameSkip: number("frame_skip")?.intValue ?? Pinned.defaultFrameSkip)
+    case "unload": self = .unload
+    case "forget": self = .forget(sha256: try text("sha256"), artifacts: flag("artifacts", true), model: flag("model", false))
+    case "inventory": self = .inventory
+    case "shutdown": self = .shutdown
+    case "benchmark": self = .benchmark(seconds: number("seconds")?.doubleValue ?? 60)
+    case "cancel_benchmark": self = .cancelBenchmark
+    default: throw Invalid(description: "unknown command \(name)")
+    }
+  }
+
+  /// A command object the server cannot run.
+  public struct Invalid: Error, CustomStringConvertible {
+    public let description: String
+  }
 }

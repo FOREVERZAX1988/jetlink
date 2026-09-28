@@ -68,8 +68,6 @@ import io.zoompilot.jetlink.ui.components.rememberWifiAddress
 import io.zoompilot.jetlink.usb.UsbState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.contentOrNull
 
 /** What the Settings rows show beyond the settings themselves. */
 data class SettingsInfo(
@@ -108,9 +106,7 @@ fun SettingsScreen(graph: AppGraph, openConnect: () -> Unit, openLogs: () -> Uni
     val usb by graph.usb.usb.collectAsStateWithLifecycle()
     val wifi = rememberWifiAddress()
     val runtime by produceState<String?>(null, runState) {
-        value = withContext(Dispatchers.IO) {
-            (graph.server.info()["onnxruntime"] as? JsonPrimitive)?.contentOrNull
-        }
+        value = withContext(Dispatchers.IO) { graph.server.runtimeVersion() }
     }
     val info = SettingsInfo(
         snapshot = snapshot,

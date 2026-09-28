@@ -6,12 +6,11 @@ import Foundation
 /// snapshots (JetlinkAndroid); `android_snapshot.json` in the tests' fixtures
 /// is one, which the Android app's own tests parse.
 public final class AppSnapshot: @unchecked Sendable {
-  /// How long a finished download stays on its row, as on the other apps.
-  public static let terminalDownloadLinger: TimeInterval = 3
   /// The window the headline numbers cover, as on the iPhone.
   public static let recentWindow: TimeInterval = 10
 
   private let condition = NSCondition()
+  private let encoder = ControlJSONEncoder()
   private var version = 1
   private var running = false
   private var server: ServerEvent?
@@ -23,8 +22,11 @@ public final class AppSnapshot: @unchecked Sendable {
   private var finished: [String: Date] = [:]
   private var imports: [ImportEvent] = []
   private var history: [StatsSample] = []
+  /// Each history sample's stats, encoded once when it arrived.
+  private var encodedStats: [Date: Any] = [:]
+  /// The Models rows, built again only when what they come from changes.
+  private var rows: [[String: Any]]?
   private var benchmark: Any = NSNull()
-  private var shutdownRequest: Any = NSNull()
   private var shutdownRequests = 0
 
   public init() {}
@@ -37,8 +39,9 @@ public final class AppSnapshot: @unchecked Sendable {
     downloads = [:]
     finished = [:]
     imports = []
-    history = []
+    clearHistory()
     benchmark = NSNull()
+    rows = nil
     bump()
     condition.unlock()
   }
@@ -54,7 +57,8 @@ public final class AppSnapshot: @unchecked Sendable {
     condition.lock()
     running = false
     link = .waiting
-    history = []
+    clearHistory()
+    rows = nil
     bump()
     condition.unlock()
   }
@@ -65,6 +69,12 @@ public final class AppSnapshot: @unchecked Sendable {
     condition.broadcast()
   }
 
+  /// Under the lock.
+  private func clearHistory() {
+    history = []
+    encodedStats = [:]
+  }
+
   public func apply(_ event: ControlEvent) {
     condition.lock()
     defer { condition.unlock() }
@@ -73,22 +83,30 @@ public final class AppSnapshot: @unchecked Sendable {
       server = value
     case .link(let value):
       link = value
-      if value.state != .connected { history = [] }
+      if value.state != .connected { clearHistory() }
+      rows = nil
     case .engine(let value):
       engine = value
+      rows = nil
     case .stats(let value):
       history = StatsSample.appending(value, to: history)
+      if let sample = history.last {
+        encodedStats[sample.at] = encoder.object(sample.stats)
+      }
+      if encodedStats.count > history.count {
+        let kept = Set(history.map(\.at))
+        encodedStats = encodedStats.filter { kept.contains($0.key) }
+      }
     case .inventory(let value):
       inventory = value
+      rows = nil
     case .catalog(let value):
       catalog = value
+      rows = nil
     case .download(let value):
       downloads[value.sha256] = value
-      if ["done", "failed", "cancelled"].contains(value.state) {
-        finished[value.sha256] = Date()
-      } else {
-        finished[value.sha256] = nil
-      }
+      finished[value.sha256] = value.isTerminal ? Date() : nil
+      rows = nil
     case .importEvent(let value):
       if let index = imports.firstIndex(where: { $0.path == value.path }) {
         imports[index] = value
@@ -97,14 +115,13 @@ public final class AppSnapshot: @unchecked Sendable {
       }
     case .benchmark(let value):
       // with the report as the other apps share it
-      var event = controlJSON(value)
+      var event = encoder.object(value)
       if var object = event as? [String: Any], let text = value.report?.text {
         object["report_text"] = text
         event = object
       }
       benchmark = event
-    case .shutdownRequest(let value):
-      shutdownRequest = controlJSON(value)
+    case .shutdownRequest:
       shutdownRequests += 1
     case .hello, .reply, .unknown:
       return
@@ -113,35 +130,43 @@ public final class AppSnapshot: @unchecked Sendable {
   }
 
   /// Waits until the state is newer than `after`, or `timeout` passes, and
-  /// returns it whole. `port` is where the server listens; `recent` the
-  /// frames of the last `recentWindow` seconds, asked only while a comma is
-  /// connected.
-  public func snapshot(after: Int, timeout: TimeInterval, port: Int? = nil, recent: () -> StatsEvent? = { nil }) -> [String: Any] {
+  /// returns it whole; nil when there is nothing new, except while a comma is
+  /// connected, whose live numbers move every second. `port` is where the
+  /// server listens; `recent` the frames of the last `recentWindow` seconds.
+  public func snapshot(after: Int, timeout: TimeInterval, port: Int? = nil, recent: () -> StatsEvent? = { nil }) -> [String: Any]? {
     condition.lock()
     defer { condition.unlock() }
     let deadline = Date().addingTimeInterval(max(0, timeout))
     while version <= after {
       if !condition.wait(until: deadline) { break }
     }
-    let now = Date()
-    for (sha, at) in finished where now.timeIntervalSince(at) >= AppSnapshot.terminalDownloadLinger {
-      downloads[sha] = nil
-      finished[sha] = nil
+    let lingered = finished.filter { Date().timeIntervalSince($0.value) >= ModelStore.terminalDownloadLinger.seconds }.keys
+    if !lingered.isEmpty {
+      for sha in lingered {
+        downloads[sha] = nil
+        finished[sha] = nil
+      }
+      rows = nil
+      bump()
     }
-    let rows = ModelRowBuilder.build(catalog: catalog, inventory: inventory, downloads: downloads, engine: engine, link: link)
+    guard version > after || link.state == .connected else { return nil }
+    if rows == nil {
+      rows = ModelRowBuilder.build(catalog: catalog, inventory: inventory, downloads: downloads, engine: engine, link: link)
+        .map { AppSnapshot.row($0, encoder: encoder) }
+    }
     let recentStats = link.state == .connected ? recent() : nil
     return [
       "version": version,
       "running": running,
       "port": port ?? NSNull(),
-      "server": controlJSON(server),
-      "link": controlJSON(link),
+      "server": encoder.object(server),
+      "link": encoder.object(link),
       // what the connected comma's link is carried over, as the apps name it
       "medium": link.connectedMedium.map { ["name": $0.rawValue, "title": $0.title, "slow": $0.isSlow] as [String: Any] } ?? NSNull(),
-      "engine": controlJSON(engine),
-      "recent": controlJSON(recentStats),
-      "history": history.map { ["at": $0.at.timeIntervalSince1970, "stats": controlJSON($0.stats)] as [String: Any] },
-      "models": rows.map(AppSnapshot.row),
+      "engine": encoder.object(engine),
+      "recent": encoder.object(recentStats),
+      "history": history.map { ["at": $0.at.timeIntervalSince1970, "stats": encodedStats[$0.at] ?? NSNull()] as [String: Any] },
+      "models": rows ?? [],
       "catalog": catalog.map { catalog -> Any in
         [
           "fetched_at": catalog.fetchedAt ?? NSNull(),
@@ -150,17 +175,15 @@ public final class AppSnapshot: @unchecked Sendable {
           "count": catalog.models.count,
         ] as [String: Any]
       } ?? NSNull(),
-      "disk": inventory.map { controlJSON($0.disk) } ?? NSNull(),
-      "loaded": inventory?.loaded ?? NSNull(),
-      "imports": imports.map { controlJSON($0) },
+      "disk": inventory.map { encoder.object($0.disk) } ?? NSNull(),
+      "imports": imports.map { encoder.object($0) },
       "benchmark": benchmark,
-      "shutdown_request": shutdownRequest,
       "shutdown_requests": shutdownRequests,
     ]
   }
 
   /// A Models row as the app draws it.
-  public static func row(_ row: ModelRow) -> [String: Any] {
+  static func row(_ row: ModelRow, encoder: ControlJSONEncoder) -> [String: Any] {
     var status: [String: Any]
     switch row.status {
     case .unresolved: status = ["kind": "unresolved"]
@@ -172,12 +195,6 @@ public final class AppSnapshot: @unchecked Sendable {
     case .loaded: status = ["kind": "loaded"]
     case .failed(let detail): status = ["kind": "failed", "detail": detail]
     }
-    // The other apps' ModelStore.canUse: what "Use" may be pressed on.
-    let canUse: Bool
-    switch row.status {
-    case .notDownloaded, .downloaded, .prepared, .failed: canUse = row.sha256 != nil || row.ref != nil
-    case .unresolved, .downloading, .preparing, .loaded: canUse = false
-    }
     return [
       "id": row.id,
       "name": row.name,
@@ -187,25 +204,38 @@ public final class AppSnapshot: @unchecked Sendable {
       "bytes": row.bytes ?? NSNull(),
       "build_time": row.buildTime ?? NSNull(),
       "status": status,
-      "prepared_for": row.preparedFor.map { controlJSON($0) },
+      "prepared_for": row.preparedFor.map { encoder.object($0) },
       "is_loaded": row.isLoaded,
       "is_default": row.isDefault,
       "is_requested_by_comma": row.isRequestedByComma,
       "is_local": row.isLocal,
       "is_orphan": row.isOrphan,
-      "can_use": canUse,
+      "can_use": ModelStore.canUse(row),
     ]
   }
 }
 
-/// An Encodable event as the control protocol writes it: a snake_case
-/// object, or null.
-public func controlJSON<T: Encodable>(_ value: T?) -> Any {
-  guard let value else { return NSNull() }
-  let encoder = JSONEncoder()
-  encoder.keyEncodingStrategy = .convertToSnakeCase
-  guard let data = try? encoder.encode(value), let object = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) else {
-    return NSNull()
+/// Encodable events as the control protocol writes them: snake_case
+/// objects. Its options are set once, and JSONEncoder encodes on any number
+/// of threads at once.
+public final class ControlJSONEncoder: @unchecked Sendable {
+  private let encoder: JSONEncoder
+
+  public init() {
+    encoder = JSONEncoder()
+    encoder.keyEncodingStrategy = .convertToSnakeCase
   }
-  return object
+
+  /// `value` as a JSON object, or null.
+  public func object<T: Encodable>(_ value: T?) -> Any {
+    guard let value, let data = try? encoder.encode(value),
+      let object = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
+    else { return NSNull() }
+    return object
+  }
+}
+
+extension Duration {
+  /// In seconds, as TimeInterval counts them.
+  var seconds: TimeInterval { Double(components.seconds) + Double(components.attoseconds) / 1e18 }
 }

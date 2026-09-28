@@ -18,7 +18,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -38,7 +37,7 @@ sealed interface RunState {
 }
 
 /** A command's answer: ok, or the server's sentence why not. */
-data class Reply(val ok: Boolean, val error: String?, val fields: JsonObject)
+data class Reply(val ok: Boolean, val error: String?)
 
 /**
  * The server in this process, and what the screens read from it: the
@@ -68,11 +67,8 @@ class ServerController(private val context: Context, private val scope: Coroutin
     /** Starts the server with [settings], restarting one that runs. */
     suspend fun start(settings: SettingsValues) = lifecycle.withLock {
         run.value = RunState.Starting
-        val error = withContext(Dispatchers.IO) {
-            Native.stop()
-            cacheDirectory.mkdirs()
-            Native.start(config(settings).toString())
-        }
+        // the server stops one that runs first
+        val error = withContext(Dispatchers.IO) { Native.start(config(settings).toString()) }
         if (error != null) {
             Log.e(TAG, "the server did not start: $error")
             run.value = RunState.Failed(error)
@@ -108,15 +104,19 @@ class ServerController(private val context: Context, private val scope: Coroutin
         var logsAfter = 0L
         while (scope.isActive) {
             val text = Native.snapshot(state.value.version, SNAPSHOT_WAIT_MS)
-            runCatching { Snapshot.parse(text) }
-                .onSuccess { state.value = it }
-                .onFailure { Log.w(TAG, "an unreadable snapshot: ${it.message}") }
+            if (text.isNotEmpty()) {
+                runCatching { Snapshot.parse(text) }
+                    .onSuccess { state.value = it }
+                    .onFailure { Log.w(TAG, "an unreadable snapshot: ${it.message}") }
+            }
             val logs = runCatching { Snapshot.json.parseToJsonElement(Native.logs(logsAfter)).jsonObject }.getOrNull()
             if (logs != null) {
                 val lines = (logs["lines"] as? kotlinx.serialization.json.JsonArray)?.mapNotNull { it.jsonPrimitive.contentOrNull }.orEmpty()
                 logsAfter = logs["next"]?.jsonPrimitive?.contentOrNull?.toLongOrNull() ?: logsAfter
                 if (lines.isNotEmpty()) {
-                    logLines.value = (logLines.value + lines).takeLast(LOG_LINES)
+                    // trimmed in chunks, not a copy of the whole log each second
+                    val kept = logLines.value + lines
+                    logLines.value = if (kept.size > LOG_LINES + LOG_LINES / 4) kept.takeLast(LOG_LINES) else kept
                 }
             }
             if (run.value != RunState.Serving) delay(250)
@@ -150,11 +150,12 @@ class ServerController(private val context: Context, private val scope: Coroutin
         val ok = reply["ok"]?.jsonPrimitive?.booleanOrNull == true
         val error = (reply["error"] as? JsonPrimitive)?.contentOrNull
         if (!ok) failure.value = error ?: "The $name command failed."
-        Reply(ok, error, reply)
+        Reply(ok, error)
     }
 
     suspend fun refreshCatalog() = command("catalog", "refresh" to true)
-    suspend fun use(sha256: String) = command("prepare", "sha256" to sha256, "frame_skip" to DEFAULT_FRAME_SKIP)
+    /** Prepares and loads a model at the frame skip a comma asks for, the server's default. */
+    suspend fun use(sha256: String) = command("prepare", "sha256" to sha256)
     suspend fun download(ref: String?, sha256: String?) = command("download", "ref" to ref, "sha256" to sha256)
     suspend fun cancelDownload(sha256: String) = command("cancel_download", "sha256" to sha256)
     suspend fun unload() = command("unload")
@@ -176,7 +177,7 @@ class ServerController(private val context: Context, private val scope: Coroutin
         }.getOrNull()
         if (copied == null) {
             failure.value = "Couldn't read that file."
-            return@withContext Reply(false, "Couldn't read that file.", JsonObject(emptyMap()))
+            return@withContext Reply(false, "Couldn't read that file.")
         }
         val reply = importModel(copy.absolutePath)
         if (!reply.ok) {
@@ -193,15 +194,13 @@ class ServerController(private val context: Context, private val scope: Coroutin
     suspend fun benchmark(seconds: Int) = command("benchmark", "seconds" to seconds)
     suspend fun cancelBenchmark() = command("cancel_benchmark")
 
-    /** Versions for About. */
-    fun info(): Map<String, JsonElement> = runCatching { Snapshot.json.parseToJsonElement(Native.info()).jsonObject.toMap() }.getOrElse { emptyMap() }
+    /** The onnxruntime version, for Settings. */
+    fun runtimeVersion(): String? = runCatching { Native.runtimeVersion() }.getOrNull()
 
     companion object {
         private const val TAG = "jetlink"
         /** The longest a snapshot waits for news; the headline refreshes at least this often. */
         const val SNAPSHOT_WAIT_MS = 1000
         const val LOG_LINES = 5000
-        /** The frame skip a comma asks for (Pinned.defaultFrameSkip). */
-        const val DEFAULT_FRAME_SKIP = 4
     }
 }

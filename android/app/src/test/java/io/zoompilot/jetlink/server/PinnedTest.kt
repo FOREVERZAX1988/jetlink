@@ -8,8 +8,8 @@ import java.io.File
 /**
  * The few constants the Android side cannot take from the server, checked
  * against Pinned.swift, which is generated from the Python: the gadget's IDs
- * in the device filter and in CommaUsb, the port, the frame skip, and the
- * onnxruntime release.
+ * in the device filter and in CommaUsb, the port, the onnxruntime
+ * release, and the NDK the Swift SDK was built with.
  */
 class PinnedTest {
     private val pinned = File(SnapshotTest.REPO, "JetlinkKit/Sources/JetlinkKit/Pinned.swift").readText()
@@ -31,9 +31,18 @@ class PinnedTest {
     }
 
     @Test
-    fun thePortAndFrameSkip() {
+    fun thePort() {
         assertEquals(pinnedInt("defaultPort"), io.zoompilot.jetlink.settings.SettingsValues().port)
-        assertEquals(pinnedInt("defaultFrameSkip"), ServerController.DEFAULT_FRAME_SKIP)
+    }
+
+    @Test
+    fun theNdk() {
+        val env = File(SnapshotTest.REPO, "android/scripts/swift-env.sh").readText()
+        val gradle = File(SnapshotTest.REPO, "android/app/build.gradle.kts").readText()
+        assertEquals(
+            Regex("""NDK_VERSION=(\S+)""").find(env)?.groupValues?.get(1),
+            Regex("""ndkVersion = "([^"]+)"""").find(gradle)?.groupValues?.get(1),
+        )
     }
 
     @Test

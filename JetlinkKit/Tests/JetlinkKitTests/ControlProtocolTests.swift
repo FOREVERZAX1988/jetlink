@@ -27,6 +27,20 @@ struct ControlProtocolTests {
     #expect(try events().count == 18)
   }
 
+  @Test func commandsReadBackAsWritten() throws {
+    let commands: [ControlCommand] = [
+      .status, .catalog(refresh: true), .download(ref: "a", sha256: nil), .download(ref: nil, sha256: "b"),
+      .cancelDownload(sha256: "b"), .importModel(path: "/m.onnx"), .prepare(sha256: "b", frameSkip: 2), .unload,
+      .forget(sha256: "b", artifacts: false, model: true), .inventory, .shutdown, .benchmark(seconds: 30), .cancelBenchmark,
+    ]
+    for command in commands {
+      let object = try #require(try JSONSerialization.jsonObject(with: command.jsonLine(id: 7)) as? [String: Any])
+      #expect(try ControlCommand(object: object) == command)
+    }
+    #expect(throws: ControlCommand.Invalid.self) { try ControlCommand(object: ["cmd": "prepare"]) }
+    #expect(throws: ControlCommand.Invalid.self) { try ControlCommand(object: ["cmd": "reboot"]) }
+  }
+
   @Test func decodesHello() throws {
     guard case .hello(let hello) = try ControlEvent(jsonLine: events()[0]) else {
       Issue.record("expected a hello event")

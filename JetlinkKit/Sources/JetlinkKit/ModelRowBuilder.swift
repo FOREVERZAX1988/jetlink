@@ -59,6 +59,11 @@ public struct ModelRow: Identifiable, Equatable, Sendable {
   }
 }
 
+extension DownloadEvent {
+  /// Done, failed or cancelled: the row lingers a moment, then goes quiet.
+  public var isTerminal: Bool { ["done", "failed", "cancelled"].contains(state) }
+}
+
 /// Turns the four server events plus the engine and link state into the list
 /// the Models view renders. A pure function, so it is all the tests need.
 public enum ModelRowBuilder {

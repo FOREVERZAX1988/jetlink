@@ -21,7 +21,7 @@ public final class ModelStore {
 
   public static let defaultFrameSkip = Pinned.defaultFrameSkip
   /// How long a finished download stays on screen before its row goes quiet.
-  public static let terminalDownloadLinger: Duration = .seconds(3)
+  public nonisolated static let terminalDownloadLinger: Duration = .seconds(3)
 
   public let server: any ServerControlling
 
@@ -101,7 +101,7 @@ public final class ModelStore {
   }
 
   private func scheduleTerminalDownloadRemoval(_ event: DownloadEvent) {
-    guard ["done", "failed", "cancelled"].contains(event.state) else { return }
+    guard event.isTerminal else { return }
     let sha = event.sha256
     let state = event.state
     Task { @MainActor [weak self] in
@@ -126,7 +126,7 @@ public final class ModelStore {
 
   /// True when Use Model has something to do: download the model, prepare
   /// it, load it, or try again after a failure.
-  public static func canUse(_ row: ModelRow) -> Bool {
+  public nonisolated static func canUse(_ row: ModelRow) -> Bool {
     guard row.sha256 != nil else { return false }
     switch row.status {
     case .notDownloaded, .downloaded, .prepared, .failed: return true

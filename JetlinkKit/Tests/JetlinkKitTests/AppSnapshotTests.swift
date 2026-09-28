@@ -75,7 +75,7 @@ struct AppSnapshotTests {
   /// The snapshot with the clock taken out: history times are when the
   /// stats event arrived.
   static func json(_ snapshot: AppSnapshot) throws -> [String: Any] {
-    var object = snapshot.snapshot(after: 0, timeout: 0, port: 5599) { stats }
+    var object = try #require(snapshot.snapshot(after: 0, timeout: 0, port: 5599) { stats })
     if var history = object["history"] as? [[String: Any]] {
       for index in history.indices { history[index]["at"] = 1_759_000_000.0 + Double(index) }
       object["history"] = history
@@ -84,7 +84,7 @@ struct AppSnapshotTests {
   }
 
   static var fixtureURL: URL {
-    URL(fileURLWithPath: #filePath).deletingLastPathComponent().appending(path: "Fixtures/android_snapshot.json")
+    SourceTree.root().appending(path: "JetlinkKit/Tests/JetlinkKitTests/Fixtures/android_snapshot.json")
   }
 
   @Test func matchesTheFixtureTheAndroidAppParses() throws {
@@ -115,16 +115,16 @@ struct AppSnapshotTests {
   @Test func disconnectingClearsTheLiveNumbers() throws {
     let snapshot = Self.serving()
     snapshot.apply(.link(LinkEvent(state: .disconnected, detail: "the device went away", peer: nil)))
-    let object = snapshot.snapshot(after: 0, timeout: 0) { Self.stats }
+    let object = try #require(snapshot.snapshot(after: 0, timeout: 0) { Self.stats })
     #expect((object["history"] as? [Any])?.isEmpty == true)
     #expect(object["recent"] is NSNull)
   }
 
   @Test func aSnapshotWaitsForNews() throws {
     let snapshot = AppSnapshot()
-    let version = try #require(snapshot.snapshot(after: 0, timeout: 0)["version"] as? Int)
+    let version = try #require(snapshot.snapshot(after: 0, timeout: 0)?["version"] as? Int)
     let started = Date()
-    _ = snapshot.snapshot(after: version, timeout: 0.2)
+    #expect(snapshot.snapshot(after: version, timeout: 0.2) == nil)
     #expect(Date().timeIntervalSince(started) >= 0.15)
     let waiter = Thread {
       Thread.sleep(forTimeInterval: 0.05)
@@ -134,6 +134,13 @@ struct AppSnapshotTests {
     let early = Date()
     let next = snapshot.snapshot(after: version, timeout: 5)
     #expect(Date().timeIntervalSince(early) < 2)
-    #expect((next["version"] as? Int ?? 0) > version)
+    #expect((next?["version"] as? Int ?? 0) > version)
+  }
+
+  @Test func aConnectedCommaAlwaysHasNews() throws {
+    let snapshot = Self.serving()
+    let version = try #require(snapshot.snapshot(after: 0, timeout: 0)?["version"] as? Int)
+    // the live numbers move every second while a comma is connected
+    #expect(snapshot.snapshot(after: version, timeout: 0) != nil)
   }
 }

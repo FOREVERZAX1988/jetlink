@@ -29,10 +29,8 @@ data class Snapshot(
     val models: List<ModelRow> = emptyList(),
     val catalog: CatalogInfo? = null,
     val disk: Disk? = null,
-    val loaded: String? = null,
     val imports: List<ImportState> = emptyList(),
     val benchmark: Benchmark? = null,
-    val shutdownRequest: ShutdownRequest? = null,
     val shutdownRequests: Int = 0,
 ) {
     val connected: Boolean get() = link.state == "connected"
@@ -229,6 +227,3 @@ data class BenchReport(
 
 @Serializable
 data class BenchWindow(val startSecond: Int = 0, val frame: BenchStats = BenchStats(), val thermal: String = "")
-
-@Serializable
-data class ShutdownRequest(val reason: String = "")
