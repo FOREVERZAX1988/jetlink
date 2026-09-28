@@ -175,9 +175,9 @@ class TestTheTwoGadgets(unittest.TestCase):
     with unittest.mock.patch.object(root, 'run', return_value=True) as run, \
          unittest.mock.patch.object(gadget, 'link_configured', return_value=True):
       self.assertTrue(gadget.setup_gadget(True))
-      run.assert_called_with('gadget', '--ios', timeout=root.GADGET_TIMEOUT)
+      run.assert_called_with('gadget', '--ios')
       self.assertTrue(gadget.setup_gadget(False))
-      run.assert_called_with('gadget', timeout=root.GADGET_TIMEOUT)
+      run.assert_called_with('gadget')
 
   def test_the_built_gadget_is_read_from_its_config(self):
     tmp = Path(tempfile.mkdtemp())
@@ -196,23 +196,6 @@ class TestGadgetSetup(unittest.TestCase):
 
   def setUp(self):
     self.tmp = Path(tempfile.mkdtemp())
-    self.script = self.tmp / 'jetlink-root.sh'
-    self.script.write_text('#!/bin/sh\n')
-    for module, name, value in ((root, 'SCRIPT', self.script), (gadget, 'AGNOS', True)):
-      p = unittest.mock.patch.object(module, name, value)
-      self.addCleanup(p.stop)
-      p.start()
-
-  def test_only_agnos_with_the_script_can_set_one_up(self):
-    self.assertTrue(gadget.can_setup_gadget())
-    with unittest.mock.patch.object(gadget, 'AGNOS', False):
-      self.assertFalse(gadget.can_setup_gadget())
-    self.script.unlink()
-    self.assertFalse(gadget.can_setup_gadget())
-
-  def test_the_scripts_checkout_is_the_one_the_owner_runs(self):
-    self.assertEqual(root.SCRIPT, self.script)
-    self.assertTrue((REPO / 'scripts' / 'comma' / 'jetlink-root.sh').is_file())
 
   def test_a_failed_setup_is_a_false_not_a_raise(self):
     # the script has already written the reason to the status file
@@ -227,7 +210,7 @@ class TestGadgetSetup(unittest.TestCase):
     with unittest.mock.patch.object(root, 'run', return_value=True) as run, \
          unittest.mock.patch.object(gadget, 'NET_STATUS', status):
       self.assertFalse(gadget.net_up())          # the script wrote nothing
-      run.assert_called_once_with('net', timeout=root.GADGET_TIMEOUT)
+      run.assert_called_once_with('net')
       status.write_text('error: no netdev yet; it appears when the owner binds the UDC (then run net)\n')
       self.assertFalse(gadget.net_up())
       status.write_text('ok 192.168.60.1 usb1\n')
@@ -235,10 +218,6 @@ class TestGadgetSetup(unittest.TestCase):
     with unittest.mock.patch.object(root, 'run', return_value=False), \
          unittest.mock.patch.object(gadget, 'NET_STATUS', status):
       self.assertFalse(gadget.net_up())
-    with unittest.mock.patch.object(gadget, 'AGNOS', False), \
-         unittest.mock.patch.object(root, 'run') as run:
-      self.assertFalse(gadget.net_up())
-      run.assert_not_called()
 
 
 class TestTheLogger(unittest.TestCase):

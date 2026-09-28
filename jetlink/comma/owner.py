@@ -42,7 +42,7 @@ import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from jetlink.comma import gadget, lending, port, vm
+from jetlink.comma import gadget, lending, port, root
 
 POLL = 0.5
 # how long the gadget is held after the last thing that wanted it. The server
@@ -208,8 +208,6 @@ class Owner:
     link turned on later gets one at once."""
     if gadget.link_configured():
       return True
-    if not gadget.can_setup_gadget():
-      return True
     return self.build(gadget.ios())
 
   def build(self, ios: bool) -> bool:
@@ -374,13 +372,16 @@ class Owner:
       self.stop_worker()
       self.wake()
       if self.vm_tuned:
-        vm.restore()
+        root.run('vm', 'restore')
         self.vm_tuned = False
       self.port.off()
       return
 
     if not self.vm_tuned:
-      vm.apply()
+      # jetlink-root.sh vm: the recording VM tuning the gadget's reads need,
+      # while the link is on. Put back only when it is turned off, never on
+      # exit: manager stops this at ignition, just as the contention starts
+      root.run('vm', 'apply')
       self.vm_tuned = True
     # before anything is presented: a C-to-C host has to find a device here
     self.port.update()

@@ -7,8 +7,8 @@ See the LICENSE file in the root directory for more details.
 What runs on the comma itself, beside openpilot: the USB gadget and the
 openpilot params it reads (gadget), the process that holds it for the whole
 time the link is on (owner), the lease other processes borrow its endpoints
-on (lending), the USB-C port (port), the VM tuning (vm), and the one root
-script all of it goes through (root). For the comma four and the comma 3X.
+on (lending), the USB-C port (port), and the one root script all of it goes
+through (root), the VM tuning included. For the comma four and the comma 3X.
 
 The standard library and jetlink's transport only: the owner that imports it
 stays resident at about 10 MB. openpilot runs the owner through a shim in the fork,

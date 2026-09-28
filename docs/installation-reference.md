@@ -82,8 +82,8 @@ The owner is the process that holds the gadget for as long as the link is on;
 openpilot lists it as `jetlinkd`. It and everything it uses on the comma live in
 `jetlink/comma/`: the gadget and the openpilot params it reads by name
 (`gadget.py`), the owner (`owner.py`), the lease modeld borrows the endpoints or
-a phone's dial on (`lending.py`), the USB-C port (`port.py`), the VM tuning
-(`vm.py`) and the wrapper that runs this script under `sudo -n` (`root.py`).
+a phone's dial on (`lending.py`), the USB-C port (`port.py`) and the wrapper
+that runs this script under `sudo -n`, on AGNOS only (`root.py`).
 It is standard library only, so the owner stays at about 10 MB. The zoompilot
 fork keeps a shim, `openpilot/sunnypilot/accelerators/jetlink/owner.py`, that
 starts it with the fork's provisioning worker.

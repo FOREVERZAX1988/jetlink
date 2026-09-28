@@ -14,7 +14,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from jetlink.comma import gadget, root, port
+from jetlink.comma import port, root
 
 SWAP = port.SWAP_AFTER
 RELEASE = port.RELEASE_AFTER
@@ -200,20 +200,14 @@ class TestTheLink(PortTest):
 
 
 class TestTheScript(unittest.TestCase):
-  def run_with(self, ok: bool, agnos: bool = True):
-    with mock.patch.object(gadget, 'AGNOS', agnos), \
-         mock.patch.object(root, 'run', return_value=ok) as run:
+  def run_with(self, ok: bool):
+    with mock.patch.object(root, 'run', return_value=ok) as run:
       return port.run_script('hold'), run
 
   def test_it_runs_the_root_script(self):
     ok, run = self.run_with(True)
     self.assertTrue(ok)
     run.assert_called_once_with('port', 'hold', timeout=root.PORT_TIMEOUT)
-
-  def test_off_agnos_it_does_nothing(self):
-    ok, run = self.run_with(True, agnos=False)
-    self.assertFalse(ok)
-    run.assert_not_called()
 
   def test_a_failure_is_a_false(self):
     # root.run has logged why: no lever, sudo, or a timeout

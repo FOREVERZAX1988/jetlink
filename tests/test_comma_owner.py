@@ -18,7 +18,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from jetlink.comma import gadget, owner
+from jetlink.comma import gadget, owner, root
+from tests import comma_fakes
 
 
 class OwnerTest(unittest.TestCase):
@@ -33,7 +34,6 @@ class OwnerTest(unittest.TestCase):
                         ('STATE', self.tmp / 'state'),
                         ('params_dir', mock.Mock(return_value=self.params)),
                         ('link_configured', mock.Mock(return_value=True)),
-                        ('can_setup_gadget', mock.Mock(return_value=False)),
                         ('host_attached', mock.Mock(return_value=True)),
                         ('udc_state', mock.Mock(return_value='configured')),
                         ('wait_for_host', mock.Mock(return_value=True)),
@@ -49,9 +49,10 @@ class OwnerTest(unittest.TestCase):
     p = mock.patch.object(owner, 'LOG', self.tmp / 'owner.log')
     self.addCleanup(p.stop)
     p.start()
-    p = mock.patch.object(owner, 'vm', mock.Mock())
+    # every root step: the real one is sudo on a comma
+    p = mock.patch.object(root, 'run', mock.Mock(return_value=True))
     self.addCleanup(p.stop)
-    self.vm = p.start()
+    self.root_run = p.start()
     # the real one runs sudo on a comma, and these run there too
     p = mock.patch.object(owner.port, 'Port', mock.Mock())
     self.addCleanup(p.stop)
@@ -59,6 +60,10 @@ class OwnerTest(unittest.TestCase):
 
   def write(self, key: str, value: bytes) -> None:
     (self.params / key).write_bytes(value)
+
+  def vm_calls(self) -> list[str]:
+    """What the owner asked jetlink-root.sh vm to do, in order."""
+    return [c.args[1] for c in self.root_run.call_args_list if c.args[0] == 'vm']
 
   def note_state(self, **kw) -> None:
     gadget.STATE.write_text(json.dumps(kw))
@@ -350,14 +355,13 @@ class TestTheToggle(OwnerTest):
     o.step()
     o.close_link.assert_called_once()
     worker.terminate.assert_called_once()
-    self.vm.restore.assert_called_once()
+    self.assertEqual(self.vm_calls(), ['restore'])
 
   def test_the_sysctls_go_in_once_and_stay_for_the_drive(self):
     o = self.owner()
     o.step()
     o.step()
-    self.vm.apply.assert_called_once()
-    self.vm.restore.assert_not_called()
+    self.assertEqual(self.vm_calls(), ['apply'])
 
   def test_the_port_is_kept_a_device_while_the_link_is_on(self):
     o = self.owner()
@@ -377,6 +381,61 @@ class TestTheToggle(OwnerTest):
     o.stop = True
     o.run()
     o.port.off.assert_called_once()
+
+
+class TestVmTuning(OwnerTest):
+  """The VM tuning, against the real jetlink-root.sh vm on a fake /proc/sys. A
+  device with the link off runs stock values, one that turns it off gets them
+  back, and a plain exit keeps them for the drive that follows. The values
+  and the ratio-mode restore are test_comma_root.py's."""
+
+  def setUp(self):
+    super().setUp()
+    comma_fakes.proc_sys(self.tmp, comma_fakes.STOCK)
+    self.root_run.side_effect = self.run_script
+
+  def run_script(self, *args: str, timeout: float = root.TIMEOUT) -> bool:
+    """root.run, without sudo, on the fake /proc/sys."""
+    return comma_fakes.run_script(self.tmp, *args, timeout=timeout).returncode == 0
+
+  def tuned(self) -> bool:
+    return comma_fakes.read_all(self.tmp, comma_fakes.TUNED) == comma_fakes.TUNED
+
+  def test_applied_on_start_and_kept_on_exit(self):
+    o = self.owner()
+    o.step()
+    o.stop = True
+    o.run()
+    self.assertEqual(self.vm_calls(), ['apply'], "an exit is the ignition handoff; restoring there strips the drive of them")
+    self.assertTrue(self.tuned())
+    self.assertTrue(comma_fakes.record(self.tmp).exists(), "the record is what a later disable restores to")
+
+  def test_the_next_start_reapplies_without_touching_the_record(self):
+    self.owner().step()
+    stock = comma_fakes.record(self.tmp).read_text()
+    self.owner().step()
+    self.assertEqual(self.vm_calls(), ['apply', 'apply'])
+    self.assertEqual(comma_fakes.record(self.tmp).read_text(), stock)
+
+  def test_nothing_happens_when_disabled(self):
+    self.write('JetlinkLink', b'0')
+    self.owner().step()
+    self.assertEqual(self.vm_calls(), [])
+    self.assertFalse(comma_fakes.record(self.tmp).exists())
+
+  def test_disabling_mid_run_restores(self):
+    o = self.owner()
+    o.step()
+    self.write('JetlinkLink', b'0')
+    o.step()
+    self.assertEqual(self.vm_calls(), ['apply', 'restore'])
+    self.assertFalse(comma_fakes.record(self.tmp).exists())
+    stock = comma_fakes.STOCK
+    self.assertEqual(comma_fakes.read_sys(self.tmp, 'vm.min_free_kbytes'), stock['vm.min_free_kbytes'])
+    # back to ratio mode through the ratio keys; the fake /proc cannot zero
+    # the bytes keys as the kernel does
+    for key in ('vm.dirty_ratio', 'vm.dirty_background_ratio'):
+      self.assertEqual(comma_fakes.read_sys(self.tmp, key), stock[key])
 
 
 class TestUsb(OwnerTest):
@@ -666,24 +725,18 @@ class TestSetup(OwnerTest):
   def test_a_gadget_boot_did_not_make_is_created(self):
     o = self.owner(presented=False)
     with mock.patch.object(gadget, 'link_configured', return_value=False), \
-         mock.patch.object(gadget, 'can_setup_gadget', return_value=True), \
          mock.patch.object(gadget, 'setup_gadget', return_value=True) as setup:
       self.assertTrue(o.ensure_gadget())
       setup.assert_called_once()
 
   def test_a_failed_setup_is_not_retried_every_cycle(self):
+    # off AGNOS too, where root.run is a False for everything
     o = self.owner(presented=False)
     with mock.patch.object(gadget, 'link_configured', return_value=False), \
-         mock.patch.object(gadget, 'can_setup_gadget', return_value=True), \
          mock.patch.object(gadget, 'setup_gadget', return_value=False) as setup:
       for _ in range(3):
-        o.ensure_gadget()
+        self.assertFalse(o.ensure_gadget())
       setup.assert_called_once()
-
-  def test_a_device_that_cannot_make_one_still_tries_the_link(self):
-    o = self.owner(presented=False)
-    with mock.patch.object(gadget, 'link_configured', return_value=False):
-      self.assertTrue(o.ensure_gadget())
 
 
 class TestTheWorker(OwnerTest):

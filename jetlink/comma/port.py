@@ -88,12 +88,10 @@ def chestnut_attached() -> bool:
 
 
 def run_script(command: str) -> bool:
-  """jetlink-root.sh port hold|off, on AGNOS only. Both commas have the lever,
-  so a False is a failure, and root.run has logged why. Its timeout is short
-  because the off in the owner's finally comes before the FunctionFS close,
-  inside manager's 5 s."""
-  if not gadget.AGNOS:
-    return False
+  """jetlink-root.sh port hold|off. Both commas have the lever, so a False is
+  a failure, and root.run has logged why. Its timeout is short because the
+  off in the owner's finally comes before the FunctionFS close, inside
+  manager's 5 s."""
   return root.run('port', command, timeout=root.PORT_TIMEOUT)
 
 

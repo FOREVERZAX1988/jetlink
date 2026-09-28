@@ -36,8 +36,6 @@ from jetlink.transport import ffs
 from jetlink.transport.base import UDC_SYSFS, udc_speed
 from jetlink.transport.tcp import CABLE_ADDRESS, DEFAULT_PORT
 
-AGNOS = os.path.isfile('/AGNOS')
-
 # -- logging --------------------------------------------------------------
 # a module-level indirection rather than an import: the owner has no swaglog
 # and must not grow one, and every other process wants its lines in the drive.
@@ -82,7 +80,7 @@ def params_dir() -> Path:
   if found is None:
     # hw.h: PARAMS_ROOT, else /data/params on device. comma_home carries the
     # prefix off-device, so a bench under its own store lands where Params does
-    home = base or ('/data/params' if AGNOS
+    home = base or ('/data/params' if root.AGNOS
                     else os.path.join(os.path.expanduser('~'),
                                       '.comma' + ('' if prefix == 'd' else prefix), 'params'))
     found = _dirs[key] = Path(home) / prefix
@@ -367,16 +365,12 @@ def wait_for_host(timeout: float, bounce=None, should_stop=None, report=None) ->
     time.sleep(HOST_POLL)
 
 
-def can_setup_gadget() -> bool:
-  """Only AGNOS has the gadget stack, and only a checkout has the script."""
-  return AGNOS and root.SCRIPT.is_file()
-
-
 def setup_gadget(ios: bool) -> bool:
   """Create the gadget, for USB or iOS: there is none yet, or the setting
   moved between the two. The script records "ok" or the reason itself, in
-  GADGET_STATUS, so a failure here reaches the offroad alert."""
-  if not root.run('gadget', *(['--ios'] if ios else []), timeout=root.GADGET_TIMEOUT):
+  GADGET_STATUS, so a failure here reaches the offroad alert. Off AGNOS
+  there is nothing to create it with, and this is a False."""
+  if not root.run('gadget', *(['--ios'] if ios else [])):
     return False
   log.warning("jetlink: gadget set up for %s", 'iOS' if ios else 'USB')
   return link_configured()
@@ -397,7 +391,7 @@ def net_up() -> bool:
   server, and NET_STATUS written as "ok 192.168.60.1 <netdev>" or
   "error: <reason>".
   """
-  if not can_setup_gadget() or not root.run('net', timeout=root.GADGET_TIMEOUT):
+  if not root.run('net'):
     return False
   status = net_status() or ''
   log.warning("jetlink: gadget network: %s", status or 'no status written')

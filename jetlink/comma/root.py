@@ -9,34 +9,41 @@ else. The script leaves its own record of the gadget and its network in
 /dev/shm (jetlink-gadget, jetlink-net), so a False here only says the call
 failed; the reason is in the log line and, for the gadget, in those files.
 
-    root.run('gadget', '--ios', timeout=root.GADGET_TIMEOUT)
+    root.run('gadget', '--ios')
     root.run('port', 'hold', timeout=root.PORT_TIMEOUT)
-    root.run('vm', 'apply', timeout=root.VM_TIMEOUT)
+    root.run('vm', 'apply')
+
+Only AGNOS has the gadget stack, the port's lever and the sysctls, so
+everywhere else run() is a quiet False and nothing is spawned.
 """
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 from pathlib import Path
 
 log = logging.getLogger('jetlink.comma')
 
+AGNOS = os.path.isfile('/AGNOS')
+
 # Resolved, so that <openpilot>/jetlink, a symlink into jetlink_repo, still
 # leads to the checkout's scripts.
 SCRIPT = Path(__file__).resolve().parents[2] / 'scripts' / 'comma' / 'jetlink-root.sh'
 
-# gadget, net, check and teardown: sudo, configfs, and for iOS nmcli and dnsmasq
-GADGET_TIMEOUT = 30.0
+# sudo, configfs, and for iOS nmcli and dnsmasq
+TIMEOUT = 30.0
 # sudo and two echos take tens of ms. Short, because the owner lets the port go
 # before it closes FunctionFS, inside manager's 5 s
 PORT_TIMEOUT = 2.0
-# sudo and three writes to /proc
-VM_TIMEOUT = 5.0
 
 
-def run(*args: str, timeout: float) -> bool:
-  """sudo -n bash SCRIPT *args. True when it exits 0; otherwise one log line,
-  with the last thing the script wrote to stderr, and False. Never raises."""
+def run(*args: str, timeout: float = TIMEOUT) -> bool:
+  """sudo -n bash SCRIPT *args, on AGNOS. True when it exits 0; otherwise one
+  log line, with the last thing the script wrote to stderr, and False. Off
+  AGNOS a False with no log line. Never raises."""
+  if not AGNOS:
+    return False
   what = ' '.join((SCRIPT.name, *args))
   try:
     result = subprocess.run(['sudo', '-n', 'bash', str(SCRIPT), *args], stdout=subprocess.DEVNULL,
