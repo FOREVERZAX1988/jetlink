@@ -26,6 +26,13 @@ from jetlink.transport.base import LinkError, LinkTimeout
 from jetlink.transport.ffs import FfsTransport
 
 
+@pytest.fixture(autouse=True)
+def quick_join(monkeypatch):
+  """Nothing unbinds a FIFO, so a reader blocked on one is never woken and
+  every close() would wait out the whole second for it."""
+  monkeypatch.setattr(ffs, 'READER_JOIN_TIMEOUT', 0.1)
+
+
 @pytest.fixture
 def mount(tmp_path):
   for ep in ('ep0', 'ep1', 'ep2'):
