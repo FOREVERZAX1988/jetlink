@@ -229,22 +229,27 @@ final class PolicyQueues: FrameStaging {
   }
 
   /// openpilot: `buf.reshape(-1, frame_skip, *buf.shape[1:]).max(1)`, the
-  /// strongest desire in each group of frame_skip frames.
+  /// strongest desire in each group of frame_skip frames. As numpy's max: a
+  /// NaN wins, and of two NaNs or two equal values (0 and -0) the earlier
+  /// stays, so the result is one of the group's float16s, bit for bit.
   private func sampleDesire(into dest: UnsafeMutableRawPointer, as type: ElementType) {
     let skip = frameSkip
     let width = desireQueue.rowCount
     let groups = desireQueue.rows / skip
     for group in 0..<groups {
       for column in 0..<width {
-        var best = -Float.infinity
-        for k in 0..<skip {
-          let value = Float(Float16(bitPattern: desireQueue.row(group * skip + k)[column]))
-          best = max(best, value)
+        var best = desireQueue.row(group * skip)[column]
+        for k in 1..<skip {
+          let value = desireQueue.row(group * skip + k)[column]
+          let kept = Float(Float16(bitPattern: best))
+          if !(kept >= Float(Float16(bitPattern: value)) || kept.isNaN) {
+            best = value
+          }
         }
         let index = group * width + column
         switch type {
-        case .float16: dest.assumingMemoryBound(to: UInt16.self)[index] = Float16(best).bitPattern
-        case .float: dest.assumingMemoryBound(to: Float.self)[index] = best
+        case .float16: dest.assumingMemoryBound(to: UInt16.self)[index] = best
+        case .float: dest.assumingMemoryBound(to: Float.self)[index] = Float(Float16(bitPattern: best))
         default: preconditionFailure("desire_pulse staged as \(type.name)")
         }
       }
