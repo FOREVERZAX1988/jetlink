@@ -127,10 +127,16 @@ public final class Server: @unchecked Sendable {
   /// it a fake before `start`.
   var gadget: (any GadgetSource)?
 
-  public init(configuration: Configuration, preparer: any ModelPreparer) throws {
+  public convenience init(configuration: Configuration, preparer: any ModelPreparer) throws {
+    try self.init(configuration: configuration, backend: Server.makeBackend(configuration, preparer: preparer))
+  }
+
+  /// A server on `backend` rather than the platform's own; the tests run the
+  /// QNN backend's CPU device this way on a Mac.
+  init(configuration: Configuration, backend: any EngineBackend) throws {
     self.configuration = configuration
     self.dial = configuration.dial
-    backend = Server.makeBackend(configuration, preparer: preparer)
+    self.backend = backend
     cache = try EngineCache(root: configuration.cacheRoot, backend: backend)
     host = EngineHost(cache: cache)
     #if os(macOS)
