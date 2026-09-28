@@ -24,7 +24,8 @@ public enum Catalog {
   /// comma). It is a string in the JSON; bundles at any other version describe
   /// fields we would misread.
   public static let requiredSelectorVersion = 19
-  public static let defaultBigModelRef = "f877d7a0ccc3cce943c76e285214c020cd65c899"
+  /// Cinque Terre V3 Model (September 17, 2026).
+  public static let defaultBigModelRef = "bf3e3631b3f91d92a1020a5e0dd4298b93ff4244"
   public static let timeout: TimeInterval = 10
   /// How long a fetched catalog is served before `catalog()` fetches again.
   public static let maxAge: TimeInterval = 3600

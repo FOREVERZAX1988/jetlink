@@ -3,7 +3,7 @@
     "artifact_suffix": ".ortcache",
     "artifact_tag": "ort1.29.0.coreml-Apple_M1_Pro",
     "catalog": {
-      "default_ref": "f877d7a0ccc3cce943c76e285214c020cd65c899",
+      "default_ref": "bf3e3631b3f91d92a1020a5e0dd4298b93ff4244",
       "error": null,
       "fetched_at": 1757440000.0,
       "models": [

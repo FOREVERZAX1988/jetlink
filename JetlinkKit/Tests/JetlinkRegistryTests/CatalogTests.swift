@@ -83,7 +83,7 @@ struct CatalogParseTests {
     #expect(Catalog.url == "https://raw.githubusercontent.com/sunnypilot/sunnypilot-models/refs/heads/gh-pages/docs/driving_models_chestnut_v26.json")
     #expect(Catalog.requiredSelectorVersion == 19)
     #expect(Catalog.probeLimit == 10)
-    #expect(Catalog.defaultBigModelRef == "f877d7a0ccc3cce943c76e285214c020cd65c899")
+    #expect(Catalog.defaultBigModelRef == "bf3e3631b3f91d92a1020a5e0dd4298b93ff4244")
   }
 }
 
@@ -173,7 +173,7 @@ struct CatalogPayloadTests {
     #expect(payload.models.count == 13)
     #expect(payload.error == nil)
     #expect(payload.fetchedAt != nil)
-    #expect(payload.defaultRef == "f877d7a0ccc3cce943c76e285214c020cd65c899")
+    #expect(payload.defaultRef == "bf3e3631b3f91d92a1020a5e0dd4298b93ff4244")
     #expect(payload.url == Catalog.url)
 
     _ = await registry.catalog()

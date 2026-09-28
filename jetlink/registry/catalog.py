@@ -37,7 +37,8 @@ PROBE_LIMIT = 10
 # It is a string in the JSON; bundles at any other version describe fields we
 # would misread.
 REQUIRED_SELECTOR_VERSION = 19
-DEFAULT_BIG_MODEL_REF = 'f877d7a0ccc3cce943c76e285214c020cd65c899'
+# Cinque Terre V3 Model (September 17, 2026)
+DEFAULT_BIG_MODEL_REF = 'bf3e3631b3f91d92a1020a5e0dd4298b93ff4244'
 CATALOG_TIMEOUT = 10.0
 
 _REF = re.compile(r'[0-9a-f]{40}')

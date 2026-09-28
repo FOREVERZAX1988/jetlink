@@ -204,7 +204,7 @@ def test_catalog_is_cached_until_it_goes_stale(tmp_path):
   payload = registry.catalog(opener=opener)
   assert len(payload['models']) == 13
   assert payload['error'] is None and payload['fetched_at'] is not None
-  assert payload['default_ref'] == 'f877d7a0ccc3cce943c76e285214c020cd65c899'
+  assert payload['default_ref'] == 'bf3e3631b3f91d92a1020a5e0dd4298b93ff4244'
 
   registry.catalog(opener=opener)
   assert opener.calls.count(CATALOG_URL) == 1, 'a fresh cache must not go to the network'
