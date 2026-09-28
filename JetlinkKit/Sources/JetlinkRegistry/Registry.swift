@@ -101,7 +101,7 @@ public final class Registry: Sendable {
         // The pinned catalog and whatever sunnypilot has published since: the
         // server runs any of their commits.
         let pinned = try await fetchCatalog(Catalog.url)
-        let newer = await newerCatalogs(after: Catalog.url)
+        let newer = try await newerCatalogs(after: Catalog.url)
         let fresh = JSON.object(Catalog.merge([pinned] + newer))
         let now = Date().timeIntervalSince1970
         raw = fresh
@@ -136,18 +136,16 @@ public final class Registry: Sendable {
   }
 
   /// Every catalog sunnypilot has published after the one at `url`, oldest
-  /// first. Stops at the first version that is not there; a failure past the
-  /// first ends the probe too, since what was found is still good.
-  func newerCatalogs(after url: String, limit: Int = Catalog.probeLimit) async -> [JSONObject] {
+  /// first. Stops at the first version that is not there. Any other failure
+  /// throws: a short list would drop a model found only past it from the kept
+  /// catalog, so the caller keeps its last complete one instead.
+  func newerCatalogs(after url: String, limit: Int = Catalog.probeLimit) async throws(RegistryError) -> [JSONObject] {
     guard let version = Catalog.version(of: url), limit > 0 else { return [] }
     var found: [JSONObject] = []
     for next in (version + 1)...(version + limit) {
       do {
         found.append(try await fetchCatalog(Catalog.url(version: next)))
       } catch  where error.kind == .notFound {
-        break
-      } catch {
-        Registry.log.warning("stopped probing for newer catalogs: \(error.message, privacy: .public)")
         break
       }
     }

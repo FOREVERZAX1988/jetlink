@@ -60,7 +60,9 @@ class FakeResponse:
 
 
 class FakeOpener:
-  """A urlopen that serves fixtures and refuses everything else."""
+  """A urlopen that serves fixtures and refuses everything else. A catalog
+  version it has no fixture for is a 404, as it is on GitHub: the newest one
+  sunnypilot has published is the last to come back."""
 
   def __init__(self, routes: dict):
     self.routes = routes
@@ -71,6 +73,9 @@ class FakeOpener:
     self.calls.append(url)
     body = self.routes.get(url)
     if body is None:
+      from jetlink.registry.catalog import CATALOG_URL_TEMPLATE
+      if url.startswith(CATALOG_URL_TEMPLATE.split('{version}')[0]):
+        raise not_found(url)
       raise urllib.error.URLError(f"no route for {url}")
     if isinstance(body, Exception):
       raise body
@@ -232,12 +237,14 @@ class TestNewerCatalogs:
     assert [b['ref'] for b in fetch_catalogs(opener=opener)['bundles']] == [fresh]
     assert opener.calls == [self.url(v), self.url(v + 1), self.url(v + 2), self.url(v + 3)]
 
-  def test_an_outage_past_the_pin_keeps_what_was_found(self):
-    from jetlink.registry.catalog import CATALOG_VERSION, fetch_catalogs
+  def test_an_outage_past_the_pin_is_a_failure_not_a_short_list(self):
+    from jetlink.registry.catalog import CATALOG_VERSION, NetworkError, fetch_catalogs
     fresh = 'e' * 40
     opener = FakeOpener({self.url(CATALOG_VERSION): {'bundles': []},
-                         self.url(CATALOG_VERSION + 1): {'bundles': [_bundle(fresh, 99, '20')]}})
-    assert [b['ref'] for b in fetch_catalogs(opener=opener)['bundles']] == [fresh]
+                         self.url(CATALOG_VERSION + 1): {'bundles': [_bundle(fresh, 99, '20')]},
+                         self.url(CATALOG_VERSION + 2): urllib.error.URLError('down')})
+    with pytest.raises(NetworkError):
+      fetch_catalogs(opener=opener)
 
   def test_the_merge_keeps_builds_at_our_version_and_adds_the_rest_for_an_accelerator(self):
     from jetlink.registry.catalog import merge_catalogs

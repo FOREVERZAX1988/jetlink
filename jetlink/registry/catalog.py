@@ -17,13 +17,11 @@ Stdlib only, and every network call takes an `opener` so tests stay offline.
 from __future__ import annotations
 
 import json
-import logging
 import re
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 
-log = logging.getLogger('jetlink.registry')
 
 CATALOG_URL_TEMPLATE = 'https://raw.githubusercontent.com/sunnypilot/sunnypilot-models/refs/heads/gh-pages/docs/driving_models_chestnut_v{version}.json'
 # v26 is v25 plus Cinque Terre V3, at the same selector version. v27 onwards
@@ -134,17 +132,15 @@ def fetch_catalog(url: str = CATALOG_URL, timeout: float = CATALOG_TIMEOUT, open
 
 def fetch_catalogs(opener=None) -> dict:
   """The pinned catalog merged with every one sunnypilot has published since,
-  whose commits the server runs too. The pinned one has to come; the probe
-  after it stops at the first version that is not there, and a failure past
-  the pin is logged and ends it, since what was found is still good."""
+  whose commits the server runs too. The probe stops at the first version that
+  is not there. Any other failure raises: a short list would drop a model
+  found only past it from whatever the caller caches, so the caller keeps its
+  last complete one instead."""
   found = [fetch_catalog(CATALOG_URL, opener=opener)]
   for v in range(CATALOG_VERSION + 1, CATALOG_VERSION + 1 + PROBE_LIMIT):
     try:
       found.append(fetch_catalog(CATALOG_URL_TEMPLATE.format(version=v), opener=opener))
     except NotFound:
-      break
-    except NetworkError as e:
-      log.warning("stopped probing for newer catalogs: %s", e)
       break
   return merge_catalogs(found)
 

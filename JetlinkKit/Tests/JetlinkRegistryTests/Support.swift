@@ -209,6 +209,9 @@ final class MockProtocol: URLProtocol, @unchecked Sendable {
     case .body(let data): respond(200, [data])
     case .chunks(let pieces): respond(200, pieces)
     case .status(let status): respond(status, [Data("error \(status)".utf8)])
+    case .none where Catalog.version(of: url.absoluteString) != nil:
+      // a catalog version with no fixture is a 404, as it is on GitHub
+      respond(404, [Data("error 404".utf8)])
     case .failure, nil:
       client.urlProtocol(self, didFailWithError: URLError(.cannotFindHost, userInfo: [NSURLErrorFailingURLStringErrorKey: url.absoluteString]))
     }

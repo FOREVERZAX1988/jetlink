@@ -108,16 +108,21 @@ struct NewerCatalogTests {
     ])
     let tmp = try TempDir()
     defer { tmp.remove() }
-    let found = await Registry(layout: tmp.layout, session: net.session).newerCatalogs(after: Catalog.url)
+    let found = try await Registry(layout: tmp.layout, session: net.session).newerCatalogs(after: Catalog.url)
     #expect(found.count == 2)
     #expect(net.urls == [catalogURL(v + 1), catalogURL(v + 2), catalogURL(v + 3)])
   }
 
-  @Test func anOutagePastThePinKeepsWhatWasFound() async throws {
-    let net = MockNet([catalogURL(Catalog.version + 1): .body(Data(#"{"bundles": []}"#.utf8))])
+  @Test func anOutagePastThePinIsAFailureNotAShortList() async throws {
+    let net = MockNet([
+      catalogURL(Catalog.version + 1): .body(Data(#"{"bundles": []}"#.utf8)),
+      catalogURL(Catalog.version + 2): .failure,
+    ])
     let tmp = try TempDir()
     defer { tmp.remove() }
-    #expect(await Registry(layout: tmp.layout, session: net.session).newerCatalogs(after: Catalog.url).count == 1)
+    await #expect(throws: RegistryError.self) {
+      try await Registry(layout: tmp.layout, session: net.session).newerCatalogs(after: Catalog.url)
+    }
   }
 
   @Test func theMergeKeepsBuildsAtOurVersionAndAddsTheRestForAnAccelerator() {
