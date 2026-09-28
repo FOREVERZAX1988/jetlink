@@ -51,11 +51,15 @@ usage() {
 
 JETSON=https://repo.download.nvidia.com/jetson/common/pool/main
 CUDA_X86=https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64
+ORT_RELEASES=https://github.com/microsoft/onnxruntime/releases/download/v1.29.0
 
-# Sets BUNDLE (its cache directory's name) and DEBS ("url sha256" each).
+# Sets BUNDLE (its cache directory's name) and DEBS ("url sha256" each), and
+# ORT: onnxruntime's official tarball ("url sha256"), whose C headers COrt
+# compiles against; the server opens the library at run time.
 pins() {
   case $FLAVOR in
   aarch64)
+    ORT="$ORT_RELEASES/onnxruntime-linux-aarch64-1.29.0.tgz e1799098ebc054b370f6176a450f158720f297818c613e5dc99b92e2ec82346f"
     BUNDLE=trt10.3.0.30-cuda12.6-aarch64
     DEBS=(
       "$JETSON/t/tensorrt/libnvinfer-headers-dev_10.3.0.30-1+cuda12.5_arm64.deb 40a4fa566218f71176144a0eafa5aef8cf0af7ee9211b20487f1970d5344bbb8"
@@ -65,6 +69,7 @@ pins() {
     )
     ;;
   x86_64)
+    ORT="$ORT_RELEASES/onnxruntime-linux-x64-1.29.0.tgz c3fddc4f139a045b0c4902c57410f0694f1c2fdf9b6939fbe38b1aeae7cd14ba"
     # 11.x keeps NvOnnxParser.h in libnvonnxparsers-dev, not the headers package
     BUNDLE=trt11.3.0.99-cuda13.4-x86_64
     DEBS=(
@@ -105,8 +110,28 @@ unpack_deb() {
   fi
 }
 
+# onnxruntime's headers under include/onnxruntime/, where COrt looks for them.
+ort_headers() {
+  local url=${ORT% *} want=${ORT#* } file dir
+  dir=$CACHE/$(basename "$url" .tgz)
+  [[ -f $dir/.complete && $(cat "$dir/.complete") == "$ORT" ]] && return
+  file=$CACHE/debs/$(basename "$url")
+  mkdir -p "$CACHE/debs"
+  if [[ ! -f $file || $(sha256 "$file") != "$want" ]]; then
+    echo "headers: fetching $(basename "$url")"
+    fetch "$url" "$file.part"
+    mv "$file.part" "$file"
+  fi
+  [[ $(sha256 "$file") == "$want" ]] || die "$(basename "$url") does not match its pinned sha256"
+  rm -rf "$dir"
+  mkdir -p "$dir/include/onnxruntime"
+  tar -xzf "$file" -C "$dir/include/onnxruntime" --strip-components 2 "$(basename "$url" .tgz)/include"
+  echo "$ORT" >"$dir/.complete"
+}
+
 step_headers() {
   local dir=$CACHE/$BUNDLE stamp entry url want file
+  ort_headers
   stamp=$(printf '%s\n' "${DEBS[@]}")
   if [[ -f $dir/.complete && $(cat "$dir/.complete") == "$stamp" ]]; then
     echo "headers: $dir/include"
@@ -204,12 +229,14 @@ version() {
 
 step_server() {
   [[ -f $CACHE/$BUNDLE/.complete ]] || step_headers
-  local version name stage bin scratch=$ROOT/build/swift-linux-$FLAVOR
+  local version name stage bin scratch=$ROOT/build/swift-linux-$FLAVOR ort
+  ort=$CACHE/$(basename "${ORT% *}" .tgz)
+  [[ -f $ort/.complete ]] || ort_headers
   version=$(version)
   name=jetlink-server-$version-linux-$FLAVOR
   # its own scratch path, so a Mac's JetlinkKit/.build is never touched
   JETLINK_TENSORRT=$CACHE/$BUNDLE/include swift build --package-path "$ROOT/JetlinkKit" --scratch-path "$scratch" \
-    -c release --static-swift-stdlib --product jetlink-server
+    -c release --static-swift-stdlib --product jetlink-server -Xcc -I"$ort/include"
   bin=$(swift build --package-path "$ROOT/JetlinkKit" --scratch-path "$scratch" -c release --show-bin-path)
   stage=$ROOT/dist/$name
   rm -rf "$stage"
