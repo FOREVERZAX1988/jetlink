@@ -104,6 +104,7 @@
       let (benched, report, benchLog) = try Binary.run(["bench", "--seconds", "1"] + cpu)
       #expect(benched == 0, "\(benchLog)")
       #expect(report.hasPrefix("Jetlink benchmark") && report.contains("over 35 ms: "), "\(report)")
+      #expect(!benchLog.contains("Jetlink benchmark"), "the report is on stdout only")
     }
 
     /// SIGTERM stops it cleanly, in order: the server, then (once it serves)

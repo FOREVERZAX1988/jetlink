@@ -118,6 +118,10 @@
     var sha256: String?
     @Option(help: "Model frames per camera frame. Default: what it was loaded with last, else 4.")
     var frameSkip: Int?
+    @Flag(
+      name: .customLong("gpu-timing"),
+      help: "TensorRT: time each launch with CUDA events and log their spread every 1,200 frames (JETLINK_TRT_GPU_TIMING=1 does too).")
+    var gpuTiming = false
     @OptionGroup var chosen: BackendArguments
     @OptionGroup var cache: CacheArguments
     @Option(help: "debug, info, warning or error.")
@@ -132,7 +136,10 @@
     func run() throws {
       setUpLogging(logLevel)
       let log = ServerLog(category: "main")
-      let backend = try chosen.pick()
+      let backend = try chosen.pick(gpuTiming: gpuTiming)
+      if gpuTiming && backend.name != BackendName.trt.rawValue {
+        log.warning("--gpu-timing times TensorRT's launches; \(backend.name) has no such timing")
+      }
       do {
         let server = try Server(
           configuration: Server.Configuration(cacheRoot: cache.root, preload: false, listen: false), backend: backend)
@@ -145,8 +152,8 @@
           throw HostError.failed("\(wanted.prefix(16)) is not built for \(backend.tag()): build it first")
         }
         try load(wanted, frameSkip: frameSkip ?? (last?.sha256 == wanted ? last!.frameSkip : Pinned.defaultFrameSkip), on: server)
-        // TODO(WS-B): TensorRT times the model with CUDA events here.
-        let report = try server.host.benchmark(seconds: seconds, run: BenchmarkRun())
+        // The report goes to stdout alone, where a script reads it.
+        let report = try server.host.benchmark(seconds: seconds, run: BenchmarkRun(), logsReport: false)
         print(report.text)
       } catch let exit as ExitCode {
         throw exit
