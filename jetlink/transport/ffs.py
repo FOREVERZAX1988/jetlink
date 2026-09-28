@@ -28,7 +28,8 @@ import time
 from collections import deque
 
 from jetlink import protocol as P
-from jetlink.transport.base import LinkError, LinkTimeout, StreamTransport, take, medium_from_usb_speed, udc_speed, usb_link_info
+from jetlink.transport.base import (UDC_SYSFS, LinkError, LinkTimeout, StreamTransport, take, medium_from_usb_speed,
+                                    udc_speed, usb_link_info)
 from jetlink.transport.priority import background_thread, widen_affinity
 from jetlink.transport.watchdog import WriteWatchdog
 
@@ -80,7 +81,10 @@ EP_OPEN_TIMEOUT = 10.0
 # drive. Unbinding the UDC dequeues it, the writev returns ESHUTDOWN, and the
 # caller retries. A real write is ~3.6 ms.
 WRITE_TIMEOUT = 15.0
-UDC_SYSFS = '/sys/class/udc'
+# where the comma's gadget lives: jetlink-root.sh gadget builds it there and
+# mounts its FunctionFS instance here
+GADGET = '/sys/kernel/config/usb_gadget/jetlink'
+MOUNT = '/dev/ffs-jetlink'
 # How long close() waits for the reader thread after unbinding, which is what
 # wakes it. A read the kernel will not complete is left to die with the process.
 READER_JOIN_TIMEOUT = 1.0
@@ -152,7 +156,7 @@ class FfsTransport(StreamTransport):
   write_chunk = 512 * SS_MAX_PACKET
   tx_align = P.GADGET_TX_ALIGN
 
-  def __init__(self, mount: str = '/dev/ffs-jetlink', gadget: str | None = None,
+  def __init__(self, mount: str = MOUNT, gadget: str | None = None,
                udc: str | None = None):
     self._prepare(mount, gadget)
     try:

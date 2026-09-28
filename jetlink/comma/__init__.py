@@ -10,8 +10,8 @@ time the link is on (owner), the lease other processes borrow its endpoints
 on (lending), the USB-C port (port), the VM tuning (vm), and the one root
 script all of it goes through (root). For the comma four and the comma 3X.
 
-Standard library only: the owner that imports it stays resident at about
-10 MB. openpilot runs the owner through a shim in the fork,
+The standard library and jetlink's transport only: the owner that imports it
+stays resident at about 10 MB. openpilot runs the owner through a shim in the fork,
 openpilot/sunnypilot/accelerators/jetlink/owner.py, which names its
 provisioning worker.
 """

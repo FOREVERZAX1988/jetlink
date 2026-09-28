@@ -5,7 +5,7 @@ This file is part of jetlink and is licensed under the MIT License.
 See the LICENSE file in the root directory for more details.
 
 The comma's USB gadget, and how to look at it, using nothing but the
-standard library.
+standard library and jetlink's own transport.
 
 Kept apart from openpilot so the process that owns the gadget can be small.
 Holding ep0 needs sysfs, a few params and a unix socket;
@@ -32,6 +32,9 @@ import time
 from pathlib import Path
 
 from jetlink.comma import root
+from jetlink.transport import ffs
+from jetlink.transport.base import UDC_SYSFS, udc_speed
+from jetlink.transport.tcp import CABLE_ADDRESS, DEFAULT_PORT
 
 AGNOS = os.path.isfile('/AGNOS')
 
@@ -151,7 +154,7 @@ def offroad() -> bool:
 # reconnect 5 to 10 s.
 LINK = Path("/dev/shm/jetlink-link")        # "cable <peer ip>" while a phone is dialed in
 NET_STATUS = Path("/dev/shm/jetlink-net")   # jetlink-root.sh: "ok 192.168.60.1 <netdev>", "error: ...", "net: off" (USB)
-CABLE_ADDR = ('192.168.60.1', 5599)
+CABLE_ADDR = (CABLE_ADDRESS, DEFAULT_PORT)
 
 
 def _link_record() -> list[str]:
@@ -207,21 +210,16 @@ def usb_speed() -> str | None:
   super-speed and ~11 ms on high-speed, so this is the first thing to read
   when the link is slow. None while unbound or where the UDC does not say."""
   udc = bound_udc()
-  if udc is None:
-    return None
-  try:
-    return (UDC_PATH / udc / "current_speed").read_text().strip() or None
-  except OSError:
-    return None
+  return None if udc is None else udc_speed(udc, str(UDC_PATH))
 
 
 # -- where the gadget lives -----------------------------------------------
 # the comma is the USB gadget and the Jetson the host, decided by the kernels:
 # AGNOS has CONFIG_USB_F_FS built in, L4T images are often stripped of the
 # gadget modules. See docs/transport.md
-GADGET_PATH = Path("/sys/kernel/config/usb_gadget/jetlink")
-FFS_MOUNT = Path("/dev/ffs-jetlink")
-UDC_PATH = Path("/sys/class/udc")
+GADGET_PATH = Path(ffs.GADGET)
+FFS_MOUNT = Path(ffs.MOUNT)
+UDC_PATH = Path(UDC_SYSFS)
 # the network function jetlink-root.sh gadget --ios adds after ffs.jetlink. Its
 # netdev is not usb0, which the modem holds, but whatever the kernel names it
 NET_FUNCTION = 'ncm.usb0'
