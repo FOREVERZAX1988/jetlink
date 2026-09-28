@@ -47,7 +47,7 @@ def test_user_cache_dir_is_under_home(monkeypatch):
   monkeypatch.setattr(P, 'is_jetson', lambda: False)
   d = P.default_cache_dir()
   assert d.name == 'jetlink'
-  assert str(d).startswith(str(Path.home())) or 'XDG' in str(d) or 'LOCALAPPDATA' in str(d)
+  assert str(d).startswith(str(Path.home())) or 'XDG' in str(d)
 
 
 def test_available_bytes_never_raises_and_is_not_negative():

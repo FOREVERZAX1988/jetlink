@@ -102,8 +102,8 @@ class UsbBulkTransport(StreamTransport):
     """Cheap presence check that does not open the device.
 
     sysfs on Linux, a handful of small reads. Elsewhere libusb enumerates,
-    which on macOS and Windows needs no driver for a device nobody has
-    claimed; the server polls this every two seconds and that is fine.
+    which on macOS needs no driver for a device nobody has claimed; the
+    server polls this every two seconds and that is fine.
     """
     sysfs = Path('/sys/bus/usb/devices')
     if sysfs.is_dir():

@@ -32,7 +32,6 @@ import os
 import queue
 import signal
 import socket
-import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -738,10 +737,8 @@ def interrupt_main() -> None:
   syscall EINTR and the handler already in main() takes it from there.
   """
   try:
-    if sys.platform == 'win32':
-      raise OSError('no process-directed SIGINT on Windows')
     os.kill(os.getpid(), signal.SIGINT)
-  except (AttributeError, OSError, ValueError):
+  except (OSError, ValueError):
     _thread.interrupt_main()
 
 

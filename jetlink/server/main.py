@@ -137,10 +137,8 @@ def _watch_parent(pid: int, interval: float = 1.0) -> None:
 def _interrupt_main() -> None:
   """Ctrl-C from a thread that is not the main one; see control.interrupt_main."""
   try:
-    if sys.platform == 'win32':
-      raise OSError('no process-directed SIGINT on Windows')
     os.kill(os.getpid(), signal.SIGINT)
-  except (AttributeError, OSError, ValueError):
+  except (OSError, ValueError):
     _thread.interrupt_main()
 
 
@@ -267,11 +265,10 @@ def main(argv=None) -> int:
     # with one killpg when we die by a signal instead of leaving it orphaned
     # with the engine half built. Not done for a terminal: the shell's job
     # control (Ctrl-C reaching the group) is what keeps a bare run stoppable.
-    if hasattr(os, 'setpgrp'):
-      try:
-        os.setpgrp()
-      except OSError:
-        pass
+    try:
+      os.setpgrp()
+    except OSError:
+      pass
     threading.Thread(target=_watch_parent, args=(args.parent_pid,), daemon=True,
                      name='jetlink-parent-watch').start()
 
@@ -337,8 +334,8 @@ def main(argv=None) -> int:
       # tcp blocks in accept and never sees an absent client
       p.error('--sleep-after only makes sense with --transport usb')
     if not platform.can_suspend():
-      # macOS and Windows own their own sleep, and a laptop lid is not a USB
-      # edge that wakes anything; the flag is the Jetson's.
+      # macOS owns its own sleep, and a laptop lid is not a USB edge that
+      # wakes anything; the flag is the Jetson's.
       p.error('--sleep-after needs /sys/power, which this host has not got')
     sleeper = Sleeper(args.sleep_after)
     log.info("will suspend after %.0f s without a gadget", args.sleep_after)

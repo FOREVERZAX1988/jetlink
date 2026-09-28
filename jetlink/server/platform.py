@@ -8,6 +8,7 @@ The few places the server has to know what it is running on.
 
 Everything here fails open to a sensible answer: a wrong guess costs a cache
 directory in an odd place or a flat memory cap, never a refusal to serve.
+Linux (a Jetson, a PC, WSL2) and macOS; there is no native Windows server.
 """
 from __future__ import annotations
 
@@ -51,35 +52,19 @@ def available_bytes() -> int:
   MemAvailable on Linux, so free plus what the kernel would reclaim. Swap does
   not count: on Tegra the GPU's allocations are pinned system RAM and cannot
   page out, and the bench Jetson has 25 GB of swap to be fooled by. Only
-  TensorRT sizes anything from this, so macOS answers 0 and Windows asks the
-  kernel the one way it offers.
+  TensorRT sizes anything from this, which runs on Linux (WSL2 included), so
+  macOS answers 0.
   """
-  if sys.platform.startswith('linux'):
-    try:
-      with open('/proc/meminfo') as f:
-        for line in f:
-          key, _, rest = line.partition(':')
-          if key == 'MemAvailable':
-            return int(rest.split()[0]) * 1024
-    except OSError:
-      pass
+  if not sys.platform.startswith('linux'):
     return 0
-  if sys.platform == 'win32':
-    try:
-      import ctypes
-
-      class MemoryStatusEx(ctypes.Structure):
-        _fields_ = [('dwLength', ctypes.c_ulong), ('dwMemoryLoad', ctypes.c_ulong),
-                    ('ullTotalPhys', ctypes.c_ulonglong), ('ullAvailPhys', ctypes.c_ulonglong),
-                    ('ullTotalPageFile', ctypes.c_ulonglong), ('ullAvailPageFile', ctypes.c_ulonglong),
-                    ('ullTotalVirtual', ctypes.c_ulonglong), ('ullAvailVirtual', ctypes.c_ulonglong),
-                    ('ullAvailExtendedVirtual', ctypes.c_ulonglong)]
-      st = MemoryStatusEx()
-      st.dwLength = ctypes.sizeof(st)
-      if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st)):
-        return int(st.ullAvailPhys)
-    except Exception:
-      pass
+  try:
+    with open('/proc/meminfo') as f:
+      for line in f:
+        key, _, rest = line.partition(':')
+        if key == 'MemAvailable':
+          return int(rest.split()[0]) * 1024
+  except OSError:
+    pass
   return 0
 
 
@@ -92,8 +77,6 @@ def default_cache_dir() -> Path:
     return JETSON_CACHE
   if sys.platform == 'darwin':
     return Path.home() / 'Library' / 'Caches' / 'jetlink'
-  if sys.platform == 'win32':
-    return Path(os.environ.get('LOCALAPPDATA', Path.home() / 'AppData' / 'Local')) / 'jetlink'
   return Path(os.environ.get('XDG_CACHE_HOME', Path.home() / '.cache')) / 'jetlink'
 
 

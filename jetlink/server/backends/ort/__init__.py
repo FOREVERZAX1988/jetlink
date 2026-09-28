@@ -321,8 +321,7 @@ def worker_rss(pid: int) -> int:
   """Resident bytes of the worker process, 0 where it cannot be read.
 
   The session is created in a child (worker.py), so the parent's own resident
-  size says nothing about how far a load has got. Nothing on Windows, which
-  has no jetlink server anyway.
+  size says nothing about how far a load has got.
   """
   if not pid:
     return 0
