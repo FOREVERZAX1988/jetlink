@@ -99,17 +99,12 @@ private final class Transfer: NSObject, URLSessionDataDelegate, Sendable {
   }
 
   func run(_ request: URLRequest, session: URLSession) async -> Result<(written: Int64, digest: String), RegistryError> {
-    #if canImport(Darwin)
-      let task = session.dataTask(with: request)
-      task.delegate = self
-    #else
-      // swift-corelibs-foundation never calls a task's own delegate: the
-      // download sat at 0 bytes on Android. A session of its own, with this
-      // as the session's delegate, gets the callbacks there.
-      let own = URLSession(configuration: session.configuration, delegate: self, delegateQueue: nil)
-      defer { own.finishTasksAndInvalidate() }
-      let task = own.dataTask(with: request)
-    #endif
+    // A session of its own with this as the session's delegate:
+    // swift-corelibs-foundation never calls a task's own delegate (a download
+    // sat at 0 bytes on Android), and a model is one transfer anyway.
+    let own = URLSession(configuration: session.configuration, delegate: self, delegateQueue: nil)
+    defer { own.finishTasksAndInvalidate() }
+    let task = own.dataTask(with: request)
     await withTaskCancellationHandler {
       await withCheckedContinuation { continuation in
         state.withLock { $0.continuation = continuation }
