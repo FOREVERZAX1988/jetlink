@@ -15,7 +15,7 @@ public struct SessionPlan: Sendable, Equatable {
   public let label: String
   /// Runs on the GPU, so the Metal keep-alive helps it.
   public let usesGPU: Bool
-  /// Runs on the Neural Engine, so the CPU keep-warm helps it.
+  /// Runs on the Neural Engine or an NPU, so the CPU keep-warm helps it.
   public let usesNeuralEngine: Bool
 
   public init(
@@ -76,8 +76,9 @@ public final class OrtEngine: @unchecked Sendable {
   /// How long the last `run()` took, the whole chain, in microseconds.
   public private(set) var lastGpuUs: UInt32 = 0
   public let providers: [String]
-  /// Whether a CPU keep-warm thread runs beside this engine.
-  public var keepsCPUWarm: Bool { keepWarm != nil }
+  /// Whether the CPU is kept warm beside this engine: a busy thread, or
+  /// Android's performance hints.
+  public var keepsCPUWarm: Bool { keepWarm != nil || hint != nil }
 
   private let chain: [OrtSession]
   private var buffers: [String: UnsafeMutableRawPointer] = [:]
@@ -88,6 +89,7 @@ public final class OrtEngine: @unchecked Sendable {
   private var parity = 0
   private let keepAlive: MetalKeepAlive?
   private let keepWarm: CPUKeepWarm?
+  private let hint: PerformanceHint?
   private var closed = false
 
   /// `keepAlive` keeps the GPU clocked up between frames, `keepCPUWarm` the
@@ -132,7 +134,11 @@ public final class OrtEngine: @unchecked Sendable {
       buffers[name] = buffer
     }
     self.keepAlive = keepAlive && plans.contains(where: \.usesGPU) ? MetalKeepAlive.make() : nil
-    self.keepWarm = keepCPUWarm && plans.contains(where: \.usesNeuralEngine) ? CPUKeepWarm() : nil
+    // Android holds the clocks up when told each frame's time; elsewhere a core spins.
+    let warmCPU = keepCPUWarm && plans.contains(where: \.usesNeuralEngine)
+    let hint = warmCPU ? PerformanceHint.make() : nil
+    self.hint = hint
+    self.keepWarm = warmCPU && hint == nil ? CPUKeepWarm() : nil
     do {
       try rebind()
     } catch {
@@ -233,7 +239,9 @@ public final class OrtEngine: @unchecked Sendable {
     if !looped.isEmpty {
       parity ^= 1
     }
-    lastGpuUs = UInt32(min(UInt64(UInt32.max), (DispatchTime.now().uptimeNanoseconds - started) / 1000))
+    let took = DispatchTime.now().uptimeNanoseconds - started
+    hint?.report(took)
+    lastGpuUs = UInt32(min(UInt64(UInt32.max), took / 1000))
   }
 
   /// CoreML and QNN allocate their working set on the first run and the
@@ -249,6 +257,7 @@ public final class OrtEngine: @unchecked Sendable {
     closed = true
     keepAlive?.close()
     keepWarm?.close()
+    hint?.close()
     release()
   }
 

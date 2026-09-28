@@ -41,6 +41,7 @@ let portableServer = [
 let androidServer = [
   "Server.swift", "Session.swift", "EngineHost.swift", "EngineCache.swift", "ServerController.swift", "EmbeddedServer.swift",
   "RegistryBridge.swift", "Benchmark.swift", "CPUKeepWarm.swift", "Ort.swift", "OrtEngine.swift", "ArtifactFiles.swift", "QNNBackend.swift",
+  "PerformanceHint.swift",
 ]
 
 func portablePackage() -> Package {
@@ -76,7 +77,7 @@ func portablePackage() -> Package {
   var sources = portableServer
   if android {
     sources += androidServer
-    serverTests += ["ServerTests.swift", "ControllerTests.swift", "QNNBackendTests.swift"]
+    serverTests += ["ServerTests.swift", "ControllerTests.swift", "QNNBackendTests.swift", "PerformanceHintTests.swift"]
     server += ["JetlinkRegistry", "COrt", crypto]
     // The app's one native library: libjetlink.so.
     products.append(.library(name: "jetlink", type: .dynamic, targets: ["JetlinkAndroid"]))

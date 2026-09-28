@@ -117,7 +117,9 @@ public final class QNNBackend: EngineBackend {
     case .cpu:
       SessionPlan(model: model, provider: nil, threads: QNNBackend.cpuThreads, label: "CPU")
     case .htp, .gpu:
-      SessionPlan(model: model, provider: "QNN", options: providerOptions(unit), label: "QNN(\(unit.rawValue))")
+      SessionPlan(
+        model: model, provider: "QNN", options: providerOptions(unit), label: "QNN(\(unit.rawValue))", usesGPU: unit == .gpu,
+        usesNeuralEngine: unit == .htp)
     }
   }
 
