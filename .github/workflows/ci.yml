@@ -172,6 +172,88 @@ jobs:
         # holds on a second platform. Nothing deploys this build
         # (docs/conformance.md).
 
+  swift-android:
+    name: Swift server for Android
+    runs-on: ubuntu-24.04
+    container: swift:6.4-noble
+    env:
+      NDK_VERSION: "30.0.16248370"
+      NDK_RELEASE: r30
+      ONNXRUNTIME: "1.29.0"
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Install unzip
+        run: apt-get update && apt-get install -y --no-install-recommends unzip
+
+      - name: Cache the NDK
+        id: ndk
+        uses: actions/cache@v4
+        with:
+          path: /opt/android-ndk
+          key: android-ndk-${{ env.NDK_VERSION }}
+
+      - name: Download the NDK
+        if: steps.ndk.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o /tmp/ndk.zip "https://dl.google.com/android/repository/android-ndk-${NDK_RELEASE}-linux.zip"
+          unzip -q /tmp/ndk.zip -d /tmp/ndk
+          mkdir -p /opt/android-ndk
+          mv /tmp/ndk/android-ndk-${NDK_RELEASE} "/opt/android-ndk/${NDK_VERSION}"
+
+      - name: Install the Swift SDK for Android
+        run: |
+          swift sdk install \
+            https://download.swift.org/swift-6.4.0-release/android-sdk/swift-6.4.0-RELEASE/swift-6.4.0-RELEASE_android.artifactbundle.tar.gz \
+            --checksum 21fb555122a3d801ad943d48df7ebffdd8824de61c25c180bb792d3edaee0b43
+
+      - name: Build libjetlink.so
+        run: |
+          curl -fsSL -o /tmp/onnxruntime.aar \
+            "https://repo1.maven.org/maven2/com/microsoft/onnxruntime/onnxruntime-android-qnn/${ONNXRUNTIME}/onnxruntime-android-qnn-${ONNXRUNTIME}.aar"
+          ANDROID_NDK_HOME="/opt/android-ndk/${NDK_VERSION}" bash android/scripts/swift-build.sh "$PWD/swift-out" /tmp/onnxruntime.aar release
+        # The whole server with JETLINK_ANDROID=1: the portable part the Linux
+        # job tests, plus the session, the engine host, the QNN backend, the
+        # usbfs pipes and the JNI bridge (android/README.md).
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libjetlink-arm64-v8a
+          path: swift-out
+          retention-days: 7
+
+  android:
+    name: Android app
+    needs: swift-android
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: libjetlink-arm64-v8a
+          path: swift-out
+
+      - name: Unit tests and the release APK
+        working-directory: android
+        run: ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleRelease -Pjetlink.prebuiltSwift="$GITHUB_WORKSPACE/swift-out"
+        # The Kotlin tests parse the snapshot fixture the Swift suites write,
+        # and check the gadget's IDs, the port and the onnxruntime release
+        # against Pinned.swift.
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Jetlink-android
+          path: android/app/build/outputs/apk/release/app-release.apk
+          retention-days: 14
+
   app:
     name: App bundle and smoke test
     runs-on: macos-26
