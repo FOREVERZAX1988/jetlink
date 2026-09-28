@@ -206,10 +206,17 @@ final class PolicyQueues: FrameStaging {
 
 /// A stateful graph (openpilot #38916): the frame goes into new_img and the
 /// scalars into their inputs as they are; the engine loops the queues itself.
+/// An engine that declines the loop (a TensorRT pair whose size or type
+/// differs) has each next_state_ output copied into its state_ input here,
+/// as `queues.StateLoop.after_run` did, when the next frame is staged.
 final class StateLoop: FrameStaging {
   private let spec: ModelSpec
   private let engine: any Engine
   private let scalars: [(name: String, range: Range<Int>)]
+  /// The pairs the engine left to the host, and whether a run since the
+  /// last reset left next_state_ outputs to carry over.
+  private let hostPairs: [(input: TensorSpec, output: TensorSpec)]
+  private var carry = false
 
   init(spec: ModelSpec, engine: any Engine) throws {
     self.spec = spec
@@ -220,14 +227,42 @@ final class StateLoop: FrameStaging {
     for name in [ModelConstants.statefulFrame] + scalars.map(\.name) where engine.inputs[name] == nil {
       throw StagingError.missingInput(name)
     }
-    try engine.loopState(pairs)
+    if try engine.loopState(pairs) {
+      hostPairs = []
+      return
+    }
+    hostPairs = try pairs.map { pair in
+      guard let input = engine.inputs[pair.input], let output = engine.outputs[pair.output], input.count == output.count,
+        input.type == output.type || (Set([input.type, output.type]).isSubset(of: [.float, .float16]))
+      else { throw HostError.failed("state \(pair.input) cannot be fed from \(pair.output)") }
+      return (input, output)
+    }
   }
 
   func reset() {
-    engine.resetState()
+    guard !hostPairs.isEmpty else {
+      engine.resetState()
+      return
+    }
+    for pair in hostPairs {
+      engine.hostInput(pair.input.name)?.initializeMemory(as: UInt8.self, repeating: 0, count: pair.input.byteCount)
+    }
+    carry = false
   }
 
   func stage(warped: UnsafeRawPointer, packed: UnsafeRawPointer) throws {
+    if carry {
+      for (input, output) in hostPairs {
+        let dest = engine.hostInput(input.name)!
+        let source = engine.output(output.name)!
+        switch output.type {
+        case .float16: Stage.store(f16: source.assumingMemoryBound(to: UInt16.self), count: input.count, into: dest, as: input.type)
+        case .float: Stage.store(f32: source, count: input.count, into: dest, as: input.type)
+        default: dest.copyMemory(from: source, byteCount: input.byteCount)
+        }
+      }
+    }
+    carry = !hostPairs.isEmpty
     let frame = engine.inputs[ModelConstants.statefulFrame]!
     Stage.store(u8: warped, count: spec.warpedBytes, into: engine.hostInput(frame.name)!, as: frame.type)
     for scalar in scalars {
