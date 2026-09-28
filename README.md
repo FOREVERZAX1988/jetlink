@@ -69,19 +69,21 @@ You need Apple silicon and macOS 15 or later; 16 GB of memory is recommended.
 
 The app includes its dependencies.
 
-### iPhone (experimental)
+### iPhone and iPad (experimental)
 
 <a href="docs/images/iphone-demo.mp4"><img src="docs/images/iphone-demo.webp" width="100%" alt="Jetlink for iPhone, recorded in the iOS Simulator: Get downloads and prepares a model, the comma connects over USB, and Status shows each frame against the 50 ms budget, with timings modeled on an iPhone 17 Pro measurement"></a>
 
-The iPhone app runs the server on the phone and serves the comma over one USB
-cable. It has only been tested with a Mac standing in for the phone.
+The iOS app runs the server on an iPhone or iPad and serves the comma over one
+USB cable. It has only been tested with a Mac standing in for the phone.
 
-You need an iPhone with USB-C on iOS 26.1 or later (a Pro model for USB 3), a
-USB 3 hub with USB-C power passthrough, and a Mac with Xcode 26.
+You need an iPhone or iPad with USB-C on iOS or iPadOS 26.1 or later (for
+USB 3, an iPhone Pro from the 15 Pro on, or an iPad Pro, Air, or mini), a USB 3
+hub with USB-C power passthrough, and a Mac with Xcode 26.
 
 1. Build and install the app with Xcode by following
-   **[Jetlink for iPhone](docs/iphone-app.md)**. A free Apple account works,
-   but the install stops opening after 7 days until you run it from Xcode again.
+   **[Jetlink for iPhone and iPad](docs/iphone-app.md)**. A free Apple account
+   works, but the install stops opening after 7 days until you run it from
+   Xcode again.
 2. Open Jetlink and keep it on screen, then complete comma setup below.
 
 ## Comma setup (all platforms)
@@ -94,13 +96,13 @@ USB 3 hub with USB-C power passthrough, and a Mac with Xcode 26.
    **Settings > Software > Target Branch > Non-Prebuilt Branches** and select
    **jetson-trt**, then let it update, reboot, and finish building.
 2. **Enable Jetlink.** Open **Settings > Models** and set **Accelerator Link**
-   to **USB** for a Jetson, Linux PC, or Mac, or to **iOS** for an iPhone. It
-   can only be changed offroad. Leave **Big Model** on its default for the
-   first run.
+   to **USB** for a Jetson, Linux PC, or Mac, or to **iOS** for an iPhone or
+   iPad. It can only be changed offroad. Leave **Big Model** on its default for
+   the first run.
 3. **Connect USB.** Connect the computer's **USB-A port** to the comma's
    **USB-C port** with a USB 3 data cable. On Mac, use a USB-A hub, dock, or
-   USB-C-to-A adapter. On Jetson, use its USB-A port. On iPhone, use the USB-A
-   port of the hub plugged into the phone. Charge-only cables will not work,
+   USB-C-to-A adapter. On Jetson, use its USB-A port. On iPhone or iPad, use the
+   USB-A port of the hub plugged into it. Charge-only cables will not work,
    and a plain C-to-C connection may select the wrong USB role.
 4. **Wait for green.** The comma's home-button icon pulses during download,
    transfer, and preparation, then turns green when ready. Keep the comma
@@ -133,7 +135,7 @@ for startup, model changes, and reconnection behavior.
 
 For logs and more checks, use the [Jetson guide](docs/jetson.md#troubleshooting),
 [Mac guide](docs/macos-app.md#troubleshooting),
-[iPhone guide](docs/iphone-app.md#logs), or
+[iPhone and iPad guide](docs/iphone-app.md#logs), or
 [PC guide](docs/platforms.md#troubleshooting).
 
 <a id="more"></a>

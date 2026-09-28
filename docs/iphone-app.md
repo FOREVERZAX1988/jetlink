@@ -1,18 +1,21 @@
-# Jetlink for iPhone
+# Jetlink for iPhone and iPad
 
-**Experimental, and not yet run on a phone.** Jetlink for iPhone runs the
-Jetlink server inside an iPhone app and serves the comma over one USB cable.
+**Experimental, and not yet run on a phone.** Jetlink for iPhone and iPad runs
+the Jetlink server inside an iOS app and serves the comma over one USB cable.
 Everything in it has been tested on a Mac, where the same Swift server runs
 Cinque Terre V3 at 30 ms per frame. How fast an iPhone runs the model, and
 whether it keeps up in a warm car, is still unmeasured; the app's Benchmark
 tab is how you find out before you drive.
+
+The same app runs on an iPad with USB-C, and everything here applies to one:
+where this page says iPhone or phone, read iPad.
 
 For a Mac, see [Jetlink for Mac](macos-app.md). For a Jetson or PC, see the
 [README](../README.md#quick-start).
 
 ## How it differs from the Mac app
 
-| | Mac | iPhone |
+| | Mac | iPhone and iPad |
 | --- | --- | --- |
 | Server | The Python server, in an embedded runtime | A Swift port of the server core, in the app |
 | Runtime | onnxruntime 1.29 with CoreML | The same: onnxruntime 1.29 with CoreML, the same options |
@@ -25,6 +28,7 @@ For a Mac, see [Jetlink for Mac](macos-app.md). For a Jetson or PC, see the
 | What you need | Why |
 | --- | --- |
 | An iPhone with USB-C on iOS 26.1 or later, ideally a Pro model from the iPhone 15 Pro on | The cable goes into it. Only those Pro models have a USB 3 port; the other USB-C iPhones are USB 2, which leaves less room in the frame budget |
+| Or an iPad with USB-C on iPadOS 26.1 or later, ideally an iPad Pro, iPad Air or iPad mini | Every iPad Pro, iPad Air and iPad mini with USB-C is USB 3 or faster; the iPad (10th generation) and iPad (A16) are USB 2. An iPad with a Lightning port is not supported |
 | A USB 3 hub with USB-C power passthrough, and a USB 3 A-to-C data cable | The comma plugs into the hub's A port; see [Connect the comma](#connect-the-comma) for why not straight into the phone. The phone runs the model 20 times a second and belongs on power |
 | About 3 GB of free space per model | A 766 MB download plus the prepared CoreML engine |
 | A Mac with Xcode 26 and the iOS 26 platform | There is no App Store or TestFlight build; you build and install it yourself. A free Apple account is enough |
@@ -76,7 +80,7 @@ nothing to type. See [What the comma presents](transport.md#what-the-comma-prese
    models settings. USB is for a Jetson, a Linux PC or a Mac; the comma rebuilds
    its USB gadget when the setting moves between the two.
 2. Open Jetlink. The first time, allow **Local Network** access when iOS asks.
-3. Plug a USB 3 hub into the iPhone.
+3. Plug a USB 3 hub into the iPhone or iPad.
 4. Join the hub's USB-A port to the comma's USB-C port with a USB 3 A-to-C data
    cable.
 5. The title reads **Connected over USB 3** once the comma is on. **USB 2**
@@ -103,7 +107,10 @@ USB 2 runs at 480 Mb/s.
 Every hop has to be USB 3: the phone, the hub and the cable. Apple lists USB 3
 only for the Pro models from the iPhone 15 Pro on; the other USB-C iPhones run
 at USB 2, and the cable in the box is a USB 2 cable
-([Apple](https://support.apple.com/en-us/105099)).
+([Apple](https://support.apple.com/en-us/105099)). Every iPad Pro, iPad Air
+and iPad mini with USB-C is USB 3 or faster, and the iPad (10th generation)
+and iPad (A16) are USB 2 (the tech specs under
+[Identify your iPad model](https://support.apple.com/en-us/108043)).
 
 A frame is about 393 KB up and 74 KB back. At USB 3 the cable costs it about
 8.4 ms there and back (p50, 11.2 ms p99), measured with a Mac standing in for
@@ -183,17 +190,19 @@ on while Jetlink is open. The title's subtitle says where things stand:
 - **Link** has the frame rate (the comma sends 20 a second) and slow frames,
   and says what the link runs over: USB 3 or USB 2 on the cable, Wi-Fi for a
   bench tool.
-- **iPhone** has the phone's temperature, battery, memory and link. A hot phone
-  slows down, and it shows here before it shows in the ring. Memory is what
-  iOS still lets the app use; it turns orange under 1 GB, where preparing a
-  model may not fit.
+- **iPhone** (**iPad** on an iPad) has the phone's temperature, battery,
+  memory and link. A hot phone slows down, and it shows here before it shows
+  in the ring. Memory is what iOS still lets the app use; it turns orange under
+  1 GB, where preparing a model may not fit.
 
 If the app leaves the screen while serving, an orange banner at the top says
 so when you come back: iOS suspends an app that is not in front.
 
 On its side the phone shows the ring and the latency with nothing else on
-screen. On the other tabs, the state stays in view in a bar above the tabs;
-tap it to go back.
+screen. An iPad sets the cards in two columns and keeps its tabs, and in a
+narrow Split View or Stage Manager window shows them as an upright phone
+does. On the other tabs, the state stays in view in a bar at the bottom; tap
+it to go back.
 
 ## Logs
 
