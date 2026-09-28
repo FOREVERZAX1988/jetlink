@@ -146,6 +146,15 @@ let package = Package(
       ],
       exclude: ["Fixtures"]),
     .testTarget(name: "JetlinkStatusPageTests", dependencies: ["JetlinkStatusPage", "JetlinkKit", "JetlinkServer", "JetlinkTestSupport"]),
+    // jetlink-server's commands in process, and the built binary for what
+    // only a process shows (--version beside a VERSION file, SIGTERM).
+    .testTarget(
+      name: "JetlinkServerCommandTests",
+      dependencies: [
+        .target(name: "jetlink-server", condition: .when(platforms: [.macOS, .linux])),
+        "JetlinkKit", "JetlinkRegistry", "JetlinkServer", "JetlinkTestSupport",
+        .product(name: "ArgumentParser", package: "swift-argument-parser", condition: .when(platforms: [.macOS, .linux])),
+      ]),
   ],
   cxxLanguageStandard: .cxx17
 )
