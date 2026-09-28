@@ -8,8 +8,9 @@ Holds the USB gadget, and nothing else.
 
 The comma is the USB device: the link exists only while some process holds ep0
 with the UDC bound. This is that process, for as long as the link is enabled,
-onroad and offroad alike. Whoever wants to move bytes borrows the endpoint
-files over a unix socket (lending.py) and the gadget never leaves the bus.
+onroad and offroad alike, and no other process ever holds ep0. Whoever wants
+to move bytes borrows the endpoint files over a unix socket (lending.py) and
+the gadget never leaves the bus.
 
 The Accelerator Link setting names the host. For USB (a Jetson or a Mac) the
 gadget is FunctionFS alone and the endpoint files are lent at once. For iOS
@@ -59,6 +60,8 @@ RECONNECT_BACKOFF = 5.0
 GADGET_SETUP_BACKOFF = 60.0
 # between attempts to bring the gadget's network interface up after a bind
 NET_BACKOFF = 5.0
+# between attempts to listen for borrowers after one failed
+LENDER_BACKOFF = 30.0
 # between runs of the worker that found nothing to do. It costs a couple of
 # seconds of imports, so it is spawned on a change and not on a timer
 WORKER_BACKOFF = 300.0
@@ -118,6 +121,8 @@ class Owner:
     self._peer: str | None = None       # the phone published as dialed in
     self.net_ready = False              # usb0 configured for this bind
     self.next_net_attempt = 0.0
+    self.lender_failed = False          # said once, until it listens again
+    self.next_lender = 0.0
     self.worker: subprocess.Popen | None = None
     self.seen: dict[str, int] = {}      # watched param -> mtime when last looked
     self._watched: dict[str, str] | None = None
@@ -386,8 +391,35 @@ class Owner:
       root.run('vm', 'apply')
       self.vm_tuned = True
 
+  def ensure_lender(self) -> None:
+    """Listen for borrowers, or say why not and try again later.
+
+    Only this process ever holds ep0, so without the lender nothing can use
+    the link: the gadget stays held all the same, since letting it go would
+    be an unplug that helps nobody, and the reason goes where
+    gadget.gadget_error() reads it, which the panels show.
+    """
+    if self.lender.listening:
+      return
+    now = time.monotonic()
+    if now < self.next_lender:
+      return
+    if self.lender.start():
+      if self.lender_failed:
+        gadget.log.warning("jetlink: listening for borrowers again")
+      self.lender_failed = False
+      gadget.note_lender_error(None)
+      return
+    self.next_lender = now + LENDER_BACKOFF
+    if not self.lender_failed:
+      gadget.log.error("jetlink: nothing can borrow the gadget, the lender could not listen on %s (%s); "
+                       "trying again every %.0f s", self.lender.path, self.lender.error, LENDER_BACKOFF)
+      self.lender_failed = True
+    gadget.note_lender_error(self.lender.error)
+
   def link_step(self, ios: bool) -> None:
     """A step with the link on, for an iPhone or not."""
+    self.ensure_lender()
     # before anything is presented: a C-to-C host has to find a device here
     self.port.update()
 
@@ -410,14 +442,8 @@ class Owner:
     if not offroad:
       # the drive has started and the endpoints belong to modeld. A run of ours
       # holding the lease would keep it out for the whole drive; the server's
-      # build carries on and modeld picks the engine up over its own link
+      # build carries on and modeld picks the engine up over its loan
       self.stop_worker()
-      if not self.lender.listening:
-        # nobody can ask us for the endpoints, so ep0 in our hands would only
-        # keep modeld out for the whole drive. Give the gadget up and let it
-        # own the link the way it did before there was a lease
-        self.close_link()
-        return
 
     if self.lender.lent or not offroad:
       if self.lender.lent:
@@ -516,8 +542,6 @@ class Owner:
 
   def run(self) -> None:
     gadget.clear_link()   # ours to write, and a record from a previous owner is stale
-    if not self.lender.start():
-      gadget.log.error("jetlink: nothing can borrow the gadget from us; modeld will open it itself")
     try:
       while not self.stop:
         started = time.monotonic()
@@ -535,6 +559,9 @@ class Owner:
       # a drive begins
       self.port.off()
       self.lender.stop()
+      # about this process's lender; with no owner there is nothing to borrow
+      # anyway, and a chestnut may be why it stopped
+      gadget.note_lender_error(None)
       self.stop_worker()
       self.close_link()
       gadget.set_dormant(False)

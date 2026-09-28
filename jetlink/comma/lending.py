@@ -9,13 +9,13 @@ Who may do endpoint IO on the gadget, while one process owns it throughout.
 The comma is the USB device: the link exists only while some process holds ep0
 with the UDC bound. Two processes used to take turns at that, and every change
 of owner was an unplug and a replug as the Jetson saw it, a fresh libusb open
-and a fresh server session. jetlinkd holds ep0 for as long as the link is
-enabled now, so none of that happens.
+and a fresh server session. The owner (owner.py) holds ep0 for as long as the
+link is enabled now, and nothing else ever does, so none of that happens.
 
 What still has to change hands is the right to read the endpoint files.
 FunctionFS keeps a queued read queued until something completes it, so a second
 reader would sit behind the first and take its reply. This is the handshake for
-that: modeld borrows for the length of a drive, jetlinkd stays off the
+that: modeld borrows for the length of a drive, the owner stays off the
 endpoints while it does, and the connection is the lease, so a modeld that is
 killed returns it by dying. There is no "give it back" message: the socket
 closing is the only signal, because it is the only one a killed process sends.
@@ -39,7 +39,7 @@ from pathlib import Path
 from jetlink.comma import gadget
 
 SOCKET = Path('/dev/shm/jetlink-lend.sock')
-# how long a borrower waits for jetlinkd to put the gadget down. It only has
+# how long a borrower waits for the owner to put the gadget down. It only has
 # something to put down if it was mid-provision at ignition, and then it is one
 # re-enumeration; the usual answer is immediate
 BORROW_TIMEOUT = 8.0
@@ -87,7 +87,7 @@ def _recv_line(conn: socket.socket, buf: bytearray, deadline: float, fds: list[i
 
 
 class Loan:
-  """The right to do endpoint IO on a gadget jetlinkd owns.
+  """The right to do endpoint IO on a gadget the owner holds.
 
   Held for the length of a drive: modeld is stopped at every ignition-off and
   SIGKILLed if it lingers, so the socket closing is how the link is handed
@@ -186,11 +186,12 @@ class Loan:
 
 
 def borrow(name: str = 'modeld', timeout: float = BORROW_TIMEOUT, path: Path = SOCKET) -> Loan | None:
-  """Ask jetlinkd for the endpoints, or None if there is nobody to ask.
+  """Ask the owner for the endpoints, or None if there is nobody to ask.
 
-  None is the ordinary answer on a device where the link was only just turned
-  on, or whose daemon died: the caller opens the gadget itself, as it always
-  did, so a drive never loses the large model to a daemon fault.
+  None while the link was only just turned on, or with an owner that died or
+  cannot listen, which then says so in gadget.gadget_error(). There is no link
+  without a loan: only the owner ever holds ep0, so the caller asks again
+  later rather than opening the gadget itself.
 
   Over the cable the answer carries the phone's socket.
   """
@@ -199,7 +200,7 @@ def borrow(name: str = 'modeld', timeout: float = BORROW_TIMEOUT, path: Path = S
     conn.settimeout(POLL)
     conn.connect(str(path))
   except OSError:
-    return None   # no jetlinkd listening; the caller owns the gadget itself
+    return None   # no owner listening
   loan = Loan(conn, bytearray(), '', '', name=name)
   reply = loan._take(timeout)
   if reply is None:
@@ -390,7 +391,7 @@ def _close(sock: socket.socket | None) -> None:
 
 
 class Lender:
-  """jetlinkd's side: one borrower at a time, for as long as it stays connected.
+  """The owner's side: one borrower at a time, for as long as it stays connected.
 
   `lendable` says whether the gadget is in the state a borrower can take over
   from, bound with no endpoint file open here; while it is not, a borrow is
@@ -416,11 +417,13 @@ class Lender:
     self._thread: threading.Thread | None = None
     self._stop = threading.Event()
     self._lent = threading.Event()
+    # why the last start could not listen, for the owner to report
+    self.error: str | None = None
 
   @property
   def listening(self) -> bool:
-    """Can anybody ask us for the endpoints? If not, holding ep0 only keeps
-    the borrower out; see Owner.step."""
+    """Can anybody ask us for the endpoints? If not, nobody can use the link,
+    and the owner says so and starts this again; see Owner.ensure_lender."""
     return self._sock is not None
 
   @property
@@ -430,19 +433,24 @@ class Lender:
     return self._lent.is_set()
 
   def start(self) -> bool:
+    """Listen for borrowers. False, with the reason in `error`, on a read-only
+    /dev/shm or a path somebody else owns; the caller logs it and tries again,
+    so this does not."""
     if self._thread is not None:
       return True
+    sock = None
     try:
       self._clear_stale()
       sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
       sock.bind(str(self.path))
       sock.listen(1)
       sock.settimeout(POLL)
-    except OSError:
-      # a read-only /dev/shm, or a path somebody else owns. modeld opens the
-      # gadget itself when nobody answers, so this is not fatal
-      gadget.log.exception("jetlink: could not listen on %s", self.path)
+    except OSError as e:
+      if sock is not None:
+        sock.close()
+      self.error = str(e) or type(e).__name__
       return False
+    self.error = None
     self._sock = sock
     self._thread = threading.Thread(target=self._serve, name='jetlink_lend', daemon=True)
     self._thread.start()
@@ -453,9 +461,10 @@ class Lender:
     if self._thread is not None:
       self._thread.join(2.0)
       self._thread = None
-    if self._sock is not None:
-      self._sock.close()
-      self._sock = None
+    if self._sock is None:
+      return   # never listened: the path, if any, is somebody else's
+    self._sock.close()
+    self._sock = None
     try:
       self.path.unlink(missing_ok=True)
     except OSError:
@@ -463,7 +472,7 @@ class Lender:
 
   def _clear_stale(self) -> None:
     """A socket file a dead daemon left behind. Proven dead by a connect that
-    is refused, so a second jetlinkd cannot take the link from a live one."""
+    is refused, so a second owner cannot take the link from a live one."""
     if not self.path.exists():
       return
     probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

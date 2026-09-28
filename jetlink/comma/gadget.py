@@ -223,6 +223,10 @@ NET_FUNCTION = 'ncm.usb0'
 # written by scripts/comma/jetlink-root.sh gadget, which the owner runs when the
 # link is on and there is no gadget: "ok", or "error: <reason>"
 GADGET_STATUS = Path("/dev/shm/jetlink-gadget")
+# the owner's own: "error: the lender could not listen: <reason>" while nothing
+# can borrow the gadget from it, absent otherwise. Not GADGET_STATUS, which
+# root owns and every build rewrites
+LENDER_STATUS = Path("/dev/shm/jetlink-lender")
 CC_ORIENTATION = Path('/sys/class/power_supply/usb/typec_cc_orientation')
 # the owner's pid while it has released the gadget on purpose so the Jetson can
 # sleep. Presence comes from this, not the UDC; a marker whose writer is dead is
@@ -251,19 +255,42 @@ def far_end_sleeps(state: dict | None = None) -> bool:
   return (owner_state() if state is None else state).get('sleep_after', 1.0) > 0
 
 
-def gadget_error() -> str | None:
-  """Why the USB gadget is unavailable, if it is.
-
-  The gadget is set up by root from the owner, nowhere a user would look. A
-  missing file is not an error: the setup never ran.
-  """
+def _status_error(path: Path) -> str | None:
+  """The reason in an "ok" or "error: <reason>" file. A missing file is not an
+  error: whatever writes it has not run."""
   try:
-    reason = GADGET_STATUS.read_text().strip()
+    reason = path.read_text().strip()
   except OSError:
     return None
   if not reason or reason == 'ok':
     return None
   return reason.removeprefix('error:').strip() or None
+
+
+def build_error() -> str | None:
+  """Why the gadget could not be built, if it could not."""
+  return _status_error(GADGET_STATUS)
+
+
+def gadget_error() -> str | None:
+  """Why the link is unavailable, if it is: the gadget could not be built, or
+  it was and nothing can borrow it from the owner.
+
+  Both happen in the owner, nowhere a user would look, so this is how the
+  reason reaches the panels.
+  """
+  return build_error() or _status_error(LENDER_STATUS)
+
+
+def note_lender_error(reason: str | None) -> None:
+  """The owner's record of a lender that cannot listen, or None once it can."""
+  try:
+    if reason is None:
+      LENDER_STATUS.unlink(missing_ok=True)
+    else:
+      LENDER_STATUS.write_text(f"error: the lender could not listen: {reason}\n")
+  except OSError:
+    log.exception("jetlink: could not record the lender's state")
 
 
 def bound_udc() -> str | None:
@@ -405,7 +432,7 @@ def link_configured() -> bool:
   The cable too: a phone is on the gadget's own network interface, which
   exists only while ep0 is held.
   """
-  if gadget_error() is not None:
+  if build_error() is not None:
     return False
   try:
     return (FFS_MOUNT / "ep0").exists()

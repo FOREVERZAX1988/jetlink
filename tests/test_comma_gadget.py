@@ -365,10 +365,12 @@ class TestGadgetStatus(unittest.TestCase):
   file is the only way the reason for a failure reaches anything a user can see."""
 
   def setUp(self):
-    self.status = Path(tempfile.mkdtemp()) / 'jetlink-gadget'
-    p = unittest.mock.patch.object(gadget, 'GADGET_STATUS', self.status)
-    self.addCleanup(p.stop)
-    p.start()
+    tmp = Path(tempfile.mkdtemp())
+    self.status = tmp / 'jetlink-gadget'
+    for name, value in (('GADGET_STATUS', self.status), ('LENDER_STATUS', tmp / 'jetlink-lender')):
+      p = unittest.mock.patch.object(gadget, name, value)
+      self.addCleanup(p.stop)
+      p.start()
 
   def test_missing_file_is_not_an_error(self):
     # A build that never ran the setup at all reads the same as not installed.
@@ -395,6 +397,20 @@ class TestGadgetStatus(unittest.TestCase):
     # path; an availability check must never take a process down over one.
     with unittest.mock.patch.object(Path, 'read_text', side_effect=PermissionError):
       self.assertIsNone(gadget.gadget_error())
+
+  def test_a_lender_that_cannot_listen_is_an_error_but_not_a_build_failure(self):
+    # the owner's own record, beside root's: the gadget is there, and nothing
+    # can borrow it
+    self.status.write_text('ok\n')
+    gadget.note_lender_error('[Errno 30] Read-only file system')
+    self.assertEqual(gadget.gadget_error(), 'the lender could not listen: [Errno 30] Read-only file system')
+    self.assertIsNone(gadget.build_error())
+    self.status.write_text('error: kernel has no USB gadget support\n')
+    self.assertEqual(gadget.gadget_error(), 'kernel has no USB gadget support', 'the build failure comes first')
+    gadget.note_lender_error(None)
+    gadget.note_lender_error(None)   # twice is not an error
+    self.status.write_text('ok\n')
+    self.assertIsNone(gadget.gadget_error())
 
 
 class TestDormant(unittest.TestCase):

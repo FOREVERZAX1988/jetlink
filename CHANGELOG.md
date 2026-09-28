@@ -4,6 +4,7 @@ Unreleased
 * The comma's device layer moved here from the zoompilot fork, as the `jetlink.comma` package: the gadget and the openpilot params it reads, the owner process that holds it, the endpoint lease, the USB-C port hold and the VM tuning. The fork keeps a shim that starts the owner with its provisioning worker. Standard library only, so the owner stays at about 10 MB
 * The comma links over USB only: `JetlinkEndpoint`, which sent the link to a server over Ethernet, is gone. The server's TCP transport stays, for testing
 * The owner builds the comma's gadget on its first step, so nothing runs once per boot and `scripts/deploy_to_comma.sh` no longer builds one
+* Only the owner ever holds the comma's gadget. If nothing can borrow it from the owner, the owner keeps it, tries again every 30 s, and the reason shows where a failed gadget build does
 * The comma's Accelerator Link setting is Off, USB or iOS
   * USB, for a Jetson or a Mac, is the plain gadget as before, lent to modeld at once
   * iOS adds a USB network interface (CDC-NCM) for an iPhone over one cable: `scripts/comma/jetlink-root.sh gadget --ios`, and `net` sets up the comma's end of that network after a bind

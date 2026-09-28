@@ -32,6 +32,8 @@ class OwnerTest(unittest.TestCase):
     for name, value in (('DORMANT', self.tmp / 'dormant'),
                         ('SHUTDOWN_REQUEST', self.tmp / 'shutdown'),
                         ('STATE', self.tmp / 'state'),
+                        ('GADGET_STATUS', self.tmp / 'gadget-status'),
+                        ('LENDER_STATUS', self.tmp / 'lender-status'),
                         ('params_dir', mock.Mock(return_value=self.params)),
                         ('link_configured', mock.Mock(return_value=True)),
                         ('host_attached', mock.Mock(return_value=True)),
@@ -327,22 +329,75 @@ class TestShutdown(OwnerTest):
 
 
 class TestNobodyCanBorrow(OwnerTest):
-  def test_a_gadget_nobody_can_ask_for_is_given_to_the_drive(self):
-    # holding ep0 with no way to lend it would keep modeld out for the whole
-    # drive; without a lease it opens the gadget itself as it always did
-    o = self.owner(lendable=True)
+  """Only the owner ever holds ep0. A lender that cannot listen leaves nobody
+  a way to the link, so the owner keeps the gadget, says why where the panels
+  look, and tries again."""
+
+  REASON = 'the lender could not listen: [Errno 30] Read-only file system'
+
+  def owner(self, **kw):
+    o = super().owner(**kw)
     o.lender.listening = False
+    o.lender.start.return_value = False
+    o.lender.error = '[Errno 30] Read-only file system'
+    return o
+
+  def test_the_gadget_is_held_through_the_drive(self):
+    o = self.owner(lendable=True)
     self.write('IsOffroad', b'0')
     o.step()
-    o.close_link.assert_called_once()
+    o.close_link.assert_not_called()
+    self.assertIsNotNone(o.transport)
+    self.assertEqual(gadget.gadget_error(), self.REASON)
+    self.assertEqual(gadget.LENDER_STATUS.read_text(), f'error: {self.REASON}\n')
+
+  def test_it_is_not_a_build_failure(self):
+    # the gadget exists; rebuilding it would not help, and would unplug the host
+    o = self.owner()
+    o.step()
+    self.assertIsNone(gadget.build_error())
+
+  def test_said_once_and_retried_on_a_backoff(self):
+    o = self.owner()
+    with mock.patch.object(gadget, 'log') as log:
+      for _ in range(3):
+        o.step()
+      o.lender.start.assert_called_once()
+      self.assertEqual(log.error.call_count, 1)
+      o.next_lender = 0.0
+      o.step()
+      self.assertEqual(o.lender.start.call_count, 2)
+      self.assertEqual(log.error.call_count, 1, 'said it again every retry')
+
+  def test_listening_again_clears_the_error(self):
+    o = self.owner()
+    o.step()
+    o.lender.start.return_value = True
+    o.next_lender = 0.0
+    o.step()
+    self.assertIsNone(gadget.gadget_error())
+    self.assertFalse(o.lender_failed)
+
+  def test_a_stop_clears_the_error(self):
+    # a chestnut turning up stops the owner with the link still on
+    o = self.owner()
+    o.step()
+    o.stop = True
+    o.run()
+    self.assertIsNone(gadget.gadget_error())
 
   def test_parked_it_still_provisions(self):
     o = self.owner(lendable=True)
-    o.lender.listening = False
     o.seen = {}
     o.step()
     o.close_link.assert_not_called()
     o.spawn_worker.assert_called_once()
+
+  def test_a_listening_lender_is_left_alone(self):
+    o = super().owner()
+    o.step()
+    o.lender.start.assert_not_called()
+    self.assertIsNone(gadget.gadget_error())
 
 
 class TestTheToggle(OwnerTest):

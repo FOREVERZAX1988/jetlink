@@ -371,12 +371,14 @@ class StaleSockets(LendingTest):
     assert lender.lent
 
   def test_a_live_daemon_keeps_its_socket(self):
-    # two jetlinkds is a misconfiguration, and the second must not take the
-    # gadget away from the one that owns it
+    # two owners is a misconfiguration, and the second must not take the
+    # gadget away from the one that owns it, even when it stops
     first = self.lender()
     second = lending.Lender(lambda: self.free, self.bounce, path=self.path)
-    self.addCleanup(second.stop)
     assert second.start() is False and not second.listening
+    assert second.error
+    second.stop()
+    assert self.path.exists()
     # macOS refuses a connect while the second's probe still fills the backlog
     # of one; Linux queues it
     assert self.until(lambda: self.take() is not None)
