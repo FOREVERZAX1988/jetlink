@@ -106,6 +106,8 @@ struct jl_trt_engine {
 };
 
 struct jl_trt_context {
+  // its own, since a misused context can outlive its engine
+  jl_trt *trt;
   jl_trt_engine *engine;
   jl_trt_dptr address[MAX_TENSORS];
   int ran;
@@ -188,6 +190,15 @@ static int enter(jl_trt *t, const char *call, char *err, size_t errlen) {
   return JL_TRT_OK;
 }
 
+// enter, or return what it said
+#define ENTER(t, call)                              \
+  do {                                              \
+    int entered_ = enter((t), (call), err, errlen); \
+    if (entered_ != JL_TRT_OK) {                    \
+      return entered_;                              \
+    }                                               \
+  } while (0)
+
 // A call CUDA forbids on the thread that is capturing: it fails, and so does
 // the capture.
 static int unsafe(jl_trt *t, const char *call, char *err, size_t errlen) {
@@ -237,16 +248,15 @@ static int inside(jl_trt *t, int kind, uintptr_t addr, size_t size) {
   return 0;
 }
 
-static int untrack(jl_trt *t, int kind, const void *ptr) {
+static obj *unlink_obj(jl_trt *t, int kind, const void *ptr) {
   for (obj **link = &t->live; *link != NULL; link = &(*link)->next) {
     if ((*link)->kind == kind && (*link)->ptr == ptr) {
       obj *o = *link;
       *link = o->next;
-      free(o);
-      return 1;
+      return o;
     }
   }
-  return 0;
+  return NULL;
 }
 
 static void free_ops(op_list *list) {
@@ -297,6 +307,22 @@ static void destroy_obj(obj *o) {
   }
   free(o->ptr);
   free(o);
+}
+
+// Frees a live object; destroying one that is not live is a misuse. Takes
+// the lock itself, recursively.
+static void destroy(jl_trt *t, int kind, void *ptr, const char *what) {
+  if (t == NULL || ptr == NULL) {
+    return;
+  }
+  pthread_mutex_lock(&t->lock);
+  obj *o = unlink_obj(t, kind, ptr);
+  if (o != NULL) {
+    destroy_obj(o);
+  } else {
+    misuse(t, "destroying %s that is not live", what);
+  }
+  pthread_mutex_unlock(&t->lock);
 }
 
 // --- element types -----------------------------------------------------------
@@ -719,10 +745,7 @@ void jl_trt_get_info(const jl_trt *t, jl_trt_info *out) {
 }
 
 int jl_trt_mem_info(jl_trt *t, size_t *free_bytes, size_t *total_bytes, char *err, size_t errlen) {
-  int rc = enter(t, "mem_info", err, errlen);
-  if (rc != JL_TRT_OK) {
-    return rc;
-  }
+  ENTER(t, "mem_info");
   size_t used = 0;
   for (obj *o = t->live; o != NULL; o = o->next) {
     if (o->kind == OBJ_DEVICE) {
@@ -791,12 +814,10 @@ const char *jl_trt_fake_last_misuse(jl_trt *t) {
 // --- memory ------------------------------------------------------------------------
 
 static int alloc(jl_trt *t, const char *call, int kind, size_t size, void **out, char *err, size_t errlen) {
-  int rc = enter(t, call, err, errlen);
-  if (rc != JL_TRT_OK) {
-    return rc;
-  }
+  ENTER(t, call);
   const char *cu = kind == OBJ_DEVICE ? "cuMemAlloc" : "cuMemHostAlloc";
-  if ((rc = unsafe(t, cu, err, errlen)) != JL_TRT_OK) {
+  int rc = unsafe(t, cu, err, errlen);
+  if (rc != JL_TRT_OK) {
     return leave(t, rc);
   }
   if (size == 0) {
@@ -820,11 +841,7 @@ static void release(jl_trt *t, int kind, void *p) {
   if (unsafe(t, kind == OBJ_DEVICE ? "cuMemFree" : "cuMemFreeHost", NULL, 0) != JL_TRT_OK) {
     misuse(t, "memory freed on the thread that is capturing");
   }
-  if (untrack(t, kind, p)) {
-    free(p);
-  } else {
-    misuse(t, "freeing %s memory that is not live", kind == OBJ_DEVICE ? "device" : "host");
-  }
+  destroy(t, kind, p, kind == OBJ_DEVICE ? "device memory" : "host memory");
   pthread_mutex_unlock(&t->lock);
 }
 
@@ -849,10 +866,7 @@ void jl_trt_host_free(jl_trt *t, void *ptr) {
 }
 
 static int queue(jl_trt *t, const char *call, jl_trt_stream *s, op o, char *err, size_t errlen) {
-  int rc = enter(t, call, err, errlen);
-  if (rc != JL_TRT_OK) {
-    return rc;
-  }
+  ENTER(t, call);
   return leave(t, submit(t, s, o, err, errlen));
 }
 
@@ -884,10 +898,7 @@ int jl_trt_memset(jl_trt *t, jl_trt_dptr dst, uint8_t value, size_t size, jl_trt
 
 int jl_trt_stream_create(jl_trt *t, jl_trt_stream **out, char *err, size_t errlen) {
   *out = NULL;
-  int rc = enter(t, "stream_create", err, errlen);
-  if (rc != JL_TRT_OK) {
-    return rc;
-  }
+  ENTER(t, "stream_create");
   jl_trt_stream *s = calloc(1, sizeof(jl_trt_stream));
   if (s == NULL) {
     return leave(t, say(err, errlen, JL_TRT_CUDA_ERROR, "cuStreamCreate: CUDA_ERROR_OUT_OF_MEMORY: out of memory"));
@@ -899,11 +910,9 @@ int jl_trt_stream_create(jl_trt *t, jl_trt_stream **out, char *err, size_t errle
 }
 
 int jl_trt_stream_sync(jl_trt *t, jl_trt_stream *s, char *err, size_t errlen) {
-  int rc = enter(t, "stream_sync", err, errlen);
+  ENTER(t, "stream_sync");
+  int rc = unsafe(t, "cuStreamSynchronize", err, errlen);
   if (rc != JL_TRT_OK) {
-    return rc;
-  }
-  if ((rc = unsafe(t, "cuStreamSynchronize", err, errlen)) != JL_TRT_OK) {
     return leave(t, rc);
   }
   if (find(t, OBJ_STREAM, s) == NULL) {
@@ -918,28 +927,17 @@ void jl_trt_stream_destroy(jl_trt *t, jl_trt_stream *s) {
     return;
   }
   pthread_mutex_lock(&t->lock);
-  if (find(t, OBJ_STREAM, s) == NULL) {
-    misuse(t, "destroying a stream that is not live");
-  } else {
-    if (s->capturing) {
-      misuse(t, "destroying a stream that is capturing");
-      if (t->capturing == s) {
-        t->capturing = NULL;
-      }
-    }
-    free_ops(&s->ops);
-    untrack(t, OBJ_STREAM, s);
-    free(s);
+  if (find(t, OBJ_STREAM, s) != NULL && s->capturing) {
+    misuse(t, "destroying a stream that is capturing");
+    t->capturing = NULL;
   }
+  destroy(t, OBJ_STREAM, s, "a stream");
   pthread_mutex_unlock(&t->lock);
 }
 
 int jl_trt_event_create(jl_trt *t, unsigned flags, jl_trt_event **out, char *err, size_t errlen) {
   *out = NULL;
-  int rc = enter(t, "event_create", err, errlen);
-  if (rc != JL_TRT_OK) {
-    return rc;
-  }
+  ENTER(t, "event_create");
   jl_trt_event *e = calloc(1, sizeof(jl_trt_event));
   if (e == NULL) {
     return leave(t, say(err, errlen, JL_TRT_CUDA_ERROR, "cuEventCreate: CUDA_ERROR_OUT_OF_MEMORY: out of memory"));
@@ -951,10 +949,7 @@ int jl_trt_event_create(jl_trt *t, unsigned flags, jl_trt_event **out, char *err
 }
 
 int jl_trt_event_record(jl_trt *t, jl_trt_event *event, jl_trt_stream *s, unsigned flags, char *err, size_t errlen) {
-  int rc = enter(t, "event_record", err, errlen);
-  if (rc != JL_TRT_OK) {
-    return rc;
-  }
+  ENTER(t, "event_record");
   if (find(t, OBJ_EVENT, event) == NULL) {
     misuse(t, "recording an event that is not live");
     return leave(t, say(err, errlen, JL_TRT_CUDA_ERROR, "cuEventRecordWithFlags: CUDA_ERROR_INVALID_HANDLE: invalid resource handle"));
@@ -990,27 +985,18 @@ static int host_wait(jl_trt *t, const char *call, jl_trt_event *event, char *err
 }
 
 int jl_trt_event_sync(jl_trt *t, jl_trt_event *event, char *err, size_t errlen) {
-  int rc = enter(t, "event_sync", err, errlen);
-  if (rc != JL_TRT_OK) {
-    return rc;
-  }
+  ENTER(t, "event_sync");
   return leave(t, host_wait(t, "cuEventSynchronize", event, err, errlen));
 }
 
 int jl_trt_event_query(jl_trt *t, jl_trt_event *event, char *err, size_t errlen) {
-  int rc = enter(t, "event_query", err, errlen);
-  if (rc != JL_TRT_OK) {
-    return rc;
-  }
+  ENTER(t, "event_query");
   // everything here has finished by the time it returns
   return leave(t, host_wait(t, "cuEventQuery", event, err, errlen));
 }
 
 int jl_trt_event_elapsed(jl_trt *t, jl_trt_event *start, jl_trt_event *end, float *ms, char *err, size_t errlen) {
-  int rc = enter(t, "event_elapsed", err, errlen);
-  if (rc != JL_TRT_OK) {
-    return rc;
-  }
+  ENTER(t, "event_elapsed");
   if (find(t, OBJ_EVENT, start) == NULL || find(t, OBJ_EVENT, end) == NULL ||
       ((start->flags | end->flags) & JL_TRT_EVENT_DISABLE_TIMING) || !start->recorded || !end->recorded) {
     return leave(t, say(err, errlen, JL_TRT_CUDA_ERROR, "cuEventElapsedTime: CUDA_ERROR_INVALID_HANDLE: invalid resource handle"));
@@ -1020,25 +1006,13 @@ int jl_trt_event_elapsed(jl_trt *t, jl_trt_event *start, jl_trt_event *end, floa
 }
 
 void jl_trt_event_destroy(jl_trt *t, jl_trt_event *event) {
-  if (t == NULL || event == NULL) {
-    return;
-  }
-  pthread_mutex_lock(&t->lock);
-  if (untrack(t, OBJ_EVENT, event)) {
-    free(event);
-  } else {
-    misuse(t, "destroying an event that is not live");
-  }
-  pthread_mutex_unlock(&t->lock);
+  destroy(t, OBJ_EVENT, event, "an event");
 }
 
 // --- graphs ------------------------------------------------------------------------
 
 int jl_trt_capture_begin(jl_trt *t, jl_trt_stream *s, char *err, size_t errlen) {
-  int rc = enter(t, "capture_begin", err, errlen);
-  if (rc != JL_TRT_OK) {
-    return rc;
-  }
+  ENTER(t, "capture_begin");
   if (find(t, OBJ_STREAM, s) == NULL) {
     return leave(t, say(err, errlen, JL_TRT_CUDA_ERROR, "cuStreamBeginCapture: CUDA_ERROR_INVALID_HANDLE: invalid resource handle"));
   }
@@ -1057,10 +1031,7 @@ int jl_trt_capture_begin(jl_trt *t, jl_trt_stream *s, char *err, size_t errlen) 
 
 int jl_trt_capture_end(jl_trt *t, jl_trt_stream *s, jl_trt_graph **out, char *err, size_t errlen) {
   *out = NULL;
-  int rc = enter(t, "capture_end", err, errlen);
-  if (rc != JL_TRT_OK) {
-    return rc;
-  }
+  ENTER(t, "capture_end");
   if (find(t, OBJ_STREAM, s) == NULL || !s->capturing) {
     return leave(t, say(err, errlen, JL_TRT_CUDA_ERROR,
                         "cuStreamEndCapture: CUDA_ERROR_ILLEGAL_STATE: the operation cannot be performed in the present state"));
@@ -1094,10 +1065,7 @@ int jl_trt_capture_end(jl_trt *t, jl_trt_stream *s, jl_trt_graph **out, char *er
 
 int jl_trt_graph_instantiate(jl_trt *t, jl_trt_graph *graph, jl_trt_graph_exec **out, char *err, size_t errlen) {
   *out = NULL;
-  int rc = enter(t, "graph_instantiate", err, errlen);
-  if (rc != JL_TRT_OK) {
-    return rc;
-  }
+  ENTER(t, "graph_instantiate");
   if (find(t, OBJ_GRAPH, graph) == NULL) {
     return leave(t, say(err, errlen, JL_TRT_CUDA_ERROR, "cuGraphInstantiateWithFlags: CUDA_ERROR_INVALID_VALUE: invalid argument"));
   }
@@ -1112,10 +1080,8 @@ int jl_trt_graph_instantiate(jl_trt *t, jl_trt_graph *graph, jl_trt_graph_exec *
 }
 
 int jl_trt_graph_launch(jl_trt *t, jl_trt_graph_exec *exec, jl_trt_stream *s, char *err, size_t errlen) {
-  int rc = enter(t, "graph_launch", err, errlen);
-  if (rc != JL_TRT_OK) {
-    return rc;
-  }
+  ENTER(t, "graph_launch");
+  int rc;
   if (find(t, OBJ_EXEC, exec) == NULL || find(t, OBJ_STREAM, s) == NULL) {
     misuse(t, "launching a graph or onto a stream that is not live");
     return leave(t, say(err, errlen, JL_TRT_CUDA_ERROR, "cuGraphLaunch: CUDA_ERROR_INVALID_HANDLE: invalid resource handle"));
@@ -1131,31 +1097,11 @@ int jl_trt_graph_launch(jl_trt *t, jl_trt_graph_exec *exec, jl_trt_stream *s, ch
 }
 
 void jl_trt_graph_destroy(jl_trt *t, jl_trt_graph *graph) {
-  if (t == NULL || graph == NULL) {
-    return;
-  }
-  pthread_mutex_lock(&t->lock);
-  if (untrack(t, OBJ_GRAPH, graph)) {
-    free_ops(&graph->ops);
-    free(graph);
-  } else {
-    misuse(t, "destroying a graph that is not live");
-  }
-  pthread_mutex_unlock(&t->lock);
+  destroy(t, OBJ_GRAPH, graph, "a graph");
 }
 
 void jl_trt_graph_exec_destroy(jl_trt *t, jl_trt_graph_exec *exec) {
-  if (t == NULL || exec == NULL) {
-    return;
-  }
-  pthread_mutex_lock(&t->lock);
-  if (untrack(t, OBJ_EXEC, exec)) {
-    free_ops(&exec->ops);
-    free(exec);
-  } else {
-    misuse(t, "destroying a graph exec that is not live");
-  }
-  pthread_mutex_unlock(&t->lock);
+  destroy(t, OBJ_EXEC, exec, "a graph exec");
 }
 
 // --- runtime -------------------------------------------------------------------------
@@ -1250,11 +1196,9 @@ static int parse_plan(jl_trt *t, char *text, jl_trt_engine *e, char *err, size_t
 int jl_trt_engine_deserialize(jl_trt *t, const void *plan, size_t size, jl_trt_engine **out, char *err,
                               size_t errlen) {
   *out = NULL;
-  int rc = enter(t, "engine_deserialize", err, errlen);
+  ENTER(t, "engine_deserialize");
+  int rc = unsafe(t, "cuMemAlloc", err, errlen);
   if (rc != JL_TRT_OK) {
-    return rc;
-  }
-  if ((rc = unsafe(t, "cuMemAlloc", err, errlen)) != JL_TRT_OK) {
     return leave(t, rc);
   }
   char *text = malloc(size + 1);
@@ -1292,11 +1236,7 @@ void jl_trt_engine_destroy(jl_trt_engine *e) {
       break;
     }
   }
-  if (untrack(t, OBJ_ENGINE, e)) {
-    free(e);
-  } else {
-    misuse(t, "destroying an engine that is not live");
-  }
+  destroy(t, OBJ_ENGINE, e, "an engine");
   pthread_mutex_unlock(&t->lock);
 }
 
@@ -1321,17 +1261,16 @@ int jl_trt_engine_io(const jl_trt_engine *e, int index, const char **name, int *
 int jl_trt_context_create(jl_trt_engine *e, jl_trt_context **out, char *err, size_t errlen) {
   *out = NULL;
   jl_trt *t = e->trt;
-  int rc = enter(t, "context_create", err, errlen);
+  ENTER(t, "context_create");
+  int rc = unsafe(t, "cuMemAlloc", err, errlen);
   if (rc != JL_TRT_OK) {
-    return rc;
-  }
-  if ((rc = unsafe(t, "cuMemAlloc", err, errlen)) != JL_TRT_OK) {
     return leave(t, rc);
   }
   jl_trt_context *c = calloc(1, sizeof(jl_trt_context));
   if (c == NULL) {
     return leave(t, say(err, errlen, JL_TRT_ERROR, "out of memory"));
   }
+  c->trt = t;
   c->engine = e;
   track(t, OBJ_CONTEXT, c, 0);
   *out = c;
@@ -1339,25 +1278,14 @@ int jl_trt_context_create(jl_trt_engine *e, jl_trt_context **out, char *err, siz
 }
 
 void jl_trt_context_destroy(jl_trt_context *c) {
-  if (c == NULL) {
-    return;
+  if (c != NULL) {
+    destroy(c->trt, OBJ_CONTEXT, c, "an execution context");
   }
-  jl_trt *t = c->engine->trt;
-  pthread_mutex_lock(&t->lock);
-  if (untrack(t, OBJ_CONTEXT, c)) {
-    free(c);
-  } else {
-    misuse(t, "destroying an execution context that is not live");
-  }
-  pthread_mutex_unlock(&t->lock);
 }
 
 int jl_trt_context_set_address(jl_trt_context *c, const char *name, jl_trt_dptr address, char *err, size_t errlen) {
-  jl_trt *t = c->engine->trt;
-  int rc = enter(t, "context_set_address", err, errlen);
-  if (rc != JL_TRT_OK) {
-    return rc;
-  }
+  jl_trt *t = c->trt;
+  ENTER(t, "context_set_address");
   for (int i = 0; i < c->engine->n; i++) {
     if (strcmp(c->engine->tensors[i].name, name) == 0) {
       c->address[i] = address;
@@ -1368,12 +1296,10 @@ int jl_trt_context_set_address(jl_trt_context *c, const char *name, jl_trt_dptr 
 }
 
 int jl_trt_context_enqueue(jl_trt_context *c, jl_trt_stream *s, char *err, size_t errlen) {
-  jl_trt *t = c->engine->trt;
-  int rc = enter(t, "context_enqueue", err, errlen);
+  jl_trt *t = c->trt;
+  ENTER(t, "context_enqueue");
+  int rc = check_bound(t, c, err, errlen);
   if (rc != JL_TRT_OK) {
-    return rc;
-  }
-  if ((rc = check_bound(t, c, err, errlen)) != JL_TRT_OK) {
     if (find(t, OBJ_STREAM, s) != NULL && s->capturing) {
       s->invalidated = 1;
     }
@@ -1396,10 +1322,7 @@ int jl_trt_context_enqueue(jl_trt_context *c, jl_trt_stream *s, char *err, size_
 
 int jl_trt_build_create(jl_trt *t, jl_trt_build **out, char *err, size_t errlen) {
   *out = NULL;
-  int rc = enter(t, "build_create", err, errlen);
-  if (rc != JL_TRT_OK) {
-    return rc;
-  }
+  ENTER(t, "build_create");
   if (t->config.no_parser) {
     return leave(t, say(err, errlen, JL_TRT_UNAVAILABLE, "libnvonnxparser.so.%d: cannot open shared object file", t->config.major));
   }
@@ -1416,25 +1339,14 @@ int jl_trt_build_create(jl_trt *t, jl_trt_build **out, char *err, size_t errlen)
 }
 
 void jl_trt_build_destroy(jl_trt_build *b) {
-  if (b == NULL) {
-    return;
+  if (b != NULL) {
+    destroy(b->trt, OBJ_BUILD, b, "a build");
   }
-  jl_trt *t = b->trt;
-  pthread_mutex_lock(&t->lock);
-  if (untrack(t, OBJ_BUILD, b)) {
-    free(b);
-  } else {
-    misuse(t, "destroying a build that is not live");
-  }
-  pthread_mutex_unlock(&t->lock);
 }
 
 int jl_trt_build_parse(jl_trt_build *b, const char *onnx_path, char *err, size_t errlen) {
   jl_trt *t = b->trt;
-  int rc = enter(t, "build_parse", err, errlen);
-  if (rc != JL_TRT_OK) {
-    return rc;
-  }
+  ENTER(t, "build_parse");
   FILE *f = fopen(onnx_path, "rb");
   if (f == NULL) {
     return leave(t, say(err, errlen, JL_TRT_ERROR, "(parseFromFile): MODEL_DESERIALIZE_FAILED: fake: cannot open %s", onnx_path));
@@ -1450,10 +1362,7 @@ int jl_trt_build_layers(const jl_trt_build *b) {
 
 int jl_trt_build_set_fp16(jl_trt_build *b, char *err, size_t errlen) {
   jl_trt *t = b->trt;
-  int rc = enter(t, "build_set_fp16", err, errlen);
-  if (rc != JL_TRT_OK) {
-    return rc;
-  }
+  ENTER(t, "build_set_fp16");
   if (t->config.strongly_typed) {
     return leave(t, say(err, errlen, JL_TRT_ERROR, "TensorRT %d has no FP16 flag; precision follows the ONNX", t->config.major));
   }
@@ -1476,10 +1385,7 @@ void jl_trt_build_set_progress(jl_trt_build *b, jl_trt_progress_fn fn, void *ctx
 
 int jl_trt_build_set_timing_cache(jl_trt_build *b, const void *data, size_t size, char *err, size_t errlen) {
   jl_trt *t = b->trt;
-  int rc = enter(t, "build_set_timing_cache", err, errlen);
-  if (rc != JL_TRT_OK) {
-    return rc;
-  }
+  ENTER(t, "build_set_timing_cache");
   b->cache_builds = -1;
   if (data == NULL || size == 0) {
     b->cache_builds = 0;
@@ -1519,10 +1425,7 @@ static int write_file(const char *path, const char *text, char *err, size_t errl
 
 int jl_trt_build_write_plan(jl_trt_build *b, const char *path, char *err, size_t errlen) {
   jl_trt *t = b->trt;
-  int rc = enter(t, "build_write_plan", err, errlen);
-  if (rc != JL_TRT_OK) {
-    return rc;
-  }
+  ENTER(t, "build_write_plan");
   if (!b->parsed) {
     return leave(t, plan_error(t, err, errlen, "fake: nothing parsed to build"));
   }
@@ -1548,7 +1451,7 @@ int jl_trt_build_write_plan(jl_trt_build *b, const char *path, char *err, size_t
            "jl_trt_fake_plan 1\nbuilt %d.%d.%d.%d\nsettings fp16=%d optimization_level=%d workspace=%zu timing_cache=%s\n%s",
            t->config.major, t->config.minor, t->config.patch, t->config.build, b->fp16, b->optimization_level,
            b->workspace, cache, tensors);
-  rc = write_file(path, text, err, errlen);
+  int rc = write_file(path, text, err, errlen);
   free(text);
   if (rc == JL_TRT_OK && b->cache_builds >= 0) {
     b->cache_builds++;
@@ -1558,10 +1461,7 @@ int jl_trt_build_write_plan(jl_trt_build *b, const char *path, char *err, size_t
 
 int jl_trt_build_write_timing_cache(jl_trt_build *b, const char *path, char *err, size_t errlen) {
   jl_trt *t = b->trt;
-  int rc = enter(t, "build_write_timing_cache", err, errlen);
-  if (rc != JL_TRT_OK) {
-    return rc;
-  }
+  ENTER(t, "build_write_timing_cache");
   if (b->cache_builds < 0) {
     return leave(t, say(err, errlen, JL_TRT_ERROR, "no timing cache is attached"));
   }

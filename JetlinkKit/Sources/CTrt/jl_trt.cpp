@@ -260,41 +260,16 @@ int onnx_type(nvinfer1::DataType type) {
   }
 }
 
+// onnx-tensorrt's errorCodeStr, which the headers do not carry
 const char *parser_code(nvonnxparser::ErrorCode code) {
-  switch (code) {
-  case nvonnxparser::ErrorCode::kSUCCESS:
-    return "SUCCESS";
-  case nvonnxparser::ErrorCode::kINTERNAL_ERROR:
-    return "INTERNAL_ERROR";
-  case nvonnxparser::ErrorCode::kMEM_ALLOC_FAILED:
-    return "MEM_ALLOC_FAILED";
-  case nvonnxparser::ErrorCode::kMODEL_DESERIALIZE_FAILED:
-    return "MODEL_DESERIALIZE_FAILED";
-  case nvonnxparser::ErrorCode::kINVALID_VALUE:
-    return "INVALID_VALUE";
-  case nvonnxparser::ErrorCode::kINVALID_GRAPH:
-    return "INVALID_GRAPH";
-  case nvonnxparser::ErrorCode::kINVALID_NODE:
-    return "INVALID_NODE";
-  case nvonnxparser::ErrorCode::kUNSUPPORTED_GRAPH:
-    return "UNSUPPORTED_GRAPH";
-  case nvonnxparser::ErrorCode::kUNSUPPORTED_NODE:
-    return "UNSUPPORTED_NODE";
-  case nvonnxparser::ErrorCode::kUNSUPPORTED_NODE_ATTR:
-    return "UNSUPPORTED_NODE_ATTR";
-  case nvonnxparser::ErrorCode::kUNSUPPORTED_NODE_INPUT:
-    return "UNSUPPORTED_NODE_INPUT";
-  case nvonnxparser::ErrorCode::kUNSUPPORTED_NODE_DATATYPE:
-    return "UNSUPPORTED_NODE_DATATYPE";
-  case nvonnxparser::ErrorCode::kUNSUPPORTED_NODE_DYNAMIC:
-    return "UNSUPPORTED_NODE_DYNAMIC";
-  case nvonnxparser::ErrorCode::kUNSUPPORTED_NODE_SHAPE:
-    return "UNSUPPORTED_NODE_SHAPE";
-  case nvonnxparser::ErrorCode::kREFIT_FAILED:
-    return "REFIT_FAILED";
-  default:
-    return "UNKNOWN";
-  }
+  static const char *const names[] = {
+      "SUCCESS",           "INTERNAL_ERROR",        "MEM_ALLOC_FAILED",          "MODEL_DESERIALIZE_FAILED",
+      "INVALID_VALUE",     "INVALID_GRAPH",         "INVALID_NODE",              "UNSUPPORTED_GRAPH",
+      "UNSUPPORTED_NODE",  "UNSUPPORTED_NODE_ATTR", "UNSUPPORTED_NODE_INPUT",    "UNSUPPORTED_NODE_DATATYPE",
+      "UNSUPPORTED_NODE_DYNAMIC", "UNSUPPORTED_NODE_SHAPE", "REFIT_FAILED",
+  };
+  size_t i = static_cast<size_t>(code);
+  return i < sizeof names / sizeof names[0] ? names[i] : "UNKNOWN";
 }
 
 const char *or_empty(const char *s) {

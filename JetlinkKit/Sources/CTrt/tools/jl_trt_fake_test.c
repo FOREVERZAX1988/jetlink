@@ -545,6 +545,8 @@ static void test_misuse(void) {
   jl_trt_fake_stats s;
   jl_trt_fake_get_stats(t, &s);
   CHECK(s.misuse == 1 && strstr(jl_trt_fake_last_misuse(t), "before its execution context") != NULL);
+  // the context still goes cleanly after its engine
+  jl_trt_context_destroy(c);
   jl_trt_host_free(t, &s);
   jl_trt_fake_get_stats(t, &s);
   CHECK(s.misuse == 2);
