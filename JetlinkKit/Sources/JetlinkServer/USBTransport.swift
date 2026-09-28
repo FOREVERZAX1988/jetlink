@@ -19,13 +19,13 @@ protocol BulkPipes: AnyObject, Sendable {
   func close()
 }
 
-/// Where the server finds the comma's gadget: IOKit on a Mac, a fake in the
-/// tests.
-protocol GadgetSource: Sendable {
+/// Where the server finds the comma's gadget: IOKit on a Mac, a descriptor
+/// the Android app hands over (UsbfsGadget), a fake in the tests.
+public protocol GadgetSource: Sendable {
   /// Is the gadget on the bus? Cheap enough to poll twice a second.
   func present() -> Bool
   /// Opens the link interface's bulk pair.
-  func open() throws -> USBTransport
+  func open() throws -> any MessageLink
 }
 
 /// Framing over USB bulk transfers, the host's end: the Swift form of

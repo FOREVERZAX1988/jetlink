@@ -122,28 +122,30 @@ public final class Server: @unchecked Sendable {
   private var stopped = false
   private var dial: DialTarget?
   private var dialing = false
-  /// Where the USB loop finds the comma: IOKit on a Mac, the device the
-  /// app hands over on Android, none elsewhere. Internal so a test can hand
-  /// it a fake before `start`.
+  /// Where the USB loop finds the comma: IOKit on a Mac, what the host hands
+  /// over elsewhere (the Android app's descriptor). Internal so a test can
+  /// hand it a fake before `start`.
   var gadget: (any GadgetSource)?
 
+  /// The platform's own backend (CoreML on Apple) and gadget (IOKit on a Mac).
   public convenience init(configuration: Configuration, preparer: any ModelPreparer) throws {
-    try self.init(configuration: configuration, backend: Server.makeBackend(configuration, preparer: preparer))
+    #if os(macOS)
+      let gadget: (any GadgetSource)? = USBGadget()
+    #else
+      let gadget: (any GadgetSource)? = nil
+    #endif
+    try self.init(configuration: configuration, backend: Server.makeBackend(configuration, preparer: preparer), gadget: gadget)
   }
 
-  /// A server on `backend` rather than the platform's own; the tests run the
-  /// QNN backend's CPU device this way on a Mac.
-  init(configuration: Configuration, backend: any EngineBackend) throws {
+  /// A server on the host's `backend` and `gadget`: the Android app's QNN
+  /// backend and descriptor, or the tests' own.
+  public init(configuration: Configuration, backend: any EngineBackend, gadget: (any GadgetSource)? = nil) throws {
     self.configuration = configuration
     self.dial = configuration.dial
     self.backend = backend
+    self.gadget = gadget
     cache = try EngineCache(root: configuration.cacheRoot, backend: backend)
     host = EngineHost(cache: cache)
-    #if os(macOS)
-      gadget = USBGadget()
-    #elseif os(Android)
-      gadget = AndroidGadget.shared
-    #endif
     // A write to a socket the comma closed must be an error, not a signal
     // that kills the app.
     signal(SIGPIPE, SIG_IGN)
@@ -418,7 +420,7 @@ public final class Server: @unchecked Sendable {
   private func startUSB() {
     guard configuration.usb else { return }
     guard let gadget else {
-      log.warning("serving over USB needs a Mac or Android; this server only listens and dials")
+      log.warning("serving over USB needs a gadget this platform can open; this server only listens and dials")
       return
     }
     setLink(LinkEvent(state: .waiting, detail: Server.usbWaiting, peer: nil))
@@ -451,7 +453,7 @@ public final class Server: @unchecked Sendable {
         Thread.sleep(forTimeInterval: Server.usbPoll)
         continue
       }
-      let transport: USBTransport
+      let transport: any MessageLink
       do {
         transport = try gadget.open()
       } catch {

@@ -289,14 +289,11 @@ final class UsbfsDevice: @unchecked Sendable {
       jl_usbfs_wake_close(wakeFD)
     }
 
-    /// The bus speed as `USBDEVFS_GET_SPEED` reports it, or nil.
+    /// The bus speed `USBDEVFS_GET_SPEED` reports, by the kernel's names
+    /// for it (usb_speed_string), as the comma's hello names its own.
     var medium: LinkMedium? {
-      switch jl_usbfs_speed(fd) {
-      case 1, 2: .usb1
-      case 3: .usb2
-      case 5, 6: .usb3
-      default: nil
-      }
+      let names = [1: "low-speed", 2: "full-speed", 3: "high-speed", 4: "wireless", 5: "super-speed", 6: "super-speed-plus"]
+      return names[Int(jl_usbfs_speed(fd))].flatMap { Pinned.usbSpeedMedia[$0] }.flatMap(LinkMedium.init(rawValue:))
     }
 
     func submit(_ urb: UsbfsURB) -> Int32 {

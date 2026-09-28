@@ -103,6 +103,10 @@ public final class EngineHost: @unchecked Sendable {
   private var listeners: [@Sendable (HostEvent) -> Void] = []
   private let emitLock = NSLock()
 
+  /// The device's thermal state for the benchmark's reports; the platform's
+  /// own unless the host knows better. Set before a benchmark runs.
+  public var thermal: @Sendable () -> String = { platformThermal() }
+
   public init(cache: EngineCache) {
     self.cache = cache
   }

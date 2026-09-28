@@ -284,7 +284,7 @@ final class FakeGadget: GadgetSource, @unchecked Sendable {
 
   func present() -> Bool { true }
 
-  func open() throws -> USBTransport {
+  func open() throws -> any MessageLink {
     let pipes: FakePipes = lock.withLock {
       opened += 1
       return pending.isEmpty ? make() : pending.removeFirst()

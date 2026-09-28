@@ -14,10 +14,20 @@ public final class EmbeddedServer: @unchecked Sendable {
   public var events: AsyncStream<ControlEvent> { controller.events }
 
   /// Builds the server on `configuration`, creating its cache directory.
-  public init(configuration: Server.Configuration) throws {
+  public convenience init(configuration: Server.Configuration) throws {
     try FileManager.default.createDirectory(at: configuration.cacheRoot, withIntermediateDirectories: true)
-    server = try Server(configuration: configuration, preparer: ONNXPreparer())
-    controller = ServerController(server: server, registry: Registry(layout: CacheLayout(root: configuration.cacheRoot)))
+    try self.init(server: Server(configuration: configuration, preparer: ONNXPreparer()))
+  }
+
+  /// The server on the host's `backend` and `gadget` (the Android app's).
+  public convenience init(configuration: Server.Configuration, backend: any EngineBackend, gadget: (any GadgetSource)?) throws {
+    try FileManager.default.createDirectory(at: configuration.cacheRoot, withIntermediateDirectories: true)
+    try self.init(server: Server(configuration: configuration, backend: backend, gadget: gadget))
+  }
+
+  private init(server: Server) {
+    self.server = server
+    controller = ServerController(server: server, registry: Registry(layout: CacheLayout(root: server.configuration.cacheRoot)))
   }
 
   /// Serves, and publishes the state a client's first screen needs.

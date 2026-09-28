@@ -33,7 +33,7 @@ let android = Context.environment["JETLINK_ANDROID"] == "1"
 let portableServer = [
   "WireProtocol.swift", "FrameReader.swift", "Transport.swift", "MessageLink.swift", "USBTransport.swift", "Queues.swift", "Convert.swift",
   "ModelSpec.swift", "ElementType.swift", "FrameStats.swift", "Log.swift", "Backend.swift", "Latch.swift", "ONNXPreparer.swift",
-  "UsbfsPipes.swift",
+  "UsbfsPipes.swift", "UsbfsGadget.swift",
 ]
 
 /// The rest of the server, which Android adds: the session and the engine
@@ -41,7 +41,6 @@ let portableServer = [
 let androidServer = [
   "Server.swift", "Session.swift", "EngineHost.swift", "EngineCache.swift", "ServerController.swift", "EmbeddedServer.swift",
   "RegistryBridge.swift", "Benchmark.swift", "CPUKeepWarm.swift", "Ort.swift", "OrtEngine.swift", "ArtifactFiles.swift", "QNNBackend.swift",
-  "AndroidGadget.swift",
 ]
 
 func portablePackage() -> Package {

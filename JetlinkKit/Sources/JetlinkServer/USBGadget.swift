@@ -27,7 +27,7 @@
     }
 
     /// Opens the gadget's link interface and its bulk pair.
-    func open() throws -> USBTransport {
+    func open() throws -> any MessageLink {
       guard let device = USBGadget.findDevice() else {
         throw LinkError.closed(String(format: "no jetlink gadget at %04x:%04x", Pinned.usbVendorID, Pinned.usbProductID))
       }
