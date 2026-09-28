@@ -122,32 +122,63 @@
     let node = FakeNode()
     let target = FakeTarget()
     let lines = Lines()
-    lazy var gadget = SysfsGadget(root: tree.root, node: node, target: target, log: lines.log)
+    var environment: [String: String] = [:]
+    /// Whether a permit write reaches the device: not while the bus is
+    /// suspended, when the kernel still reports success.
+    let lpmTakes = Dial(true)
+    /// What was written to the comma's usb3_lpm_permit, in order.
+    let permits = Dial<[String]>([])
+    lazy var gadget = SysfsGadget(
+      root: tree.root, node: node, target: target, environment: environment,
+      write: { [lpmTakes, permits] path, text throws(KernelError) in
+        try Sysfs.write(path, text)
+        let suffix = "/port/usb3_lpm_permit"
+        guard path.hasSuffix(suffix) else { return }
+        permits.value.append(text)
+        guard lpmTakes.value else { return }
+        let device = String(path.dropLast(suffix.count))
+        for state in ["u1", "u2"] {
+          try Sysfs.write("\(device)/power/usb3_hardware_lpm_\(state)", text == "0" ? "disabled\n" : "enabled\n")
+        }
+      }, log: lines.log)
 
     init() {
       // A hub and its interface, which the scan passes over.
       device("2-1", vendor: "0bda", product: "0489", bus: 2, device: 2)
       tree.write("/sys/bus/usb/devices/2-1:1.0/bInterfaceClass", "09\n")
+      // Its port 3, whose permit outlives the devices plugged into it.
+      tree.write("/sys/devices/usb2/2-1/2-1:1.0/2-1-port3/usb3_lpm_permit", "u1_u2\n")
     }
 
-    func device(_ name: String, vendor: String, product: String, bus: Int, device: Int, descriptors: [UInt8] = Descriptors.comma) {
+    func device(
+      _ name: String, vendor: String, product: String, bus: Int, device: Int, speed: String = "5000", descriptors: [UInt8] = Descriptors.comma
+    ) {
       let base = "/sys/bus/usb/devices/\(name)"
       tree.write("\(base)/idVendor", "\(vendor)\n")
       tree.write("\(base)/idProduct", "\(product)\n")
       tree.write("\(base)/busnum", "\(bus)\n")
       tree.write("\(base)/devnum", "\(device)\n")
-      tree.write("\(base)/speed", "5000\n")
+      tree.write("\(base)/speed", "\(speed)\n")
       tree.write(String(format: "/dev/bus/usb/%03d/%03d", bus, device), bytes: descriptors)
     }
 
-    /// The comma's gadget plugs in behind the hub.
-    func plug(device number: Int = 3, descriptors: [UInt8] = Descriptors.comma) {
-      device("2-1.3", vendor: "1209", product: "0001", bus: 2, device: number, descriptors: descriptors)
+    /// The comma's gadget plugs in behind the hub; with `lpm`, as a USB 3
+    /// device the kernel runs with U1 and U2 enabled.
+    func plug(device number: Int = 3, speed: String = "5000", lpm: Bool = false, descriptors: [UInt8] = Descriptors.comma) {
+      device("2-1.3", vendor: "1209", product: "0001", bus: 2, device: number, speed: speed, descriptors: descriptors)
+      guard lpm else { return }
+      tree.link("/sys/bus/usb/devices/2-1.3/port", to: tree.path("/sys/devices/usb2/2-1/2-1:1.0/2-1-port3"))
+      tree.write("/sys/bus/usb/devices/2-1.3/power/usb3_hardware_lpm_u1", "enabled\n")
+      tree.write("/sys/bus/usb/devices/2-1.3/power/usb3_hardware_lpm_u2", "enabled\n")
     }
 
     func unplug(device number: Int = 3) {
       tree.remove("/sys/bus/usb/devices/2-1.3")
       tree.remove(String(format: "/dev/bus/usb/002/%03d", number))
+    }
+
+    func lpm(_ state: String) -> String? {
+      tree.read("/sys/bus/usb/devices/2-1.3/power/usb3_hardware_lpm_\(state)")
     }
   }
 
@@ -310,6 +341,85 @@
       #expect(!gadget.present())
       #expect(!usbfs.present())
       #expect(bus.node.descriptorsOpen.value.isEmpty)
+    }
+  }
+
+  @Suite("USB 3 link power management")
+  struct LinkPowerManagementTests {
+    @Test("Turned off on the comma's own port at the claim, and read back")
+    func off() throws {
+      let bus = Bus()
+      bus.plug(lpm: true)
+      #expect(bus.gadget.present())
+      _ = try bus.gadget.open()
+      #expect(bus.permits.value == ["0"])
+      #expect(bus.tree.read("/sys/devices/usb2/2-1/2-1:1.0/2-1-port3/usb3_lpm_permit") == "0")
+      #expect(bus.lpm("u1") == "disabled\n" && bus.lpm("u2") == "disabled\n")
+      #expect(bus.lines.count("usb 3 link power management off for the comma's link") == 1)
+      // Not again for the comma's per-run reopens.
+      _ = try bus.gadget.open()
+      #expect(bus.permits.value == ["0"])
+    }
+
+    @Test("A write that does not take is a warning with what the device reads")
+    func notTaken() throws {
+      let bus = Bus()
+      bus.plug(lpm: true)
+      bus.lpmTakes.value = false
+      #expect(bus.gadget.present())
+      _ = try bus.gadget.open()
+      #expect(bus.permits.value == ["0"])
+      #expect(bus.lines.has(.warning, "usb 3 link power management is still on for the comma's link after writing 0"))
+      #expect(bus.lines.has(.warning, "u1 enabled, u2 enabled"))
+      #expect(bus.lines.count("usb 3 link power management off") == 0)
+    }
+
+    @Test("Written again after every re-enumeration, with the comma on the bus")
+    func reenumerated() throws {
+      let bus = Bus()
+      bus.plug(device: 3, lpm: true)
+      #expect(bus.gadget.present())
+      _ = try bus.gadget.open()
+      bus.unplug(device: 3)
+      #expect(!bus.gadget.present())
+      // It comes back with U1/U2 on, as after a write made while it was away.
+      bus.plug(device: 8, lpm: true)
+      #expect(bus.lpm("u1") == "enabled\n")
+      #expect(bus.gadget.present())
+      _ = try bus.gadget.open()
+      #expect(bus.permits.value == ["0", "0"])
+      #expect(bus.lpm("u1") == "disabled\n" && bus.lpm("u2") == "disabled\n")
+      #expect(bus.lines.count("usb 3 link power management off for the comma's link") == 2)
+    }
+
+    @Test("Nothing on a USB 2 link, or for a device the kernel runs without LPM")
+    func skipped() throws {
+      let usb2 = Bus()
+      usb2.plug(speed: "480", lpm: true)
+      #expect(usb2.gadget.present())
+      _ = try usb2.gadget.open()
+      #expect(usb2.permits.value.isEmpty)
+      #expect(usb2.lpm("u1") == "enabled\n")
+
+      let bare = Bus()
+      bare.plug()
+      #expect(bare.gadget.present())
+      _ = try bare.gadget.open()
+      #expect(bare.permits.value.isEmpty)
+      #expect(bare.lines.count("link power management") == 0)
+    }
+
+    @Test("JETLINK_USB_LPM=1 keeps it on, putting back the kernel's default")
+    func keptOn() throws {
+      let bus = Bus()
+      bus.environment = ["JETLINK_USB_LPM": "1"]
+      bus.tree.write("/sys/devices/usb2/2-1/2-1:1.0/2-1-port3/usb3_lpm_permit", "0\n")
+      bus.plug(lpm: true)
+      #expect(bus.gadget.present())
+      _ = try bus.gadget.open()
+      #expect(bus.permits.value == ["u1_u2"])
+      #expect(bus.lpm("u1") == "enabled\n" && bus.lpm("u2") == "enabled\n")
+      #expect(bus.lines.has(.info, "usb 3 link power management left on for the comma's link (JETLINK_USB_LPM=1)"))
     }
   }
 
