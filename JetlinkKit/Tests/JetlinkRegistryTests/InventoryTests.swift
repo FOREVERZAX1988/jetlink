@@ -1,4 +1,5 @@
 import Foundation
+import JetlinkTestSupport
 import Testing
 
 @testable import JetlinkRegistry
@@ -170,7 +171,7 @@ struct InventoryTests {
     #expect(models.first?.name == nil && models.first?.ref == nil)
   }
 
-  @Test(.enabled(if: MockNet.intercepts)) func aDownloadedModelIsNamedFromTheCatalog() async throws {
+  @Test func aDownloadedModelIsNamedFromTheCatalog() async throws {
     let tmp = try TempDir()
     defer { tmp.remove() }
     let net = MockNet(catalogRoutes([LFS.pointerURL(ref: fixtureRef): .body(Fixture.data("pointer_f877d7a0.txt"))]))
