@@ -57,26 +57,23 @@ support. The Jetson host uses libusb and does not need gadget kernel modules.
 Reversing these roles requires gadget modules that may be missing from the
 Jetson's L4T installation.
 
-For manual integration, run this from the Jetlink checkout on the comma once per
-boot:
-
-```bash
-sudo scripts/comma/jetlink-root.sh gadget
-```
+Nothing on the comma needs running by hand. The owner builds the gadget on its
+first step, for USB or iOS as the comma's Accelerator Link setting says, and
+rebuilds it when the setting moves.
 
 `scripts/comma/jetlink-root.sh` is everything Jetlink does as root on the
-comma, for the comma four and the comma 3X. Its `gadget` subcommand creates the
-gadget configuration. `jetlinkd` opens `ep0`, writes FunctionFS descriptors,
-and binds the USB device controller. The script cannot bind the controller
-before those descriptors exist. With `gadget --ios` (the comma's Accelerator
-Link set to iOS) the gadget is composite, with a network interface for an
-iPhone; its network part (`net`) is repeated after each bind, because the
-interface only exists from the first bind on. Without `--ios` the gadget is the
-vendor interface alone. `check` prints what the kernel can present and the
-negotiated bus speed, and `teardown` removes the gadget. The other subcommands
-are the owner's: `port hold|off` keeps the USB-C port the device end of a USB
-link, and `vm apply|restore` sets and undoes the VM tuning the link needs while
-the comma records.
+comma, for the comma four and the comma 3X, and the owner runs it under
+`sudo -n`. Its `gadget` subcommand creates the gadget configuration. The owner
+then opens `ep0`, writes the FunctionFS descriptors, and binds the USB device
+controller; the script cannot bind the controller before those descriptors
+exist. With `gadget --ios` (Accelerator Link set to iOS) the gadget is
+composite, with a network interface for an iPhone, and the owner runs `net`
+after each bind, because the interface only exists from the first bind on.
+Without `--ios` the gadget is the vendor interface alone. `port hold|off` keeps
+the USB-C port the device end of a USB link, and `vm apply|restore` sets and
+undoes the VM tuning the link needs while the comma records. By hand, `sudo
+scripts/comma/jetlink-root.sh check` prints what has been built and the
+negotiated bus speed, and `teardown` removes the gadget.
 
 The owner is the process that holds the gadget for as long as the link is on;
 openpilot lists it as `jetlinkd`. It and everything it uses on the comma live in

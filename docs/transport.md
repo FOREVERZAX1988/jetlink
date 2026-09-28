@@ -48,8 +48,8 @@ Latency depends on the link enumerating at USB 3 (SuperSpeed). A frame is about
 must be a USB 3 A-to-C data cable, and why a phone goes through a USB 3 hub.
 On the comma, the negotiated speed is in `/sys/class/udc/*/current_speed`:
 `super-speed` is USB 3 and `high-speed` is USB 2. `sudo
-scripts/comma/jetlink-root.sh check` prints it along with what the gadget can
-present.
+scripts/comma/jetlink-root.sh check` prints it along with the gadget the comma
+has built.
 
 ### The network link on a Linux host
 

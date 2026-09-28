@@ -3,7 +3,8 @@
 # Copyright (c) 2026-, Zeph Leggett.
 # This file is part of jetlink and is licensed under the MIT License.
 #
-# Push this package to a comma for testing, and set up the USB gadget.
+# Push this package to a comma for testing. The owner builds the USB gadget
+# itself, on its first step.
 #
 # The repo lands at <openpilot>/jetlink_repo with a symlink <openpilot>/jetlink
 # into its package dir, as launch_chffrplus.sh does for tinygrad and opendbc.
@@ -34,23 +35,21 @@ ssh "$HOST" "[ -d '$root/jetlink' ] && [ ! -L '$root/jetlink' ] && rm -rf '$root
 
 echo "==> checking the package imports under the AGNOS venv"
 ssh "$HOST" "cd '$root' && PYTHONPATH='$root' /usr/local/venv/bin/python3 -c '
-import jetlink, jetlink.client, jetlink.transport.ffs, jetlink.queues
+import jetlink, jetlink.client, jetlink.transport.ffs, jetlink.queues, jetlink.comma.owner
 print(\"jetlink\", jetlink.__version__, \"ok\")'"
-
-echo "==> configuring the USB gadget (idempotent)"
-ssh "$HOST" "sudo bash $DEST/scripts/comma/jetlink-root.sh gadget"
 
 cat <<'NEXT'
 
-==> done. On the comma the gadget is configured but not bound; jetlinkd or
-    modeld binds it when it opens ep0.
+==> done. The owner, the one resident jetlink process on the comma, builds the
+    USB gadget on its first step, for USB or iOS as Accelerator Link says, and
+    binds it. jetlinkd is the provisioning run it starts, and that exits.
 
-    A jetlinkd or modeld that was already running still has the OLD package
+    An owner or modeld that was already running still has the OLD package
     imported, and manager never respawns a process that exited on its own.
-    Restart the daemon yourself (get the pid first: pkill -f over ssh matches
-    your own ssh command line and kills the session):
+    Reboot the comma, or restart them yourself (get the pid first: pkill -f
+    over ssh matches your own ssh command line and kills the session):
 
-      pgrep -f "^/usr/local/venv/bin/python3 -m openpilot.sunnypilot.accelerators.jetlink.jetlinkd$"
+      pgrep -f "^openpilot.sunnypilot.accelerators.jetlink.owner$"
 
     Sanity check with the Jetson cabled up and its server running
     (docker/run.sh --transport usb):
