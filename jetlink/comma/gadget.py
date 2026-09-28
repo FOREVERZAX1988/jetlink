@@ -142,8 +142,8 @@ def offroad() -> bool:
 # FunctionFS vendor interface) or iOS (an iPhone, which gives apps no USB
 # access). For iOS the gadget is composite, with a CDC-NCM network interface
 # whose comma end is 192.168.60.1 (jetlink-root.sh gadget --ios, and net, which
-# also runs the DHCP server), and the phone dials CABLE_ADDR whenever its USB
-# ethernet is up.
+# also runs the DHCP server), and the phone dials CABLE_ADDR whenever it holds
+# a lease on that network.
 # The owner hands the accepted socket to whoever borrows the link; nothing
 # writes to the endpoint files, which a phone never reads. The setting, not a
 # guess, says which: a hello over FunctionFS to a phone blocks 15 s and bounces

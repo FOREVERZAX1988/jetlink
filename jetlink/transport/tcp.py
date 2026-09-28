@@ -4,7 +4,7 @@ Copyright (c) 2026-, Zeph Leggett.
 This file is part of jetlink and is licensed under the MIT License.
 See the LICENSE file in the root directory for more details.
 
-TCP transport, for ethernet, a phone over the cable, and benchmarking.
+TCP transport, for a phone over the cable, and for testing and benchmarking.
 
 Over the USB cable it rides the CDC-NCM interface of the comma's composite
 gadget: the comma is 192.168.60.1 and a phone dials it. A Jetson or a Mac uses

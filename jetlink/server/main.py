@@ -10,7 +10,7 @@ Inference server entrypoint: a Jetson in the car, or any machine with a GPU.
     # as the USB host, which is how the Jetson runs in the car
     python3 -m jetlink.server.main --transport usb
 
-    # over ethernet, for development and benchmarking
+    # over TCP, for development and benchmarking
     python3 -m jetlink.server.main --transport tcp --port 5599
 
     # on a Mac: CoreML through onnxruntime by default, tinygrad on Metal by name;
