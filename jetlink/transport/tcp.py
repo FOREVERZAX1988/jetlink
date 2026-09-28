@@ -21,7 +21,7 @@ import socket
 from jetlink.transport.base import LinkError, StreamTransport, udc_speed, usb_link_info
 
 DEFAULT_PORT = 5599
-# The comma's end of the USB network link a phone dials (setup_gadget.sh).
+# The comma's end of the USB network link a phone dials (jetlink-root.sh gadget --ios).
 # A connection whose local address is this one is a cable, not a LAN.
 CABLE_ADDRESS = '192.168.60.1'
 

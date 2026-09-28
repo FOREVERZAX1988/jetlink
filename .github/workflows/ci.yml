@@ -55,11 +55,11 @@ jobs:
 
       - name: Run shellcheck
         run: |
-          # what the installer runs or installs; the bench scripts are not
-          # held to it yet
+          # what the installer runs or installs, and what the comma runs as
+          # root; the bench scripts are not held to it yet
           shellcheck install.sh scripts/jetlink scripts/jetlink-run-server \
             scripts/jetlink-wake-setup.sh scripts/jetlink-poweroff.sh \
-            docker/*.sh tests/installer/*.sh
+            scripts/comma/jetlink-root.sh docker/*.sh tests/installer/*.sh
 
       - name: Run the installer scenarios
         run: tests/installer/run.sh

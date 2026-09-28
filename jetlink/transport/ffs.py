@@ -11,7 +11,7 @@ has CONFIG_USB_F_FS built in, while a host needs no kernel driver at all, which
 an L4T rootfs stripped of the gadget modules does not have. See
 docs/transport.md.
 
-Bring-up (scripts/setup_gadget.sh does all of this):
+Bring-up (scripts/comma/jetlink-root.sh gadget does all of this):
     configfs gadget -> functions/ffs.jetlink -> mount -t functionfs
     write descriptors + strings to ep0 -> ep1 (OUT) and ep2 (IN) appear
     echo <udc> > UDC
@@ -161,7 +161,7 @@ class FfsTransport(StreamTransport):
       os.write(self.ep0, build_strings())
       if gadget is not None:
         # Bind last: a FunctionFS gadget cannot attach until its descriptors
-        # are written, which is why setup_gadget.sh leaves UDC empty.
+        # are written, which is why jetlink-root.sh leaves UDC empty.
         self.bind(udc)
       # ep1/ep2 exist now, but opening one before a host enables it costs the
       # gadget until the next reboot; see _ensure_epfiles.

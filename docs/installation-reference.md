@@ -61,17 +61,22 @@ For manual integration, run this from the Jetlink checkout on the comma once per
 boot:
 
 ```bash
-sudo scripts/setup_gadget.sh
+sudo scripts/comma/jetlink-root.sh gadget
 ```
 
-The script creates the gadget configuration. `jetlinkd` opens `ep0`, writes
-FunctionFS descriptors, and binds the USB device controller. The setup script
-cannot bind the controller before those descriptors exist. With `--ios` (the
-comma's Accelerator Link set to iOS) the gadget is composite, with a network
-interface for an iPhone; its network part (`--net`) is repeated after each bind,
-because the `usb0` interface only exists from the first bind on. Without it the
-gadget is the vendor interface alone. `--check` prints what the kernel can
-present and the negotiated bus speed.
+`scripts/comma/jetlink-root.sh` is everything Jetlink does as root on the
+comma, for the comma four and the comma 3X. Its `gadget` subcommand creates the
+gadget configuration. `jetlinkd` opens `ep0`, writes FunctionFS descriptors,
+and binds the USB device controller. The script cannot bind the controller
+before those descriptors exist. With `gadget --ios` (the comma's Accelerator
+Link set to iOS) the gadget is composite, with a network interface for an
+iPhone; its network part (`net`) is repeated after each bind, because the
+interface only exists from the first bind on. Without `--ios` the gadget is the
+vendor interface alone. `check` prints what the kernel can present and the
+negotiated bus speed, and `teardown` removes the gadget. The other subcommands
+are the owner's: `port hold|off` keeps the USB-C port the device end of a USB
+link, and `vm apply|restore` sets and undoes the VM tuning the link needs while
+the comma records.
 
 | Descriptor | Value |
 | --- | --- |
@@ -79,8 +84,8 @@ present and the negotiated bus speed.
 | bcdDevice | `0x0100`; `0x0101` for iOS, so hosts refetch cached descriptors |
 | bDeviceClass/SubClass/Protocol | `0x00/0x00/0x00`, class per interface; for iOS `0xEF/0x02/0x01`, Miscellaneous with interface association (composite) |
 | Interface 0 | `0xFF/0xFF/0xFF` vendor specific, one bulk IN and one bulk OUT endpoint: the Jetlink link |
-| Interfaces 1 and 2 (iOS only) | CDC-NCM control and data (CDC-ECM where the kernel has no NCM): the network for an iPhone |
-| Network (iOS only) | comma `192.168.60.1/24`; DHCP `192.168.60.2` to `.254` with 10 minute leases from dnsmasq on `usb0`, no router or DNS options |
+| Interfaces 1 and 2 (iOS only) | CDC-NCM control and data: the network for an iPhone |
+| Network (iOS only) | comma `192.168.60.1/24`; DHCP `192.168.60.2` to `.254` with 10 minute leases from dnsmasq on the gadget's interface (`usb1` or later, since the modem holds `usb0`), no router or DNS options |
 
 On the Jetson, the installer sets up the server as a service; for a manual run,
 from a checkout:

@@ -1,9 +1,10 @@
 Unreleased
 ==========
+* One root script on the comma, `scripts/comma/jetlink-root.sh`, for the comma four and the comma 3X: the gadget (`gadget`, `net`, `check`, `teardown`), the USB-C port hold (`port hold|off`) and the recording VM tuning (`vm apply|restore`), run through `jetlink.comma.root`. It replaces `scripts/setup_gadget.sh` and drops what neither comma needs: the CDC-ECM fallback, the MAC address writes the kernel refuses, and modprobe
 * The comma's Accelerator Link setting is Off, USB or iOS
   * USB, for a Jetson or a Mac, is the plain gadget as before, lent to modeld at once
-  * iOS adds a USB network interface (CDC-NCM) for an iPhone over one cable: `scripts/setup_gadget.sh --ios`, and `--net` sets up the comma's end of that network after a bind
-  * `--check` prints what the comma can present and the negotiated USB speed
+  * iOS adds a USB network interface (CDC-NCM) for an iPhone over one cable: `scripts/comma/jetlink-root.sh gadget --ios`, and `net` sets up the comma's end of that network after a bind
+  * `check` prints what the comma can present and the negotiated USB speed
   * The cable's DHCP pool is the whole subnet with 10 minute leases
   * The server finds the link by its vendor interface class, wherever the gadget puts it
   * `bench_link.py` and `verify_parity.py` take a phone's dial with `--listen`

@@ -38,7 +38,7 @@ import jetlink, jetlink.client, jetlink.transport.ffs, jetlink.queues
 print(\"jetlink\", jetlink.__version__, \"ok\")'"
 
 echo "==> configuring the USB gadget (idempotent)"
-ssh "$HOST" "sudo bash $DEST/scripts/setup_gadget.sh"
+ssh "$HOST" "sudo bash $DEST/scripts/comma/jetlink-root.sh gadget"
 
 cat <<'NEXT'
 

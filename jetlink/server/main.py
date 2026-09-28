@@ -223,7 +223,7 @@ def _ffs_opener(args):
 
   def open_transport():
     if not (mount / 'ep0').exists():
-      waiting("waiting for functionfs at %s (run scripts/setup_gadget.sh)", mount)
+      waiting("waiting for functionfs at %s (run scripts/comma/jetlink-root.sh gadget)", mount)
       return None
     try:
       # This writes the descriptors and binds the UDC; either can fail

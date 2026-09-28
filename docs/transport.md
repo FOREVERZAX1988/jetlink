@@ -26,13 +26,12 @@ setting (on the comma, in the models settings):
   vendor-specific interface with one bulk endpoint pair, which the servers open
   through libusb (IOUSBHost on the Mac). There is no network interface.
 - **iOS**, for an iPhone: a composite gadget. Interface 0 is the same vendor
-  interface, and after it comes a CDC-NCM network interface (CDC-ECM on a
-  kernel without NCM), because iOS gives apps no access to a vendor USB device
-  but drives a USB network adapter itself. The comma is `192.168.60.1` on that
-  network and runs a DHCP server for it, so the phone gets a `192.168.60.x`
-  address with no gateway and no DNS, keeps its own route to the internet over
-  Wi-Fi, and dials the comma at `192.168.60.1:5599`. The vendor interface is
-  never used on iOS.
+  interface, and after it comes a CDC-NCM network interface, because iOS gives
+  apps no access to a vendor USB device but drives a USB network adapter
+  itself. The comma is `192.168.60.1` on that network and runs a DHCP server
+  for it, so the phone gets a `192.168.60.x` address with no gateway and no
+  DNS, keeps its own route to the internet over Wi-Fi, and dials the comma at
+  `192.168.60.1:5599`. The vendor interface is never used on iOS.
 
 Moving the setting between USB and iOS rebuilds the gadget, which is an unplug,
 so the comma applies it once the car is parked.
@@ -43,8 +42,9 @@ Latency depends on the link enumerating at USB 3 (SuperSpeed). A frame is about
 460 KB: around 1 ms on USB 3 and around 11 ms on USB 2. That is why the cable
 must be a USB 3 A-to-C data cable, and why a phone goes through a USB 3 hub.
 On the comma, the negotiated speed is in `/sys/class/udc/*/current_speed`:
-`super-speed` is USB 3 and `high-speed` is USB 2. `sudo scripts/setup_gadget.sh
---check` prints it along with what the gadget can present.
+`super-speed` is USB 3 and `high-speed` is USB 2. `sudo
+scripts/comma/jetlink-root.sh check` prints it along with what the gadget can
+present.
 
 ### The network link on a Linux host
 

@@ -111,7 +111,7 @@ the phone; the comma's USB network driver is the limit, not the wire. USB 2 is
 expected to add another 4 to 6 ms; that is an estimate, not yet measured. On
 the comma, the negotiated speed is in `/sys/class/udc/*/current_speed`:
 `super-speed` is USB 3 and `high-speed` is USB 2.
-`sudo scripts/setup_gadget.sh --check` prints it.
+`sudo scripts/comma/jetlink-root.sh check` prints it.
 
 ### Ethernet adapter, the manual fallback
 
