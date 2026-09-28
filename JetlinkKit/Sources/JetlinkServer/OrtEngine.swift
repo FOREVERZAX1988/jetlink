@@ -271,14 +271,3 @@ public final class OrtEngine: @unchecked Sendable {
 }
 
 extension OrtEngine: Engine {}
-
-#if !canImport(Metal)
-  /// No GPU to keep clocked up here: QNN's own performance mode does that job
-  /// on Android.
-  final class MetalKeepAlive {
-    static func make() -> MetalKeepAlive? { nil }
-    func pulse() {}
-    func pause() {}
-    func close() {}
-  }
-#endif

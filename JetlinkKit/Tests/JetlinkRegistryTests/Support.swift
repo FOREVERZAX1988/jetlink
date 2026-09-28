@@ -157,6 +157,17 @@ final class MockNet: Sendable {
     var calls: [Call] = []
   }
 
+  /// Whether MockProtocol sees a mock session's requests. It tells them by
+  /// the session's extra header, which swift-corelibs-foundation (Linux,
+  /// Android) adds only as it sends, so there they would reach the network.
+  static let intercepts: Bool = {
+    #if canImport(FoundationNetworking)
+      false
+    #else
+      true
+    #endif
+  }()
+
   let id = UUID().uuidString
   let session: URLSession
 

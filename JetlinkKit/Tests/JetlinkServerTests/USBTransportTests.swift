@@ -346,75 +346,72 @@ final class GadgetClient: CommaClient {
   }
 }
 
-// The server itself is Apple-only; the Linux build runs the framing above.
-#if canImport(COrt)
-  @Suite("Server over USB", .serialized)
-  struct ServerUSBTests {
-    func makeServer(_ cache: TemporaryDirectory, gadget: FakeGadget) throws -> Server {
-      let server = try Server(
-        configuration: Server.Configuration(
-          host: "127.0.0.1", port: 0, cacheRoot: cache.url, device: .cpu, keepAlive: false, preload: false, listen: false, usb: true),
-        preparer: ONNXPreparer())
-      server.gadget = gadget
-      return server
-    }
-
-    @Test("A gadget nothing on the comma serves is retried quietly, with no link events")
-    func unservedGadget() throws {
-      let cache = try TemporaryDirectory()
-      let gadget = FakeGadget(then: unservedPipes)
-      let server = try makeServer(cache, gadget: gadget)
-      let links = LockedLinks()
-      server.host.subscribe { if case .link(let link) = $0 { links.append(link) } }
-      try server.start()
-      defer { server.shutdown() }
-      #expect(server.port == nil, "a USB server opens no port")
-      let deadline = Date().addingTimeInterval(10)
-      while gadget.opens < 3 && Date() < deadline {
-        Thread.sleep(forTimeInterval: 0.05)
-      }
-      #expect(gadget.opens >= 3)
-      #expect(links.all.allSatisfy { $0.state == .waiting }, "\(links.all)")
-    }
-
-    @Test("The comma over USB is served as over TCP; the link is up on its first message and down when it goes")
-    func servesOverUSB() throws {
-      let cache = try TemporaryDirectory()
-      let comma = FakePipes()
-      let gadget = FakeGadget([unservedPipes(), comma], then: unservedPipes)
-      let server = try makeServer(cache, gadget: gadget)
-      let links = LockedLinks()
-      server.host.subscribe { if case .link(let link) = $0 { links.append(link) } }
-      try server.start()
-      defer { server.shutdown() }
-      let client = GadgetClient(comma)
-      try client.sendJSON(.helloReq, ["client": ["name": "modeld", "nonce": 1]])
-      let hello = try client.recv(.helloResp).json
-      #expect(hello["protocol"] as? Int == Int(Wire.version))
-      try client.send(.ping)
-      _ = try client.recv(.pong)
-      #expect(links.all.contains { $0.state == .connected && $0.peer == "usb" && $0.linkMedium == .usb3 })
-      comma.unplug()
-      let deadline = Date().addingTimeInterval(5)
-      while !links.all.contains(where: { $0.state == .disconnected }) && Date() < deadline {
-        Thread.sleep(forTimeInterval: 0.05)
-      }
-      #expect(links.all.filter { $0.state == .connected }.count == 1)
-      #expect(links.all.contains { $0.state == .disconnected })
-    }
-
-    @Test("A comma over USB is served the outputs the Python server computes", arguments: ["tiny_queued", "tiny_stateful"])
-    func servesGoldenFramesOverUSB(_ name: String) throws {
-      let golden = try Golden(name)
-      let cache = try TemporaryDirectory()
-      let comma = FakePipes()
-      comma.burst = 5 * 1024
-      let server = try makeServer(cache, gadget: FakeGadget([comma], then: unservedPipes))
-      try server.start()
-      defer { server.shutdown() }
-      let (_, count) = try GadgetClient(comma).replay(golden)
-      #expect(comma.crossed == 0)
-      #expect(server.framesServed == count)
-    }
+@Suite("Server over USB", .serialized)
+struct ServerUSBTests {
+  func makeServer(_ cache: TemporaryDirectory, gadget: FakeGadget) throws -> Server {
+    let server = try Server(
+      configuration: Server.Configuration(
+        host: "127.0.0.1", port: 0, cacheRoot: cache.url, device: .cpu, keepAlive: false, preload: false, listen: false, usb: true),
+      preparer: ONNXPreparer())
+    server.gadget = gadget
+    return server
   }
-#endif
+
+  @Test("A gadget nothing on the comma serves is retried quietly, with no link events")
+  func unservedGadget() throws {
+    let cache = try TemporaryDirectory()
+    let gadget = FakeGadget(then: unservedPipes)
+    let server = try makeServer(cache, gadget: gadget)
+    let links = LockedLinks()
+    server.host.subscribe { if case .link(let link) = $0 { links.append(link) } }
+    try server.start()
+    defer { server.shutdown() }
+    #expect(server.port == nil, "a USB server opens no port")
+    let deadline = Date().addingTimeInterval(10)
+    while gadget.opens < 3 && Date() < deadline {
+      Thread.sleep(forTimeInterval: 0.05)
+    }
+    #expect(gadget.opens >= 3)
+    #expect(links.all.allSatisfy { $0.state == .waiting }, "\(links.all)")
+  }
+
+  @Test("The comma over USB is served as over TCP; the link is up on its first message and down when it goes")
+  func servesOverUSB() throws {
+    let cache = try TemporaryDirectory()
+    let comma = FakePipes()
+    let gadget = FakeGadget([unservedPipes(), comma], then: unservedPipes)
+    let server = try makeServer(cache, gadget: gadget)
+    let links = LockedLinks()
+    server.host.subscribe { if case .link(let link) = $0 { links.append(link) } }
+    try server.start()
+    defer { server.shutdown() }
+    let client = GadgetClient(comma)
+    try client.sendJSON(.helloReq, ["client": ["name": "modeld", "nonce": 1]])
+    let hello = try client.recv(.helloResp).json
+    #expect(hello["protocol"] as? Int == Int(Wire.version))
+    try client.send(.ping)
+    _ = try client.recv(.pong)
+    #expect(links.all.contains { $0.state == .connected && $0.peer == "usb" && $0.linkMedium == .usb3 })
+    comma.unplug()
+    let deadline = Date().addingTimeInterval(5)
+    while !links.all.contains(where: { $0.state == .disconnected }) && Date() < deadline {
+      Thread.sleep(forTimeInterval: 0.05)
+    }
+    #expect(links.all.filter { $0.state == .connected }.count == 1)
+    #expect(links.all.contains { $0.state == .disconnected })
+  }
+
+  @Test("A comma over USB is served the outputs the Python server computes", arguments: ["tiny_queued", "tiny_stateful"])
+  func servesGoldenFramesOverUSB(_ name: String) throws {
+    let golden = try Golden(name)
+    let cache = try TemporaryDirectory()
+    let comma = FakePipes()
+    comma.burst = 5 * 1024
+    let server = try makeServer(cache, gadget: FakeGadget([comma], then: unservedPipes))
+    try server.start()
+    defer { server.shutdown() }
+    let (_, count) = try GadgetClient(comma).replay(golden)
+    #expect(comma.crossed == 0)
+    #expect(server.framesServed == count)
+  }
+}

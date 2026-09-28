@@ -1,8 +1,7 @@
 #if !canImport(os)
   import Foundation
 
-  /// `os.Logger`'s shape where there is no unified log: Linux, where the
-  /// conformance suite builds the portable modules (docs/conformance.md). The
+  /// `os.Logger`'s shape where there is no unified log: Linux and Android. The
   /// same call sites compile, privacy arguments included, and write to
   /// standard error. On Apple platforms this file is empty and the modules
   /// import `os` itself.

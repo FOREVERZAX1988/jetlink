@@ -121,16 +121,14 @@ struct PinnedConstantTests {
     #expect(USBTransport.readChunk == Pinned.usbReadChunk)
   }
 
-  #if canImport(COrt)
-    @Test("Builds carry the Python's prepare version, on the Python's onnxruntime")
-    func preparation() {
-      #if canImport(Metal)
-        #expect(CoreMLBackend.prepareVersion == Pinned.prepareVersion)
-      #endif
-      #expect(QNNBackend.prepareVersion == Pinned.prepareVersion)
-      #expect(OrtRuntime.version == Pinned.onnxruntimeVersion)
-    }
-  #endif
+  @Test("Builds carry the Python's prepare version, on the Python's onnxruntime")
+  func preparation() {
+    #if canImport(Metal)
+      #expect(CoreMLBackend.prepareVersion == Pinned.prepareVersion)
+    #endif
+    #expect(QNNBackend.prepareVersion == Pinned.prepareVersion)
+    #expect(OrtRuntime.version == Pinned.onnxruntimeVersion)
+  }
 }
 
 @Suite("Conformance: wire bytes against protocol.py and StreamTransport")

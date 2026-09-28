@@ -44,7 +44,7 @@ let usage = """
 struct Options {
   var cache: URL?
   var port: UInt16 = 5599
-  var device: CoreMLBackend.Device = .ane
+  var device: Server.Device = Server.defaultDevice
   var keepAlive = true
   var keepCPUWarm = true
   var preload = true
@@ -67,7 +67,7 @@ func parse() -> Options {
     switch arg {
     case "--cache": options.cache = URL(fileURLWithPath: value(arg), isDirectory: true)
     case "--port": options.port = UInt16(value(arg)) ?? 5599
-    case "--device": options.device = CoreMLBackend.Device(rawValue: value(arg)) ?? .ane
+    case "--device": options.device = Server.Device(rawValue: value(arg)) ?? Server.defaultDevice
     case "--no-keepalive": options.keepAlive = false
     case "--no-cpu-keepwarm": options.keepCPUWarm = false
     case "--no-preload": options.preload = false
@@ -99,7 +99,8 @@ func line(_ event: String, _ payload: [String: Any]) {
     let text = String(data: data, encoding: .utf8)
   {
     print(text)
-    fflush(stdout)
+    // all streams: Glibc's stdout is a mutable global, which Swift 6 refuses
+    fflush(nil)
   }
 }
 

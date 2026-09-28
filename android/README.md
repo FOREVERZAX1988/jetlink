@@ -54,10 +54,10 @@ adb install -r app/build/outputs/apk/release/app-release.apk
 ```
 
 The `swiftBuild` task runs `scripts/swift-build.sh`, which cross-compiles
-`JetlinkKit` (`JETLINK_ANDROID=1` selects the Android package) with the Swift
-runtime linked in, always optimized. `-Pjetlink.prebuiltSwift=DIR` packages
-`DIR/arm64-v8a/libjetlink.so` instead, for work on the Kotlin side without the
-Swift toolchain. The APK is arm64 only, as the QNN runtime is.
+`JetlinkKit`'s `jetlink` library with the Swift runtime linked in, always
+optimized. `-Pjetlink.prebuiltSwift=DIR` packages `DIR/arm64-v8a/libjetlink.so`
+instead, for work on the Kotlin side without the Swift toolchain. The APK is
+arm64 only, as the QNN runtime is.
 
 Release builds are signed with the debug key so they install over debug ones;
 the app is sideloaded, never published.
