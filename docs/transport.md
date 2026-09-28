@@ -105,19 +105,12 @@ To change an existing setup, run `jetlink setup`.
 For what happens when you park or start the car, and how battery-protection
 shutdown differs from sleep, see [Choose your power setup](jetson.md#1-choose-your-power-setup).
 
-## Ethernet (TCP)
+## TCP
 
-Use wired Ethernet for TCP. On the comma, use a USB-C gigabit Ethernet adapter
-with a Realtek RTL8152/8153 or ASIX AX88179 chipset. These are supported by
-the comma.
-
-1. Connect the comma and server to a wired network with fixed IP addresses.
-2. Start the server with `--transport tcp`.
-3. Set the comma's `JetlinkEndpoint` parameter to `<server-ip>:5599`, replacing
-   `<server-ip>` with the server's wired-network IP address.
-
-TCP has no client authentication. Use a trusted network. Wi-Fi exceeds the 50 ms
-frame budget; use USB 3 or wired Ethernet.
+The comma links over USB only: the plain gadget, or for an iPhone the gadget's
+network interface. The server's TCP transport (`--transport tcp`) is for
+testing a server without a comma. It has no client authentication, so use a
+trusted network, and Wi-Fi misses the 50 ms frame budget.
 
 To test a server without a comma, follow [test without a
 comma](platforms.md#test-without-a-comma).

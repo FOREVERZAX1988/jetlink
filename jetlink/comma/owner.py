@@ -69,10 +69,8 @@ WORKER_GRACE = 10.0
 # because the loop below logs a traceback per cycle if something stays broken
 LOG = Path('/data/log/jetlink-owner.log')
 LOG_BYTES = 1 << 20
-# params whose change is a reason to look again: the pick, what is built, and
-# the endpoint: switching between the gadget and a Jetson on ethernet is a
-# different server, which may not have the engine yet
-WATCHED = (gadget.P_BIG_MODEL, gadget.P_READY, gadget.P_SPEC, gadget.P_ENDPOINT)
+# params whose change is a reason to look again: the pick and what is built
+WATCHED = (gadget.P_BIG_MODEL, gadget.P_READY, gadget.P_SPEC)
 
 
 def _own_logger(path: Path) -> logging.Logger:
@@ -192,8 +190,6 @@ class Owner:
     """
     if self.transport is not None:
       return True
-    if gadget.link_endpoint() is not None:
-      return False   # the Jetson is on ethernet; there is no gadget to own
     try:
       from jetlink.transport.ffs import FfsTransport
       self.transport = FfsTransport(str(gadget.FFS_MOUNT), gadget=str(gadget.GADGET_PATH))
@@ -210,7 +206,7 @@ class Owner:
     """Is there a gadget to present? Create it if there is none: nothing sets
     it up at boot, so the owner's first step does, parked or onroad, and a
     link turned on later gets one at once."""
-    if gadget.link_endpoint() is not None or gadget.link_configured():
+    if gadget.link_configured():
       return True
     if not gadget.can_setup_gadget():
       return True
@@ -242,13 +238,6 @@ class Owner:
     self.next_net_attempt = now + NET_BACKOFF
     self.net_ready = gadget.net_up()
 
-  def link_ready(self) -> bool:
-    """Is there a link for a run to use? A Jetson on ethernet needs nothing
-    of ours; the cable and the USB link both need the gadget presented, since
-    the phone's network interface exists only while ep0 is held."""
-    if gadget.link_kind() == 'ethernet':
-      return True
-    return self.open_link()
 
   def settle(self) -> None:
     """Put the gadget back to bound with nothing open on it.
@@ -283,7 +272,7 @@ class Owner:
 
   def go_dormant(self) -> None:
     """Release the gadget so the Jetson can sleep. The marker goes first so
-    present() never blinks. Never over TCP: see step()."""
+    present() never blinks. Never on the cable: see step()."""
     gadget.log.warning("jetlink: nothing left to do, releasing the gadget so the jetson can sleep")
     gadget.set_dormant(True)
     self.close_link()
@@ -393,9 +382,8 @@ class Owner:
     if not self.vm_tuned:
       vm.apply()
       self.vm_tuned = True
-    # before anything is presented: a C-to-C host has to find a device here.
-    # Ethernet needs the port as it boots, to host the adapter
-    self.port.update(gadget.link_endpoint() is None)
+    # before anything is presented: a C-to-C host has to find a device here
+    self.port.update()
 
     # each read is a file; take them once and pass them down
     offroad = gadget.offroad()
@@ -410,7 +398,7 @@ class Owner:
     if reason is not None and not self.lender.lent:
       self.stop_worker()
       self.wake()
-      if self.link_ready():
+      if self.open_link():
         return self.spawn_worker(f'the jetson has to be shut down: {reason}')
       return
 
@@ -447,7 +435,7 @@ class Owner:
       if not self.ensure_gadget():
         return
       self.wake()
-      if not self.link_ready():
+      if not self.open_link():
         return
       return self.spawn_worker(why)
 
@@ -460,8 +448,7 @@ class Owner:
       if not sleeps and self.ensure_gadget():
         self.open_link()
       return
-    # never over ethernet, where the gadget is not the link
-    if sleeps and gadget.link_endpoint() is None and time.monotonic() - self.idle_since >= DORMANT_HOLD:
+    if sleeps and time.monotonic() - self.idle_since >= DORMANT_HOLD:
       self.go_dormant()
     else:
       self.settle()
@@ -507,8 +494,6 @@ class Owner:
 
     What is built is learned once, onroad too: an iOS gadget taken for USB
     would lend a phone the endpoint files."""
-    if gadget.link_endpoint() is not None:
-      return False
     if self.built_ios is None:
       self.built_ios = gadget.built_for_ios() if gadget.link_configured() else gadget.ios()
       self.publish()

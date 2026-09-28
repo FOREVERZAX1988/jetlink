@@ -70,7 +70,7 @@ The app includes its dependencies.
 
 ### iPhone (experimental)
 
-An iPhone with USB-C can serve the comma over wired Ethernet, with the server
+An iPhone with USB-C can serve the comma over one USB cable, with the server
 running inside the app. It is built from source with Xcode and has not been
 measured on a phone yet; see [Jetlink for iPhone](docs/iphone-app.md).
 

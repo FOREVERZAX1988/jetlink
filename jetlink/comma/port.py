@@ -14,16 +14,15 @@ facing a Mac, nothing enumerates; facing an iPhone or a Jetson's own USB-C
 port, the far end enumerates as a device. Carrot's Jetson on C-to-C read
 "Powered cable w/ sink" and enumerated as 0955:7020.
 
-While the link runs over USB, a chestnut is the only thing the comma should
-host on this port; ethernet takes the link off USB and this with it. So once
-the comma has been the host for a few seconds with no chestnut on the port,
-whatever is on the other end is a host that lost the toss, and the port is held
-at sink until that cable comes out. Nothing happens anywhere else: the comma
-as the device (every USB-A host, a C-to-C host that won), a power supply, a
-chestnut, and a device without the lever all leave the port as AGNOS boots it.
-Holding for the whole session would be simpler and would hide a chestnut
-plugged in while the link is on, since chestnut_present() needs the comma to
-host it before jetlink stands aside.
+While the link is on, a chestnut is the only thing the comma should host on
+this port. So once the comma has been the host for a few seconds with no
+chestnut on the port, whatever is on the other end is a host that lost the
+toss, and the port is held at sink until that cable comes out. Nothing happens
+anywhere else: the comma as the device (every USB-A host, a C-to-C host that
+won), a power supply, a chestnut, and a device without the lever all leave the
+port as AGNOS boots it. Holding for the whole session would be simpler and
+would hide a chestnut plugged in while the link is on, since
+chestnut_present() needs the comma to host it before jetlink stands aside.
 
 The lever is the charger's DISABLE_POWER_ROLE_SWITCH voter, forced from
 debugfs. It is the one that holds. The charger puts the port back to dual role
@@ -106,7 +105,7 @@ class Port:
     self._reset()
 
   def _reset(self) -> None:
-    self.able: bool | None = None   # is there a lever; None until the link first runs over USB
+    self.able: bool | None = None   # is there a lever; None until the link is first on
     self.held = False               # the voter is forced to sink
     # this plug has been judged, so leave it until it comes out. Also set for
     # the length of a hold until a host comes back
@@ -114,10 +113,7 @@ class Port:
     self.role: str | None = None
     self.role_since = 0.0
 
-  def update(self, usb: bool, now: float | None = None) -> None:
-    if not usb:
-      self.off()
-      return
+  def update(self, now: float | None = None) -> None:
     if self.able is None:
       # the port as AGNOS boots it, whatever an owner killed mid-hold left
       # behind, and the answer to whether there is a lever at all

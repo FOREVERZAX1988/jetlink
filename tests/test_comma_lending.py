@@ -40,13 +40,10 @@ class LendingTest(unittest.TestCase):
     self.addCleanup(p.stop)
     self.udc = 'udc0'
     p.start()
-    # the link is the gadget unless a test says otherwise, whatever this
-    # machine's own params hold; and a loopback stand-in for usb0
-    for name, value in (('link_endpoint', mock.Mock(return_value=None)),
-                        ('CABLE_ADDR', ('127.0.0.1', 0))):
-      p = mock.patch.object(lending.gadget, name, value)
-      self.addCleanup(p.stop)
-      p.start()
+    # a loopback stand-in for usb0
+    p = mock.patch.object(lending.gadget, 'CABLE_ADDR', ('127.0.0.1', 0))
+    self.addCleanup(p.stop)
+    p.start()
     self.holding = False
 
   def lender(self, cable: lending.CableListener | None = None) -> lending.Lender:
@@ -134,13 +131,6 @@ class Borrowing(LendingTest):
     t.join(3.0)
     assert got and got[0] is not None
 
-  def test_over_tcp_there_is_nothing_to_borrow_and_nobody_is_asked(self):
-    lender = self.lender()
-    with mock.patch.object(lending.gadget, 'link_endpoint', return_value=('10.0.0.5', 5599)):
-      t0 = time.monotonic()
-      assert self.take(timeout=3.0) is None
-      assert time.monotonic() - t0 < 0.5, 'waited on a lender over TCP'
-    assert not lender.lent, 'the owner was asked for endpoints it does not have'
 
   def test_during_the_hold_a_borrower_is_told_to_retry(self):
     # a phone may still dial; a hello over FunctionFS to a phone blocks 15 s

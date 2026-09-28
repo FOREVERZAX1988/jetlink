@@ -57,10 +57,10 @@ class PortTest(unittest.TestCase):
       (d / 'idVendor').write_text(f'{ids[0]:04x}\n')
       (d / 'idProduct').write_text(f'{ids[1]:04x}\n')
 
-  def run_for(self, seconds: float, usb: bool = True) -> None:
+  def run_for(self, seconds: float) -> None:
     end = self.now + seconds
     while self.now < end:
-      self.port.update(usb, now=self.now)
+      self.port.update(now=self.now)
       self.now += 0.5
 
   def commands(self) -> list[str]:
@@ -171,15 +171,11 @@ class TestAccessories(PortTest):
 
 
 class TestTheLink(PortTest):
-  def test_ethernet_leaves_the_port_as_it_boots(self):
-    self.plug('source')   # the adapter
-    self.run_for(60, usb=False)
-    self.assertEqual(self.commands(), [])
-
-  def test_moving_to_ethernet_undoes_a_hold_once(self):
+  def test_turning_the_link_off_undoes_a_hold_once(self):
     self.plug('source')
     self.run_for(SWAP + 1)
-    self.run_for(5, usb=False)
+    self.port.off()
+    self.port.off()
     self.assertEqual(self.commands(), ['off', 'hold', 'off'])
     self.assertFalse(self.port.held)
 

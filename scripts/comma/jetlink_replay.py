@@ -110,7 +110,7 @@ def jetlink_params() -> dict:
   params = Params()
   out: dict = {'JetlinkLink': 1}   # Accelerator Link USB
   # the selection is the big-model slot and the identity its pointer, both params
-  for key in ('JetlinkEngineReady', 'JetlinkSpec', 'JetlinkEndpoint', 'JetlinkModelPointers',
+  for key in ('JetlinkEngineReady', 'JetlinkSpec', 'JetlinkModelPointers',
               'ModelManager_ActiveBundleChestnut', 'ModelManager_ModelsCache_Chestnut'):
     value = params.get(key)
     if value is not None:

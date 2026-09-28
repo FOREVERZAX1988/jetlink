@@ -2,6 +2,7 @@ Unreleased
 ==========
 * One root script on the comma, `scripts/comma/jetlink-root.sh`, for the comma four and the comma 3X: the gadget (`gadget`, `net`, `check`, `teardown`), the USB-C port hold (`port hold|off`) and the recording VM tuning (`vm apply|restore`), run through `jetlink.comma.root`. It replaces `scripts/setup_gadget.sh` and drops what neither comma needs: the CDC-ECM fallback, the MAC address writes the kernel refuses, and modprobe
 * The comma's device layer moved here from the zoompilot fork, as the `jetlink.comma` package: the gadget and the openpilot params it reads, the owner process that holds it, the endpoint lease, the USB-C port hold and the VM tuning. The fork keeps a shim that starts the owner with its provisioning worker. Standard library only, so the owner stays at about 10 MB
+* The comma links over USB only: `JetlinkEndpoint`, which sent the link to a server over Ethernet, is gone. The server's TCP transport stays, for testing
 * The comma's Accelerator Link setting is Off, USB or iOS
   * USB, for a Jetson or a Mac, is the plain gadget as before, lent to modeld at once
   * iOS adds a USB network interface (CDC-NCM) for an iPhone over one cable: `scripts/comma/jetlink-root.sh gadget --ios`, and `net` sets up the comma's end of that network after a bind

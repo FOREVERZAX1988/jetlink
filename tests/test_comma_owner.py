@@ -33,7 +33,6 @@ class OwnerTest(unittest.TestCase):
                         ('STATE', self.tmp / 'state'),
                         ('params_dir', mock.Mock(return_value=self.params)),
                         ('link_configured', mock.Mock(return_value=True)),
-                        ('link_endpoint', mock.Mock(return_value=None)),
                         ('can_setup_gadget', mock.Mock(return_value=False)),
                         ('host_attached', mock.Mock(return_value=True)),
                         ('udc_state', mock.Mock(return_value='configured')),
@@ -360,17 +359,10 @@ class TestTheToggle(OwnerTest):
     self.vm.apply.assert_called_once()
     self.vm.restore.assert_not_called()
 
-  def test_the_port_is_kept_a_device_while_the_link_is_usb(self):
+  def test_the_port_is_kept_a_device_while_the_link_is_on(self):
     o = self.owner()
     o.step()
-    o.port.update.assert_called_once_with(True)
-
-  def test_ethernet_gives_the_port_back(self):
-    o = self.owner()
-    with mock.patch.object(gadget, 'link_endpoint', return_value=('10.0.0.2', 5599)):
-      o.step()
-    o.port.update.assert_called_once_with(False)
-
+    o.port.update.assert_called_once_with()
 
   def test_turning_it_off_gives_the_port_back(self):
     o = self.owner()
@@ -385,13 +377,6 @@ class TestTheToggle(OwnerTest):
     o.stop = True
     o.run()
     o.port.off.assert_called_once()
-
-  def test_a_jetson_on_ethernet_has_no_gadget_to_own(self):
-    with mock.patch.object(gadget, 'link_endpoint', return_value=('10.0.0.2', 5599)):
-      o = owner.Owner()
-      o.lender = mock.Mock(lent=False, listening=True)
-      self.assertFalse(o.open_link())
-      self.assertIsNone(o.transport)
 
 
 class TestUsb(OwnerTest):
@@ -675,65 +660,6 @@ class TestSwitchingMode(OwnerTest):
       o.step()
     self.setup_gadget.assert_called_once()
     self.assertFalse(o.built_ios)
-
-
-class TestEthernet(OwnerTest):
-  """With JetlinkEndpoint set there is no gadget, and runs start without one."""
-
-  def owner(self, **kw):
-    o = super().owner(presented=False, **kw)
-    o.open_link.return_value = False   # what open_link answers over ethernet
-    return o
-
-  def setUp(self):
-    super().setUp()
-    p = mock.patch.object(gadget, 'link_endpoint', mock.Mock(return_value=('10.0.0.5', 5599)))
-    self.addCleanup(p.stop)
-    p.start()
-
-  def test_the_first_look_of_the_boot_runs_without_a_gadget(self):
-    o = self.owner()
-    o.seen = {}
-    o.step()
-    o.spawn_worker.assert_called_once()
-    o.open_link.assert_not_called()
-
-  def test_a_new_pick_starts_a_run_without_a_gadget(self):
-    o = self.owner()
-    o.step()
-    o.spawn_worker.assert_not_called()
-    self.write('ModelManager_ActiveBundleChestnut', b'{"ref": "c" * 40}')
-    o.step()
-    o.spawn_worker.assert_called_once()
-
-  def test_a_shutdown_request_starts_a_run_without_a_gadget(self):
-    o = self.owner()
-    gadget.SHUTDOWN_REQUEST.write_text(json.dumps({'reason': 'car battery'}))
-    o.step()
-    o.spawn_worker.assert_called_once()
-
-  def test_onroad_it_starts_nothing(self):
-    o = self.owner()
-    o.seen = {}
-    self.write('IsOffroad', b'0')
-    o.step()
-    o.spawn_worker.assert_not_called()
-
-  def test_the_endpoint_changing_is_a_reason_to_look_again(self):
-    # a different server, which may not have the engine yet
-    o = self.owner()
-    o.step()
-    o.spawn_worker.assert_not_called()
-    self.write('JetlinkEndpoint', b'10.0.0.6:5599')
-    o.step()
-    o.spawn_worker.assert_called_once()
-
-  def test_over_ethernet_the_owner_never_goes_dormant(self):
-    o = super().owner(presented=True)
-    o.idle_since = time.monotonic() - owner.DORMANT_HOLD
-    o.step()
-    self.assertFalse(o.dormant)
-    o.close_link.assert_not_called()
 
 
 class TestSetup(OwnerTest):

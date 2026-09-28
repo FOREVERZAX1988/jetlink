@@ -60,7 +60,6 @@ def set_logger(logger) -> None:
 # none is written. openpilot declares them all (params_keys.h).
 P_READY = "JetlinkEngineReady"      # sha256 of the model the Jetson has built
 P_SPEC = "JetlinkSpec"              # the spec a provisioning run recorded; the owner only stats it
-P_ENDPOINT = "JetlinkEndpoint"      # optional "host:port" to use TCP instead of USB
 P_LINK = "JetlinkLink"              # Accelerator Link, an index into LINK_MODES
 P_OFFROAD = "IsOffroad"             # manager's: is the car parked
 P_BIG_MODEL = "ModelManager_ActiveBundleChestnut"  # the model manager's big-model pick
@@ -138,15 +137,6 @@ def offroad() -> bool:
   return True if value is None else value
 
 
-def link_endpoint() -> tuple[str, int] | None:
-  """A host:port override, for running the Jetson over ethernet during bring-up."""
-  raw = raw_param(P_ENDPOINT)
-  if not raw:
-    return None
-  host, _, port = raw.decode(errors='replace').strip().partition(':')
-  return host, int(port or 5599)
-
-
 # -- what carries the link ------------------------------------------------
 # The Accelerator Link setting names the host: USB (a Jetson or a Mac on the
 # FunctionFS vendor interface) or iOS (an iPhone, which gives apps no USB
@@ -172,12 +162,9 @@ def _link_record() -> list[str]:
 
 
 def link_kind() -> str:
-  """'ethernet' for the explicit JetlinkEndpoint param; otherwise the gadget
-  the owner built and published, 'cable' for iOS (the phone's network
-  interface on the gadget) or 'usb'. The setting stands in only until the
-  owner has said: it may have moved and be waiting for the car to park."""
-  if link_endpoint() is not None:
-    return 'ethernet'
+  """The gadget the owner built and published: 'cable' for iOS (the phone's
+  network interface on the gadget) or 'usb'. The setting stands in only until
+  the owner has said: it may have moved and be waiting for the car to park."""
   record = _link_record()
   if record[:1] in (['cable'], ['usb']):
     return record[0]
@@ -205,11 +192,6 @@ def clear_link() -> None:
   except OSError:
     log.exception("jetlink: could not clear the link record")
 
-
-def over_tcp() -> bool:
-  """Is the server reached over TCP, on the cable or on ethernet? Over TCP
-  there is nothing to enumerate and no endpoint file to bounce."""
-  return link_kind() != 'usb'
 
 
 def net_status() -> str | None:
@@ -352,13 +334,11 @@ def wait_for_host(timeout: float, bounce=None, should_stop=None, report=None) ->
   pin still showing a host, and only another connect moves it: that is what
   `bounce` is for, and it is spent once.
 
-  Over TCP there is nothing to enumerate: the connect that made the client
-  already reached the far end. Waiting on the UDC stalled every modeld join
-  for CONNECT_TIMEOUT and then started over, so the large model never joined;
-  on the cable the UDC is configured, but by a phone, and it is the dial that
-  proved it is there.
+  On the cable there is nothing to wait for: the connect that made the client
+  already reached the phone. The UDC is configured too, but by the phone, and
+  it is the dial that proved it is there.
   """
-  if over_tcp():
+  if link_kind() == 'cable':
     return True
   deadline = time.monotonic() + timeout
   stalled_since = None
@@ -427,18 +407,16 @@ def net_up() -> bool:
 
 
 def link_configured() -> bool:
-  """Can we even attempt a link? The gadget exists, or ethernet is configured.
+  """Can we even attempt a link? The gadget exists.
 
   Not host_attached(): the UDC only binds when something opens ep0, and nothing
   opens ep0 unless the link looks usable. Waiting for a host deadlocks.
 
-  Only the explicit endpoint bypasses the gadget. A phone on the cable is on
-  the gadget's own network interface, which exists only while ep0 is held.
+  The cable too: a phone is on the gadget's own network interface, which
+  exists only while ep0 is held.
   """
   if gadget_error() is not None:
     return False
-  if link_endpoint() is not None:
-    return True
   try:
     return (FFS_MOUNT / "ep0").exists()
   except OSError:

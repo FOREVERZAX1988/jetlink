@@ -59,7 +59,7 @@ def main():
   # find, and the join asks for a model that has not been picked
   keys = ('CarParamsPersistent', 'CalibrationParams', 'ModelManager_ActiveBundleChestnut',
           'ModelManager_ModelsCache_Chestnut', 'JetlinkModelPointers',
-          'JetlinkSpec', 'JetlinkEngineReady', 'JetlinkEndpoint')
+          'JetlinkSpec', 'JetlinkEngineReady')
   saved = {key: live.get(key) for key in keys}
   if saved['CarParamsPersistent'] is None:
     raise SystemExit('no saved CarParams; bench cannot choose a vehicle configuration')

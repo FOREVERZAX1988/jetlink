@@ -39,5 +39,6 @@ With always-on power, the Jetson sleeps when the ignition is off and the comma
 wakes it when the car starts. See [power setup](transport.md#power-requirements)
 for consumption and the separate battery-protection shutdown option.
 
-TCP has no client authentication. Use a trusted network. Wi-Fi missed the frame
-budget in measurements; use USB 3 or wired Ethernet.
+The comma links over USB. The server's TCP transport is for testing: it has no
+client authentication, so use a trusted network, and Wi-Fi missed the frame
+budget in measurements.

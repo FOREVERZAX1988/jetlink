@@ -192,12 +192,8 @@ def borrow(name: str = 'modeld', timeout: float = BORROW_TIMEOUT, path: Path = S
   on, or whose daemon died: the caller opens the gadget itself, as it always
   did, so a drive never loses the large model to a daemon fault.
 
-  Over the cable the answer carries the phone's socket; over ethernet there is
-  nothing to lend and nobody holds anything, so nobody is asked.
+  Over the cable the answer carries the phone's socket.
   """
-  if gadget.link_endpoint() is not None:
-    # asking would only wait out the timeout on "retry" before connecting anyway
-    return None
   try:
     conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     conn.settimeout(POLL)

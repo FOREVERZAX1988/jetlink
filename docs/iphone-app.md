@@ -113,25 +113,6 @@ the comma, the negotiated speed is in `/sys/class/udc/*/current_speed`:
 `super-speed` is USB 3 and `high-speed` is USB 2.
 `sudo scripts/comma/jetlink-root.sh check` prints it.
 
-### Ethernet adapter, the manual fallback
-
-If the comma's kernel has no USB network function, the comma dials the phone
-over Ethernet instead, as a Jetson on an Ethernet adapter does.
-
-1. Plug a USB-C gigabit Ethernet adapter into the comma and another into the
-   iPhone (or a hub with Ethernet), and join them with a network cable. The
-   comma supports Realtek RTL8152/8153 and ASIX AX88179 adapters.
-2. On the iPhone, open **Settings > Ethernet**, choose the adapter, set
-   **Configure IP** to **Manual**, and give it an address such as `10.0.0.2`
-   with subnet mask `255.255.255.0`.
-3. Give the comma's adapter an address on the same subnet, such as `10.0.0.1`.
-4. Set the comma's `JetlinkEndpoint` parameter to the Ethernet address the app
-   shows under **Connection**, such as `10.0.0.2:5599`. See
-   [Ethernet (TCP)](transport.md#ethernet-tcp).
-
-The title then reads **Connected over TCP**. Wi-Fi works for testing,
-including the iPhone's Personal Hotspot, but it does not meet the frame budget.
-
 The app's Settings has these steps under **Help > Connecting the Comma**.
 
 ## Prepare a model before you drive
@@ -246,8 +227,8 @@ on the road. Keep the phone out of the sun, and out of a thick case.
 | Setting | What it does |
 | --- | --- |
 | Link | Whether the comma is on the USB cable or an Ethernet adapter, or that the phone is dialing |
-| Port | The TCP port the phone listens on, 5599 by default. Over the cable the phone dials the comma's port instead; the comma's `JetlinkEndpoint` names this one |
-| USB, Ethernet, Wi-Fi | The phone's addresses. The USB one is the comma's lease over the cable; the Ethernet one is what `JetlinkEndpoint` should say |
+| Port | The TCP port the phone listens on, 5599 by default, for `verify_parity.py` from a Mac. Over the cable the phone dials the comma's port instead |
+| USB, Ethernet, Wi-Fi | The phone's addresses. The USB one is the comma's lease over the cable |
 | Compute | Neural Engine (default): the whole model on it. Neural Engine + GPU: the Mac's layout, the vision trunk on the Neural Engine and the rest on the GPU. GPU: for when another app keeps the Neural Engine busy. Changing it prepares the model again |
 | CPU Keep-Warm | On by default. A CPU core kept busy between frames while the Neural Engine runs the model, so the next frame is not waiting on a core that went to sleep. It uses some power |
 | GPU Keep-Alive | A small GPU job between frames so the GPU does not slow down in the gaps. It uses some power |

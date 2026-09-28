@@ -61,7 +61,7 @@ class TestVmTuning(unittest.TestCase):
     for p in (mock.patch.object(gadget, 'AGNOS', True),
               mock.patch.object(root, 'run', self.run_script),
               mock.patch.object(gadget, 'DORMANT', self.tmp / 'dormant'),
-              mock.patch.object(gadget, 'link_endpoint', mock.Mock(return_value=None)),
+
               mock.patch.object(owner.port, 'Port', mock.Mock())):
       self.addCleanup(p.stop)
       p.start()
