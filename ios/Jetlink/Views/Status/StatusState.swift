@@ -16,9 +16,6 @@ struct StatusState: Equatable {
   var recent: StatsEvent?
   /// One summary a second, for the history chart.
   var history: [StatsSample] = []
-  /// What the comma's JetlinkEndpoint should say to reach this phone, over
-  /// an Ethernet adapter.
-  var endpoint: String?
   /// The phone's address on the comma's cable network, while the cable is in.
   var cableAddress: String?
   /// What the connected comma's link is carried over: USB 3, USB 2 or TCP.

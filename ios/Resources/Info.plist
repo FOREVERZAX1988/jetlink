@@ -35,7 +35,7 @@
 	<key>NSHumanReadableCopyright</key>
 	<string>MIT License. Copyright 2026 Zeph Leggett.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Jetlink serves your comma's driving model over the Ethernet or Wi-Fi network the comma is on.</string>
+	<string>Jetlink serves your comma's driving model over the network its USB cable makes.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

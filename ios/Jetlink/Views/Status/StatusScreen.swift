@@ -43,8 +43,7 @@ struct StatusScreen: View {
       openModels: { tab = .models },
       retry: retry,
       openSettings: openSettings,
-      refreshCatalog: { app.models.refreshCatalog() },
-      copyEndpoint: { UIPasteboard.general.string = $0 })
+      refreshCatalog: { app.models.refreshCatalog() })
   }
 
   private func useDefault() {

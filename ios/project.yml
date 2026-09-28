@@ -56,7 +56,7 @@ targets:
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
         UIRequiredDeviceCapabilities: [arm64, metal]
-        NSLocalNetworkUsageDescription: Jetlink serves your comma's driving model over the Ethernet or Wi-Fi network the comma is on.
+        NSLocalNetworkUsageDescription: Jetlink serves your comma's driving model over the network its USB cable makes.
         # The browse that asks for Local Network access at launch.
         NSBonjourServices: [_jetlink._tcp]
         # A model can be copied in from the Finder or the Files app, as well

@@ -9,7 +9,6 @@ struct StatusActions {
   var retry: () -> Void = {}
   var openSettings: () -> Void = {}
   var refreshCatalog: () -> Void = {}
-  var copyEndpoint: (String) -> Void = { _ in }
 }
 
 /// The main card: the headroom while the comma is served, and otherwise
@@ -82,21 +81,7 @@ struct HeroCard: View {
         Label("Waiting for Comma", systemImage: "cable.connector")
           .symbolEffect(.pulse, options: .repeating)
       } description: {
-        if state.cableAddress != nil {
-          Text("Dialing the comma over USB.")
-        } else {
-          Text(state.endpoint == nil ? "Plug in the comma." : "Over USB, nothing to set. Over Ethernet, set the comma's endpoint to this address.")
-        }
-      } actions: {
-        if state.cableAddress == nil, let endpoint = state.endpoint {
-          Button {
-            actions.copyEndpoint(endpoint)
-          } label: {
-            Label(endpoint, systemImage: "doc.on.doc")
-              .font(.body.monospacedDigit().weight(.medium))
-          }
-          .buttonStyle(.glass)
-        }
+        Text(state.cableAddress == nil ? "Plug in the comma." : "Dialing the comma over USB.")
       }
     }
   }

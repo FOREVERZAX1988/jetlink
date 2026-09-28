@@ -181,7 +181,8 @@ on while Jetlink is open. The title's subtitle says where things stand:
 - **History** has a bar for every 5 seconds of the last 2 minutes, as tall as
   that span's slowest frames.
 - **Link** has the frame rate (the comma sends 20 a second) and slow frames,
-  and says whether the comma is on the USB cable or an Ethernet adapter.
+  and says what the link runs over: USB 3 or USB 2 on the cable, TCP for a
+  bench tool on Wi-Fi.
 - **iPhone** has the phone's temperature, battery, memory and link. A hot phone
   slows down, and it shows here before it shows in the ring. Memory is what
   iOS still lets the app use; it turns orange under 1 GB, where preparing a
@@ -226,9 +227,9 @@ on the road. Keep the phone out of the sun, and out of a thick case.
 
 | Setting | What it does |
 | --- | --- |
-| Link | Whether the comma is on the USB cable or an Ethernet adapter, or that the phone is dialing |
+| Link | USB 3 or USB 2 while the comma is connected (TCP for a bench tool), Dialing while the phone dials it |
 | Port | The TCP port the phone listens on, 5599 by default, for `verify_parity.py` from a Mac. Over the cable the phone dials the comma's port instead |
-| USB, Ethernet, Wi-Fi | The phone's addresses. The USB one is the comma's lease over the cable |
+| USB, Wi-Fi | The phone's addresses. The USB one is the comma's lease over the cable; the Wi-Fi one, with the port, is where a Mac's bench tools reach the phone |
 | Compute | Neural Engine (default): the whole model on it. Neural Engine + GPU: the Mac's layout, the vision trunk on the Neural Engine and the rest on the GPU. GPU: for when another app keeps the Neural Engine busy. Changing it prepares the model again |
 | CPU Keep-Warm | On by default. A CPU core kept busy between frames while the Neural Engine runs the model, so the next frame is not waiting on a core that went to sleep. It uses some power |
 | GPU Keep-Alive | A small GPU job between frames so the GPU does not slow down in the gaps. It uses some power |

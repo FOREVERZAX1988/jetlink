@@ -1,8 +1,7 @@
 import SwiftUI
 
-/// How the comma and the phone meet: one cable through a hub, and the
-/// Ethernet adapter as the fallback. What docs/iphone-app.md says, in
-/// the app, for a reader standing at the car.
+/// How the comma and the phone meet: one cable through a hub. What
+/// docs/iphone-app.md says, in the app, for a reader standing at the car.
 struct ConnectHelpScreen: View {
   var body: some View {
     List {
@@ -27,16 +26,6 @@ struct ConnectHelpScreen: View {
         .foregroundStyle(.secondary)
       } header: {
         Text("USB 3")
-      }
-      Section {
-        step(1, "Put an Ethernet adapter on each end.", "A USB-C gigabit adapter on the comma, one on the phone, and a short cable between them.")
-        step(2, "Give the phone a manual address.", "Settings > Ethernet > the adapter > Configure IP > Manual, such as 10.0.0.2 with mask 255.255.255.0.")
-        step(3, "Give the comma an address on the same subnet.", "Such as 10.0.0.1.")
-        step(4, "Set the comma's JetlinkEndpoint.", "The Ethernet address this app shows under Connection, such as 10.0.0.2:5599. The comma dials the phone.")
-      } header: {
-        Text("Ethernet Adapter")
-      } footer: {
-        Text("The manual fallback, for a comma whose kernel has no USB network function. Wi-Fi works for testing and misses the frame budget.")
       }
     }
     .navigationTitle("Connecting the Comma")

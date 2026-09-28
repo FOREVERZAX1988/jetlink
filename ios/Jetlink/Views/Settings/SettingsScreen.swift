@@ -97,7 +97,7 @@ struct SettingsScreen: View {
     } header: {
       Text("Connection")
     } footer: {
-      Text("Over USB the phone dials the comma; nothing to set. Over an Ethernet adapter, set the comma's endpoint to the Ethernet address.")
+      Text("Over USB the phone dials the comma; nothing to set. The port is where bench tools on a Mac reach the phone, at its Wi-Fi address.")
     }
   }
 

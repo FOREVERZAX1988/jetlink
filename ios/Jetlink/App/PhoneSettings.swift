@@ -8,7 +8,9 @@ import Observation
 final class PhoneSettings {
   private let defaults: UserDefaults
 
-  /// The TCP port the comma's JetlinkEndpoint names.
+  /// The TCP port the server listens on, where bench tools such as
+  /// `bench_link.py --host` reach the phone over Wi-Fi. Over the cable the
+  /// phone dials the comma instead.
   var port: UInt16 {
     didSet { defaults.set(Int(port), forKey: Keys.port) }
   }
