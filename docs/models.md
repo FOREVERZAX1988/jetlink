@@ -2,32 +2,30 @@
 
 # Choose and prepare models
 
-For normal setup, select a model under **Settings > Models > Big Model** on
-the comma while offroad and connected to the internet. You can do this outside
-the car or in the car. The comma downloads it, sends it to the server, and
-waits for the server to prepare it. Start with the default model.
-See [daily use](using-jetlink.md#choose-a-model) for model changes and switching.
+Pick a model on the comma under **Settings > Models > Big Model**, offroad and
+online (in or out of the car). The comma downloads it, sends it to the server,
+and waits while the server prepares it. Start with the default. Changing and
+switching models: [daily use](using-jetlink.md#choose-a-model).
 
 ## Prepare ahead of time (optional)
 
-Use the server's internet connection to download a model before connecting the
-comma. This can save time when the comma is on LTE.
+Download on the server's internet connection before connecting the comma. This
+saves time when the comma is on LTE.
 
-On Mac, open **Models**, click **Use Model**, and wait for **In Use**.
-Select the same model on the comma. See the [Mac guide](macos-app.md#use-a-model-before-you-drive).
+On a Mac, open **Models**, click **Use Model**, and wait for **In Use**. Then pick
+the same model on the comma. See the [Mac guide](macos-app.md#use-a-model-before-you-drive).
 
 ### On a Jetson or an installed PC
 
-List the available models, then fetch one using its full 40-character ref:
+List the models, then fetch one by its full 40-character `ref` from the JSON
+(plain `list` shortens refs):
 
 ```bash
 jetlink models list --json
 jetlink models fetch <ref>
 ```
 
-Replace `<ref>` with the full `ref` value for your chosen model in the JSON.
-The plain `list` output abbreviates refs for display. To prepare it as well, stop the server
-first. If a comma is connected, keep it offroad during these steps:
+To prepare it too, stop the server first, with any connected comma offroad:
 
 ```bash
 jetlink stop
@@ -36,27 +34,24 @@ jetlink start
 ```
 
 **Do not prepare a model in a separate process while the server uses the same
-cache.** Concurrent builds are unsupported and can exhaust memory. The Mac
-app prepares through the running server and does not need this stop/start step.
+cache.** Concurrent builds are unsupported and can exhaust memory. The Mac app
+prepares through the running server, so it needs no stop and start.
 
 ### From a source install
 
-Activate the Python environment used to install Jetlink, then use
+In the Python environment Jetlink is installed in, run
 `jetlink-models list --json`, `jetlink-models fetch <ref>`, and
 `jetlink-models prepare <ref>`. Stop any server using that cache before
-running `prepare`.
+`prepare`.
 
 ## Downloads, prepared engines, and disk space
 
-A download is the original ONNX model. A prepared engine is the version built
-for your computer's backend and device. Jetlink keeps both so it can reuse them.
-A runtime update may require another preparation; it keeps the download.
-
-Most model downloads are about 766 MB. Prepared engine sizes vary; on a Mac,
-allow about 3 GB total per model with the default backend. Each `--device`
-layout on a Mac (`ane`, `coreml`, `ane-whole`) is a separate prepared engine,
-because each one prepares the ONNX differently; see
-[backends](backends.md#runtime-comparison).
+- A download is the ONNX model, most about 766 MB.
+- A prepared engine is built for your backend and device. Jetlink keeps both.
+- A runtime update may prepare again; the download is kept.
+- On a Mac, allow about 3 GB per model with the default backend. Each Mac
+  `--device` (`ane`, `coreml`, `ane-whole`) has its own prepared engine; see
+  [backends](backends.md#runtime-comparison).
 
 | Installation | Default cache folder |
 | --- | --- |
@@ -66,22 +61,21 @@ because each one prepares the ONNX differently; see
 | Other Mac terminal setup | `~/Library/Caches/jetlink` |
 | Other desktop setup | `~/.cache/jetlink` |
 
-The Mac app lets you choose a cache folder in Settings. Source-install commands use
-`JETLINK_CACHE` or `--cache DIR` to override their default. The installer wrapper
-uses the server's cache automatically.
+- Mac app: choose a cache folder in Settings.
+- Source installs: `JETLINK_CACHE` or `--cache DIR`.
+- The installer's `jetlink models` uses the server's cache.
 
-Use `jetlink models inventory` with the installer, or `jetlink-models inventory`
-from a source install, to inspect disk use. The Mac app shows it under **Models**.
+Disk use: `jetlink models inventory` (installer), `jetlink-models inventory`
+(source install), or **Models** in the Mac app.
 
 ## Commands
 
-See the [model command reference](model-cli.md#commands) for listing, fetching,
-importing, preparing, and deleting models, including arguments and examples.
+Listing, fetching, importing, preparing and deleting models:
+[model command reference](model-cli.md#commands).
 
 ## Developer reference
 
-For cache internals and scripting, see the [model CLI](model-cli.md) and
-[server control protocol](control-protocol.md).
+[Model CLI](model-cli.md) and [server control protocol](control-protocol.md).
 
 <a id="model-identifiers-and-storage"></a>
 <a id="the-protocol"></a>

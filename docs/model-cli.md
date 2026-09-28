@@ -1,32 +1,20 @@
 # Model command reference
 
-For choosing a model or preparing one before a drive, start with
-[model management](models.md). This page documents `jetlink-models`.
+Reference for `jetlink-models`. To choose or prepare a model before a drive,
+start with [model management](models.md).
 
 ## Model identifiers and storage
 
-A **ref** is a 40-character commit hash from comma's openpilot repository. It
-identifies a model in sunnypilot's big-model catalog, the same list the comma
-shows under **Settings > Models > Big Model**.
-
-A **SHA-256** is a 64-character hash of the ONNX file. The comma and server use
-it to identify the model and its cached files. One ref resolves to exactly one
-SHA-256, and that never changes.
-
-Most refs have the ONNX in their own tree. Newer ones, starting with Cinque
-Terre V3, ship only a precompiled tinygrad file; their commit subject names
-the export, and its ONNX comes from comma's model repo on Hugging Face
-(`commaai/openpilot_driving_models`). Resolving and fetching work the same for
-both kinds.
-
-The catalog updates independently of Jetlink, so new models appear without a
-Jetlink update. Jetlink runs the ONNX model rather than sunnypilot's compiled
-runtime artifact.
-
-Anywhere a command takes `REF_OR_SHA256`, use a 40-character hexadecimal ref or
-a 64-character hexadecimal SHA-256 hash. Anything else is an error.
-
-Files live under the cache directory:
+- A **ref** is a 40-character commit hash from comma's openpilot repository. It
+  names a model in sunnypilot's big-model catalog, the list under
+  **Settings > Models > Big Model** on the comma.
+- A **SHA-256** is the 64-character hash of the ONNX file. One ref resolves to
+  exactly one SHA-256, and that never changes.
+- `REF_OR_SHA256` takes a 40-character hexadecimal ref or a 64-character
+  hexadecimal SHA-256. Anything else is an error.
+- The catalog updates on its own, so new models appear without a Jetlink update.
+- From Cinque Terre V3 on, the ONNX comes from comma's model repo on Hugging
+  Face (`commaai/openpilot_driving_models`).
 
 | Path | What is in it |
 | --- | --- |
@@ -34,10 +22,9 @@ Files live under the cache directory:
 | `<cache>/engines/` | The prepared engines and their sidecar files, one per backend and device |
 | `<cache>/registry/` | The cached catalog, the resolved pointers, and records of models you imported |
 
-The cache directory is `JETLINK_CACHE` if it is set, otherwise
-`/mnt/data/jetlink` on a Jetson, `~/Library/Caches/jetlink` on a Mac terminal,
-and `~/.cache/jetlink` elsewhere. Every command takes `--cache DIR` to override
-it.
+The cache is `JETLINK_CACHE` if set, otherwise `/mnt/data/jetlink` on a Jetson,
+`~/Library/Caches/jetlink` on a Mac terminal, and `~/.cache/jetlink` elsewhere.
+`--cache DIR` overrides it on every command.
 
 ## Commands
 
@@ -51,18 +38,16 @@ jetlink-models rm        SHA256 [--artifacts] [--model] [--cache DIR]
 jetlink-models prepare   REF_OR_SHA256 [--backend auto] [--device auto] [--cache DIR]
 ```
 
-Run these commands in the Python environment used to install Jetlink. You can
-use `python -m jetlink.registry` instead of `jetlink-models`. In the syntax
-above, square brackets mark optional arguments. Replace uppercase placeholders
-such as `REF` and `PATH` with your values; omit the brackets.
-
-The output examples below are shortened for readability.
+- Run them in the Python environment Jetlink is installed in, or use
+  `python -m jetlink.registry` instead of `jetlink-models`.
+- Square brackets mark optional arguments. Replace uppercase placeholders such
+  as `REF` and `PATH`, without the brackets.
+- The output below is shortened.
 
 ### list
 
-Lists available models, newest first, and their download or preparation status.
-The cached copy is used when it is less than an hour old; `--refresh` fetches a
-new one.
+Lists models, newest first, with their download or preparation status. Uses the
+cached catalog if under an hour old; `--refresh` fetches a new one.
 
 ```bash
 jetlink-models list
@@ -75,11 +60,9 @@ jetlink-models list
  11  BMRLNAP Model v4        f877d7a0cc  766 MB  prepared
 ```
 
-The table abbreviates refs. Use `list --json` to get the full 40-character
-`ref` needed by `fetch` and `prepare`.
-
-`--json` prints the `catalog` payload described in the [control
-protocol](control-protocol.md#the-protocol). Example:
+The table shortens refs. `list --json` gives the full 40-character `ref` that
+`fetch` and `prepare` need. It prints the `catalog` payload from the [control
+protocol](control-protocol.md#the-protocol):
 
 ```json
 {"fetched_at": 1757440000.0,
@@ -90,12 +73,12 @@ protocol](control-protocol.md#the-protocol). Example:
              "index": 12, "sha256": null, "bytes": null}]}
 ```
 
-`sha256` and `bytes` are null until that entry's pointer has been resolved.
+`sha256` and `bytes` are null until that entry's pointer is resolved.
 
 ### resolve
 
-Looks up the model SHA-256 and file size for a ref. The result is cached, so
-later lookups do not need a network request.
+Prints a ref's SHA-256 and file size. The result is cached, so later lookups
+need no network.
 
 ```bash
 jetlink-models resolve f877d7a0ccc3cce943c76e285214c020cd65c899
@@ -105,13 +88,12 @@ jetlink-models resolve f877d7a0ccc3cce943c76e285214c020cd65c899
 a086d5249fc308bb...  765953504 bytes
 ```
 
-The hash is printed in full; it is shortened here.
+The real output prints the full hash.
 
 ### fetch
 
-Downloads the ONNX file for a ref or a SHA-256. It resolves the pointer if
-needed, downloads to a `.part` file, checks the size and the hash, and only then
-renames it into place. Progress goes to standard error, one line per whole
+Downloads the ONNX for a ref or SHA-256 to a `.part` file, checks size and hash,
+then renames it into place. Progress goes to standard error, one line per
 percent, so the output can be piped.
 
 ```bash
@@ -125,14 +107,13 @@ downloading a086d5249fc308bb... 765953504 bytes
 verified, saved to /mnt/data/jetlink/models/a086d5249fc308bb.onnx
 ```
 
-An interrupted download leaves the `.part` file behind and starts again from the
-beginning next time. A file appears without `.part` only once it has been
-verified.
+An interrupted download restarts from the beginning. Only a verified file loses
+its `.part`.
 
 ### import
 
-Adds an ONNX file you already have. The file is hashed, copied into
-`<cache>/models/`, and recorded with a name so it shows up in listings.
+Adds an ONNX file you already have: hashes it, copies it into
+`<cache>/models/`, and records the name for listings.
 
 ```bash
 jetlink-models import ~/Downloads/big_driving_supercombo.onnx --name "My export"
@@ -146,8 +127,8 @@ copied to /mnt/data/jetlink/models/a086d5249fc308bb.onnx
 
 ### inventory
 
-Lists downloaded models, prepared engines, their backends and devices, and disk
-usage.
+Lists downloaded models, prepared engines with their backends and devices, and
+disk use.
 
 ```bash
 jetlink-models inventory
@@ -166,15 +147,15 @@ engines
 disk  models 766 MB, engines 4.1 GB, 63 GB free
 ```
 
-`--json` prints the `inventory` payload from the control protocol, the same
-shape the app receives.
+`--json` prints the control protocol's `inventory` payload, as the app receives it.
 
 ### rm
 
-`--model` deletes the downloaded ONNX file. `--artifacts` deletes all prepared
-engines for the model. You can remove the download and keep using its prepared
-engine. Replace `SHA256` below with the full hash from `resolve` or `inventory
---json`:
+- `--model` deletes the downloaded ONNX file.
+- `--artifacts` deletes all of the model's prepared engines.
+- A prepared engine keeps working after its download is removed.
+
+Replace `SHA256` with the full hash from `resolve` or `inventory --json`:
 
 ```bash
 jetlink-models rm SHA256 --model
@@ -182,23 +163,21 @@ jetlink-models rm SHA256 --model
 
 ### prepare
 
-Fetches the model if it is not there, then builds an engine for the chosen
-backend, exactly as `jetlink-server --build` does. If no model is recorded as
-last loaded, the server records this model and loads it at the next startup.
+Fetches the model if needed, then builds an engine for the chosen backend,
+exactly as `jetlink-server --build` does. If no model is recorded as last
+loaded, the server loads this one at its next startup.
 
 **Do not run `prepare` while a `jetlink-server` is using the same cache.**
-Concurrent builds in the same cache are unsupported and can exhaust memory. The
-command cannot always detect a running server. On a Jetson, stop the service
-first:
+Concurrent builds are unsupported and can exhaust memory, and the command cannot
+always detect a running server. On a Jetson, stop the service first:
 
 ```bash
 jetlink stop
 ```
 
-Start it again with `jetlink start` after preparation finishes.
-
-Or leave the server running and ask it to prepare the model over the [control
-channel](control-protocol.md), the only safe way to build while it serves.
+Run `jetlink start` when preparation finishes. Or leave the server running and
+ask it to prepare over the [control channel](control-protocol.md), the only safe
+way to build while it serves.
 
 ```bash
 jetlink-models prepare f877d7a0ccc3cce943c76e285214c020cd65c899
@@ -221,14 +200,14 @@ built in 166.4 s, saved to /mnt/data/jetlink/engines/a086d5249fc308bb.trt10.3.0.
 
 ## On a Jetson or an installed PC
 
-The installer's `jetlink models` runs this CLI inside the server image, with the
-server's models folder. Replace `<ref>` with a 40-character ref from `list --json`:
+The installer's `jetlink models` runs this CLI in the server image, on the
+server's models folder. Every subcommand works. Replace `<ref>` with a
+40-character ref from `list --json`:
 
 ```bash
 jetlink models list --json
 jetlink models fetch <ref>
 ```
 
-Every subcommand works this way. Stop the server with `jetlink stop` before
-`prepare`, and start it again afterwards with `jetlink start`, or use the
-control channel.
+Before `prepare`, run `jetlink stop`, then `jetlink start` afterwards, or use
+the control channel.
