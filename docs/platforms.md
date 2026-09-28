@@ -44,10 +44,8 @@ brew install python libusb
 scripts/run-mac.sh
 ```
 
-The first run installs dependencies and starts the server. Plug the comma into a
-**USB-A port on a hub or dock** with an A-to-C data cable, or use a USB-C-to-A
-adapter. Going through USB-A makes the Mac take the host role reliably; a plain
-C-to-C cable may not.
+The first run installs dependencies and starts the server. Plug the comma in
+with a **USB 3 USB-C cable**, or a USB-A to USB-C cable with a USB-C adapter.
 
 With the comma's **Accelerator Link** set to USB, the comma presents only the
 Jetlink link: no network interface appears on the Mac, a Jetson or a Linux PC.

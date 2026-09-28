@@ -29,7 +29,7 @@ For a Mac, see [Jetlink for Mac](macos-app.md). For a Jetson or PC, see the
 | --- | --- |
 | An iPhone with USB-C on iOS 26.1 or later, ideally a Pro model from the iPhone 15 Pro on | The cable goes into it. Only those Pro models have a USB 3 port; the other USB-C iPhones are USB 2, which leaves less room in the frame budget |
 | Or an iPad with USB-C on iPadOS 26.1 or later, ideally an iPad Pro, iPad Air or iPad mini | Every iPad Pro, iPad Air and iPad mini with USB-C is USB 3 or faster; the iPad (10th generation) and iPad (A16) are USB 2. An iPad with a Lightning port is not supported |
-| A USB 3 hub with USB-C power passthrough, and a USB 3 A-to-C data cable | The comma plugs into the hub's A port; see [Connect the comma](#connect-the-comma) for why not straight into the phone. The phone runs the model 20 times a second and belongs on power |
+| A USB 3 USB-C cable, or a USB-A to USB-C cable with a USB-C adapter | A powered USB-C hub between them keeps the phone charging: it runs the model 20 times a second |
 | About 3 GB of free space per model | A 766 MB download plus the prepared CoreML engine |
 | A Mac with Xcode 26 and the iOS 26 platform | There is no App Store or TestFlight build; you build and install it yourself. A free Apple account is enough |
 
@@ -80,31 +80,23 @@ nothing to type. See [What the comma presents](transport.md#what-the-comma-prese
    models settings. USB is for a Jetson, a Linux PC or a Mac; the comma rebuilds
    its USB gadget when the setting moves between the two.
 2. Open Jetlink. The first time, allow **Local Network** access when iOS asks.
-3. Plug a USB 3 hub into the iPhone or iPad.
-4. Join the hub's USB-A port to the comma's USB-C port with a USB 3 A-to-C data
-   cable.
-5. The title reads **Connected over USB 3** once the comma is on. **USB 2**
+3. Connect the iPhone or iPad to the comma with a USB 3 USB-C cable, or a USB-A
+   to USB-C cable with a USB-C adapter. A powered USB-C hub between them keeps
+   it charging.
+4. The title reads **Connected over USB 3** once the comma is on. **USB 2**
    there, and on the Link tile, means the phone, the hub or the cable is not
    USB 3; the title turns orange. See [USB 3 matters](#usb-3-matters).
 
 Open the app before plugging in. It dials while the cable is in, so an app
 opened afterwards connects when it opens; it just connects later.
 
-**Do not plug the comma straight into the phone with a C-to-C cable.** The two
-negotiate power, the comma ends up supplying the phone, and it reboots. Through
-a hub's A port the comma only ever draws.
-
-A direct cable is being worked on. zoompilot has the comma
-hold its USB-C port as the device whenever the far end of the cable is a host
-and not a chestnut, so the phone takes the host role as a hub gives it today.
-A Mac on a C-to-C cable already comes up as the host without it. Nobody has
-tried an iPhone yet; use the hub until the [changelog](../CHANGELOG.md) says
-it works. When trying it, use a USB 3 C-to-C cable: one whose e-marker says
-USB 2 runs at 480 Mb/s.
+The comma holds its USB-C port as the device, so the phone takes the host role
+on a direct cable. A direct cable has not been tried with a phone yet: if the
+comma restarts when you plug the phone in, connect through a powered USB-C hub.
 
 ### USB 3 matters
 
-Every hop has to be USB 3: the phone, the hub and the cable. Apple lists USB 3
+Every hop has to be USB 3: the phone, the cable and any hub. Apple lists USB 3
 only for the Pro models from the iPhone 15 Pro on; the other USB-C iPhones run
 at USB 2, and the cable in the box is a USB 2 cable
 ([Apple](https://support.apple.com/en-us/105099)). Every iPad Pro, iPad Air

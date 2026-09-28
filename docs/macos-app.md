@@ -10,7 +10,7 @@ the [Jetson guide](jetson.md). For the command line on any platform, see
 
 - An Apple silicon Mac with macOS 15 or later. Intel Macs are not supported.
 - 16 GB of memory recommended and about 3 GB of disk space per model.
-- A USB-A port on a hub, dock, or adapter, and a USB 3 A-to-C data cable.
+- A USB 3 USB-C cable, or a USB-A to USB-C cable with a USB-C adapter.
 
 You also need a comma running a zoompilot build with Jetlink in it, set up with
 the steps in the [README](../README.md#quick-start).
@@ -32,13 +32,10 @@ for comma**. Connect the comma to continue.
 
 Complete [comma setup](../README.md#comma-setup-all-platforms), including the
 branch installation and **Accelerator Link** set to **USB**. Then connect the
-**Mac's USB-A port to the comma's USB-C port**, using a USB-A port
-on a hub or dock, or a USB-C-to-A adapter. A C-to-C cable also connects: on
-2026-09-27 an M1 Pro enumerated a comma four as its device at 5 Gb/s over a
-USB 3 C-to-C cable. The cable must be a USB 3 one; C-to-C cables marked for
-USB 2 run at 480 Mb/s, about 10 ms slower a frame. If a C-to-C cable ever gives
-the comma the host role instead, the zoompilot branch's port hold makes it the
-device within a few seconds.
+**Mac to the comma** with a USB 3 USB-C cable, or a USB-A to USB-C cable with a
+USB-C adapter. The cable must be a USB 3 one; USB-C cables marked for USB 2 run
+at 480 Mb/s, about 10 ms slower a frame. If the comma ever takes the host role,
+its port hold makes it the device within a few seconds.
 
 The Status screen then shows:
 
@@ -175,7 +172,7 @@ back. See [backend measurements](backends.md#mac-measured) for details.
 | Problem | What to do |
 | --- | --- |
 | The server failed to start | Open **Logs**. The last lines say why. The usual causes are another server already holding the USB device, and a cache folder that is not writable. |
-| The app stays on Waiting for comma | Use a USB-A port on a hub, dock or adapter, use a USB 3 data cable, and check that **Accelerator Link** is set to **USB** under Settings > Models on the comma. |
+| The app stays on Waiting for comma | Use a USB 3 data cable, or a USB-A to USB-C cable with a USB-C adapter, and check that **Accelerator Link** is set to **USB** under Settings > Models on the comma. |
 | Use Model takes a long time | CoreML should take about 20 seconds to prepare and up to about 10 seconds to load. If it takes minutes, right-click the model in **Models**, choose **Delete Prepared Engines…**, then use it again. Close other large applications to free memory. |
 | The comma says **Big Model Lost** | Check the cable first. Then check that the Mac did not sleep: turn on **Keep the Mac awake while serving** and keep the Mac on power. |
 | Everything rebuilt after an update | A new runtime version means a new prepared engine, so the model is prepared again. The download is kept and is not fetched twice. |

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// How the comma and the iPhone or iPad meet: one cable through a hub, in a
+/// How the comma and the iPhone or iPad meet: one USB-C cable, in a
 /// few steps for a reader standing at the car. docs/iphone-app.md has the why.
 struct ConnectHelpScreen: View {
   static let guide = URL(string: "https://github.com/zoompilot/jetlink/blob/main/docs/iphone-app.md#connect-the-comma")!
@@ -11,11 +11,10 @@ struct ConnectHelpScreen: View {
       Section {
         step(1, "On the comma, set Accelerator Link to iOS.")
         step(2, "Open Jetlink and allow Local Network access.")
-        step(3, "Plug a USB 3 hub into your \(device).")
-        step(4, "Connect the hub to the comma with a USB 3 A-to-C cable.")
-        step(5, "Wait for Connected.")
+        step(3, "Connect your \(device) to the comma with a USB 3 USB-C cable.")
+        step(4, "Wait for Connected.")
       } footer: {
-        Text("Don't connect the comma straight to your \(device) with a USB-C cable.")
+        Text("Or use a USB-A to USB-C cable with a USB-C adapter. A powered USB-C hub keeps your \(device) charging.")
       }
       // Apple's tech specs: USB 3 on the iPhone 15 Pro and later Pro models,
       // and on every iPad Pro, iPad Air and iPad mini with USB-C; USB 2 on
