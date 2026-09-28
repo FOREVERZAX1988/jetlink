@@ -27,8 +27,8 @@
 //
 // Nothing on the way to CUDA takes a lock. A handle is used by one thread at
 // a time; different handles may be used on different threads at once (a
-// build beside a loaded engine), as TensorRT allows. Destroy everything made from a jl_trt before
-// jl_trt_close, and a context before its engine.
+// build beside a loaded engine), as TensorRT allows. Destroy everything made
+// from a jl_trt before jl_trt_close, and a context before its engine.
 #ifndef JL_TRT_H
 #define JL_TRT_H
 
