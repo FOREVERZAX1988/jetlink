@@ -136,6 +136,8 @@ public final class AppSnapshot: @unchecked Sendable {
       "port": port ?? NSNull(),
       "server": controlJSON(server),
       "link": controlJSON(link),
+      // what the connected comma's link is carried over, as the apps name it
+      "medium": link.connectedMedium.map { ["name": $0.rawValue, "title": $0.title, "slow": $0.isSlow] as [String: Any] } ?? NSNull(),
       "engine": controlJSON(engine),
       "recent": controlJSON(recentStats),
       "history": history.map { ["at": $0.at.timeIntervalSince1970, "stats": controlJSON($0.stats)] as [String: Any] },
@@ -179,6 +181,7 @@ public final class AppSnapshot: @unchecked Sendable {
     return [
       "id": row.id,
       "name": row.name,
+      "display_name": row.displayName,
       "ref": row.ref ?? NSNull(),
       "sha256": row.sha256 ?? NSNull(),
       "bytes": row.bytes ?? NSNull(),

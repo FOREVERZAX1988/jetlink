@@ -129,11 +129,17 @@
     "state" : "connected"
   },
   "loaded" : "a086d5249fc308bb7c0ffbcbb2b8a53c3f6b1f0a1d2c3b4a5e6f7081920304050",
+  "medium" : {
+    "name" : "usb3",
+    "slow" : false,
+    "title" : "USB 3"
+  },
   "models" : [
     {
       "build_time" : "2026-09-17T11:04:00Z",
       "bytes" : 766000000,
       "can_use" : false,
+      "display_name" : "Cinque Terre Model V3",
       "id" : "404a18cfd86d29630000000000000000000000000000000000000000000000ff",
       "is_default" : true,
       "is_loaded" : false,
@@ -156,6 +162,7 @@
       "build_time" : "2026-08-30T09:41:12Z",
       "bytes" : 765953504,
       "can_use" : false,
+      "display_name" : "BMRLNAP Model v4",
       "id" : "a086d5249fc308bb7c0ffbcbb2b8a53c3f6b1f0a1d2c3b4a5e6f7081920304050",
       "is_default" : false,
       "is_loaded" : true,
