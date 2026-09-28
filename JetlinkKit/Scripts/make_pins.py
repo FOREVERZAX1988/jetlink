@@ -43,12 +43,13 @@ def fixture_pins(path: Path = FIXTURE_PINS) -> dict[str, str]:
 
 def values() -> list[tuple[str, str, str, str]]:
   """(swift name, swift type, swift literal, where it is kept)."""
+  from jetlink import __version__
   from jetlink import protocol as P
   from jetlink.server import control
   from jetlink.server import session
   from jetlink.server.backends import ort
   from jetlink.spec import CHUNK, DEFAULT_FRAME_SKIP, MODEL_CONTEXT_FREQ, MODEL_RUN_FREQ
-  from jetlink.transport import base, tcp, usbbulk
+  from jetlink.transport import base, tcp
 
   def hex32(v: int) -> str:
     text = f'{v:08X}'
@@ -59,6 +60,7 @@ def values() -> list[tuple[str, str, str, str]]:
     return f'[\n{rows}  ]'
 
   return [
+    ('productVersion', 'String', f'"{__version__}"', 'jetlink.__version__'),
     ('magic', 'UInt32', hex32(P.MAGIC), 'jetlink.protocol.MAGIC'),
     ('protocolVersion', 'UInt16', str(P.VERSION), 'jetlink.protocol.VERSION'),
     ('headerSize', 'Int', str(P.HEADER_SIZE), 'jetlink.protocol.HEADER_SIZE'),
@@ -71,16 +73,16 @@ def values() -> list[tuple[str, str, str, str]]:
     ('messageTypes', '[(name: String, value: UInt16)]', pairs(P.Msg), 'jetlink.protocol.Msg'),
     ('flags', '[(name: String, value: UInt32)]', pairs(P.Flag), 'jetlink.protocol.Flag'),
     ('statuses', '[(name: String, value: UInt32)]', pairs(P.Status), 'jetlink.protocol.Status'),
-    ('usbVendorID', 'UInt16', f'0x{usbbulk.JETLINK_VID:04X}', 'jetlink.transport.usbbulk.JETLINK_VID'),
-    ('usbProductID', 'UInt16', f'0x{usbbulk.JETLINK_PID:04X}', 'jetlink.transport.usbbulk.JETLINK_PID'),
-    ('usbVendorClass', '[UInt8]', '[' + ', '.join(f'0x{v:02X}' for v in usbbulk.VENDOR_CLASS) + ']',
-     'jetlink.transport.usbbulk.VENDOR_CLASS'),
-    ('usbMaxPacket', 'Int', str(usbbulk.MAX_PACKET), 'jetlink.transport.usbbulk.MAX_PACKET'),
+    ('usbVendorID', 'UInt16', f'0x{P.USB_VID:04X}', 'jetlink.protocol.USB_VID'),
+    ('usbProductID', 'UInt16', f'0x{P.USB_PID:04X}', 'jetlink.protocol.USB_PID'),
+    ('usbVendorClass', '[UInt8]', '[' + ', '.join(f'0x{v:02X}' for v in P.USB_VENDOR_CLASS) + ']',
+     'jetlink.protocol.USB_VENDOR_CLASS'),
+    ('usbMaxPacket', 'Int', str(P.USB_MAX_PACKET), 'jetlink.protocol.USB_MAX_PACKET'),
     ('linkMedia', '[String]', '[' + ', '.join(f'"{m}"' for m in base.LINK_MEDIA) + ']', 'jetlink.transport.base.LINK_MEDIA'),
     ('usbSpeedMedia', '[String: String]',
      '[\n' + ''.join(f'    "{k}": "{v}",\n' for k, v in base.USB_MEDIA.items()) + '  ]', 'jetlink.transport.base.USB_MEDIA'),
     ('cableAddress', 'String', f'"{tcp.CABLE_ADDRESS}"', 'jetlink.transport.tcp.CABLE_ADDRESS'),
-    ('usbReadChunk', 'Int', str(usbbulk.READ_CHUNK), 'jetlink.transport.usbbulk.READ_CHUNK'),
+    ('usbReadChunk', 'Int', str(P.USB_READ_CHUNK), 'jetlink.protocol.USB_READ_CHUNK'),
     ('modelRunFrequency', 'Int', str(MODEL_RUN_FREQ), 'jetlink.spec.MODEL_RUN_FREQ'),
     ('modelContextFrequency', 'Int', str(MODEL_CONTEXT_FREQ), 'jetlink.spec.MODEL_CONTEXT_FREQ'),
     ('defaultFrameSkip', 'Int', str(DEFAULT_FRAME_SKIP), 'jetlink.spec.DEFAULT_FRAME_SKIP'),
