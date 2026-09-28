@@ -62,7 +62,9 @@ class TestParamsOffTheFilesystem(unittest.TestCase):
   def setUp(self):
     self.tmp = Path(tempfile.mkdtemp())
     (self.tmp / 'd').mkdir()
-    self.enterContext(unittest.mock.patch.dict(os.environ, {'PARAMS_ROOT': str(self.tmp)}))
+    env = unittest.mock.patch.dict(os.environ, {'PARAMS_ROOT': str(self.tmp)})
+    env.start()
+    self.addCleanup(env.stop)
     os.environ.pop('OPENPILOT_PREFIX', None)
 
   def write(self, key: str, value: bytes) -> None:
