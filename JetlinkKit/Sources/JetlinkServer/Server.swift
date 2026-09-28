@@ -100,8 +100,8 @@ public final class Server: @unchecked Sendable {
   public let host: EngineHost
   public let cache: ServerCache
   public let backend: any EngineBackend
-  /// The piggybacked telemetry: what the comma logs about its accelerator.
-  public var telemetry: @Sendable () -> [String: Any] = { [:] }
+  /// What the host passed in besides the backend and the gadget.
+  public var hooks: ServerHooks { host.hooks }
 
   private let log = ServerLog(category: "server")
   private let lock = NSLock()
@@ -121,14 +121,16 @@ public final class Server: @unchecked Sendable {
   var gadget: (any GadgetSource)?
 
   /// A server on the host's `backend` (JetlinkORT's CoreML or QNN backend, or
-  /// the tests' own) and `gadget`, if it serves USB.
-  public init(configuration: Configuration, backend: any EngineBackend, gadget: (any GadgetSource)? = nil) throws {
+  /// the tests' own), its `gadget` if it serves USB, and its `hooks`.
+  public init(
+    configuration: Configuration, backend: any EngineBackend, gadget: (any GadgetSource)? = nil, hooks: ServerHooks = ServerHooks()
+  ) throws {
     self.configuration = configuration
     self.dial = configuration.dial
     self.backend = backend
     self.gadget = gadget
     cache = try ServerCache(root: configuration.cacheRoot, backend: backend)
-    host = EngineHost(cache: cache)
+    host = EngineHost(cache: cache, hooks: hooks)
     // A write to a socket the comma closed must be an error, not a signal
     // that kills the app.
     signal(SIGPIPE, SIG_IGN)
@@ -292,7 +294,7 @@ public final class Server: @unchecked Sendable {
       previous.session.interrupt()
       previous.done.wait()
     }
-    let session = Session(transport: transport, host: host) { [weak self] in self?.telemetry() ?? [:] }
+    let session = Session(transport: transport, host: host)
     session.onLink = { [weak self] event in
       self?.log.info("client connected from \(event.peer ?? "?") over \(event.linkMedium?.title ?? "an unknown link")")
       self?.setLink(event)
@@ -324,6 +326,7 @@ public final class Server: @unchecked Sendable {
     // A gadget nobody on the comma was serving never connected, so it does
     // not disconnect either: the USB loop says so once, and retries quietly.
     guard session.announced else { return }
+    _ = hooks.gadgetIdle?(.disconnected)
     log.info("client disconnected: \(reason)")
     if isCurrent && !isStopped {
       setLink(LinkEvent(state: .disconnected, detail: reason, peer: nil))
@@ -430,12 +433,18 @@ public final class Server: @unchecked Sendable {
       guard gadget.present() else {
         quiet = 0
         waiting.say(Server.usbWaiting)
-        if currentLink.state == .disconnected {
+        let link = currentLink.state
+        if link == .disconnected {
           setLink(LinkEvent(state: .waiting, detail: Server.usbWaiting, peer: nil))
+        }
+        // A comma served over TCP meanwhile keeps the host up as a gadget does.
+        if link != .connected, hooks.gadgetIdle?(.absent) == true {
+          continue
         }
         Thread.sleep(forTimeInterval: Server.usbPoll)
         continue
       }
+      _ = hooks.gadgetIdle?(.present)
       let transport: any MessageLink
       do {
         transport = try gadget.open()

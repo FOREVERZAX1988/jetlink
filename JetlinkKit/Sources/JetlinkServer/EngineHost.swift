@@ -67,7 +67,8 @@ public enum HostEvent: Sendable {
   case stats(StatsEvent)
   /// A benchmark's progress and its report.
   case benchmark(BenchmarkEvent)
-  /// The comma asked for a power-off, which this server refused.
+  /// The comma asked for a power-off, which this server refused: the host
+  /// passed no shutdown hook, or its hook declined.
   case shutdownRequested(reason: String)
 }
 
@@ -99,12 +100,12 @@ public final class EngineHost: @unchecked Sendable {
   private var listeners: [@Sendable (HostEvent) -> Void] = []
   private let emitLock = NSLock()
 
-  /// The device's thermal state for the benchmark's reports; the platform's
-  /// own unless the host knows better. Set before a benchmark runs.
-  public var thermal: @Sendable () -> String = { platformThermal() }
+  /// The host's telemetry, thermal state, sleep and power: `ServerHooks`.
+  let hooks: ServerHooks
 
-  public init(cache: ServerCache) {
+  public init(cache: ServerCache, hooks: ServerHooks = ServerHooks()) {
     self.cache = cache
+    self.hooks = hooks
   }
 
   var backend: any EngineBackend { cache.backend }

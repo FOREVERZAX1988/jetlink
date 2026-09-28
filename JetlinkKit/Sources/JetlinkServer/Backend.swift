@@ -21,6 +21,20 @@ public struct ArtifactInvalid: Error, CustomStringConvertible {
   }
 }
 
+/// An error an engine cannot come back from, such as CUDA's sticky errors
+/// (an illegal address, a failed launch): the context is broken, and every
+/// later frame and every rejoin would fail with the engine still "loaded".
+/// The session answers the frame INFER_FAILED, then calls
+/// `ServerHooks.fatal`. A type whose codes are only sometimes fatal
+/// conforms and says which through `isFatal`.
+public protocol FatalEngineError: Error {
+  var isFatal: Bool { get }
+}
+
+extension FatalEngineError {
+  public var isFatal: Bool { true }
+}
+
 /// A loaded model, ready to run a frame at a time: a backend's engine
 /// (JetlinkORT's `OrtEngine`), or the tests' one that needs no runtime.
 public protocol Engine: AnyObject {
@@ -58,6 +72,9 @@ public protocol EngineBackend: AnyObject, Sendable {
   func tag() -> String
   /// backend, runtime_version, device: for the hello.
   func describe() -> [String: String]
+  /// What this backend adds to the hello besides `describe()`: TensorRT's
+  /// `trt_version`, which the comma logs.
+  var helloFields: [String: Any] { get }
   func deriveSpec(model: URL, sha256: String, nbytes: Int64, frameSkip: Int) throws -> ModelSpec
   func build(model: URL, artifact: URL, report: @escaping ProgressFn, metaExtra: [String: Any]) throws
   func load(artifact: URL, report: @escaping ProgressFn) throws -> any Engine
@@ -76,6 +93,8 @@ extension EngineBackend {
   public func describe() -> [String: String] {
     ["backend": name, "runtime_version": runtimeVersion, "device": deviceTag()]
   }
+
+  public var helloFields: [String: Any] { [:] }
 }
 
 /// A version or device name as a filename component.

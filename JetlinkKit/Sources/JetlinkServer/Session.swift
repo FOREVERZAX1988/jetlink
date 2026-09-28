@@ -9,7 +9,6 @@ import JetlinkRegistry
 final class Session: @unchecked Sendable {
   private let transport: any MessageLink
   private let host: EngineHost
-  private let telemetry: () -> [String: Any]
   private let log = ServerLog(category: "session")
   private var client = ""
   private var lastSeq: UInt32 = 0
@@ -37,11 +36,10 @@ final class Session: @unchecked Sendable {
   /// The reply's parts: head, outputs, and the telemetry when asked for.
   private let parts: UnsafeMutablePointer<UnsafeRawBufferPointer>
 
-  init(transport: any MessageLink, host: EngineHost, telemetry: @escaping () -> [String: Any]) {
+  init(transport: any MessageLink, host: EngineHost) {
     self.transport = transport
     medium = transport.medium
     self.host = host
-    self.telemetry = telemetry
     outputCapacity = 18_452
     outputBuffer = .allocate(capacity: outputCapacity)
     packedCapacity = 1 << 16
@@ -110,6 +108,7 @@ final class Session: @unchecked Sendable {
   private func announce() {
     announced = true
     onLink?(linkEvent)
+    _ = host.hooks.gadgetIdle?(.connected)
   }
 
   /// Serves until the link fails, and returns why.
@@ -211,11 +210,15 @@ final class Session: @unchecked Sendable {
       "loaded": host.loadedSHA() ?? NSNull(),
       "frames_served": frames,
       "cached_models": host.cache.inventory(),
-      "telemetry": telemetry(),
-      // This server never suspends: the comma holds the link while parked.
-      "sleep_after": 0.0,
+      "telemetry": host.hooks.telemetry(),
+      // 0 unless the host really suspends: the comma then holds the gadget
+      // for the whole park instead of letting go for a box that never sleeps.
+      "sleep_after": host.hooks.sleepAfter,
     ]
     for (key, value) in host.backend.describe() {
+      response[key] = value
+    }
+    for (key, value) in host.backend.helloFields {
       response[key] = value
     }
     try sendJSON(.helloResp, seq: message.seq, response)
@@ -304,9 +307,14 @@ final class Session: @unchecked Sendable {
     let reply = infer(loaded, message)
     host.lock.unlock()
 
-    let state: Data? = reply.wantsState ? JSONLine.encode(telemetry()) : nil
+    let state: Data? = reply.wantsState ? JSONLine.encode(host.hooks.telemetry()) : nil
     let sendStarted = DispatchTime.now().uptimeNanoseconds
     try respond(message.seq, reply, state: state)
+    if let failure = reply.failure, (failure as? any FatalEngineError)?.isFatal == true {
+      // After the reply, so the comma hears INFER_FAILED rather than a timeout.
+      log.error("the engine cannot recover from this: \(String(describing: failure))")
+      host.hooks.fatal?(failure)
+    }
     guard reply.ran else { return }
     let sendUs = microseconds(since: sendStarted)
     frames += 1
@@ -329,6 +337,8 @@ final class Session: @unchecked Sendable {
     var wantsState = false
     /// The model ran, so the frame counts and is timed.
     var ran = false
+    /// Why it failed, when it did.
+    var failure: (any Error)?
   }
 
   /// INFER_RESP: the head, `outputBytes` of the output buffer, and the
@@ -373,6 +383,7 @@ final class Session: @unchecked Sendable {
 
     var status = Wire.Status.ok
     var queueUs: UInt32 = 0
+    var failure: (any Error)?
     do {
       try loaded.staging.stage(warped: warped, packed: packedBuffer)
       queueUs = microseconds(since: started)
@@ -380,6 +391,7 @@ final class Session: @unchecked Sendable {
     } catch {
       log.error("inference failed: \(String(describing: error))")
       status = .inferFailed
+      failure = error
     }
 
     let count = spec.outputCount
@@ -413,14 +425,19 @@ final class Session: @unchecked Sendable {
 
     return InferReply(
       frameID: frameID, status: status, gpuUs: loaded.engine.lastGpuUs, queueUs: queueUs, totalUs: microseconds(since: started),
-      outputBytes: status == .ok || status == .notFinite ? count * 4 : 0, wantsState: flags.contains(.wantState), ran: true)
+      outputBytes: status == .ok || status == .notFinite ? count * 4 : 0, wantsState: flags.contains(.wantState), ran: true, failure: failure)
   }
 
   private func onShutdown(_ message: Message) throws {
-    // A phone does not power itself off for the comma; say so rather than
-    // pretend, and let the app tell the person the comma asked.
     let reason = (JSONLine.decode(message.payload)?["reason"] as? String) ?? ""
     log.warning("shutdown requested by the client: \(reason.isEmpty ? "no reason given" : reason)")
+    if let powerOff = host.hooks.shutdown?(reason) {
+      try sendJSON(.shutdownResp, seq: message.seq, ["ok": true, "detail": "powering off"])
+      powerOff()
+      return
+    }
+    // A phone does not power itself off for the comma; say so rather than
+    // pretend, and let the app tell the person the comma asked.
     try sendJSON(.shutdownResp, seq: message.seq, ["ok": false, "detail": "this server cannot power its device off"])
     host.emit(.shutdownRequested(reason: reason))
   }
@@ -428,7 +445,7 @@ final class Session: @unchecked Sendable {
   private func onState(_ message: Message) throws {
     let (sha, skip) = wanted()
     let status = host.status(sha, frameSkip: skip)
-    var response = telemetry()
+    var response = host.hooks.telemetry()
     response["engine_state"] = status["state"] ?? "none"
     response["detail"] = status["detail"] ?? ""
     response["loaded"] = host.loadedSHA() ?? NSNull()

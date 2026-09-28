@@ -203,8 +203,8 @@
       }
       let server: EmbeddedServer
       do {
-        server = try EmbeddedServer(configuration: configuration, backend: backend, gadget: gadget)
-        server.server.host.thermal = { Host.shared.thermal }
+        server = try EmbeddedServer(
+          configuration: configuration, backend: backend, gadget: gadget, hooks: ServerHooks(thermal: { Host.shared.thermal }))
         state.reset()
         let events = server.events
         let state = self.state
