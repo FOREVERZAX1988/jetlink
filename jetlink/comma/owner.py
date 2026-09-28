@@ -202,13 +202,13 @@ class Owner:
       self.next_attempt = time.monotonic() + RECONNECT_BACKOFF
       return False
 
-  def ensure_gadget(self) -> bool:
-    """Is there a gadget to present? Create it if there is none: nothing sets
-    it up at boot, so the owner's first step does, parked or onroad, and a
-    link turned on later gets one at once."""
+  def ensure_gadget(self, ios: bool) -> bool:
+    """Is there a gadget to present? Create it, for iOS or USB, if there is
+    none: nothing sets it up at boot, so the owner's first step does, parked
+    or onroad, and a link turned on later gets one at once."""
     if gadget.link_configured():
       return True
-    return self.build(gadget.ios())
+    return self.build(ios)
 
   def build(self, ios: bool) -> bool:
     """Set the gadget up for USB or iOS. A failure backs off, since the script
@@ -253,7 +253,7 @@ class Owner:
     gadget.wait_for_host(SETTLE_TIMEOUT, bounce=self.bounce_gadget,
                          should_stop=lambda: self.stop)
 
-  def hold(self) -> None:
+  def hold(self, ios: bool) -> None:
     """Everything this process does once the car is moving, or once somebody
     has the endpoints.
 
@@ -263,7 +263,7 @@ class Owner:
     self.wake()
     if self.transport is not None:
       return self.settle()
-    if self.ensure_gadget():
+    if self.ensure_gadget(ios):
       self.open_link()
 
   # -- the parked car -------------------------------------------------------
@@ -365,7 +365,9 @@ class Owner:
     self.stop = True
 
   def step(self) -> None:
-    if not gadget.enabled():
+    # each read is a file; take them once and pass them down
+    mode = gadget.link_mode()
+    if mode == 'off':
       if self.transport is not None:
         gadget.log.warning("jetlink: disabled, releasing the link")
         self.close_link()
@@ -376,19 +378,22 @@ class Owner:
         self.vm_tuned = False
       self.port.off()
       return
-
+    self.link_step(mode == 'ios')
     if not self.vm_tuned:
       # jetlink-root.sh vm: the recording VM tuning the gadget's reads need,
-      # while the link is on. Put back only when it is turned off, never on
-      # exit: manager stops this at ignition, just as the contention starts
+      # while the link is on. After the step, so the first gadget does not
+      # wait on it. Put back only when the link is turned off, never on exit:
+      # manager stops this at ignition, just as the contention starts
       root.run('vm', 'apply')
       self.vm_tuned = True
+
+  def link_step(self, ios: bool) -> None:
+    """A step with the link on, for an iPhone or not."""
     # before anything is presented: a C-to-C host has to find a device here
     self.port.update()
 
-    # each read is a file; take them once and pass them down
     offroad = gadget.offroad()
-    if self.switch_mode(offroad):
+    if self.switch_mode(offroad, ios):
       return
     self.attached = gadget.host_attached()
     self.watch_the_port()
@@ -422,10 +427,10 @@ class Owner:
         # letting go looks like one arriving
         self.lease_settled = time.monotonic() + LEASE_SETTLE
         self.idle_since = time.monotonic()
-      return self.hold()
+      return self.hold(ios)
 
     if self.worker_running():
-      return self.hold()
+      return self.hold(ios)
 
     if time.monotonic() < max(self.next_attempt, self.lease_settled):
       return
@@ -433,7 +438,7 @@ class Owner:
     state = gadget.owner_state()
     why = self.wanted(state)
     if why is not None:
-      if not self.ensure_gadget():
+      if not self.ensure_gadget(ios):
         return
       self.wake()
       if not self.open_link():
@@ -446,7 +451,7 @@ class Owner:
     if self.transport is None:
       # nothing to do and nothing presented: only worth a bind if the far end
       # stays awake for it
-      if not sleeps and self.ensure_gadget():
+      if not sleeps and self.ensure_gadget(ios):
         self.open_link()
       return
     if sleeps and time.monotonic() - self.idle_since >= DORMANT_HOLD:
@@ -488,7 +493,7 @@ class Owner:
     elif not self.cable.held and self._peer is not None:
       self.publish()   # the phone hung up, or its borrower finished
 
-  def switch_mode(self, offroad: bool) -> bool:
+  def switch_mode(self, offroad: bool, ios: bool) -> bool:
     """Rebuild the gadget when the setting moved between USB and iOS: they are
     different devices. Only while parked and with nobody on the link, since
     the rebuild is an unplug. True when this step went on it.
@@ -496,11 +501,10 @@ class Owner:
     What is built is learned once, onroad too: an iOS gadget taken for USB
     would lend a phone the endpoint files."""
     if self.built_ios is None:
-      self.built_ios = gadget.built_for_ios() if gadget.link_configured() else gadget.ios()
+      self.built_ios = gadget.built_for_ios() if gadget.link_configured() else ios
       self.publish()
     if not offroad or self.lender.lent or self.worker_running():
       return False
-    ios = gadget.ios()
     if ios == self.built_ios:
       return False
     if time.monotonic() < self.next_gadget_attempt:

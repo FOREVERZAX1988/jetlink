@@ -363,6 +363,13 @@ class TestTheToggle(OwnerTest):
     o.step()
     self.assertEqual(self.vm_calls(), ['apply'])
 
+  def test_the_first_gadget_is_not_held_up_by_the_sysctls(self):
+    self.write('IsOffroad', b'0')
+    o = self.owner(presented=False)
+    with mock.patch.object(gadget, 'link_configured', return_value=False):
+      o.step()
+    self.assertEqual([c.args[0] for c in self.root_run.call_args_list], ['gadget', 'vm'])
+
   def test_the_port_is_kept_a_device_while_the_link_is_on(self):
     o = self.owner()
     o.step()
@@ -726,7 +733,7 @@ class TestSetup(OwnerTest):
     o = self.owner(presented=False)
     with mock.patch.object(gadget, 'link_configured', return_value=False), \
          mock.patch.object(gadget, 'setup_gadget', return_value=True) as setup:
-      self.assertTrue(o.ensure_gadget())
+      self.assertTrue(o.ensure_gadget(False))
       setup.assert_called_once()
 
   def test_a_failed_setup_is_not_retried_every_cycle(self):
@@ -735,7 +742,7 @@ class TestSetup(OwnerTest):
     with mock.patch.object(gadget, 'link_configured', return_value=False), \
          mock.patch.object(gadget, 'setup_gadget', return_value=False) as setup:
       for _ in range(3):
-        self.assertFalse(o.ensure_gadget())
+        self.assertFalse(o.ensure_gadget(False))
       setup.assert_called_once()
 
 
