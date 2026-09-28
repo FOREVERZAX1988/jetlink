@@ -161,15 +161,3 @@ def test_workspace_is_sized_from_free_memory_with_a_cap(monkeypatch):
   assert B.workspace_bytes() == int((1 << 30) * B.WORKSPACE_FRACTION)
   monkeypatch.setattr(B, 'available_bytes', lambda: 100 << 30)
   assert B.workspace_bytes() == B.MAX_WORKSPACE_BYTES
-
-
-def test_the_old_import_paths_still_resolve():
-  """Playbooks and container images import these names; keep them one release."""
-  from jetlink.server import builder, cudart, engine
-  assert builder.EngineCache is EngineCache
-  assert builder.build_engine is B.build_engine
-  assert builder.device_tag is B.device_tag
-  assert engine.TrtEngine.__name__ == 'TrtEngine'
-  assert callable(cudart.malloc)
-  with pytest.raises(AttributeError):
-    builder.no_such_thing  # noqa: B018

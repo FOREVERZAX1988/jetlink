@@ -52,7 +52,7 @@ def install_stubs() -> None:
   trt.OnnxParser = lambda *a, **k: None
   sys.modules['tensorrt'] = trt
 
-  # cuda-python: jetlink.server.cudart reads a few enum members at import.
+  # cuda-python: jetlink.server.backends.trt.cudart reads a few enum members at import.
   runtime = types.ModuleType('cuda.bindings.runtime')
   runtime.cudaError_t = _enum(cudaSuccess=0)
   runtime.cudaMemcpyKind = _enum(cudaMemcpyHostToDevice=1, cudaMemcpyDeviceToHost=2,
