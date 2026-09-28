@@ -67,7 +67,7 @@ import Testing
     }
     if fixture == "noshape", layout == .split {
       // Python asks onnx's shape inferrer for the trunk's shape; Swift has none.
-      #expect(throws: OnnxError("the export records no shape for trunk; this model cannot be prepared on iPhone")) {
+      #expect(throws: OnnxError("the export records no shape for trunk; this model cannot be prepared on iPhone or iPad")) {
         try prepare()
       }
       #expect(try FileManager.default.contentsOfDirectory(atPath: out.url.path).isEmpty)
@@ -79,7 +79,7 @@ import Testing
       // refuses rather than prepare something else.
       #expect(expected.norms == 3 && expected.heads == 6)
       let tensor = fixture == "notype" ? "p" : "vm"
-      #expect(throws: OnnxError("the export records no type for \(tensor); this model cannot be prepared on iPhone")) {
+      #expect(throws: OnnxError("the export records no type for \(tensor); this model cannot be prepared on iPhone or iPad")) {
         try prepare()
       }
       #expect(try FileManager.default.contentsOfDirectory(atPath: out.url.path).isEmpty)

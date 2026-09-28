@@ -4,7 +4,7 @@ import SwiftUI
 /// How a model row reads in either app's list: one line of facts, what Use
 /// Model is about to do, and what the disk holds.
 public enum ModelFormatting {
-  /// What Use Model is about to do. `device` is "this Mac" or "this iPhone".
+  /// What Use Model is about to do. `device` is "this Mac", "this iPhone" or "this iPad".
   public static func useHelp(_ row: ModelRow, device: String) -> String {
     switch row.status {
     case .notDownloaded:

@@ -33,7 +33,7 @@ enum Split {
     // does not record; there is none here.
     let typed = Set((g.inputs + g.valueInfo + g.outputs).filter { $0.shape != nil }.map(\.key))
     if let missing = ends.first(where: { !typed.contains($0) }) {
-      throw OnnxError("the export records no shape for \(missing); this model cannot be prepared on iPhone")
+      throw OnnxError("the export records no shape for \(missing); this model cannot be prepared on iPhone or iPad")
     }
 
     let extractor = try Extractor(model)

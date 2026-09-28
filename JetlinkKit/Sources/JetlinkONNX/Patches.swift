@@ -423,7 +423,7 @@ enum Patches {
       var node = node
       if norms.contains(i), let x = node.inputs.first, !already.contains(x) {
         guard let type = types[x] else {
-          throw OnnxError("the export records no type for \(x); this model cannot be prepared on iPhone")
+          throw OnnxError("the export records no type for \(x); this model cannot be prepared on iPhone or iPad")
         }
         if type == DataType.float16 {
           if scaled[x] == nil {
@@ -529,7 +529,7 @@ enum Patches {
     // Python asks the shape inferrer for an entry the file does not type;
     // Swift has none (see prescaleLayerNorm).
     if let untyped = entries.filter({ types[$0] == nil }).sorted(by: pyLess).first {
-      throw OnnxError("the export records no type for \(untyped); this model cannot be prepared on iPhone")
+      throw OnnxError("the export records no type for \(untyped); this model cannot be prepared on iPhone or iPad")
     }
     let notFP16 = entries.filter { types[$0] != DataType.float16 }.sorted(by: pyLess)
     guard notFP16.isEmpty else {
