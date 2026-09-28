@@ -14,7 +14,7 @@ Unreleased
   * `bench_link.py` and `verify_parity.py` take a phone's dial with `--listen`
 * iPhone
   * Connects over one cable: the app dials the comma as soon as it has the comma's address, and the title says Connected over USB
-  * Compute defaults to the whole model on the Neural Engine, with a CPU Keep-Warm setting beside GPU Keep-Alive
+  * Processor defaults to the whole model on the Neural Engine, with a Keep CPU Awake setting beside Keep GPU Awake
   * A Benchmark tab: one or ten minutes at the comma's pace, a verdict, the run in ten-second windows with the phone's temperature, and the `bench_link.py` and `verify_parity.py` commands filled in
   * A Logs screen, a Memory tile, log lines for memory pressure, heat and the app going to the background, a banner while the app is not on screen, and an alert when the comma asks to shut down
   * Signing from a git-ignored `Local.xcconfig`, Release when run from Xcode, and a help page on connecting the comma

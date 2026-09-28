@@ -79,10 +79,9 @@ nothing to type. See [What the comma presents](transport.md#what-the-comma-prese
 3. Plug a USB 3 hub into the iPhone.
 4. Join the hub's USB-A port to the comma's USB-C port with a USB 3 A-to-C data
    cable.
-5. The title reads **Connected over USB 3** once the comma is on. Settings shows
-   the phone's address on the cable under **Connection**. **USB 2** there, and
-   on the Link tile, means the phone, the hub or the cable is not USB 3; the
-   title turns orange. See [USB 3 matters](#usb-3-matters).
+5. The title reads **Connected over USB 3** once the comma is on. **USB 2**
+   there, and on the Link tile, means the phone, the hub or the cable is not
+   USB 3; the title turns orange. See [USB 3 matters](#usb-3-matters).
 
 Open the app before plugging in. It dials while the cable is in, so an app
 opened afterwards connects when it opens; it just connects later.
@@ -131,8 +130,8 @@ or imported with **Add Model File**.
 
 ## Benchmark
 
-Before the first drive, and after a new model or a change of Compute, find out
-whether the phone is fast enough. Open **Benchmark** with a model loaded and
+Before the first drive, and after a new model or a change of Processor, find
+out whether the phone is fast enough. Open **Benchmark** with a model loaded and
 the comma not connected, leave the phone as it will be in the car (charging,
 in its mount), and tap **1 Minute**. The app runs the model 20 times a second
 on made-up camera frames and times the phone's share of each frame: the
@@ -146,7 +145,7 @@ end:
   50 ms. **Too Slow** (red) misses 20 frames a second.
 - **Totals.** Frames, frames over the 50 ms budget (and over 35), the phone's
   temperature at the start and the end, and the model alone.
-- **Windows.** The run ten seconds at a time, each with its P99 and the phone's
+- **Over Time.** The run ten seconds at a time, each with its P99 and the phone's
   temperature as it closed. This is where a phone that slows as it heats
   shows it.
 
@@ -170,8 +169,8 @@ from the loaded model and the phone's addresses:
 
 Mount the phone where you can see it, in either orientation. The screen stays
 on while Jetlink is open. The title's subtitle says where things stand:
-**Connected over USB 3** (or **USB 2**, or **TCP**), **Waiting**, **Preparing**,
-**Disconnected**, or what is wrong.
+**Connected over USB 3** (or **USB 2**, or **Wi-Fi**), **Waiting for Comma**,
+**Preparing Model**, **Disconnected**, or what is wrong.
 
 - **Headroom** is the 50 ms frame budget as a ring, filled to the slowest 1%
   of frames (P99) over the last 10 seconds. The number inside is the room
@@ -182,8 +181,8 @@ on while Jetlink is open. The title's subtitle says where things stand:
 - **History** has a bar for every 5 seconds of the last 2 minutes, as tall as
   that span's slowest frames.
 - **Link** has the frame rate (the comma sends 20 a second) and slow frames,
-  and says what the link runs over: USB 3 or USB 2 on the cable, TCP for a
-  bench tool on Wi-Fi.
+  and says what the link runs over: USB 3 or USB 2 on the cable, Wi-Fi for a
+  bench tool.
 - **iPhone** has the phone's temperature, battery, memory and link. A hot phone
   slows down, and it shows here before it shows in the ring. Memory is what
   iOS still lets the app use; it turns orange under 1 GB, where preparing a
@@ -227,11 +226,11 @@ road. Keep the phone out of the sun, and out of a thick case.
 
 | Setting | What it does |
 | --- | --- |
-| Link | USB 3 or USB 2 while the comma is connected (TCP for a bench tool), Dialing while the phone dials it |
+| Link | USB 3 or USB 2 while the comma is connected (Wi-Fi for a bench tool), Connecting while the phone dials it |
 | Port | The TCP port the phone listens on, 5599 by default, for `verify_parity.py` from a Mac. Over the cable the phone dials the comma's port instead |
-| USB, Wi-Fi | The phone's addresses. The USB one is the comma's lease over the cable; the Wi-Fi one, with the port, is where a Mac's bench tools reach the phone |
-| Compute | Neural Engine (default): the whole model on it. Neural Engine + GPU: the Mac's layout, the vision trunk on the Neural Engine and the rest on the GPU. GPU: for when another app keeps the Neural Engine busy. Changing it prepares the model again |
-| CPU Keep-Warm | On by default. A CPU core kept busy between frames while the Neural Engine runs the model, so the next frame is not waiting on a core that went to sleep. It uses some power |
-| GPU Keep-Alive | A small GPU job between frames so the GPU does not slow down in the gaps. It uses some power |
+| Wi-Fi | The phone's Wi-Fi address and port, where a Mac's bench tools reach the phone. The cable's address is automatic and not shown |
+| Processor | Neural Engine (default): the whole model on it. Neural Engine + GPU: the Mac's layout, the vision trunk on the Neural Engine and the rest on the GPU. GPU: for when another app keeps the Neural Engine busy. Changing it prepares the model again |
+| Keep CPU Awake | On by default. A CPU core kept busy between frames while the Neural Engine runs the model, so the next frame is not waiting on a core that went to sleep. It uses some power |
+| Keep GPU Awake | A small GPU job between frames so the GPU does not slow down in the gaps. It uses some power |
 | Keep Screen On | On by default. With it off, auto-lock suspends Jetlink |
 | Help | How to connect the comma, and the logs |
