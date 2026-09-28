@@ -65,7 +65,7 @@ reset_box() {
     ln -sf "$SRC/tests/installer/fake.sh" "$FAKE_BIN/$c"
   done
   unset FAKE_ARCH FAKE_SMI FAKE_GPU_OK FAKE_PUBLISHED FAKE_PM_REBOOT FAKE_NV_DOCKER_POLLS \
-    FAKE_PULL_FAILS FAKE_MANIFEST_HANGS FAKE_SERVER_BROKEN FAKE_RESTARTS
+    FAKE_PULL_FAILS FAKE_MANIFEST_HANGS FAKE_SERVER_BROKEN FAKE_RESTARTS FAKE_LATEST JETLINK_REPO_URL
 }
 
 jetson() {  # jetson L4T_RELEASE REVISION
@@ -129,6 +129,9 @@ git init -q -b main /tmp/repo
 cp -R "$SRC/." /tmp/repo/
 git -C /tmp/repo add -A
 git -C /tmp/repo -c user.name=test -c user.email=test@example.invalid commit -qm "tree under test"
+# releases, as git ls-remote sees them: v0.10.0 is the highest by number, not
+# v0.9.0, and v0.11.0rc1 is a prerelease
+for t in v0.9.0 v0.10.0 v0.11.0rc1; do git -C /tmp/repo tag "$t"; done
 # shellcheck disable=SC1091
 echo "installer scenarios on $(. /etc/os-release; echo "$PRETTY_NAME")"
 
@@ -263,17 +266,103 @@ expect_no_file /etc/systemd/system/jetlink-server.service
 show_on_failure "$f"
 
 # ---------------------------------------------------------------------------
-scenario "curl | bash from the repository, with a published image"
+scenario "curl | bash installs the newest release, as GitHub's API names it"
 reset_box; jetson 39 2.1; with_docker; f=$FAILED
-export FAKE_PUBLISHED=1 JETLINK_REPO_URL=file:///tmp/repo
+export FAKE_PUBLISHED=1 FAKE_LATEST=v0.9.0 JETLINK_REPO_URL=file:///tmp/repo
 piped --yes
 expect_rc 0
-expect_ran "docker pull ghcr.io/zoompilot/jetlink:edge-cuda"
+# the API's answer, not the highest tag
+expect_out "Getting Jetlink (v0.9.0)"
+expect_ran "docker pull ghcr.io/zoompilot/jetlink:0.9.0-cuda"
 expect_not_ran "docker build"
 expect_file /opt/jetlink/src/.git
 expect_in /etc/jetlink/install.conf "JETLINK_SOURCE=git"
-expect_in /etc/jetlink/server.env "JETLINK_IMAGE_REF=ghcr.io/zoompilot/jetlink:edge-cuda"
-unset JETLINK_REPO_URL
+expect_in /etc/jetlink/install.conf "JETLINK_REF=latest"
+expect_in /etc/jetlink/install.conf "JETLINK_VERSION=v0.9.0"
+expect_in /etc/jetlink/server.env "JETLINK_IMAGE_REF=ghcr.io/zoompilot/jetlink:0.9.0-cuda"
+jetlink status >/tmp/status.txt 2>&1
+expect_in /tmp/status.txt "v0.9.0 (follows releases)"
+show_on_failure "$f"
+
+# ---------------------------------------------------------------------------
+scenario "jetlink update moves to the next release"
+: >"$FAKE_LOG"; f=$FAILED
+export FAKE_LATEST=v0.10.0
+jetlink update >"$OUT" 2>&1; RC=$?
+expect_rc 0
+expect_out "Getting the newest Jetlink (v0.10.0)"
+expect_ran "docker pull ghcr.io/zoompilot/jetlink:0.10.0-cuda"
+expect_in /etc/jetlink/install.conf "JETLINK_REF=latest"
+expect_in /etc/jetlink/install.conf "JETLINK_VERSION=v0.10.0"
+show_on_failure "$f"
+
+# ---------------------------------------------------------------------------
+scenario "an install that saved main before 0.5.0 follows releases; no API, so the tags"
+: >"$FAKE_LOG"; f=$FAILED
+# what the installer wrote before 0.5.0: its default, main, and no version
+sed -i -e 's/^JETLINK_REF=.*/JETLINK_REF=main/' -e '/^JETLINK_VERSION=/d' /etc/jetlink/install.conf
+unset FAKE_LATEST
+piped --update
+expect_rc 0
+expect_out "Jetlink now follows releases; for development builds, use --ref main."
+expect_ran "releases/latest"
+expect_ran "docker pull ghcr.io/zoompilot/jetlink:0.10.0-cuda"
+expect_not_ran "0.11.0rc1"
+expect_in /etc/jetlink/install.conf "JETLINK_REF=latest"
+expect_in /etc/jetlink/install.conf "JETLINK_VERSION=v0.10.0"
+show_on_failure "$f"
+
+# ---------------------------------------------------------------------------
+scenario "--ref main pins development builds, and an update keeps them"
+: >"$FAKE_LOG"; f=$FAILED
+piped --update --ref main
+expect_rc 0
+expect_ran "docker pull ghcr.io/zoompilot/jetlink:edge-cuda"
+expect_in /etc/jetlink/install.conf "JETLINK_REF=main"
+expect_in /etc/jetlink/install.conf "JETLINK_VERSION=main"
+: >"$FAKE_LOG"
+piped --update
+expect_rc 0
+expect_no_out "now follows releases"
+expect_ran "docker pull ghcr.io/zoompilot/jetlink:edge-cuda"
+expect_in /etc/jetlink/install.conf "JETLINK_REF=main"
+show_on_failure "$f"
+
+# ---------------------------------------------------------------------------
+scenario "--ref vX.Y.Z pins a release; --ref latest follows them again"
+: >"$FAKE_LOG"; f=$FAILED
+export FAKE_LATEST=v0.10.0
+piped --update --ref v0.9.0
+expect_rc 0
+expect_ran "docker pull ghcr.io/zoompilot/jetlink:0.9.0-cuda"
+expect_in /etc/jetlink/install.conf "JETLINK_REF=v0.9.0"
+: >"$FAKE_LOG"
+piped --update
+expect_rc 0
+expect_ran "docker pull ghcr.io/zoompilot/jetlink:0.9.0-cuda"
+: >"$FAKE_LOG"
+piped --update --ref latest
+expect_rc 0
+expect_ran "docker pull ghcr.io/zoompilot/jetlink:0.10.0-cuda"
+expect_in /etc/jetlink/install.conf "JETLINK_REF=latest"
+show_on_failure "$f"
+
+# ---------------------------------------------------------------------------
+scenario "no answer from GitHub: an update stays put, a first install stops"
+: >"$FAKE_LOG"; f=$FAILED
+unset FAKE_LATEST
+export JETLINK_REPO_URL=file:///nonexistent
+piped --update
+expect_rc 0
+expect_out "Could not look up the newest release; staying on v0.10.0."
+expect_ran "docker pull ghcr.io/zoompilot/jetlink:0.10.0-cuda"
+reset_box; jetson 39 2.1; with_docker
+export FAKE_PUBLISHED=1 JETLINK_REPO_URL=file:///nonexistent
+piped --yes
+expect_rc 1
+expect_out "Could not find the newest Jetlink release."
+expect_no_file /etc/jetlink
+expect_not_ran "apt-get"
 show_on_failure "$f"
 
 # ---------------------------------------------------------------------------
@@ -298,7 +387,7 @@ piped --yes
 expect_rc 0
 expect_out "Downloading the Jetlink server"
 expect_in /var/log/jetlink-install.log "the download was interrupted; trying again"
-expect_in /etc/jetlink/server.env "JETLINK_IMAGE_REF=ghcr.io/zoompilot/jetlink:edge-cuda"
+expect_in /etc/jetlink/server.env "JETLINK_IMAGE_REF=ghcr.io/zoompilot/jetlink:0.10.0-cuda"
 expect_not_ran "docker build"
 unset JETLINK_REPO_URL
 show_on_failure "$f"
@@ -311,7 +400,7 @@ export FAKE_PUBLISHED=1 FAKE_MANIFEST_HANGS=1 JETLINK_REPO_URL=file:///tmp/repo
 JETLINK_TEST_NET_TIMEOUT_S=1 bash </src/install.sh -s -- --yes >"$OUT" 2>&1; RC=$?
 expect_rc 0
 expect_in /var/log/jetlink-install.log "registry check 1 timed out after 1s"
-expect_ran "docker pull ghcr.io/zoompilot/jetlink:edge-cuda"
+expect_ran "docker pull ghcr.io/zoompilot/jetlink:0.10.0-cuda"
 expect_not_ran "docker build"
 expect_no_out "so it will be built here"
 unset JETLINK_REPO_URL

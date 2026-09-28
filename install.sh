@@ -14,7 +14,7 @@
 #   --reconfigure    ask the questions again
 #   --build          build the server image here instead of downloading one
 #   --image IMAGE    run this image instead
-#   --ref REF        install this branch or tag (default: main)
+#   --ref REF        a tag or branch (default: latest, the newest release)
 #   --dry-run        check and ask, then show the plan without changing anything
 #   --uninstall      remove Jetlink
 #
@@ -24,6 +24,7 @@ set -Eeuo pipefail
 
 REPO_URL="${JETLINK_REPO_URL:-https://github.com/zoompilot/jetlink.git}"
 RAW_URL=https://raw.githubusercontent.com/zoompilot/jetlink
+API_URL=https://api.github.com/repos/zoompilot/jetlink
 REGISTRY=ghcr.io/zoompilot/jetlink
 ETC_DIR=/etc/jetlink
 CONF="$ETC_DIR/install.conf"
@@ -52,7 +53,7 @@ POLL_S="${JETLINK_TEST_POLL_S:-5}"
 NET_TIMEOUT_S="${JETLINK_TEST_NET_TIMEOUT_S:-60}"
 
 OPT_YES=0 OPT_UPDATE=0 OPT_RECONFIGURE=0 OPT_BUILD=0 OPT_DRY_RUN=0 OPT_UNINSTALL=0
-OPT_IMAGE="" OPT_REF="${JETLINK_REF:-}"
+OPT_IMAGE="" OPT_REF=""
 
 # ---------------------------------------------------------------------------
 # Output
@@ -436,6 +437,10 @@ detect_pc() {
 
 POWER='' SLEEP_AFTER=0 POWEROFF_WITH_COMMA=0 ADD_SWAP=0 AUTOSTART=1
 CACHE_DIR='' REF='' SOURCE='' SOURCE_DIR='' COMMIT=''
+# REF is what the install follows: latest (the newest release), a tag or a
+# branch. RESOLVED is the tag or branch that gave, or `local` for a checkout,
+# saved as JETLINK_VERSION (not VERSION, which /etc/os-release sets).
+RESOLVED=''
 SWAP_FILE='' MASKED_UNITS='' JOURNALD_CAPPED=0 NEED_REBOOT=0
 IMAGE_REF='' IMAGE_ID='' GPU_ARGS='' GPU_REPORT=''
 HAD_INSTALL=0
@@ -443,6 +448,8 @@ HAD_INSTALL=0
 load_previous() {
   [ -r "$CONF" ] || return 0
   HAD_INSTALL=1
+  # only from the file: the jetlink command runs this with it exported
+  local JETLINK_REF='' JETLINK_VERSION=''
   # shellcheck disable=SC1090
   . "$CONF"
   # what the server runs with, the sleep delay and the cache among it
@@ -457,7 +464,23 @@ load_previous() {
   MASKED_UNITS="${JETLINK_MASKED_UNITS:-}"
   JOURNALD_CAPPED="${JETLINK_JOURNALD_CAPPED:-0}"
   REF="${JETLINK_REF:-}"
+  RESOLVED="${JETLINK_VERSION:-}"
   return 0
+}
+
+# --ref, else the saved choice, else latest. Installers before 0.5.0 saved
+# main, their default, without asking, and no JETLINK_VERSION: such an
+# install follows releases now.
+choose_ref() {
+  if [ -n "$OPT_REF" ]; then
+    REF="$OPT_REF"
+  elif [ "$REF" = main ] && [ -z "$RESOLVED" ]; then
+    REF=latest RESOLVED=main
+    if [ "$SOURCE" != local ]; then
+      note "Jetlink now follows releases; for development builds, use --ref main."
+    fi
+  fi
+  REF="${REF:-latest}"
 }
 
 # Without a terminal every question takes its default, which is the
@@ -612,7 +635,11 @@ offer_driver() {
   fi
   heading "The NVIDIA driver is installed."
   say "  Restart the computer, then run the installer again:"
-  say "    curl -fsSL $RAW_URL/${REF:-main}/install.sh | bash"
+  if [ "$REF" = latest ]; then
+    say "    curl -fsSL $RAW_URL/main/install.sh | bash"
+  else
+    say "    curl -fsSL $RAW_URL/$REF/install.sh | bash -s -- --ref $REF"
+  fi
   say ""
   save_log
   exit 0
@@ -635,7 +662,7 @@ show_plan() {
   elif [ "$OPT_BUILD" = 1 ] || [ "$SOURCE" = local ]; then
     say "  • Build the Jetlink server here ${D}(about 4 GB of downloads, 5 to 30 minutes)${N}"
   else
-    say "  • Download the Jetlink server ${D}(about 4 GB)${N}"
+    say "  • Download Jetlink $RESOLVED ${D}(about 4 GB)${N}"
   fi
   if [ "$AUTOSTART" = 1 ]; then
     say "  • Start Jetlink every time this computer starts"
@@ -677,15 +704,56 @@ detect_source() {
   fi
 }
 
+# The tag or branch to check out. latest is looked up on every run, so an
+# update moves to the newest release; with no answer an update stays on the
+# one it has, and a first install stops rather than guess.
+resolve_ref() {
+  local had="$RESOLVED"
+  if [ "$SOURCE" = local ]; then
+    RESOLVED=local
+  elif [ "$REF" != latest ]; then
+    RESOLVED="$REF"
+  else
+    RESOLVED="$(latest_release)"
+    if [ -n "$RESOLVED" ]; then
+      printf '\n==> the newest release is %s\n' "$RESOLVED" >>"$LOG"
+    elif [ -n "$had" ] && [ "$had" != local ]; then
+      RESOLVED="$had"
+      note "Could not look up the newest release; staying on $had."
+    else
+      die "Could not find the newest Jetlink release." \
+        "GitHub did not answer. Check the connection and run the installer again," \
+        "or name a release: --ref v0.5.0"
+    fi
+  fi
+}
+
+# The newest release's tag, or nothing: GitHub's latest release, never a draft
+# or a prerelease, else the highest vX.Y.Z tag (the API allows 60 requests an
+# hour from one address). Nothing in here fails, since the ERR trap would fire
+# inside the command substitution that calls it.
+latest_release() {
+  local json refs re='"tag_name"[[:space:]]*:[[:space:]]*"(v[0-9]+\.[0-9]+\.[0-9]+)"'
+  json="$(curl -fsSL --max-time 20 "$API_URL/releases/latest" 2>>"$LOG" || true)"
+  if [[ $json =~ $re ]]; then
+    printf '%s' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  refs="$(git ls-remote --tags --refs "$REPO_URL" 'v*' 2>>"$LOG" || true)"
+  printf '%s\n' "$refs" \
+    | sed -n 's#.*refs/tags/\(v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$#\1#p' \
+    | sort -t. -k1.2,1n -k2,2n -k3,3n | tail -n 1
+}
+
 prepare_source() {
   if [ "$SOURCE" = local ]; then
     COMMIT="$(git -C "$SOURCE_DIR" rev-parse --short HEAD 2>/dev/null || echo local)"
     return 0
   fi
   if [ -d "$SOURCE_DIR/.git" ]; then
-    step "Getting Jetlink ($REF)" as_root sh -c "git -C '$SOURCE_DIR' fetch --depth 1 origin '$REF' && git -C '$SOURCE_DIR' reset --hard FETCH_HEAD"
+    step "Getting Jetlink ($RESOLVED)" as_root sh -c "git -C '$SOURCE_DIR' fetch --depth 1 origin '$RESOLVED' && git -C '$SOURCE_DIR' reset --hard FETCH_HEAD"
   else
-    step "Getting Jetlink ($REF)" as_root sh -c "rm -rf '$SOURCE_DIR' && mkdir -p '$SRC_ROOT' && git clone --depth 1 --branch '$REF' '$REPO_URL' '$SOURCE_DIR'"
+    step "Getting Jetlink ($RESOLVED)" as_root sh -c "rm -rf '$SOURCE_DIR' && mkdir -p '$SRC_ROOT' && git clone --depth 1 --branch '$RESOLVED' '$REPO_URL' '$SOURCE_DIR'"
   fi
   COMMIT="$(as_root git -C "$SOURCE_DIR" rev-parse --short HEAD)"
 }
@@ -833,9 +901,9 @@ add_toolkit_repo() {
 
 # The published image for a ref: main -> edge-<flavor>, vX.Y.Z -> X.Y.Z-<flavor>
 published_tag() {
-  case "$REF" in
+  case "$RESOLVED" in
     main) printf 'edge-%s' "$FLAVOR" ;;
-    v[0-9]*) printf '%s-%s' "${REF#v}" "$FLAVOR" ;;
+    v[0-9]*) printf '%s-%s' "${RESOLVED#v}" "$FLAVOR" ;;
     *) return 1 ;;
   esac
 }
@@ -1038,6 +1106,7 @@ write_conf() {
   {
     echo "# The answers the Jetlink installer was given; it reads them back on an update."
     printf 'JETLINK_REF=%q\n' "$REF"
+    printf 'JETLINK_VERSION=%q\n' "$RESOLVED"
     printf 'JETLINK_SOURCE=%q\n' "$SOURCE"
     printf 'JETLINK_SOURCE_DIR=%q\n' "$SOURCE_DIR"
     printf 'JETLINK_COMMIT=%q\n' "$COMMIT"
@@ -1237,7 +1306,8 @@ main() {
 
   detect
   load_previous
-  REF="${OPT_REF:-${REF:-main}}"
+  detect_source
+  choose_ref
   if [ -z "$CACHE_DIR" ]; then
     CACHE_DIR=/var/lib/jetlink
     [ "$JETSON" = 1 ] && CACHE_DIR=/mnt/data/jetlink
@@ -1255,7 +1325,7 @@ main() {
   fi
   jetson_musts
 
-  detect_source
+  resolve_ref
   show_plan
 
   if [ "$OPT_UPDATE" = 0 ] || [ "$HAD_INSTALL" = 0 ]; then

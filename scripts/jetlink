@@ -71,6 +71,18 @@ comma_state() {
   esac
 }
 
+# What runs, and what an update moves to: the newest release, or what --ref named.
+version_line() {
+  local version="${JETLINK_VERSION:-${JETLINK_REF:-unknown}}"
+  if [ "$version" = local ]; then
+    echo "checkout at ${JETLINK_SOURCE_DIR:-?} ${D}(${JETLINK_COMMIT:-?})${N}"
+  elif [ "${JETLINK_REF:-}" = latest ]; then
+    echo "$version ${D}(follows releases)${N}"
+  else
+    echo "$version ${D}(${JETLINK_COMMIT:-?})${N}"
+  fi
+}
+
 cmd_status() {
   load
   local state since image_ref
@@ -89,6 +101,7 @@ cmd_status() {
     echo "  comma          $(comma_state)"
   fi
   echo "  computer       ${JETLINK_PLATFORM_NAME:-unknown}"
+  echo "  version        $(version_line)"
   echo "  server         $image_ref ${D}(${JETLINK_IMAGE:7:12})${N}"
   echo "  models folder  $JETLINK_CACHE_DIR ${D}($(human_size "$JETLINK_CACHE_DIR"))${N}"
   if [ "${JETLINK_JETSON:-0}" = 1 ]; then
@@ -131,16 +144,35 @@ cmd_models() {
     --entrypoint python3 "$JETLINK_IMAGE" -m jetlink.registry "$@"
 }
 
+# The newest release's tag, or nothing, found as install.sh's latest_release
+# finds it: GitHub's latest release, else the highest vX.Y.Z tag.
+latest_release() {
+  local json re='"tag_name"[[:space:]]*:[[:space:]]*"(v[0-9]+\.[0-9]+\.[0-9]+)"'
+  json="$(curl -fsSL --max-time 20 https://api.github.com/repos/zoompilot/jetlink/releases/latest 2>/dev/null || true)"
+  if [[ $json =~ $re ]]; then
+    echo "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  { git -C "$1" ls-remote --tags --refs origin 'v*' 2>/dev/null || true; } \
+    | sed -n 's#.*refs/tags/\(v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$#\1#p' \
+    | sort -t. -k1.2,1n -k2,2n -k3,3n | tail -n 1
+}
+
 # update, setup and uninstall are the installer's: it is the one place that
-# knows what it changed on this computer.
+# knows what it changed on this computer. An update runs the installer of the
+# version it moves to.
 run_installer() {
   load
-  local src="${JETLINK_SOURCE_DIR:-}"
+  local src="${JETLINK_SOURCE_DIR:-}" ref="${JETLINK_REF:-main}"
   if [ "${JETLINK_SOURCE:-git}" = git ] && [ -d "$src/.git" ]; then
     if [ "$1" = --update ]; then
-      echo "Getting the newest Jetlink ($JETLINK_REF)..."
-      git -C "$src" fetch --depth 1 origin "$JETLINK_REF" >/dev/null 2>&1 \
-        && git -C "$src" reset --hard FETCH_HEAD >/dev/null
+      # with no answer the installer looks again, and says what it found
+      if [ "$ref" = latest ]; then ref="$(latest_release "$src")"; fi
+      if [ -n "$ref" ]; then
+        echo "Getting the newest Jetlink ($ref)..."
+        git -C "$src" fetch --depth 1 origin "$ref" >/dev/null 2>&1 \
+          && git -C "$src" reset --hard FETCH_HEAD >/dev/null
+      fi
     fi
     exec bash "$src/install.sh" "$@"
   fi
@@ -152,8 +184,10 @@ run_installer() {
     fi
     exec bash "$src/install.sh" "$@"
   fi
-  # The source copy is gone: fetch the installer again.
-  curl -fsSL "$INSTALLER_URL_BASE/${JETLINK_REF:-main}/install.sh" | bash -s -- "$@"
+  # The source copy is gone: fetch the installer again. main's installs the
+  # newest release.
+  if [ "$ref" = latest ]; then ref=main; fi
+  curl -fsSL "$INSTALLER_URL_BASE/$ref/install.sh" | bash -s -- "$@"
 }
 
 main() {

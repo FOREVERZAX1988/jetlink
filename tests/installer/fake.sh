@@ -135,6 +135,11 @@ case "$name" in
     # the network the installer needs, answered from here; anything else fails
     case " $* " in
       *" https://github.com "*) ;;
+      *" https://api.github.com/repos/zoompilot/jetlink/releases/latest "*)
+        # the newest release, FAKE_LATEST; without one, GitHub's rate limit
+        [ -n "${FAKE_LATEST:-}" ] || { echo "curl: (22) The requested URL returned error: 403" >&2; exit 22; }
+        printf '{\n  "html_url": "https://github.com/zoompilot/jetlink/releases/tag/%s",\n  "tag_name": "%s",\n  "prerelease": false\n}\n' \
+          "$FAKE_LATEST" "$FAKE_LATEST" ;;
       *download.docker.com*|*nvidia.github.io*) echo "deb https://example.invalid/fake stable main" ;;
       *) echo "fake curl: no route for $*" >&2; exit 22 ;;
     esac ;;
