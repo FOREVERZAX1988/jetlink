@@ -236,7 +236,6 @@ class Owner:
     self.next_net_attempt = now + NET_BACKOFF
     self.net_ready = gadget.net_up()
 
-
   def settle(self) -> None:
     """Put the gadget back to bound with nothing open on it.
 

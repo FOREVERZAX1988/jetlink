@@ -177,7 +177,6 @@ class TestParked(OwnerTest):
     o.step()
     self.assertTrue(o.dormant)
 
-
   def test_a_run_that_wakes_the_jetson_gets_the_hold_before_letting_go(self):
     # bench 2026-09-10: a run finished 2.5 s after the wake, the owner released
     # the gadget 1 ms later, and the jetson was still enumerating. The hold used

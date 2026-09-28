@@ -18,10 +18,9 @@ the comma: python plus this plus the FunctionFS transport is 10.4 MB against
 Nothing in jetlink.comma may import openpilot; openpilot's params are read
 here as files, by name. tests/test_comma_gadget.py holds the line.
 
-The fork's accelerators/jetlink/helpers re-exports most of it, so the heavy
-processes carry on calling `helpers.udc_state()`; they also install cloudlog
-over `log` at import, so their lines still reach swaglog while the owner's go
-to a file.
+The fork's heavy processes import it directly, and its helpers module points
+`log` at cloudlog (set_logger), so their lines still reach swaglog while the
+owner's go to a file.
 """
 from __future__ import annotations
 

@@ -131,7 +131,6 @@ class Borrowing(LendingTest):
     t.join(3.0)
     assert got and got[0] is not None
 
-
   def test_during_the_hold_a_borrower_is_told_to_retry(self):
     # a phone may still dial; a hello over FunctionFS to a phone blocks 15 s
     self.holding = True

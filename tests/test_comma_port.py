@@ -185,7 +185,6 @@ class TestTheLink(PortTest):
     self.port.off()
     self.assertEqual(self.commands(), ['off'])
 
-
   def test_a_failed_first_off_does_not_stop_the_watch(self):
     # both commas have the lever, so a failure is a failure, which root.run
     # has logged, and not a device without one
