@@ -4,6 +4,7 @@
   import Foundation
   import JetlinkKit
   import JetlinkServer
+  import JetlinkStatusPage
   #if os(Linux)
     import JetlinkLinux
     import JetlinkLog
@@ -100,7 +101,13 @@
       }
       if statusPort > 0 {
         // The status page starts here, on its own threads, once it serves.
-        log.warning("--status-port \(statusPort): this build does not serve the status page yet")
+        // Without its page it stays off: the comma matters more than a page.
+        do {
+          _ = try StatusPage.page()
+          log.warning("--status-port \(statusPort): this build does not serve the status page yet")
+        } catch {
+          log.warning("\(error)")
+        }
       }
       stopOnSignals { signal in
         log.info("stopping on \(signal)")
