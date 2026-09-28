@@ -59,6 +59,14 @@ public struct ModelRow: Identifiable, Equatable, Sendable {
   }
 }
 
+extension ModelRow {
+  /// Something on disk to delete: the model, or an engine prepared from it.
+  public func hasFiles(in inventory: InventoryEvent?) -> Bool {
+    guard let sha256 else { return false }
+    return !preparedFor.isEmpty || inventory?.models.contains { $0.sha256 == sha256 } == true
+  }
+}
+
 extension DownloadEvent {
   /// Done, failed or cancelled: the row lingers a moment, then goes quiet.
   public var isTerminal: Bool { ["done", "failed", "cancelled"].contains(state) }

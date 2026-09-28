@@ -308,7 +308,7 @@ fun ModelRowView(row: ModelRow, actions: ModelActions) {
     val colors = JetlinkTheme.colors
     var menu by remember { mutableStateOf(false) }
     val action = ModelRules.action(row)
-    val canDelete = ModelRules.hasFiles(row)
+    val canDelete = row.hasFiles
     // The row's menu holds what its button does not: stopping and deleting.
     val hasMenu = canDelete || action == RowAction.InUse
     Row(

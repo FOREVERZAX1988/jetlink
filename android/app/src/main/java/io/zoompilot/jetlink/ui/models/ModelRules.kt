@@ -78,11 +78,6 @@ object ModelRules {
         return inFlight != row.sha256
     }
 
-    /** Something on the phone to delete: the model, or an engine prepared from it. */
-    fun hasFiles(row: ModelRow): Boolean =
-        row.sha256 != null &&
-            (row.status.kind in setOf("downloaded", "prepared", "loaded") || row.preparedFor.isNotEmpty() || row.isLocal || row.isOrphan)
-
     /** The catalog's models, the ones added from a file, and the ones a comma sent. */
     data class Sections(val available: List<ModelRow>, val added: List<ModelRow>, val uploaded: List<ModelRow>)
 

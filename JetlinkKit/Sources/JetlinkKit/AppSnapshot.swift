@@ -152,7 +152,7 @@ public final class AppSnapshot: @unchecked Sendable {
     guard version > after || link.state == .connected else { return nil }
     if rows == nil {
       rows = ModelRowBuilder.build(catalog: catalog, inventory: inventory, downloads: downloads, engine: engine, link: link)
-        .map { AppSnapshot.row($0, encoder: encoder) }
+        .map { AppSnapshot.row($0, inventory: inventory, encoder: encoder) }
     }
     let recentStats = link.state == .connected ? recent() : nil
     return [
@@ -183,7 +183,7 @@ public final class AppSnapshot: @unchecked Sendable {
   }
 
   /// A Models row as the app draws it.
-  static func row(_ row: ModelRow, encoder: ControlJSONEncoder) -> [String: Any] {
+  static func row(_ row: ModelRow, inventory: InventoryEvent?, encoder: ControlJSONEncoder) -> [String: Any] {
     var status: [String: Any]
     switch row.status {
     case .unresolved: status = ["kind": "unresolved"]
@@ -211,6 +211,7 @@ public final class AppSnapshot: @unchecked Sendable {
       "is_local": row.isLocal,
       "is_orphan": row.isOrphan,
       "can_use": ModelStore.canUse(row),
+      "has_files": row.hasFiles(in: inventory),
     ]
   }
 }

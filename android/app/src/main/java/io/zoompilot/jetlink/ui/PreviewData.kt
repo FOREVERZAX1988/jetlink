@@ -58,6 +58,7 @@ object PreviewData {
         buildTime = "2026-08-30T09:41:12Z",
         status = RowStatus(kind = "loaded"),
         preparedFor = listOf(Artifact(sha256 = BIG_MODEL_SHA, backend = "ort", device = "htp-SM8650", bytes = 800_000_000, current = true)),
+        hasFiles = true,
         isLoaded = true,
         isRequestedByComma = true,
     )
@@ -93,6 +94,7 @@ object PreviewData {
         status = RowStatus(kind = "prepared"),
         preparedFor = listOf(Artifact(current = true)),
         isOrphan = true,
+        hasFiles = true,
         canUse = true,
     )
 

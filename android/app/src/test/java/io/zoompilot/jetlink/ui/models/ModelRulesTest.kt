@@ -84,14 +84,6 @@ class ModelRulesTest {
     }
 
     @Test
-    fun whatCanBeDeleted() {
-        assertTrue(ModelRules.hasFiles(PreviewData.loaded))
-        assertTrue(ModelRules.hasFiles(PreviewData.orphan))
-        assertFalse(ModelRules.hasFiles(PreviewData.available))
-        assertFalse(ModelRules.hasFiles(PreviewData.downloading))
-    }
-
-    @Test
     fun sectionsAndDisk() {
         val sections = ModelRules.sections(PreviewData.serving.models)
         assertEquals(3, sections.available.size)

@@ -156,7 +156,7 @@ struct ModelsScreen: View {
         stop: { models.unload() }
       )
       .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-        if hasFiles(row) {
+        if row.hasFiles(in: models.inventory) {
           Button("Delete", systemImage: "trash", role: .destructive) { confirmation = .delete(row) }
         }
       }
@@ -175,7 +175,7 @@ struct ModelsScreen: View {
     if row.status == .loaded {
       Button("Stop Using", systemImage: "stop.circle") { models.unload() }
     }
-    if hasFiles(row) {
+    if row.hasFiles(in: models.inventory) {
       Divider()
       Button("Delete", systemImage: "trash", role: .destructive) { confirmation = .delete(row) }
     }
@@ -189,12 +189,6 @@ struct ModelsScreen: View {
     } else {
       models.use(row)
     }
-  }
-
-  private func hasFiles(_ row: ModelRow) -> Bool {
-    guard let sha = row.sha256 else { return false }
-    let model = models.inventory?.models.contains { $0.sha256 == sha } ?? false
-    return model || !row.preparedFor.isEmpty
   }
 
   /// A picked file is readable only while its security scope is open, and the

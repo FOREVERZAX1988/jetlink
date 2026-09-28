@@ -128,6 +128,8 @@ data class ModelRow(
     val isLocal: Boolean = false,
     val isOrphan: Boolean = false,
     val canUse: Boolean = false,
+    /** Something on the phone to delete: the model, or an engine prepared from it. */
+    val hasFiles: Boolean = false,
 ) {
     /** Prepared for this phone's processor, and so quick to load. */
     val isPrepared: Boolean get() = preparedFor.any { it.current }

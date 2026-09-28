@@ -107,9 +107,11 @@ struct AppSnapshotTests {
     #expect(loaded["is_loaded"] as? Bool == true)
     #expect((loaded["status"] as? [String: Any])?["kind"] as? String == "loaded")
     #expect(loaded["can_use"] as? Bool == false)
+    #expect(loaded["has_files"] as? Bool == true)
     let downloading = try #require(rows.first { ($0["ref"] as? String) == Self.otherRef })
     #expect((downloading["status"] as? [String: Any])?["kind"] as? String == "downloading")
     #expect(downloading["is_default"] as? Bool == true)
+    #expect(downloading["has_files"] as? Bool == false)
   }
 
   @Test func disconnectingClearsTheLiveNumbers() throws {

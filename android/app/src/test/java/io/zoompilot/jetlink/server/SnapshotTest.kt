@@ -47,9 +47,11 @@ class SnapshotTest {
         assertTrue(loaded.isRequestedByComma)
         assertEquals("loaded", loaded.status.kind)
         assertTrue(loaded.isPrepared)
+        assertTrue(loaded.hasFiles)
         assertEquals("BMRLNAP Model v4", snapshot.modelName(snapshot.engine.sha256))
         val downloading = snapshot.models.first { it.isDefault }
         assertEquals("downloading", downloading.status.kind)
+        assertFalse(downloading.hasFiles)
         assertEquals(0.42, downloading.status.frac, 1e-9)
         assertEquals(41_000_000.0, downloading.status.rateBps, 1e-9)
         assertFalse(downloading.canUse)
