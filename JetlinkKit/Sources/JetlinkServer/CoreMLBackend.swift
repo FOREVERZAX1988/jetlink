@@ -32,7 +32,6 @@ public final class CoreMLBackend: EngineBackend {
   /// no bump. The same number on both sides is what lets one Mac cache serve
   /// both servers; `Pinned` carries it from the Python.
   public static let prepareVersion = Pinned.prepareVersion
-  static let manifestName = "sessions.json"
 
   public let name = "ort"
   public let suffix = ".ortcache"
@@ -74,14 +73,6 @@ public final class CoreMLBackend: EngineBackend {
     sanitize("\(device.rawValue)-\(chip)")
   }
 
-  public func tag() -> String {
-    "ort\(sanitize(runtimeVersion)).\(deviceTag())"
-  }
-
-  public func describe() -> [String: String] {
-    ["backend": name, "runtime_version": runtimeVersion, "device": deviceTag()]
-  }
-
   /// (session name, compute units) in run order.
   var sessions: [(name: String, units: String?)] {
     switch device {
@@ -115,94 +106,64 @@ public final class CoreMLBackend: EngineBackend {
 
   public func build(model: URL, artifact: URL, report: @escaping ProgressFn, metaExtra: [String: Any]) throws {
     let started = Date()
-    let parent = artifact.deletingLastPathComponent()
-    try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
-    // Staged beside the final path, where the cache's sweep finds it if a
-    // build is killed, and renamed into place only once it has run.
-    let temp = parent.appending(path: "tmp\(UUID().uuidString.prefix(8))", directoryHint: .isDirectory)
-    let staged = temp.appending(path: "artifact", directoryHint: .isDirectory)
-    try FileManager.default.createDirectory(at: staged, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: temp) }
-
-    report("patch", 0, "preparing the model for CoreML")
-    let sessions = self.sessions
-    let prepared = try preparer.prepare(model: model, into: staged, layout: layout) {
-      CoreMLBackend.cacheKey(artifact: artifact, part: $0)
-    }
-    log.info("prepared \(model.lastPathComponent): \(prepared.summary)")
-    guard prepared.parts.map(\.name) == sessions.map(\.name) else {
-      throw HostError.failed("the preparation wrote \(prepared.parts.map(\.name)), expected \(sessions.map(\.name))")
-    }
-    var manifest: [[String: Any]] = []
-    for (session, part) in zip(sessions, prepared.parts) {
-      guard let units = session.units else {
-        manifest.append(["model": part.file, "units": NSNull(), "cache": NSNull()])
-        continue
-      }
-      let cache = "coreml-\(session.name)"
-      try FileManager.default.createDirectory(at: staged.appending(path: cache, directoryHint: .isDirectory), withIntermediateDirectories: true)
-      manifest.append(["model": part.file, "units": units, "cache": cache])
-    }
-    try JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted]).write(to: staged.appending(path: CoreMLBackend.manifestName))
-    report("patch", 1, "prepared")
-
-    let weights = prepared.parts.reduce(0) { $0 + $1.weightBytes }
-    let caches = manifest.compactMap { ($0["cache"] as? String).map { staged.appending(path: $0, directoryHint: .isDirectory) } }
     let expect = ArtifactSidecar.read(artifact)
-    let progress = CoreMLProgress(caches: caches, weightBytes: weights, expect: expect)
-    report("convert", 0, "converting for CoreML")
-    let ticker = Ticker(interval: 2) { elapsed in
-      let (stage, frac, msg) = progress.tick(elapsed: elapsed)
-      report(stage, frac, msg)
-    }
-    let engineStarted = Date()
-    let engine: OrtEngine
-    do {
-      engine = try OrtEngine(plans: plans(staged, manifest), device: deviceTag(), keepAlive: false, keepCPUWarm: false)
-    } catch {
-      ticker.stop()
-      throw error
-    }
-    ticker.stop()
-    defer { engine.close() }
-    let (converted, compiled) = progress.measure()
-    let compileSeconds = Date().timeIntervalSince(engineStarted)
-    report("convert", 1, "converted \(formatBytes(converted))")
-    report("compile", 1, "compiled in \(Int(compileSeconds.rounded())) s")
-    // Prove it runs before calling it built.
-    try engine.run()
-    engine.close()
-    // A load reads only the compiled model, so the MLProgram onnxruntime
-    // converted each session to is dead weight beside it: on an M1 Pro with
-    // 1.29.0 the artifact went from 2.2 GB to 1.4 GB, loading in 0.5 s with
-    // outputs bit for bit the same. A phone has no room for both.
-    let freed = CoreMLBackend.dropConvertedModels(caches)
-    if freed > 0 {
-      log.info("removed \(formatBytes(freed)) of converted model the compiled one replaces")
-    }
+    var meta = try OrtArtifact.build(artifact) { staged in
+      report("patch", 0, "preparing the model for CoreML")
+      let prepared = try preparer.prepare(model: model, into: staged, layout: layout) {
+        CoreMLBackend.cacheKey(artifact: artifact, part: $0)
+      }
+      log.info("prepared \(model.lastPathComponent): \(prepared.summary)")
+      guard prepared.parts.map(\.name) == sessions.map(\.name) else {
+        throw HostError.failed("the preparation wrote \(prepared.parts.map(\.name)), expected \(sessions.map(\.name))")
+      }
+      var manifest: [[String: Any]] = []
+      for (session, part) in zip(sessions, prepared.parts) {
+        guard let units = session.units else {
+          manifest.append(["model": part.file, "units": NSNull(), "cache": NSNull()])
+          continue
+        }
+        let cache = "coreml-\(session.name)"
+        try FileManager.default.createDirectory(at: staged.appending(path: cache, directoryHint: .isDirectory), withIntermediateDirectories: true)
+        manifest.append(["model": part.file, "units": units, "cache": cache])
+      }
+      try OrtArtifact.writeManifest(manifest, in: staged)
+      report("patch", 1, "prepared")
 
-    if FileManager.default.fileExists(atPath: artifact.path) {
-      try FileManager.default.removeItem(at: artifact)
+      let weights = prepared.parts.reduce(0) { $0 + $1.weightBytes }
+      let caches = manifest.compactMap { ($0["cache"] as? String).map { staged.appending(path: $0, directoryHint: .isDirectory) } }
+      let progress = CoreMLProgress(caches: caches, weightBytes: weights, expect: expect)
+      report("convert", 0, "converting for CoreML")
+      let engineStarted = Date()
+      let engine = try Ticker.during(interval: 2, { elapsed in
+        let (stage, frac, msg) = progress.tick(elapsed: elapsed)
+        report(stage, frac, msg)
+      }) {
+        try OrtEngine(plans: plans(staged, manifest), device: deviceTag(), keepAlive: false, keepCPUWarm: false)
+      }
+      defer { engine.close() }
+      let (converted, compiled) = progress.measure()
+      let compileSeconds = Date().timeIntervalSince(engineStarted)
+      report("convert", 1, "converted \(formatBytes(converted))")
+      report("compile", 1, "compiled in \(Int(compileSeconds.rounded())) s")
+      // Prove it runs before calling it built.
+      try engine.run()
+      engine.close()
+      // A load reads only the compiled model, so the MLProgram onnxruntime
+      // converted each session to is dead weight beside it: on an M1 Pro with
+      // 1.29.0 the artifact went from 2.2 GB to 1.4 GB, loading in 0.5 s with
+      // outputs bit for bit the same. A phone has no room for both.
+      let freed = CoreMLBackend.dropConvertedModels(caches)
+      if freed > 0 {
+        log.info("removed \(formatBytes(freed)) of converted model the compiled one replaces")
+      }
+      var meta = OrtArtifact.meta(
+        self, manifest: manifest, providers: engine.providers, model: model, prepareVersion: CoreMLBackend.prepareVersion, started: started)
+      meta["convert_bytes"] = converted
+      meta["compile_bytes"] = compiled
+      meta["compile_seconds"] = pythonRound(compileSeconds, 1)
+      meta["freed_bytes"] = freed
+      return meta
     }
-    try FileManager.default.moveItem(at: staged, to: artifact)
-
-    let formatter = ISO8601DateFormatter()
-    var meta: [String: Any] = [
-      "backend": name,
-      "onnxruntime": runtimeVersion,
-      "device": deviceTag(),
-      "sessions": manifest,
-      "providers": engine.providers,
-      "build_seconds": pythonRound(Date().timeIntervalSince(started), 1),
-      "onnx": model.lastPathComponent,
-      "prepare": CoreMLBackend.prepareVersion,
-      "preparer": "swift",
-      "built_at": formatter.string(from: Date()),
-      "convert_bytes": converted,
-      "compile_bytes": compiled,
-      "compile_seconds": pythonRound(compileSeconds, 1),
-      "freed_bytes": freed,
-    ]
     for (key, value) in metaExtra { meta[key] = value }
     try ArtifactSidecar.write(artifact, meta)
     report("build", 1, "done in \(meta["build_seconds"]!)s")
@@ -235,54 +196,19 @@ public final class CoreMLBackend: EngineBackend {
   // MARK: load
 
   public func load(artifact: URL, report: @escaping ProgressFn) throws -> any Engine {
-    let manifestURL = artifact.appending(path: CoreMLBackend.manifestName)
-    guard let data = try? Data(contentsOf: manifestURL),
-      let manifest = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]], !manifest.isEmpty
-    else {
-      throw ArtifactInvalid("\(artifact.lastPathComponent): no readable \(CoreMLBackend.manifestName) inside")
-    }
-    let meta = ArtifactSidecar.read(artifact)
-    let version = (meta["prepare"] as? NSNumber)?.intValue ?? 1
-    if version != CoreMLBackend.prepareVersion {
-      throw ArtifactInvalid(
-        "\(artifact.lastPathComponent): prepared as version \(version), CoreML builds are now at \(CoreMLBackend.prepareVersion); rebuilding")
-    }
-    for entry in manifest {
-      guard let model = entry["model"] as? String, FileManager.default.fileExists(atPath: artifact.appending(path: model).path) else {
-        throw ArtifactInvalid("\(artifact.lastPathComponent): a session's model is missing")
-      }
+    let (manifest, meta) = try OrtArtifact.open(artifact, prepareVersion: CoreMLBackend.prepareVersion, builds: "CoreML") { entry in
       // Without its compile, onnxruntime would recompile under a "loading"
       // that never moves. Rebuild instead, which reports progress. Only the
       // compile is looked for: the converted MLProgram beside it is dropped
       // after the build (dropConvertedModels).
-      if let cache = entry["cache"] as? String {
-        let directory = artifact.appending(path: cache, directoryHint: .isDirectory)
-        let contents = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
-        if contents.isEmpty {
-          throw ArtifactInvalid("\(artifact.lastPathComponent): the CoreML cache for \(model) is empty")
-        }
-      }
+      guard let cache = entry["cache"] as? String else { return nil }
+      let contents = (try? FileManager.default.contentsOfDirectory(atPath: artifact.appending(path: cache, directoryHint: .isDirectory).path)) ?? []
+      return contents.isEmpty ? "the CoreML cache for \(entry["model"] as? String ?? cache) is empty" : nil
     }
-    let started = Date()
-    let took = (meta["load_seconds"] as? NSNumber)?.doubleValue ?? 0
-    report("load", 0, "loading the CoreML model")
-    let ticker = Ticker(interval: 1) { elapsed in
-      if took > 0 {
-        report("load", min(0.95, elapsed / took), "loading the CoreML model, \(Int(elapsed)) s of about \(Int(took.rounded())) s")
-      } else {
-        report("load", 0, "loading the CoreML model, \(Int(elapsed)) s elapsed")
-      }
+    let (engine, seconds) = try OrtArtifact.load(artifact, meta: meta, what: "the CoreML model", report: report) {
+      try OrtEngine(plans: plans(artifact, manifest), device: deviceTag(), keepAlive: keepAlive, keepCPUWarm: keepCPUWarm)
     }
-    defer { ticker.stop() }
-    let engine = try OrtEngine(plans: plans(artifact, manifest), device: deviceTag(), keepAlive: keepAlive, keepCPUWarm: keepCPUWarm)
-    let seconds = Date().timeIntervalSince(started)
     log.info("onnxruntime sessions on \(device.rawValue) in \(String(format: "%.1f", seconds)) s")
-    report("load", 1, "loaded in \(Int(seconds.rounded())) s")
-    if !meta.isEmpty {
-      var updated = meta
-      updated["load_seconds"] = pythonRound(seconds, 1)
-      try? ArtifactSidecar.write(artifact, updated)
-    }
     return engine
   }
 

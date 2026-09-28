@@ -8,9 +8,6 @@ public struct SessionPlan: Sendable, Equatable {
   /// provider alone.
   public let provider: String?
   public let options: [String: String]
-  /// Session config entries on top of jetlink's own, as the QNN provider's
-  /// context cache takes them.
-  public let config: [String: String]
   /// The CPU provider's intra-op pool: 1 where an accelerator does the work.
   public let threads: Int
   /// The session as the log and the hello name it: "CoreML(CPUAndGPU)",
@@ -22,13 +19,12 @@ public struct SessionPlan: Sendable, Equatable {
   public let usesNeuralEngine: Bool
 
   public init(
-    model: URL, provider: String?, options: [String: String] = [:], config: [String: String] = [:], threads: Int = 1, label: String,
+    model: URL, provider: String?, options: [String: String] = [:], threads: Int = 1, label: String,
     usesGPU: Bool = false, usesNeuralEngine: Bool = false
   ) {
     self.model = model
     self.provider = provider
     self.options = options
-    self.config = config
     self.threads = threads
     self.label = label
     self.usesGPU = usesGPU
@@ -90,9 +86,7 @@ public final class OrtEngine: @unchecked Sendable {
   private var looped: [(input: String, output: String)] = []
   private var bindings: [[OrtBinding]] = []  // [parity][session]
   private var parity = 0
-  #if canImport(Metal)
-    private let keepAlive: MetalKeepAlive?
-  #endif
+  private let keepAlive: MetalKeepAlive?
   private let keepWarm: CPUKeepWarm?
   private var closed = false
 
@@ -102,7 +96,7 @@ public final class OrtEngine: @unchecked Sendable {
     self.device = device
     var chain: [OrtSession] = []
     for plan in plans {
-      chain.append(try OrtSession(model: plan.model, provider: plan.provider, options: plan.options, config: plan.config, threads: plan.threads))
+      chain.append(try OrtSession(model: plan.model, provider: plan.provider, options: plan.options, threads: plan.threads))
     }
     self.chain = chain
     self.providers = plans.map(\.label)
@@ -137,9 +131,7 @@ public final class OrtEngine: @unchecked Sendable {
       buffer.initializeMemory(as: UInt8.self, repeating: 0, count: max(size, 1))
       buffers[name] = buffer
     }
-    #if canImport(Metal)
-      self.keepAlive = keepAlive && plans.contains(where: \.usesGPU) ? MetalKeepAlive.make() : nil
-    #endif
+    self.keepAlive = keepAlive && plans.contains(where: \.usesGPU) ? MetalKeepAlive.make() : nil
     self.keepWarm = keepCPUWarm && plans.contains(where: \.usesNeuralEngine) ? CPUKeepWarm() : nil
     do {
       try rebind()
@@ -227,9 +219,7 @@ public final class OrtEngine: @unchecked Sendable {
 
   public func run() throws {
     guard !closed else { throw OrtError("engine is closed") }
-    #if canImport(Metal)
-      keepAlive?.pulse()
-    #endif
+    keepAlive?.pulse()
     keepWarm?.pulse()
     let started = DispatchTime.now().uptimeNanoseconds
     do {
@@ -237,9 +227,7 @@ public final class OrtEngine: @unchecked Sendable {
         try binding.run()
       }
     } catch {
-      #if canImport(Metal)
-        keepAlive?.pause()
-      #endif
+      keepAlive?.pause()
       throw error
     }
     if !looped.isEmpty {
@@ -259,9 +247,7 @@ public final class OrtEngine: @unchecked Sendable {
   public func close() {
     guard !closed else { return }
     closed = true
-    #if canImport(Metal)
-      keepAlive?.close()
-    #endif
+    keepAlive?.close()
     keepWarm?.close()
     release()
   }
@@ -276,3 +262,14 @@ public final class OrtEngine: @unchecked Sendable {
 }
 
 extension OrtEngine: Engine {}
+
+#if !canImport(Metal)
+  /// No GPU to keep clocked up here: QNN's own performance mode does that job
+  /// on Android.
+  final class MetalKeepAlive {
+    static func make() -> MetalKeepAlive? { nil }
+    func pulse() {}
+    func pause() {}
+    func close() {}
+  }
+#endif

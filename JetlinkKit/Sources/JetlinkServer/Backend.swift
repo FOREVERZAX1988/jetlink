@@ -35,15 +35,27 @@ public protocol EngineBackend: AnyObject, Sendable {
   var name: String { get }
   /// The artifact's extension.
   var suffix: String { get }
-  /// What an artifact is valid for: runtime version and device, sanitized.
-  func tag() -> String
+  /// The runtime's release, "1.29.0".
+  var runtimeVersion: String { get }
   /// The device part of the tag: "ane-Apple_M1_Pro", "htp-SM8650".
   func deviceTag() -> String
+  /// What an artifact is valid for: runtime version and device, sanitized.
+  func tag() -> String
   /// backend, runtime_version, device: for the hello.
   func describe() -> [String: String]
   func deriveSpec(model: URL, sha256: String, nbytes: Int64, frameSkip: Int) throws -> ModelSpec
   func build(model: URL, artifact: URL, report: @escaping ProgressFn, metaExtra: [String: Any]) throws
   func load(artifact: URL, report: @escaping ProgressFn) throws -> any Engine
+}
+
+extension EngineBackend {
+  public func tag() -> String {
+    "\(name)\(sanitize(runtimeVersion)).\(deviceTag())"
+  }
+
+  public func describe() -> [String: String] {
+    ["backend": name, "runtime_version": runtimeVersion, "device": deviceTag()]
+  }
 }
 
 /// A version or device name as a filename component.

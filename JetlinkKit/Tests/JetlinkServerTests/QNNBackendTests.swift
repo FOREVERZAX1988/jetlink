@@ -62,10 +62,9 @@ struct QNNBackendTests {
 
   @Test("The chip the app reports names the artifacts")
   func chip() {
-    QNNBackend.reportChip("SM8650")
-    defer { QNNBackend.reportChip("") }
-    let backend = QNNBackend(device: .htp, preparer: ONNXPreparer())
+    let backend = QNNBackend(device: .htp, preparer: ONNXPreparer(), chip: "SM8650")
     #expect(backend.deviceTag() == "htp-SM8650")
+    #expect(QNNBackend(device: .htp, preparer: ONNXPreparer(), chip: "").deviceTag() == "htp-unknown")
     #expect(backend.tag() == "ort\(sanitize(OrtRuntime.version)).htp-SM8650")
   }
 }

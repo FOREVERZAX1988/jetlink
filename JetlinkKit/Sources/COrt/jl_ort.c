@@ -90,14 +90,12 @@ void jl_free(void *p) {
 
 char *jl_env_create(int log_severity, jl_env **out) {
   *out = NULL;
-  if (base() == NULL) {
 #ifdef JL_ORT_DLOPEN
+  if (base() == NULL) {
     const char *why = dlerror();
     return copy(why != NULL ? why : "cannot open libonnxruntime.so");
-#else
-    return copy("onnxruntime is not linked");
-#endif
   }
+#endif
   if (api() == NULL) {
     return copy("this onnxruntime does not provide the C API version jetlink was built against");
   }

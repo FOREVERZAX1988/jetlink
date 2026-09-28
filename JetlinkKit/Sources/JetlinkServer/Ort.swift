@@ -70,20 +70,16 @@ final class OrtSession: @unchecked Sendable {
     }
     let providerOptions = entries(options)
     let configEntries = entries(config)
+    let providerName = provider.flatMap { strdup($0) }
+    strings.append(providerName)
     try providerOptions.withUnsafeBufferPointer { optionBuffer in
       try configEntries.withUnsafeBufferPointer { configBuffer in
         try model.path.withCString { path in
-          if let provider {
-            try provider.withCString { name in
-              try OrtError.check(
-                jl_session_create(
-                  env.pointer, path, name, optionBuffer.baseAddress, optionBuffer.count, configBuffer.baseAddress, configBuffer.count,
-                  Int32(threads), &session))
-            }
-          } else {
-            try OrtError.check(
-              jl_session_create(env.pointer, path, nil, nil, 0, configBuffer.baseAddress, configBuffer.count, Int32(threads), &session))
-          }
+          // the shim ignores the options without a provider
+          try OrtError.check(
+            jl_session_create(
+              env.pointer, path, providerName, optionBuffer.baseAddress, optionBuffer.count, configBuffer.baseAddress, configBuffer.count,
+              Int32(threads), &session))
         }
       }
     }

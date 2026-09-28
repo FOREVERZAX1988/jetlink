@@ -43,7 +43,6 @@ public final class QNNBackend: EngineBackend {
 
   /// The same preparation as CoreML's, so the same version.
   public static let prepareVersion = Pinned.prepareVersion
-  static let manifestName = "sessions.json"
   /// A first NPU compile with no earlier build to go by. The QNN graph
   /// finalization of a big model is minutes on a phone (unmeasured).
   static let expectedCompileSeconds = 180.0
@@ -58,50 +57,20 @@ public final class QNNBackend: EngineBackend {
   private let chip: String
   private let log = ServerLog(category: "qnn")
 
-  public init(device: Device = .htp, preparer: any ModelPreparer, keepAlive: Bool = true, keepCPUWarm: Bool = false) {
+  /// `chip` is the SoC's model, "SM8650" (Build.SOC_MODEL), which is what a
+  /// QNN context is valid for; the Android app passes it.
+  public init(device: Device = .htp, preparer: any ModelPreparer, keepAlive: Bool = true, keepCPUWarm: Bool = false, chip: String = "cpu") {
     self.device = device
     self.preparer = preparer
     self.keepAlive = keepAlive
     self.keepCPUWarm = keepCPUWarm
-    self.chip = QNNBackend.chipName()
+    self.chip = chip.isEmpty ? "unknown" : chip
   }
-
-  /// The SoC's model, "SM8650", which is what a QNN context is valid for.
-  /// The Android app reports Build.SOC_MODEL before it starts the server;
-  /// "cpu" off Android.
-  public static func chipName() -> String {
-    chipLock.lock()
-    defer { chipLock.unlock() }
-    return reportedChip ?? {
-      #if os(Android)
-        "unknown"
-      #else
-        "cpu"
-      #endif
-    }()
-  }
-
-  public static func reportChip(_ name: String) {
-    chipLock.lock()
-    reportedChip = name.isEmpty ? nil : name
-    chipLock.unlock()
-  }
-
-  private static let chipLock = NSLock()
-  nonisolated(unsafe) private static var reportedChip: String?
 
   public var runtimeVersion: String { OrtRuntime.version }
 
   public func deviceTag() -> String {
     sanitize("\(device.rawValue)-\(chip)")
-  }
-
-  public func tag() -> String {
-    "ort\(sanitize(runtimeVersion)).\(deviceTag())"
-  }
-
-  public func describe() -> [String: String] {
-    ["backend": name, "runtime_version": runtimeVersion, "device": deviceTag()]
   }
 
   /// (session name, unit) in run order.
@@ -143,12 +112,12 @@ public final class QNNBackend: EngineBackend {
     }
   }
 
-  func plan(_ model: URL, _ unit: Unit, config: [String: String] = [:]) -> SessionPlan {
+  func plan(_ model: URL, _ unit: Unit) -> SessionPlan {
     switch unit {
     case .cpu:
       SessionPlan(model: model, provider: nil, threads: QNNBackend.cpuThreads, label: "CPU")
     case .htp, .gpu:
-      SessionPlan(model: model, provider: "QNN", options: providerOptions(unit), config: config, label: "QNN(\(unit.rawValue))")
+      SessionPlan(model: model, provider: "QNN", options: providerOptions(unit), label: "QNN(\(unit.rawValue))")
     }
   }
 
@@ -164,159 +133,91 @@ public final class QNNBackend: EngineBackend {
 
   public func build(model: URL, artifact: URL, report: @escaping ProgressFn, metaExtra: [String: Any]) throws {
     let started = Date()
-    let fm = FileManager.default
-    let parent = artifact.deletingLastPathComponent()
-    try fm.createDirectory(at: parent, withIntermediateDirectories: true)
-    // Staged beside the final path, where the cache's sweep finds it if a
-    // build is killed, and renamed into place only once it has run.
-    let temp = parent.appending(path: "tmp\(UUID().uuidString.prefix(8))", directoryHint: .isDirectory)
-    let staged = temp.appending(path: "artifact", directoryHint: .isDirectory)
-    try fm.createDirectory(at: staged, withIntermediateDirectories: true)
-    defer { try? fm.removeItem(at: temp) }
-
-    report("patch", 0, "preparing the model")
-    let sessions = self.sessions
-    let prepared = try preparer.prepare(model: model, into: staged, layout: layout) {
-      CoreMLPreparation.cacheKey(stem: artifact.deletingPathExtension().lastPathComponent, part: $0)
-    }
-    log.info("prepared \(model.lastPathComponent): \(prepared.summary)")
-    guard prepared.parts.map(\.name) == sessions.map(\.name) else {
-      throw HostError.failed("the preparation wrote \(prepared.parts.map(\.name)), expected \(sessions.map(\.name))")
-    }
-    report("patch", 1, "prepared")
-
-    // Compile each NPU session into its EP context.
     let expect = ArtifactSidecar.read(artifact)
-    let took = (expect["compile_seconds"] as? NSNumber)?.doubleValue ?? QNNBackend.expectedCompileSeconds
-    var manifest: [[String: Any]] = []
-    var contextBytes: Int64 = 0
-    let compileStarted = Date()
-    for (session, part) in zip(sessions, prepared.parts) {
-      guard session.unit == .htp else {
-        manifest.append(["model": part.file, "unit": session.unit.rawValue])
-        continue
+    var meta = try OrtArtifact.build(artifact) { staged in
+      report("patch", 0, "preparing the model")
+      let prepared = try preparer.prepare(model: model, into: staged, layout: layout) {
+        CoreMLPreparation.cacheKey(stem: artifact.deletingPathExtension().lastPathComponent, part: $0)
       }
-      let source = staged.appending(path: part.file)
-      let context = staged.appending(path: "\(session.name)_ctx.onnx")
-      report("compile", 0, "compiling \(session.name) for the NPU")
-      let ticker = Ticker(interval: 2) { elapsed in
-        report(
-          "compile", min(0.95, elapsed / took),
-          "compiling \(session.name) for the NPU, \(Int(elapsed)) s of about \(Int(took.rounded())) s")
+      log.info("prepared \(model.lastPathComponent): \(prepared.summary)")
+      guard prepared.parts.map(\.name) == sessions.map(\.name) else {
+        throw HostError.failed("the preparation wrote \(prepared.parts.map(\.name)), expected \(sessions.map(\.name))")
       }
-      do {
-        let config = [
-          "ep.context_enable": "1",
-          "ep.context_file_path": context.path,
-          // the context binary in a file of its own beside the model, not
-          // base64 inside it
-          "ep.context_embed_mode": "0",
-        ]
-        _ = try OrtSession(model: source, provider: "QNN", options: providerOptions(.htp), config: config)
-      } catch {
-        ticker.stop()
-        throw error
-      }
-      ticker.stop()
-      if fm.fileExists(atPath: context.path) {
-        // The context carries the compiled graph and any nodes left to the
-        // CPU with their weights; the prepared model is dead weight beside it.
-        try? fm.removeItem(at: source)
-        manifest.append(["model": context.lastPathComponent, "unit": session.unit.rawValue])
-      } else {
-        log.warning("onnxruntime wrote no EP context for \(session.name); each load will compile it again")
-        manifest.append(["model": part.file, "unit": session.unit.rawValue])
-      }
-    }
-    let compileSeconds = Date().timeIntervalSince(compileStarted)
-    contextBytes = ArtifactSidecar.treeBytes(staged)
-    try JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted]).write(to: staged.appending(path: QNNBackend.manifestName))
-    if sessions.contains(where: { $0.unit == .htp }) {
-      report("compile", 1, "compiled in \(Int(compileSeconds.rounded())) s")
-    }
+      report("patch", 1, "prepared")
+      let (manifest, compileSeconds) = try compile(prepared, in: staged, expect: expect, report: report)
+      try OrtArtifact.writeManifest(manifest, in: staged)
 
-    // Prove it runs before calling it built: minutes on a CPU, so it ticks.
-    let proving = Ticker(interval: 1) { elapsed in
-      report("load", 0, "loading the model to check it runs, \(Int(elapsed)) s elapsed")
+      // Prove it runs before calling it built: minutes on a CPU, so it ticks.
+      let providers = try Ticker.during(interval: 1, { report("load", 0, "loading the model to check it runs, \(Int($0)) s elapsed") }) {
+        let engine = try OrtEngine(plans: plans(staged, manifest), device: deviceTag(), keepAlive: false, keepCPUWarm: false)
+        defer { engine.close() }
+        try engine.run()
+        return engine.providers
+      }
+      var meta = OrtArtifact.meta(
+        self, manifest: manifest, providers: providers, model: model, prepareVersion: QNNBackend.prepareVersion, started: started)
+      meta["compile_seconds"] = pythonRound(compileSeconds, 1)
+      meta["artifact_bytes"] = ArtifactSidecar.treeBytes(staged)
+      return meta
     }
-    let providers: [String]
-    do {
-      let engine = try OrtEngine(plans: plans(staged, manifest), device: deviceTag(), keepAlive: false, keepCPUWarm: false)
-      defer { engine.close() }
-      try engine.run()
-      providers = engine.providers
-    } catch {
-      proving.stop()
-      throw error
-    }
-    proving.stop()
-
-    if fm.fileExists(atPath: artifact.path) {
-      try fm.removeItem(at: artifact)
-    }
-    try fm.moveItem(at: staged, to: artifact)
-
-    var meta: [String: Any] = [
-      "backend": name,
-      "onnxruntime": runtimeVersion,
-      "device": deviceTag(),
-      "sessions": manifest,
-      "providers": providers,
-      "build_seconds": pythonRound(Date().timeIntervalSince(started), 1),
-      "onnx": model.lastPathComponent,
-      "prepare": QNNBackend.prepareVersion,
-      "preparer": "swift",
-      "built_at": ISO8601DateFormatter().string(from: Date()),
-      "compile_seconds": pythonRound(compileSeconds, 1),
-      "artifact_bytes": contextBytes,
-    ]
     for (key, value) in metaExtra { meta[key] = value }
     try ArtifactSidecar.write(artifact, meta)
     report("build", 1, "done in \(meta["build_seconds"]!)s")
   }
 
+  /// Compiles each NPU session into its EP context, which then replaces its
+  /// prepared model: the context carries the compiled graph and any nodes
+  /// left to the CPU with their weights. Returns the manifest, what each
+  /// session loads, and how long the compiles took.
+  private func compile(_ prepared: PreparedModel, in staged: URL, expect: [String: Any], report: @escaping ProgressFn) throws -> (
+    manifest: [[String: Any]], seconds: TimeInterval
+  ) {
+    let took = (expect["compile_seconds"] as? NSNumber)?.doubleValue ?? QNNBackend.expectedCompileSeconds
+    let started = Date()
+    var manifest: [[String: Any]] = []
+    for (session, part) in zip(sessions, prepared.parts) {
+      var file = part.file
+      if session.unit == .htp {
+        let source = staged.appending(path: part.file)
+        let context = staged.appending(path: "\(session.name)_ctx.onnx")
+        report("compile", 0, "compiling \(session.name) for the NPU")
+        try Ticker.during(interval: 2, { elapsed in
+          report("compile", min(0.95, elapsed / took), "compiling \(session.name) for the NPU, \(Int(elapsed)) s of about \(Int(took.rounded())) s")
+        }) {
+          let config = [
+            "ep.context_enable": "1",
+            "ep.context_file_path": context.path,
+            // the context binary in a file of its own beside the model, not base64 inside it
+            "ep.context_embed_mode": "0",
+          ]
+          _ = try OrtSession(model: source, provider: "QNN", options: providerOptions(.htp), config: config)
+        }
+        if FileManager.default.fileExists(atPath: context.path) {
+          try? FileManager.default.removeItem(at: source)
+          file = context.lastPathComponent
+        } else {
+          log.warning("onnxruntime wrote no EP context for \(session.name); each load will compile it again")
+        }
+      }
+      manifest.append(["model": file, "unit": session.unit.rawValue])
+    }
+    let seconds = Date().timeIntervalSince(started)
+    if sessions.contains(where: { $0.unit == .htp }) {
+      report("compile", 1, "compiled in \(Int(seconds.rounded())) s")
+    }
+    return (manifest, seconds)
+  }
+
   // MARK: load
 
   public func load(artifact: URL, report: @escaping ProgressFn) throws -> any Engine {
-    let manifestURL = artifact.appending(path: QNNBackend.manifestName)
-    guard let data = try? Data(contentsOf: manifestURL),
-      let manifest = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]], !manifest.isEmpty
-    else {
-      throw ArtifactInvalid("\(artifact.lastPathComponent): no readable \(QNNBackend.manifestName) inside")
+    let (manifest, meta) = try OrtArtifact.open(artifact, prepareVersion: QNNBackend.prepareVersion, builds: "QNN") { entry in
+      (entry["unit"] as? String).flatMap(Unit.init(rawValue:)) == nil ? "a session names no unit" : nil
     }
-    let meta = ArtifactSidecar.read(artifact)
-    let version = (meta["prepare"] as? NSNumber)?.intValue ?? 1
-    if version != QNNBackend.prepareVersion {
-      throw ArtifactInvalid(
-        "\(artifact.lastPathComponent): prepared as version \(version), builds are now at \(QNNBackend.prepareVersion); rebuilding")
+    let (engine, seconds) = try OrtArtifact.load(artifact, meta: meta, what: "the model", report: report) {
+      try OrtEngine(plans: plans(artifact, manifest), device: deviceTag(), keepAlive: keepAlive, keepCPUWarm: keepCPUWarm)
     }
-    for entry in manifest {
-      guard let model = entry["model"] as? String, FileManager.default.fileExists(atPath: artifact.appending(path: model).path),
-        (entry["unit"] as? String).flatMap(Unit.init(rawValue:)) != nil
-      else {
-        throw ArtifactInvalid("\(artifact.lastPathComponent): a session's model is missing")
-      }
-    }
-    let started = Date()
-    let took = (meta["load_seconds"] as? NSNumber)?.doubleValue ?? 0
-    report("load", 0, "loading the model")
-    let ticker = Ticker(interval: 1) { elapsed in
-      if took > 0 {
-        report("load", min(0.95, elapsed / took), "loading the model, \(Int(elapsed)) s of about \(Int(took.rounded())) s")
-      } else {
-        report("load", 0, "loading the model, \(Int(elapsed)) s elapsed")
-      }
-    }
-    defer { ticker.stop() }
-    let engine = try OrtEngine(plans: plans(artifact, manifest), device: deviceTag(), keepAlive: keepAlive, keepCPUWarm: keepCPUWarm)
-    let seconds = Date().timeIntervalSince(started)
     log.info("onnxruntime sessions on \(device.rawValue) in \(String(format: "%.1f", seconds)) s: \(engine.providers.joined(separator: " then "))")
-    report("load", 1, "loaded in \(Int(seconds.rounded())) s")
-    if !meta.isEmpty {
-      var updated = meta
-      updated["load_seconds"] = pythonRound(seconds, 1)
-      try? ArtifactSidecar.write(artifact, updated)
-    }
     return engine
   }
 
