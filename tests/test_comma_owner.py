@@ -402,19 +402,11 @@ class TestNobodyCanBorrow(OwnerTest):
 class TestTheToggle(OwnerTest):
   def test_turning_it_off_lets_everything_go(self):
     o = self.owner()
-    o.vm_tuned = True
     worker = o.worker = mock.Mock(**{'poll.return_value': None})
     self.write('JetlinkLink', b'0')
     o.step()
     o.close_link.assert_called_once()
     worker.terminate.assert_called_once()
-    self.assertEqual(self.vm_calls(), ['restore'])
-
-  def test_the_sysctls_go_in_once_and_stay_for_the_drive(self):
-    o = self.owner()
-    o.step()
-    o.step()
-    self.assertEqual(self.vm_calls(), ['apply'])
 
   def test_the_first_gadget_is_not_held_up_by_the_sysctls(self):
     self.write('IsOffroad', b'0')
@@ -444,10 +436,11 @@ class TestTheToggle(OwnerTest):
 
 
 class TestVmTuning(OwnerTest):
-  """The VM tuning, against the real jetlink-root.sh vm on a fake /proc/sys. A
-  device with the link off runs stock values, one that turns it off gets them
-  back, and a plain exit keeps them for the drive that follows. The values
-  and the ratio-mode restore are test_comma_root.py's."""
+  """When the owner applies and restores the VM tuning, against the real
+  jetlink-root.sh vm on a fake /proc/sys. A device with the link off runs
+  stock values, one that turns it off gets them back, and a plain exit keeps
+  them for the drive that follows. The values and the ratio-mode restore are
+  test_comma_root.py's."""
 
   def setUp(self):
     super().setUp()
@@ -461,8 +454,9 @@ class TestVmTuning(OwnerTest):
   def tuned(self) -> bool:
     return comma_fakes.read_all(self.tmp, comma_fakes.TUNED) == comma_fakes.TUNED
 
-  def test_applied_on_start_and_kept_on_exit(self):
+  def test_applied_once_on_start_and_kept_on_exit(self):
     o = self.owner()
+    o.step()
     o.step()
     o.stop = True
     o.run()
@@ -489,13 +483,7 @@ class TestVmTuning(OwnerTest):
     self.write('JetlinkLink', b'0')
     o.step()
     self.assertEqual(self.vm_calls(), ['apply', 'restore'])
-    self.assertFalse(comma_fakes.record(self.tmp).exists())
-    stock = comma_fakes.STOCK
-    self.assertEqual(comma_fakes.read_sys(self.tmp, 'vm.min_free_kbytes'), stock['vm.min_free_kbytes'])
-    # back to ratio mode through the ratio keys; the fake /proc cannot zero
-    # the bytes keys as the kernel does
-    for key in ('vm.dirty_ratio', 'vm.dirty_background_ratio'):
-      self.assertEqual(comma_fakes.read_sys(self.tmp, key), stock[key])
+    self.assertFalse(comma_fakes.record(self.tmp).exists(), 'the restore never ran')
 
 
 class TestUsb(OwnerTest):
