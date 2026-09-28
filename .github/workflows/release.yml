@@ -117,8 +117,6 @@ jobs:
           echo "NOTARY_KEY_PATH=$RUNNER_TEMP/AuthKey.p8" >> "$GITHUB_ENV"
 
       - name: Build and sign the app
-        env:
-          DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           # SIGN_IDENTITY is in the environment only when the step above ran;
           # the scripts default it to "-" (ad hoc) otherwise.

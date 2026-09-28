@@ -2,10 +2,8 @@
 #
 # Generate the Xcode project and build Release into macos/build/Jetlink.app.
 #
-# SIGN_IDENTITY defaults to "-" (ad hoc), which is what a machine with no
-# Developer ID certificate can produce. Pass a real identity and
-# DEVELOPMENT_TEAM for a release build; scripts/sign.sh then re-signs the
-# nested Mach-O files with the right entitlements.
+# The build is always ad hoc. scripts/sign.sh then signs everything inside out
+# with SIGN_IDENTITY and the right entitlements.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -46,12 +44,11 @@ XCODEBUILD_ARGS=(
   # JetlinkONNX says so with an #error on Intel (its Float16 does not exist there).
   "ARCHS=arm64"
   "ONLY_ACTIVE_ARCH=NO"
-  "CODE_SIGN_IDENTITY=${SIGN_IDENTITY:--}"
+  # A Developer ID (or a team) on this command line reaches the Swift package
+  # targets too, which sign automatically, and xcodebuild refuses the pair.
+  "CODE_SIGN_IDENTITY=-"
   CODE_SIGNING_ALLOWED=YES
 )
-if [ -n "${DEVELOPMENT_TEAM:-}" ]; then
-  XCODEBUILD_ARGS+=("DEVELOPMENT_TEAM=$DEVELOPMENT_TEAM")
-fi
 xcodebuild "${XCODEBUILD_ARGS[@]}"
 
 PRODUCT="$MACOS_DIR/build/DerivedData/Build/Products/Release/Jetlink.app"

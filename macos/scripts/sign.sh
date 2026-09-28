@@ -81,6 +81,20 @@ else
   echo "warning: no embedded runtime at $PYTHON_ROOT; signing the app only"
 fi
 
+FRAMEWORKS="$APP/Contents/Frameworks"
+if [ -d "$FRAMEWORKS" ]; then
+  # The app is built ad hoc (build-app.sh), so the frameworks it embeds, the
+  # Swift server's onnxruntime among them, are signed here with the app's
+  # identity: their loose dylibs first, then each framework bundle.
+  echo "==> signing the frameworks"
+  while IFS= read -r -d '' f; do
+    codesign --force --options runtime "$TIMESTAMP" --sign "$SIGN_IDENTITY" "$f"
+  done < <(find "$FRAMEWORKS" -type f -name '*.dylib' -print0)
+  for f in "$FRAMEWORKS"/*.framework; do
+    [ -e "$f" ] || continue
+    codesign --force --options runtime "$TIMESTAMP" --sign "$SIGN_IDENTITY" "$f"
+  done
+fi
 echo "==> signing the app"
 codesign --force --options runtime "$TIMESTAMP" \
   --entitlements "$APP_ENTITLEMENTS" --sign "$SIGN_IDENTITY" "$APP"

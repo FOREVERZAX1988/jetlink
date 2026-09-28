@@ -43,7 +43,7 @@ without xcodegen installed.
 For CI releases and signing secrets, see [publishing](../docs/publishing.md).
 
 ```
-SIGN_IDENTITY="Developer ID Application: Name (TEAMID)" DEVELOPMENT_TEAM=TEAMID make -C macos app
+SIGN_IDENTITY="Developer ID Application: Name (TEAMID)" make -C macos app
 NOTARY_KEY_ID=... NOTARY_ISSUER_ID=... NOTARY_KEY_PATH=AuthKey_XXXX.p8 make -C macos notarize
 SIGN_IDENTITY="Developer ID Application: Name (TEAMID)" make -C macos dmg
 ```

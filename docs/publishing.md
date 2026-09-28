@@ -70,7 +70,6 @@ signing mode" says which mode ran.
 | `MACOS_CERTIFICATE_P12_BASE64` | the Developer ID Application certificate with its private key, exported from Keychain Access as a .p12 and base64 encoded |
 | `MACOS_CERTIFICATE_PASSWORD` | the .p12 password |
 | `KEYCHAIN_PASSWORD` | any random string; it locks the temporary keychain the runner builds in |
-| `APPLE_TEAM_ID` | the 10 character team id, passed to the build as `DEVELOPMENT_TEAM` |
 | `NOTARY_KEY_ID` | the App Store Connect API key id |
 | `NOTARY_ISSUER_ID` | the issuer id of that key |
 | `NOTARY_PRIVATE_KEY_P8_BASE64` | the key's .p8 file, base64 encoded |
