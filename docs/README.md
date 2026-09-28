@@ -9,6 +9,7 @@ New? Start with the [quick start](../README.md#quick-start).
 | Set up a Jetson (JetPack, power) | [Jetson setup](jetson.md) |
 | Install and use the Mac app | [Jetlink for Mac](macos-app.md) |
 | Try the iPhone and iPad app (experimental) | [Jetlink for iPhone and iPad](iphone-app.md) |
+| Try the Android app (experimental) | [Jetlink for Android](android-app.md) |
 | Set up a Linux PC, WSL2, or a source install | [Platform setup](platforms.md) |
 | Understand icons, startup, and model switching | [Using Jetlink](using-jetlink.md) |
 | Choose a model or prepare one ahead of time | [Model management](models.md) |
@@ -31,5 +32,6 @@ then your platform guide's troubleshooting.
 | Test a server without a comma | [Benchmark setup](platforms.md#test-without-a-comma) |
 | Build the Mac app | [Mac development](../macos/README.md) |
 | Build the iPhone and iPad app | [iPhone development](../ios/README.md) |
+| Build the Android app | [Android development](../android/README.md) |
 | Keep the Swift and Python servers in step | [Conformance](conformance.md) |
 | Publish releases | [Publishing](publishing.md) |

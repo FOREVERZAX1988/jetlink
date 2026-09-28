@@ -5,6 +5,7 @@ to the comma.
 
 - Keep laptops powered and awake; sleep drops the link.
 - Keep the iPhone app on screen; iOS suspends it otherwise.
+- The Android app keeps serving in the background while its notification shows.
 
 ## Check the comma's icon
 

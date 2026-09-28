@@ -6,7 +6,7 @@ must serve both.
 | Server | Code | Runs |
 | --- | --- | --- |
 | Python | `jetlink/server` | Jetson, Linux PC, and the Mac app until the Swift one takes over |
-| Swift | `JetlinkKit/Sources/JetlinkServer` | the iPhone app, the Mac app behind a setting, `jetlink-serve` |
+| Swift | `JetlinkKit/Sources/JetlinkServer` | the iPhone app, the Android app, the Mac app behind a setting, `jetlink-serve` |
 
 Python is the source: what the two must agree on is generated from it,
 committed, and read by the Swift tests; the Python tests check the Python still
@@ -24,6 +24,18 @@ writes exactly those files.
 | LFS pointers, model identities, catalog parsing and merging, one cache directory's catalog and inventory payloads | `make_conformance_fixtures.py registry` | `JetlinkRegistryTests/ConformanceTests.swift` |
 | ONNX preparation for the split, whole and ane-whole layouts, byte for byte, on graphs that take every branch | `make_onnx_fixtures.py` | `JetlinkONNXTests/PreparationTests.swift` |
 | Whole-server runs: driving output of the tiny queued and stateful graphs, bit for bit, over TCP and USB | `make_server_fixtures.py` | `JetlinkServerTests/ServerTests.swift` and `USBTransportTests.swift` |
+
+The Android app draws what the Swift server hands it as JSON, so there the
+Swift is the source: `JetlinkKitTests/AppSnapshotTests.swift` checks the
+snapshot against `Fixtures/android_snapshot.json` (`JETLINK_WRITE_FIXTURES=1`
+rewrites it), and the app's `SnapshotTest.kt` parses the same file. The app's
+`PinnedTest.kt` checks its USB ids, port, frame skip and onnxruntime release
+against `Pinned.swift`.
+
+The Swift suites also run on Android (`android/scripts/swift-test-device.sh`),
+reading the same fixtures through `JETLINK_TEST_ROOT`. There the golden frames
+of an fp16 graph are held to a 0.999 correlation rather than bit for bit:
+onnxruntime's Android build computes fp16 MatMul in fp16.
 
 - Generators live in `JetlinkKit/Scripts`. Each imports the `jetlink` package
   of its own checkout, whatever the environment has installed.

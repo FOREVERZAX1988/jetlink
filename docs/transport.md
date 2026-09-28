@@ -13,6 +13,7 @@ A USB 3 data cable; charge-only cables do not work.
 | Mac | USB-C cable, or USB-A to USB-C with a USB-C adapter |
 | Linux PC | USB-A to USB-C, from a USB-A port on the PC |
 | iPhone | USB-C cable, or USB-A to USB-C with a USB-C adapter; a powered USB-C hub between them keeps the phone charging |
+| Android | USB-A to USB-C, from a USB 3 hub with USB-C power pass-through on the phone, so it charges; or a USB-C to USB-A adapter |
 
 - The comma holds its USB-C port as the device for any host but a chestnut.
 - The comma's USB-C port cannot serve Jetlink and chestnut at once.
@@ -24,7 +25,7 @@ settings):
 
 | Setting | For | Gadget |
 | --- | --- | --- |
-| **USB** | Jetson, Mac, Linux PC | Plain: one vendor-specific interface, one bulk endpoint pair, opened through libusb (IOUSBHost on the Mac). No network interface. |
+| **USB** | Jetson, Mac, Linux PC, Android | Plain: one vendor-specific interface, one bulk endpoint pair, opened through libusb (IOUSBHost on the Mac; usbdevfs on the descriptor Android's USB host API hands the app). No network interface. |
 | **iOS** | iPhone | Composite: interface 0 is the same vendor interface (never used on iOS), then a CDC-NCM network interface, since iOS gives apps no vendor USB access but drives USB network adapters itself. |
 
 - iOS network: the comma is `192.168.60.1` and runs DHCP; the phone gets a

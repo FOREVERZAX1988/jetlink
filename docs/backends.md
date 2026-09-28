@@ -15,6 +15,7 @@ layouts described below, and no tinygrad.
 | --- | --- | --- | --- |
 | `trt` | NVIDIA CUDA | `.plan` | TensorRT 10.3 on JetPack 6, 10.16 on JetPack 7.2, or 11.x from PyPI on a PC |
 | `ort` | CoreML, CUDA, CPU | `.ortcache/` | ONNX Runtime 1.22+ |
+| `ort` (Android, Swift server) | QNN: Hexagon NPU, Adreno GPU; CPU | `.ortcache/` | onnxruntime-android-qnn 1.29.0 |
 
 - `--backend auto`: TensorRT if available, else ONNX Runtime (CoreML on macOS,
   CUDA or CPU elsewhere).
@@ -28,6 +29,18 @@ On a Mac, `--device` picks the CoreML layout:
 | `coreml` | everything on the GPU |
 | `ane-whole` | one CoreML program, every compute unit allowed, prepared as the iPhone does (policy LayerNormalization inputs scaled by 1/8 so their fp16 squares do not overflow; heads after the trunk in fp32). For comparing against the default, not daily use; see [how the default runs](mac-performance.md#how-the-default-runs). |
 
+The Android app's Swift server has its own devices (Settings > Processor), on
+the same preparation as CoreML's:
+
+| Device | Layout |
+| --- | --- |
+| `htp` (NPU + GPU, default) | vision trunk on the NPU in fp16, the rest on the GPU, as `ane` splits it; the NPU part compiled once into onnxruntime's EP context |
+| `htp-whole` (NPU) | the whole graph on the NPU, prepared as `ane-whole`; the NPU computes in fp16 throughout, heads included |
+| `gpu` | everything on the Adreno GPU |
+| `cpu` | onnxruntime's CPU provider, for the emulator |
+
+None of these has run on a Snapdragon yet.
+
 ## Platform matrix
 
 | Platform | Backend | USB | Telemetry | Sleep support |
@@ -36,6 +49,7 @@ On a Mac, `--device` picks the CoreML layout:
 | Linux with NVIDIA GPU | TensorRT; ONNX Runtime as an alternative | libusb with `scripts/99-jetlink-host.rules` | NVML | `--sleep-after` requires `/sys/power`; USB wake depends on hardware |
 | Windows with NVIDIA GPU | TensorRT in WSL2 | Requires `usbipd-win` | NVML | None |
 | macOS with Apple silicon | ONNX Runtime with CoreML on the Neural Engine and GPU | USB 3 USB-C cable, or USB-A to USB-C with a USB-C adapter; the app uses macOS's USB framework, the Python server libusb | Not available | The app, or `scripts/run-mac.sh`, prevents idle sleep on AC power |
+| Android with Snapdragon | ONNX Runtime with QNN on the NPU and GPU (the app's Swift server) | USB host through a hub; usbdevfs on the app's descriptor | Not available | A foreground service keeps it serving |
 
 Timing and power: [performance and operating limits](status.md).
 

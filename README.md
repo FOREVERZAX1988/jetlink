@@ -81,6 +81,17 @@ Only tested with a Mac standing in for the phone. You need:
    works, but you must run it from Xcode again every 7 days.
 2. Open Jetlink and keep it on screen.
 
+### Android (experimental)
+
+Not yet run on a phone. You need:
+
+* An Android phone with a Snapdragon 8 Gen 2 or newer and USB 3.
+* A USB 3 hub with USB-C power pass-through, and a USB-A to USB-C cable.
+* A Mac or Linux PC to build the app.
+
+1. Build and install it: **[Jetlink for Android](docs/android-app.md)**.
+2. Open Jetlink, plug in the comma, and tick **Always open** when Android asks.
+
 ## Comma setup (all platforms)
 
 1. **Install zoompilot with Jetlink.** After resetting the comma, enter
@@ -89,7 +100,7 @@ Only tested with a Mac standing in for the phone. You need:
    **Settings > Software > Target Branch > Non-Prebuilt Branches**.
    Let it finish installing, rebooting, and building.
 2. **Enable Jetlink.** Set **Settings > Models > Accelerator Link** to **USB**
-   (Jetson, Linux PC, Mac) or **iOS** (iPhone, iPad). Offroad only. Leave
+   (Jetson, Linux PC, Mac, Android) or **iOS** (iPhone, iPad). Offroad only. Leave
    **Big Model** at its default for the first run.
 3. **Connect USB.** A USB 3 USB-C cable, or a USB-A to USB-C cable with a
    USB-C adapter. Jetson: use its USB-A port. Charge-only cables won't work.
@@ -122,6 +133,7 @@ More: [daily use and icon meanings](docs/using-jetlink.md).
 Logs and more: [Jetson](docs/jetson.md#troubleshooting),
 [Mac](docs/macos-app.md#troubleshooting),
 [iPhone and iPad](docs/iphone-app.md#logs),
+[Android](docs/android-app.md#logs),
 [PC](docs/platforms.md#troubleshooting).
 
 <a id="more"></a>

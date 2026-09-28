@@ -13,6 +13,8 @@ both devices powered and online.
      the update fails.
    - Mac app: quit Jetlink, replace it with the new release, and reopen it.
    - iPhone app: run `git pull` in the checkout, then click **Run** in Xcode.
+   - Android app: run `git pull` in the checkout, then build and install it
+     again ([Android development](../android/README.md#build)).
    - Source install: run `git pull` in the checkout. Mac script: restart
      `scripts/run-mac.sh`; recreate `.venv` if dependencies changed.
 

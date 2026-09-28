@@ -40,7 +40,7 @@ scripts/run-mac.sh
 - The first run installs dependencies and starts the server.
 - Plug the comma in with a **USB 3 USB-C cable**, or a USB-A to USB-C cable with
   a USB-C adapter.
-- Set the comma's **Accelerator Link** to **USB** (**iOS** is for iPhone). See
+- Set the comma's **Accelerator Link** to **USB** (also for Android; **iOS** is for iPhone). See
   [what the comma presents](transport.md#what-the-comma-presents).
 - CoreML prepares a model in **about 20 seconds** the first time, and loads it
   in under a second to about 10 seconds on every server restart.

@@ -7,7 +7,7 @@ soft-disables: take over. See [daily use](using-jetlink.md).
 <a id="platform-testing"></a>
 
 Requirements: [Jetson](jetson.md), [Mac](macos-app.md),
-[iPhone](iphone-app.md), [PC](platforms.md).
+[iPhone](iphone-app.md), [Android](android-app.md), [PC](platforms.md).
 
 ## Measured performance
 

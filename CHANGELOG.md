@@ -1,9 +1,12 @@
-Unreleased
-==========
-**Mac**
-* **Swift only:** The app runs the Swift server alone, with no bundled Python.
-* **Settings:** Server, Log level and the Python override are gone; a stored tinygrad backend reads as Automatic.
-* The Python server still runs from a checkout with `scripts/run-mac.sh`.
+Jetlink v0.6.0
+==============
+**Android support!**
+* Run big models on a Snapdragon phone's NPU over USB (experimental, build from source) <3
+* Turn on: Settings > Models > Accelerator Link > USB.
+
+**One Swift engine everywhere**
+* The Mac, iPhone/iPad and Android apps all run the same Swift server.
+* **Mac:** No bundled Python. The Server, Log level and Python override settings are gone; a stored tinygrad backend reads as Automatic. The Python server still runs from a checkout with `scripts/run-mac.sh`.
 
 Jetlink v0.5.0
 ==============
