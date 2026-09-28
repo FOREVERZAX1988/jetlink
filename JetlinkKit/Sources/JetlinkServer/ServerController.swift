@@ -1,5 +1,6 @@
 import Foundation
 import JetlinkKit
+import JetlinkRegistry
 
 /// What the control layer needs from the model registry: the catalog, the
 /// bytes, and what is on disk. JetlinkRegistry's `Registry` is the one the
@@ -302,7 +303,7 @@ public final class ServerController: @unchecked Sendable {
     }
     var ref = ref
     if let sha256 {
-      guard EngineCache.isSHA256(sha256) else { throw ControlError.refused("sha256 must be a lowercase SHA-256 digest") }
+      guard CacheLayout.isSHA256(sha256) else { throw ControlError.refused("sha256 must be a lowercase SHA-256 digest") }
       // An LFS object is an oid plus a size: its ref is what can ask for one.
       guard let known = registry.ref(for: sha256) else {
         throw ControlError.refused("model \(sha256.prefix(16)) is not in the catalog")
@@ -315,8 +316,8 @@ public final class ServerController: @unchecked Sendable {
     } catch {
       throw ControlError.refused("could not resolve \(ref!): \(error)")
     }
-    let path = server.cache.modelPath(pointer.sha256)
-    if FileManager.default.fileExists(atPath: path.path) && (pointer.size == 0 || fileSize(path) == pointer.size) {
+    let path = try server.cache.modelPath(pointer.sha256)
+    if FileManager.default.fileExists(atPath: path.path) && (pointer.size == 0 || Files.size(of: path) == pointer.size) {
       throw ControlError.refused("model \(pointer.sha256.prefix(16)) is already downloaded")
     }
     let queued = lock.withLock {
@@ -497,9 +498,9 @@ public final class ServerController: @unchecked Sendable {
   // MARK: prepare, forget
 
   private func prepare(_ sha256: String, frameSkip: Int) async throws -> [String: JSONValue] {
-    guard EngineCache.isSHA256(sha256) else { throw ControlError.refused("sha256 must be a lowercase SHA-256 digest") }
-    let entry = server.cache.entry(sha256)
-    let modelPath = server.cache.modelPath(sha256)
+    guard CacheLayout.isSHA256(sha256) else { throw ControlError.refused("sha256 must be a lowercase SHA-256 digest") }
+    let entry = try server.cache.entry(sha256)
+    let modelPath = try server.cache.modelPath(sha256)
     if !entry.exists && !FileManager.default.fileExists(atPath: modelPath.path) {
       return try await downloadThenPrepare(sha256, frameSkip: frameSkip)
     }
@@ -545,10 +546,10 @@ public final class ServerController: @unchecked Sendable {
   }
 
   /// What the model weighs, for a request that has no client behind it.
-  private func nbytes(_ sha256: String) -> Int64 {
-    let modelPath = server.cache.modelPath(sha256)
+  private func nbytes(_ sha256: String) throws -> Int64 {
+    let modelPath = try server.cache.modelPath(sha256)
     if FileManager.default.fileExists(atPath: modelPath.path) {
-      return fileSize(modelPath)
+      return Files.size(of: modelPath)
     }
     if let spec = (try? server.cache.entry(sha256).meta())?["spec"] as? [String: Any],
       let bytes = (spec["nbytes"] as? NSNumber)?.int64Value, bytes > 0
@@ -559,7 +560,7 @@ public final class ServerController: @unchecked Sendable {
   }
 
   private func forget(_ sha256: String, artifacts: Bool, model: Bool) throws {
-    guard EngineCache.isSHA256(sha256) else { throw ControlError.refused("sha256 must be a lowercase SHA-256 digest") }
+    guard CacheLayout.isSHA256(sha256) else { throw ControlError.refused("sha256 must be a lowercase SHA-256 digest") }
     let snapshot = server.host.snapshot()
     if snapshot.sha256 == sha256 && (snapshot.state == .building || snapshot.state == .loading) {
       throw ControlError.refused("a build for this model is running")
@@ -568,7 +569,7 @@ public final class ServerController: @unchecked Sendable {
       server.host.unload()
     }
     try registry.remove(sha256: sha256, artifacts: artifacts, model: model)
-    if let remembered = server.cache.lastLoaded(), remembered.sha256 == sha256, !server.cache.entry(sha256).exists {
+    if let remembered = server.cache.lastLoaded(), remembered.sha256 == sha256, try !server.cache.entry(sha256).exists {
       // Preloading an engine that is no longer there costs a start-up failure.
       server.cache.forgetLastLoaded()
     }

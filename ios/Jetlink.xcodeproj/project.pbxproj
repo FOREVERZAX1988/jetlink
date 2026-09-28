@@ -25,6 +25,7 @@
 		ADFB4A5A28CCC9EF06EB05C0 /* PhoneServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8965401CE0D537AAE299392 /* PhoneServer.swift */; };
 		BC2C8BEE97C8C36333DCE538 /* JetlinkRegistry in Frameworks */ = {isa = PBXBuildFile; productRef = 274CFEF8A0044F990232F4AE /* JetlinkRegistry */; };
 		C17ECDB8A4833CBCF16B9746 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6B71A2709AC0F259D4486CB6 /* Assets.xcassets */; };
+		C5A26CB41E0083A447B027D2 /* JetlinkORT in Frameworks */ = {isa = PBXBuildFile; productRef = 278B898DF1DED4B7671FF5F5 /* JetlinkORT */; };
 		C97C593B2028CC112617A42C /* JetlinkServer in Frameworks */ = {isa = PBXBuildFile; productRef = 18188F707063EC9D73EC6510 /* JetlinkServer */; };
 		D670F7279D6E2E827E607299 /* JetlinkUI in Frameworks */ = {isa = PBXBuildFile; productRef = 95031BC76E32EFCF41AB88C6 /* JetlinkUI */; };
 		E1F9CD7E83F269C2600CF610 /* PhoneSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = B61BCBBE9254A57B8F820C68 /* PhoneSettings.swift */; };
@@ -68,6 +69,7 @@
 				D670F7279D6E2E827E607299 /* JetlinkUI in Frameworks */,
 				BC2C8BEE97C8C36333DCE538 /* JetlinkRegistry in Frameworks */,
 				C97C593B2028CC112617A42C /* JetlinkServer in Frameworks */,
+				C5A26CB41E0083A447B027D2 /* JetlinkORT in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -244,6 +246,7 @@
 				95031BC76E32EFCF41AB88C6 /* JetlinkUI */,
 				274CFEF8A0044F990232F4AE /* JetlinkRegistry */,
 				18188F707063EC9D73EC6510 /* JetlinkServer */,
+				278B898DF1DED4B7671FF5F5 /* JetlinkORT */,
 			);
 			productName = Jetlink;
 			productReference = C8ECBD9F702381594E2513CB /* Jetlink.app */;
@@ -534,6 +537,10 @@
 		274CFEF8A0044F990232F4AE /* JetlinkRegistry */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = JetlinkRegistry;
+		};
+		278B898DF1DED4B7671FF5F5 /* JetlinkORT */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = JetlinkORT;
 		};
 		95031BC76E32EFCF41AB88C6 /* JetlinkUI */ = {
 			isa = XCSwiftPackageProductDependency;

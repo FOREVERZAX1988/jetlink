@@ -8,19 +8,19 @@ import Foundation
   import Android
 #endif
 
-/// The filesystem calls the registry makes, with Python's semantics where the
-/// port depends on them: `stat` follows a symlink as `Path.stat()` does, and a
-/// file that is already gone is not an error to remove.
-enum Files {
-  struct Status {
-    let isFile: Bool
-    let isDirectory: Bool
-    let size: Int64
-    let modified: Double
+/// The filesystem calls the registry and the server make, with Python's
+/// semantics where the port depends on them: `stat` follows a symlink as
+/// `Path.stat()` does, and a file that is already gone is not an error to remove.
+package enum Files {
+  package struct Status {
+    package let isFile: Bool
+    package let isDirectory: Bool
+    package let size: Int64
+    package let modified: Double
   }
 
   /// `os.stat(path)`, or nil for anything it would raise on.
-  static func status(_ url: URL) -> Status? {
+  package static func status(_ url: URL) -> Status? {
     var info = stat()
     guard stat(url.path(percentEncoded: false), &info) == 0 else { return nil }
     let type = info.st_mode & S_IFMT
@@ -50,7 +50,7 @@ enum Files {
 
   /// A file's size, or everything under a directory artifact; 0 when neither
   /// can be read.
-  static func size(of url: URL) -> Int64 {
+  package static func size(of url: URL) -> Int64 {
     guard let top = status(url) else { return 0 }
     if top.isFile { return top.size }
     guard top.isDirectory, let walker = FileManager.default.enumerator(atPath: url.path(percentEncoded: false)) else {

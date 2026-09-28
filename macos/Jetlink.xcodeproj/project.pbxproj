@@ -30,6 +30,7 @@
 		BC2C8BEE97C8C36333DCE538 /* JetlinkServer in Frameworks */ = {isa = PBXBuildFile; productRef = 18188F707063EC9D73EC6510 /* JetlinkServer */; };
 		C17ECDB8A4833CBCF16B9746 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6B71A2709AC0F259D4486CB6 /* Assets.xcassets */; };
 		C5BD297534DB35414E8EE4A4 /* LogsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C8A278FA961C026335DCFD8 /* LogsView.swift */; };
+		C97C593B2028CC112617A42C /* JetlinkORT in Frameworks */ = {isa = PBXBuildFile; productRef = 278B898DF1DED4B7671FF5F5 /* JetlinkORT */; };
 		D670F7279D6E2E827E607299 /* JetlinkUI in Frameworks */ = {isa = PBXBuildFile; productRef = 95031BC76E32EFCF41AB88C6 /* JetlinkUI */; };
 		E2541FEB05BB69B0D4ED86FD /* ActivityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B668BFB7A68D7E8F0B5F93E2 /* ActivityView.swift */; };
 		E3E5E81C9DDEEE6634A62A34 /* BenchmarkView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95935759392B054144F7DC96 /* BenchmarkView.swift */; };
@@ -82,6 +83,7 @@
 				15023ACD3AC6BCE6E2D2CD0A /* JetlinkKit in Frameworks */,
 				D670F7279D6E2E827E607299 /* JetlinkUI in Frameworks */,
 				BC2C8BEE97C8C36333DCE538 /* JetlinkServer in Frameworks */,
+				C97C593B2028CC112617A42C /* JetlinkORT in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -228,6 +230,7 @@
 				EE168AFAF92FF522E4DD799C /* JetlinkKit */,
 				95031BC76E32EFCF41AB88C6 /* JetlinkUI */,
 				18188F707063EC9D73EC6510 /* JetlinkServer */,
+				278B898DF1DED4B7671FF5F5 /* JetlinkORT */,
 			);
 			productName = Jetlink;
 			productReference = C8ECBD9F702381594E2513CB /* Jetlink.app */;
@@ -603,6 +606,10 @@
 		18188F707063EC9D73EC6510 /* JetlinkServer */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = JetlinkServer;
+		};
+		278B898DF1DED4B7671FF5F5 /* JetlinkORT */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = JetlinkORT;
 		};
 		95031BC76E32EFCF41AB88C6 /* JetlinkUI */ = {
 			isa = XCSwiftPackageProductDependency;

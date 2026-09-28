@@ -13,16 +13,13 @@ public final class EmbeddedServer: @unchecked Sendable {
   /// The control channel's events, as the Python server's socket sends them.
   public var events: AsyncStream<ControlEvent> { controller.events }
 
-  /// Builds the server on `configuration`, creating its cache directory.
-  public convenience init(configuration: Server.Configuration) throws {
+  /// The server on `configuration` and the host's `backend`, `gadget` and
+  /// `hooks`, creating its cache directory.
+  public convenience init(
+    configuration: Server.Configuration, backend: any EngineBackend, gadget: (any GadgetSource)? = nil, hooks: ServerHooks = ServerHooks()
+  ) throws {
     try FileManager.default.createDirectory(at: configuration.cacheRoot, withIntermediateDirectories: true)
-    try self.init(server: Server(configuration: configuration, preparer: ONNXPreparer()))
-  }
-
-  /// The server on the host's `backend` and `gadget` (the Android app's).
-  public convenience init(configuration: Server.Configuration, backend: any EngineBackend, gadget: (any GadgetSource)?) throws {
-    try FileManager.default.createDirectory(at: configuration.cacheRoot, withIntermediateDirectories: true)
-    try self.init(server: Server(configuration: configuration, backend: backend, gadget: gadget))
+    try self.init(server: Server(configuration: configuration, backend: backend, gadget: gadget, hooks: hooks))
   }
 
   private init(server: Server) {

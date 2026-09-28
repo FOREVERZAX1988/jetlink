@@ -13,7 +13,7 @@ native library, `libjetlink.so`:
 | Part | What it is |
 | --- | --- |
 | `JetlinkKit` | The server, the model registry and the ONNX preparation, shared with the Apple apps |
-| `JetlinkServer/QNNBackend.swift` | onnxruntime's QNN provider: the NPU and GPU of a Snapdragon |
+| `JetlinkORT/QNNBackend.swift` | onnxruntime's QNN provider: the NPU and GPU of a Snapdragon |
 | `JetlinkServer/UsbfsPipes.swift`, `CUsbfs` | The comma's bulk pair through usbdevfs, on the descriptor the app opened |
 | `JetlinkKit/AppSnapshot.swift` | The app's state as the screens draw it, from the server's events |
 | `JetlinkAndroid` | The JNI functions `io.zoompilot.jetlink.server.Native` calls |
@@ -54,10 +54,10 @@ adb install -r app/build/outputs/apk/release/app-release.apk
 ```
 
 The `swiftBuild` task runs `scripts/swift-build.sh`, which cross-compiles
-`JetlinkKit` (`JETLINK_ANDROID=1` selects the Android package) with the Swift
-runtime linked in, always optimized. `-Pjetlink.prebuiltSwift=DIR` packages
-`DIR/arm64-v8a/libjetlink.so` instead, for work on the Kotlin side without the
-Swift toolchain. The APK is arm64 only, as the QNN runtime is.
+`JetlinkKit`'s `jetlink` library with the Swift runtime linked in, always
+optimized. `-Pjetlink.prebuiltSwift=DIR` packages `DIR/arm64-v8a/libjetlink.so`
+instead, for work on the Kotlin side without the Swift toolchain. The APK is
+arm64 only, as the QNN runtime is.
 
 Release builds are signed with the debug key so they install over debug ones;
 the app is sideloaded, never published.

@@ -7,6 +7,8 @@
 #
 # Steps, run in the order given (default: server):
 #   headers    fetch and unpack the flavor's pinned TensorRT + CUDA headers
+#   ort        fetch onnxruntime's pinned CPU tarball for the tests and print
+#              its directory: include/ for -Xcc -I, lib/ for LD_LIBRARY_PATH
 #   shim       compile CTrt/jl_trt.cpp against them, and check it links
 #              nothing of NVIDIA's (everything is dlopened at run time)
 #   selftest   link tools/jl_trt_selftest against the shim; run it on a GPU
@@ -20,9 +22,9 @@
 # or HEAD tagged v<__version__>), else <__version__>-dev.<short sha>.
 #
 # A step runs where its tools are: `server` in $JETLINK_SWIFT_IMAGE
-# (swift:6.3-jammy) unless already inside it, the C and C++ steps in
+# (swift:6.3.3-jammy, CI's) unless already inside it, the C and C++ steps in
 # ubuntu:22.04 unless this is a Linux host of the flavor's architecture.
-# --container sends every step but `headers` to a container. Downloads are
+# --container sends every step but the fetches to a container. Downloads are
 # cached in $JETLINK_BUILD_CACHE, by default ${XDG_CACHE_HOME:-~/.cache}/jetlink-build:
 # NVIDIA's headers never enter the repo. Objects go to build/, tarballs to dist/.
 set -euo pipefail
@@ -30,8 +32,8 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 CACHE=${JETLINK_BUILD_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/jetlink-build}
 CTRT=$ROOT/JetlinkKit/Sources/CTrt
-SWIFT_IMAGE=${JETLINK_SWIFT_IMAGE:-swift:6.3-jammy}
-SWIFT_VERSION=6.3
+SWIFT_IMAGE=${JETLINK_SWIFT_IMAGE:-swift:6.3.3-jammy}
+SWIFT_VERSION=6.3.3
 C_IMAGE=ubuntu:22.04
 
 die() {
@@ -40,7 +42,7 @@ die() {
 }
 
 usage() {
-  sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'
   exit 2
 }
 
@@ -51,11 +53,15 @@ usage() {
 
 JETSON=https://repo.download.nvidia.com/jetson/common/pool/main
 CUDA_X86=https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64
+ORT_RELEASES=https://github.com/microsoft/onnxruntime/releases/download/v1.29.0
 
-# Sets BUNDLE (its cache directory's name) and DEBS ("url sha256" each).
+# Sets BUNDLE (its cache directory's name) and DEBS ("url sha256" each), and
+# ORT: onnxruntime's official tarball ("url sha256"), whose C headers COrt
+# compiles against; the server opens the library at run time.
 pins() {
   case $FLAVOR in
   aarch64)
+    ORT="$ORT_RELEASES/onnxruntime-linux-aarch64-1.29.0.tgz e1799098ebc054b370f6176a450f158720f297818c613e5dc99b92e2ec82346f"
     BUNDLE=trt10.3.0.30-cuda12.6-aarch64
     DEBS=(
       "$JETSON/t/tensorrt/libnvinfer-headers-dev_10.3.0.30-1+cuda12.5_arm64.deb 40a4fa566218f71176144a0eafa5aef8cf0af7ee9211b20487f1970d5344bbb8"
@@ -65,6 +71,7 @@ pins() {
     )
     ;;
   x86_64)
+    ORT="$ORT_RELEASES/onnxruntime-linux-x64-1.29.0.tgz c3fddc4f139a045b0c4902c57410f0694f1c2fdf9b6939fbe38b1aeae7cd14ba"
     # 11.x keeps NvOnnxParser.h in libnvonnxparsers-dev, not the headers package
     BUNDLE=trt11.3.0.99-cuda13.4-x86_64
     DEBS=(
@@ -105,8 +112,39 @@ unpack_deb() {
   fi
 }
 
+ort_dir() {
+  echo "$CACHE/$(basename "${ORT% *}" .tgz)"
+}
+
+# onnxruntime's headers under include/onnxruntime/, where COrt looks for them,
+# and its library under lib/, which the tests open.
+ort_headers() {
+  local url=${ORT% *} want=${ORT#* } file dir
+  dir=$(ort_dir)
+  [[ -f $dir/.complete && $(cat "$dir/.complete") == "$ORT lib" ]] && return
+  file=$CACHE/debs/$(basename "$url")
+  mkdir -p "$CACHE/debs"
+  if [[ ! -f $file || $(sha256 "$file") != "$want" ]]; then
+    echo "headers: fetching $(basename "$url")" >&2
+    fetch "$url" "$file.part"
+    mv "$file.part" "$file"
+  fi
+  [[ $(sha256 "$file") == "$want" ]] || die "$(basename "$url") does not match its pinned sha256"
+  rm -rf "$dir"
+  mkdir -p "$dir/include/onnxruntime"
+  tar -xzf "$file" -C "$dir/include/onnxruntime" --strip-components 2 "$(basename "$url" .tgz)/include"
+  tar -xzf "$file" -C "$dir" --strip-components 1 "$(basename "$url" .tgz)/lib"
+  echo "$ORT lib" >"$dir/.complete"
+}
+
+step_ort() {
+  ort_headers
+  ort_dir
+}
+
 step_headers() {
   local dir=$CACHE/$BUNDLE stamp entry url want file
+  ort_headers
   stamp=$(printf '%s\n' "${DEBS[@]}")
   if [[ -f $dir/.complete && $(cat "$dir/.complete") == "$stamp" ]]; then
     echo "headers: $dir/include"
@@ -204,17 +242,20 @@ version() {
 
 step_server() {
   [[ -f $CACHE/$BUNDLE/.complete ]] || step_headers
-  local version name stage bin scratch=$ROOT/build/swift-linux-$FLAVOR
+  local version name stage bin scratch=$ROOT/build/swift-linux-$FLAVOR ort
+  ort=$(ort_dir)
+  ort_headers
   version=$(version)
   name=jetlink-server-$version-linux-$FLAVOR
   # its own scratch path, so a Mac's JetlinkKit/.build is never touched
   JETLINK_TENSORRT=$CACHE/$BUNDLE/include swift build --package-path "$ROOT/JetlinkKit" --scratch-path "$scratch" \
-    -c release --static-swift-stdlib --product jetlink-server
+    -c release --static-swift-stdlib --product jetlink-server -Xcc -I"$ort/include"
   bin=$(swift build --package-path "$ROOT/JetlinkKit" --scratch-path "$scratch" -c release --show-bin-path)
   stage=$ROOT/dist/$name
   rm -rf "$stage"
   mkdir -p "$stage/bin" "$stage/share/jetlink/systemd" "$stage/share/jetlink/udev" "$stage/share/jetlink/web"
-  cp "$bin/jetlink-server" "$stage/bin/"
+  # stripped: the symbol table is a third of the binary
+  strip -o "$stage/bin/jetlink-server" "$bin/jetlink-server"
   # SwiftPM looks for a target's resources in a bundle beside the executable
   find "$bin" -maxdepth 1 -name '*.resources' -exec cp -R {} "$stage/bin/" \;
   # the installer's own unit and rules, as they are in this tree
@@ -250,7 +291,7 @@ native_c() {
 # The image a step needs, or "" to run it here.
 image_for() {
   case $1 in
-  headers) echo "" ;;
+  headers | ort) echo "" ;;
   server) in_swift_container && echo "" || echo "$SWIFT_IMAGE" ;;
   fake-test) [[ $FORCE_CONTAINER == 1 ]] && echo "$C_IMAGE" || echo "" ;;
   *) [[ $FORCE_CONTAINER == 0 ]] && native_c && echo "" || echo "$C_IMAGE" ;;
@@ -297,7 +338,7 @@ STEPS=("$@")
 [[ ${#STEPS[@]} -gt 0 ]] || STEPS=(server)
 for step in "${STEPS[@]}"; do
   case $step in
-  headers | shim | selftest | fake-test | server) ;;
+  headers | ort | shim | selftest | fake-test | server) ;;
   *) usage ;;
   esac
 done

@@ -99,10 +99,18 @@ public struct LastLoaded: Sendable, Equatable {
   }
 }
 
+/// What a backend's artifact is on disk.
+public enum ArtifactKind: Sendable {
+  /// One file: a TensorRT plan.
+  case file
+  /// A directory: onnxruntime's prepared model and compiled caches.
+  case directory
+}
+
 /// One backend's view of the cache: the Python `EngineCache` with its backend
-/// reduced to the three strings the cache uses. The key is the model's
-/// identity plus the backend's tag, so two backends keep two artifacts per
-/// model and each sees only its own.
+/// reduced to what the cache uses of it. The key is the model's identity plus
+/// the backend's tag, so two backends keep two artifacts per model and each
+/// sees only its own.
 public struct EngineCache: Sendable {
   public let layout: CacheLayout
   /// The backend's tag, for example `ort1.29.0.ane-Apple_A18_Pro`.
@@ -111,13 +119,15 @@ public struct EngineCache: Sendable {
   public let suffix: String
   /// The backend's name, recorded in last-loaded.json for the log.
   public let backend: String
+  public let kind: ArtifactKind
 
   /// Makes engines/ and models/, as opening a Python EngineCache does.
-  public init(layout: CacheLayout, tag: String, suffix: String, backend: String) {
+  public init(layout: CacheLayout, tag: String, suffix: String, backend: String, kind: ArtifactKind = .file) {
     self.layout = layout
     self.tag = tag
     self.suffix = suffix
     self.backend = backend
+    self.kind = kind
     try? Files.makeDirectory(layout.engines)
     try? Files.makeDirectory(layout.models)
   }
@@ -129,7 +139,9 @@ public struct EngineCache: Sendable {
 
   public func entry(_ sha256: String) throws(RegistryError) -> CacheEntry {
     let key = try key(sha256)
-    return CacheEntry(path: layout.engines.appending(path: key + suffix), metaPath: layout.engines.appending(path: key + ".json"))
+    let hint: URL.DirectoryHint = kind == .directory ? .isDirectory : .notDirectory
+    return CacheEntry(
+      path: layout.engines.appending(path: key + suffix, directoryHint: hint), metaPath: layout.engines.appending(path: key + ".json"))
   }
 
   /// Model identities with an artifact this backend can load: a sidecar with
@@ -161,11 +173,11 @@ public struct EngineCache: Sendable {
   /// without NTP, so a fresh build can look older than everything on disk.
   /// Other backends' artifacts are not touched.
   public func prune(keep: Int = CacheLayout.keepArtifacts, protect: URL? = nil) {
-    let protected = protect?.standardizedFileURL.path(percentEncoded: false)
+    let protected = protect.map(PythonPath.path)
     var found: [(url: URL, modified: Double)] = []
     for name in Files.names(in: layout.engines) where name.hasSuffix(suffix) {
       let url = layout.engines.appending(path: name)
-      if let protected, url.standardizedFileURL.path(percentEncoded: false) == protected { continue }
+      if let protected, PythonPath.path(url) == protected { continue }
       found.append((url, Files.status(url)?.modified ?? 0))
     }
     found.sort { $0.modified > $1.modified }
@@ -182,7 +194,8 @@ public struct EngineCache: Sendable {
 }
 
 public struct CacheEntry: Sendable, Equatable {
-  /// The artifact: a file for TensorRT and tinygrad, a directory for onnxruntime.
+  /// The artifact: a file for TensorRT and tinygrad, a directory for
+  /// onnxruntime (`ArtifactKind`).
   public let path: URL
   public let metaPath: URL
 
@@ -219,5 +232,13 @@ enum PythonPath {
   /// `Path(name).with_suffix(new)`.
   static func withSuffix(_ name: String, _ new: String) -> String {
     stem(name) + new
+  }
+
+  /// The path pathlib compares: a directory's URL ends in a slash and the
+  /// same name listed from its parent does not, but they are one path.
+  static func path(_ url: URL) -> String {
+    var path = url.standardizedFileURL.path(percentEncoded: false)
+    while path.count > 1 && path.hasSuffix("/") { path.removeLast() }
+    return path
   }
 }

@@ -6,15 +6,14 @@ import Testing
 
 /// The whole server, over a real socket, on onnxruntime's CPU provider: the
 /// upload, the Swift preparation, the build, the load, the queues or the state
-/// loop, and the reply, checked bit for bit against what the Python server's
-/// parts compute for the same frames.
+/// loop, and the reply, checked against what the Python server's parts
+/// compute for the same frames (bit for bit on Apple; see `CommaClient.replay`).
 @Suite("Server", .serialized)
 struct ServerTests {
   func serve(_ body: (Server, TestClient) throws -> Void) throws {
     let cache = try TemporaryDirectory()
     let server = try Server(
-      configuration: Server.Configuration(host: "127.0.0.1", port: 0, cacheRoot: cache.url, device: .cpu, keepAlive: false, preload: false),
-      preparer: ONNXPreparer())
+      configuration: Server.Configuration(host: "127.0.0.1", port: 0, cacheRoot: cache.url, preload: false), backend: cpuBackend())
     try server.start()
     defer { server.stop() }
     let client = try TestClient(port: server.port!)
@@ -30,7 +29,7 @@ struct ServerTests {
       #expect(hello["protocol"] as? Int == 2)
       #expect(hello["backend"] as? String == "ort")
       #expect(count == 8)
-      #expect(server.framesServed == count)
+      #expect(eventually { server.framesServed == count })
     }
   }
 
@@ -101,7 +100,7 @@ struct ServerTests {
       try client.sendJSON(.uploadDone, ["sha256": golden.sha256])
       let reply = try client.recv(.engineResp).json
       #expect(reply["state"] as? String == "failed")
-      #expect(!FileManager.default.fileExists(atPath: server.cache.modelPath(golden.sha256).path))
+      #expect(try !FileManager.default.fileExists(atPath: server.cache.modelPath(golden.sha256).path))
     }
   }
 
@@ -195,9 +194,7 @@ struct ServerTests {
 struct ServerLifecycleTests {
   func makeServer(_ cache: TemporaryDirectory, dial: DialTarget? = nil) throws -> Server {
     try Server(
-      configuration: Server.Configuration(
-        host: "127.0.0.1", port: 0, cacheRoot: cache.url, device: .cpu, keepAlive: false, preload: false, dial: dial),
-      preparer: ONNXPreparer())
+      configuration: Server.Configuration(host: "127.0.0.1", port: 0, cacheRoot: cache.url, preload: false, dial: dial), backend: cpuBackend())
   }
 
   @Test("stop keeps the engine loaded; shutdown releases it")

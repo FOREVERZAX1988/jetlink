@@ -1,26 +1,36 @@
 #if !canImport(os)
   import Foundation
 
-  /// `os.Logger`'s shape where there is no unified log: Linux, where the
-  /// conformance suite builds the portable modules (docs/conformance.md). The
+  /// `os.Logger`'s shape where there is no unified log: Linux and Android. The
   /// same call sites compile, privacy arguments included, and write to
   /// standard error. On Apple platforms this file is empty and the modules
   /// import `os` itself.
   public struct Logger: Sendable {
+    public enum Level: Int, Comparable, Sendable {
+      case debug, info, notice, warning, error
+
+      public static func < (a: Level, b: Level) -> Bool { a.rawValue < b.rawValue }
+    }
+
+    /// The least severe level written, for every logger in the process: a
+    /// daemon's --log-level. Set once at startup, before any thread logs.
+    nonisolated(unsafe) public static var threshold = Level.info
+
     private let label: String
 
     public init(subsystem: String, category: String) {
       label = "\(subsystem).\(category)"
     }
 
-    public func debug(_ message: LogMessage) {}
-    public func info(_ message: LogMessage) { write("INFO", message) }
-    public func notice(_ message: LogMessage) { write("NOTICE", message) }
-    public func warning(_ message: LogMessage) { write("WARNING", message) }
-    public func error(_ message: LogMessage) { write("ERROR", message) }
+    public func debug(_ message: LogMessage) { write(.debug, "DEBUG", message) }
+    public func info(_ message: LogMessage) { write(.info, "INFO", message) }
+    public func notice(_ message: LogMessage) { write(.notice, "NOTICE", message) }
+    public func warning(_ message: LogMessage) { write(.warning, "WARNING", message) }
+    public func error(_ message: LogMessage) { write(.error, "ERROR", message) }
 
-    private func write(_ level: String, _ message: LogMessage) {
-      FileHandle.standardError.write(Data("\(level) \(label): \(message.text)\n".utf8))
+    private func write(_ level: Level, _ name: String, _ message: LogMessage) {
+      guard level >= Logger.threshold else { return }
+      FileHandle.standardError.write(Data("\(name) \(label): \(message.text)\n".utf8))
     }
   }
 

@@ -1,5 +1,6 @@
 import Foundation
 import JetlinkKit
+import JetlinkORT
 import JetlinkServer
 import JetlinkUI
 import SwiftUI
@@ -31,14 +32,14 @@ struct ServerStoreTests {
   }
 
   @Test func usbServesTheGadgetAndOpensNoPort() {
-    let configuration = ServerStore.configuration(backend: .auto, transport: .usb, tcpPort: 5599, cacheDirectory: cache)
+    let configuration = ServerStore.configuration(transport: .usb, tcpPort: 5599, cacheDirectory: cache)
     #expect(configuration.usb)
     #expect(!configuration.listen)
     #expect(configuration.cacheRoot == cache)
   }
 
   @Test func tcpListensOnThePortAndLeavesUSBAlone() {
-    let configuration = ServerStore.configuration(backend: .auto, transport: .tcp, tcpPort: 5601, cacheDirectory: cache)
+    let configuration = ServerStore.configuration(transport: .tcp, tcpPort: 5601, cacheDirectory: cache)
     #expect(!configuration.usb)
     #expect(configuration.listen)
     #expect(configuration.port == 5601)
@@ -49,7 +50,9 @@ struct ServerStoreTests {
     (BackendChoice.coreml, CoreMLBackend.Device.coreml),
   ])
   func backendMapping(choice: BackendChoice, device: CoreMLBackend.Device) {
-    #expect(ServerStore.configuration(backend: choice, transport: .usb, tcpPort: 5599, cacheDirectory: cache).device == device)
+    let backend = ServerStore.backend(for: choice)
+    #expect(backend.device == device)
+    #expect(backend.keepAlive && backend.keepCPUWarm)
   }
 
   @Test func logLinesReadLikePythons() throws {
