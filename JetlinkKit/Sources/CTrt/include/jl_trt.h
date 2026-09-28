@@ -15,7 +15,10 @@
 // writes why into err: errlen bytes at most, always NUL terminated, truncated
 // to fit; err may be NULL. A CUDA failure reads "<call>: <CUDA_ERROR_NAME>:
 // <description>". When TensorRT fails without giving a reason (a NULL engine,
-// a false), err holds the last error TensorRT logged on the calling thread.
+// a false), the shim asks the context whether a sticky CUDA error is behind
+// it, and returns that as JL_TRT_CUDA_STICKY if so, since a failed
+// deserialize must not pass for a bad plan; else err holds the last error
+// TensorRT logged on the calling thread.
 // Frees and destroys return nothing: close paths cannot act on an error, and
 // a sticky one has already surfaced from the call that caused it.
 //
@@ -253,7 +256,7 @@ void jl_trt_graph_exec_destroy(jl_trt *trt, jl_trt_graph_exec *exec);
 // deserializeCudaEngine over the caller's bytes, which TensorRT does not keep:
 // the caller maps the plan read-only and unmaps it when this returns, so a
 // 1.7 GB plan is never read into the heap. A plan from another TensorRT build
-// fails here with JL_TRT_ERROR (D21).
+// fails here with JL_TRT_ERROR (D21); a sticky CUDA error, with its own code.
 int jl_trt_engine_deserialize(jl_trt *trt, const void *plan, size_t size, jl_trt_engine **out, char *err,
                               size_t errlen);
 void jl_trt_engine_destroy(jl_trt_engine *engine);
@@ -271,8 +274,8 @@ int jl_trt_context_create(jl_trt_engine *engine, jl_trt_context **out, char *err
 void jl_trt_context_destroy(jl_trt_context *context);
 int jl_trt_context_set_address(jl_trt_context *context, const char *name, jl_trt_dptr address, char *err,
                                size_t errlen);
-// enqueueV3. When TensorRT refuses, the shim queries the stream, so a sticky
-// CUDA error behind the refusal comes back as JL_TRT_CUDA_STICKY.
+// enqueueV3. A refusal asks the context for a sticky error as above, unless
+// the stream is capturing: that would end the capture.
 int jl_trt_context_enqueue(jl_trt_context *context, jl_trt_stream *stream, char *err, size_t errlen);
 
 // --- builder ----------------------------------------------------------------

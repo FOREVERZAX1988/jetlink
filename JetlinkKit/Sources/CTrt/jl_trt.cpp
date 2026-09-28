@@ -20,7 +20,6 @@
 #include <atomic>
 #include <cerrno>
 #include <cstdarg>
-#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <mutex>
@@ -28,9 +27,54 @@
 #define JL_STR2(x) #x
 #define JL_STR(x) JL_STR2(x)
 
+// Every driver entry point the shim uses: its name after "cu", the CUDA
+// version whose signature this is (cudaTypedefs.h's PFN_cu<name>_v<version>),
+// and the parameters. One table fills the struct and resolves it.
+#define JL_DRIVER(X)                                                               \
+  X(Init, 2000, (unsigned))                                                        \
+  X(DriverGetVersion, 2020, (int *))                                               \
+  X(DeviceGet, 2000, (CUdevice *, int))                                            \
+  X(DeviceGetName, 2000, (char *, int, CUdevice))                                  \
+  X(DeviceGetAttribute, 2000, (int *, CUdevice_attribute, CUdevice))               \
+  X(DevicePrimaryCtxRetain, 7000, (CUcontext *, CUdevice))                         \
+  X(DevicePrimaryCtxRelease, 11000, (CUdevice))                                    \
+  X(CtxSetCurrent, 4000, (CUcontext))                                              \
+  X(CtxSynchronize, 2000, ())                                                      \
+  X(MemGetInfo, 3020, (size_t *, size_t *))                                        \
+  X(MemAlloc, 3020, (CUdeviceptr *, size_t))                                       \
+  X(MemFree, 3020, (CUdeviceptr))                                                  \
+  X(MemHostAlloc, 2020, (void **, size_t, unsigned))                               \
+  X(MemFreeHost, 2000, (void *))                                                   \
+  X(MemcpyHtoDAsync, 3020, (CUdeviceptr, const void *, size_t, CUstream))          \
+  X(MemcpyDtoHAsync, 3020, (void *, CUdeviceptr, size_t, CUstream))                \
+  X(MemcpyDtoDAsync, 3020, (CUdeviceptr, CUdeviceptr, size_t, CUstream))           \
+  X(MemsetD8Async, 3020, (CUdeviceptr, unsigned char, size_t, CUstream))           \
+  X(StreamCreate, 2000, (CUstream *, unsigned))                                    \
+  X(StreamSynchronize, 2000, (CUstream))                                           \
+  X(StreamIsCapturing, 10000, (CUstream, CUstreamCaptureStatus *))                 \
+  X(StreamDestroy, 4000, (CUstream))                                               \
+  X(EventCreate, 2000, (CUevent *, unsigned))                                      \
+  X(EventRecordWithFlags, 11010, (CUevent, CUstream, unsigned))                    \
+  X(EventSynchronize, 2000, (CUevent))                                             \
+  X(EventQuery, 2000, (CUevent))                                                   \
+  X(EventElapsedTime, 2000, (float *, CUevent, CUevent))                           \
+  X(EventDestroy, 4000, (CUevent))                                                 \
+  X(StreamBeginCapture, 10010, (CUstream, CUstreamCaptureMode))                    \
+  X(StreamEndCapture, 10000, (CUstream, CUgraph *))                                \
+  X(GraphInstantiateWithFlags, 11040, (CUgraphExec *, CUgraph, unsigned long long)) \
+  X(GraphLaunch, 10000, (CUgraphExec, CUstream))                                   \
+  X(GraphDestroy, 10000, (CUgraph))                                                \
+  X(GraphExecDestroy, 10000, (CUgraphExec))                                        \
+  X(GetErrorName, 6000, (CUresult, const char **))                                 \
+  X(GetErrorString, 6000, (CUresult, const char **))
+
 namespace {
 
-// --- errors ------------------------------------------------------------------
+struct Cuda {
+#define JL_MEMBER(name, version, params) CUresult(*name) params;
+  JL_DRIVER(JL_MEMBER)
+#undef JL_MEMBER
+};
 
 int say(char *err, size_t errlen, int code, const char *fmt, ...) {
   if (err != nullptr && errlen > 0) {
@@ -46,131 +90,25 @@ int say(char *err, size_t errlen, int code, const char *fmt, ...) {
 // gives when a call returns NULL or false. Cleared before each such call.
 thread_local char last_error[1024];
 
-int trt_fail(char *err, size_t errlen, const char *call, const char *fallback) {
-  return say(err, errlen, JL_TRT_ERROR, "%s: %s", call, last_error[0] ? last_error : fallback);
-}
-
 // Errors that leave the context unusable: every later call in it fails the
 // same way, and only a new process gets a working one back (D15). Unknown is
 // here too, since nothing says the context survived it.
 bool is_sticky(CUresult r) {
-  switch (r) {
-  case CUDA_ERROR_ILLEGAL_ADDRESS:
-  case CUDA_ERROR_LAUNCH_TIMEOUT:
-  case CUDA_ERROR_HARDWARE_STACK_ERROR:
-  case CUDA_ERROR_ILLEGAL_INSTRUCTION:
-  case CUDA_ERROR_MISALIGNED_ADDRESS:
-  case CUDA_ERROR_INVALID_ADDRESS_SPACE:
-  case CUDA_ERROR_INVALID_PC:
-  case CUDA_ERROR_LAUNCH_FAILED:
-  case CUDA_ERROR_ASSERT:
-  case CUDA_ERROR_ECC_UNCORRECTABLE:
-  case CUDA_ERROR_NVLINK_UNCORRECTABLE:
-  case CUDA_ERROR_EXTERNAL_DEVICE:
-  case CUDA_ERROR_CONTEXT_IS_DESTROYED:
-  case CUDA_ERROR_DEVICE_UNAVAILABLE:
-  case CUDA_ERROR_DEINITIALIZED:
-  case CUDA_ERROR_UNKNOWN:
-    return true;
-  default:
-    return false;
+  static const CUresult sticky[] = {
+      CUDA_ERROR_ILLEGAL_ADDRESS,    CUDA_ERROR_LAUNCH_TIMEOUT,       CUDA_ERROR_HARDWARE_STACK_ERROR,
+      CUDA_ERROR_ILLEGAL_INSTRUCTION, CUDA_ERROR_MISALIGNED_ADDRESS,  CUDA_ERROR_INVALID_ADDRESS_SPACE,
+      CUDA_ERROR_INVALID_PC,         CUDA_ERROR_LAUNCH_FAILED,        CUDA_ERROR_ASSERT,
+      CUDA_ERROR_ECC_UNCORRECTABLE,  CUDA_ERROR_NVLINK_UNCORRECTABLE, CUDA_ERROR_EXTERNAL_DEVICE,
+      CUDA_ERROR_CONTEXT_IS_DESTROYED, CUDA_ERROR_DEVICE_UNAVAILABLE, CUDA_ERROR_DEINITIALIZED,
+      CUDA_ERROR_UNKNOWN,
+  };
+  for (CUresult s : sticky) {
+    if (r == s) {
+      return true;
+    }
   }
+  return false;
 }
-
-// --- the driver API --------------------------------------------------------------
-
-typedef CUresult (*GetProcAddressV2)(const char *, void **, int, cuuint64_t, CUdriverProcAddressQueryResult *);
-typedef CUresult (*GetProcAddressV1)(const char *, void **, int, cuuint64_t);
-
-struct Cuda {
-  CUresult (*Init)(unsigned);
-  CUresult (*DriverGetVersion)(int *);
-  CUresult (*DeviceGet)(CUdevice *, int);
-  CUresult (*DeviceGetName)(char *, int, CUdevice);
-  CUresult (*DeviceGetAttribute)(int *, CUdevice_attribute, CUdevice);
-  CUresult (*DevicePrimaryCtxRetain)(CUcontext *, CUdevice);
-  CUresult (*DevicePrimaryCtxRelease)(CUdevice);
-  CUresult (*CtxSetCurrent)(CUcontext);
-  CUresult (*MemGetInfo)(size_t *, size_t *);
-  CUresult (*MemAlloc)(CUdeviceptr *, size_t);
-  CUresult (*MemFree)(CUdeviceptr);
-  CUresult (*MemHostAlloc)(void **, size_t, unsigned);
-  CUresult (*MemFreeHost)(void *);
-  CUresult (*MemcpyHtoDAsync)(CUdeviceptr, const void *, size_t, CUstream);
-  CUresult (*MemcpyDtoHAsync)(void *, CUdeviceptr, size_t, CUstream);
-  CUresult (*MemcpyDtoDAsync)(CUdeviceptr, CUdeviceptr, size_t, CUstream);
-  CUresult (*MemsetD8Async)(CUdeviceptr, unsigned char, size_t, CUstream);
-  CUresult (*StreamCreate)(CUstream *, unsigned);
-  CUresult (*StreamSynchronize)(CUstream);
-  CUresult (*StreamQuery)(CUstream);
-  CUresult (*StreamIsCapturing)(CUstream, CUstreamCaptureStatus *);
-  CUresult (*StreamDestroy)(CUstream);
-  CUresult (*EventCreate)(CUevent *, unsigned);
-  CUresult (*EventRecordWithFlags)(CUevent, CUstream, unsigned);
-  CUresult (*EventSynchronize)(CUevent);
-  CUresult (*EventQuery)(CUevent);
-  CUresult (*EventElapsedTime)(float *, CUevent, CUevent);
-  CUresult (*EventDestroy)(CUevent);
-  CUresult (*StreamBeginCapture)(CUstream, CUstreamCaptureMode);
-  CUresult (*StreamEndCapture)(CUstream, CUgraph *);
-  CUresult (*GraphInstantiateWithFlags)(CUgraphExec *, CUgraph, unsigned long long);
-  CUresult (*GraphLaunch)(CUgraphExec, CUstream);
-  CUresult (*GraphDestroy)(CUgraph);
-  CUresult (*GraphExecDestroy)(CUgraphExec);
-  CUresult (*GetErrorName)(CUresult, const char **);
-  CUresult (*GetErrorString)(CUresult, const char **);
-};
-
-// Each entry point, and the CUDA version whose signature the member above
-// declares (cudaTypedefs.h's PFN_<name>_v<version>).
-struct Entry {
-  const char *name;
-  int version;
-  size_t offset;
-};
-
-#define JL_ENTRY(member, version) {"cu" #member, version, offsetof(Cuda, member)}
-const Entry entries[] = {
-    JL_ENTRY(Init, 2000),
-    JL_ENTRY(DriverGetVersion, 2020),
-    JL_ENTRY(DeviceGet, 2000),
-    JL_ENTRY(DeviceGetName, 2000),
-    JL_ENTRY(DeviceGetAttribute, 2000),
-    JL_ENTRY(DevicePrimaryCtxRetain, 7000),
-    JL_ENTRY(DevicePrimaryCtxRelease, 11000),
-    JL_ENTRY(CtxSetCurrent, 4000),
-    JL_ENTRY(MemGetInfo, 3020),
-    JL_ENTRY(MemAlloc, 3020),
-    JL_ENTRY(MemFree, 3020),
-    JL_ENTRY(MemHostAlloc, 2020),
-    JL_ENTRY(MemFreeHost, 2000),
-    JL_ENTRY(MemcpyHtoDAsync, 3020),
-    JL_ENTRY(MemcpyDtoHAsync, 3020),
-    JL_ENTRY(MemcpyDtoDAsync, 3020),
-    JL_ENTRY(MemsetD8Async, 3020),
-    JL_ENTRY(StreamCreate, 2000),
-    JL_ENTRY(StreamSynchronize, 2000),
-    JL_ENTRY(StreamQuery, 2000),
-    JL_ENTRY(StreamIsCapturing, 10000),
-    JL_ENTRY(StreamDestroy, 4000),
-    JL_ENTRY(EventCreate, 2000),
-    JL_ENTRY(EventRecordWithFlags, 11010),
-    JL_ENTRY(EventSynchronize, 2000),
-    JL_ENTRY(EventQuery, 2000),
-    JL_ENTRY(EventElapsedTime, 2000),
-    JL_ENTRY(EventDestroy, 4000),
-    JL_ENTRY(StreamBeginCapture, 10010),
-    JL_ENTRY(StreamEndCapture, 10000),
-    JL_ENTRY(GraphInstantiateWithFlags, 11040),
-    JL_ENTRY(GraphLaunch, 10000),
-    JL_ENTRY(GraphDestroy, 10000),
-    JL_ENTRY(GraphExecDestroy, 10000),
-    JL_ENTRY(GetErrorName, 6000),
-    JL_ENTRY(GetErrorString, 6000),
-};
-#undef JL_ENTRY
-
-// --- TensorRT's callbacks ------------------------------------------------------------
 
 // TensorRT keeps the first logger it is given for the whole process, so there
 // is one, and jl_trt_set_logger changes where it forwards.
@@ -195,12 +133,14 @@ public:
 
 Logger logger;
 
-// What TensorRT's factories expect: the ILogger itself, as their inline
+// What TensorRT's factories take: the ILogger itself, as their inline
 // wrappers pass it.
 void *trt_logger() {
   return static_cast<nvinfer1::ILogger *>(&logger);
 }
 
+// IProgressMonitor's calls, forwarded as they come; TensorRT may make them
+// from several threads, and Swift hears one at a time.
 class Monitor final : public nvinfer1::IProgressMonitor {
 public:
   void phaseStart(const char *phase, const char *parent, int32_t steps) noexcept override {
@@ -216,18 +156,16 @@ public:
     emit(JL_TRT_PHASE_FINISH, phase, nullptr, 0);
   }
 
-  std::mutex lock;
-  jl_trt_progress_fn fn = nullptr;
-  void *ctx = nullptr;
-
-private:
-  // TensorRT may report from several threads; Swift hears one at a time
   void emit(int event, const char *phase, const char *parent, int value) {
     std::lock_guard<std::mutex> hold(lock);
     if (fn != nullptr) {
       fn(ctx, event, phase, parent, value);
     }
   }
+
+  std::mutex lock;
+  jl_trt_progress_fn fn = nullptr;
+  void *ctx = nullptr;
 };
 
 // The context each thread last made current, and for which open: a context
@@ -239,69 +177,29 @@ struct Current {
 thread_local Current current = {nullptr, 0};
 std::atomic<uint64_t> generations{0};
 
-int onnx_type(nvinfer1::DataType type) {
-  switch (type) {
-  case nvinfer1::DataType::kFLOAT:
-    return JL_TRT_FLOAT;
-  case nvinfer1::DataType::kHALF:
-    return JL_TRT_FLOAT16;
-  case nvinfer1::DataType::kINT8:
-    return JL_TRT_INT8;
-  case nvinfer1::DataType::kINT32:
-    return JL_TRT_INT32;
-  case nvinfer1::DataType::kINT64:
-    return JL_TRT_INT64;
-  case nvinfer1::DataType::kBOOL:
-    return JL_TRT_BOOL;
-  case nvinfer1::DataType::kUINT8:
-    return JL_TRT_UINT8;
-  default:
-    return 0;
-  }
-}
-
-// onnx-tensorrt's errorCodeStr, which the headers do not carry
-const char *parser_code(nvonnxparser::ErrorCode code) {
-  static const char *const names[] = {
-      "SUCCESS",           "INTERNAL_ERROR",        "MEM_ALLOC_FAILED",          "MODEL_DESERIALIZE_FAILED",
-      "INVALID_VALUE",     "INVALID_GRAPH",         "INVALID_NODE",              "UNSUPPORTED_GRAPH",
-      "UNSUPPORTED_NODE",  "UNSUPPORTED_NODE_ATTR", "UNSUPPORTED_NODE_INPUT",    "UNSUPPORTED_NODE_DATATYPE",
-      "UNSUPPORTED_NODE_DYNAMIC", "UNSUPPORTED_NODE_SHAPE", "REFIT_FAILED",
-  };
-  size_t i = static_cast<size_t>(code);
-  return i < sizeof names / sizeof names[0] ? names[i] : "UNKNOWN";
+bool write_file(const char *path, const void *data, size_t size) {
+  FILE *f = fopen(path, "wb");
+  bool ok = f != nullptr && fwrite(data, 1, size, f) == size;
+  return f != nullptr && fclose(f) == 0 && ok;
 }
 
 const char *or_empty(const char *s) {
   return s != nullptr ? s : "";
 }
 
-bool write_file(const char *path, const void *data, size_t size) {
-  FILE *f = fopen(path, "wb");
-  if (f == nullptr) {
-    return false;
-  }
-  bool ok = fwrite(data, 1, size, f) == size;
-  return fclose(f) == 0 && ok;
-}
-
 } // namespace
 
 struct jl_trt {
-  void *cuda_lib = nullptr;
   Cuda cu = {};
   CUdevice device = 0;
   CUcontext ctx = nullptr;
   uint64_t generation = 0;
-
   void *(*create_runtime)(void *, int32_t) = nullptr;
   void *(*create_builder)(void *, int32_t) = nullptr;
   void *(*create_parser)(void *, void *, int) = nullptr;
-
   std::atomic<int> sticky{0};
   std::mutex sticky_lock;
   char sticky_message[512] = {0};
-
   char device_name[256] = {0};
   jl_trt_info info = {};
 };
@@ -329,6 +227,7 @@ struct jl_trt_build {
 
 namespace {
 
+// The CUDA handles are ours with the types taken off.
 CUstream cu(jl_trt_stream *s) {
   return reinterpret_cast<CUstream>(s);
 }
@@ -337,26 +236,23 @@ CUevent cu(jl_trt_event *e) {
   return reinterpret_cast<CUevent>(e);
 }
 
+// The one CUDA error path: "<call>: <CUDA_ERROR_NAME>: <description>", and
+// the latch when the error is sticky.
 int cuda_fail(jl_trt *t, const char *call, CUresult r, char *err, size_t errlen) {
-  const char *name = nullptr;
-  const char *text = nullptr;
+  const char *name = "CUDA_ERROR_UNKNOWN", *text = "unknown error";
   if (t->cu.GetErrorName != nullptr) {
     t->cu.GetErrorName(r, &name);
     t->cu.GetErrorString(r, &text);
   }
-  char message[512];
-  snprintf(message, sizeof message, "%s: %s: %s", call, name ? name : "CUDA_ERROR_UNKNOWN", text ? text : "unknown error");
   if (!is_sticky(r)) {
-    return say(err, errlen, JL_TRT_CUDA_ERROR, "%s", message);
+    return say(err, errlen, JL_TRT_CUDA_ERROR, "%s: %s: %s", call, name, text);
   }
-  {
-    std::lock_guard<std::mutex> hold(t->sticky_lock);
-    if (t->sticky.load() == 0) {
-      snprintf(t->sticky_message, sizeof t->sticky_message, "%s", message);
-      t->sticky.store(1);
-    }
+  std::lock_guard<std::mutex> hold(t->sticky_lock);
+  if (t->sticky.load() == 0) {
+    snprintf(t->sticky_message, sizeof t->sticky_message, "%s: %s: %s", call, name, text);
+    t->sticky.store(1, std::memory_order_release);
   }
-  return say(err, errlen, JL_TRT_CUDA_STICKY, "%s", message);
+  return say(err, errlen, JL_TRT_CUDA_STICKY, "%s: %s: %s", call, name, text);
 }
 
 // Every call that reaches CUDA or TensorRT starts here: fail at once once the
@@ -379,48 +275,68 @@ int enter(jl_trt *t, char *err, size_t errlen) {
 
 // For the calls that return nothing: current if it can be, never failing.
 void enter_quietly(jl_trt *t) {
-  if (t->sticky.load() == 0 && (current.ctx != t->ctx || current.generation != t->generation) &&
-      t->cu.CtxSetCurrent(t->ctx) == CUDA_SUCCESS) {
-    current = {t->ctx, t->generation};
-  }
+  char ignored[1];
+  enter(t, ignored, 0);
 }
 
-#define JL_CU(call, ...)                                    \
-  do {                                                      \
-    CUresult r_ = t->cu.call(__VA_ARGS__);                  \
-    if (r_ != CUDA_SUCCESS) {                               \
-      return cuda_fail(t, "cu" #call, r_, err, errlen);     \
-    }                                                       \
-  } while (0)
+// enter, then one driver call: what most of the API is.
+template <typename F> int call(jl_trt *t, const char *name, char *err, size_t errlen, F f) {
+  int rc = enter(t, err, errlen);
+  if (rc != JL_TRT_OK) {
+    return rc;
+  }
+  CUresult r = f();
+  return r == CUDA_SUCCESS ? JL_TRT_OK : cuda_fail(t, name, r, err, errlen);
+}
 
-#define JL_ENTER(t)                        \
-  do {                                     \
-    int rc_ = enter((t), err, errlen);     \
-    if (rc_ != JL_TRT_OK) {                \
-      return rc_;                          \
-    }                                      \
+// TensorRT returned NULL or false. A sticky CUDA error can sit behind that,
+// and must not pass for a bad plan (D21 would delete a good one), so the
+// context is asked, unless `stream` is capturing: a synchronize would end
+// the capture, which fails anyway. Otherwise err is what TensorRT logged.
+int refused(jl_trt *t, const char *name, const char *fallback, CUstream stream, char *err, size_t errlen) {
+  CUstreamCaptureStatus status = CU_STREAM_CAPTURE_STATUS_NONE;
+  if (stream == nullptr || (t->cu.StreamIsCapturing(stream, &status) == CUDA_SUCCESS &&
+                            status == CU_STREAM_CAPTURE_STATUS_NONE)) {
+    CUresult r = t->cu.CtxSynchronize();
+    if (is_sticky(r)) {
+      return cuda_fail(t, name, r, err, errlen);
+    }
+  }
+  return say(err, errlen, JL_TRT_ERROR, "%s: %s", name, last_error[0] ? last_error : fallback);
+}
+
+#define JL_ENTER(t)                    \
+  do {                                 \
+    int rc_ = enter((t), err, errlen); \
+    if (rc_ != JL_TRT_OK) {            \
+      return rc_;                      \
+    }                                  \
   } while (0)
 
 int open_cuda(jl_trt *t, int device, char *err, size_t errlen) {
-  t->cuda_lib = dlopen("libcuda.so.1", RTLD_NOW | RTLD_LOCAL);
-  if (t->cuda_lib == nullptr) {
+  void *lib = dlopen("libcuda.so.1", RTLD_NOW | RTLD_LOCAL);
+  if (lib == nullptr) {
     return say(err, errlen, JL_TRT_UNAVAILABLE, "no CUDA driver: %s", dlerror());
   }
-  // the _v2 form exists from CUDA 12.0; the first from 11.3
-  auto v2 = reinterpret_cast<GetProcAddressV2>(dlsym(t->cuda_lib, "cuGetProcAddress_v2"));
-  auto v1 = reinterpret_cast<GetProcAddressV1>(dlsym(t->cuda_lib, "cuGetProcAddress"));
+  // the _v2 form exists from CUDA 12.0, the first from 11.3
+  typedef CUresult (*V2)(const char *, void **, int, cuuint64_t, CUdriverProcAddressQueryResult *);
+  typedef CUresult (*V1)(const char *, void **, int, cuuint64_t);
+  auto v2 = reinterpret_cast<V2>(dlsym(lib, "cuGetProcAddress_v2"));
+  auto v1 = reinterpret_cast<V1>(dlsym(lib, "cuGetProcAddress"));
   if (v2 == nullptr && v1 == nullptr) {
     return say(err, errlen, JL_TRT_UNAVAILABLE, "this CUDA driver is older than 11.3: it has no cuGetProcAddress");
   }
-  for (const Entry &e : entries) {
-    void *fn = nullptr;
-    CUresult r = v2 != nullptr ? v2(e.name, &fn, e.version, CU_GET_PROC_ADDRESS_LEGACY_STREAM, nullptr)
-                               : v1(e.name, &fn, e.version, CU_GET_PROC_ADDRESS_LEGACY_STREAM);
-    if (r != CUDA_SUCCESS || fn == nullptr) {
-      return say(err, errlen, JL_TRT_UNAVAILABLE, "this CUDA driver has no %s (version %d)", e.name, e.version);
-    }
-    memcpy(reinterpret_cast<char *>(&t->cu) + e.offset, &fn, sizeof fn);
+  auto resolve = [&](const char *name, int version, void **fn) {
+    CUresult r = v2 != nullptr ? v2(name, fn, version, CU_GET_PROC_ADDRESS_LEGACY_STREAM, nullptr)
+                               : v1(name, fn, version, CU_GET_PROC_ADDRESS_LEGACY_STREAM);
+    return r == CUDA_SUCCESS && *fn != nullptr;
+  };
+#define JL_RESOLVE(name, version, params)                                                                 \
+  if (!resolve("cu" #name, version, reinterpret_cast<void **>(&t->cu.name))) {                            \
+    return say(err, errlen, JL_TRT_UNAVAILABLE, "this CUDA driver has no cu%s (version %d)", #name, version); \
   }
+  JL_DRIVER(JL_RESOLVE)
+#undef JL_RESOLVE
   CUresult r = t->cu.Init(0);
   if (r == CUDA_SUCCESS) {
     r = t->cu.DeviceGet(&t->device, device);
@@ -431,11 +347,18 @@ int open_cuda(jl_trt *t, int device, char *err, size_t errlen) {
   }
   jl_trt_info &info = t->info;
   info.device = device;
-  JL_CU(DriverGetVersion, &info.cuda_driver);
-  JL_CU(DeviceGetName, t->device_name, static_cast<int>(sizeof t->device_name), t->device);
-  JL_CU(DeviceGetAttribute, &info.cc_major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, t->device);
-  JL_CU(DeviceGetAttribute, &info.cc_minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, t->device);
-  JL_CU(DevicePrimaryCtxRetain, &t->ctx, t->device);
+  CUresult setup[] = {
+      t->cu.DriverGetVersion(&info.cuda_driver),
+      t->cu.DeviceGetName(t->device_name, static_cast<int>(sizeof t->device_name), t->device),
+      t->cu.DeviceGetAttribute(&info.cc_major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, t->device),
+      t->cu.DeviceGetAttribute(&info.cc_minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, t->device),
+      t->cu.DevicePrimaryCtxRetain(&t->ctx, t->device),
+  };
+  for (CUresult s : setup) {
+    if (s != CUDA_SUCCESS) {
+      return cuda_fail(t, "cuDevice", s, err, errlen);
+    }
+  }
   t->generation = ++generations;
   return enter(t, err, errlen);
 }
@@ -451,22 +374,22 @@ int open_tensorrt(jl_trt *t, char *err, size_t errlen) {
   if (lib == nullptr) {
     return say(err, errlen, JL_TRT_UNAVAILABLE, "no TensorRT %d: %s", NV_TENSORRT_MAJOR, dlerror());
   }
-  int32_t (*major)() = nullptr, (*minor)() = nullptr, (*patch)() = nullptr, (*build)() = nullptr;
+  int32_t (*version[4])() = {};
   if (!resolve(lib, "createInferRuntime_INTERNAL", &t->create_runtime) ||
       !resolve(lib, "createInferBuilder_INTERNAL", &t->create_builder) ||
-      !resolve(lib, "getInferLibMajorVersion", &major) || !resolve(lib, "getInferLibMinorVersion", &minor) ||
-      !resolve(lib, "getInferLibPatchVersion", &patch) || !resolve(lib, "getInferLibBuildVersion", &build)) {
+      !resolve(lib, "getInferLibMajorVersion", &version[0]) || !resolve(lib, "getInferLibMinorVersion", &version[1]) ||
+      !resolve(lib, "getInferLibPatchVersion", &version[2]) || !resolve(lib, "getInferLibBuildVersion", &version[3])) {
     return say(err, errlen, JL_TRT_UNAVAILABLE, "%s lacks an entry point jetlink needs: %s", name, dlerror());
   }
   jl_trt_info &info = t->info;
-  info.major = major();
-  info.minor = minor();
-  info.patch = patch();
-  info.build = build();
+  info.major = version[0]();
+  info.minor = version[1]();
+  info.patch = version[2]();
+  info.build = version[3]();
   // A newer minor runs what older headers compiled; an older one may lack
   // what they call. The build number is a respin of the same release.
-  long have = NV_TENSORRT_VERSION_INT(info.major, info.minor, info.patch);
-  if (info.major != NV_TENSORRT_MAJOR || have < static_cast<long>(NV_TENSORRT_VERSION)) {
+  if (info.major != NV_TENSORRT_MAJOR ||
+      NV_TENSORRT_VERSION_INT(info.major, info.minor, info.patch) < static_cast<long>(NV_TENSORRT_VERSION)) {
     return say(err, errlen, JL_TRT_UNAVAILABLE, "TensorRT %d.%d.%d.%d is loaded; this build needs %d.x from %d.%d.%d on",
                info.major, info.minor, info.patch, info.build, NV_TENSORRT_MAJOR, NV_TENSORRT_MAJOR,
                NV_TENSORRT_MINOR, NV_TENSORRT_PATCH);
@@ -487,11 +410,31 @@ int open_tensorrt(jl_trt *t, char *err, size_t errlen) {
   return JL_TRT_OK;
 }
 
+// TensorRT's data types, by their DataType value, as ONNX numbers them.
+int onnx_type(nvinfer1::DataType type) {
+  static const int onnx[] = {JL_TRT_FLOAT, JL_TRT_FLOAT16, JL_TRT_INT8, JL_TRT_INT32, JL_TRT_BOOL,
+                             JL_TRT_UINT8, 0 /* FP8 */,    0 /* BF16 */, JL_TRT_INT64};
+  size_t i = static_cast<size_t>(type);
+  return i < sizeof onnx / sizeof onnx[0] ? onnx[i] : 0;
+}
+
+// onnx-tensorrt's errorCodeStr, which the headers do not carry
+const char *parser_code(nvonnxparser::ErrorCode code) {
+  static const char *const names[] = {
+      "SUCCESS",           "INTERNAL_ERROR",        "MEM_ALLOC_FAILED",       "MODEL_DESERIALIZE_FAILED",
+      "INVALID_VALUE",     "INVALID_GRAPH",         "INVALID_NODE",           "UNSUPPORTED_GRAPH",
+      "UNSUPPORTED_NODE",  "UNSUPPORTED_NODE_ATTR", "UNSUPPORTED_NODE_INPUT", "UNSUPPORTED_NODE_DATATYPE",
+      "UNSUPPORTED_NODE_DYNAMIC", "UNSUPPORTED_NODE_SHAPE", "REFIT_FAILED",
+  };
+  size_t i = static_cast<size_t>(code);
+  return i < sizeof names / sizeof names[0] ? names[i] : "UNKNOWN";
+}
+
 } // namespace
 
-// --- library ---------------------------------------------------------------------
-
 extern "C" {
+
+// --- library ---------------------------------------------------------------------
 
 int jl_trt_open(int device, jl_trt **out, char *err, size_t errlen) {
   *out = nullptr;
@@ -542,9 +485,7 @@ void jl_trt_get_info(const jl_trt *t, jl_trt_info *out) {
 }
 
 int jl_trt_mem_info(jl_trt *t, size_t *free_bytes, size_t *total_bytes, char *err, size_t errlen) {
-  JL_ENTER(t);
-  JL_CU(MemGetInfo, free_bytes, total_bytes);
-  return JL_TRT_OK;
+  return call(t, "cuMemGetInfo", err, errlen, [&] { return t->cu.MemGetInfo(free_bytes, total_bytes); });
 }
 
 void jl_trt_set_logger(jl_trt *t, int min_severity, jl_trt_log_fn fn, void *ctx) {
@@ -559,15 +500,13 @@ int jl_trt_sticky(const jl_trt *t) {
   return t->sticky.load(std::memory_order_acquire);
 }
 
-// --- memory ------------------------------------------------------------------------
+// --- memory and copies -------------------------------------------------------------
 
 int jl_trt_mem_alloc(jl_trt *t, size_t size, jl_trt_dptr *out, char *err, size_t errlen) {
-  *out = 0;
-  JL_ENTER(t);
   CUdeviceptr p = 0;
-  JL_CU(MemAlloc, &p, size);
+  int rc = call(t, "cuMemAlloc", err, errlen, [&] { return t->cu.MemAlloc(&p, size); });
   *out = static_cast<jl_trt_dptr>(p);
-  return JL_TRT_OK;
+  return rc;
 }
 
 void jl_trt_mem_free(jl_trt *t, jl_trt_dptr ptr) {
@@ -579,10 +518,8 @@ void jl_trt_mem_free(jl_trt *t, jl_trt_dptr ptr) {
 
 int jl_trt_host_alloc(jl_trt *t, size_t size, void **out, char *err, size_t errlen) {
   *out = nullptr;
-  JL_ENTER(t);
   // cudaHostAllocDefault, as Python allocated them
-  JL_CU(MemHostAlloc, out, size, 0);
-  return JL_TRT_OK;
+  return call(t, "cuMemHostAlloc", err, errlen, [&] { return t->cu.MemHostAlloc(out, size, 0); });
 }
 
 void jl_trt_host_free(jl_trt *t, void *ptr) {
@@ -594,48 +531,36 @@ void jl_trt_host_free(jl_trt *t, void *ptr) {
 
 int jl_trt_copy_h2d(jl_trt *t, jl_trt_dptr dst, const void *src, size_t size, jl_trt_stream *stream, char *err,
                     size_t errlen) {
-  JL_ENTER(t);
-  JL_CU(MemcpyHtoDAsync, static_cast<CUdeviceptr>(dst), src, size, cu(stream));
-  return JL_TRT_OK;
+  return call(t, "cuMemcpyHtoDAsync", err, errlen, [&] { return t->cu.MemcpyHtoDAsync(dst, src, size, cu(stream)); });
 }
 
 int jl_trt_copy_d2h(jl_trt *t, void *dst, jl_trt_dptr src, size_t size, jl_trt_stream *stream, char *err,
                     size_t errlen) {
-  JL_ENTER(t);
-  JL_CU(MemcpyDtoHAsync, dst, static_cast<CUdeviceptr>(src), size, cu(stream));
-  return JL_TRT_OK;
+  return call(t, "cuMemcpyDtoHAsync", err, errlen, [&] { return t->cu.MemcpyDtoHAsync(dst, src, size, cu(stream)); });
 }
 
 int jl_trt_copy_d2d(jl_trt *t, jl_trt_dptr dst, jl_trt_dptr src, size_t size, jl_trt_stream *stream, char *err,
                     size_t errlen) {
-  JL_ENTER(t);
-  JL_CU(MemcpyDtoDAsync, static_cast<CUdeviceptr>(dst), static_cast<CUdeviceptr>(src), size, cu(stream));
-  return JL_TRT_OK;
+  return call(t, "cuMemcpyDtoDAsync", err, errlen, [&] { return t->cu.MemcpyDtoDAsync(dst, src, size, cu(stream)); });
 }
 
 int jl_trt_memset(jl_trt *t, jl_trt_dptr dst, uint8_t value, size_t size, jl_trt_stream *stream, char *err,
                   size_t errlen) {
-  JL_ENTER(t);
-  JL_CU(MemsetD8Async, static_cast<CUdeviceptr>(dst), value, size, cu(stream));
-  return JL_TRT_OK;
+  return call(t, "cuMemsetD8Async", err, errlen, [&] { return t->cu.MemsetD8Async(dst, value, size, cu(stream)); });
 }
 
 // --- streams and events ----------------------------------------------------------------
 
 int jl_trt_stream_create(jl_trt *t, jl_trt_stream **out, char *err, size_t errlen) {
-  *out = nullptr;
-  JL_ENTER(t);
   CUstream s = nullptr;
   // CU_STREAM_DEFAULT, as cudaStreamCreate
-  JL_CU(StreamCreate, &s, 0);
+  int rc = call(t, "cuStreamCreate", err, errlen, [&] { return t->cu.StreamCreate(&s, 0); });
   *out = reinterpret_cast<jl_trt_stream *>(s);
-  return JL_TRT_OK;
+  return rc;
 }
 
 int jl_trt_stream_sync(jl_trt *t, jl_trt_stream *stream, char *err, size_t errlen) {
-  JL_ENTER(t);
-  JL_CU(StreamSynchronize, cu(stream));
-  return JL_TRT_OK;
+  return call(t, "cuStreamSynchronize", err, errlen, [&] { return t->cu.StreamSynchronize(cu(stream)); });
 }
 
 void jl_trt_stream_destroy(jl_trt *t, jl_trt_stream *stream) {
@@ -646,43 +571,34 @@ void jl_trt_stream_destroy(jl_trt *t, jl_trt_stream *stream) {
 }
 
 int jl_trt_event_create(jl_trt *t, unsigned flags, jl_trt_event **out, char *err, size_t errlen) {
-  *out = nullptr;
-  JL_ENTER(t);
   CUevent e = nullptr;
-  JL_CU(EventCreate, &e, flags);
+  int rc = call(t, "cuEventCreate", err, errlen, [&] { return t->cu.EventCreate(&e, flags); });
   *out = reinterpret_cast<jl_trt_event *>(e);
-  return JL_TRT_OK;
+  return rc;
 }
 
 int jl_trt_event_record(jl_trt *t, jl_trt_event *event, jl_trt_stream *stream, unsigned flags, char *err,
                         size_t errlen) {
-  JL_ENTER(t);
-  JL_CU(EventRecordWithFlags, cu(event), cu(stream), flags);
-  return JL_TRT_OK;
+  return call(t, "cuEventRecordWithFlags", err, errlen,
+              [&] { return t->cu.EventRecordWithFlags(cu(event), cu(stream), flags); });
 }
 
 int jl_trt_event_sync(jl_trt *t, jl_trt_event *event, char *err, size_t errlen) {
-  JL_ENTER(t);
-  JL_CU(EventSynchronize, cu(event));
-  return JL_TRT_OK;
+  return call(t, "cuEventSynchronize", err, errlen, [&] { return t->cu.EventSynchronize(cu(event)); });
 }
 
 int jl_trt_event_query(jl_trt *t, jl_trt_event *event, char *err, size_t errlen) {
-  JL_ENTER(t);
-  CUresult r = t->cu.EventQuery(cu(event));
-  if (r == CUDA_ERROR_NOT_READY) {
-    return JL_TRT_NOT_READY;
-  }
-  if (r != CUDA_SUCCESS) {
-    return cuda_fail(t, "cuEventQuery", r, err, errlen);
-  }
-  return JL_TRT_OK;
+  bool pending = false;
+  int rc = call(t, "cuEventQuery", err, errlen, [&] {
+    CUresult r = t->cu.EventQuery(cu(event));
+    pending = r == CUDA_ERROR_NOT_READY;
+    return pending ? CUDA_SUCCESS : r;
+  });
+  return rc == JL_TRT_OK && pending ? JL_TRT_NOT_READY : rc;
 }
 
 int jl_trt_event_elapsed(jl_trt *t, jl_trt_event *start, jl_trt_event *end, float *ms, char *err, size_t errlen) {
-  JL_ENTER(t);
-  JL_CU(EventElapsedTime, ms, cu(start), cu(end));
-  return JL_TRT_OK;
+  return call(t, "cuEventElapsedTime", err, errlen, [&] { return t->cu.EventElapsedTime(ms, cu(start), cu(end)); });
 }
 
 void jl_trt_event_destroy(jl_trt *t, jl_trt_event *event) {
@@ -695,40 +611,33 @@ void jl_trt_event_destroy(jl_trt *t, jl_trt_event *event) {
 // --- graphs ----------------------------------------------------------------------------
 
 int jl_trt_capture_begin(jl_trt *t, jl_trt_stream *stream, char *err, size_t errlen) {
-  JL_ENTER(t);
-  JL_CU(StreamBeginCapture, cu(stream), CU_STREAM_CAPTURE_MODE_THREAD_LOCAL);
-  return JL_TRT_OK;
+  return call(t, "cuStreamBeginCapture", err, errlen,
+              [&] { return t->cu.StreamBeginCapture(cu(stream), CU_STREAM_CAPTURE_MODE_THREAD_LOCAL); });
 }
 
 int jl_trt_capture_end(jl_trt *t, jl_trt_stream *stream, jl_trt_graph **out, char *err, size_t errlen) {
-  *out = nullptr;
-  JL_ENTER(t);
   CUgraph g = nullptr;
-  CUresult r = t->cu.StreamEndCapture(cu(stream), &g);
-  if (r != CUDA_SUCCESS) {
+  int rc = call(t, "cuStreamEndCapture", err, errlen, [&] { return t->cu.StreamEndCapture(cu(stream), &g); });
+  if (rc != JL_TRT_OK && g != nullptr) {
     // an invalidated capture can still hand back a partial graph
-    if (g != nullptr) {
-      t->cu.GraphDestroy(g);
-    }
-    return cuda_fail(t, "cuStreamEndCapture", r, err, errlen);
+    t->cu.GraphDestroy(g);
+    g = nullptr;
   }
   *out = reinterpret_cast<jl_trt_graph *>(g);
-  return JL_TRT_OK;
+  return rc;
 }
 
 int jl_trt_graph_instantiate(jl_trt *t, jl_trt_graph *graph, jl_trt_graph_exec **out, char *err, size_t errlen) {
-  *out = nullptr;
-  JL_ENTER(t);
   CUgraphExec x = nullptr;
-  JL_CU(GraphInstantiateWithFlags, &x, reinterpret_cast<CUgraph>(graph), 0);
+  int rc = call(t, "cuGraphInstantiateWithFlags", err, errlen,
+                [&] { return t->cu.GraphInstantiateWithFlags(&x, reinterpret_cast<CUgraph>(graph), 0); });
   *out = reinterpret_cast<jl_trt_graph_exec *>(x);
-  return JL_TRT_OK;
+  return rc;
 }
 
 int jl_trt_graph_launch(jl_trt *t, jl_trt_graph_exec *exec, jl_trt_stream *stream, char *err, size_t errlen) {
-  JL_ENTER(t);
-  JL_CU(GraphLaunch, reinterpret_cast<CUgraphExec>(exec), cu(stream));
-  return JL_TRT_OK;
+  return call(t, "cuGraphLaunch", err, errlen,
+              [&] { return t->cu.GraphLaunch(reinterpret_cast<CUgraphExec>(exec), cu(stream)); });
 }
 
 void jl_trt_graph_destroy(jl_trt *t, jl_trt_graph *graph) {
@@ -752,26 +661,22 @@ int jl_trt_engine_deserialize(jl_trt *t, const void *plan, size_t size, jl_trt_e
   *out = nullptr;
   JL_ENTER(t);
   auto *runtime = static_cast<nvinfer1::IRuntime *>(t->create_runtime(trt_logger(), NV_TENSORRT_VERSION));
-  if (runtime == nullptr) {
-    return trt_fail(err, errlen, "createInferRuntime", "TensorRT returned no runtime");
-  }
-  nvinfer1::ICudaEngine *engine = runtime->deserializeCudaEngine(plan, size);
+  nvinfer1::ICudaEngine *engine = runtime != nullptr ? runtime->deserializeCudaEngine(plan, size) : nullptr;
   if (engine == nullptr) {
     delete runtime;
-    return trt_fail(err, errlen, "deserializeCudaEngine", "TensorRT could not deserialize the plan");
+    return refused(t, "deserializeCudaEngine", "TensorRT could not deserialize the plan", nullptr, err, errlen);
   }
   *out = new jl_trt_engine{t, runtime, engine};
   return JL_TRT_OK;
 }
 
 void jl_trt_engine_destroy(jl_trt_engine *e) {
-  if (e == nullptr) {
-    return;
+  if (e != nullptr) {
+    enter_quietly(e->trt);
+    delete e->engine;
+    delete e->runtime;
+    delete e;
   }
-  enter_quietly(e->trt);
-  delete e->engine;
-  delete e->runtime;
-  delete e;
 }
 
 int jl_trt_engine_io_count(const jl_trt_engine *e) {
@@ -781,21 +686,16 @@ int jl_trt_engine_io_count(const jl_trt_engine *e) {
 int jl_trt_engine_io(const jl_trt_engine *e, int index, const char **name, int *is_input, int *type, int64_t *dims,
                      int *rank, char *err, size_t errlen) {
   int count = e->engine->getNbIOTensors();
-  if (index < 0 || index >= count) {
-    return say(err, errlen, JL_TRT_ERROR, "no IO tensor %d; the engine has %d", index, count);
-  }
-  const char *n = e->engine->getIOTensorName(index);
-  nvinfer1::Dims shape = e->engine->getTensorShape(n);
-  if (shape.nbDims < 0 || shape.nbDims > JL_TRT_MAX_DIMS) {
-    return say(err, errlen, JL_TRT_ERROR, "tensor %s has %d dims", n, shape.nbDims);
+  const char *n = index >= 0 && index < count ? e->engine->getIOTensorName(index) : nullptr;
+  nvinfer1::Dims shape = n != nullptr ? e->engine->getTensorShape(n) : nvinfer1::Dims{};
+  if (n == nullptr || shape.nbDims < 0 || shape.nbDims > JL_TRT_MAX_DIMS) {
+    return say(err, errlen, JL_TRT_ERROR, "no IO tensor %d with usable dims; the engine has %d", index, count);
   }
   *name = n;
   *is_input = e->engine->getTensorIOMode(n) == nvinfer1::TensorIOMode::kINPUT;
   *type = onnx_type(e->engine->getTensorDataType(n));
   *rank = shape.nbDims;
-  for (int i = 0; i < shape.nbDims; i++) {
-    dims[i] = shape.d[i];
-  }
+  memcpy(dims, shape.d, static_cast<size_t>(shape.nbDims) * sizeof(int64_t));
   return JL_TRT_OK;
 }
 
@@ -804,45 +704,34 @@ int jl_trt_context_create(jl_trt_engine *e, jl_trt_context **out, char *err, siz
   JL_ENTER(e->trt);
   nvinfer1::IExecutionContext *context = e->engine->createExecutionContext();
   if (context == nullptr) {
-    return trt_fail(err, errlen, "createExecutionContext", "TensorRT returned no execution context");
+    return refused(e->trt, "createExecutionContext", "TensorRT returned no execution context", nullptr, err, errlen);
   }
   *out = new jl_trt_context{e->trt, context};
   return JL_TRT_OK;
 }
 
 void jl_trt_context_destroy(jl_trt_context *c) {
-  if (c == nullptr) {
-    return;
+  if (c != nullptr) {
+    enter_quietly(c->trt);
+    delete c->context;
+    delete c;
   }
-  enter_quietly(c->trt);
-  delete c->context;
-  delete c;
 }
 
 int jl_trt_context_set_address(jl_trt_context *c, const char *name, jl_trt_dptr address, char *err, size_t errlen) {
   last_error[0] = '\0';
-  if (!c->context->setTensorAddress(name, reinterpret_cast<void *>(static_cast<uintptr_t>(address)))) {
-    return trt_fail(err, errlen, "setTensorAddress", "TensorRT refused the address");
+  if (c->context->setTensorAddress(name, reinterpret_cast<void *>(static_cast<uintptr_t>(address)))) {
+    return JL_TRT_OK;
   }
-  return JL_TRT_OK;
+  return say(err, errlen, JL_TRT_ERROR, "setTensorAddress: %s", last_error[0] ? last_error : "TensorRT refused it");
 }
 
 int jl_trt_context_enqueue(jl_trt_context *c, jl_trt_stream *stream, char *err, size_t errlen) {
-  jl_trt *t = c->trt;
-  JL_ENTER(t);
+  JL_ENTER(c->trt);
   if (c->context->enqueueV3(reinterpret_cast<cudaStream_t>(stream))) {
     return JL_TRT_OK;
   }
-  // A refusal may hide a CUDA error. Querying a capturing stream would end
-  // the capture, so only one that is not capturing is asked.
-  CUstreamCaptureStatus status = CU_STREAM_CAPTURE_STATUS_NONE;
-  if (t->cu.StreamIsCapturing(cu(stream), &status) == CUDA_SUCCESS && status == CU_STREAM_CAPTURE_STATUS_NONE) {
-    CUresult r = t->cu.StreamQuery(cu(stream));
-    if (r != CUDA_SUCCESS && r != CUDA_ERROR_NOT_READY) {
-      return cuda_fail(t, "enqueueV3", r, err, errlen);
-    }
-  }
-  return trt_fail(err, errlen, "enqueueV3", "TensorRT refused to enqueue");
+  return refused(c->trt, "enqueueV3", "TensorRT refused to enqueue", cu(stream), err, errlen);
 }
 
 // --- builder -----------------------------------------------------------------------------
@@ -856,23 +745,18 @@ int jl_trt_build_create(jl_trt *t, jl_trt_build **out, char *err, size_t errlen)
   jl_trt_build *b = new jl_trt_build();
   b->trt = t;
   b->builder = static_cast<nvinfer1::IBuilder *>(t->create_builder(trt_logger(), NV_TENSORRT_VERSION));
-  if (b->builder == nullptr) {
-    jl_trt_build_destroy(b);
-    return trt_fail(err, errlen, "createInferBuilder", "TensorRT returned no builder");
-  }
   // 0 on TensorRT 10 is a weakly typed network, precision then picked by the
   // FP16 flag: the build the car was validated on. On 11 every network is
   // strongly typed and the flag that asked for it is deprecated and ignored.
-  b->network = b->builder->createNetworkV2(0);
-  if (b->network != nullptr) {
-    b->parser = static_cast<nvonnxparser::IParser *>(t->create_parser(b->network, trt_logger(), NV_ONNX_PARSER_VERSION));
-  }
-  if (b->parser != nullptr) {
-    b->config = b->builder->createBuilderConfig();
-  }
+  b->network = b->builder != nullptr ? b->builder->createNetworkV2(0) : nullptr;
+  b->parser = b->network != nullptr
+                  ? static_cast<nvonnxparser::IParser *>(t->create_parser(b->network, trt_logger(), NV_ONNX_PARSER_VERSION))
+                  : nullptr;
+  b->config = b->parser != nullptr ? b->builder->createBuilderConfig() : nullptr;
   if (b->config == nullptr) {
     jl_trt_build_destroy(b);
-    return trt_fail(err, errlen, "createBuilderConfig", "TensorRT returned no network, parser or config");
+    return refused(t, "createInferBuilder", "TensorRT returned no builder, network, parser or config", nullptr, err,
+                   errlen);
   }
   *out = b;
   return JL_TRT_OK;
@@ -883,7 +767,7 @@ void jl_trt_build_destroy(jl_trt_build *b) {
     return;
   }
   enter_quietly(b->trt);
-  // the reverse of creation; the config refers to the cache, the network to
+  // the reverse of creation: the config refers to the cache, the network to
   // the parser's weights
   delete b->config;
   delete b->cache;
@@ -899,34 +783,20 @@ int jl_trt_build_parse(jl_trt_build *b, const char *onnx_path, char *err, size_t
     return JL_TRT_OK;
   }
   // str(ParserError) in TensorRT's Python bindings, one per line
-  size_t used = 0;
-  int n = b->parser->getNbErrors();
-  if (err != nullptr && errlen > 0) {
-    err[0] = '\0';
-  }
-  for (int i = 0; i < n && err != nullptr && used + 1 < errlen; i++) {
+  say(err, errlen, JL_TRT_ERROR, "%s", last_error[0] ? last_error : "the ONNX parser failed without an error");
+  for (int i = 0, used = 0; i < b->parser->getNbErrors() && err != nullptr && static_cast<size_t>(used) + 1 < errlen;
+       i++) {
     const nvonnxparser::IParserError *e = b->parser->getError(i);
-    if (e == nullptr) {
-      continue;
+    bool whole = e->code() == nvonnxparser::ErrorCode::kMODEL_DESERIALIZE_FAILED ||
+                 e->code() == nvonnxparser::ErrorCode::kREFIT_FAILED;
+    char node[512] = "";
+    if (!whole) {
+      snprintf(node, sizeof node, "In node %d with name: %s and operator: %s ", e->node(), or_empty(e->nodeName()),
+               or_empty(e->nodeOperator()));
     }
-    const char *sep = i > 0 ? "\n" : "";
-    int w;
-    if (e->code() == nvonnxparser::ErrorCode::kMODEL_DESERIALIZE_FAILED ||
-        e->code() == nvonnxparser::ErrorCode::kREFIT_FAILED) {
-      w = snprintf(err + used, errlen - used, "%s(%s): %s: %s", sep, or_empty(e->func()), parser_code(e->code()),
-                   or_empty(e->desc()));
-    } else {
-      w = snprintf(err + used, errlen - used, "%sIn node %d with name: %s and operator: %s (%s): %s: %s", sep, e->node(),
-                   or_empty(e->nodeName()), or_empty(e->nodeOperator()), or_empty(e->func()), parser_code(e->code()),
-                   or_empty(e->desc()));
-    }
-    if (w < 0) {
-      break;
-    }
-    used += static_cast<size_t>(w);
-  }
-  if (n == 0) {
-    say(err, errlen, JL_TRT_ERROR, "%s", last_error[0] ? last_error : "the ONNX parser failed without an error");
+    int w = snprintf(err + used, errlen - used, "%s%s(%s): %s: %s", i > 0 ? "\n" : "", node, or_empty(e->func()),
+                     parser_code(e->code()), or_empty(e->desc()));
+    used += w > 0 ? w : 0;
   }
   return JL_TRT_ERROR;
 }
@@ -967,12 +837,10 @@ void jl_trt_build_set_progress(jl_trt_build *b, jl_trt_progress_fn fn, void *ctx
 int jl_trt_build_set_timing_cache(jl_trt_build *b, const void *data, size_t size, char *err, size_t errlen) {
   JL_ENTER(b->trt);
   nvinfer1::ITimingCache *cache = b->config->createTimingCache(size > 0 ? data : nullptr, size);
-  if (cache == nullptr) {
-    return trt_fail(err, errlen, "createTimingCache", "TensorRT could not read the timing cache");
-  }
-  if (!b->config->setTimingCache(*cache, false)) {
+  if (cache == nullptr || !b->config->setTimingCache(*cache, false)) {
     delete cache;
-    return trt_fail(err, errlen, "setTimingCache", "the timing cache does not match this TensorRT and GPU");
+    return say(err, errlen, JL_TRT_ERROR, "timing cache: %s",
+               last_error[0] ? last_error : "it does not match this TensorRT and GPU");
   }
   // the config holds the new one now
   delete b->cache;
@@ -984,14 +852,11 @@ int jl_trt_build_write_plan(jl_trt_build *b, const char *path, char *err, size_t
   JL_ENTER(b->trt);
   nvinfer1::IHostMemory *plan = b->builder->buildSerializedNetwork(*b->network, *b->config);
   if (plan == nullptr) {
-    return trt_fail(err, errlen, "buildSerializedNetwork", "TensorRT returned no engine");
+    return refused(b->trt, "buildSerializedNetwork", "TensorRT returned no engine", nullptr, err, errlen);
   }
   bool ok = write_file(path, plan->data(), plan->size());
   delete plan;
-  if (!ok) {
-    return say(err, errlen, JL_TRT_ERROR, "cannot write %s: %s", path, strerror(errno));
-  }
-  return JL_TRT_OK;
+  return ok ? JL_TRT_OK : say(err, errlen, JL_TRT_ERROR, "cannot write %s: %s", path, strerror(errno));
 }
 
 int jl_trt_build_write_timing_cache(jl_trt_build *b, const char *path, char *err, size_t errlen) {
@@ -1000,15 +865,9 @@ int jl_trt_build_write_timing_cache(jl_trt_build *b, const char *path, char *err
   }
   JL_ENTER(b->trt);
   nvinfer1::IHostMemory *blob = b->cache->serialize();
-  if (blob == nullptr) {
-    return trt_fail(err, errlen, "ITimingCache::serialize", "TensorRT returned nothing");
-  }
-  bool ok = write_file(path, blob->data(), blob->size());
+  bool ok = blob != nullptr && write_file(path, blob->data(), blob->size());
   delete blob;
-  if (!ok) {
-    return say(err, errlen, JL_TRT_ERROR, "cannot write %s: %s", path, strerror(errno));
-  }
-  return JL_TRT_OK;
+  return ok ? JL_TRT_OK : say(err, errlen, JL_TRT_ERROR, "cannot write the timing cache to %s: %s", path, strerror(errno));
 }
 
 } // extern "C"
