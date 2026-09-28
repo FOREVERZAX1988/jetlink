@@ -12,6 +12,7 @@ Use a USB 3 A-to-C data cable. Charge-only cables do not work.
 | Jetson | USB-A port on the Jetson |
 | Mac | USB-A port on a hub, dock, or USB-C-to-A adapter |
 | Linux PC | USB-A port on the PC |
+| iPhone | USB-A port on a USB 3 hub with USB-C power passthrough |
 
 Use the USB-A connection shown above. The Jetson's USB-C port and a direct
 C-to-C cable on a Mac may not connect correctly. The comma's USB-C port cannot
@@ -34,7 +35,7 @@ setting (on the comma, in the models settings):
   `192.168.60.1:5599`. The vendor interface is never used on iOS.
 
 Moving the setting between USB and iOS rebuilds the gadget, which is an unplug,
-so the comma applies it once the car is parked.
+so the setting can only be changed while offroad.
 
 The comma's side of this is the `jetlink.comma` package: the owner process
 holds the gadget and lends modeld its endpoints, or the phone's dial, and every

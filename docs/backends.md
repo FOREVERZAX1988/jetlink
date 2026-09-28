@@ -69,7 +69,7 @@ See the [full measurements and test conditions](mac-performance.md).
 
 ## Hardware limitations
 
-Native Windows USB requires WinUSB. Use WSL2 for the
+Native Windows is not supported. Use WSL2 for the
 [Windows setup](platforms.md#windows-nvidia-gpu). On a Mac, use a USB-A port on a hub, dock, or adapter to ensure
 that the Mac acts as the USB host.
 

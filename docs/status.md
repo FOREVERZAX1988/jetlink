@@ -8,7 +8,8 @@ for model switching and reconnection behavior.
 <a id="platform-testing"></a>
 
 For hardware and software requirements, see [Jetson setup](jetson.md),
-[the Mac guide](macos-app.md), or [PC setup](platforms.md).
+[the Mac guide](macos-app.md), [the iPhone guide](iphone-app.md), or
+[PC setup](platforms.md).
 
 ## Measured performance
 

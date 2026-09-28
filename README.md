@@ -71,9 +71,16 @@ The app includes its dependencies.
 
 ### iPhone (experimental)
 
-An iPhone with USB-C can serve the comma over one USB cable, with the server
-running inside the app. It is built from source with Xcode and has not been
-measured on a phone yet; see [Jetlink for iPhone](docs/iphone-app.md).
+The iPhone app runs the server on the phone and serves the comma over one USB
+cable. It has only been tested with a Mac standing in for the phone.
+
+You need an iPhone with USB-C on iOS 26.1 or later (a Pro model for USB 3), a
+USB 3 hub with USB-C power passthrough, and a Mac with Xcode 26.
+
+1. Build and install the app with Xcode by following
+   **[Jetlink for iPhone](docs/iphone-app.md)**. A free Apple account works,
+   but the install stops opening after 7 days until you run it from Xcode again.
+2. Open Jetlink and keep it on screen, then complete comma setup below.
 
 ## Comma setup (all platforms)
 
@@ -85,12 +92,14 @@ measured on a phone yet; see [Jetlink for iPhone](docs/iphone-app.md).
    **Settings > Software > Target Branch > Non-Prebuilt Branches** and select
    **jetson-trt**, then let it update, reboot, and finish building.
 2. **Enable Jetlink.** Open **Settings > Models** and set **Accelerator Link**
-   to **USB** (**iOS** is for an iPhone). Leave **Big Model** on its default for
-   the first run.
+   to **USB** for a Jetson, Linux PC, or Mac, or to **iOS** for an iPhone. It
+   can only be changed offroad. Leave **Big Model** on its default for the
+   first run.
 3. **Connect USB.** Connect the computer's **USB-A port** to the comma's
    **USB-C port** with a USB 3 data cable. On Mac, use a USB-A hub, dock, or
-   USB-C-to-A adapter. On Jetson, use its USB-A port. Charge-only cables will
-   not work, and a plain C-to-C connection may select the wrong USB role.
+   USB-C-to-A adapter. On Jetson, use its USB-A port. On iPhone, use the USB-A
+   port of the hub plugged into the phone. Charge-only cables will not work,
+   and a plain C-to-C connection may select the wrong USB role.
 4. **Wait for green.** The comma's home-button icon pulses during download,
    transfer, and preparation, then turns green when ready. Keep the comma
    offroad and connected to the internet until it finishes. You do not need to download a model manually.
@@ -116,11 +125,13 @@ for startup, model changes, and reconnection behavior.
 | No Accelerator Link setting | Confirm the `jetson-trt` branch in Settings > Software. |
 | Server stays waiting; icon never pulses | Check the server is running, use a USB-A port, and try another USB 3 data cable. |
 | Model list is empty | Connect the comma to the internet and use Refresh Model List. |
-| Setup alert or orange icon | Read the home-screen alert. Check internet access, then set Accelerator Link to Off and back to USB. |
+| Setup alert or orange icon | Read the home-screen alert. Check internet access, then set Accelerator Link to Off and back to USB or iOS. |
+| Alert says **no warp built for this camera** | The comma's build is missing a part the link needs. Update or reinstall the `jetson-trt` branch. |
 | Link drops repeatedly | Check the cable, separate power supplies, cooling, and whether the computer slept. |
 
 For logs and more checks, use the [Jetson guide](docs/jetson.md#troubleshooting),
-[Mac guide](docs/macos-app.md#troubleshooting), or
+[Mac guide](docs/macos-app.md#troubleshooting),
+[iPhone guide](docs/iphone-app.md#logs), or
 [PC guide](docs/platforms.md#troubleshooting).
 
 <a id="more"></a>

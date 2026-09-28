@@ -13,6 +13,7 @@ and connected to the internet during the update.
      settings and restarts Jetlink. If the update fails, it restores the
      previous server.
    - Mac app: quit Jetlink, replace it with the new release, and reopen it.
+   - iPhone app: run `git pull` in the checkout, then click **Run** in Xcode.
    - Source install: run `git pull` from the Jetlink checkout. For the Mac
      script, restart `scripts/run-mac.sh`; recreate `.venv` if dependencies
      changed.

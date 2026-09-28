@@ -2,6 +2,7 @@
 
 After [setup](../README.md#quick-start), leave the server running and connect
 it to the comma. Keep laptops powered and awake; sleep interrupts the link.
+Keep the iPhone app on screen; iOS suspends it otherwise.
 
 ## Check the comma's icon
 

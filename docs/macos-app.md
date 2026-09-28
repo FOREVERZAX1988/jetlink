@@ -57,11 +57,10 @@ On the comma, the home-button icon pulses while the model transfers and loads,
 then turns green. For driving behavior, see the
 [daily use guide](using-jetlink.md).
 
-The Mac also gains a network service named **jetlink** in System Settings >
-Network, with a `192.168.60.x` address and no router. That is the comma's
-network interface for an iPhone, part of the same USB gadget as the link; the
-Mac app uses the link, not the network, so leave the service alone. See [what
-the comma presents](transport.md#what-the-comma-presents).
+If the Mac gains a network service named **jetlink** in System Settings >
+Network, the comma's **Accelerator Link** is set to **iOS**, which is for an
+iPhone. Set it to **USB**. See [what the comma
+presents](transport.md#what-the-comma-presents).
 
 ## Everyday use
 

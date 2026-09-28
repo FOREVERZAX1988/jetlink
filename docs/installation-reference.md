@@ -54,8 +54,7 @@ runs it in the foreground; Ctrl-C stops it.
 
 The comma 3X with AGNOS kernel 4.9.103 includes FunctionFS and USB gadget
 support. The Jetson host uses libusb and does not need gadget kernel modules.
-Reversing these roles requires gadget modules that may be missing from the
-Jetson's L4T installation.
+The server is always the USB host.
 
 Nothing on the comma needs running by hand. The owner builds the gadget on its
 first step, for USB or iOS as the comma's Accelerator Link setting says, and

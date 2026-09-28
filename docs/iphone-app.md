@@ -49,9 +49,10 @@ a free one will do.
 4. On the iPhone, turn on **Settings > Privacy & Security > Developer Mode**
    and restart. The switch appears once the phone has been plugged into a Mac
    with Xcode open.
-5. Run `make -C ios open`, connect the iPhone, select it as the run destination
-   and click **Run**. The **Jetlink** scheme builds Release, which is how the
-   app is used in the car. The first build fetches onnxruntime.
+5. Install xcodegen (`brew install xcodegen`) and run `make -C ios open`.
+   Connect the iPhone, select it as the run destination and click **Run**. The
+   **Jetlink** scheme builds Release, which is how the app is used in the car.
+   The first build fetches onnxruntime.
 6. The first launch is refused until you trust the developer: on the iPhone,
    **Settings > General > VPN & Device Management**, your Apple ID, **Trust**.
 
@@ -71,9 +72,9 @@ drives itself. The comma is `192.168.60.1` on that network and gives the phone
 an address by DHCP, and the app dials the comma the moment it has one. There is
 nothing to type. See [What the comma presents](transport.md#what-the-comma-presents).
 
-1. On the comma, parked, set **Accelerator Link** to **iOS** in the models
-   settings. USB is for a Jetson or a Mac; the comma rebuilds its USB gadget
-   when the setting moves between the two.
+1. On the comma, while offroad, set **Accelerator Link** to **iOS** in the
+   models settings. USB is for a Jetson, a Linux PC or a Mac; the comma rebuilds
+   its USB gadget when the setting moves between the two.
 2. Open Jetlink. The first time, allow **Local Network** access when iOS asks.
 3. Plug a USB 3 hub into the iPhone.
 4. Join the hub's USB-A port to the comma's USB-C port with a USB 3 A-to-C data
@@ -207,10 +208,9 @@ empties the view.
 
 A phone running a model 20 times a second warms up, and a phone in a mount in
 the sun warms faster. When iOS decides it is too hot it slows the chip down,
-and frames start missing 50 ms. In one drive of about 30 minutes on an earlier
-build the phone slowed as it warmed. The 10-minute benchmark shows how your
-phone and mount fare; the Temperature tile and the logs say when it throttles
-on the road. Keep the phone out of the sun, and out of a thick case.
+and frames start missing 50 ms. The 10-minute benchmark shows how your phone
+and mount fare; the Temperature tile and the logs say when it throttles on the
+road. Keep the phone out of the sun, and out of a thick case.
 
 ## Limits
 

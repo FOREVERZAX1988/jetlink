@@ -9,7 +9,7 @@ uses the same protocol.
 
 ```
 --control-socket ADDR   open a local control channel; ADDR is a filesystem path
-                        (AF_UNIX) or tcp://127.0.0.1:PORT (loopback only, for Windows)
+                        (AF_UNIX) or tcp://127.0.0.1:PORT (loopback only)
 --parent-pid PID        exit cleanly when this process is no longer our parent
                         (checked once a second; a dead parent means getppid() changed)
 ```
