@@ -14,10 +14,10 @@
 // fails here first: nothing that synchronizes or allocates on the capturing
 // thread (the capture is invalidated), a context's first enqueue is not
 // captured, every IO tensor has an address before an enqueue, copies stay
-// inside live allocations, a graph never replays into freed memory (a sticky
-// illegal address, as on a GPU). Where the real stack would not say anything
-// (a free of an unknown pointer, an engine destroyed under a live context),
-// the fake counts a misuse.
+// inside live allocations and move pinned host memory, a graph never replays
+// into freed memory (a sticky illegal address, as on a GPU). A rule broken in
+// a call that returns nothing (a destroy out of order, a double free) latches
+// the sticky flag, so the next call fails with a "fake:" message saying why.
 //
 // A plan is text:
 //
@@ -96,22 +96,13 @@ void jl_trt_fake_fail(jl_trt *trt, const char *call, int nth, int code, const ch
 void jl_trt_fake_set_build(jl_trt *trt, const char *tensor_lines, int layers);
 
 typedef struct {
-  // Stream-ordered work done, a graph launch counting each piece it replays.
-  uint64_t h2d, h2d_bytes, d2h, d2h_bytes, d2d, d2d_bytes, memsets, memset_bytes;
-  // Engine runs, direct or replayed, and those that were direct.
-  uint64_t enqueues, direct_enqueues;
-  uint64_t graph_launches;
-  // The pieces of work the last successful capture recorded.
-  uint64_t captured_ops;
+  // Stream-ordered work done, direct or replayed by a graph; engine runs.
+  uint64_t h2d, d2h, d2d, memsets, enqueues, graph_launches;
   // Live objects: all 0 once everything is destroyed.
   int64_t device_allocs, host_allocs, streams, events, graphs, graph_execs, engines, contexts, builds;
-  // Rules broken; jl_trt_fake_last_misuse says how.
-  uint64_t misuse;
 } jl_trt_fake_stats;
 
 void jl_trt_fake_get_stats(jl_trt *trt, jl_trt_fake_stats *out);
-// The last misuse in words, "" when there was none. Lasts until the next one.
-const char *jl_trt_fake_last_misuse(jl_trt *trt);
 
 #ifdef __cplusplus
 }

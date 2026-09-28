@@ -4,7 +4,7 @@
 // resets the state, and times a replay. Every step prints PASS or FAIL; the
 // exit status is the verdict. Built against the fake (JL_TRT_FAKE) too, where
 // the fake's default plan is this model, so the program itself is tested
-// without a GPU.
+// without a GPU; that build also checks what only the fake can stage.
 //
 //   jl_trt_selftest [--device N] [--keep DIR]
 #define _XOPEN_SOURCE 700
@@ -151,6 +151,65 @@ static int write_all(const char *path, const void *data, size_t size) {
   int ok = fwrite(data, 1, size, f) == size;
   return fclose(f) == 0 && ok;
 }
+
+#ifdef JL_TRT_FAKE
+// What only the fake can stage: a GPU fault, injected failures, and a plan
+// from another TensorRT build.
+static void fake_checks(void) {
+  static const char *plan = "jl_trt_fake_plan 1\nbuilt 10.3.0.30\ninput x float16 1 8\ninput state float16 1 8\n"
+                            "output y float32 1 8\noutput next_state float16 1 8 from state\n";
+  jl_trt *t = NULL;
+  jl_trt_engine *engine = NULL;
+  jl_trt_context *context = NULL;
+  jl_trt_stream *stream = NULL;
+  jl_trt_graph *graph = NULL;
+  jl_trt_graph_exec *exec = NULL;
+  jl_trt_dptr dev[N_TENSORS] = {0};
+  void *host[N_TENSORS] = {0};
+  const char *step = "fake";
+  REQUIRE(jl_trt_fake_open(NULL, &t, err, sizeof err), step);
+  REQUIRE(jl_trt_engine_deserialize(t, plan, strlen(plan), &engine, err, sizeof err), step);
+  REQUIRE(jl_trt_context_create(engine, &context, err, sizeof err), step);
+  REQUIRE(jl_trt_stream_create(t, &stream, err, sizeof err), step);
+  for (int i = 0; i < N_TENSORS; i++) {
+    REQUIRE(jl_trt_mem_alloc(t, bytes[i], &dev[i], err, sizeof err), step);
+    REQUIRE(jl_trt_host_alloc(t, bytes[i], &host[i], err, sizeof err), step);
+    REQUIRE(jl_trt_context_set_address(context, names[i], dev[i], err, sizeof err), step);
+  }
+  REQUIRE(jl_trt_context_enqueue(context, stream, err, sizeof err), step);
+  REQUIRE(jl_trt_capture_begin(t, stream, err, sizeof err), step);
+  REQUIRE(jl_trt_copy_h2d(t, dev[X], host[X], bytes[X], stream, err, sizeof err), step);
+  REQUIRE(jl_trt_context_enqueue(context, stream, err, sizeof err), step);
+  REQUIRE(jl_trt_capture_end(t, stream, &graph, err, sizeof err), step);
+  REQUIRE(jl_trt_graph_instantiate(t, graph, &exec, err, sizeof err), step);
+
+  jl_trt_fake_fail(t, "graph_launch", 1, JL_TRT_CUDA_ERROR, "CUDA_ERROR_LAUNCH_OUT_OF_RESOURCES: too many resources");
+  int rc = jl_trt_graph_launch(t, exec, stream, err, sizeof err);
+  int again = jl_trt_graph_launch(t, exec, stream, err, sizeof err);
+  report(rc == JL_TRT_CUDA_ERROR && again == JL_TRT_OK && !jl_trt_sticky(t), "fake: injected error", "the next launch works");
+
+  // closing out of order: a buffer the graph uses, freed before the graph
+  jl_trt_mem_free(t, dev[X]);
+  rc = jl_trt_graph_launch(t, exec, stream, err, sizeof err);
+  again = jl_trt_stream_sync(t, stream, err, sizeof err);
+  report(rc == JL_TRT_CUDA_STICKY && again == JL_TRT_CUDA_STICKY && jl_trt_sticky(t), "fake: replay into freed memory",
+         "sticky, and latched: %s", err);
+
+  jl_trt_fake_config other;
+  jl_trt_fake_defaults(&other);
+  other.minor = 16;
+  other.patch = 2;
+  other.build = 10;
+  jl_trt *newer = NULL;
+  jl_trt_engine *refused = NULL;
+  REQUIRE(jl_trt_fake_open(&other, &newer, err, sizeof err), step);
+  rc = jl_trt_engine_deserialize(newer, plan, strlen(plan), &refused, err, sizeof err);
+  report(rc == JL_TRT_ERROR && refused == NULL && !jl_trt_sticky(newer), "fake: another build's plan", "%s", err);
+  jl_trt_close(newer);
+done:
+  jl_trt_close(t);
+}
+#endif
 
 int main(int argc, char **argv) {
   int device = 0;
@@ -393,11 +452,16 @@ done:
 #ifdef JL_TRT_FAKE
     jl_trt_fake_stats stats;
     jl_trt_fake_get_stats(t, &stats);
-    report(stats.misuse == 0 && stats.device_allocs == 0 && stats.host_allocs == 0 && stats.engines == 0,
-           "fake", "%llu misuse, nothing left allocated", (unsigned long long)stats.misuse);
+    report(stats.device_allocs == 0 && stats.host_allocs == 0 && stats.streams == 0 && stats.events == 0 &&
+               stats.graph_execs == 0 && stats.engines == 0 && stats.contexts == 0,
+           "fake", "nothing left allocated; %llu enqueues, %llu graph launches", (unsigned long long)stats.enqueues,
+           (unsigned long long)stats.graph_launches);
 #endif
     jl_trt_close(t);
   }
+#ifdef JL_TRT_FAKE
+  fake_checks();
+#endif
   if (keep == NULL) {
     unlink(onnx_path);
     unlink(plan_path);
