@@ -280,7 +280,11 @@ struct ServerHooksTests {
   func noIdleWhileServed() throws {
     let gadget = ComingAndGoingGadget()
     let events = Recorded<GadgetIdleEvent>()
-    try serve(hooks: ServerHooks(gadgetIdle: { events.append($0); return false }), gadget: gadget) { _, client in
+    let hooks = ServerHooks(gadgetIdle: { event in
+      events.append(event)
+      return false
+    })
+    try serve(hooks: hooks, gadget: gadget) { _, client in
       try client.send(.ping)
       _ = try client.recv(.pong)
       #expect(events.wait { $0.contains(.connected) })
