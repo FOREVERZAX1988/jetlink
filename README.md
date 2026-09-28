@@ -5,36 +5,36 @@
 <h1 align="center">Jetlink</h1>
 
 <p align="center">
-  Run openpilot's large driving models on a computer connected to your comma.<br>
-  The comma handles cameras and vehicle control; Jetlink runs the model and
-  returns predictions 20 times per second.
+  Run openpilot's large driving models on a computer connected to your comma.
 </p>
 
-**Jetlink is experimental.** It requires zoompilot's
+**Jetlink is experimental.** It needs zoompilot's
 [`jetson-trt` branch](https://github.com/zoompilot/zoompilot/tree/jetson-trt).
-The comma uses its small model while the link is unavailable. If the link drops
-while engaged, the comma soft-disables and tells you to take over. Read the
-[operating limits](docs/status.md) before use.
+If the link drops while engaged, the comma soft-disables: take over.
+Read the [operating limits](docs/status.md) first.
 
 ## Quick start
 
-You need a **comma 3X or comma 4**, a **USB 3 USB-C cable** (USB-A to USB-C for a Jetson), and
-**separate power for the comma and computer**. You can set up Jetlink outside
-the car or in the car while offroad. Keep the comma connected to the internet
-during setup, and keep your computer powered and awake.
+You need:
 
-1. Install Jetlink on your computer using one of the options below.
-2. Complete [comma setup](#comma-setup-all-platforms).
+* A **comma 3X or comma 4**.
+* A **USB 3 USB-C cable** (Jetson: USB-A to USB-C).
+* **Separate power for the comma and computer**.
+
+Set up in or out of the car, offroad. Keep the comma online and the computer
+powered and awake.
+
+1. Install Jetlink on your computer (below).
+2. Do [comma setup](#comma-setup-all-platforms).
 3. Wait for the comma's icon to turn green.
 
 ### Jetson
 
-Follow the **[Jetson setup guide](docs/jetson.md)** for what you need, power
-choices, and installation.
+Follow the **[Jetson setup guide](docs/jetson.md)**.
 
-We recommend **always-on 12 V power with deep sleep**: the Jetson sleeps when
-the ignition is off and the comma wakes it when you start the car. If your
-socket turns off with the ignition, choose **Switched** in the installer.
+Recommended: **always-on 12 V power with deep sleep**. The Jetson sleeps with
+the ignition off; the comma wakes it when you start the car. If your socket
+turns off with the ignition, choose **Switched** in the installer.
 
 <details>
 <summary>Watch the installer</summary>
@@ -47,94 +47,86 @@ socket turns off with the ignition, choose **Switched** in the installer.
 
 ### Linux PC
 
-On Ubuntu or Debian with an NVIDIA GeForce RTX 20 series or newer GPU, run:
+Needs Ubuntu or Debian and an NVIDIA GeForce RTX 20 series or newer GPU. Run:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zoompilot/jetlink/main/install.sh | bash
 ```
 
-Allow 10–30 minutes, then complete comma setup below.
-See [Linux setup](docs/platforms.md#linux-nvidia-gpu) for help.
+Takes 10–30 minutes. Help: [Linux setup](docs/platforms.md#linux-nvidia-gpu).
 
 ### Mac
 
 <a href="docs/images/mac-demo.mp4"><img src="docs/images/mac-demo.webp" width="100%" alt="Jetlink for Mac: Use Model downloads and prepares a model, the comma connects over USB, and Status shows each frame against the 50 ms budget"></a>
 
-You need Apple silicon and macOS 15 or later; 16 GB of memory is recommended.
+Needs Apple silicon and macOS 15 or later (16 GB memory recommended).
+Dependencies are included.
 
 1. Download the Mac DMG from [Releases](https://github.com/zoompilot/jetlink/releases).
-2. Open it and drag **Jetlink** to **Applications**.
-3. Open Jetlink. **Waiting for comma** means the server is ready to connect.
-4. Keep the Mac powered and awake, then complete comma setup below.
-
-The app includes its dependencies.
+2. Drag **Jetlink** to **Applications** and open it.
+3. Wait for **Waiting for comma**.
+4. Keep the Mac powered and awake.
 
 ### iPhone and iPad (experimental)
 
 <a href="docs/images/iphone-demo.mp4"><img src="docs/images/iphone-demo.webp" width="100%" alt="Jetlink for iPhone, recorded in the iOS Simulator: Get downloads and prepares a model, the comma connects over USB, and Status shows each frame against the 50 ms budget, with timings modeled on an iPhone 17 Pro measurement"></a>
 
-The iOS app runs the server on an iPhone or iPad and serves the comma over one
-USB cable. It has only been tested with a Mac standing in for the phone.
+Only tested with a Mac standing in for the phone. You need:
 
-You need an iPhone or iPad with USB-C on iOS or iPadOS 26.1 or later (for
-USB 3, an iPhone Pro from the 15 Pro on, or an iPad Pro, Air, or mini), a USB 3
-USB-C cable, and a Mac with Xcode 26.
+* An iPhone or iPad with USB-C on iOS or iPadOS 26.1 or later. For USB 3: an
+  iPhone 15 Pro or later Pro, or an iPad Pro, Air, or mini.
+* A USB 3 USB-C cable.
+* A Mac with Xcode 26.
 
-1. Build and install the app with Xcode by following
+1. Build and install with Xcode:
    **[Jetlink for iPhone and iPad](docs/iphone-app.md)**. A free Apple account
-   works, but the install stops opening after 7 days until you run it from
-   Xcode again.
-2. Open Jetlink and keep it on screen, then complete comma setup below.
+   works, but you must run it from Xcode again every 7 days.
+2. Open Jetlink and keep it on screen.
 
 ## Comma setup (all platforms)
 
 1. **Install zoompilot with Jetlink.** After resetting the comma, enter
-   **`zoompilot/jetson-trt`** when setup asks for the install URL. This works
-   whether you previously used openpilot, sunnypilot, or another fork. Let
-   installation finish, including any reboot and build.
-   If you already use zoompilot, you can instead open
-   **Settings > Software > Target Branch > Non-Prebuilt Branches** and select
-   **jetson-trt**, then let it update, reboot, and finish building.
-2. **Enable Jetlink.** Open **Settings > Models** and set **Accelerator Link**
-   to **USB** for a Jetson, Linux PC, or Mac, or to **iOS** for an iPhone or
-   iPad. It can only be changed offroad. Leave **Big Model** on its default for
-   the first run.
-3. **Connect USB.** Use a USB 3 USB-C cable, or a USB-A to USB-C cable with a
-   USB-C adapter. On a Jetson, use its USB-A port. Charge-only cables will not
-   work.
-4. **Wait for green.** The comma's home-button icon pulses during download,
-   transfer, and preparation, then turns green when ready. Keep the comma
-   offroad and connected to the internet until it finishes. You do not need to download a model manually.
+   **`zoompilot/jetson-trt`** as the install URL (works from any fork).
+   Already on zoompilot? Select **jetson-trt** in
+   **Settings > Software > Target Branch > Non-Prebuilt Branches**.
+   Let it finish installing, rebooting, and building.
+2. **Enable Jetlink.** Set **Settings > Models > Accelerator Link** to **USB**
+   (Jetson, Linux PC, Mac) or **iOS** (iPhone, iPad). Offroad only. Leave
+   **Big Model** at its default for the first run.
+3. **Connect USB.** A USB 3 USB-C cable, or a USB-A to USB-C cable with a
+   USB-C adapter. Jetson: use its USB-A port. Charge-only cables won't work.
+4. **Wait for green.** The home-button icon pulses while the model downloads
+   and prepares, then turns green. Stay offroad and online until then.
 
-After download and transfer, the default model takes about 3 minutes to prepare
-on Jetson or about 20 seconds on an M1 Pro. Later loads use the cached engine.
+First prepare of the default model: about 3 minutes on a Jetson, 20 seconds on
+an M1 Pro. Later loads are cached.
 
 ## What to expect when driving
 
-The small model runs until the large model is ready and can switch. Switching
-requires **a stop with cruise off, or lateral control off**. Disengaging alone
-is not enough when lateral control is always on. A dimmed green icon means the
-model is waiting to switch; **Big Model Ready** means it has switched.
+* The small model drives until the large model is ready.
+* The large model takes over **at a stop with cruise off, or with lateral
+  control off**. With lateral control always on, disengaging alone is not enough.
+* Dimmed green icon: waiting to switch. **Big Model Ready**: switched.
+* **Big Model Lost** while engaged: take over. The comma soft-disables and
+  falls back to the small model.
 
-If you hear **Big Model Lost** while engaged, take over. The comma soft-disables
-and falls back to the small model. See [daily use and icon meanings](docs/using-jetlink.md)
-for startup, model changes, and reconnection behavior.
+More: [daily use and icon meanings](docs/using-jetlink.md).
 
 ## If something is wrong
 
 | Problem | First check |
 | --- | --- |
 | No Accelerator Link setting | Confirm the `jetson-trt` branch in Settings > Software. |
-| Server stays waiting; icon never pulses | Check the server is running, and try another USB 3 data cable or a USB-A to USB-C cable with a USB-C adapter. |
-| Model list is empty | Connect the comma to the internet and use Refresh Model List. |
-| Setup alert or orange icon | Read the home-screen alert. Check internet access, then set Accelerator Link to Off and back to USB or iOS. |
-| Alert says **no warp built for this camera** | The comma's build is missing a part the link needs. Update or reinstall the `jetson-trt` branch. |
-| Link drops repeatedly | Check the cable, separate power supplies, cooling, and whether the computer slept. |
+| Server stays waiting; icon never pulses | Check the server is running. Try another USB 3 data cable, or a USB-A to USB-C cable with a USB-C adapter. |
+| Model list is empty | Connect the comma to the internet, then use Refresh Model List. |
+| Setup alert or orange icon | Read the alert. Check internet, then set Accelerator Link to Off and back to USB or iOS. |
+| Alert says **no warp built for this camera** | Update or reinstall the `jetson-trt` branch. |
+| Link drops repeatedly | Check the cable, separate power, cooling, and computer sleep. |
 
-For logs and more checks, use the [Jetson guide](docs/jetson.md#troubleshooting),
-[Mac guide](docs/macos-app.md#troubleshooting),
-[iPhone and iPad guide](docs/iphone-app.md#logs), or
-[PC guide](docs/platforms.md#troubleshooting).
+Logs and more: [Jetson](docs/jetson.md#troubleshooting),
+[Mac](docs/macos-app.md#troubleshooting),
+[iPhone and iPad](docs/iphone-app.md#logs),
+[PC](docs/platforms.md#troubleshooting).
 
 <a id="more"></a>
 

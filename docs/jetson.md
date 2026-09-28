@@ -1,65 +1,62 @@
 # Set up Jetlink on a Jetson
 
-Allow about an hour for first-time setup, mostly downloads. You can set up
-Jetlink outside the car or in the car while offroad. Keep the Jetson and comma
-connected to the internet during setup, and keep both devices powered.
+About an hour the first time, mostly downloads. Set up in or out of the car,
+offroad. Keep the Jetson and comma powered and online.
 
 ## What you need
 
 - A **Jetson Orin Nano Super Developer Kit (8 GB)**.
 - A **64 GB or larger microSD card**, or an NVMe SSD.
 - A **comma 3X or comma 4** and a **USB 3 A-to-C data cable**.
-- Separate power for the Jetson and comma. The comma cannot power the Jetson.
+- Separate power for the Jetson and comma (the comma cannot power the Jetson).
 
 ## 1. Choose your power setup
 
-**We recommend always-on 12 V power and deep sleep.** Use a straight
-12 V-to-DC adapter with a **5.5 mm outer / 2.5 mm inner, center-positive** plug.
-The supply and cable must support at least 25 W.
-[See an adapter example](transport.md#recommended-jetson-power-setup).
+**Recommended: always-on 12 V power with deep sleep.** Use a straight
+12 V-to-DC adapter with a **5.5 mm outer / 2.5 mm inner, center-positive**
+plug, rated for at least 25 W (supply and cable).
+[Adapter example](transport.md#recommended-jetson-power-setup).
 
-Choose the installer option that matches your car's power socket:
+Pick the installer option for your car's power socket:
 
-| Does the socket stay powered with the ignition off? | Choose | What to expect |
-| --- | --- | --- |
-| Yes | **Always on** (recommended) | Ignition off: the Jetson sleeps after a few minutes. Car started: the comma wakes it automatically. |
-| No | **Switched** | Ignition off: the Jetson loses power. Car started: it boots; allow about 1–2 minutes for the large model. |
+| Socket powered with the ignition off? | Choose | Ignition off | Car started |
+| --- | --- | --- | --- |
+| Yes | **Always on** (recommended) | Jetson sleeps after a few minutes, using about **0.3 W** on 12 V. | The comma wakes it. |
+| No | **Switched** | Jetson loses power. | It boots; the large model takes about 1–2 minutes. |
 
-Check whether your socket turns off a few minutes after parking. If it does,
-choose **Switched**. Deep sleep needs power to stay connected and uses about
-**0.3 W (300 mW)** directly on 12 V.
+Not sure? If the socket turns off a few minutes after parking, choose
+**Switched**.
 
-**The installer also asks about battery protection.** Choose **Yes** to let
-the comma shut down the Jetson for low battery or after a long time parked.
-After this full shutdown, press the Jetson's power button or unplug and
-reconnect its power; starting the car alone will not restart it on always-on
-power. Choose **No** to keep using deep sleep while parked, without the comma
-shutting down the Jetson to protect the battery.
+**Battery protection** (installer question):
+
+- **Yes:** the comma shuts the Jetson down for low battery or a long park. To
+  restart it, press its power button or reconnect its power. Starting the car
+  won't.
+- **No:** the Jetson stays in deep sleep while parked, with no
+  battery-protection shutdown.
 
 <a id="1-put-jetpack-on-the-jetson"></a>
 <a id="2-run-the-installer"></a>
 
 ## 2. Install Jetlink
 
-The Jetson needs **JetPack 7.2.1** (recommended) or **6.2** first.
-If JetPack is already installed, continue to the command below.
+Needs **JetPack 7.2.1** (recommended) or **6.2**.
 
 <details>
 <summary>New Jetson? Install JetPack first</summary>
 
-You need another computer, a USB stick of at least 16 GB, a DisplayPort
-monitor, and a keyboard. **Installation erases the selected Jetson drive.**
+You need another computer, a 16 GB or larger USB stick, a DisplayPort monitor,
+and a keyboard. **This erases the selected Jetson drive.**
 
 1. Download the Jetson ISO from [NVIDIA](https://developer.nvidia.com/embedded/jetpack)
    and write it to the USB stick with [balenaEtcher](https://etcher.balena.io/).
 2. Connect the monitor, keyboard, storage, and USB stick to the Jetson.
    Power it on, press **Esc**, and select the USB stick in **Boot Manager**.
 3. If offered a firmware update, **press Y within 30 seconds**.
-4. Choose **Install Jetson ISO** and your target drive. When finished, remove
-   the USB stick and complete the on-screen setup.
+4. Choose **Install Jetson ISO** and your target drive. Then remove the USB
+   stick and finish the on-screen setup.
 
-For older firmware or installation problems, follow
-[NVIDIA's setup guide](https://docs.nvidia.com/jetson/orin-nano-devkit/user-guide/latest/quick_start.html).
+Older firmware or problems: [NVIDIA's setup guide](https://docs.nvidia.com/jetson/orin-nano-devkit/user-guide/latest/quick_start.html).
 
 </details>
 
@@ -69,28 +66,28 @@ On the Jetson, open **Terminal** and paste:
 curl -fsSL https://raw.githubusercontent.com/zoompilot/jetlink/main/install.sh | bash
 ```
 
-Answer the power questions using the choices above. The installer handles the
-rest. Allow 10–30 minutes and leave it running until it finishes.
+Answer the power questions as above. Takes 10–30 minutes; leave it running.
 
 ## 3. Connect the comma
 
 1. **Install zoompilot.** After resetting the comma, enter
-   **`zoompilot/jetson-trt`** as the install URL. If you already use zoompilot,
-   select **jetson-trt** under **Settings > Software > Target Branch >
-   Non-Prebuilt Branches**. Wait for installation and any reboot to finish.
-2. **Enable Jetlink.** Under **Settings > Models**, set **Accelerator Link** to **USB**.
+   **`zoompilot/jetson-trt`** as the install URL. Already on zoompilot? Select
+   **jetson-trt** in **Settings > Software > Target Branch >
+   Non-Prebuilt Branches**. Wait for installation and any reboot.
+2. **Enable Jetlink.** Set **Settings > Models > Accelerator Link** to **USB**.
    Leave **Big Model** at its default.
 3. **Connect the cable.** Jetson **USB-A** → comma **USB-C**.
-4. **Wait for the green icon** on the comma. The model downloads automatically,
-   then takes about 3 minutes to prepare the first time.
+4. **Wait for the green icon.** The model downloads itself; the first prepare
+   takes about 3 minutes.
 
-You're set up. With always-on power, leave both cables connected: the Jetson
-sleeps when parked and wakes when you start the car.
+Always-on power: leave both cables connected. The Jetson sleeps when parked and
+wakes when you start the car.
 
-The comma uses its small model until the large model is ready. It switches
-**at a stop with cruise off, or with lateral control off**. If you hear
-**Big Model Lost** while engaged, take over. Read [daily use](using-jetlink.md)
-before driving; Jetlink is experimental.
+Before driving, read [daily use](using-jetlink.md):
+
+- The small model drives until the large model is ready.
+- It switches **at a stop with cruise off, or with lateral control off**.
+- **Big Model Lost** while engaged: take over.
 
 <a id="troubleshooting"></a>
 
@@ -99,8 +96,8 @@ before driving; Jetlink is experimental.
 | Problem | Try this |
 | --- | --- |
 | Installer stopped | Run the install command again. |
-| Icon never turns green | Run `jetlink status`. Check the cable uses the Jetson's USB-A port; try another USB 3 data cable. |
-| Jetson will not wake | If it fully shut down, press its power button or unplug and reconnect power. Otherwise check **Always on** is selected with `jetlink setup`. |
+| Icon never turns green | Run `jetlink status`. Use the Jetson's USB-A port; try another USB 3 data cable. |
+| Jetson will not wake | After a full shutdown, press its power button or reconnect power. Otherwise check **Always on** with `jetlink setup`. |
 | Model fails to prepare or keeps disconnecting | Run `jetlink logs`. Check storage space, power, cable, and cooling. |
 | Connection fails after an update | [Update both the comma and Jetlink](releasing.md). |
 
@@ -119,8 +116,8 @@ jetlink setup      # change power settings
 jetlink uninstall  # remove Jetlink
 ```
 
-When asking for help, include the output of `jetlink status`, the model name,
-the exact alert, and when it happened. The installer log is at
+When asking for help, include `jetlink status` output, the model name, the
+exact alert, and when it happened. Installer log:
 `/var/log/jetlink-install.log`. Save the server log with:
 
 ```bash

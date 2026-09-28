@@ -1,19 +1,17 @@
 # Performance and operating limits
 
 Jetlink is experimental. If the link drops while engaged, the comma
-soft-disables and tells you to take over. See [daily use](using-jetlink.md)
-for model switching and reconnection behavior.
+soft-disables: take over. See [daily use](using-jetlink.md).
 
 <a id="status-and-known-limitations"></a>
 <a id="platform-testing"></a>
 
-For hardware and software requirements, see [Jetson setup](jetson.md),
-[the Mac guide](macos-app.md), [the iPhone guide](iphone-app.md), or
-[PC setup](platforms.md).
+Requirements: [Jetson](jetson.md), [Mac](macos-app.md),
+[iPhone](iphone-app.md), [PC](platforms.md).
 
 ## Measured performance
 
-Orin Nano Super 8 GB, TensorRT 10.3 FP16, over USB 3, recorded-segment replay:
+Orin Nano Super 8 GB, TensorRT 10.3 FP16, USB 3, recorded-segment replay:
 
 | Model | GPU inference | Full modeld mean / max | First engine build |
 | --- | ---: | ---: | ---: |
@@ -21,25 +19,20 @@ Orin Nano Super 8 GB, TensorRT 10.3 FP16, over USB 3, recorded-segment replay:
 | TGC v2, 766 MB | ~20 ms | 31.1 / 33.5 ms | 166 s |
 | Lebowski, 1757 MB | 36.2 ms | 46.3 / 49.5 ms | 290 s |
 
-Full modeld timings include image processing, transport, inference, and output
-parsing. The frame budget is 50 ms, so Lebowski leaves little margin. These
-short tests do not establish sustained performance at high temperatures.
+* Full modeld includes image processing, transport, inference, and parsing.
+* The frame budget is 50 ms; Lebowski leaves little margin.
+* Sustained use at high temperatures is untested.
 
-For Mac latency, preparation times, and backend comparisons, see
-[Mac performance](mac-performance.md).
+Mac numbers: [Mac performance](mac-performance.md).
 
 <a id="what-still-needs-validation"></a>
 
 ## Power and connection
 
-Use separate power supplies for the comma and server. Voltage drops can reboot
-the server and interrupt the link. Keep laptops powered and awake, and provide
-adequate cooling during sustained use.
-
-With always-on power, the Jetson sleeps when the ignition is off and the comma
-wakes it when the car starts. See [power setup](transport.md#power-requirements)
-for consumption and the separate battery-protection shutdown option.
-
-The comma links over USB. The server's TCP transport is for testing: it has no
-client authentication, so use a trusted network, and Wi-Fi missed the frame
-budget in measurements.
+* Use separate power supplies for the comma and server. Voltage drops can
+  reboot the server and drop the link.
+* Keep laptops powered, awake, and cooled.
+* Always-on power: the Jetson sleeps with the ignition off and the comma wakes
+  it when the car starts. See [power setup](transport.md#power-requirements).
+* Link over USB. TCP is for testing only: it has no client authentication
+  (trusted networks only), and Wi-Fi missed the frame budget.
