@@ -16,6 +16,9 @@ FAKE_BIN=/tmp/fakebin
 export FAKE_BIN FAKE_LOG=/tmp/fake.log FAKE_STATE=/tmp/fake-state
 export JETLINK_TEST_DT_MODEL=/tmp/dt-model JETLINK_TEST_MEM_SLEEP=/tmp/mem-sleep
 export JETLINK_TEST_PROC_VERSION=/tmp/proc-version JETLINK_TEST_SYSTEMD_RUN=/tmp
+# the lock a native server makes to be held awake; none until a scenario says
+export JETLINK_TEST_AWAKE_LOCK=/tmp/jetlink-awake.lock
+LOCK=$JETLINK_TEST_AWAKE_LOCK
 # the same questions on every machine: plenty of disk, and no swap yet
 export JETLINK_TEST_FREE_GB=100 JETLINK_TEST_SWAPS=/tmp/swaps
 # nothing waited on here is real, so there is nothing to wait for
@@ -62,7 +65,8 @@ reset_box() {
   rm -rf /etc/jetlink /usr/local/lib/jetlink /usr/local/bin/jetlink /opt/jetlink /var/lib/jetlink /mnt/data \
     "$UNITS"/jetlink-* /etc/udev/rules.d/99-jetlink-usb-wakeup.rules \
     /etc/systemd/journald.conf.d/60-jetlink.conf "$FAKE_STATE" "$FAKE_LOG" "$FAKE_BIN" \
-    /etc/nv_tegra_release /etc/nvpmodel.conf /tmp/dt-model /tmp/mem-sleep /etc/apt/sources.list.d/nvidia-container-toolkit.list
+    /etc/nv_tegra_release /etc/nvpmodel.conf /tmp/dt-model /tmp/mem-sleep /etc/apt/sources.list.d/nvidia-container-toolkit.list \
+    "$LOCK"
   cp /tmp/fstab.orig /etc/fstab
   mkdir -p "$FAKE_STATE"
   echo "Linux version 6.8.0-fake (gcc) #1 SMP" >/tmp/proc-version
@@ -260,7 +264,7 @@ expect_in /etc/jetlink/install.conf "JETLINK_SOURCE=git"
 expect_in /etc/jetlink/install.conf "JETLINK_REF=latest"
 expect_in /etc/jetlink/install.conf "JETLINK_VERSION=v0.10.0"
 # shellcheck disable=SC2016
-expect_in "$UNITS/jetlink-server.service" 'ExecStart=/opt/jetlink/current/bin/jetlink-server --usb --cache ${JETLINK_CACHE_DIR} --sleep-after ${JETLINK_SLEEP_AFTER} --status-port ${JETLINK_STATUS_PORT}'
+expect_in "$UNITS/jetlink-server.service" 'ExecStart=/opt/jetlink/current/bin/jetlink-server --usb --backend trt --cache ${JETLINK_CACHE_DIR} --sleep-after ${JETLINK_SLEEP_AFTER} --status-port ${JETLINK_STATUS_PORT}'
 expect_in "$UNITS/jetlink-server.service" "EnvironmentFile=-/etc/jetlink/server.env"
 expect_in "$UNITS/jetlink-server.service" "RestartSec=2"
 expect_not_in "$UNITS/jetlink-server.service" "docker"
@@ -287,23 +291,30 @@ jetlink models list >/tmp/models.txt 2>&1
 expect_in /tmp/models.txt "fake model list in /mnt/data/jetlink"
 expect_ran "jetlink-server models list"
 jetlink run --log-level debug >/tmp/run.txt 2>&1
-expect_ran "jetlink-server --usb --cache /mnt/data/jetlink --sleep-after 120 --status-port 5600 --log-level debug"
+expect_ran "jetlink-server --usb --backend trt --cache /mnt/data/jetlink --sleep-after 120 --status-port 5600 --log-level debug"
 systemctl start jetlink-server
 show_on_failure "$f"
 
 # ---------------------------------------------------------------------------
 scenario "update keeps the answers and asks nothing"
 : >"$FAKE_LOG"; f=$FAILED
+# a native server that sleeps, with the awake lock it makes at start
+: >"$LOCK" && chmod 644 "$LOCK"
 cli update
 expect_rc 0
 expect_out "Getting the newest Jetlink (v0.10.0)"
 expect_no_out "A few questions"
 expect_no_out "Go ahead?"
 expect_out "Jetlink is installed and running"
-# the running server serves until the new one is downloaded and checked
-expect_out "Stopping the running Jetlink server for the update"
+# it serves through the downloads, held awake so it cannot suspend the Jetson
+# under them, and stops only for the switch
+expect_out "Holding this computer awake for the update"
+expect_ran "jetlink-server-0.10.0-linux-aarch64.tar.gz [held awake]"
+expect_ran "apt-cache policy libnvinfer10 [held awake]"
 expect_before "releases/download/v0.10.0" "systemctl stop jetlink-server"
 expect_before "jetlink-server backends" "systemctl stop jetlink-server"
+expect_out "Stopping the running Jetlink server for the update"
+expect_ran "jetlink-server started: native, sleep 120"
 expect_file /etc/jetlink/server.env.prev
 expect_no_out "The previous Jetlink server is running again."
 expect_in /etc/jetlink/install.conf "JETLINK_POWER=always"
@@ -314,6 +325,44 @@ expect_not_ran "$(apt_install "libnvinfer10")"
 expect_ran "apt-cache policy libnvinfer10"
 expect_link /opt/jetlink/current /opt/jetlink/0.10.0
 expect_no_file /opt/jetlink/previous
+show_on_failure "$f"
+
+# ---------------------------------------------------------------------------
+scenario "jetlink caffeinate holds the server awake: a command, -t, until stopped"
+: >"$FAKE_LOG"; f=$FAILED
+lock_free() { flock --exclusive --nonblock "$LOCK" true; }
+# a command: held while it runs, and its exit status comes back
+jetlink caffeinate sh -c "flock -xn $LOCK true && echo free || echo held; exit 7" >"$OUT" 2>&1; RC=$?
+expect_rc 7
+expect_out "held"
+check "still held after the command" lock_free
+jetlink caffeinate jetlink status >/tmp/status.txt 2>&1
+expect_in /tmp/status.txt "held awake by jetlink caffeinate"
+jetlink status >/tmp/status.txt 2>&1
+expect_not_in /tmp/status.txt "held awake"
+# -t SECONDS
+jetlink caffeinate -t 2 >"$OUT" 2>&1 &
+pid=$!
+sleep 1
+refute "not held during -t" lock_free
+wait "$pid"; RC=$?
+expect_rc 0
+expect_out "Holding the Jetson awake for 2 s"
+check "still held after -t" lock_free
+# no arguments: until it is stopped
+jetlink caffeinate >"$OUT" 2>&1 &
+pid=$!
+sleep 1
+refute "not held" lock_free
+kill -TERM "$pid"; wait "$pid"; RC=$?
+expect_rc 0
+expect_out "Holding the Jetson awake; Ctrl-C to let it sleep."
+check "still held after it stopped" lock_free
+# a server without the lock (from before it, or in Docker): nothing to hold
+rm -f "$LOCK"
+cli caffeinate
+expect_rc 1
+expect_out "The server is not running natively; nothing to hold."
 show_on_failure "$f"
 
 # ---------------------------------------------------------------------------
@@ -438,6 +487,9 @@ scenario "--ref vX.Y.Z pins a release; --ref latest follows them again"
 : >"$FAKE_LOG"; f=$FAILED
 piped '' --update --ref v0.9.0
 expect_rc 0
+# a server that sleeps and has no awake lock (from before it) stops first
+expect_before "systemctl stop jetlink-server" "releases/download/v0.9.0"
+expect_not_ran "[held awake]"
 expect_ran "releases/download/v0.9.0/jetlink-server-0.9.0-linux-aarch64.tar.gz"
 expect_in /etc/jetlink/install.conf "JETLINK_REF=v0.9.0"
 : >"$FAKE_LOG"
@@ -593,12 +645,12 @@ piped 'y\n\ny\n'
 expect_rc 0
 expect_out "NVIDIA driver 580.95.05"
 expect_no_out "How is the Jetson powered"
-expect_out "Install NVIDIA TensorRT 11.3 from NVIDIA's package source"
+expect_out "Install NVIDIA TensorRT 11.3.0.99 from NVIDIA's package source"
 check "never installed libcurl4" grep -qE '^apt-get .* install --no-install-recommends .*libcurl4' "$FAKE_LOG"
 expect_ran "https://developer.download.nvidia.com/compute/cuda/repos/$DIST/x86_64/cuda-keyring_1.1-1_all.deb"
 expect_ran "dpkg -i"
 # the CUDA 13 build, by its exact version, and never the meta packages
-expect_ran "$(apt_install "libnvinfer11=11.3.0.99-1+cuda13.0 libnvonnxparsers11=11.3.0.99-1+cuda13.0")"
+expect_ran "$(apt_install "libnvinfer11=11.3.0.99-1+cuda13.4 libnvonnxparsers11=11.3.0.99-1+cuda13.4")"
 refute "installed a TensorRT meta package" grep -qE 'install .*(tensorrt|cuda12\.9)' "$FAKE_LOG"
 expect_ran "releases/download/v0.10.0/jetlink-server-0.10.0-linux-x86_64.tar.gz"
 expect_in /etc/jetlink/server.env "JETLINK_JETSON=0"
@@ -609,6 +661,12 @@ expect_no_file /etc/systemd/journald.conf.d/60-jetlink.conf
 expect_no_file "$UNITS/jetlink-server.service.d/20-jetson-clocks.conf"
 expect_in /var/lib/jetlink/poweroff-dry-run "Written by the Jetlink installer"
 expect_out "Keep this computer plugged in and awake"
+# a server that never sleeps serves until the new one is downloaded and checked
+: >"$FAKE_LOG"
+cli update
+expect_rc 0
+expect_before "releases/download/v0.10.0" "systemctl stop jetlink-server"
+expect_before "jetlink-server backends" "systemctl stop jetlink-server"
 show_on_failure "$f"
 
 # ---------------------------------------------------------------------------
@@ -636,7 +694,7 @@ piped '' --yes
 expect_rc 0
 expect_out "Windows (WSL) support is untested."
 expect_out "usbipd"
-expect_ran "$(apt_install "libnvinfer11=11.3.0.99-1+cuda13.0 libnvonnxparsers11=11.3.0.99-1+cuda13.0")"
+expect_ran "$(apt_install "libnvinfer11=11.3.0.99-1+cuda13.4 libnvonnxparsers11=11.3.0.99-1+cuda13.4")"
 # a Linux driver or CUDA package inside WSL breaks the Windows driver's
 refute "installed CUDA or a driver in WSL" grep -qE 'install .*(cuda |cuda-drivers|cuda-toolkit|nvidia-driver)' "$FAKE_LOG"
 expect_in /etc/jetlink/install.conf "WSL"
@@ -649,6 +707,16 @@ reset_box; pc 580.95.05; wsl
 JETLINK_TEST_SYSTEMD_RUN=/nonexistent piped '' --yes
 expect_rc 1
 expect_out "systemd=true"
+show_on_failure "$f"
+
+# ---------------------------------------------------------------------------
+scenario "a PC whose package source lacks the server's TensorRT build stops"
+reset_box; pc 580.95.05; f=$FAILED
+FAKE_TRT11_BUILDS="11.3.0.99-1+cuda12.9 11.2.1.2-1+cuda13.3" piped '' --yes
+expect_rc 1
+expect_out "NVIDIA's package source has no TensorRT 11.3.0.99-1+cuda13.4."
+expect_not_ran "libnvinfer11="
+expect_no_file "$UNITS/jetlink-server.service"
 show_on_failure "$f"
 
 # ---------------------------------------------------------------------------
@@ -769,8 +837,15 @@ expect_before "$(apt_install "libnvinfer10 libnvonnxparsers10")" "systemctl stop
 expect_before "releases/download/v0.10.0/jetlink-server-0.10.0-linux-aarch64.tar.gz" "systemctl stop jetlink-server"
 expect_before "jetlink-server backends" "systemctl stop jetlink-server"
 expect_ran "docker rm -f jetlink"
+# meanwhile it serves without sleeping, so it cannot suspend the Jetson under
+# apt; the native server starts with the user's sleep
+expect_out "Keeping this computer awake for the update"
+expect_before "jetlink-server started: docker, sleep 0" "releases/download/v0.10.0"
+expect_before "jetlink-server started: docker, sleep 0" "$(apt_install "libnvinfer10")"
+expect_ran "jetlink-server started: native, sleep 120"
+check "server.env.prev lost the sleep" grep -q '^JETLINK_SLEEP_AFTER=120' /etc/jetlink/server.env.prev
 # its images go once the native server is up, and Docker stays
-expect_before "systemctl restart jetlink-server" "docker rmi"
+expect_before "jetlink-server started: native" "docker rmi"
 expect_ran "docker rmi ghcr.io/zoompilot/jetlink:0.4.3-cuda"
 refute "removed a package" grep -qE '^apt-get .* (remove|purge)' "$FAKE_LOG"
 expect_in /etc/jetlink/server.env "JETLINK_CACHE_DIR=/mnt/data/jetlink"
@@ -855,6 +930,7 @@ expect_out "jetlink update --ref v0.6.0"
 expect_not_ran "$(apt_install "libnvinfer10")"
 expect_in "$UNITS/jetlink-server.service" "run-server"
 expect_in /etc/jetlink/server.env "JETLINK_IMAGE="
+expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=120"
 show_on_failure "$f"
 
 # ---------------------------------------------------------------------------
@@ -864,7 +940,7 @@ old_install v0.6.0
 cli update
 expect_rc 0
 expect_out "Jetlink is installed and running"
-expect_ran "$(apt_install "libnvinfer11=11.3.0.99-1+cuda13.0 libnvonnxparsers11=11.3.0.99-1+cuda13.0")"
+expect_ran "$(apt_install "libnvinfer11=11.3.0.99-1+cuda13.4 libnvonnxparsers11=11.3.0.99-1+cuda13.4")"
 expect_ran "releases/download/v0.10.0/jetlink-server-0.10.0-linux-x86_64.tar.gz"
 expect_ran "docker rmi ghcr.io/zoompilot/jetlink:0.6.0-cuda"
 refute "removed the toolkit" grep -qE '^apt-get .* (remove|purge)' "$FAKE_LOG"
@@ -884,9 +960,20 @@ old_install v0.6.0
 # the status page's own unit, from before it moved into the server
 printf '[Service]\nExecStart=/usr/bin/python3 /usr/local/lib/jetlink/web/jetlink_web.py\n[Install]\nWantedBy=multi-user.target\n' \
   >"$UNITS/jetlink-web.service"
+# a failure while it serves without sleeping puts the sleep back
+FAKE_BAD_SUM=1 cli update
+expect_rc 1
+expect_ran "jetlink-server started: docker, sleep 0"
+check "not started again with its sleep" test "$(grep 'jetlink-server started' "$FAKE_LOG" | tail -n 1)" = "jetlink-server started: docker, sleep 120"
+expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=120"
+expect_out "The previous Jetlink server is running again."
+: >"$FAKE_LOG"
 export FAKE_SERVER_BROKEN=1 FAKE_RESTARTS=3
 cli update
 expect_rc 1
+expect_ran "jetlink-server started: docker, sleep 0"
+check "not started again with its sleep" test "$(grep 'jetlink-server started' "$FAKE_LOG" | tail -n 1)" = "jetlink-server started: docker, sleep 120"
+expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=120"
 expect_out "The previous Jetlink server is running again."
 expect_in "$UNITS/jetlink-server.service" "run-server"
 expect_no_file "$UNITS/jetlink-server.service.d/20-jetson-clocks.conf"
@@ -910,6 +997,7 @@ expect_not_in /etc/jetlink/server.env "JETLINK_IMAGE"
 expect_no_file "$UNITS/jetlink-web.service"
 expect_ran "systemctl disable --now jetlink-web.service"
 expect_ran "docker rmi ghcr.io/zoompilot/jetlink:0.6.0-cuda"
+expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=120"
 show_on_failure "$f"
 
 # ---------------------------------------------------------------------------

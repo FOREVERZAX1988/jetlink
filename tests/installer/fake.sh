@@ -12,7 +12,11 @@ set -u
 name="$(basename "$0")"
 state="${FAKE_STATE:-/tmp/fake-state}"
 mkdir -p "$state"
-printf '%s %s\n' "$name" "$*" >>"${FAKE_LOG:-/tmp/fake.log}"
+# and whether the server's awake lock was held at the time
+held=''
+lock="${JETLINK_TEST_AWAKE_LOCK:-/nonexistent}"
+if [ -e "$lock" ] && ! flock --exclusive --nonblock "$lock" true 2>/dev/null; then held=' [held awake]'; fi
+printf '%s %s%s\n' "$name" "$*" "$held" >>"${FAKE_LOG:-/tmp/fake.log}"
 
 # an installed package's version; fails when it is not installed
 pkg() { cat "$state/pkg-$1" 2>/dev/null; }
@@ -43,8 +47,9 @@ case "$name" in
     case "${1:-}" in
       policy) printf '%s:\n  Installed: %s\n  Candidate: %s\n' "$2" "$(pkg "$2" || echo '(none)')" "$TRT10" ;;
       madison)
-        # NVIDIA's CUDA repository: 11.3 for CUDA 13 and 12.9 under one number
-        for v in 11.3.0.99-1+cuda13.0 11.3.0.99-1+cuda12.9 11.2.0.47-1+cuda13.0; do
+        # NVIDIA's CUDA repository (both Ubuntu releases): 11.3.0.99 for CUDA
+        # 13.4 and 12.9 under one number, and the release before
+        for v in ${FAKE_TRT11_BUILDS:-11.3.0.99-1+cuda13.4 11.3.0.99-1+cuda12.9 11.2.1.2-1+cuda13.3}; do
           printf ' %s | %s | https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64  Packages\n' "$2" "$v"
         done ;;
     esac ;;
@@ -95,7 +100,16 @@ case "$name" in
         [ -f "$state/stopped-${*: -1}" ] && { [ "$quiet" = 1 ] || echo inactive; exit 3; }
         [ "$quiet" = 1 ] || echo active ;;
       stop) touch "$state/stopped-${*: -1}" ;;
-      start|restart) rm -f "$state/stopped-${*: -1}" ;;
+      start|restart)
+        rm -f "$state/stopped-${*: -1}"
+        if [ "${*: -1}" = jetlink-server ]; then
+          # which server came up, and whether it may sleep
+          kind=native
+          grep -qs run-server /etc/systemd/system/jetlink-server.service && kind=docker
+          printf 'jetlink-server started: %s, sleep %s\n' "$kind" \
+            "$(sed -n 's/^JETLINK_SLEEP_AFTER=//p' /etc/jetlink/server.env 2>/dev/null | tail -n 1)" \
+            >>"${FAKE_LOG:-/tmp/fake.log}"
+        fi ;;
       is-enabled)
         u="${*: -1}"
         if [ -f "$state/masked-$u" ]; then echo masked

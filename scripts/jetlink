@@ -9,6 +9,9 @@ CONF="$ETC_DIR/install.conf"
 ENV_FILE="$ETC_DIR/server.env"
 SERVER=/opt/jetlink/current/bin/jetlink-server
 UNIT=jetlink-server
+# the server does not suspend while anyone holds a shared lock on this; it
+# makes the file, readable by all, when it starts
+AWAKE_LOCK="${JETLINK_TEST_AWAKE_LOCK:-/run/jetlink-awake.lock}"
 INSTALLER_URL_BASE="https://raw.githubusercontent.com/zoompilot/jetlink"
 
 if [ -t 1 ]; then
@@ -28,6 +31,7 @@ ${B}jetlink${N}: manage the Jetlink server on this computer
   ${B}jetlink update${N}      update Jetlink, keeping your settings
   ${B}jetlink setup${N}       answer the setup questions again
   ${B}jetlink models${N} ...  list, download or prepare models (${B}jetlink models --help${N})
+  ${B}jetlink caffeinate${N}  keep it awake until Ctrl-C (or ${B}-t${N} SECONDS, or while COMMAND runs)
   ${B}jetlink uninstall${N}   remove Jetlink from this computer
 
 Help and troubleshooting: https://github.com/zoompilot/jetlink
@@ -132,6 +136,9 @@ cmd_status() {
     fi
     echo "  power          $power"
   fi
+  if [ -e "$AWAKE_LOCK" ] && ! flock --exclusive --nonblock "$AWAKE_LOCK" true 2>/dev/null; then
+    echo "  sleep          held awake by jetlink caffeinate"
+  fi
   if [ "$state" = active ]; then page_lines; fi
   echo "  starts at boot $(systemctl is-enabled "$UNIT" 2>/dev/null || echo no)"
   echo
@@ -152,6 +159,42 @@ cmd_models() {
     exit 1
   fi
   JETLINK_CACHE="$JETLINK_CACHE_DIR" exec "$SERVER" models "$@"
+}
+
+# Like macOS's caffeinate: hold the server's awake lock until Ctrl-C, for -t
+# SECONDS, or while a command runs, then exit with its status. A shared lock
+# on a file opened read-only, so it needs no root, and a holder that dies lets
+# go. The waits run without the lock's descriptor, so nothing outlives this.
+cmd_caffeinate() {
+  if [ ! -e "$AWAKE_LOCK" ]; then
+    echo "The server is not running natively; nothing to hold."
+    exit 1
+  fi
+  [ "${1:-}" = -- ] && shift
+  local seconds='' rc=0
+  if [ "${1:-}" = -t ]; then
+    seconds="${2:-}"
+    [[ $seconds =~ ^[0-9]+$ ]] || { echo "Usage: jetlink caffeinate [-t SECONDS] [COMMAND [ARGS...]]"; exit 2; }
+    shift 2
+  fi
+  exec 9<"$AWAKE_LOCK"
+  flock --shared 9
+  if [ $# -gt 0 ]; then
+    "$@" 9<&- || rc=$?
+    exit "$rc"
+  fi
+  trap 'kill "$!" 2>/dev/null; exit 0' INT TERM
+  if [ -n "$seconds" ]; then
+    echo "Holding the Jetson awake for $seconds s; Ctrl-C to let it sleep."
+    sleep "$seconds" 9<&- &
+    wait "$!"
+  else
+    echo "Holding the Jetson awake; Ctrl-C to let it sleep."
+    while :; do
+      sleep 3600 9<&- &
+      wait "$!"
+    done
+  fi
 }
 
 # The newest release's tag, or nothing, found as install.sh's latest_release
@@ -225,10 +268,11 @@ main() {
       if [ "${JETLINK_JETSON:-0}" = 1 ] && command -v jetson_clocks >/dev/null 2>&1; then
         jetson_clocks || true
       fi
-      exec "$SERVER" --usb --cache "$JETLINK_CACHE_DIR" --sleep-after "${JETLINK_SLEEP_AFTER:-0}" \
+      exec "$SERVER" --usb --backend trt --cache "$JETLINK_CACHE_DIR" --sleep-after "${JETLINK_SLEEP_AFTER:-0}" \
         --status-port "${JETLINK_STATUS_PORT:-0}" "$@"
       ;;
     models|model) as_root models "$@"; cmd_models "$@" ;;
+    caffeinate) cmd_caffeinate "$@" ;;
     update|upgrade) as_root update "$@"; run_installer --update "$@" ;;
     setup|configure|reconfigure) as_root setup "$@"; run_installer --reconfigure "$@" ;;
     uninstall|remove) as_root uninstall "$@"; run_installer --uninstall "$@" ;;

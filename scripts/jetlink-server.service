@@ -21,7 +21,10 @@ Type=simple
 # for an install by hand; server.env overrides them
 Environment=JETLINK_CACHE_DIR=/var/lib/jetlink JETLINK_SLEEP_AFTER=0 JETLINK_STATUS_PORT=5600
 EnvironmentFile=-/etc/jetlink/server.env
-ExecStart=/opt/jetlink/current/bin/jetlink-server --usb --cache ${JETLINK_CACHE_DIR} --sleep-after ${JETLINK_SLEEP_AFTER} --status-port ${JETLINK_STATUS_PORT}
+# TensorRT or nothing: a server that cannot load it exits, so the failure shows
+# in the journal and in `jetlink status` instead of the car being served from
+# the CPU
+ExecStart=/opt/jetlink/current/bin/jetlink-server --usb --backend trt --cache ${JETLINK_CACHE_DIR} --sleep-after ${JETLINK_SLEEP_AFTER} --status-port ${JETLINK_STATUS_PORT}
 Restart=always
 RestartSec=2
 

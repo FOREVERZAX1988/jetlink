@@ -51,13 +51,14 @@ MIN_CC=75
 MIN_DISK_GB=15
 SWAP_GB=8
 # JetPack 7.2 runs the newest TensorRT the Jetson repository has, and nothing
-# older than this. PCs get the TensorRT the x86_64 server is built against.
+# older than this. PCs get the exact build the x86_64 server is compiled
+# against, as NVIDIA's package index spells it.
 JP7_MIN_TRT=10.16.2.10
-PC_TRT=11.3.0.99
+PC_TRT=11.3.0.99-1+cuda13.4
 # free space on / that installing TensorRT takes: the download and the files
 TRT_GB_JP7=6
 TRT_GB_JP6=3
-TRT_GB_PC=7
+TRT_GB_PC=6
 # units that hold up boot waiting for a network the car does not have
 WAIT_ONLINE_UNITS="systemd-networkd-wait-online.service NetworkManager-wait-online.service"
 # where detection looks; the installer's tests point these at fakes
@@ -66,6 +67,7 @@ MEM_SLEEP="${JETLINK_TEST_MEM_SLEEP:-/sys/power/mem_sleep}"
 SWAPS="${JETLINK_TEST_SWAPS:-/proc/swaps}"
 PROC_VERSION="${JETLINK_TEST_PROC_VERSION:-/proc/version}"
 SYSTEMD_RUN="${JETLINK_TEST_SYSTEMD_RUN:-/run/systemd/system}"
+AWAKE_LOCK="${JETLINK_TEST_AWAKE_LOCK:-/run/jetlink-awake.lock}"
 # seconds between looks at something the installer waits on
 POLL_S="${JETLINK_TEST_POLL_S:-5}"
 # seconds a download may make no progress before it is abandoned and tried again
@@ -739,7 +741,7 @@ show_plan() {
     elif [ "$JETSON" = 1 ]; then
       say "  • Install NVIDIA TensorRT from JetPack's package source"
     else
-      say "  • Install NVIDIA TensorRT ${PC_TRT%.*.*} from NVIDIA's package source ${D}(about 1.9 GB)${N}"
+      say "  • Install NVIDIA TensorRT ${PC_TRT%%-*} from NVIDIA's package source ${D}(about 1.9 GB)${N}"
     fi
   fi
   if [ -n "$OPT_BINARY" ]; then
@@ -930,11 +932,11 @@ install_base_packages() {
 }
 
 # The running server keeps serving while the slow parts download and install,
-# and stops only for the switch, so a failure before then leaves it as it was.
-# Its settings are kept as server.env.prev and install.conf.prev: a failed
-# update puts them back and starts it again (restore_previous_server), and
-# after a good one they are a way back by hand.
-SERVER_STOPPED=0 CHANGED=0 IMAGES_REMOVED=0
+# and stops only for the switch, so a failure before then leaves it as it was
+# (hold_sleep has the one exception). Its settings are kept as server.env.prev
+# and install.conf.prev: a failed update puts them back and starts it again
+# (restore_previous_server), and after a good one they are a way back by hand.
+SERVER_STOPPED=0 CHANGED=0 IMAGES_REMOVED=0 SLEEP_HELD=0
 ENV_PREV="$ETC_DIR/server.env.prev"
 CONF_PREV="$ETC_DIR/install.conf.prev"
 
@@ -965,6 +967,30 @@ backup_install() {
   good "The Docker setup is saved in $DOCKER_ERA_DIR"
 }
 
+# A server that sleeps would suspend the computer under a long download the
+# moment the comma lets go. A native one does not while its awake lock is held
+# (jetlink caffeinate), so this run holds it until it exits; one from before
+# the lock stops now instead of at the switch. The Docker era's does not know
+# the lock: it restarts without sleeping, and a failure puts its server.env back.
+hold_sleep() {
+  local after
+  [ -f "$UNIT_DIR/$UNIT.service" ] && [ -f "$ENV_FILE" ] || return 0
+  after="$(sed -n 's/^JETLINK_SLEEP_AFTER=//p' "$ENV_FILE" | tail -n 1)"
+  [ "${after%.*}" -gt 0 ] 2>/dev/null || return 0
+  as_root systemctl is-active --quiet "$UNIT" || return 0
+  if [ "$DOCKER_ERA" = 0 ]; then
+    if [ -r "$AWAKE_LOCK" ] && exec 8<"$AWAKE_LOCK" && flock --shared --wait 10 8; then
+      good "Holding this computer awake for the update"
+    else
+      stop_running_server
+    fi
+    return 0
+  fi
+  { grep -v '^JETLINK_SLEEP_AFTER=' "$ENV_PREV"; echo 'JETLINK_SLEEP_AFTER=0'; } | root_write "$ENV_FILE"
+  SLEEP_HELD=1
+  step "Keeping this computer awake for the update" as_root systemctl restart "$UNIT"
+}
+
 stop_running_server() {
   [ "$SERVER_STOPPED" = 0 ] || return 0
   [ -f "$UNIT_DIR/$UNIT.service" ] || return 0
@@ -982,11 +1008,13 @@ stop_running_server() {
 # After a failed update: the previous files and settings, and the previous
 # server running if it was.
 restore_previous_server() {
-  [ "$CHANGED" = 1 ] || [ "$SERVER_STOPPED" = 1 ] || return 0
-  local changed=$CHANGED was_running=$SERVER_STOPPED
-  CHANGED=0 SERVER_STOPPED=0
-  if [ "$changed" = 1 ]; then
+  [ "$CHANGED" = 1 ] || [ "$SERVER_STOPPED" = 1 ] || [ "$SLEEP_HELD" = 1 ] || return 0
+  local changed=$CHANGED was_running=$SERVER_STOPPED held=$SLEEP_HELD
+  CHANGED=0 SERVER_STOPPED=0 SLEEP_HELD=0
+  if [ "$changed" = 1 ] || [ "$held" = 1 ]; then
     if [ -f "$ENV_PREV" ]; then as_root cp -p "$ENV_PREV" "$ENV_FILE" >>"$LOG" 2>&1 || true; fi
+  fi
+  if [ "$changed" = 1 ]; then
     if [ -f "$CONF_PREV" ]; then as_root cp -p "$CONF_PREV" "$CONF" >>"$LOG" 2>&1 || true; fi
     if [ "$DOCKER_ERA" = 1 ]; then
       restore_docker_era
@@ -999,7 +1027,7 @@ restore_previous_server() {
     as_root systemctl stop "$UNIT" >>"$LOG" 2>&1 || true
     note "The Docker server's images were deleted to make room, so it cannot start again."
     note "Run the installer again, or go back to Docker with: jetlink update --ref $DOCKER_LAST"
-  elif [ "$was_running" = 1 ]; then
+  elif [ "$was_running" = 1 ] || [ "$held" = 1 ]; then
     if as_root systemctl restart "$UNIT" >>"$LOG" 2>&1; then
       note "The previous Jetlink server is running again."
     else
@@ -1085,13 +1113,14 @@ newest_jetson_trt() {
 
 # TensorRT 11.3 from NVIDIA's CUDA repository for the Ubuntu release (WSL uses
 # the same: its own repository has no TensorRT). Only the two libraries, at
-# their exact version: 11.3 is built for CUDA 12.9 and 13 under one version
-# number, which apt's resolver mixes up, and the tensorrt meta packages bring
-# 1.6 GB of builder resources and the headers. Nothing named cuda-* but the
-# keyring: a driver package would break WSL's.
+# the exact build the server is compiled against: 11.3.0.99 is built for CUDA
+# 12.9 and 13.4 under one version number, which apt's resolver mixes up, and
+# the tensorrt meta packages bring 1.6 GB of builder resources and the
+# headers. Nothing named cuda-* but the keyring: a driver package would break
+# WSL's.
 pc_trt() {
   [ "$TRT_PRESENT" = 1 ] && return 0
-  local dist v
+  local dist builds
   case "$OS_CODENAME" in
     jammy) dist=ubuntu2204 ;;
     noble) dist=ubuntu2404 ;;
@@ -1102,12 +1131,11 @@ pc_trt() {
     step "Adding NVIDIA's package source" add_cuda_repo "$dist"
   fi
   step "Getting the package list" apt_get update
-  v="$(apt-cache madison libnvinfer11 2>/dev/null | awk -F'|' '{gsub(/ /, "", $2); print $2}' \
-    | grep -E "^${PC_TRT//./\\.}-[0-9]+\+cuda13(\.[0-9]+)*$" | sort -V | tail -n 1 || true)"
-  [ -n "$v" ] || die "NVIDIA's package source has no TensorRT $PC_TRT for CUDA 13." \
+  builds="$(apt-cache madison libnvinfer11 2>/dev/null | awk -F'|' '{gsub(/ /, "", $2); print $2}' || true)"
+  grep -qxF "$PC_TRT" <<<"$builds" || die "NVIDIA's package source has no TensorRT $PC_TRT." \
     "Run the installer again later; if it keeps failing, open an issue."
-  step "Installing TensorRT ${PC_TRT%.*.*} (about 1.9 GB)" \
-    apt_get install --no-install-recommends "libnvinfer11=$v" "libnvonnxparsers11=$v"
+  step "Installing TensorRT ${PC_TRT%%-*} (about 1.9 GB)" \
+    apt_get install --no-install-recommends "libnvinfer11=$PC_TRT" "libnvonnxparsers11=$PC_TRT"
   apt_get clean >>"$LOG" 2>&1 || true
 }
 
@@ -1471,7 +1499,7 @@ start_server() {
   since="$(date '+%Y-%m-%d %H:%M:%S')"
   as_root systemctl restart "$UNIT"
   step "Starting the Jetlink server" wait_ready "$since"
-  SERVER_STOPPED=0 CHANGED=0
+  SERVER_STOPPED=0 CHANGED=0 SLEEP_HELD=0
   keep_previous
   # only now: until the native server was ready they were the way back
   if [ "$DOCKER_ERA" = 1 ]; then remove_docker_images; fi
@@ -1707,6 +1735,7 @@ main() {
   install_base_packages
   prepare_source
   backup_install
+  hold_sleep
   get_server
   ensure_runtime
   check_gpu
