@@ -71,6 +71,8 @@ The app includes its dependencies.
 
 ### iPhone (experimental)
 
+<a href="docs/images/iphone-demo.mp4"><img src="docs/images/iphone-demo.webp" width="100%" alt="Jetlink for iPhone, recorded in the iOS Simulator: Get downloads and prepares a model, the comma connects over USB, and Status shows each frame against the 50 ms budget, with timings modeled on an iPhone 17 Pro measurement"></a>
+
 The iPhone app runs the server on the phone and serves the comma over one USB
 cable. It has only been tested with a Mac standing in for the phone.
 
