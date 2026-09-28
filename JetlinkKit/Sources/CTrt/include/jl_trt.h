@@ -21,13 +21,13 @@
 //
 // CUDA contexts are the shim's business: jl_trt_open retains the device's
 // primary context, and every call that reaches CUDA or TensorRT first makes it
-// current on the calling thread, once per thread (a thread-local remembers).
-// Swift may call from any thread, Dispatch's included, without knowing
-// contexts exist.
+// current on the calling thread unless a thread-local says that context
+// already is. Swift may call from any thread, Dispatch's included, without
+// knowing contexts exist.
 //
-// No call takes a lock. A handle is used by one thread at a time; different
-// handles may be used on different threads at once (a build beside a loaded
-// engine), as TensorRT allows. Destroy everything made from a jl_trt before
+// Nothing on the way to CUDA takes a lock. A handle is used by one thread at
+// a time; different handles may be used on different threads at once (a
+// build beside a loaded engine), as TensorRT allows. Destroy everything made from a jl_trt before
 // jl_trt_close, and a context before its engine.
 #ifndef JL_TRT_H
 #define JL_TRT_H
@@ -48,13 +48,17 @@ enum {
   JL_TRT_CUDA_ERROR = 2,
   // A CUDA error that breaks the context for good (CUDA's sticky errors: an
   // illegal address, a failed launch, a hardware exception) or a device that
-  // is gone. Only a new process recovers (D15). It latches: from then on every
-  // call on the same jl_trt returns it without reaching CUDA, and
-  // jl_trt_sticky says so.
+  // is gone. Only a new process recovers (D15). It latches, atomically, since
+  // a build thread and the session thread share it: from then on every call
+  // on the same jl_trt returns it without reaching CUDA, and jl_trt_sticky
+  // says so.
   JL_TRT_CUDA_STICKY = 3,
   // jl_trt_open only: no CUDA driver or no such device, or no TensorRT of the
-  // major this shim was compiled for, or one older than its headers.
+  // major this shim was compiled for, or one older than its headers
+  // (major.minor.patch; the build number is not compared).
   JL_TRT_UNAVAILABLE = 4,
+  // jl_trt_event_query only: the work before the event has not finished.
+  JL_TRT_NOT_READY = 5,
 };
 
 // TensorRT's data types, as ONNX numbers them, so they read the same as
@@ -106,11 +110,17 @@ typedef uint64_t jl_trt_dptr;
 // the call only.
 typedef void (*jl_trt_log_fn)(void *ctx, int severity, const char *message);
 
-// The build's root phase: its name, the steps done and how many there are
-// (total may be 0). Sent on every phase start and step TensorRT reports, with
-// the root phase's numbers each time, as trt/build.py's _Monitor does. The
-// build cannot be stopped from here.
-typedef void (*jl_trt_progress_fn)(void *ctx, const char *phase, int step, int total);
+// IProgressMonitor's calls, as they come: which phase started (value is its
+// step count, parent NULL for a root phase), took a step (value is the step)
+// or finished (value 0, parent NULL). Finding the root phase is Swift's, as
+// trt/build.py's _Monitor did it, so the fake can test it. The build cannot
+// be stopped from here.
+enum {
+  JL_TRT_PHASE_START = 0,
+  JL_TRT_PHASE_STEP = 1,
+  JL_TRT_PHASE_FINISH = 2,
+};
+typedef void (*jl_trt_progress_fn)(void *ctx, int event, const char *phase, const char *parent, int value);
 
 // Both callbacks may run on TensorRT's own threads; the shim makes each one's
 // calls one at a time.
@@ -127,6 +137,9 @@ typedef struct {
   int strongly_typed;
   // cuDriverGetVersion: 12060 for CUDA 12.6.
   int cuda_driver;
+  // 1 when libnvinfer_plugin was found and its plugins registered, as Python
+  // did, so a plan with a plugin layer deserializes. Worth a log line.
+  int plugins;
   // The device: its index, name ("Orin") and compute capability (8, 7), the
   // device part of the cache tag. device_name lasts until jl_trt_close.
   int device;
@@ -138,7 +151,8 @@ typedef struct {
 // by name are only TensorRT's factories and version getters; every other
 // TensorRT call is an inline virtual in its headers. libnvonnxparser is
 // needed by jl_trt_build_create alone, so a machine without it still loads
-// plans. The libraries stay loaded for the life of the process.
+// plans; libnvinfer_plugin is registered when present and never required.
+// The libraries stay loaded for the life of the process.
 int jl_trt_open(int device, jl_trt **out, char *err, size_t errlen);
 // Releases the primary context.
 void jl_trt_close(jl_trt *trt);
@@ -207,6 +221,9 @@ int jl_trt_event_create(jl_trt *trt, unsigned flags, jl_trt_event **out, char *e
 int jl_trt_event_record(jl_trt *trt, jl_trt_event *event, jl_trt_stream *stream, unsigned flags, char *err,
                         size_t errlen);
 int jl_trt_event_sync(jl_trt *trt, jl_trt_event *event, char *err, size_t errlen);
+// cuEventQuery, without waiting: JL_TRT_OK once the work before the event is
+// done, JL_TRT_NOT_READY before, or an error.
+int jl_trt_event_query(jl_trt *trt, jl_trt_event *event, char *err, size_t errlen);
 // Milliseconds between two recorded timing events (cuEventElapsedTime).
 int jl_trt_event_elapsed(jl_trt *trt, jl_trt_event *start, jl_trt_event *end, float *ms, char *err,
                          size_t errlen);
@@ -286,7 +303,9 @@ void jl_trt_build_set_progress(jl_trt_build *build, jl_trt_progress_fn fn, void 
 // A timing cache from an earlier build's bytes (NULL and 0 for an empty one),
 // attached with mismatches not ignored. TensorRT copies the bytes. Nonzero
 // when either step fails (another build's cache, a truncated one): then
-// nothing is attached, and the caller builds cold or attaches an empty cache.
+// nothing is attached, and the caller attaches an empty cache, which the
+// build fills and jl_trt_build_write_timing_cache saves. Python kept the
+// unusable one, so its builds stayed cold.
 int jl_trt_build_set_timing_cache(jl_trt_build *build, const void *data, size_t size, char *err,
                                   size_t errlen);
 
