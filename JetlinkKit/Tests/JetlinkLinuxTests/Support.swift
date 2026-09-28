@@ -62,6 +62,11 @@
     func makeDirectory(_ absolute: String) {
       try! FileManager.default.createDirectory(atPath: path(absolute), withIntermediateDirectories: true)
     }
+
+    /// A symlink at `absolute` to `destination`, as sysfs links a device to its port.
+    func link(_ absolute: String, to destination: String) {
+      try! FileManager.default.createSymbolicLink(atPath: path(absolute), withDestinationPath: destination)
+    }
   }
 
   /// Log lines, kept.

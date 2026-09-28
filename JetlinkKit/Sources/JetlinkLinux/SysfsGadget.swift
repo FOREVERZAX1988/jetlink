@@ -56,6 +56,9 @@
     let root: HostRoot
     private let node: any UsbfsNode
     private let target: any UsbfsTarget
+    /// JETLINK_USB_LPM=1: USB 3 link power management stays on.
+    private let keepLPM: Bool
+    private let write: @Sendable (String, String) throws(KernelError) -> Void
     private let log: LinuxLog
     private let lock = NSLock()
     private var claimed: Claimed?
@@ -65,10 +68,17 @@
       self.init(root: .system, node: DevUsbfs(), target: UsbfsGadget())
     }
 
-    init(root: HostRoot, node: any UsbfsNode, target: any UsbfsTarget, log: @escaping LinuxLog = serverLog("usb")) {
+    init(
+      root: HostRoot, node: any UsbfsNode, target: any UsbfsTarget, environment: [String: String] = ProcessInfo.processInfo.environment,
+      write: @escaping @Sendable (String, String) throws(KernelError) -> Void = Sysfs.write, log: @escaping LinuxLog = serverLog("usb")
+    ) {
       self.root = root
       self.node = node
       self.target = target
+      // A bench switch for A/B runs: it writes the kernel's default (u1_u2)
+      // back, since a port set to 0 stays so until a reboot.
+      keepLPM = environment["JETLINK_USB_LPM"] == "1"
+      self.write = write
       self.log = log
     }
 
@@ -116,18 +126,48 @@
           node.release(fd, interface: picked.interface)
           throw error
         }
-        // The link's power management goes here once it is measured: the
-        // comma's port is the device's `port` link (2-1.3/port, which is
-        // 2-1:1.0/2-1-port3), whose usb3_lpm_permit would be set now, before
-        // the first session.
         log(
           .info,
           "claimed the comma's gadget at \(found.name) (\(path), \(found.speed.map { "\($0) Mb/s" } ?? "unknown speed")): interface \(picked.interface), bulk in \(hex(picked.inEndpoint)) out \(hex(picked.outEndpoint))"
         )
+        linkPowerManagement(found)
         return Claimed(found: found, fd: fd, interface: picked.interface)
       } catch {
         node.close(fd)
         throw error
+      }
+    }
+
+    /// Turns USB 3 link power management (U1/U2) off on the comma's own port,
+    /// the largest single cost of the link: every idle gap between frames
+    /// otherwise ends in an exit from U1 or U2, 3.9 ms of the 7.6 ms onroad
+    /// transport on the bench. The hub then keeps its uplink in U0 by itself.
+    /// Deep suspend and the USB wake are unaffected (U3 is separate).
+    ///
+    /// The permit belongs to the port and survives re-enumerations, but a
+    /// write while the comma is off the bus reports success and changes
+    /// nothing, so it is written at every claim, with the comma present, and
+    /// the device's own U1/U2 state is read back. Nothing to do on a USB 2
+    /// link, or for a device the kernel runs without LPM (no such files).
+    private func linkPowerManagement(_ found: Found) {
+      let device = root.path("/sys/bus/usb/devices/\(found.name)")
+      let permit = "\(device)/port/usb3_lpm_permit"
+      let states = ["u1", "u2"].map { "\(device)/power/usb3_hardware_lpm_\($0)" }
+      guard (found.speed.flatMap { Int($0) } ?? 5000) >= 5000, Sysfs.read(permit) != nil, states.allSatisfy({ Sysfs.read($0) != nil })
+      else { return }
+      do throws(KernelError) {
+        try write(permit, keepLPM ? "u1_u2" : "0")
+      } catch {
+        log(.warning, "could not set usb 3 link power management for the comma's link: \(error)")
+        return
+      }
+      let read = states.map { Sysfs.read($0) ?? "unreadable" }
+      if keepLPM {
+        log(.info, "usb 3 link power management left on for the comma's link (JETLINK_USB_LPM=1): u1 \(read[0]), u2 \(read[1])")
+      } else if read.allSatisfy({ $0 == "disabled" }) {
+        log(.info, "usb 3 link power management off for the comma's link")
+      } else {
+        log(.warning, "usb 3 link power management is still on for the comma's link after writing 0 to \(permit): u1 \(read[0]), u2 \(read[1])")
       }
     }
 
