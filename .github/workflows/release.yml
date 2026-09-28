@@ -464,7 +464,7 @@ jobs:
             printf '## Install\n\n'
             printf 'Mac (Apple silicon): [%s](https://github.com/%s/releases/download/%s/%s)\n\n' "$MAC" "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" "$MAC"
             printf 'Jetson or Linux PC:\n\n'
-            printf '```bash\ncurl -fsSL https://raw.githubusercontent.com/zoompilot/jetlink/%s/install.sh | bash -s -- --ref %s\n```\n\n' "$GITHUB_REF_NAME" "$GITHUB_REF_NAME"
+            printf '```bash\ncurl -fsSL https://raw.githubusercontent.com/zoompilot/jetlink/main/install.sh | bash\n```\n\n'
             printf 'Images:\n\n'
             if [ "${CUDA_PUSHED:-}" = "true" ]; then
               printf -- '- `ghcr.io/zoompilot/jetlink:%s-cuda`: NVIDIA PCs (amd64, driver 580+) and JetPack 7.2 (arm64)\n' "$VERSION"
