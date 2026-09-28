@@ -1,11 +1,15 @@
 import Foundation
+import JetlinkTestSupport
 import Testing
 
 @testable import JetlinkRegistry
 
+#if canImport(FoundationNetworking)
+  import FoundationNetworking
+#endif
+
 /// tests/test_registry.py's fetch section, plus what the Swift download adds:
 /// progress by whole percent, a real socket, and no .part left on any failure.
-@Suite(.enabled(if: MockNet.intercepts))
 struct FetchTests {
   @Test func fallsThroughToTheServerThatHasIt() async throws {
     let tmp = try TempDir()
@@ -71,8 +75,8 @@ struct FetchTests {
     #expect(tmp.names("models").isEmpty)
   }
 
-  // LocalServer speaks Darwin sockets (Support.swift).
-  #if canImport(Darwin)
+  // LocalServer speaks Darwin's and Glibc's sockets.
+  #if canImport(Darwin) || canImport(Glibc)
     @Test func aCancelledTaskStopsTheDownload() async throws {
       let tmp = try TempDir()
       defer { tmp.remove() }
@@ -176,7 +180,7 @@ struct FetchTests {
   }
 }
 
-#if canImport(Darwin)
+#if canImport(Darwin) || canImport(Glibc)
   /// The download through URLSession's real HTTP stack, from a server on loopback.
   struct LocalDownloadTests {
     static let benchmark = ProcessInfo.processInfo.environment["JETLINK_BENCH"] == "1"

@@ -379,6 +379,9 @@ struct StatsConformanceTests {
       #expect(got.stagesMs == wantStages, "\(name) stages")
       #expect(got.slow == int(expected["slow"]), "\(name) slow")
       #expect(got.windowS == double(expected["window_s"]), "\(name) window")
+      let total = expected["total_ms"] as! [String: Any]
+      #expect(got.totalMs == StatsEvent.Total(mean: double(total["mean"]), p99: double(total["p99"]), max: double(total["max"])), "\(name) total")
+      #expect(got.gpuMs == StatsEvent.Mean(mean: double((expected["gpu_ms"] as! [String: Any])["mean"])), "\(name) gpu")
     }
   }
 

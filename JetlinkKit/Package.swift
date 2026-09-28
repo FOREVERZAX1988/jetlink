@@ -22,7 +22,6 @@
 //   JetlinkStatusPage  the read-only status page the daemon serves
 //   JetlinkAndroid   the JNI library the Android app loads, libjetlink.so (Android only)
 //   jetlink-server   the server as a command and a daemon, on Linux and macOS
-//   jetlink-serve    the server on its own, for benches
 //   jetlink-onnx     the preparation on its own, for checking it against Python
 //
 // onnxruntime is linked in on Apple platforms and opened at run time elsewhere
@@ -62,7 +61,6 @@ let package = Package(
     .library(name: "JetlinkORT", targets: ["JetlinkORT"]),
     .library(name: "jetlink", type: .dynamic, targets: ["JetlinkAndroid"]),
     .executable(name: "jetlink-server", targets: ["jetlink-server"]),
-    .executable(name: "jetlink-serve", targets: ["jetlink-serve"]),
     .executable(name: "jetlink-onnx", targets: ["jetlink-onnx"]),
   ],
   dependencies: [
@@ -127,7 +125,6 @@ let package = Package(
         .target(name: "JetlinkLinux", condition: .when(platforms: [.linux])),
         .product(name: "ArgumentParser", package: "swift-argument-parser", condition: .when(platforms: [.macOS, .linux])),
       ]),
-    .executableTarget(name: "jetlink-serve", dependencies: ["JetlinkKit", "JetlinkServer", "JetlinkORT"]),
     .executableTarget(name: "jetlink-onnx", dependencies: ["JetlinkONNX"]),
     // Helpers more than one test target uses: JSON comparison, hex, the source tree.
     .target(name: "JetlinkTestSupport", path: "Tests/JetlinkTestSupport"),
@@ -149,6 +146,15 @@ let package = Package(
       ],
       exclude: ["Fixtures"]),
     .testTarget(name: "JetlinkStatusPageTests", dependencies: ["JetlinkStatusPage", "JetlinkKit", "JetlinkServer", "JetlinkTestSupport"]),
+    // jetlink-server's commands in process, and the built binary for what
+    // only a process shows (--version beside a VERSION file, SIGTERM).
+    .testTarget(
+      name: "JetlinkServerCommandTests",
+      dependencies: [
+        .target(name: "jetlink-server", condition: .when(platforms: [.macOS, .linux])),
+        "JetlinkKit", "JetlinkRegistry", "JetlinkServer", "JetlinkTestSupport",
+        .product(name: "ArgumentParser", package: "swift-argument-parser", condition: .when(platforms: [.macOS, .linux])),
+      ]),
   ],
   cxxLanguageStandard: .cxx17
 )
