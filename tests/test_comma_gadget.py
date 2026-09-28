@@ -5,7 +5,8 @@ This file is part of jetlink and is licensed under the MIT License.
 See the LICENSE file in the root directory for more details.
 
 The comma's gadget: openpilot's params read as files, what carries the link,
-and the gadget built and brought up through the root script.
+the gadget built and brought up through the root script, the wait for a host,
+and the files the owner and the root script leave in /dev/shm.
 """
 import json
 import os
@@ -259,3 +260,169 @@ class TestLinkMode(unittest.TestCase):
     self.write('JetlinkEnabled', '1')
     self.assertEqual(gadget.link_mode(), 'off')
     self.assertEqual(sorted(p.name for p in self.dir.iterdir()), ['JetlinkEnabled'], 'wrote a param')
+
+
+class FakeClock:
+  """monotonic and sleep, so a 45 s wait costs no wall clock."""
+
+  def __init__(self, now: float = 1000.0):
+    self.now = now
+    self.slept = 0.0
+
+  def monotonic(self) -> float:
+    return self.now
+
+  def sleep(self, seconds: float) -> None:
+    step = max(seconds, 0.01)
+    self.now += step
+    self.slept += step
+
+
+class TestWaitForHost(unittest.TestCase):
+  """Waiting for the Jetson to enumerate the gadget, which stays bound: every
+  unbind is an unplug the far end has to recover from, and the one case that
+  needs an edge is a bus that stalled half enumerated."""
+
+  # the fork's backend.CONNECT_TIMEOUT, what modeld's join waits
+  CONNECT_TIMEOUT = 45.0
+
+  def setUp(self):
+    self.clock = FakeClock()
+    self.bounced = []
+    # USB, whatever the machine's params or a previous owner's record hold
+    for name, value in (('time', self.clock), ('LINK', Path(tempfile.mkdtemp()) / 'link'),
+                        ('ios', unittest.mock.Mock(return_value=False))):
+      p = unittest.mock.patch.object(gadget, name, value)
+      self.addCleanup(p.stop)
+      p.start()
+
+  def bus(self, udc: str, cc: bool = True) -> None:
+    for name, value in (('udc_state', udc), ('port_has_host', cc)):
+      p = unittest.mock.patch.object(gadget, name, return_value=value)
+      self.addCleanup(p.stop)
+      p.start()
+
+  def wait(self, seconds: float = CONNECT_TIMEOUT) -> bool:
+    return gadget.wait_for_host(seconds, bounce=lambda: self.bounced.append(True))
+
+  def test_a_host_that_is_already_there_is_not_waited_for(self):
+    self.bus('configured')
+    self.assertIs(self.wait(), True)
+    self.assertEqual(self.clock.slept, 0.0)
+
+  def test_a_bus_that_stalls_half_enumerated_is_bounced_once(self):
+    # A jetson whose hubs are not armed for remote wakeup answers the bind
+    # with a bus reset and stops there; only another connect moves it.
+    self.bus('default')
+    self.assertIs(self.wait(), False)
+    self.assertEqual(len(self.bounced), 1)
+
+  def test_the_bounce_waits_out_a_normal_enumeration(self):
+    self.bus('addressed')
+    self.wait(gadget.STALLED_ENUMERATION / 2)
+    self.assertEqual(self.bounced, [])
+
+  def test_nothing_on_the_cable_is_not_a_stall(self):
+    # No host on the CC pin: there is nobody to enumerate us and bouncing the
+    # gadget would only cost the next one its bind.
+    self.bus('not attached', cc=False)
+    self.assertIs(self.wait(), False)
+    self.assertEqual(self.bounced, [])
+
+  def test_a_jetson_still_booting_is_left_alone(self):
+    # Powered but not yet driving the bus: the UDC never leaves powered.
+    self.bus('powered')
+    self.assertIs(self.wait(), False)
+    self.assertEqual(self.bounced, [])
+
+  def test_a_bounce_that_fails_does_not_end_the_wait(self):
+    self.bus('default')
+    self.assertIs(gadget.wait_for_host(self.CONNECT_TIMEOUT,
+                                       bounce=unittest.mock.Mock(side_effect=OSError('no such device'))), False)
+
+  def test_a_host_that_turns_up_late_is_still_joined(self):
+    states = ['powered'] * 3 + ['configured']
+    with unittest.mock.patch.object(gadget, 'udc_state', side_effect=lambda: states.pop(0) if states else 'configured'), \
+         unittest.mock.patch.object(gadget, 'port_has_host', return_value=True):
+      self.assertIs(self.wait(), True)
+
+  def test_a_caller_that_is_going_away_is_not_kept_waiting(self):
+    self.bus('powered')
+    self.assertIs(gadget.wait_for_host(self.CONNECT_TIMEOUT, should_stop=lambda: True), False)
+    self.assertEqual(self.clock.slept, 0.0)
+
+  def test_the_wait_says_once_that_it_is_waiting(self):
+    self.bus('powered')
+    said = []
+    gadget.wait_for_host(2.0, report=lambda: said.append(True))
+    self.assertEqual(said, [True])
+
+
+class TestGadgetStatus(unittest.TestCase):
+  """The gadget is set up by root, from the owner through jetlink-root.sh. This
+  file is the only way the reason for a failure reaches anything a user can see."""
+
+  def setUp(self):
+    self.status = Path(tempfile.mkdtemp()) / 'jetlink-gadget'
+    p = unittest.mock.patch.object(gadget, 'GADGET_STATUS', self.status)
+    self.addCleanup(p.stop)
+    p.start()
+
+  def test_missing_file_is_not_an_error(self):
+    # A build that never ran the setup at all reads the same as not installed.
+    self.assertIsNone(gadget.gadget_error())
+
+  def test_ok_is_not_an_error(self):
+    self.status.write_text('ok\n')
+    self.assertIsNone(gadget.gadget_error())
+
+  def test_empty_is_not_an_error(self):
+    self.status.write_text('')
+    self.assertIsNone(gadget.gadget_error())
+
+  def test_reason_is_unwrapped(self):
+    self.status.write_text('error: kernel has no USB gadget support\n')
+    self.assertEqual(gadget.gadget_error(), 'kernel has no USB gadget support')
+
+  def test_bare_reason_survives(self):
+    self.status.write_text('something went wrong')
+    self.assertEqual(gadget.gadget_error(), 'something went wrong')
+
+  def test_unreadable_status_is_not_an_error(self):
+    # Path.exists() and read_text() raise rather than return on a root-only
+    # path; an availability check must never take a process down over one.
+    with unittest.mock.patch.object(Path, 'read_text', side_effect=PermissionError):
+      self.assertIsNone(gadget.gadget_error())
+
+
+class TestDormant(unittest.TestCase):
+  """The owner's marker while it has let the gadget go on purpose, and
+  hardwared's request to power the Jetson off."""
+
+  def setUp(self):
+    self.tmp = Path(tempfile.mkdtemp())
+    for name in ('DORMANT', 'SHUTDOWN_REQUEST'):
+      p = unittest.mock.patch.object(gadget, name, self.tmp / name.lower())
+      self.addCleanup(p.stop)
+      p.start()
+
+  def test_marker_from_a_live_process_counts(self):
+    gadget.set_dormant(True)
+    self.assertTrue(gadget.dormant())
+    gadget.set_dormant(False)
+    self.assertFalse(gadget.dormant())
+
+  def test_marker_from_a_dead_process_is_a_leftover(self):
+    gadget.DORMANT.write_text('4194304')  # above pid_max
+    self.assertFalse(gadget.dormant())
+
+  def test_garbage_is_not_dormant(self):
+    gadget.DORMANT.write_text('not a pid')
+    self.assertFalse(gadget.dormant())
+
+  def test_shutdown_request_round_trip(self):
+    self.assertIsNone(gadget.pending_shutdown())
+    self.assertTrue(gadget.request_shutdown('car battery'))
+    self.assertEqual(gadget.pending_shutdown(), 'car battery')
+    gadget.finish_shutdown()
+    self.assertIsNone(gadget.pending_shutdown())
