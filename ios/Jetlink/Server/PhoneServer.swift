@@ -173,8 +173,9 @@ final class PhoneServer: ServerControlling {
     }
   }
 
+  /// The card on Status says it failed; the reason is in Logs.
   private func fail(_ detail: String) {
-    log.error("\(detail, privacy: .public)")
+    note(.error, detail)
     lastFailure = detail
     runState = .failed(detail)
     embedded?.stop(releasingEngine: false)

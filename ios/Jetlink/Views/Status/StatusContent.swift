@@ -57,7 +57,7 @@ struct StatusContent: View {
           if state.history.count > 1 {
             history
           }
-          SectionHeader("Link", detail: state.linkMedium.map { "\($0.title) link" })
+          SectionHeader("Link", detail: state.linkMedium?.phoneTitle)
           link(recent)
         }
         SectionHeader("iPhone")
@@ -71,9 +71,9 @@ struct StatusContent: View {
   private var foregroundBanner: some View {
     Label {
       VStack(alignment: .leading, spacing: 2) {
-        Text("Jetlink must stay on screen")
+        Text("Keep Jetlink on Screen")
           .font(.subheadline.weight(.semibold))
-        Text("iOS suspends an app that is not in front, and the comma loses the big model.")
+        Text("The big model stops while Jetlink is in the background.")
           .font(.footnote)
       }
     } icon: {
@@ -131,7 +131,7 @@ struct StatusContent: View {
           note: health.memoryNote, noteTone: health.memoryTone)
         MetricTile(
           title: "Link", systemImage: state.linkMedium == nil ? "cable.connector.slash" : "cable.connector", tint: .teal,
-          value: state.linkMedium?.title ?? "None",
+          value: state.linkMedium?.phoneTitle ?? "None",
           note: linkNote, noteTone: state.linkMedium?.isSlow == true ? .orange : nil)
       }
     }
@@ -139,8 +139,8 @@ struct StatusContent: View {
 
   /// Under the Link tile: why there is none, or that a slow one costs frames.
   private var linkNote: String {
-    guard let medium = state.linkMedium else { return state.cableAddress == nil ? "Waiting" : "Dialing" }
-    return medium.isSlow ? "Slow: needs USB 3 end to end" : "Connected"
+    guard let medium = state.linkMedium else { return state.cableAddress == nil ? "Waiting" : "Connecting" }
+    return medium.isSlow ? "Slow, use USB 3" : "Connected"
   }
 }
 

@@ -76,13 +76,13 @@ struct StatusState: Equatable {
     case .serving: break
     }
     switch engine.state {
-    case .building: return Summary(title: "Preparing", symbol: "gearshape.2.fill", tone: .info)
-    case .loading: return Summary(title: "Loading", symbol: "arrow.down.circle.fill", tone: .info)
+    case .building: return Summary(title: "Preparing Model", symbol: "gearshape.2.fill", tone: .info)
+    case .loading: return Summary(title: "Loading Model", symbol: "arrow.down.circle.fill", tone: .info)
     case .failed: return Summary(title: "Model Failed", symbol: "exclamationmark.triangle.fill", tone: .bad)
     case .ready, .none: break
     }
     if localNetworkDenied && link.state != .connected {
-      return Summary(title: "Blocked", symbol: "wifi.exclamationmark", tone: .bad)
+      return Summary(title: "Local Network Off", symbol: "wifi.exclamationmark", tone: .bad)
     }
     switch link.state {
     case .connected:
@@ -91,7 +91,7 @@ struct StatusState: Equatable {
         ? Summary(title: "Connected", symbol: "car.fill", tone: linkMedium?.isSlow == true ? .warning : .good)
         : Summary(title: "No Model", symbol: "shippingbox.fill", tone: .warning)
     case .waiting:
-      return Summary(title: "Waiting", symbol: "cable.connector", tone: .neutral)
+      return Summary(title: "Waiting for Comma", symbol: "cable.connector", tone: .neutral)
     case .disconnected:
       return Summary(title: "Disconnected", symbol: "cable.connector.slash", tone: .warning)
     }
@@ -100,7 +100,7 @@ struct StatusState: Equatable {
   /// The summary with the link it is over: "Connected over USB 3".
   var headline: String {
     if summary.title == "Connected", let linkMedium {
-      return "Connected over \(linkMedium.title)"
+      return "Connected over \(linkMedium.phoneTitle)"
     }
     return summary.title
   }
@@ -108,5 +108,13 @@ struct StatusState: Equatable {
   /// The line under the title: the summary and the model.
   var subtitle: String {
     [headline, modelName].compactMap { $0 }.joined(separator: " · ")
+  }
+}
+
+extension LinkMedium {
+  /// The link as the phone names it: anything but the cable reaches the
+  /// phone over Wi-Fi.
+  var phoneTitle: String {
+    self == .tcp ? "Wi-Fi" : title
   }
 }

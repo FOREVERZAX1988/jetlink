@@ -1,52 +1,46 @@
 import SwiftUI
 
-/// How the comma and the phone meet: one cable through a hub. What
-/// docs/iphone-app.md says, in the app, for a reader standing at the car.
+/// How the comma and the phone meet: one cable through a hub, in a few
+/// steps for a reader standing at the car. docs/iphone-app.md has the why.
 struct ConnectHelpScreen: View {
+  static let guide = URL(string: "https://github.com/zoompilot/jetlink/blob/main/docs/iphone-app.md#connect-the-comma")!
+
   var body: some View {
     List {
       Section {
-        step(1, "Set the comma to iOS.", "On the comma, parked: Accelerator Link, iOS. USB is for a Jetson or a Mac.")
-        step(2, "Open Jetlink first.", "The phone dials the comma as soon as the cable is in. An app opened afterwards dials when it opens.")
-        step(3, "Plug a USB 3 hub into the iPhone.", "One with power passthrough keeps the phone charged; the model runs 20 times a second.")
-        step(4, "Join the hub to the comma with a USB 3 A-to-C cable.", "The A end goes in the hub, the C end in the comma.")
-        step(5, "Wait for Connected over USB.", "The comma gives the phone an address over the cable. There is nothing to type.")
-      } header: {
-        Text("One Cable")
+        step(1, "On the comma, set Accelerator Link to iOS.")
+        step(2, "Open Jetlink and allow Local Network access.")
+        step(3, "Plug a USB 3 hub into your iPhone.")
+        step(4, "Connect the hub to the comma with a USB 3 A-to-C cable.")
+        step(5, "Wait for Connected.")
       } footer: {
-        Text(
-          "Do not plug the comma straight into the phone with a C-to-C cable. The two negotiate power, the comma ends up supplying the phone, and it reboots. Through a hub's A port the comma only ever draws."
-        )
+        Text("Don't connect the comma straight to your iPhone with a USB-C cable.")
       }
       Section {
-        Text(
-          "Only the Pro iPhones, from the iPhone 15 Pro on, have a USB 3 port. The others, and the cable in the box, are USB 2. At USB 3 the cable costs a frame about 8 ms there and back, measured with a Mac standing in for the phone; USB 2 is expected to add a few milliseconds more. The title turns orange on USB 2. On the comma, the negotiated speed is in /sys/class/udc/*/current_speed: super-speed is USB 3, high-speed is USB 2."
-        )
-        .font(.subheadline)
-        .foregroundStyle(.secondary)
+        LabeledContent("iPhone 15 Pro and Later", value: "USB 3")
+        LabeledContent("Other iPhones", value: "USB 2")
       } header: {
-        Text("USB 3")
+        Text("Speed")
+      } footer: {
+        Text("USB 2 works, but leaves less time for each frame.")
+      }
+      Section {
+        Link("Learn More", destination: ConnectHelpScreen.guide)
       }
     }
     .navigationTitle("Connecting the Comma")
     .navigationBarTitleDisplayMode(.inline)
   }
 
-  private func step(_ number: Int, _ title: String, _ detail: String) -> some View {
-    HStack(alignment: .top, spacing: 12) {
+  private func step(_ number: Int, _ text: String) -> some View {
+    HStack(alignment: .firstTextBaseline, spacing: 12) {
       Text(number.formatted())
-        .font(.subheadline.weight(.semibold).monospacedDigit())
+        .font(.body.weight(.semibold).monospacedDigit())
         .foregroundStyle(.secondary)
         .frame(width: 18, alignment: .trailing)
-      VStack(alignment: .leading, spacing: 3) {
-        Text(title)
-          .font(.body.weight(.medium))
-        Text(detail)
-          .font(.subheadline)
-          .foregroundStyle(.secondary)
-      }
+      Text(text)
     }
-    .padding(.vertical, 2)
+    .accessibilityElement(children: .combine)
   }
 }
 

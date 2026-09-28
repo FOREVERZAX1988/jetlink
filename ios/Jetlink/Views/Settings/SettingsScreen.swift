@@ -13,9 +13,14 @@ struct SettingsScreen: View {
     case logs, connect
   }
 
-  /// `-tab logs` opens Settings with the Logs screen pushed, for screenshots.
+  /// `-tab logs` or `-tab connect` opens Settings with that screen pushed,
+  /// for screenshots.
   static var initialPath: [Destination] {
-    UserDefaults.standard.string(forKey: "tab") == "logs" ? [.logs] : []
+    switch UserDefaults.standard.string(forKey: "tab") {
+    case "logs": [.logs]
+    case "connect": [.connect]
+    default: []
+    }
   }
 
   var body: some View {
@@ -24,7 +29,7 @@ struct SettingsScreen: View {
       Form {
         connection
         Section {
-          Picker("Compute", selection: $settings.device) {
+          Picker("Processor", selection: $settings.device) {
             Text(CoreMLBackend.Device.aneWhole.title).tag(CoreMLBackend.Device.aneWhole)
             Text(CoreMLBackend.Device.ane.title).tag(CoreMLBackend.Device.ane)
             Text(CoreMLBackend.Device.coreml.title).tag(CoreMLBackend.Device.coreml)
@@ -33,14 +38,12 @@ struct SettingsScreen: View {
               Text(CoreMLBackend.Device.cpu.title).tag(CoreMLBackend.Device.cpu)
             #endif
           }
-          Toggle("CPU Keep-Warm", isOn: $settings.keepCPUWarm)
-          Toggle("GPU Keep-Alive", isOn: $settings.keepGPUAwake)
+          Toggle("Keep CPU Awake", isOn: $settings.keepCPUWarm)
+          Toggle("Keep GPU Awake", isOn: $settings.keepGPUAwake)
         } header: {
           Text("Performance")
         } footer: {
-          Text(
-            "Changing Compute prepares models again. Keep-Warm holds a CPU core busy between frames while the Neural Engine runs the model; Keep-Alive does the same for the GPU."
-          )
+          Text("Changing the processor prepares models again.")
         }
         Section {
           Toggle("Keep Screen On", isOn: $settings.keepScreenOn)
@@ -71,7 +74,7 @@ struct SettingsScreen: View {
 
   private var connection: some View {
     Section {
-      LabeledContent("Link", value: app.server.linkMedium?.title ?? (app.network.cable == nil ? "Not Connected" : "Dialing"))
+      LabeledContent("Link", value: app.server.linkMedium?.phoneTitle ?? (app.network.cable == nil ? "Not Connected" : "Connecting"))
       LabeledContent("Port") {
         TextField("5599", text: $portText)
           .keyboardType(.numberPad)
@@ -82,12 +85,11 @@ struct SettingsScreen: View {
       if portChanged {
         Button("Use Port \(portText)", action: applyPort)
       }
-      if app.network.addresses.isEmpty {
-        LabeledContent("Address", value: "None")
-      }
-      ForEach(app.network.addresses) { address in
+      // Where a Mac's bench tools reach the phone. The cable's address is
+      // the comma's to hand out and the phone's to dial; nobody types it.
+      ForEach(app.network.addresses.filter { $0.kind != .cable }) { address in
         LabeledContent {
-          Text(address.kind == .cable ? address.address : "\(address.address):\(app.server.port.map(String.init) ?? portText)")
+          Text("\(address.address):\(app.server.port.map(String.init) ?? portText)")
             .monospacedDigit()
             .textSelection(.enabled)
         } label: {
@@ -97,7 +99,7 @@ struct SettingsScreen: View {
     } header: {
       Text("Connection")
     } footer: {
-      Text("Over USB the phone dials the comma; nothing to set. The port is where bench tools on a Mac reach the phone, at its Wi-Fi address.")
+      Text("The port is only for testing from a Mac over Wi-Fi.")
     }
   }
 
@@ -121,8 +123,8 @@ struct SettingsScreen: View {
   private var storage: some View {
     if let disk = app.models.inventory?.disk {
       Section("Storage") {
-        LabeledContent("Models", value: ByteCount.string(disk.modelsBytes))
-        LabeledContent("Engines", value: ByteCount.string(disk.enginesBytes))
+        LabeledContent("Downloaded", value: ByteCount.string(disk.modelsBytes))
+        LabeledContent("Prepared", value: ByteCount.string(disk.enginesBytes))
         LabeledContent("Available", value: ByteCount.string(disk.freeBytes))
       }
     }

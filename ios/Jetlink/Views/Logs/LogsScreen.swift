@@ -15,12 +15,6 @@ struct LogsScreen: View {
     ScrollViewReader { proxy in
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 2) {
-          if logs.lines.isEmpty {
-            Text("Nothing logged yet.")
-              .foregroundStyle(.secondary)
-              .frame(maxWidth: .infinity, alignment: .center)
-              .padding(.top, 40)
-          }
           ForEach(Array(logs.lines.enumerated()), id: \.offset) { _, line in
             Text(line)
               .font(.caption.monospaced())
@@ -49,12 +43,17 @@ struct LogsScreen: View {
         proxy.scrollTo(LogsScreen.bottomAnchor, anchor: .bottom)
       }
     }
+    .overlay {
+      if logs.lines.isEmpty {
+        ContentUnavailableView("No Logs", systemImage: "doc.text")
+      }
+    }
     .background(Color.groupedBackground)
     .navigationTitle("Logs")
     .navigationBarTitleDisplayMode(.inline)
     .toolbar {
       ToolbarItem(placement: .topBarTrailing) {
-        ShareLink(item: logs.lines.joined(separator: "\n"), preview: SharePreview("Jetlink logs"))
+        ShareLink(item: logs.lines.joined(separator: "\n"), preview: SharePreview("Jetlink Logs"))
           .disabled(logs.lines.isEmpty)
       }
       ToolbarItem(placement: .topBarTrailing) {

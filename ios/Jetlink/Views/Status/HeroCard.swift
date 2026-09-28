@@ -32,8 +32,8 @@ struct HeroCard: View {
       }
     case .noModel:
       noModel
-    case .failed(let detail):
-      failed(detail)
+    case .failed:
+      failed
     }
   }
 
@@ -81,7 +81,7 @@ struct HeroCard: View {
         Label("Waiting for Comma", systemImage: "cable.connector")
           .symbolEffect(.pulse, options: .repeating)
       } description: {
-        Text(state.cableAddress == nil ? "Plug in the comma." : "Dialing the comma over USB.")
+        Text(state.cableAddress == nil ? "Plug in the comma." : "Connecting over USB.")
       }
     }
   }
@@ -124,13 +124,14 @@ struct HeroCard: View {
 
   // MARK: failed
 
-  private func failed(_ detail: String) -> some View {
-    card {
+  /// What went wrong, in a line; the error itself is in Logs.
+  private var failed: some View {
+    let model = state.runState == .serving
+    return card {
       ContentUnavailableView {
-        Label(state.runState == .serving ? "Model Failed" : "Server Stopped", systemImage: "exclamationmark.triangle")
+        Label(model ? "Model Failed" : "Jetlink Stopped", systemImage: "exclamationmark.triangle")
       } description: {
-        Text(detail)
-          .lineLimit(4)
+        Text(model ? "Couldn't prepare this model. See Logs for details." : "See Logs for details.")
       } actions: {
         Button("Try Again", action: actions.retry)
           .buttonStyle(.glass)

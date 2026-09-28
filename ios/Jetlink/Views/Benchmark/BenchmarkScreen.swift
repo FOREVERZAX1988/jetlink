@@ -30,16 +30,18 @@ struct BenchmarkScreen: View {
           CommandCard(
             title: "Over the Cable", systemImage: "cable.connector", command: commaCommand,
             missing: "Load a model to get the command.",
-            note:
-              "Parked, with the cable in and Accelerator Link off on the comma, so its own client is not holding the port. Run it on the comma over SSH: it waits for the phone to dial, then sends 1,200 real-sized frames at 20 a second and reports the round trip the car will see. Frames over 50 ms should be 0."
+            note: "Run it on the comma over SSH, parked, with Accelerator Link off."
           )
           SectionHeader("Accuracy")
           CommandCard(
             title: "From a Mac", systemImage: "checkmark.seal", command: parityCommand,
             missing: app.network.wifi == nil ? "Join Wi-Fi and load a model to get the command." : "Load a model to get the command.",
-            note:
-              "Checks that this phone computes what onnxruntime does on a computer, the gate the Mac server passes. Run it in a jetlink checkout on a Mac on the same Wi-Fi; it reads the model where the Mac app keeps it. Wi-Fi is slow, and this test does not care. It should end with OK."
+            note: "Run it in a jetlink checkout on a Mac on the same Wi-Fi."
           )
+          Link("Learn More", destination: BenchmarkScreen.guide)
+            .font(.subheadline)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
         }
         .padding(.bottom, 24)
       }
@@ -55,12 +57,14 @@ struct BenchmarkScreen: View {
       .toolbar {
         if let report {
           ToolbarItem(placement: .topBarTrailing) {
-            ShareLink(item: report.text, preview: SharePreview("Jetlink benchmark"))
+            ShareLink(item: report.text, preview: SharePreview("Jetlink Benchmark"))
           }
         }
       }
     }
   }
+
+  static let guide = URL(string: "https://github.com/zoompilot/jetlink/blob/main/docs/iphone-app.md#benchmark")!
 
   // MARK: state
 
@@ -92,7 +96,7 @@ struct BenchmarkScreen: View {
         } else {
           buttons
         }
-        if let text = refusal ?? (event?.state == "failed" ? event?.detail : nil) {
+        if let text = refusal ?? (event?.state == "failed" ? "The benchmark failed. See Logs for details." : nil) {
           Text(text)
             .font(.footnote)
             .foregroundStyle(.red)
@@ -101,11 +105,9 @@ struct BenchmarkScreen: View {
             .font(.footnote)
             .foregroundStyle(.orange)
         }
-        Text(
-          "Runs the loaded model 20 times a second, as the comma will, on made-up camera frames: the history queues, the model, and reading the answer back. The cable is not in it. Leave the phone as it will be in the car, charging and mounted."
-        )
-        .font(.footnote)
-        .foregroundStyle(.secondary)
+        Text("Run it with the iPhone charging and in its mount.")
+          .font(.footnote)
+          .foregroundStyle(.secondary)
       }
     }
   }
@@ -165,11 +167,17 @@ struct BenchmarkScreen: View {
       defer { starting = false }
       do {
         let reply = try await app.server.send(.benchmark(seconds: seconds))
-        if !reply.ok { refusal = reply.error ?? "The benchmark could not start." }
+        if !reply.ok { refuse(reply.error) }
       } catch {
-        refusal = error.localizedDescription
+        refuse(error.localizedDescription)
       }
     }
+  }
+
+  /// A short line on the card, and the server's reason in Logs.
+  private func refuse(_ reason: String?) {
+    refusal = "Couldn't start the benchmark. See Logs for details."
+    app.server.note(.warning, "the benchmark could not start: \(reason ?? "no reason given")")
   }
 
   private func cancel() {
@@ -240,7 +248,7 @@ struct WindowsCard: View {
   let windows: [BenchmarkWindow]
 
   var body: some View {
-    SummaryCard(title: "Windows", systemImage: "chart.bar.fill", tint: .indigo, trailing: "10 s each") {
+    SummaryCard(title: "Over Time", systemImage: "chart.bar.fill", tint: .indigo, trailing: "10 s each") {
       BenchmarkWindowRows(windows: windows)
     }
   }

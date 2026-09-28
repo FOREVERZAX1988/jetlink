@@ -71,10 +71,14 @@ struct ModelsScreen: View {
     } message: {
       Text(importError ?? "")
     }
+    // The server's own words go to Logs; the alert says where to find them.
+    .onChange(of: models.lastError) { _, error in
+      if let error { app.server.note(.warning, error) }
+    }
     .alert("Couldn't Complete", isPresented: Binding(get: { models.lastError != nil }, set: { if !$0 { models.clearError() } })) {
       Button("OK") { models.clearError() }
     } message: {
-      Text(models.lastError ?? "")
+      Text("See Logs for details.")
     }
   }
 
@@ -111,7 +115,8 @@ struct ModelsScreen: View {
         if let disk = models.inventory?.disk {
           Section {
           } footer: {
-            Text("Models \(ByteCount.string(disk.modelsBytes)) · Engines \(ByteCount.string(disk.enginesBytes)) · \(ByteCount.string(disk.freeBytes)) Free")
+            let sizes = [disk.modelsBytes, disk.enginesBytes, disk.freeBytes].map(ByteCount.string)
+            Text("\(sizes[0]) Downloaded · \(sizes[1]) Prepared · \(sizes[2]) Free")
           }
         }
       }
@@ -224,7 +229,7 @@ struct ModelsScreen: View {
   private func confirmationMessage(_ item: Confirmation) -> String {
     switch item {
     case .delete:
-      return "The download and the prepared engine are removed. You can get it again later."
+      return "You can download it again later."
     case .switchModel:
       return "The comma uses its small model until this one is ready."
     }

@@ -37,21 +37,22 @@ struct RootView: View {
     .onChange(of: app.server.shutdownRequests) { _, count in
       shutdownAlert = count > 0
     }
-    .alert("The comma asked to shut down", isPresented: $shutdownAlert) {
+    .alert("Comma Asked to Shut Down", isPresented: $shutdownAlert) {
       Button("OK") {}
     } message: {
-      let reason = app.server.shutdownRequest?.reason ?? ""
-      Text("Jetlink cannot power the phone off and told the comma so\(reason.isEmpty ? "" : " (\(reason))"). You can close Jetlink.")
+      // The reason the comma gave is in Logs.
+      Text("Jetlink can't turn off your iPhone, but you can close the app.")
     }
   }
 
-  /// `-tab models`, `-tab benchmark`, `-tab settings` or `-tab logs` on the
-  /// command line opens there, for screenshots from the simulator.
+  /// `-tab models`, `-tab benchmark`, `-tab settings`, `-tab logs` or
+  /// `-tab connect` on the command line opens there, for screenshots from
+  /// the simulator.
   static var initialTab: Tab {
     switch UserDefaults.standard.string(forKey: "tab") {
     case "models": .models
     case "benchmark": .benchmark
-    case "settings", "logs": .settings
+    case "settings", "logs", "connect": .settings
     default: .status
     }
   }
