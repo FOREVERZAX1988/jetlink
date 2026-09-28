@@ -305,6 +305,7 @@ public final class EngineHost: @unchecked Sendable {
 
   private func run(_ job: Job, request: Request, entry: CacheEntry, modelPath: URL, spec: ModelSpec?) {
     var engine: (any Engine)?
+    var fatal: (any Error)?
     do {
       // One engine resident at a time: a build needs the memory.
       unload()
@@ -346,6 +347,9 @@ public final class EngineHost: @unchecked Sendable {
       log.info("engine ready: \(entry.path.lastPathComponent)")
     } catch {
       log.error("engine preparation failed: \(String(describing: error))")
+      if (error as? any FatalEngineError)?.isFatal == true {
+        fatal = error
+      }
       engine?.close()
       lock.lock()
       job.state = .failed
@@ -361,6 +365,12 @@ public final class EngineHost: @unchecked Sendable {
       session.engineUpdate()
     }
     emit(.engine(snapshot()))
+    // D15, as on the frame path: a device broken while building, loading or
+    // warming up stays broken for every later job, so the host gets it once
+    // the comma has heard the job failed.
+    if let fatal {
+      hooks.fatal?(fatal)
+    }
   }
 
   /// Start what the client is still waiting for, now the device is free. A

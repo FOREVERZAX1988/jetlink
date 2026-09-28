@@ -5,11 +5,12 @@ import Testing
 @testable import JetlinkServer
 
 /// The CPU backend with what a TensorRT one adds: fields in the hello, and
-/// runs that fail with an error of the test's choosing.
+/// runs or loads that fail with an error of the test's choosing.
 final class HookBackend: EngineBackend, @unchecked Sendable {
   private let inner = cpuBackend()
   private let lock = NSLock()
   private var failure: (any Error)?
+  private var loadFailure: (any Error)?
   let helloFields: [String: Any]
 
   init(helloFields: [String: Any] = [:]) {
@@ -29,6 +30,11 @@ final class HookBackend: EngineBackend, @unchecked Sendable {
 
   var runFailure: (any Error)? { lock.withLock { failure } }
 
+  /// Every load from now on throws `error`; nil loads again.
+  func failLoads(with error: (any Error)?) {
+    lock.withLock { loadFailure = error }
+  }
+
   func deriveSpec(model: URL, sha256: String, nbytes: Int64, frameSkip: Int) throws -> ModelSpec {
     try inner.deriveSpec(model: model, sha256: sha256, nbytes: nbytes, frameSkip: frameSkip)
   }
@@ -38,7 +44,8 @@ final class HookBackend: EngineBackend, @unchecked Sendable {
   }
 
   func load(artifact: URL, report: @escaping ProgressFn) throws -> any Engine {
-    FailingEngine(try inner.load(artifact: artifact, report: report), backend: self)
+    if let failure = lock.withLock({ loadFailure }) { throw failure }
+    return FailingEngine(try inner.load(artifact: artifact, report: report), backend: self)
   }
 }
 
@@ -322,6 +329,22 @@ struct ServerHooksTests {
       #expect(fatal.all.isEmpty)
       backend.failRuns(with: DeviceError(sticky: true))
       #expect(try frame(client, golden).status == Wire.Status.inferFailed.rawValue)
+      #expect(eventually { fatal.all == ["CUDA_ERROR_ILLEGAL_ADDRESS"] })
+    }
+  }
+
+  @Test("A fatal engine error while preparing the engine fails the job, then is handed to the host; another only fails it")
+  func fatalWhilePreparing() throws {
+    let golden = try Golden("tiny_stateful")
+    let backend = HookBackend()
+    let fatal = Recorded<String>()
+    try serve(hooks: ServerHooks(fatal: { fatal.append(String(describing: $0)) }), backend: backend) { _, client in
+      backend.failLoads(with: DeviceError(sticky: false))
+      #expect(throws: TestError.self) { try client.ensureEngine(model: golden.model, sha256: golden.sha256) }
+      #expect(fatal.all.isEmpty)
+      // Built by the first try: this one only loads.
+      backend.failLoads(with: DeviceError(sticky: true))
+      #expect(throws: TestError.self) { try client.ensureEngine(model: golden.model, sha256: golden.sha256) }
       #expect(eventually { fatal.all == ["CUDA_ERROR_ILLEGAL_ADDRESS"] })
     }
   }
