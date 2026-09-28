@@ -324,6 +324,30 @@ class TestShutdown(OwnerTest):
     o.spawn_worker.assert_called_once()
     assert 'shut down' in o.spawn_worker.call_args.args[0]
 
+  def test_the_run_it_starts_is_left_to_ask(self):
+    # the run asking the jetson was stopped and started again every step, half
+    # a second, less than it takes to start: on the bench nothing ever asked
+    o = self.owner()
+    self.request()
+    o.step()
+    o.spawn_worker.assert_called_once()
+    asking = o.worker = mock.Mock(**{'poll.return_value': None})
+    for _ in range(5):
+      o.step()
+    asking.terminate.assert_not_called()
+    o.spawn_worker.assert_called_once()
+
+  def test_a_run_that_exits_with_the_request_there_is_tried_again_shortly(self):
+    o = self.owner()
+    self.request()
+    o.step()
+    o.worker = mock.Mock(**{'poll.return_value': 0, 'returncode': 0})
+    o.step()                                  # it finished, within the retry wait
+    o.spawn_worker.assert_called_once()
+    o.next_shutdown_run = 0.0                 # the wait is over
+    o.step()
+    assert o.spawn_worker.call_count == 2
+
   def test_a_borrower_is_left_alone(self):
     # modeld has the endpoints: this cannot talk over it, and hardwared only
     # shuts a parked car down anyway

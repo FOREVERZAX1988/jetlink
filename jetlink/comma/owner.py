@@ -65,6 +65,7 @@ LENDER_BACKOFF = 30.0
 # between runs of the worker that found nothing to do. It costs a couple of
 # seconds of imports, so it is spawned on a change and not on a timer
 WORKER_BACKOFF = 300.0
+SHUTDOWN_RETRY = 2.0      # a shutdown run that exited with the request still there
 WORKER_GRACE = 10.0
 
 # under /data/log rather than /dev/shm: this is the one jetlink process alive
@@ -113,6 +114,8 @@ class Owner:
     self.next_attempt = 0.0
     self.next_gadget_attempt = 0.0
     self.next_worker = 0.0
+    self.shutting_down = False          # the run in flight is the one asking the jetson to power off
+    self.next_shutdown_run = 0.0
     self.lease_settled = 0.0
     self.attached = False
     self.configured = False             # attached, as of the last step: for the edges
@@ -312,6 +315,7 @@ class Owner:
       return True
     gadget.log.warning("jetlink: the provisioning run finished (%s)", self.worker.returncode)
     self.worker = None
+    self.shutting_down = False
     # the far end may still be waking; give it the hold before letting go
     self.idle_since = time.monotonic()
     # after the run, not before it: a run writes JetlinkSpec itself, so a mark
@@ -362,6 +366,7 @@ class Owner:
     except subprocess.TimeoutExpired:
       self.worker.kill()
     self.worker = None
+    self.shutting_down = False
 
   # -- the loop -------------------------------------------------------------
 
@@ -433,10 +438,20 @@ class Owner:
     # flight takes minutes, so a shutdown request cannot queue behind one
     reason = gadget.pending_shutdown()
     if reason is not None and not self.lender.lent:
-      self.stop_worker()
+      if self.worker_running():
+        if self.shutting_down:
+          # the run asking the jetson. Stopping it here restarted it every
+          # step, half a second, less than it takes to start: on the bench
+          # nothing ever asked, and hardwared gave up after its 25 s
+          return
+        self.stop_worker()
+      if time.monotonic() < self.next_shutdown_run:
+        return
       self.wake()
       if self.open_link():
-        return self.spawn_worker(f'the jetson has to be shut down: {reason}')
+        self.next_shutdown_run = time.monotonic() + SHUTDOWN_RETRY
+        self.spawn_worker(f'the jetson has to be shut down: {reason}')
+        self.shutting_down = True
       return
 
     if not offroad:
