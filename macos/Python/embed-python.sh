@@ -3,8 +3,8 @@
 # Build the relocatable CPython prefix that ships inside Jetlink.app.
 #
 # The result is macos/build/python: a python-build-standalone install with the
-# pinned wheels, tinygrad from git, the jetlink package, and Homebrew's
-# libusb dropped into site-packages/usb1. `make app` rsyncs it into
+# pinned wheels, the jetlink package, and Homebrew's libusb dropped into
+# site-packages/usb1. `make app` rsyncs it into
 # Jetlink.app/Contents/Resources/python.
 #
 # Gotchas this script exists to get right:
@@ -38,12 +38,9 @@ OUT="${OUT:-$MACOS_DIR/build/python}"
 DOWNLOADS="${DOWNLOADS:-$MACOS_DIR/build/downloads}"
 WHEELHOUSE="$DOWNLOADS/wheels"
 PYVER=3.14
-TINYGRAD_COMMIT=e837e367aac9e1a66e689f4f32ce20ca9367df13
 
 REQUIREMENTS="$SCRIPT_DIR/requirements.txt"
-REQUIREMENTS_GIT="$SCRIPT_DIR/requirements-git.txt"
 
-command -v git >/dev/null 2>&1 || { echo "error: git is required to install tinygrad from source" >&2; exit 1; }
 [ -f "$LIBUSB_DYLIB" ] || { echo "error: no libusb at $LIBUSB_DYLIB; run: brew install libusb" >&2; exit 1; }
 
 mkdir -p "$DOWNLOADS" "$WHEELHOUSE"
@@ -90,12 +87,9 @@ done < <(grep -oE 'https://files\.pythonhosted\.org/[^[:space:]]+' "$REQUIREMENT
 echo "==> installing pinned wheels"
 "$PY" -m pip install --no-deps --require-hashes --no-index --find-links "$WHEELHOUSE" -r "$REQUIREMENTS"
 
-# tinygrad and the jetlink package both build with setuptools, which the line
-# above just put in the prefix, so build isolation (which would need a second
-# download) is off. Step 5 prunes setuptools again.
-echo "==> installing tinygrad from git"
-"$PY" -m pip install --no-deps --no-build-isolation -r "$REQUIREMENTS_GIT"
-
+# The jetlink package builds with setuptools, which the line above just put in
+# the prefix, so build isolation (which would need a second download) is off.
+# Step 5 prunes setuptools again.
 echo "==> installing the jetlink package"
 "$PY" -m pip install --no-deps --no-build-isolation "$REPO_ROOT"
 
@@ -153,11 +147,10 @@ CLEAN_ENV=(env -i "PATH=/usr/bin:/bin:/usr/sbin:/sbin" "HOME=$HOME" "TMPDIR=${TM
   PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONIOENCODING=utf-8 LANG=en_US.UTF-8)
 # USBContext() is what opens libusb; importing usb1 alone does not.
 "${CLEAN_ENV[@]}" "$PY" -c \
-  "import jetlink, numpy, onnx, usb1, tinygrad; usb1.USBContext().close(); import importlib.metadata as m; print('onnxruntime', m.version('onnxruntime'))"
+  "import jetlink, numpy, onnx, usb1; usb1.USBContext().close(); import importlib.metadata as m; print('onnxruntime', m.version('onnxruntime'))"
 BACKENDS="$("${CLEAN_ENV[@]}" "$PY" -m jetlink.server.main --list-backends)"
 echo "$BACKENDS"
 echo "$BACKENDS" | grep -q '\bort\b' || { echo "error: the ort backend did not come up" >&2; exit 1; }
-echo "$BACKENDS" | grep -q '\btinygrad\b' || { echo "error: the tinygrad backend did not come up" >&2; exit 1; }
 
 # 8. The manifest the app reads to show what it is running.
 echo "==> writing MANIFEST.json"
@@ -173,7 +166,7 @@ JETLINK_GIT="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo un
 MANIFEST_PY="$OUT/MANIFEST.json" \
 PACKAGES_JSON="$PACKAGES_JSON" \
 PBS_TAG="$PBS_TAG" PBS_SHA256="$PBS_SHA256" \
-TINYGRAD_COMMIT="$TINYGRAD_COMMIT" LIBUSB_VERSION="$LIBUSB_VERSION" JETLINK_GIT="$JETLINK_GIT" \
+LIBUSB_VERSION="$LIBUSB_VERSION" JETLINK_GIT="$JETLINK_GIT" \
 "$PY" - <<'MANIFEST'
 import datetime, json, os
 
@@ -185,7 +178,6 @@ manifest = {
   "pbs_tag": os.environ["PBS_TAG"],
   "pbs_sha256": os.environ["PBS_SHA256"],
   "packages": packages,
-  "tinygrad_commit": os.environ["TINYGRAD_COMMIT"],
   "libusb": os.environ["LIBUSB_VERSION"],
   "jetlink_git": os.environ["JETLINK_GIT"],
   "built_at": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),

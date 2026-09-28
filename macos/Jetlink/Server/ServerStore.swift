@@ -324,7 +324,6 @@ final class ServerStore: ServerControlling {
       pid: getpid(), version: ServerStore.appVersion, python: "", backend: "", runtimeVersion: "", device: "",
       cache: settings.cacheDirectory.path(percentEncoded: false), transport: settings.transport.rawValue,
       port: configuration.listen ? Int(configuration.port) : nil)
-    let tinygrad = settings.backend == .tinygrad
     // Creating the cache, the engine cache's first look at the disk and the
     // first inventory are file work the main thread should not wait on.
     startTask = Task { [weak self] in
@@ -346,9 +345,6 @@ final class ServerStore: ServerControlling {
           for await event in embedded.events {
             self?.apply(event)
           }
-        }
-        if tinygrad {
-          Log.write(.warning, "app", "tinygrad needs the Python server; the Swift server runs CoreML with the Neural Engine instead")
         }
         self.runningServer = .swift
         if !self.stopRequested {
@@ -382,7 +378,7 @@ final class ServerStore: ServerControlling {
 
   /// What the Swift server is asked to be, from the settings the Python
   /// server also reads. Automatic is the Neural Engine with the GPU (the
-  /// split, the Mac's fastest); tinygrad has no Swift form, so it gets the same.
+  /// split, the Mac's fastest).
   nonisolated static func embeddedConfiguration(backend: BackendChoice, transport: TransportChoice, tcpPort: Int, cacheDirectory: URL)
     -> Server.Configuration
   {

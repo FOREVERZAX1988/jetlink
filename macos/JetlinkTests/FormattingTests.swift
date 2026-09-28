@@ -11,7 +11,7 @@ import Testing
 struct FormattingTests {
   @Test("The runtime line names the runtime, its version and the hardware")
   func runtimeLine() {
-    #expect(StatusView.runtimeLine(backend: "tinygrad", version: "0.14.0+1241484386bc", device: "METAL-Apple_M1_Pro") == "tinygrad 0.14.0, Apple M1 Pro")
+    #expect(StatusView.runtimeLine(backend: "trt", version: "10.3.0+cuda12", device: "cuda-Orin") == "TensorRT 10.3.0, Orin")
     #expect(StatusView.runtimeLine(backend: "ort", version: "1.29.0", device: "coreml-Apple_M1_Pro") == "onnxruntime 1.29.0, Apple M1 Pro")
   }
 
@@ -21,7 +21,6 @@ struct FormattingTests {
   func backendDescription() {
     #expect(StatusView.backendDescription(backend: "ort", device: "coreml-Apple_M1_Pro") == "CoreML on the GPU")
     #expect(StatusView.backendDescription(backend: "ort", device: "ane-Apple_M1_Pro") == "CoreML with the Neural Engine")
-    #expect(StatusView.backendDescription(backend: "tinygrad", device: "METAL") == "tinygrad on Metal")
     #expect(StatusView.backendDescription(backend: "trt", device: "cuda") == "trt")
     #expect(StatusView.backendDescription(backend: nil, device: nil) == "Unknown")
   }
@@ -40,7 +39,7 @@ struct FormattingTests {
   func backendShortName() {
     #expect(StatusView.backendShortName(backend: "ort", device: "ane-Apple_M1_Pro") == "Neural Engine")
     #expect(StatusView.backendShortName(backend: "ort", device: "coreml-Apple_M1_Pro") == "CoreML GPU")
-    #expect(StatusView.backendShortName(backend: "tinygrad", device: "METAL-Apple_M1_Pro") == "tinygrad")
+    #expect(StatusView.backendShortName(backend: "trt", device: "cuda-Orin") == "trt")
     #expect(BackendChoice.auto.shortTitle == "Neural Engine")
   }
 

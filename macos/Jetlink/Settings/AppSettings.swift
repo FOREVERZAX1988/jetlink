@@ -20,14 +20,6 @@ enum ServerEngine: String, CaseIterable, Codable, Sendable {
     case .swift: "Swift"
     }
   }
-
-  /// The backends this server has: tinygrad is Python only.
-  var backends: [BackendChoice] {
-    switch self {
-    case .python: BackendChoice.allCases
-    case .swift: [.auto, .coreml]
-    }
-  }
 }
 
 @MainActor

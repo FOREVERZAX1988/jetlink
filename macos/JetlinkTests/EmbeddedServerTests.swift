@@ -23,11 +23,6 @@ struct EmbeddedServerTests {
     #expect(AppSettings(defaults: defaults).serverEngine == .python)
   }
 
-  @Test func tinygradIsPythonOnly() {
-    #expect(ServerEngine.python.backends.contains(.tinygrad))
-    #expect(!ServerEngine.swift.backends.contains(.tinygrad))
-  }
-
   @Test func usbServesTheGadgetAndOpensNoPort() {
     let configuration = ServerStore.embeddedConfiguration(backend: .auto, transport: .usb, tcpPort: 5599, cacheDirectory: cache)
     #expect(configuration.usb)
@@ -45,7 +40,6 @@ struct EmbeddedServerTests {
   @Test(arguments: [
     (BackendChoice.auto, CoreMLBackend.Device.ane),
     (BackendChoice.coreml, CoreMLBackend.Device.coreml),
-    (BackendChoice.tinygrad, CoreMLBackend.Device.ane),
   ])
   func backendMapping(choice: BackendChoice, device: CoreMLBackend.Device) {
     #expect(ServerStore.embeddedConfiguration(backend: choice, transport: .usb, tcpPort: 5599, cacheDirectory: cache).device == device)

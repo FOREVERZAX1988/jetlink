@@ -111,7 +111,7 @@ struct ServerSettingsView: View {
         }
         VStack(alignment: .leading, spacing: 4) {
           Picker("Backend", selection: $settings.backend) {
-            ForEach(settings.serverEngine.backends, id: \.self) { choice in
+            ForEach(BackendChoice.allCases, id: \.self) { choice in
               Text(choice == .auto ? "Automatic (\(choice.title))" : choice.title).tag(choice)
             }
           }
@@ -166,12 +166,6 @@ struct ServerSettingsView: View {
       }
     }
     .formStyle(.grouped)
-    .onChange(of: settings.serverEngine) {
-      // tinygrad has no Swift form; the picker would show nothing selected
-      if !settings.serverEngine.backends.contains(settings.backend) {
-        settings.backend = .auto
-      }
-    }
   }
 
   static func engineCaption(_ engine: ServerEngine) -> String {
@@ -189,8 +183,6 @@ struct ServerSettingsView: View {
       "Recommended: the fastest on Apple silicon. Preparing takes about 20 seconds the first time."
     case .coreml:
       "Slower. Use it if another app keeps the Neural Engine busy."
-    case .tinygrad:
-      "Loads in a second, but misses the 50 ms frame budget on an M1 Pro; a newer Mac may make it."
     }
   }
 
@@ -201,7 +193,6 @@ struct ServerSettingsView: View {
     var parts: [String] = []
     if let python = manifest["python"] { parts.append("Python \(python)") }
     if let ort = manifest["onnxruntime"] { parts.append("onnxruntime \(ort)") }
-    if let tinygrad = manifest["tinygrad"] { parts.append("tinygrad \(String(tinygrad.prefix(8)))") }
     return parts.isEmpty ? "This build has no bundled Python runtime." : "Bundled: " + parts.joined(separator: ", ")
   }
 }

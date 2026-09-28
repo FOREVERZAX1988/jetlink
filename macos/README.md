@@ -14,8 +14,8 @@ make -C macos app
 ```
 
 `make app` generates the Xcode project, builds `macos/build/python` (an
-embedded CPython 3.14.7 with the pinned wheels, tinygrad from git, the jetlink
-package and libusb), builds Release, and signs everything ad hoc. The result is
+embedded CPython 3.14.7 with the pinned wheels, the jetlink package and
+libusb), builds Release, and signs everything ad hoc. The result is
 `macos/build/Jetlink.app`. The first run downloads about 200 MB into
 `macos/build/downloads`, which `make clean` keeps.
 
@@ -31,8 +31,7 @@ make -C macos dev
 
 This opens `Jetlink.xcodeproj` with `JETLINK_PYTHON` pointing at the repo's
 `.venv`. Xcode runs the app with that environment instead of the embedded runtime. Set the venv up once with
-`pip install -e ".[ort,usb]"` plus tinygrad from git (the commit in
-`Python/requirements-git.txt`; the PyPI wheel cannot parse the models).
+`pip install -e ".[ort,usb]"`.
 
 `make -C macos project` regenerates the project from `project.yml` alone;
 `make -C macos test` runs the Swift Testing suites. The generated

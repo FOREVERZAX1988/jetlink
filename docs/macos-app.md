@@ -145,8 +145,8 @@ through macOS's USB framework, or listens on the TCP port for a bench client.
 On an M1 Pro it is about 1 ms faster a frame than the Python server
 ([measurements](mac-performance.md#the-python-server-and-the-swift-server)).
 
-- It has **Automatic** and **CoreML on the GPU**. tinygrad is Python only; with
-  it selected, the Swift server runs Automatic and says so in Logs.
+- It has the same two backends as the Python server, **Automatic** and
+  **CoreML on the GPU**.
 - The **Benchmark** page (Command-3) runs the loaded model at the comma's pace
   on the Mac alone and gives the same verdict as the iPhone app. It works with
   the Swift server only, and only while no comma is connected.
@@ -163,7 +163,6 @@ were measured on an M1 Pro; other Macs may differ.
 | --- | --- | --- |
 | Automatic (recommended) | The fastest | Use this by default. |
 | CoreML on the GPU | About a third slower | Another app keeps the Neural Engine busy. |
-| tinygrad on Metal | Over the 50 ms budget every frame | Test tinygrad; it exceeds the driving frame budget on this Mac. |
 
 If you previously chose **CoreML on the GPU**, select **Automatic** to switch
 back. See [backend measurements](backends.md#mac-measured) for details.

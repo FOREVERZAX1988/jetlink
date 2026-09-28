@@ -41,7 +41,7 @@ struct PythonRuntime: Sendable, Equatable {
 
   /// The embedded runtime's manifest, flattened for the About and Settings
   /// displays: the top level keys stay, and every entry of "packages" is lifted
-  /// to the top level, so "onnxruntime" and "tinygrad" are keys of their own.
+  /// to the top level, so "onnxruntime" is a key of its own.
   /// Nil when there is no bundled runtime.
   static func manifest() -> [String: String]? {
     guard let resources = Bundle.main.resourceURL else { return nil }

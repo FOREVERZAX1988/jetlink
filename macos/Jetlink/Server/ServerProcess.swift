@@ -2,16 +2,15 @@ import Foundation
 import os
 
 enum BackendChoice: String, CaseIterable, Codable, Sendable {
-  // A stored "ane" from an earlier version decodes to nothing and so to auto,
-  // which is now the same thing.
-  case auto, coreml, tinygrad
+  // A stored "ane" or "tinygrad" from an earlier version decodes to nothing
+  // and so to auto: the first is now the same thing, the second is gone.
+  case auto, coreml
 
   /// What `--backend` gets.
   var backendArgument: String {
     switch self {
     case .auto: return "auto"
     case .coreml: return "ort"
-    case .tinygrad: return "tinygrad"
     }
   }
 
@@ -20,7 +19,6 @@ enum BackendChoice: String, CaseIterable, Codable, Sendable {
     switch self {
     case .auto: return nil
     case .coreml: return "coreml"
-    case .tinygrad: return "METAL"
     }
   }
 
@@ -32,8 +30,6 @@ enum BackendChoice: String, CaseIterable, Codable, Sendable {
       self = .auto
     } else if backend == "ort", device.isEmpty || device.hasPrefix("coreml") {
       self = .coreml
-    } else if backend == "tinygrad" {
-      self = .tinygrad
     } else {
       return nil
     }
@@ -44,7 +40,6 @@ enum BackendChoice: String, CaseIterable, Codable, Sendable {
     switch self {
     case .auto: return "CoreML with the Neural Engine"
     case .coreml: return "CoreML on the GPU"
-    case .tinygrad: return "tinygrad on Metal"
     }
   }
 
@@ -53,7 +48,6 @@ enum BackendChoice: String, CaseIterable, Codable, Sendable {
     switch self {
     case .auto: return "Neural Engine"
     case .coreml: return "CoreML GPU"
-    case .tinygrad: return "tinygrad"
     }
   }
 }

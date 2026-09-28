@@ -29,7 +29,6 @@ struct ServerConfigurationTests {
   @Test(arguments: [
     (BackendChoice.auto, "auto", String?.none),
     (BackendChoice.coreml, "ort", String?.some("coreml")),
-    (BackendChoice.tinygrad, "tinygrad", String?.some("METAL")),
   ])
   func backendMapping(choice: BackendChoice, backend: String, device: String?) {
     let arguments = ServerProcess.arguments(for: configuration(backend: choice))
@@ -46,6 +45,9 @@ struct ServerConfigurationTests {
     let defaults = try #require(UserDefaults(suiteName: suite))
     defer { defaults.removePersistentDomain(forName: suite) }
     defaults.set("ane", forKey: AppSettings.Key.backend)
+    #expect(AppSettings(defaults: defaults).backend == .auto)
+    // tinygrad is gone; a Mac that had it picked comes back on Automatic
+    defaults.set("tinygrad", forKey: AppSettings.Key.backend)
     #expect(AppSettings(defaults: defaults).backend == .auto)
     defaults.set("coreml", forKey: AppSettings.Key.backend)
     #expect(AppSettings(defaults: defaults).backend == .coreml)

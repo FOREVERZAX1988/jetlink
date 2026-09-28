@@ -58,9 +58,9 @@ flatbuffers==25.12.19 \
 packaging==26.3 \
     --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
 
-# Build time only. tinygrad and the jetlink package are both setuptools
-# projects and are installed with --no-build-isolation, so setuptools has to be
-# in the prefix while they build. embed-python.sh prunes it again in step 5, so
+# Build time only. The jetlink package is a setuptools project and is installed
+# with --no-build-isolation, so setuptools has to be in the prefix while it
+# builds. embed-python.sh prunes it again in step 5, so
 # it never ships.
 # wheel: https://files.pythonhosted.org/packages/95/9c/c510029fc6ef33a6275cd2c5d3cecd6613dfd6aa401d57c54f1c18852ccf/setuptools-84.0.0-py3-none-any.whl
 setuptools==84.0.0 \

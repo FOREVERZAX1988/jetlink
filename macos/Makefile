@@ -25,7 +25,7 @@ export JETLINK_VERSION
 export JETLINK_BUILD
 
 # The interpreter `make dev` hands to Xcode: the repo's development venv, which
-# needs `pip install -e ".[ort,usb]"` plus tinygrad from git.
+# needs `pip install -e ".[ort,usb]"`.
 JETLINK_PYTHON ?= $(REPO_ROOT)/.venv/bin/python
 
 .PHONY: all project python app sign notarize dmg test smoke dev clean

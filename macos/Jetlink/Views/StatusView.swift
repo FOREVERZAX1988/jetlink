@@ -328,7 +328,7 @@ struct StatusView: View {
     return settings.cacheDirectory
   }
 
-  /// "tinygrad 0.14.0, Apple M1 Pro": what is actually running, under the
+  /// "onnxruntime 1.29.0, Apple M1 Pro": what is actually running, under the
   /// backend's plain name. The device loses the backend prefix it repeats.
   static func runtimeLine(backend: String, version: String, device: String) -> String {
     let runtime =
@@ -347,8 +347,8 @@ struct StatusView: View {
     return hardware.isEmpty ? head : "\(head), \(hardware)"
   }
 
-  /// "CoreML with the Neural Engine", "CoreML on the GPU", "tinygrad on Metal",
-  /// or what the server reported when it is none of the app's choices.
+  /// "CoreML with the Neural Engine", "CoreML on the GPU", or what the server
+  /// reported when it is none of the app's choices.
   static func backendDescription(backend: String?, device: String?) -> String {
     BackendChoice(backend: backend, device: device)?.title ?? otherBackendName(backend, device: device)
   }

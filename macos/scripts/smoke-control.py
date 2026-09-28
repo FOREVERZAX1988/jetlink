@@ -271,7 +271,7 @@ def main(argv=None) -> int:
   p.add_argument('--backend', default='ort',
                  help='which backend to bring up. ort on the CPU is the default: it needs no '
                       'GPU and it spawns the onnxruntime worker, which is the part of the '
-                      'bundle most likely to break. --backend tinygrad is the quick alternative')
+                      'bundle most likely to break')
   p.add_argument('--device', default='cpu',
                  help='backend specific device; empty means the backend chooses')
   p.add_argument('--quiet', action='store_true', help='do not echo the server log')
