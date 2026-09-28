@@ -8,8 +8,8 @@ A driving-model-shaped ONNX small enough to build in a test.
 
 The same inputs as the big model with the same names and dtypes (uint8 images
 behind a Cast, fp16 everything else), an `org.tinygrad` Contiguous node in the
-middle so the passthrough stripping and tinygrad's native handling are both
-exercised, and openpilot's output_slices metadata. The arithmetic is a mean
+middle so the passthrough stripping is exercised, and openpilot's output_slices
+metadata. The arithmetic is a mean
 over the images and one matmul, so a numpy reference is exact enough to judge
 fp16 backends against.
 """

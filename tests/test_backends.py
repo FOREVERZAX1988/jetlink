@@ -62,11 +62,11 @@ class TestSelect:
         raise RuntimeError('no CUDA device')
       return FakeBackend(version=name)
 
-    monkeypatch.setattr(backends, '_candidates', lambda device: [('trt', device), ('tinygrad', device)])
+    monkeypatch.setattr(backends, '_candidates', lambda device: [('trt', device), ('ort', device)])
     monkeypatch.setattr(backends, '_make', make)
-    picked = backends.select('auto', 'METAL')
-    assert picked.version == 'tinygrad'
-    assert made == ['trt', 'tinygrad']
+    picked = backends.select('auto', 'cpu')
+    assert picked.version == 'ort'
+    assert made == ['trt', 'ort']
     assert 'no CUDA device' in caplog.text
 
   def test_auto_with_nothing_working_reports_every_reason(self, monkeypatch):
@@ -80,27 +80,20 @@ class TestSelect:
     assert 'ort is broken' in str(e.value)
 
   def test_available_lists_installed_runtimes_only(self, monkeypatch):
-    monkeypatch.setattr(backends.sys, 'platform', 'linux')
-    monkeypatch.setattr(backends, '_importable', lambda m: m in ('tinygrad',))
-    assert backends.available() == ['tinygrad']
+    monkeypatch.setattr(backends, '_importable', lambda m: False)
+    assert backends.available() == []
+    monkeypatch.setattr(backends, '_importable', lambda m: m in ('onnxruntime',))
+    assert backends.available() == ['ort']
     monkeypatch.setattr(backends, '_importable', lambda m: m in ('tensorrt', 'cuda.bindings', 'onnxruntime'))
     assert backends.available() == ['trt', 'ort']
-    monkeypatch.setattr(backends, '_importable', lambda m: m in ('onnxruntime', 'tinygrad'))
-    assert backends.available() == ['tinygrad', 'ort']
-    monkeypatch.setattr(backends.sys, 'platform', 'darwin')
-    assert backends.available() == ['ort', 'tinygrad']
+    # TensorRT without cuda-python cannot run anything
+    monkeypatch.setattr(backends, '_importable', lambda m: m in ('tensorrt', 'onnxruntime'))
+    assert backends.available() == ['ort']
 
-  def test_a_mac_tries_onnxruntime_then_tinygrad(self, monkeypatch):
-    """onnxruntime's auto is CoreML or nothing on a Mac (test_ort_backend), so
-    one without the CoreML provider falls through to tinygrad on Metal, the
-    next best, not a 600 ms frame on the CPU."""
-    monkeypatch.setattr(backends.sys, 'platform', 'darwin')
-    monkeypatch.setattr(backends, '_importable', lambda m: m in ('onnxruntime', 'tinygrad'))
-    assert backends._candidates('auto') == [('ort', 'auto'), ('tinygrad', 'auto')]
-    assert backends._candidates('METAL') == [('ort', 'METAL'), ('tinygrad', 'METAL')]
-    monkeypatch.setattr(backends.sys, 'platform', 'linux')
-    monkeypatch.setattr(backends, '_importable', lambda m: m in ('tensorrt', 'cuda', 'onnxruntime', 'tinygrad'))
-    assert backends._candidates('auto') == [('trt', 'auto'), ('tinygrad', 'auto'), ('ort', 'auto')]
+  def test_auto_tries_tensorrt_then_onnxruntime(self, monkeypatch):
+    monkeypatch.setattr(backends, '_importable', lambda m: m in ('tensorrt', 'cuda', 'onnxruntime'))
+    assert backends._candidates('auto') == [('trt', 'auto'), ('ort', 'auto')]
+    assert backends._candidates('cpu') == [('trt', 'cpu'), ('ort', 'cpu')]
 
 
 # -- the base helpers ---------------------------------------------------------
@@ -189,7 +182,7 @@ def test_hello_names_the_backend_and_keeps_trt_version_only_for_tensorrt(linked)
 
 
 def test_an_invalid_artifact_is_rebuilt_from_the_model_on_disk(linked, monkeypatch, caplog):
-  """A pickle from an older tinygrad must heal, not fail every connect."""
+  """An artifact an older runtime left must heal, not fail every connect."""
   client, host, backend, spec, onnx = linked
   _sha_of(spec, onnx, monkeypatch)
   client.ensure_engine(spec.sha256, spec.nbytes, onnx_path=onnx, build_timeout=10.0)

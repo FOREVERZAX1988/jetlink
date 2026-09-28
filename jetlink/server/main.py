@@ -13,17 +13,14 @@ Inference server entrypoint: a Jetson in the car, or any machine with a GPU.
     # over TCP, for development and benchmarking
     python3 -m jetlink.server.main --transport tcp --port 5599
 
-    # on a Mac: CoreML through onnxruntime by default, tinygrad on Metal by name;
-    # scripts/run-mac.sh wraps this
+    # on a Mac: CoreML through onnxruntime; scripts/run-mac.sh wraps this
     python3 -m jetlink.server.main --transport tcp
-    python3 -m jetlink.server.main --backend tinygrad --device METAL --transport tcp
 
     # build an engine ahead of time, no client needed
     python3 -m jetlink.server.main --build /path/to/big_driving_supercombo.onnx
 
---backend auto picks TensorRT where it imports, CoreML on a Mac, then
-tinygrad, then onnxruntime on whatever it has; docs/platforms.md has the
-measured frame times and start-up costs behind that order.
+--backend auto picks TensorRT where it imports, else onnxruntime: CoreML on a
+Mac, CUDA or the CPU elsewhere.
 """
 from __future__ import annotations
 
@@ -113,8 +110,8 @@ def _serve(cache: EngineCache, open_transport, sleeper: Sleeper | None = None,
     if owns_host:
       # Ctrl-C or a stop: release the engine on the thread that owns it rather
       # than leaving it to interpreter teardown, which some runtimes survive
-      # less well than others (backends/tinygrad/owner.py). With a host from
-      # main(), main() is what closes it, after the control channel.
+      # less well than others. With a host from main(), main() is what closes
+      # it, after the control channel.
       host.close()
 
 
@@ -210,13 +207,12 @@ def main(argv=None) -> int:
   p = argparse.ArgumentParser(description='jetlink inference server')
   p.add_argument('--backend', choices=('auto', *NAMES), default='auto',
                  help='what runs the model: trt (TensorRT), ort (onnxruntime: CoreML, CUDA or '
-                      'CPU), tinygrad. auto takes the first that comes up, in that order')
+                      'CPU). auto takes the first that comes up, in that order')
   p.add_argument('--device', default='auto',
-                 help='backend-specific: a CUDA device index for trt; METAL, CUDA, NV, AMD or '
-                      'CPU for tinygrad; ane (the vision trunk on the Neural Engine, the rest on '
-                      'the GPU: auto on Apple silicon), ane-whole (the whole graph in one CoreML '
-                      'program, every unit allowed, prepared for the Neural Engine), coreml (the '
-                      'GPU only), cuda or cpu for ort')
+                 help='backend-specific: a CUDA device index for trt; for ort, ane (the vision '
+                      'trunk on the Neural Engine, the rest on the GPU: auto on Apple silicon), '
+                      'ane-whole (the whole graph in one CoreML program, every unit allowed, '
+                      'prepared for the Neural Engine), coreml (the GPU only), cuda or cpu')
   p.add_argument('--list-backends', action='store_true',
                  help='print the backends whose runtime is installed here, and exit')
   p.add_argument('--transport', choices=('tcp', 'usb'), default='tcp',
@@ -281,7 +277,7 @@ def main(argv=None) -> int:
 
   if args.list_backends:
     found = available()
-    print('\n'.join(found) if found else 'none: pip install jetlink[trt], jetlink[ort] or jetlink[tinygrad]')
+    print('\n'.join(found) if found else 'none: pip install jetlink[trt] or jetlink[ort]')
     return 0
 
   backend = select(args.backend, args.device)

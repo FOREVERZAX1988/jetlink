@@ -7,7 +7,7 @@ See the LICENSE file in the root directory for more details.
 The seam between the server and whatever runs the model.
 
 A Backend turns an ONNX file into an artifact it can load quickly (a TensorRT
-plan, a pickled tinygrad JIT, a compiled CoreML model) and loads one into an
+plan, a compiled CoreML model) and loads one into an
 Engine. An Engine runs one frame: the session writes the model's inputs into
 the staging arrays `host_input` hands out, calls `run`, and reads the output
 views back. Everything else in the server - the protocol, the queues, the cache,
@@ -34,7 +34,7 @@ class ArtifactInvalid(Exception):
   """The artifact on disk is not one this backend can load.
 
   Raised by `Backend.load` for something that is wrong with the file itself: a
-  JIT pickled by another tinygrad, a compiled-model cache another runtime wrote.
+  compiled-model cache another runtime wrote, or an older preparation left.
   The host answers by deleting it and rebuilding from the ONNX if it has one,
   so a runtime upgrade heals itself instead of failing every connect. Anything
   else a load can hit (out of memory, a device that went away) is a plain
@@ -72,8 +72,8 @@ class Engine(Protocol):
 
 
 class Backend(Protocol):
-  name: str          # 'trt' | 'tinygrad' | 'ort', as the hello reports it
-  suffix: str        # the artifact's extension, '.plan' | '.pkl' | '.ortcache'
+  name: str          # 'trt' | 'ort', as the hello reports it
+  suffix: str        # the artifact's extension, '.plan' | '.ortcache'
 
   def tag(self) -> str:
     """What an artifact is valid for: runtime version and device, sanitized

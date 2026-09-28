@@ -197,9 +197,9 @@ def runtime_version() -> str:
 def _pick_device(providers: list[str], device: str) -> str:
   have = set(providers)
   if device in ('auto', '', None):
-    # On a Mac, CoreML or nothing, so auto moves on to tinygrad rather than
-    # serving off the CPU: `ane` on Apple silicon, the fastest there (see the
-    # module docstring), the GPU on Intel.
+    # On a Mac, CoreML or nothing rather than serving off the CPU: `ane` on
+    # Apple silicon, the fastest there (see the module docstring), the GPU on
+    # Intel.
     order = (('ane' if is_apple_silicon() else 'coreml',) if sys.platform == 'darwin'
              else ('cuda', 'cpu'))
     for d in order:

@@ -396,8 +396,8 @@ class EngineHost:
       try:
         engine = self._load_engine(entry.path)
       except ArtifactInvalid as e:
-        # Wrong on disk, not wrong here: a pickle from another tinygrad, a
-        # compiled-model cache another runtime left. Replace it from the ONNX
+        # Wrong on disk, not wrong here: a compiled-model cache another
+        # runtime or an older preparation left. Replace it from the ONNX
         # when there is one, else let the client upload again.
         log.warning("discarding %s: %s", entry.path.name, e)
         entry.remove()

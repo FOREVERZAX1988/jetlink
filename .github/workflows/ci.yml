@@ -19,12 +19,6 @@ concurrency:
 permissions:
   contents: read
 
-env:
-  # The sunnypilot fork. The PyPI wheel has no org.tinygrad ONNX domain and
-  # cannot parse the driving models, and this commit is on no upstream branch,
-  # so it has to be named by its full sha here.
-  TINYGRAD_PIN: tinygrad @ git+https://github.com/sunnypilot/tinygrad@e837e367aac9e1a66e689f4f32ce20ca9367df13
-
 jobs:
   python-lint:
     name: Python lint
@@ -88,8 +82,8 @@ jobs:
 
       - name: Run the tests
         run: python -m pytest -q
-        # onnxruntime's CPU wheel is the one runtime here. The trt and tinygrad
-        # suites skip themselves without it, but test_sleep drives the serve
+        # onnxruntime's CPU wheel is the one runtime here. The trt suites
+        # skip themselves without TensorRT, but test_sleep drives the serve
         # loop, which needs a backend to select rather than a skip.
 
   python-test-macos:
@@ -110,13 +104,10 @@ jobs:
       - name: Install the package
         run: pip install -e ".[dev,ort,usb]"
 
-      - name: Install tinygrad from git
-        run: pip install --no-deps "$TINYGRAD_PIN"
-
       - name: Run the tests
         run: python -m pytest -q
-        # onnxruntime on the CPU provider and tinygrad on the CPU device are
-        # both real here, so the backend suites run instead of skipping.
+        # onnxruntime on the CPU provider is real here, so the backend suites
+        # run instead of skipping.
 
   swift:
     name: Swift build and tests

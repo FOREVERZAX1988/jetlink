@@ -226,16 +226,6 @@ def test_onnxruntime_loops_the_state_in_its_worker(model_path, spec, tmp_path):
   _agrees(OrtBackend('cpu'), model_path, spec, tmp_path, '.ortcache', loops_itself=True)
 
 
-@pytest.mark.skipif(importlib.util.find_spec('tinygrad') is None, reason='needs tinygrad')
-def test_tinygrad_returns_the_queues_and_loops_them(model_path, spec, tmp_path):
-  from jetlink.server.backends.tinygrad import TinygradBackend
-  try:
-    backend = TinygradBackend('CPU')
-  except Exception as e:
-    pytest.skip(f'tinygrad CPU device unavailable: {e}')
-  _agrees(backend, model_path, spec, tmp_path, '.pkl', loops_itself=False)
-
-
 class TestOverTheLink:
   """A real client and Session over TCP, only the engine faked."""
 

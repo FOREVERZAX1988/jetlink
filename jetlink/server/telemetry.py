@@ -220,7 +220,7 @@ def pick_source(backend: str = ''):
   from jetlink.server.platform import is_jetson
   if is_jetson():
     return Telemetry()
-  if backend in ('', 'trt', 'tinygrad', 'ort'):
+  if backend in ('', 'trt', 'ort'):
     try:
       return NvmlTelemetry()
     except Exception as e:

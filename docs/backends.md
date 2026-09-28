@@ -12,12 +12,11 @@ measurements are in the [performance reference](mac-performance.md).
 | Backend | Devices | Prepared files | Requirements |
 | --- | --- | --- | --- |
 | `trt` | NVIDIA CUDA | `.plan` | TensorRT 10.3 on JetPack 6, 10.16 on JetPack 7.2, or 11.x from PyPI on a PC |
-| `tinygrad` | METAL, CUDA, NV, AMD, CPU | `.pkl` | The pinned tinygrad source version below |
 | `ort` | CoreML, CUDA, CPU | `.ortcache/` | ONNX Runtime 1.22+ |
 
-`--backend auto` selects TensorRT if available, then CoreML on macOS, then
-tinygrad, then ONNX Runtime with an available device. Prepared files are cached
-separately for each runtime version and device.
+`--backend auto` selects TensorRT if available, then ONNX Runtime: CoreML on
+macOS, CUDA or the CPU elsewhere. Prepared files are cached separately for each
+runtime version and device.
 
 On a Mac, `--device` picks the CoreML layout: `ane` (the default on Apple
 silicon) runs the vision trunk on the Neural Engine and the rest on the GPU,
@@ -33,7 +32,7 @@ see [how the default runs](mac-performance.md#how-the-default-runs) for why.
 | Platform | Backend | USB | Telemetry | Sleep support |
 | --- | --- | --- | --- | --- |
 | Jetson Orin | TensorRT | USB-A host with libusb | Tegra sensors | Suspend and poweroff |
-| Linux with NVIDIA GPU | TensorRT; tinygrad or ONNX Runtime as alternatives | libusb with `scripts/99-jetlink-host.rules` | NVML | `--sleep-after` requires `/sys/power`; USB wake depends on hardware |
+| Linux with NVIDIA GPU | TensorRT; ONNX Runtime as an alternative | libusb with `scripts/99-jetlink-host.rules` | NVML | `--sleep-after` requires `/sys/power`; USB wake depends on hardware |
 | Windows with NVIDIA GPU | TensorRT in WSL2 | Requires `usbipd-win` | NVML | None |
 | macOS with Apple silicon | ONNX Runtime with CoreML on the Neural Engine and GPU | USB-A hub, dock, or adapter with libusb | Not available | `scripts/run-mac.sh` prevents idle sleep on AC power |
 
@@ -47,8 +46,7 @@ See [performance and operating limits](status.md) for timing and power considera
 ## Mac, measured
 
 On a 16 GB M1 Pro, the default Neural Engine/GPU backend averaged about 31 ms
-per frame in paced 20 Hz tests, and GPU-only 41 to 44 ms. tinygrad averaged
-66 ms and missed every 50 ms deadline in its test.
+per frame in paced 20 Hz tests, and GPU-only 41 to 44 ms.
 
 These are bench measurements. Some CoreML runs still had individual frames
 over the deadline; averages alone do not establish driving reliability.
@@ -64,18 +62,10 @@ See the [full measurements and test conditions](mac-performance.md).
 
 ## Runtime implementation and dependencies
 
-- tinygrad calls run on one dedicated thread because its JIT and Metal state
-  require the same thread for loading and inference.
 - ONNX Runtime sessions run in a worker process so model preparation does not
   block server connections, progress updates, or pings. Frame inputs and
   outputs use shared memory.
 - Jetlink disables ONNX Runtime telemetry to avoid a macOS shutdown crash.
-- Install tinygrad from the pinned source commit. The PyPI 0.14.0 package lacks
-  the `org.tinygrad` ONNX domain required by exported models:
-
-```bash
-pip install --no-deps "tinygrad @ git+https://github.com/sunnypilot/tinygrad@e837e367aac9e1a66e689f4f32ce20ca9367df13"
-```
 
 ## Hardware limitations
 

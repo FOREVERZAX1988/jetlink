@@ -213,8 +213,9 @@ class StateLoop:
 
   An engine with `loop_state` keeps the loop itself, TensorRT in device memory
   and onnxruntime in its worker: the queues are 12 MB, which would otherwise
-  cross to the host and back every frame. For tinygrad the copy is done here,
-  after the reply has gone.
+  cross to the host and back every frame. For an engine that declines the
+  loop (a TensorRT pair that does not match) the copy is done here, after the
+  reply has gone.
   """
 
   def __init__(self, spec: ModelSpec, engine):

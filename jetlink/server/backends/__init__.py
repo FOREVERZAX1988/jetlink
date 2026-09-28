@@ -8,31 +8,24 @@ Which runtime runs the model.
 
     trt       TensorRT on an NVIDIA GPU: the Jetson, and a desktop or laptop
     ort       onnxruntime: CoreML on Apple silicon, CUDA or CPU elsewhere
-    tinygrad  tinygrad on whatever it drives: Metal, CUDA, AMD
 
 Runtimes are imported only when chosen, never here: the tests import the
 server on machines with none of them, and a Jetson must not pay for a Mac's
 imports.
 
-`auto` prefers TensorRT, then on a Mac CoreML through onnxruntime, then
-tinygrad, then onnxruntime on whatever it has. The Mac order is measured
-(docs/platforms.md): CoreML runs the frame in 39 ms to tinygrad's 66 on an
-M1 Pro, and 66 is over the budget. CoreML's price is nine minutes to create
-its session every time the process starts, paid in a worker while the
-server keeps answering, which is the same wait a Jetson rebuilding a plan
-costs and as rare. --backend tinygrad is the switch.
+`auto` prefers TensorRT, then onnxruntime: CoreML on a Mac, CUDA or the CPU
+elsewhere.
 """
 from __future__ import annotations
 
 import importlib.util
 import logging
-import sys
 
 from jetlink.server.backends.base import Backend
 
 log = logging.getLogger('jetlink.backends')
 
-NAMES = ('trt', 'tinygrad', 'ort')
+NAMES = ('trt', 'ort')
 
 
 def _importable(module: str) -> bool:
@@ -49,9 +42,6 @@ def _make(name: str, device: str) -> Backend:
   if name == 'ort':
     from jetlink.server.backends.ort import OrtBackend
     return OrtBackend(device)
-  if name == 'tinygrad':
-    from jetlink.server.backends.tinygrad import TinygradBackend
-    return TinygradBackend(device)
   raise ValueError(f"unknown backend {name!r}; one of {NAMES} or auto")
 
 
@@ -60,11 +50,7 @@ def available() -> list[str]:
   found = []
   if _importable('tensorrt') and (_importable('cuda.bindings') or _importable('cuda')):
     found.append('trt')
-  if _importable('onnxruntime') and sys.platform == 'darwin':
-    found.append('ort')
-  if _importable('tinygrad'):
-    found.append('tinygrad')
-  if _importable('onnxruntime') and 'ort' not in found:
+  if _importable('onnxruntime'):
     found.append('ort')
   return found
 
@@ -72,9 +58,7 @@ def available() -> list[str]:
 def _candidates(device: str) -> list[tuple[str, str]]:
   """(backend, device) pairs auto tries, in order: every installed backend,
   each given the --device the user gave, which the ones it means nothing to
-  skip. On a Mac onnxruntime's auto is CoreML or nothing, so a Mac whose
-  onnxruntime has no CoreML provider falls through to tinygrad rather than
-  serving off the CPU."""
+  skip."""
   return [(name, device) for name in available()]
 
 
@@ -86,7 +70,7 @@ def select(name: str = 'auto', device: str = 'auto') -> Backend:
   candidates = _candidates(device)
   if not candidates:
     raise RuntimeError("no inference runtime is installed: pip install one of "
-                       "'jetlink[trt]', 'jetlink[ort]' or 'jetlink[tinygrad]'")
+                       "'jetlink[trt]' or 'jetlink[ort]'")
   reasons = []
   for candidate, dev in candidates:
     try:

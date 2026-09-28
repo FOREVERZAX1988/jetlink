@@ -12,7 +12,8 @@ The frame budget is 50 ms at 20 frames per second (20 Hz). On Apple silicon the
 default runs the model's vision layers on the Neural Engine and the rest on the
 GPU. `--device coreml` runs everything on the GPU. It is slower, but use it if
 another app keeps the Neural Engine busy: the default assumes Jetlink is the
-only thing using it. tinygrad exceeds the budget.
+only thing using it. tinygrad, measured before Jetlink dropped it, exceeded the
+budget.
 
 | | Default: Neural Engine and GPU | GPU only (`--device coreml`) | tinygrad METAL |
 | --- | ---: | ---: | ---: |

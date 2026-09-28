@@ -3,9 +3,8 @@
 # with CoreML through onnxruntime: on Apple silicon the vision layers run on the
 # Neural Engine and the rest on the GPU, the fastest way (docs/mac-performance.md).
 # If another app keeps the Neural Engine busy, pass --device coreml for the GPU
-# alone. JETLINK_BACKEND=tinygrad picks tinygrad on Metal instead, over the
-# frame budget on an M1 Pro. JETLINK_TRANSPORT=tcp serves a bench client on
-# port 5599 instead of the comma.
+# alone. JETLINK_TRANSPORT=tcp serves a bench client on port 5599 instead of
+# the comma.
 #
 # USB is the default because the comma is the only client that matters and it
 # only speaks USB in the car. Plug it into a USB-A port on a hub or dock with an
@@ -29,12 +28,8 @@ if [ ! -x "$VENV/bin/python" ]; then
   python3 -m venv "$VENV"
   "$VENV/bin/python" -m pip install --quiet --upgrade pip
   "$VENV/bin/python" -m pip install --quiet -e ".[ort,usb]"
-  # tinygrad comes from git, not PyPI: the 0.14.0 wheel has no org.tinygrad ONNX
-  # domain and cannot load the exported models.
-  "$VENV/bin/python" -m pip install --quiet --no-deps \
-    "tinygrad @ git+https://github.com/sunnypilot/tinygrad@e837e367aac9e1a66e689f4f32ce20ca9367df13"
 fi
 export JETLINK_CACHE="${JETLINK_CACHE:-$PWD/models_cache}"
 mkdir -p "$JETLINK_CACHE"
-exec caffeinate -s "$VENV/bin/python" -m jetlink.server.main --backend "${JETLINK_BACKEND:-auto}" \
+exec caffeinate -s "$VENV/bin/python" -m jetlink.server.main \
   --transport "${JETLINK_TRANSPORT:-usb}" "$@"

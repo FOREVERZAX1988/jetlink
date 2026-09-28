@@ -43,7 +43,7 @@ _SHA256 = re.compile(r'[0-9a-f]{64}')
 
 @dataclass
 class CacheEntry:
-  path: Path        # the artifact: a file for TensorRT and tinygrad, a directory for onnxruntime
+  path: Path        # the artifact: a file for TensorRT, a directory for onnxruntime
   meta_path: Path
 
   @property

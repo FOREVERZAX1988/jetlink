@@ -68,9 +68,6 @@ JETLINK_TRANSPORT=tcp scripts/run-mac.sh
 # The GPU only, if another app keeps the Neural Engine busy
 scripts/run-mac.sh --device coreml
 
-# tinygrad on Metal: over the frame budget on an M1 Pro
-JETLINK_BACKEND=tinygrad scripts/run-mac.sh
-
 # Prepare a model ahead of time, then exit
 scripts/run-mac.sh --build /path/to/big_driving_supercombo.onnx
 ```

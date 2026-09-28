@@ -72,7 +72,7 @@ def test_device_selection(monkeypatch):
   assert _pick_device(with_coreml, 'ane-whole') == 'ane-whole'
   assert _pick_device(with_coreml, 'coreml') == 'coreml'
   # auto on a Mac: the Neural Engine split on Apple silicon, the GPU on
-  # Intel, and never the CPU, so auto moves on to tinygrad instead
+  # Intel, and never the CPU
   monkeypatch.setattr('jetlink.server.backends.ort.sys.platform', 'darwin')
   monkeypatch.setattr('jetlink.server.backends.ort.is_apple_silicon', lambda: True)
   assert _pick_device(with_coreml, 'auto') == 'ane'

@@ -25,6 +25,7 @@ Unreleased
   * `jetlink-serve --usb` runs the Swift server as the USB host from a checkout
 * Both apps say whether the comma is on USB 3, USB 2 or TCP, and warn on USB 2; on the iPhone the title turns orange
   * The comma's hello names its link and the speed its USB controller negotiated; the server's link event carries it as `medium`
+* The tinygrad backend is gone: `--backend tinygrad`, the `jetlink[tinygrad]` extra, and tinygrad in the Mac app's Backend setting and bundled runtime. It missed the 50 ms frame budget on every Mac measured and no other host used it; a Mac that had it picked comes back on Automatic
 * The server's `--transport ffs`, which made the server the USB gadget, is gone with its `--ffs-mount`, `--gadget` and `--udc` flags; the comma is always the gadget
 * The old import paths `jetlink.server.builder`, `jetlink.server.engine` and `jetlink.server.cudart` are gone; they have been `jetlink.server.cache` and `jetlink.server.backends.trt` since v0.3.0a1
 
