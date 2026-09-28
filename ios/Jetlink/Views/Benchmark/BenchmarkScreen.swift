@@ -30,7 +30,7 @@ struct BenchmarkScreen: View {
           CommandCard(
             title: "Over the Cable", systemImage: "cable.connector", command: commaCommand,
             missing: "Load a model to get the command.",
-            note: "Run it on the comma over SSH, parked, with Accelerator Link off."
+            note: "Run it on the comma over SSH, offroad, with Accelerator Link set to iOS."
           )
           SectionHeader("Accuracy")
           CommandCard(
@@ -211,13 +211,8 @@ struct BenchmarkScreen: View {
 
   // MARK: commands
 
-  /// bench_link on the comma, listening for this phone's dial over the cable.
-  private var commaCommand: String? {
-    guard let sha256, let bytes = modelBytes else { return nil }
-    let listen = "--listen 0.0.0.0:\(PhoneServer.commaDial.port)"
-    let model = "--sha256 \(sha256) --nbytes \(bytes)"
-    return "cd /data/openpilot/jetlink_repo && PYTHONPATH=/data/openpilot python3 scripts/bench_link.py \(listen) \(model) --rate 20 --n 1200"
-  }
+  /// The live bench on the comma: its cameras and modeld, over this phone's link.
+  private let commaCommand: String? = "/data/openpilot/jetlink_repo/scripts/comma/jetlink_live_bench.sh 180"
 
   /// verify_parity from a Mac on the same Wi-Fi, dialing the phone's listener.
   private var parityCommand: String? {
