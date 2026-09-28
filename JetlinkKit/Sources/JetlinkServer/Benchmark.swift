@@ -47,8 +47,8 @@ extension BenchmarkStats {
 
 /// The device's thermal state as the benchmark reports it: "nominal",
 /// "fair", "serious" or "critical", from ProcessInfo on Apple platforms. The
-/// Android app sets `EngineHost.thermal` from PowerManager instead.
-func platformThermal() -> String {
+/// Android app passes `ServerHooks.thermal` from PowerManager instead.
+public func platformThermal() -> String {
   #if canImport(Darwin)
     thermalLabel(ProcessInfo.processInfo.thermalState)
   #else
@@ -89,8 +89,8 @@ extension EngineHost {
     case .background: qos = "background"
     default: qos = "default"
     }
-    let warm = (engine as? OrtEngine)?.keepsCPUWarm == true ? "on" : "off"
-    return "\(config), frame thread \(qos), CPU keep-warm \(warm)"
+    let notes = engine.notes
+    return "\(config), frame thread \(qos)" + (notes.isEmpty ? "" : ", \(notes)")
   }
 
   /// Runs the loaded engine at 20 Hz for `seconds`, through the real queues
@@ -161,7 +161,7 @@ extension EngineHost {
     var frameMs: [Double] = [], accelMs: [Double] = [], queueMs: [Double] = [], outMs: [Double] = []
     var windows: [BenchmarkWindow] = []
     var windowFrames: [Double] = []
-    let thermalAtStart = thermal()
+    let thermalAtStart = hooks.thermal()
     let period = 1.0 / Double(ModelConstants.runFrequency)
     let warmup = EngineHost.benchmarkWarmup
     let build = EngineHost.buildLine(l.engine)
@@ -231,7 +231,7 @@ extension EngineHost {
       let second = Int(ProcessInfo.processInfo.systemUptime - t0)
       if second - windowStart >= EngineHost.benchmarkWindow {
         let window = BenchmarkWindow(
-          startSecond: windowStart, frame: BenchmarkStats.of(windowFrames), thermal: thermal())
+          startSecond: windowStart, frame: BenchmarkStats.of(windowFrames), thermal: hooks.thermal())
         windows.append(window)
         windowFrames.removeAll(keepingCapacity: true)
         windowStart = second
@@ -242,12 +242,12 @@ extension EngineHost {
     }
     if !windowFrames.isEmpty {
       windows.append(
-        BenchmarkWindow(startSecond: windowStart, frame: BenchmarkStats.of(windowFrames), thermal: thermal()))
+        BenchmarkWindow(startSecond: windowStart, frame: BenchmarkStats.of(windowFrames), thermal: hooks.thermal()))
     }
     return BenchmarkReport(
       sha256: l.sha256, device: device, seconds: round2(ProcessInfo.processInfo.systemUptime - t0), frames: frameMs.count,
       frame: BenchmarkStats.of(frameMs), accelerator: BenchmarkStats.of(accelMs), queues: BenchmarkStats.of(queueMs), output: BenchmarkStats.of(outMs),
       build: build, over35: frameMs.filter { $0 > 35 }.count, over50: frameMs.filter { $0 > 50 }.count, windows: windows,
-      thermalAtStart: thermalAtStart, thermalAtEnd: thermal(), cancelled: run.cancelled)
+      thermalAtStart: thermalAtStart, thermalAtEnd: hooks.thermal(), cancelled: run.cancelled)
   }
 }

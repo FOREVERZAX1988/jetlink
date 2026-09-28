@@ -109,25 +109,24 @@ prepared under another version rebuilds on its next load.
 ## Linux
 
 The Jetson stays on the Python server (the Swift one has no TensorRT backend).
-The Swift package builds on Linux only as the drift check's second platform,
-never for deployment. `Package.swift`'s Linux branch builds JetlinkKit,
-JetlinkONNX, JetlinkRegistry and the portable part of JetlinkServer; the few
-tests that need Apple's frameworks sit behind `canImport(Darwin)` or
-`canImport(COrt)`.
+The whole Swift package builds on Linux, the server included. onnxruntime is
+opened at run time, as on Android, from the official `onnxruntime-linux-*`
+tarball of the release `Pinned` names: the build needs its headers, and the
+tests that run a model need its library.
 
 | | |
 | --- | --- |
-| In | wire protocol, TCP transport, USB framing (not the IOUSBHost gadget), queues, conversions (element loops instead of vImage), model spec, frame statistics, ONNX preparer |
-| Out | onnxruntime, CoreML, Metal, the session, engine host, server loop, JetlinkUI |
-| Stand-ins | swift-crypto for CryptoKit; `JetlinkLog` takes `os.Logger`'s calls; the capped HTTP read fetches the whole body and cuts it (Linux URLSession has no byte stream; this build never fetches a model) |
-| Tests | the conformance suites, all of JetlinkONNX's (byte-for-byte preparation included), control protocol and model row tests, and the wire, USB framing, conversion, spec, JSON and cache layout tests: 123 tests in 19 suites. Registry network tests and everything that runs the server loop stay on macOS. |
+| Stand-ins | swift-crypto for CryptoKit; `JetlinkLog` takes `os.Logger`'s calls; element loops instead of vImage; the capped HTTP read fetches the whole body and cuts it (Linux URLSession has no byte stream) |
+| Not on Linux | JetlinkUI, the IOUSBHost gadget, CoreML and Metal; the registry tests that fake the network (swift-corelibs-foundation adds a session's headers only as it sends, so `MockProtocol` cannot tell its requests from real ones) and the two that serve over Darwin sockets |
 
-CI runs it in the `swift:6.2-noble` container. Locally, from the checkout root,
-building in memory rather than in Docker's disk image:
+Locally, from the checkout root, with the tarball's `include` in
+`$ORT/include/onnxruntime` and its `lib` in `$ORT/lib`, building in memory
+rather than in Docker's disk image:
 
 ```bash
-docker run --rm -v "$PWD":/src:ro --tmpfs /work:exec,size=6g swift:6.2-noble bash -c \
-  'tar -C /src --exclude=.build -cf - JetlinkKit tests/fixtures | tar -C /work -xf - && swift test --package-path /work/JetlinkKit'
+docker run --rm -v "$PWD":/src:ro -v "$ORT":/ort:ro --tmpfs /work:exec,size=6g swift:6.3-jammy bash -c \
+  'tar -C /src --exclude=.build -cf - JetlinkKit tests/fixtures | tar -C /work -xf - &&
+   LD_LIBRARY_PATH=/ort/lib swift test --package-path /work/JetlinkKit -Xcc -I/ort/include'
 ```
 
 ## What the Swift refuses on purpose

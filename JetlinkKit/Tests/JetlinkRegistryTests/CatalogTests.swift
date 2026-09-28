@@ -98,6 +98,7 @@ func bundle(_ ref: String, _ index: Int64, selector: String = "19", name: String
 }
 
 /// A model sunnypilot publishes after this release is still listed.
+@Suite(.enabled(if: MockNet.intercepts))
 struct NewerCatalogTests {
   @Test func versionsAreProbedUpToTheFirstMissingOne() async throws {
     let v = Catalog.version
@@ -162,6 +163,7 @@ struct NewerCatalogTests {
   }
 }
 
+@Suite(.enabled(if: MockNet.intercepts))
 struct CatalogPayloadTests {
   @Test func isCachedUntilItGoesStale() async throws {
     let net = MockNet(catalogRoutes())

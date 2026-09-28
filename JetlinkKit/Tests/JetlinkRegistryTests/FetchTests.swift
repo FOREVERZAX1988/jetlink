@@ -5,6 +5,7 @@ import Testing
 
 /// tests/test_registry.py's fetch section, plus what the Swift download adds:
 /// progress by whole percent, a real socket, and no .part left on any failure.
+@Suite(.enabled(if: MockNet.intercepts))
 struct FetchTests {
   @Test func fallsThroughToTheServerThatHasIt() async throws {
     let tmp = try TempDir()
@@ -70,22 +71,25 @@ struct FetchTests {
     #expect(tmp.names("models").isEmpty)
   }
 
-  @Test func aCancelledTaskStopsTheDownload() async throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
-    let server = try LocalServer(total: 64 << 20)
-    defer { server.stop() }
-    let pointer = Pointer(oid: String(repeating: "c", count: 64), size: server.total)
-    let dest = tmp.url.appending(path: "models/cccccccccccccccc.onnx")
-    let task = Task {
-      try await LFS.download(href: server.url, pointer: pointer, dest: dest, session: .shared, progress: { _ in }, shouldStop: { false })
+  // LocalServer speaks Darwin sockets (Support.swift).
+  #if canImport(Darwin)
+    @Test func aCancelledTaskStopsTheDownload() async throws {
+      let tmp = try TempDir()
+      defer { tmp.remove() }
+      let server = try LocalServer(total: 64 << 20)
+      defer { server.stop() }
+      let pointer = Pointer(oid: String(repeating: "c", count: 64), size: server.total)
+      let dest = tmp.url.appending(path: "models/cccccccccccccccc.onnx")
+      let task = Task {
+        try await LFS.download(href: server.url, pointer: pointer, dest: dest, session: .shared, progress: { _ in }, shouldStop: { false })
+      }
+      try await Task.sleep(for: .milliseconds(20))
+      task.cancel()
+      let result = await task.result
+      #expect(throws: RegistryError.self) { try result.get() }
+      #expect(tmp.names("models").isEmpty)
     }
-    try await Task.sleep(for: .milliseconds(20))
-    task.cancel()
-    let result = await task.result
-    #expect(throws: RegistryError.self) { try result.get() }
-    #expect(tmp.names("models").isEmpty)
-  }
+  #endif
 
   @Test func noServerHasIt() async throws {
     let tmp = try TempDir()
@@ -172,48 +176,50 @@ struct FetchTests {
   }
 }
 
-/// The download through URLSession's real HTTP stack, from a server on loopback.
-struct LocalDownloadTests {
-  static let benchmark = ProcessInfo.processInfo.environment["JETLINK_BENCH"] == "1"
+#if canImport(Darwin)
+  /// The download through URLSession's real HTTP stack, from a server on loopback.
+  struct LocalDownloadTests {
+    static let benchmark = ProcessInfo.processInfo.environment["JETLINK_BENCH"] == "1"
 
-  private func download(megabytes: Int64, session: URLSession) async throws -> (seconds: Double, progress: [Double]) {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
-    let server = try LocalServer(total: megabytes << 20)
-    defer { server.stop() }
-    let pointer = Pointer(oid: server.sha256, size: server.total)
-    let dest = try tmp.layout.modelPath(sha256: pointer.oid)
-    let seen = ProgressLog()
+    private func download(megabytes: Int64, session: URLSession) async throws -> (seconds: Double, progress: [Double]) {
+      let tmp = try TempDir()
+      defer { tmp.remove() }
+      let server = try LocalServer(total: megabytes << 20)
+      defer { server.stop() }
+      let pointer = Pointer(oid: server.sha256, size: server.total)
+      let dest = try tmp.layout.modelPath(sha256: pointer.oid)
+      let seen = ProgressLog()
 
-    let clock = ContinuousClock()
-    let start = clock.now
-    let path = try await LFS.download(href: server.url, pointer: pointer, dest: dest, session: session, progress: seen.callback, shouldStop: { false })
-    let elapsed = clock.now - start
+      let clock = ContinuousClock()
+      let start = clock.now
+      let path = try await LFS.download(href: server.url, pointer: pointer, dest: dest, session: session, progress: seen.callback, shouldStop: { false })
+      let elapsed = clock.now - start
 
-    #expect(path == dest)
-    #expect(Files.status(dest)?.size == server.total)
-    #expect(tmp.names("models") == [dest.lastPathComponent])
-    let seconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
-    return (seconds, seen.all)
-  }
+      #expect(path == dest)
+      #expect(Files.status(dest)?.size == server.total)
+      #expect(tmp.names("models") == [dest.lastPathComponent])
+      let seconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
+      return (seconds, seen.all)
+    }
 
-  @Test func streamsHashesAndVerifiesOverARealSocket() async throws {
-    let (seconds, progress) = try await download(megabytes: 16, session: .shared)
-    #expect(progress.last == 1.0)
-    #expect(progress.count >= 2 && progress.count <= 102)
-    print("local download: 16 MB in \(String(format: "%.3f", seconds)) s, \(String(format: "%.0f", 16 / seconds)) MB/s")
-  }
+    @Test func streamsHashesAndVerifiesOverARealSocket() async throws {
+      let (seconds, progress) = try await download(megabytes: 16, session: .shared)
+      #expect(progress.last == 1.0)
+      #expect(progress.count >= 2 && progress.count <= 102)
+      print("local download: 16 MB in \(String(format: "%.3f", seconds)) s, \(String(format: "%.0f", 16 / seconds)) MB/s")
+    }
 
-  /// JETLINK_BENCH=1 swift test --filter throughput. JETLINK_BENCH_MB sets the
-  /// size (256 by default); it is written to the temp dir and deleted.
-  @Test(.enabled(if: benchmark)) func throughput() async throws {
-    let megabytes = Int64(ProcessInfo.processInfo.environment["JETLINK_BENCH_MB"] ?? "") ?? 256
-    let configuration = URLSessionConfiguration.ephemeral
-    for (label, session) in [("shared", URLSession.shared), ("ephemeral", URLSession(configuration: configuration))] {
-      let (seconds, _) = try await download(megabytes: megabytes, session: session)
-      let rate = Double(megabytes) / seconds
-      print("local download (\(label) session): \(megabytes) MB in \(String(format: "%.3f", seconds)) s = \(String(format: "%.0f", rate)) MB/s")
-      #expect(rate >= 100, "the download must not be per-byte slow")
+    /// JETLINK_BENCH=1 swift test --filter throughput. JETLINK_BENCH_MB sets the
+    /// size (256 by default); it is written to the temp dir and deleted.
+    @Test(.enabled(if: benchmark)) func throughput() async throws {
+      let megabytes = Int64(ProcessInfo.processInfo.environment["JETLINK_BENCH_MB"] ?? "") ?? 256
+      let configuration = URLSessionConfiguration.ephemeral
+      for (label, session) in [("shared", URLSession.shared), ("ephemeral", URLSession(configuration: configuration))] {
+        let (seconds, _) = try await download(megabytes: megabytes, session: session)
+        let rate = Double(megabytes) / seconds
+        print("local download (\(label) session): \(megabytes) MB in \(String(format: "%.3f", seconds)) s = \(String(format: "%.0f", rate)) MB/s")
+        #expect(rate >= 100, "the download must not be per-byte slow")
+      }
     }
   }
-}
+#endif

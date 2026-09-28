@@ -1,4 +1,5 @@
 import Foundation
+import JetlinkORT
 import JetlinkTestSupport
 import Testing
 
@@ -19,6 +20,28 @@ enum Fixture {
   static func json(_ name: String) throws -> [String: Any] {
     try JSONSerialization.jsonObject(with: data(name)) as! [String: Any]
   }
+}
+
+/// onnxruntime's CPU provider, which every platform's tests run the model on:
+/// under the CoreML backend on Apple platforms, under QNN's elsewhere.
+func cpuBackend() -> any EngineBackend {
+  #if canImport(Metal)
+    CoreMLBackend(device: .cpu, preparer: ONNXPreparer(), keepAlive: false)
+  #else
+    QNNBackend(device: .cpu, preparer: ONNXPreparer(), keepAlive: false)
+  #endif
+}
+
+/// Whether `condition` holds within `timeout`. The session counts a frame
+/// after its reply is on the wire, so the client can read the last reply
+/// before the server has counted it.
+func eventually(timeout: TimeInterval = 2, _ condition: () -> Bool) -> Bool {
+  let deadline = Date().addingTimeInterval(timeout)
+  while !condition() {
+    if Date() >= deadline { return false }
+    Thread.sleep(forTimeInterval: 0.005)
+  }
+  return true
 }
 
 /// A fresh directory, removed when the test is done with it.
@@ -106,8 +129,9 @@ extension CommaClient {
     return state
   }
 
-  /// Hello, the model, then Python's golden frames, each reply checked bit
-  /// for bit against Python's output. Returns the hello and the frames sent.
+  /// Hello, the model, then Python's golden frames, each reply checked against
+  /// Python's output: bit for bit on Apple, by correlation elsewhere. Returns
+  /// the hello and the frames sent.
   @discardableResult
   func replay(_ golden: Golden) throws -> (hello: [String: Any], frames: Int) {
     try send(.helloReq, JSONSerialization.data(withJSONObject: ["client": ["name": "test", "nonce": 1]]))
@@ -125,11 +149,12 @@ extension CommaClient {
       #expect(reply.status == Wire.Status.ok.rawValue)
       let expected = Data(golden.expected[(i * spec.outputBytes)..<((i + 1) * spec.outputBytes)])
       let got = Data(reply.payload[Wire.inferRespSize...])
-      #if os(Android)
-        // onnxruntime for Android arm64 runs an fp16 graph's MatMul and
-        // ReduceMean in fp16 where the Mac's build does not, so tiny_queued
-        // (all fp16) lands within about 3% of Python's and tiny_stateful (fp32)
-        // bit for bit. Held to what verify_parity asks of a phone instead.
+      #if os(Android) || os(Linux)
+        // onnxruntime's Android and Linux builds run an fp16 graph's MatMul
+        // and ReduceMean in fp16 where the Apple build does not, so
+        // tiny_queued (all fp16) lands within about 3% of Python's and
+        // tiny_stateful (fp32) bit for bit. Held to what verify_parity asks of
+        // a phone instead.
         let correlation = Golden.correlation(got, expected)
         #expect(correlation >= 0.999, "frame \(i) correlates \(correlation) with Python's, differing by up to \(Golden.worstDifference(got, expected))")
       #else

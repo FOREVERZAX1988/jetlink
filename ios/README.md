@@ -15,7 +15,8 @@ shares:
 | `JetlinkUI` | SwiftUI both apps draw with: the frame budget, the headroom ring, badges |
 | `JetlinkONNX` | Reading and preparing a model's ONNX for CoreML, without the onnx package |
 | `JetlinkRegistry` | sunnypilot's model catalog, LFS downloads, imports, the cache layout |
-| `JetlinkServer` | The server: wire protocol, TCP, session, queues, onnxruntime, control |
+| `JetlinkServer` | The server: wire protocol, TCP, session, queues, control |
+| `JetlinkORT` | onnxruntime's CoreML provider, which runs the model |
 
 `ios/Jetlink` holds only what is the phone's own: the dashboard, the Models and
 Settings screens, the server's lifecycle in the app, and the phone's health.

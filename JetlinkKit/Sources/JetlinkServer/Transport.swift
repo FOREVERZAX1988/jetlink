@@ -338,9 +338,8 @@ enum JSONLine {
 }
 
 /// The socket calls whose names the transports' own methods shadow, and the
-/// few constants that differ between Darwin, glibc and Bionic. Linux is where
-/// the conformance suite runs the portable modules (docs/conformance.md);
-/// Bionic is Android's libc.
+/// few constants that differ between Darwin, glibc (Linux) and Bionic
+/// (Android).
 enum Sys {
   #if canImport(Darwin)
     static let stream = SOCK_STREAM

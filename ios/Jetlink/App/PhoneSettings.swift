@@ -1,5 +1,5 @@
 import Foundation
-import JetlinkServer
+import JetlinkORT
 import Observation
 
 /// The few things worth changing on a phone, kept in UserDefaults.

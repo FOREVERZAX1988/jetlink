@@ -1,6 +1,8 @@
 #include "jl_usbfs.h"
 
-// Linux and Android only: the package declares this target nowhere else.
+// Linux and Android only; elsewhere this compiles to nothing, and nothing links it.
+#ifdef __linux__
+
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
@@ -105,3 +107,5 @@ int jl_usbfs_speed(int fd) {
   int speed = ioctl(fd, USBDEVFS_GET_SPEED);
   return speed >= 0 ? speed : -errno;
 }
+
+#endif

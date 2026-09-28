@@ -44,6 +44,12 @@ public struct TensorSpec: Sendable, Equatable {
   public let type: ElementType
   public let shape: [Int]
 
+  public init(name: String, type: ElementType, shape: [Int]) {
+    self.name = name
+    self.type = type
+    self.shape = shape
+  }
+
   public var count: Int { shape.reduce(1, *) }
   public var byteCount: Int { count * type.size }
 }

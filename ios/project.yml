@@ -36,7 +36,7 @@ targets:
       - path: Resources/Assets.xcassets
     dependencies:
       - package: JetlinkKit
-        products: [JetlinkKit, JetlinkUI, JetlinkRegistry, JetlinkServer]
+        products: [JetlinkKit, JetlinkUI, JetlinkRegistry, JetlinkServer, JetlinkORT]
     info:
       path: Resources/Info.plist
       properties:

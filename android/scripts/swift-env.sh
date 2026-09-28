@@ -62,6 +62,3 @@ onnxruntime_headers() {
   mkdir -p "$2/onnxruntime"
   unzip -o -q -j "$1" 'headers/*' -d "$2/onnxruntime"
 }
-
-# Package.swift builds the Android package with this set.
-export JETLINK_ANDROID=1

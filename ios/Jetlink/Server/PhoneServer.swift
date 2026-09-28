@@ -1,5 +1,6 @@
 import Foundation
 import JetlinkKit
+import JetlinkORT
 import JetlinkServer
 import Observation
 import os
@@ -113,8 +114,9 @@ final class PhoneServer: ServerControlling {
     do {
       let root = try PhoneServer.prepareCacheDirectory()
       let embedded = try EmbeddedServer(
-        configuration: Server.Configuration(
-          port: settings.port, cacheRoot: root, device: settings.device, keepAlive: settings.keepGPUAwake, keepCPUWarm: settings.keepCPUWarm))
+        configuration: Server.Configuration(port: settings.port, cacheRoot: root),
+        backend: CoreMLBackend(
+          device: settings.device, preparer: ONNXPreparer(), keepAlive: settings.keepGPUAwake, keepCPUWarm: settings.keepCPUWarm))
       self.embedded = embedded
       consumeTask = Task { [weak self] in
         for await event in embedded.events {

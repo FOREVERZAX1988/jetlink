@@ -33,6 +33,19 @@ PACKET_MULTIPLE = 1024
 # those bytes as the next header. Host to device keeps the PADDED byte instead.
 GADGET_TX_ALIGN = 16 * PACKET_MULTIPLE
 
+# The comma's gadget as a USB host finds it: these IDs (pid.codes' test
+# allocation; get a real PID before distributing this), which
+# scripts/comma/jetlink-root.sh presents, then the link's interface by its class
+# triple (transport/ffs.py), because the comma set to iOS presents a composite
+# gadget and a reordered config could move the number. Endpoint addresses are
+# read from the descriptors, never assumed: FunctionFS renumbers them at bind.
+USB_VID = 0x1209
+USB_PID = 0x0001
+USB_VENDOR_CLASS = (0xFF, 0xFF, 0xFF)
+USB_MAX_PACKET = 1024   # SuperSpeed bulk
+# What a host asks for in one bulk IN read.
+USB_READ_CHUNK = 256 * USB_MAX_PACKET
+
 # magic, version, msg_type, seq, flags, length, reserved, 4 pad
 HEADER_FMT = '<IHHIIIQ4x'
 HEADER_SIZE = struct.calcsize(HEADER_FMT)
