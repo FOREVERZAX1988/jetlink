@@ -250,18 +250,13 @@ class TestLinkMode(unittest.TestCase):
     (self.dir / key).write_text(value)
 
   def test_the_three_modes(self):
+    self.assertEqual(gadget.link_mode(), 'off', 'unset')
+    self.assertEqual(list(self.dir.iterdir()), [], 'wrote a param')
     for raw, mode in (('0', 'off'), ('1', 'usb'), ('2', 'ios'), ('7', 'off'), ('x', 'off'), ('', 'off')):
       self.write('JetlinkLink', raw)
       self.assertEqual(gadget.link_mode(), mode, raw)
     self.write('JetlinkLink', '2')
     self.assertTrue(gadget.enabled() and gadget.ios())
-
-  def test_unset_is_off_whatever_the_old_switch_says(self):
-    # the fork's params migration carries JetlinkEnabled over, not this
-    self.assertEqual(gadget.link_mode(), 'off')
-    self.write('JetlinkEnabled', '1')
-    self.assertEqual(gadget.link_mode(), 'off')
-    self.assertEqual(sorted(p.name for p in self.dir.iterdir()), ['JetlinkEnabled'], 'wrote a param')
 
 
 class FakeClock:

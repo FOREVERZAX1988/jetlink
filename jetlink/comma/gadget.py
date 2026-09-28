@@ -102,9 +102,8 @@ def param_bool(key: str) -> bool | None:
 
 
 def link_mode() -> str:
-  """Accelerator Link: 'off', 'usb' or 'ios'. Unset or unreadable is 'off'.
-  manager writes the default before anything runs, and the fork's params
-  migration carries the old on/off switch over."""
+  """Accelerator Link: 'off', 'usb' or 'ios'. Unset or unreadable is 'off';
+  manager writes the default before anything runs."""
   raw = raw_param(P_LINK)
   try:
     return LINK_MODES[int(raw)]
