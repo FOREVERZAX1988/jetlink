@@ -215,7 +215,7 @@ extension EngineHost {
           o.baseAddress!.copyMemory(from: out, byteCount: spec.outputCount * 4)
         }
       }
-      let finite = !output.contains { !$0.isFinite }
+      let finite = output.withUnsafeBytes { Convert.allFinite($0.baseAddress!, count: spec.outputCount) }
       let outputUs = microseconds(since: readStarted)
       let totalUs = microseconds(since: started)
       let accel = l.engine.lastGpuUs

@@ -47,6 +47,10 @@ public protocol Engine: AnyObject {
   /// What ran beside the model, for a benchmark report's build line: "CPU
   /// keep-warm on". Empty when there is nothing to say.
   var notes: String { get }
+  /// Where the host writes an input. For every input but a looped pair's
+  /// state_ one the pointer stays the same from load to close, as does
+  /// `output`'s for every output the engine does not loop: staging looks
+  /// them up once, at load.
   func hostInput(_ name: String) -> UnsafeMutableRawPointer?
   func output(_ name: String) -> UnsafeRawPointer?
   @discardableResult func loopState(_ pairs: [(input: String, output: String)]) throws -> Bool
