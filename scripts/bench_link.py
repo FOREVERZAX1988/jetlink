@@ -18,6 +18,9 @@ takes ~21 ms of it. Sends real-sized payloads at the real rate and reports the t
     python3 scripts/bench_link.py --ffs --sha256 <hex> --nbytes <n>
     python3 scripts/bench_link.py --ffs --spec spec.json
 
+    # the same with jetlinkd running: borrow the link from it, as modeld does
+    python3 scripts/bench_link.py --ffs --loan --spec spec.json
+
     # from a Mac standing in for the comma: wait for one phone to dial us
     # (the app dials whatever answers on its cable network), then bench it
     python3 scripts/bench_link.py --listen 5599 --onnx big_model.onnx
@@ -37,6 +40,8 @@ from jetlink.spec import ModelSpec, spec_from_onnx
 
 # modeld's per-frame budget; a frame past it is dropped, and frameDropPerc > 1 soft-disables
 FRAME_BUDGET_MS = 50.0
+# how long --loan waits for the gadget owner to lend the link
+LOAN_TIMEOUT = 60.0
 
 
 def load_spec(args) -> ModelSpec | None:
@@ -96,6 +101,26 @@ def open_listen(spec: str, timeout: float):
   return JetlinkClient(transport)
 
 
+def open_loan(timeout: float = LOAN_TIMEOUT):
+  """Borrow the link from the comma's gadget owner and open it as modeld does
+  (openpilot's jetlink helpers.connect): over the phone's dial if the owner
+  lent one, else over the endpoint files. (loan, client); close the client,
+  then the loan."""
+  from jetlink.comma import lending
+  loan = lending.borrow('bench', timeout=timeout)
+  if loan is None:
+    raise SystemExit(f"no loan from the gadget owner in {timeout:g}s: is jetlinkd running, "
+                     "and is modeld or jetlink_hold.py holding it?")
+  print(f"borrowed the {'cable link' if loan.sock is not None else 'gadget'}: udc {loan.udc}, mount {loan.mount}")
+  try:
+    if loan.sock is not None:
+      return loan, JetlinkClient.open_socket(loan.sock)
+    return loan, JetlinkClient.open_borrowed_ffs(loan.mount, loan.udc, bounce=loan.bounce)
+  except BaseException:
+    loan.close()
+    raise
+
+
 def main() -> int:
   p = argparse.ArgumentParser()
   g = p.add_mutually_exclusive_group(required=True)
@@ -110,6 +135,9 @@ def main() -> int:
   p.add_argument('--listen-timeout', type=float, default=120.0, metavar='SECONDS',
                  help='--listen: how long to wait for the dial')
   p.add_argument('--port', type=int, default=5599)
+  p.add_argument('--loan', action='store_true',
+                 help="with --ffs: borrow the link from the comma's gadget owner (jetlinkd), as modeld does, "
+                      "rather than opening the gadget")
   p.add_argument('--ffs-mount', default='/dev/ffs-jetlink')
   p.add_argument('--gadget', default='/sys/kernel/config/usb_gadget/jetlink')
   p.add_argument('--wait-host', type=float, default=0.0, metavar='SECONDS',
@@ -121,9 +149,14 @@ def main() -> int:
   p.add_argument('--n', type=int, default=400)
   p.add_argument('--rate', type=float, default=20.0, help='Hz; 0 = as fast as possible')
   args = p.parse_args()
+  if args.loan and not args.ffs:
+    p.error('--loan goes with --ffs')
 
+  loan = None
   if args.usb:
     client = JetlinkClient.open_usb()
+  elif args.loan:
+    loan, client = open_loan()
   elif args.ffs:
     # opening this writes the descriptors and binds the UDC, so the Jetson can enumerate us
     client = JetlinkClient.open_ffs(args.ffs_mount, gadget=args.gadget)
@@ -136,6 +169,8 @@ def main() -> int:
   finally:
     # a FunctionFS owner that dies leaves the gadget bound with nothing servicing it
     client.close()
+    if loan is not None:
+      loan.close()   # the owner takes the endpoints back
 
 
 def _run(args, client) -> int:
