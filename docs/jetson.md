@@ -22,7 +22,7 @@ Choose the installer option that matches your car's power socket:
 
 | Does the socket stay powered with the ignition off? | Choose | What to expect |
 | --- | --- | --- |
-| Yes | **Always on** — recommended | Ignition off: the Jetson sleeps after a few minutes. Car started: the comma wakes it automatically. |
+| Yes | **Always on** (recommended) | Ignition off: the Jetson sleeps after a few minutes. Car started: the comma wakes it automatically. |
 | No | **Switched** | Ignition off: the Jetson loses power. Car started: it boots; allow about 1–2 minutes for the large model. |
 
 Check whether your socket turns off a few minutes after parking. If it does,

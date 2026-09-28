@@ -30,8 +30,8 @@ For a Mac, see [Jetlink for Mac](macos-app.md). For a Jetson or PC, see the
 | A Mac with Xcode 26 and the iOS 26 platform | There is no App Store or TestFlight build; you build and install it yourself. A free Apple account is enough |
 
 You also need a comma running a zoompilot build with Jetlink, set up as in the
-[README](../README.md#comma-setup-all-platforms). The **iOS** option of
-**Accelerator Link** is on the zoompilot `iphone` branch only, for now.
+[README](../README.md#comma-setup-all-platforms), with **Accelerator Link** set
+to **iOS**.
 
 ## Install
 
@@ -91,7 +91,7 @@ opened afterwards connects when it opens; it just connects later.
 negotiate power, the comma ends up supplying the phone, and it reboots. Through
 a hub's A port the comma only ever draws.
 
-A direct cable is being worked on. The zoompilot `iphone` branch has the comma
+A direct cable is being worked on. zoompilot has the comma
 hold its USB-C port as the device whenever the far end of the cable is a host
 and not a chestnut, so the phone takes the host role as a hub gives it today.
 A Mac on a C-to-C cable already comes up as the host without it. Nobody has
@@ -157,10 +157,10 @@ clipboard or in a note.
 Two things the phone cannot measure itself are filled in as commands to copy,
 from the loaded model and the phone's addresses:
 
-- **From the comma**, `scripts/bench_link.py --listen ...` on the comma over
-  SSH, with the cable in and **Accelerator Link** off on the comma so its own
-  client is not holding the port. It waits for the phone to dial, sends 1,200
-  real-sized frames and reports the round trip the car will see. Frames over
+- **From the comma**, `jetlink_repo/scripts/comma/jetlink_live_bench.sh 180`
+  on the comma over SSH, offroad, with **Accelerator Link** on **iOS** and the
+  phone connected. It runs the cameras and modeld as a drive does, over the
+  phone's link, and reports the frame times the car will see. Frames over
   50 ms should be 0.
 - **From a Mac**, `scripts/verify_parity.py ...` on a Mac on the same Wi-Fi,
   which checks that the phone computes what onnxruntime does on a computer:
