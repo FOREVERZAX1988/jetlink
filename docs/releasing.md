@@ -1,7 +1,8 @@
 # Updates and rollback
 
-The comma build and the Jetlink server must be compatible. Update both while
-parked.
+The comma build and the Jetlink server must be compatible. You can update
+both outside the car or in the car while offroad. Keep both devices powered
+and connected to the internet during the update.
 
 ## Updating
 
@@ -16,7 +17,7 @@ parked.
      script, restart `scripts/run-mac.sh`; recreate `.venv` if dependencies
      changed.
 
-3. Plug in while parked and wait for the green icon. A new Jetlink or model may
+3. Connect the comma while offroad and wait for the green icon. A new Jetlink or model may
    need another engine build. Cached engines stay valid across updates that do
    not change the model or runtime.
 

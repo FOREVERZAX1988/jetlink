@@ -1,7 +1,8 @@
 # Set up Jetlink on a Jetson
 
-Allow about an hour for first-time setup, mostly downloads. Stay parked and
-keep the Jetson and comma connected to the internet during setup.
+Allow about an hour for first-time setup, mostly downloads. You can set up
+Jetlink outside the car or in the car while offroad. Keep the Jetson and comma
+connected to the internet during setup, and keep both devices powered.
 
 ## What you need
 

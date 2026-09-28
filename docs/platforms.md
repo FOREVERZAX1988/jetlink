@@ -3,6 +3,10 @@
 Run Jetlink on a Mac, Linux PC, or Windows PC with WSL2. Set up the comma with the steps
 in the [README](../README.md#quick-start).
 
+You can set up Jetlink outside the car or in the car while offroad. Keep the
+comma and computer connected to the internet during setup, and keep the
+computer powered and awake.
+
 Choose your setup:
 
 - [Mac app](macos-app.md) for installation without terminal commands.

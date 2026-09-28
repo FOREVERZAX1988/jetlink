@@ -23,8 +23,8 @@ it to the comma. Keep laptops powered and awake; sleep interrupts the link.
   **Big Model Available** at every stop. Disengaging alone is not enough on a
   car with lateral control always on.
 - A **Big Model Ready** chime means it has taken over.
-- Picking a new model needs the comma online once, while parked, to download
-  it. While it prepares, the comma uses its small model and shows progress.
+- Picking a new model needs the comma connected to the internet while offroad
+  to download it. While it prepares, the comma uses its small model and shows progress.
   The large model takes over when ready and the switching conditions above
   are met.
 - **Big Model Lost** while engaged is a soft disable. Take over. The small model
@@ -47,7 +47,8 @@ adapter and installer choices.
 
 ## Choose a model
 
-While parked and online, open **Settings > Models > Big Model** on the comma.
+With the comma offroad and connected to the internet, open
+**Settings > Models > Big Model**. You can do this outside the car or in the car.
 Start with the default. The comma downloads your selection and sends it to the
 server automatically. A new catalog entry appears without a Jetlink update;
 use **Refresh Model List** if the list is empty or out of date.

@@ -2,6 +2,8 @@
 
 New to Jetlink? Start with the [quick start](../README.md#quick-start).
 Install the server, set up the comma, and wait for its icon to turn green.
+You can do this outside the car or in the car while offroad. Keep the comma
+connected to the internet during setup, and keep the computer powered and awake.
 
 ## Setup and daily use
 

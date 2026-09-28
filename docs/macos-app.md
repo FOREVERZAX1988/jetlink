@@ -17,6 +17,10 @@ the steps in the [README](../README.md#quick-start).
 
 ## Install
 
+You can set up Jetlink outside the car or in the car while offroad. Keep the
+comma and Mac connected to the internet during setup, and keep the Mac powered
+and awake.
+
 1. Download the Mac DMG from [Releases](https://github.com/zoompilot/jetlink/releases).
 2. Open it and drag Jetlink to Applications.
 3. Open Jetlink from Applications.

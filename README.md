@@ -19,8 +19,9 @@ while engaged, the comma soft-disables and tells you to take over. Read the
 ## Quick start
 
 You need a **comma 3X or comma 4**, a **USB 3 A-to-C data cable**, and
-**separate power for the comma and computer**. Stay parked and keep the comma
-online during setup.
+**separate power for the comma and computer**. You can set up Jetlink outside
+the car or in the car while offroad. Keep the comma connected to the internet
+during setup, and keep your computer powered and awake.
 
 1. Install Jetlink on your computer using one of the options below.
 2. Complete [comma setup](#comma-setup-all-platforms).
@@ -91,8 +92,8 @@ measured on a phone yet; see [Jetlink for iPhone](docs/iphone-app.md).
    USB-C-to-A adapter. On Jetson, use its USB-A port. Charge-only cables will
    not work, and a plain C-to-C connection may select the wrong USB role.
 4. **Wait for green.** The comma's home-button icon pulses during download,
-   transfer, and preparation, then turns green when ready. Stay parked and
-   online until it finishes. You do not need to download a model manually.
+   transfer, and preparation, then turns green when ready. Keep the comma
+   offroad and connected to the internet until it finishes. You do not need to download a model manually.
 
 After download and transfer, the default model takes about 3 minutes to prepare
 on Jetson or about 20 seconds on an M1 Pro. Later loads use the cached engine.

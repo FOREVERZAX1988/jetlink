@@ -3,8 +3,9 @@
 # Choose and prepare models
 
 For normal setup, select a model under **Settings > Models > Big Model** on
-the comma while parked and online. The comma downloads it, sends it to the
-server, and waits for the server to prepare it. Start with the default model.
+the comma while offroad and connected to the internet. You can do this outside
+the car or in the car. The comma downloads it, sends it to the server, and
+waits for the server to prepare it. Start with the default model.
 See [daily use](using-jetlink.md#choose-a-model) for model changes and switching.
 
 ## Prepare ahead of time (optional)
@@ -26,7 +27,7 @@ jetlink models fetch <ref>
 
 Replace `<ref>` with the full `ref` value for your chosen model in the JSON.
 The plain `list` output abbreviates refs for display. To prepare it as well, stop the server
-first. Run these steps while parked:
+first. If a comma is connected, keep it offroad during these steps:
 
 ```bash
 jetlink stop
