@@ -145,6 +145,19 @@ jobs:
         # wire bytes against protocol.py, the preparation byte for byte
         # against Python's, and whole-server runs against golden frames.
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run the comma's client against jetlink-server
+        run: |
+          pip install numpy pytest
+          swift build --package-path JetlinkKit --product jetlink-server
+          JETLINK_SERVER_BIN=JetlinkKit/.build/debug/jetlink-server python -m pytest -q tests/test_swift_server.py
+        # jetlink.client over TCP against the Mac build, as the Linux job
+        # does against its own.
+
       - name: Check the committed iPhone project is fresh
         run: |
           make -C ios project
@@ -155,22 +168,72 @@ jobs:
         # SwiftPM against the iPhone SDK, so it needs no iOS simulator runtime.
 
   swift-linux:
-    name: Swift conformance on Linux
-    runs-on: ubuntu-24.04
-    container: swift:6.2-noble
+    name: Swift on Linux (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {arch: aarch64, runner: ubuntu-22.04-arm}
+          - {arch: x86_64, runner: ubuntu-22.04}
+    runs-on: ${{ matrix.runner }}
+    # The Mac's Swift, and the one build-linux.sh builds the release tarballs
+    # with; jammy's glibc is JetPack 6's, the oldest a Jetson runs.
+    container: swift:6.3.3-jammy
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
 
-      - name: Run the portable modules' tests
-        run: swift test --package-path JetlinkKit
-        # Package.swift's Linux branch: JetlinkKit, JetlinkONNX, JetlinkRegistry
-        # and the portable part of JetlinkServer (the wire, the TCP and USB
-        # framing, the queues, the frame statistics), built with
-        # swift-crypto. The conformance suites read the
-        # same Python-written fixtures here as on macOS, so the drift check
-        # holds on a second platform. Nothing deploys this build
-        # (docs/conformance.md).
+      - name: Fetch onnxruntime
+        run: |
+          ort=$(scripts/build-linux.sh "linux-${{ matrix.arch }}" ort)
+          echo "ORT=$ort" >> "$GITHUB_ENV"
+        # The official CPU tarball of the release Pinned names, at the sha256
+        # build-linux.sh pins: headers for COrt, and the library the server
+        # opens at run time (JL_ORT_DLOPEN).
+
+      - name: Build the package
+        run: swift build --package-path JetlinkKit -Xcc -I"$ORT/include"
+        # Every target, the server and jetlink-server included, with CTrt as
+        # the fake over host memory: linux-trt compiles the real shim.
+
+      - name: Run the Swift tests
+        run: LD_LIBRARY_PATH="$ORT/lib" swift test --package-path JetlinkKit -Xcc -I"$ORT/include"
+        # The conformance suites read the same Python-written fixtures as on
+        # macOS. The golden frames are held to a 0.999 correlation here, as on
+        # Android: onnxruntime's Linux build computes fp16 MatMul in fp16.
+
+      - name: Install numpy and pytest
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends python3-pip
+          python3 -m pip install numpy==2.2.6 pytest==8.4.2
+
+      - name: Run the comma's client against jetlink-server
+        run: LD_LIBRARY_PATH="$ORT/lib" JETLINK_SERVER_BIN=JetlinkKit/.build/debug/jetlink-server python3 -m pytest -q tests/test_swift_server.py
+        # jetlink.client over TCP, as a comma drives the server. Naming the
+        # binary makes a missing one fail rather than skip.
+
+  linux-trt:
+    name: TensorRT shim (${{ matrix.flavor }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {flavor: linux-aarch64, runner: ubuntu-22.04-arm}
+          - {flavor: linux-x86_64, runner: ubuntu-22.04}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/jetlink-build
+          key: jetlink-build-${{ matrix.flavor }}-${{ hashFiles('scripts/build-linux.sh') }}
+      - name: Build the shim and its selftest; run the selftest on the fake
+        run: scripts/build-linux.sh ${{ matrix.flavor }} headers fake-test shim selftest
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jl_trt_selftest-${{ matrix.flavor }}
+          path: build/${{ matrix.flavor }}/jl_trt_selftest
 
   swift-android:
     name: Swift server for Android
@@ -200,7 +263,7 @@ jobs:
           curl -fsSL -o /tmp/ndk.zip "https://dl.google.com/android/repository/android-ndk-${NDK_RELEASE}-linux.zip"
           unzip -q /tmp/ndk.zip -d /tmp/ndk
           mkdir -p /opt/android-ndk
-          mv /tmp/ndk/android-ndk-${NDK_RELEASE} "/opt/android-ndk/${NDK_VERSION}"
+          mv "/tmp/ndk/android-ndk-${NDK_RELEASE}" "/opt/android-ndk/${NDK_VERSION}"
 
       - name: Install the Swift SDK for Android
         run: |
@@ -213,9 +276,8 @@ jobs:
           curl -fsSL -o /tmp/onnxruntime.aar \
             "https://repo1.maven.org/maven2/com/microsoft/onnxruntime/onnxruntime-android-qnn/${ONNXRUNTIME}/onnxruntime-android-qnn-${ONNXRUNTIME}.aar"
           ANDROID_NDK_HOME="/opt/android-ndk/${NDK_VERSION}" bash android/scripts/swift-build.sh "$PWD/swift-out" /tmp/onnxruntime.aar release
-        # The whole server with JETLINK_ANDROID=1: the portable part the Linux
-        # job tests, plus the session, the engine host, the QNN backend, the
-        # usbfs pipes and the JNI bridge (android/README.md).
+        # The `jetlink` product: the server the Linux job tests, with the QNN
+        # backend and the JNI bridge (android/README.md).
 
       - uses: actions/upload-artifact@v4
         with:
