@@ -6,9 +6,8 @@
 #
 # onnx serialises and shape-infers the ONNX fixtures. onnxruntime is the
 # release the Apple builds run: the Swift package links its xcframework
-# (JetlinkKit/Package.swift), the Mac's Python server pins it
-# (macos/Python/requirements.txt), and its CPU provider on Apple arm64
-# computes the golden outputs. numpy and protobuf are what those ran with.
+# (JetlinkKit/Package.swift), and its CPU provider on Apple arm64 computes the
+# golden outputs. numpy and protobuf are what those ran with.
 numpy==2.5.3
 onnx==1.22.0
 onnxruntime==1.29.0

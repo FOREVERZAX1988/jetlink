@@ -1,10 +1,8 @@
 # Lint and test on every push and pull request.
 #
 # The cheap jobs (ruff, pytest on Linux) report in about a minute. The app job
-# is the slow one: it downloads the interpreter tarball and the pinned wheels,
-# builds the embedded runtime, builds and ad hoc signs the bundle, and then
-# runs a real server out of it. Its downloads are cached, keyed on the scripts
-# that choose them.
+# is the slow one: it builds and ad hoc signs the bundle, then runs the Swift
+# server out of it.
 name: CI
 
 on:
