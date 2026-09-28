@@ -6,8 +6,8 @@ import Testing
 
 /// The whole server, over a real socket, on onnxruntime's CPU provider: the
 /// upload, the Swift preparation, the build, the load, the queues or the state
-/// loop, and the reply, checked bit for bit against what the Python server's
-/// parts compute for the same frames.
+/// loop, and the reply, checked against what the Python server's parts
+/// compute for the same frames (bit for bit on Apple; see `CommaClient.replay`).
 @Suite("Server", .serialized)
 struct ServerTests {
   func serve(_ body: (Server, TestClient) throws -> Void) throws {

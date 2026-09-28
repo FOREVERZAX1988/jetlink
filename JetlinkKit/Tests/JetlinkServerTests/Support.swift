@@ -129,8 +129,9 @@ extension CommaClient {
     return state
   }
 
-  /// Hello, the model, then Python's golden frames, each reply checked bit
-  /// for bit against Python's output. Returns the hello and the frames sent.
+  /// Hello, the model, then Python's golden frames, each reply checked against
+  /// Python's output: bit for bit on Apple, by correlation elsewhere. Returns
+  /// the hello and the frames sent.
   @discardableResult
   func replay(_ golden: Golden) throws -> (hello: [String: Any], frames: Int) {
     try send(.helloReq, JSONSerialization.data(withJSONObject: ["client": ["name": "test", "nonce": 1]]))
@@ -148,11 +149,12 @@ extension CommaClient {
       #expect(reply.status == Wire.Status.ok.rawValue)
       let expected = Data(golden.expected[(i * spec.outputBytes)..<((i + 1) * spec.outputBytes)])
       let got = Data(reply.payload[Wire.inferRespSize...])
-      #if os(Android)
-        // onnxruntime for Android arm64 runs an fp16 graph's MatMul and
-        // ReduceMean in fp16 where the Mac's build does not, so tiny_queued
-        // (all fp16) lands within about 3% of Python's and tiny_stateful (fp32)
-        // bit for bit. Held to what verify_parity asks of a phone instead.
+      #if os(Android) || os(Linux)
+        // onnxruntime's Android and Linux builds run an fp16 graph's MatMul
+        // and ReduceMean in fp16 where the Apple build does not, so
+        // tiny_queued (all fp16) lands within about 3% of Python's and
+        // tiny_stateful (fp32) bit for bit. Held to what verify_parity asks of
+        // a phone instead.
         let correlation = Golden.correlation(got, expected)
         #expect(correlation >= 0.999, "frame \(i) correlates \(correlation) with Python's, differing by up to \(Golden.worstDifference(got, expected))")
       #else
