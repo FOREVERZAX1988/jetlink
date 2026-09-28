@@ -70,9 +70,9 @@ jetlink-models list
 
 ```
   #  Model                  Ref         Size    On disk
- 13  Cinque Terre V3 Model   bf3e3631b3  766 MB  no
+ 13  Cinque Terre V3 Model   bf3e3631b3  766 MB  prepared (default)
  12  Cinque Terre Model V2   37bfa1413e  766 MB  no
- 11  BMRLNAP Model v4        f877d7a0cc  766 MB  prepared (default)
+ 11  BMRLNAP Model v4        f877d7a0cc  766 MB  prepared
 ```
 
 The table abbreviates refs. Use `list --json` to get the full 40-character
@@ -84,7 +84,7 @@ protocol](control-protocol.md#the-protocol). Example:
 ```json
 {"fetched_at": 1757440000.0,
  "url": "https://raw.githubusercontent.com/sunnypilot/sunnypilot-models/refs/heads/gh-pages/docs/driving_models_chestnut_v26.json",
- "default_ref": "f877d7a0ccc3cce943c76e285214c020cd65c899", "error": null,
+ "default_ref": "bf3e3631b3f91d92a1020a5e0dd4298b93ff4244", "error": null,
  "models": [{"name": "Cinque Terre Model V2", "short_name": "CTMV2",
              "ref": "37bfa1413edcdc2e8844984b83727c33f81d8f46", "build_time": "<ISO 8601 timestamp>",
              "index": 12, "sha256": null, "bytes": null}]}
