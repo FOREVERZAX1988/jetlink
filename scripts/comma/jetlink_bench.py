@@ -140,7 +140,8 @@ def main():
             row = (time.monotonic() - start, model.frameId, int(model.big), int(sm.valid['modelV2']),
                    model.modelExecutionTime * 1000, model.frameDropPerc,
                    (sm.logMonoTime['modelV2'] - model.timestampEof) / 1e6,
-                   str(status.acceleratorState), int(status.bigModelAvailable))
+                   # the available column is the state being ready, as bigModelAvailable was
+                   str(status.acceleratorState), int(str(status.acceleratorState) == 'ready'))
             rows.append(row)
             writer.writerow(row)
           if time.monotonic() - last >= 10:
