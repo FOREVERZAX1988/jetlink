@@ -1,5 +1,5 @@
 import JetlinkKit
-import JetlinkServer
+import JetlinkORT
 import JetlinkUI
 import SwiftUI
 

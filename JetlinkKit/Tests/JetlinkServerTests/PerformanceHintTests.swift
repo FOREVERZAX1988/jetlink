@@ -2,7 +2,7 @@
   import Foundation
   import Testing
 
-  @testable import JetlinkServer
+  @testable import JetlinkORT
 
   /// The hint API is found at run time; this checks the calls' shapes where
   /// the device has it. An emulator's power HAL may not, and then there is

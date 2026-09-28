@@ -13,7 +13,7 @@ native library, `libjetlink.so`:
 | Part | What it is |
 | --- | --- |
 | `JetlinkKit` | The server, the model registry and the ONNX preparation, shared with the Apple apps |
-| `JetlinkServer/QNNBackend.swift` | onnxruntime's QNN provider: the NPU and GPU of a Snapdragon |
+| `JetlinkORT/QNNBackend.swift` | onnxruntime's QNN provider: the NPU and GPU of a Snapdragon |
 | `JetlinkServer/UsbfsPipes.swift`, `CUsbfs` | The comma's bulk pair through usbdevfs, on the descriptor the app opened |
 | `JetlinkKit/AppSnapshot.swift` | The app's state as the screens draw it, from the server's events |
 | `JetlinkAndroid` | The JNI functions `io.zoompilot.jetlink.server.Native` calls |

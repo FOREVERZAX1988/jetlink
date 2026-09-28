@@ -2,6 +2,7 @@ import Foundation
 import JetlinkKit
 import Testing
 
+@testable import JetlinkORT
 @testable import JetlinkServer
 
 /// The Android backend's build, artifact and load, on its CPU device, which
@@ -14,7 +15,7 @@ struct QNNBackendTests {
   func servesGoldenFrames(_ name: String) throws {
     let golden = try Golden(name)
     let cache = try TemporaryDirectory()
-    let configuration = Server.Configuration(host: "127.0.0.1", port: 0, cacheRoot: cache.url, keepAlive: false, preload: false)
+    let configuration = Server.Configuration(host: "127.0.0.1", port: 0, cacheRoot: cache.url, preload: false)
     let backend = QNNBackend(device: .cpu, preparer: ONNXPreparer(), keepAlive: false)
     let server = try Server(configuration: configuration, backend: backend)
     try server.start()

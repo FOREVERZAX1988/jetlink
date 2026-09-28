@@ -1,5 +1,5 @@
 import Foundation
-import JetlinkServer
+import JetlinkORT
 import Observation
 
 /// Where the server runs the model. The Swift server has the two the Python

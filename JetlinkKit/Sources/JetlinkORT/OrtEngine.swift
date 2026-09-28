@@ -1,4 +1,5 @@
 import Foundation
+import JetlinkServer
 
 /// One session of a chain: its model file, the execution provider to run it
 /// on, and that provider's options.
@@ -79,6 +80,7 @@ public final class OrtEngine: @unchecked Sendable {
   /// Whether the CPU is kept warm beside this engine: a busy thread, or
   /// Android's performance hints.
   public var keepsCPUWarm: Bool { keepWarm != nil || hint != nil }
+  public var notes: String { "CPU keep-warm \(keepsCPUWarm ? "on" : "off")" }
 
   private let chain: [OrtSession]
   private var buffers: [String: UnsafeMutableRawPointer] = [:]

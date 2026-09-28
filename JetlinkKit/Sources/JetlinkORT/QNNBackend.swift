@@ -1,6 +1,7 @@
 import Foundation
 import JetlinkKit
 import JetlinkONNX
+import JetlinkServer
 
 /// onnxruntime's QNN provider in process, the Android backend: Qualcomm's
 /// Hexagon NPU ("HTP") and Adreno GPU on a Snapdragon phone. The Android

@@ -13,12 +13,15 @@ public struct ArtifactInvalid: Error, CustomStringConvertible {
   }
 }
 
-/// A loaded model, ready to run a frame at a time. `OrtEngine` is the one the
-/// server uses; the tests have one that needs no runtime.
+/// A loaded model, ready to run a frame at a time: a backend's engine
+/// (JetlinkORT's `OrtEngine`), or the tests' one that needs no runtime.
 public protocol Engine: AnyObject {
   var inputs: [String: TensorSpec] { get }
   var outputs: [String: TensorSpec] { get }
   var lastGpuUs: UInt32 { get }
+  /// What ran beside the model, for a benchmark report's build line: "CPU
+  /// keep-warm on". Empty when there is nothing to say.
+  var notes: String { get }
   func hostInput(_ name: String) -> UnsafeMutableRawPointer?
   func output(_ name: String) -> UnsafeRawPointer?
   @discardableResult func loopState(_ pairs: [(input: String, output: String)]) throws -> Bool
@@ -46,6 +49,10 @@ public protocol EngineBackend: AnyObject, Sendable {
   func deriveSpec(model: URL, sha256: String, nbytes: Int64, frameSkip: Int) throws -> ModelSpec
   func build(model: URL, artifact: URL, report: @escaping ProgressFn, metaExtra: [String: Any]) throws
   func load(artifact: URL, report: @escaping ProgressFn) throws -> any Engine
+}
+
+extension Engine {
+  public var notes: String { "" }
 }
 
 extension EngineBackend {

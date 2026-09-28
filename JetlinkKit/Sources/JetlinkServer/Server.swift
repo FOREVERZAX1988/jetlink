@@ -45,21 +45,17 @@ public struct DialTarget: Sendable, Equatable, CustomStringConvertible {
 /// USB gadget. Over a USB network link the comma listens and the phone dials
 /// it, so an accepted connection on the comma is the proof of a phone. A
 /// dialed connection is served the same way, and the listener stays open
-/// beside it for benches and a Mac on the LAN. On a Mac the server can be the
-/// USB host instead, as the Python server is with `--transport usb`: it opens
-/// the gadget's vendor interface whenever the comma is on the bus.
+/// beside it for benches and a Mac on the LAN. The server can be the USB host
+/// instead, as the Python server is with `--transport usb`: it opens the
+/// gadget's vendor interface whenever the comma is on the bus.
+///
+/// The host builds the backend and the gadget and passes them in, so nothing
+/// here knows which runtime runs the model or how a platform reaches USB.
 public final class Server: @unchecked Sendable {
   public struct Configuration: Sendable {
     public var host: String
     public var port: UInt16
     public var cacheRoot: URL
-    public var device: Device
-    /// Keep the accelerator clocked up between frames: MetalKeepAlive on
-    /// Apple, the NPU's burst mode on Android.
-    public var keepAlive: Bool
-    /// Keep a CPU core busy between frames while a Neural Engine session
-    /// runs (CPUKeepWarm).
-    public var keepCPUWarm: Bool
     /// Start loading the engine that was loaded last, before a comma asks.
     public var preload: Bool
     /// Dial this end and serve the connection; `setDial` changes it later.
@@ -68,19 +64,16 @@ public final class Server: @unchecked Sendable {
     /// has no reason to open a port.
     public var listen: Bool
     /// Be the USB host: open the comma's gadget whenever it is on the bus.
-    /// macOS and Android only.
+    /// Needs the gadget the host passes to `init`.
     public var usb: Bool
 
     public init(
-      host: String = "0.0.0.0", port: UInt16 = Wire.defaultPort, cacheRoot: URL, device: Device = Server.defaultDevice, keepAlive: Bool = true,
-      keepCPUWarm: Bool = true, preload: Bool = true, dial: DialTarget? = nil, listen: Bool = true, usb: Bool = false
+      host: String = "0.0.0.0", port: UInt16 = Wire.defaultPort, cacheRoot: URL, preload: Bool = true, dial: DialTarget? = nil,
+      listen: Bool = true, usb: Bool = false
     ) {
       self.host = host
       self.port = port
       self.cacheRoot = cacheRoot
-      self.device = device
-      self.keepAlive = keepAlive
-      self.keepCPUWarm = keepCPUWarm
       self.preload = preload
       self.dial = dial
       self.listen = listen
@@ -122,23 +115,13 @@ public final class Server: @unchecked Sendable {
   private var stopped = false
   private var dial: DialTarget?
   private var dialing = false
-  /// Where the USB loop finds the comma: IOKit on a Mac, what the host hands
-  /// over elsewhere (the Android app's descriptor). Internal so a test can
-  /// hand it a fake before `start`.
+  /// Where the USB loop finds the comma: IOKit's `USBGadget` on a Mac, the
+  /// Android app's descriptor in a `UsbfsGadget`. Internal so a test can hand
+  /// it a fake before `start`.
   var gadget: (any GadgetSource)?
 
-  /// The platform's own backend (CoreML on Apple) and gadget (IOKit on a Mac).
-  public convenience init(configuration: Configuration, preparer: any ModelPreparer) throws {
-    #if os(macOS)
-      let gadget: (any GadgetSource)? = USBGadget()
-    #else
-      let gadget: (any GadgetSource)? = nil
-    #endif
-    try self.init(configuration: configuration, backend: Server.makeBackend(configuration, preparer: preparer), gadget: gadget)
-  }
-
-  /// A server on the host's `backend` and `gadget`: the Android app's QNN
-  /// backend and descriptor, or the tests' own.
+  /// A server on the host's `backend` (JetlinkORT's CoreML or QNN backend, or
+  /// the tests' own) and `gadget`, if it serves USB.
   public init(configuration: Configuration, backend: any EngineBackend, gadget: (any GadgetSource)? = nil) throws {
     self.configuration = configuration
     self.dial = configuration.dial
@@ -536,28 +519,6 @@ public final class Server: @unchecked Sendable {
     lock.unlock()
     guard connected, let stats = host.frameStats.summary(window: window, framesTotal: frames) else { return }
     host.emit(.stats(stats))
-  }
-}
-
-extension Server {
-  #if canImport(Metal)
-    /// Where the model runs: the Neural Engine, the GPU or the CPU.
-    public typealias Device = CoreMLBackend.Device
-    public static let defaultDevice: Device = .ane
-  #else
-    /// Where the model runs: the NPU, the GPU or the CPU.
-    public typealias Device = QNNBackend.Device
-    public static let defaultDevice: Device = .htp
-  #endif
-
-  /// onnxruntime with CoreML on Apple platforms, with QNN elsewhere.
-  static func makeBackend(_ configuration: Configuration, preparer: any ModelPreparer) -> any EngineBackend {
-    #if canImport(Metal)
-      CoreMLBackend(
-        device: configuration.device, preparer: preparer, keepAlive: configuration.keepAlive, keepCPUWarm: configuration.keepCPUWarm)
-    #else
-      QNNBackend(device: configuration.device, preparer: preparer, keepAlive: configuration.keepAlive, keepCPUWarm: configuration.keepCPUWarm)
-    #endif
   }
 }
 

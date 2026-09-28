@@ -1,5 +1,6 @@
 import COrt
 import Foundation
+import JetlinkServer
 
 /// onnxruntime, through the C shim in COrt.
 public enum OrtRuntime {

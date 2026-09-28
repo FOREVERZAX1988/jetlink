@@ -89,8 +89,8 @@ extension EngineHost {
     case .background: qos = "background"
     default: qos = "default"
     }
-    let warm = (engine as? OrtEngine)?.keepsCPUWarm == true ? "on" : "off"
-    return "\(config), frame thread \(qos), CPU keep-warm \(warm)"
+    let notes = engine.notes
+    return "\(config), frame thread \(qos)" + (notes.isEmpty ? "" : ", \(notes)")
   }
 
   /// Runs the loaded engine at 20 Hz for `seconds`, through the real queues

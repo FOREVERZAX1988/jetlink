@@ -1,4 +1,5 @@
 import Foundation
+import JetlinkORT
 import JetlinkTestSupport
 import Testing
 
@@ -19,6 +20,16 @@ enum Fixture {
   static func json(_ name: String) throws -> [String: Any] {
     try JSONSerialization.jsonObject(with: data(name)) as! [String: Any]
   }
+}
+
+/// onnxruntime's CPU provider, which every platform's tests run the model on:
+/// under the CoreML backend on Apple platforms, under QNN's elsewhere.
+func cpuBackend() -> any EngineBackend {
+  #if canImport(Metal)
+    CoreMLBackend(device: .cpu, preparer: ONNXPreparer(), keepAlive: false)
+  #else
+    QNNBackend(device: .cpu, preparer: ONNXPreparer(), keepAlive: false)
+  #endif
 }
 
 /// A fresh directory, removed when the test is done with it.

@@ -2,6 +2,7 @@
   import Android
   import Foundation
   import JetlinkKit
+  import JetlinkORT
   import JetlinkServer
 
   // The Android app's way into the server: plain JNI functions on
@@ -174,22 +175,19 @@
       guard let cache = config["cache"] as? String, !cache.isEmpty else {
         throw HostFailure("no cache directory")
       }
-      let deviceName = config["device"] as? String ?? Server.defaultDevice.rawValue
-      guard let device = Server.Device(rawValue: deviceName) else {
+      let deviceName = config["device"] as? String ?? QNNBackend.Device.htp.rawValue
+      guard let device = QNNBackend.Device(rawValue: deviceName) else {
         throw HostFailure("unknown device \(deviceName)")
       }
       let configuration = Server.Configuration(
         port: UInt16(clamping: (config["port"] as? NSNumber)?.intValue ?? Int(Wire.defaultPort)),
         cacheRoot: URL(fileURLWithPath: cache, isDirectory: true),
-        device: device,
-        keepAlive: (config["keep_alive"] as? Bool) ?? true,
-        keepCPUWarm: (config["keep_cpu_warm"] as? Bool) ?? false,
         preload: (config["preload"] as? Bool) ?? true,
         listen: (config["listen"] as? Bool) ?? true,
         usb: (config["usb"] as? Bool) ?? true)
       let backend = QNNBackend(
-        device: device, preparer: ONNXPreparer(), keepAlive: configuration.keepAlive, keepCPUWarm: configuration.keepCPUWarm,
-        chip: config["chip"] as? String ?? "")
+        device: device, preparer: ONNXPreparer(), keepAlive: (config["keep_alive"] as? Bool) ?? true,
+        keepCPUWarm: (config["keep_cpu_warm"] as? Bool) ?? false, chip: config["chip"] as? String ?? "")
 
       let logs = self.logs
       // logcat too, where `adb logcat -s jetlink` finds it

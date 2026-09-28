@@ -105,8 +105,7 @@ struct ControllerTests {
   func withController(_ body: (ServerController, FakeRegistry, EventLog) async throws -> Void) async throws {
     let cache = try TemporaryDirectory()
     let server = try Server(
-      configuration: Server.Configuration(host: "127.0.0.1", port: 0, cacheRoot: cache.url, device: .cpu, keepAlive: false, preload: false),
-      preparer: ONNXPreparer())
+      configuration: Server.Configuration(host: "127.0.0.1", port: 0, cacheRoot: cache.url, preload: false), backend: cpuBackend())
     let registry = try FakeRegistry(cache: cache.url, golden: Golden("tiny_queued"))
     let controller = ServerController(server: server, registry: registry)
     let log = EventLog(controller.events)

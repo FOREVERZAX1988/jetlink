@@ -10,8 +10,11 @@
 //   JetlinkONNX      reading and preparing a driving model's ONNX, without the onnx package
 //   JetlinkRegistry  sunnypilot's model catalog, LFS downloads, and the cache layout
 //   JetlinkServer    the jetlink server in Swift: the wire protocol, the session, the
-//                    queues and onnxruntime, and the comma's gadget over IOKit (macOS)
-//                    or usbfs (Linux, Android)
+//                    queues, the engine host and cache, and the comma's gadget over
+//                    IOKit (macOS) or usbfs (Linux, Android). The host passes in the
+//                    backend that runs the model, and the gadget.
+//   JetlinkORT       onnxruntime's backends: CoreML on Apple, QNN on Android, and the
+//                    CPU provider under either
 //   JetlinkAndroid   the JNI library the Android app loads, libjetlink.so (Android only)
 //   jetlink-serve    the server on its own, for benches
 //   jetlink-onnx     the preparation on its own, for checking it against Python
@@ -38,6 +41,7 @@ let package = Package(
     .library(name: "JetlinkONNX", targets: ["JetlinkONNX"]),
     .library(name: "JetlinkRegistry", targets: ["JetlinkRegistry"]),
     .library(name: "JetlinkServer", targets: ["JetlinkServer"]),
+    .library(name: "JetlinkORT", targets: ["JetlinkORT"]),
     .library(name: "jetlink", type: .dynamic, targets: ["JetlinkAndroid"]),
     .executable(name: "jetlink-serve", targets: ["jetlink-serve"]),
     .executable(name: "jetlink-onnx", targets: ["jetlink-onnx"]),
@@ -75,13 +79,14 @@ let package = Package(
     .target(name: "CUsbfs"),
     .target(
       name: "JetlinkServer",
-      dependencies: [
-        "JetlinkKit", "JetlinkONNX", "JetlinkRegistry", "JetlinkLog", "COrt", .target(name: "CUsbfs", condition: .when(platforms: linux)), crypto,
-      ],
+      dependencies: ["JetlinkKit", "JetlinkONNX", "JetlinkRegistry", "JetlinkLog", .target(name: "CUsbfs", condition: .when(platforms: linux)), crypto]),
+    .target(
+      name: "JetlinkORT", dependencies: ["JetlinkKit", "JetlinkONNX", "JetlinkServer", "COrt"],
       linkerSettings: [.linkedFramework("Metal", .when(platforms: apple))]),
     .target(
-      name: "JetlinkAndroid", dependencies: ["JetlinkKit", "JetlinkServer"], linkerSettings: [.linkedLibrary("log", .when(platforms: [.android]))]),
-    .executableTarget(name: "jetlink-serve", dependencies: ["JetlinkKit", "JetlinkServer"]),
+      name: "JetlinkAndroid", dependencies: ["JetlinkKit", "JetlinkServer", "JetlinkORT"],
+      linkerSettings: [.linkedLibrary("log", .when(platforms: [.android]))]),
+    .executableTarget(name: "jetlink-serve", dependencies: ["JetlinkKit", "JetlinkServer", "JetlinkORT"]),
     .executableTarget(name: "jetlink-onnx", dependencies: ["JetlinkONNX"]),
     // Helpers more than one test target uses: JSON comparison, hex, the source tree.
     .target(name: "JetlinkTestSupport", path: "Tests/JetlinkTestSupport"),
@@ -89,6 +94,7 @@ let package = Package(
     // The fixtures are read in place through #filePath, so they are not resources.
     .testTarget(name: "JetlinkONNXTests", dependencies: ["JetlinkONNX", "JetlinkTestSupport", crypto], exclude: ["Fixtures"]),
     .testTarget(name: "JetlinkRegistryTests", dependencies: ["JetlinkRegistry", "JetlinkTestSupport", crypto]),
-    .testTarget(name: "JetlinkServerTests", dependencies: ["JetlinkServer", "JetlinkTestSupport"], exclude: ["Fixtures"]),
+    // The server's tests run it on onnxruntime's CPU provider.
+    .testTarget(name: "JetlinkServerTests", dependencies: ["JetlinkServer", "JetlinkORT", "JetlinkTestSupport"], exclude: ["Fixtures"]),
   ]
 )

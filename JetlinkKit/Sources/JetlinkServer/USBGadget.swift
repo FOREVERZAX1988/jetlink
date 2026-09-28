@@ -18,16 +18,18 @@
   /// No driver claims a vendor-class interface, so opening one needs no
   /// entitlement and no root. Another program holding it (the Python server,
   /// say) makes the open fail with exclusive access.
-  struct USBGadget: GadgetSource {
+  public struct USBGadget: GadgetSource {
+    public init() {}
+
     /// Is a jetlink gadget on the bus? Opens nothing; cheap enough to poll.
-    func present() -> Bool {
+    public func present() -> Bool {
       guard let device = USBGadget.findDevice() else { return false }
       IOObjectRelease(device)
       return true
     }
 
     /// Opens the gadget's link interface and its bulk pair.
-    func open() throws -> any MessageLink {
+    public func open() throws -> any MessageLink {
       guard let device = USBGadget.findDevice() else {
         throw LinkError.closed(String(format: "no jetlink gadget at %04x:%04x", Pinned.usbVendorID, Pinned.usbProductID))
       }

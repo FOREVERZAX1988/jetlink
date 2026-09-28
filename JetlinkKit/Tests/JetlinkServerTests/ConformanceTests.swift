@@ -1,5 +1,6 @@
 import Foundation
 import JetlinkKit
+import JetlinkORT
 import JetlinkTestSupport
 import Testing
 

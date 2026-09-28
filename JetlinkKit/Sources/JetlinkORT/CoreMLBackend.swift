@@ -2,6 +2,7 @@
   import Foundation
   import JetlinkKit
   import JetlinkONNX
+  import JetlinkServer
   import Metal
 
   /// onnxruntime's CoreML provider in process: the Swift form of the Python ort

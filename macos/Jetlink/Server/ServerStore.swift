@@ -1,5 +1,6 @@
 import Foundation
 import JetlinkKit
+import JetlinkORT
 import JetlinkServer
 import Observation
 import os
@@ -102,8 +103,8 @@ final class ServerStore: ServerControlling {
         await file?.append(line)
       }
     }
-    let configuration = ServerStore.configuration(
-      backend: settings.backend, transport: settings.transport, tcpPort: settings.tcpPort, cacheDirectory: settings.cacheDirectory)
+    let configuration = ServerStore.configuration(transport: settings.transport, tcpPort: settings.tcpPort, cacheDirectory: settings.cacheDirectory)
+    let choice = settings.backend
     // The controller's first .server event fills in the backend fields.
     let seed = ServerInfo(
       version: ServerStore.appVersion, choice: settings.backend, runtimeVersion: "", device: "", cache: settings.cacheDirectory.path(percentEncoded: false),
@@ -113,7 +114,7 @@ final class ServerStore: ServerControlling {
     startTask = Task { [weak self] in
       let started = await Task.detached(priority: .userInitiated) {
         Result {
-          let embedded = try EmbeddedServer(configuration: configuration)
+          let embedded = try EmbeddedServer(configuration: configuration, backend: ServerStore.backend(for: choice), gadget: USBGadget())
           try embedded.start()
           return embedded
         }
@@ -238,13 +239,15 @@ final class ServerStore: ServerControlling {
   // MARK: configuration
 
   /// What the server is asked to be, from the settings.
-  nonisolated static func configuration(backend: BackendChoice, transport: TransportChoice, tcpPort: Int, cacheDirectory: URL)
-    -> Server.Configuration
-  {
+  nonisolated static func configuration(transport: TransportChoice, tcpPort: Int, cacheDirectory: URL) -> Server.Configuration {
     let port = UInt16(clamping: tcpPort > 0 ? tcpPort : AppSettings.defaultTCPPort)
-    return Server.Configuration(
-      port: port, cacheRoot: cacheDirectory, device: backend.device, keepAlive: true, keepCPUWarm: true, preload: true,
-      listen: transport == .tcp, usb: transport == .usb)
+    return Server.Configuration(port: port, cacheRoot: cacheDirectory, preload: true, listen: transport == .tcp, usb: transport == .usb)
+  }
+
+  /// What runs the model: CoreML on the device the setting names, with the
+  /// GPU and a CPU core kept up between frames.
+  nonisolated static func backend(for choice: BackendChoice) -> CoreMLBackend {
+    CoreMLBackend(device: choice.device, preparer: ONNXPreparer(), keepAlive: true, keepCPUWarm: true)
   }
 
   nonisolated static var appVersion: String {

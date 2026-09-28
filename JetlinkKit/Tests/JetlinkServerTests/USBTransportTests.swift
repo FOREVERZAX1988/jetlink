@@ -350,9 +350,8 @@ final class GadgetClient: CommaClient {
 struct ServerUSBTests {
   func makeServer(_ cache: TemporaryDirectory, gadget: FakeGadget) throws -> Server {
     let server = try Server(
-      configuration: Server.Configuration(
-        host: "127.0.0.1", port: 0, cacheRoot: cache.url, device: .cpu, keepAlive: false, preload: false, listen: false, usb: true),
-      preparer: ONNXPreparer())
+      configuration: Server.Configuration(host: "127.0.0.1", port: 0, cacheRoot: cache.url, preload: false, listen: false, usb: true),
+      backend: cpuBackend())
     server.gadget = gadget
     return server
   }

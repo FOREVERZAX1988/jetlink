@@ -1,5 +1,6 @@
 import Foundation
 import JetlinkKit
+import JetlinkORT
 import JetlinkServer
 
 // The Swift server on a Mac: the same code the iPhone runs and the Mac app
@@ -30,7 +31,7 @@ let usage = """
                         the GPU (default); ane-whole: the whole graph on the
                         Neural Engine, the iPhone's layout; coreml: the whole
                         graph on the GPU; cpu: onnxruntime's CPU provider, for
-                        tests
+                        tests, and the default off Apple platforms
     --dial HOST[:PORT]  also dial this end and serve the connection, as the
                         phone dials the comma over a USB network link; the
                         listener stays open beside it
@@ -41,10 +42,19 @@ let usage = """
     --help              this text
   """
 
+#if canImport(Metal)
+  typealias Device = CoreMLBackend.Device
+  let defaultDevice = Device.ane
+#else
+  // QNN's backend, whose CPU device is onnxruntime's CPU provider alone.
+  typealias Device = QNNBackend.Device
+  let defaultDevice = Device.cpu
+#endif
+
 struct Options {
   var cache: URL?
   var port: UInt16 = 5599
-  var device: Server.Device = Server.defaultDevice
+  var device = defaultDevice
   var keepAlive = true
   var keepCPUWarm = true
   var preload = true
@@ -67,7 +77,7 @@ func parse() -> Options {
     switch arg {
     case "--cache": options.cache = URL(fileURLWithPath: value(arg), isDirectory: true)
     case "--port": options.port = UInt16(value(arg)) ?? 5599
-    case "--device": options.device = Server.Device(rawValue: value(arg)) ?? Server.defaultDevice
+    case "--device": options.device = Device(rawValue: value(arg)) ?? defaultDevice
     case "--no-keepalive": options.keepAlive = false
     case "--no-cpu-keepwarm": options.keepCPUWarm = false
     case "--no-preload": options.preload = false
@@ -119,12 +129,22 @@ guard let cache = options.cache else {
   exit(2)
 }
 
+#if canImport(Metal)
+  let backend = CoreMLBackend(device: options.device, preparer: ONNXPreparer(), keepAlive: options.keepAlive, keepCPUWarm: options.keepCPUWarm)
+#else
+  let backend = QNNBackend(device: options.device, preparer: ONNXPreparer(), keepAlive: options.keepAlive, keepCPUWarm: options.keepCPUWarm)
+#endif
+#if os(macOS)
+  let gadget: (any GadgetSource)? = USBGadget()
+#else
+  let gadget: (any GadgetSource)? = nil
+#endif
+
 do {
   let server = try Server(
     configuration: Server.Configuration(
-      port: options.port, cacheRoot: cache, device: options.device, keepAlive: options.keepAlive, keepCPUWarm: options.keepCPUWarm,
-      preload: options.preload, dial: options.dial, listen: options.listen ?? !options.usb, usb: options.usb),
-    preparer: ONNXPreparer())
+      port: options.port, cacheRoot: cache, preload: options.preload, dial: options.dial, listen: options.listen ?? !options.usb, usb: options.usb),
+    backend: backend, gadget: gadget)
   server.host.subscribe { event in
     switch event {
     case .progress(let stage, let frac, let msg): line("progress", ["stage": stage, "frac": frac, "msg": msg])

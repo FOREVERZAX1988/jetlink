@@ -13,8 +13,7 @@ struct ServerTests {
   func serve(_ body: (Server, TestClient) throws -> Void) throws {
     let cache = try TemporaryDirectory()
     let server = try Server(
-      configuration: Server.Configuration(host: "127.0.0.1", port: 0, cacheRoot: cache.url, device: .cpu, keepAlive: false, preload: false),
-      preparer: ONNXPreparer())
+      configuration: Server.Configuration(host: "127.0.0.1", port: 0, cacheRoot: cache.url, preload: false), backend: cpuBackend())
     try server.start()
     defer { server.stop() }
     let client = try TestClient(port: server.port!)
@@ -195,9 +194,7 @@ struct ServerTests {
 struct ServerLifecycleTests {
   func makeServer(_ cache: TemporaryDirectory, dial: DialTarget? = nil) throws -> Server {
     try Server(
-      configuration: Server.Configuration(
-        host: "127.0.0.1", port: 0, cacheRoot: cache.url, device: .cpu, keepAlive: false, preload: false, dial: dial),
-      preparer: ONNXPreparer())
+      configuration: Server.Configuration(host: "127.0.0.1", port: 0, cacheRoot: cache.url, preload: false, dial: dial), backend: cpuBackend())
   }
 
   @Test("stop keeps the engine loaded; shutdown releases it")

@@ -51,11 +51,11 @@ struct Request: Equatable {
   }
 }
 
-enum HostError: Error, CustomStringConvertible {
+package enum HostError: Error, CustomStringConvertible {
   case invalid(String)
   case failed(String)
 
-  var description: String {
+  package var description: String {
     switch self {
     case .invalid(let detail), .failed(let detail): return detail
     }
