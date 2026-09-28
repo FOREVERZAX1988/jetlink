@@ -3,6 +3,7 @@ Jetlink v0.5.0
 **iPhone & iPad support!**
 * Run big models on an iPhone or iPad over one USB cable (experimental, build with Xcode) <3
 * Turn on: Settings > Models > Accelerator Link > iOS.
+* Thank you Casey (@ScriptDrifter) for the original iPhone port!
 
 **One Swift engine**
 * The Mac and iPhone/iPad apps now share one Swift server, matched to the Python server's output.
