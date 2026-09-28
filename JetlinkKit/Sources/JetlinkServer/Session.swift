@@ -28,9 +28,6 @@ final class Session: @unchecked Sendable {
   /// The reply's float32 outputs, reused every frame.
   private var outputBuffer: UnsafeMutablePointer<Float>
   private var outputCapacity: Int
-  /// The packed scalars, copied out of the receive buffer to align them.
-  private var packedBuffer: UnsafeMutableRawPointer
-  private var packedCapacity: Int
   /// The reply's fixed head, packed in place every frame.
   private let responseHead: UnsafeMutableRawPointer
   /// The reply's parts: head, outputs, and the telemetry when asked for.
@@ -42,8 +39,6 @@ final class Session: @unchecked Sendable {
     self.host = host
     outputCapacity = 18_452
     outputBuffer = .allocate(capacity: outputCapacity)
-    packedCapacity = 1 << 16
-    packedBuffer = .allocate(byteCount: packedCapacity, alignment: 16)
     responseHead = .allocate(byteCount: Wire.inferRespSize, alignment: 8)
     parts = .allocate(capacity: 3)
     parts.initialize(repeating: UnsafeRawBufferPointer(start: nil, count: 0), count: 3)
@@ -51,7 +46,6 @@ final class Session: @unchecked Sendable {
 
   deinit {
     outputBuffer.deallocate()
-    packedBuffer.deallocate()
     responseHead.deallocate()
     parts.deallocate()
   }
@@ -361,8 +355,8 @@ final class Session: @unchecked Sendable {
   /// The frame itself: stage, run, read the output back. Caller holds `host.lock`.
   private func infer(_ loaded: Loaded, _ message: Message) -> InferReply {
     let started = DispatchTime.now().uptimeNanoseconds
-    let spec = loaded.spec
-    guard message.payload.count == spec.inferReqBytes else {
+    let layout = loaded.staging.layout
+    guard message.payload.count == layout.requestBytes else {
       // The offsets below come from the spec, not the wire: a client on
       // another model would have its scalars read out of the image.
       return InferReply(status: .badShape)
@@ -374,18 +368,14 @@ final class Session: @unchecked Sendable {
       loaded.staging.reset()
     }
     let warped = base + Wire.inferReqSize
-    if spec.packedBytes > packedCapacity {
-      packedBuffer.deallocate()
-      packedCapacity = spec.packedBytes
-      packedBuffer = .allocate(byteCount: packedCapacity, alignment: 16)
-    }
-    packedBuffer.copyMemory(from: warped + spec.warpedBytes, byteCount: spec.packedBytes)
 
     var status = Wire.Status.ok
     var queueUs: UInt32 = 0
     var failure: (any Error)?
     do {
-      try loaded.staging.stage(warped: warped, packed: packedBuffer)
+      // The packed floats stay where they arrived: every cast and copy of
+      // them reads unaligned, so they need no aligned copy first.
+      try loaded.staging.stage(warped: warped, packed: warped + layout.warpedBytes)
       queueUs = microseconds(since: started)
       try loaded.engine.run()
     } catch {
@@ -394,17 +384,16 @@ final class Session: @unchecked Sendable {
       failure = error
     }
 
-    let count = spec.outputCount
+    let count = layout.outputCount
     if count > outputCapacity {
       outputBuffer.deallocate()
       outputCapacity = count
       outputBuffer = .allocate(capacity: count)
     }
-    if status == .ok, let io = loaded.engine.outputs[ModelConstants.drivingOutput], let out = loaded.engine.output(ModelConstants.drivingOutput) {
+    if status == .ok, let type = layout.outputType, let out = loaded.engine.output(ModelConstants.drivingOutput) {
       // float32 on the wire whatever the graph says; openpilot drops to the
       // small model on a non-finite output either way, so say so here.
-      var finite = true
-      switch io.type {
+      switch type {
       case .float:
         outputBuffer.update(from: out.assumingMemoryBound(to: Float.self), count: count)
       case .float16:
@@ -412,11 +401,7 @@ final class Session: @unchecked Sendable {
       default:
         status = .inferFailed
       }
-      for i in 0..<count where !outputBuffer[i].isFinite {
-        finite = false
-        break
-      }
-      if !finite && status == .ok {
+      if status == .ok && !Convert.allFinite(outputBuffer, count: count) {
         status = .notFinite
       }
     } else if status == .ok {
