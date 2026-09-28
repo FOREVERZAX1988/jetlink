@@ -53,7 +53,7 @@ cat <<'NEXT'
       pgrep -f "^openpilot.sunnypilot.accelerators.jetlink.owner$"
 
     Sanity check with the Jetson cabled up and its server running
-    (docker/run.sh --transport usb):
+    (the jetlink-server service, or jetlink run):
 
       ssh <comma> 'cat /sys/class/udc/*/state'      # want: configured
       ssh <jetson> 'lsusb -d 1209:0001'             # want: the gadget listed
