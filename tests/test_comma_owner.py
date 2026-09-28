@@ -99,6 +99,13 @@ class OwnerTest(unittest.TestCase):
     self.assertTrue(readable, 'the dial never reached the listener')
     return phone
 
+  def hang_up(self, o, phone: socket.socket) -> None:
+    """The phone closes its end, and the owner's next step can see it: the
+    loopback FIN can still be on its way when close returns."""
+    phone.close()
+    readable, _, _ = select.select([o.cable._sock], [], [], 3.0)
+    self.assertTrue(readable, 'the hang-up never reached the owner')
+
 
 class TestOnroad(OwnerTest):
   """Once the car is moving the owner holds the gadget and stays off the bus."""
@@ -579,7 +586,7 @@ class TestCable(IosTest):
     o.step()
     phone = self.dial(o)
     o.step()
-    phone.close()
+    self.hang_up(o, phone)
     o.step()
     self.assertFalse(o.cable.held)
     self.assertIsNone(gadget.link_peer())
@@ -593,7 +600,7 @@ class TestCable(IosTest):
     o.step()
     phone = self.dial(o)
     o.step()
-    phone.close()
+    self.hang_up(o, phone)
     o.step()
     o.idle_since = time.monotonic() - owner.DORMANT_HOLD
     o.step()
