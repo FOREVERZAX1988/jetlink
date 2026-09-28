@@ -7,6 +7,8 @@
 #
 # Steps, run in the order given (default: server):
 #   headers    fetch and unpack the flavor's pinned TensorRT + CUDA headers
+#   ort        fetch onnxruntime's pinned CPU tarball for the tests and print
+#              its directory: include/ for -Xcc -I, lib/ for LD_LIBRARY_PATH
 #   shim       compile CTrt/jl_trt.cpp against them, and check it links
 #              nothing of NVIDIA's (everything is dlopened at run time)
 #   selftest   link tools/jl_trt_selftest against the shim; run it on a GPU
@@ -20,9 +22,9 @@
 # or HEAD tagged v<__version__>), else <__version__>-dev.<short sha>.
 #
 # A step runs where its tools are: `server` in $JETLINK_SWIFT_IMAGE
-# (swift:6.3-jammy) unless already inside it, the C and C++ steps in
+# (swift:6.3.3-jammy, CI's) unless already inside it, the C and C++ steps in
 # ubuntu:22.04 unless this is a Linux host of the flavor's architecture.
-# --container sends every step but `headers` to a container. Downloads are
+# --container sends every step but the fetches to a container. Downloads are
 # cached in $JETLINK_BUILD_CACHE, by default ${XDG_CACHE_HOME:-~/.cache}/jetlink-build:
 # NVIDIA's headers never enter the repo. Objects go to build/, tarballs to dist/.
 set -euo pipefail
@@ -30,8 +32,8 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 CACHE=${JETLINK_BUILD_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/jetlink-build}
 CTRT=$ROOT/JetlinkKit/Sources/CTrt
-SWIFT_IMAGE=${JETLINK_SWIFT_IMAGE:-swift:6.3-jammy}
-SWIFT_VERSION=6.3
+SWIFT_IMAGE=${JETLINK_SWIFT_IMAGE:-swift:6.3.3-jammy}
+SWIFT_VERSION=6.3.3
 C_IMAGE=ubuntu:22.04
 
 die() {
@@ -40,7 +42,7 @@ die() {
 }
 
 usage() {
-  sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'
   exit 2
 }
 
@@ -110,15 +112,20 @@ unpack_deb() {
   fi
 }
 
-# onnxruntime's headers under include/onnxruntime/, where COrt looks for them.
+ort_dir() {
+  echo "$CACHE/$(basename "${ORT% *}" .tgz)"
+}
+
+# onnxruntime's headers under include/onnxruntime/, where COrt looks for them,
+# and its library under lib/, which the tests open.
 ort_headers() {
   local url=${ORT% *} want=${ORT#* } file dir
-  dir=$CACHE/$(basename "$url" .tgz)
-  [[ -f $dir/.complete && $(cat "$dir/.complete") == "$ORT" ]] && return
+  dir=$(ort_dir)
+  [[ -f $dir/.complete && $(cat "$dir/.complete") == "$ORT lib" ]] && return
   file=$CACHE/debs/$(basename "$url")
   mkdir -p "$CACHE/debs"
   if [[ ! -f $file || $(sha256 "$file") != "$want" ]]; then
-    echo "headers: fetching $(basename "$url")"
+    echo "headers: fetching $(basename "$url")" >&2
     fetch "$url" "$file.part"
     mv "$file.part" "$file"
   fi
@@ -126,7 +133,13 @@ ort_headers() {
   rm -rf "$dir"
   mkdir -p "$dir/include/onnxruntime"
   tar -xzf "$file" -C "$dir/include/onnxruntime" --strip-components 2 "$(basename "$url" .tgz)/include"
-  echo "$ORT" >"$dir/.complete"
+  tar -xzf "$file" -C "$dir" --strip-components 1 "$(basename "$url" .tgz)/lib"
+  echo "$ORT lib" >"$dir/.complete"
+}
+
+step_ort() {
+  ort_headers
+  ort_dir
 }
 
 step_headers() {
@@ -230,8 +243,8 @@ version() {
 step_server() {
   [[ -f $CACHE/$BUNDLE/.complete ]] || step_headers
   local version name stage bin scratch=$ROOT/build/swift-linux-$FLAVOR ort
-  ort=$CACHE/$(basename "${ORT% *}" .tgz)
-  [[ -f $ort/.complete ]] || ort_headers
+  ort=$(ort_dir)
+  ort_headers
   version=$(version)
   name=jetlink-server-$version-linux-$FLAVOR
   # its own scratch path, so a Mac's JetlinkKit/.build is never touched
@@ -241,7 +254,8 @@ step_server() {
   stage=$ROOT/dist/$name
   rm -rf "$stage"
   mkdir -p "$stage/bin" "$stage/share/jetlink/systemd" "$stage/share/jetlink/udev" "$stage/share/jetlink/web"
-  cp "$bin/jetlink-server" "$stage/bin/"
+  # stripped: the symbol table is a third of the binary
+  strip -o "$stage/bin/jetlink-server" "$bin/jetlink-server"
   # SwiftPM looks for a target's resources in a bundle beside the executable
   find "$bin" -maxdepth 1 -name '*.resources' -exec cp -R {} "$stage/bin/" \;
   # the installer's own unit and rules, as they are in this tree
@@ -277,7 +291,7 @@ native_c() {
 # The image a step needs, or "" to run it here.
 image_for() {
   case $1 in
-  headers) echo "" ;;
+  headers | ort) echo "" ;;
   server) in_swift_container && echo "" || echo "$SWIFT_IMAGE" ;;
   fake-test) [[ $FORCE_CONTAINER == 1 ]] && echo "$C_IMAGE" || echo "" ;;
   *) [[ $FORCE_CONTAINER == 0 ]] && native_c && echo "" || echo "$C_IMAGE" ;;
@@ -324,7 +338,7 @@ STEPS=("$@")
 [[ ${#STEPS[@]} -gt 0 ]] || STEPS=(server)
 for step in "${STEPS[@]}"; do
   case $step in
-  headers | shim | selftest | fake-test | server) ;;
+  headers | ort | shim | selftest | fake-test | server) ;;
   *) usage ;;
   esac
 done
