@@ -3,6 +3,10 @@ import Foundation
 import JetlinkONNX
 import JetlinkServer
 
+#if canImport(Android)
+  import Android
+#endif
+
 /// TensorRT on an NVIDIA GPU: the Jetson's backend, and a PC's. The Swift
 /// form of the Python server's trt/__init__.py and trt/build.py.
 ///

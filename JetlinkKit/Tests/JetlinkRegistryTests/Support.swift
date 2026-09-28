@@ -125,19 +125,21 @@ struct TempDir {
 // MockNet and LocalServer are JetlinkTestSupport's, which the command's tests
 // share.
 
-extension LocalServer {
-  /// The SHA-256 of what is served, without holding it.
-  var sha256: String {
-    var hasher = SHA256()
-    var left = total
-    while left > 0 {
-      let n = Int(min(Int64(pattern.count), left))
-      hasher.update(data: pattern.prefix(n))
-      left -= Int64(n)
+#if canImport(Darwin) || canImport(Glibc)
+  extension LocalServer {
+    /// The SHA-256 of what is served, without holding it.
+    var sha256: String {
+      var hasher = SHA256()
+      var left = total
+      while left > 0 {
+        let n = Int(min(Int64(pattern.count), left))
+        hasher.update(data: pattern.prefix(n))
+        left -= Int64(n)
+      }
+      return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
-    return hasher.finalize().map { String(format: "%02x", $0) }.joined()
   }
-}
+#endif
 
 /// Collects progress calls from whatever thread makes them.
 final class ProgressLog: Sendable {

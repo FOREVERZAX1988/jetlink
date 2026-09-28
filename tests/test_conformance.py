@@ -164,5 +164,7 @@ def test_onnx_fixtures_are_what_the_python_makes(tmp_path):
   if not _onnx_matches():
     pytest.skip(f'fixtures made with onnx {FIXTURE_ONNX}')
   _run('make_onnx_fixtures', '--out', tmp_path)
-  problems = _same_tree(tmp_path, ROOT / ONNX_FIXTURES)
+  # The .trt layout's expected files and trt.json were made once from
+  # onnx_patch.patch_file and stay as they are; this generator does not make them.
+  problems = _same_tree(tmp_path, ROOT / ONNX_FIXTURES, skip=lambda name: name == 'trt.json' or '.trt.' in name)
   assert not problems, problems

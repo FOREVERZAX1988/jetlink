@@ -76,13 +76,14 @@ package enum Artifact {
     let started = Date()
     let took = (meta["load_seconds"] as? NSNumber)?.doubleValue ?? 0
     report("load", 0, "loading \(what)")
-    let engine = try Ticker.during(interval: 1, { elapsed in
+    let tick: @Sendable (TimeInterval) -> Void = { elapsed in
       if took > 0 {
         report("load", min(0.95, elapsed / took), "loading \(what), \(Int(elapsed)) s of about \(Int(took.rounded())) s")
       } else {
         report("load", 0, "loading \(what), \(Int(elapsed)) s elapsed")
       }
-    }, body)
+    }
+    let engine = try Ticker.during(interval: 1, tick, body)
     let seconds = Date().timeIntervalSince(started)
     report("load", 1, "loaded in \(Int(seconds.rounded())) s")
     if !meta.isEmpty {
