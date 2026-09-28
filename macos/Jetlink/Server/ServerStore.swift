@@ -246,8 +246,8 @@ final class ServerStore: ServerControlling {
 
   /// What runs the model: CoreML on the device the setting names, with the
   /// GPU and a CPU core kept up between frames.
-  nonisolated static func backend(for choice: BackendChoice) -> CoreMLBackend {
-    CoreMLBackend(device: choice.device, preparer: ONNXPreparer(), keepAlive: true, keepCPUWarm: true)
+  nonisolated static func backend(for choice: BackendChoice) -> OrtBackend {
+    OrtBackend(profile: choice.profile, preparer: ONNXPreparer(), keepAlive: true, keepCPUWarm: true)
   }
 
   nonisolated static var appVersion: String {

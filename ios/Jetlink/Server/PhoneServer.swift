@@ -115,8 +115,8 @@ final class PhoneServer: ServerControlling {
       let root = try PhoneServer.prepareCacheDirectory()
       let embedded = try EmbeddedServer(
         configuration: Server.Configuration(port: settings.port, cacheRoot: root),
-        backend: CoreMLBackend(
-          device: settings.device, preparer: ONNXPreparer(), keepAlive: settings.keepGPUAwake, keepCPUWarm: settings.keepCPUWarm))
+        backend: OrtBackend(
+          profile: settings.device, preparer: ONNXPreparer(), keepAlive: settings.keepGPUAwake, keepCPUWarm: settings.keepCPUWarm))
       self.embedded = embedded
       consumeTask = Task { [weak self] in
         for await event in embedded.events {
