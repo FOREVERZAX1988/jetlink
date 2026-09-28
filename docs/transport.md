@@ -1,121 +1,119 @@
 # Cables, networking, and power
 
-For initial setup, see the [README](../README.md#quick-start), [Jetson
-guide](jetson.md), or [platform setup](platforms.md).
+Initial setup: [README](../README.md#quick-start), [Jetson
+guide](jetson.md), [platform setup](platforms.md).
 
 ## USB connection
 
-Use a USB 3 A-to-C data cable. Charge-only cables do not work.
+A USB 3 data cable; charge-only cables do not work.
 
-| Server | Connection to the comma's USB-C port |
+| Server | Cable to the comma's USB-C port |
 | --- | --- |
-| Jetson | USB-A port on the Jetson |
-| Mac | USB-A port on a hub, dock, or USB-C-to-A adapter |
-| Linux PC | USB-A port on the PC |
-| iPhone | USB-A port on a USB 3 hub with USB-C power passthrough |
+| Jetson | USB-A to USB-C, from the Jetson's USB-A port (its USB-C port may not connect) |
+| Mac | USB-C cable, or USB-A to USB-C with a USB-C adapter |
+| Linux PC | USB-A to USB-C, from a USB-A port on the PC |
+| iPhone | USB-C cable, or USB-A to USB-C with a USB-C adapter; a powered USB-C hub between them keeps the phone charging |
 
-Use the USB-A connection shown above. The Jetson's USB-C port and a direct
-C-to-C cable on a Mac may not connect correctly. The comma's USB-C port cannot
-serve Jetlink and chestnut at the same time.
+- The comma holds its USB-C port as the device for any host but a chestnut.
+- The comma's USB-C port cannot serve Jetlink and chestnut at once.
 
 ### What the comma presents
 
-The comma presents one of two USB gadgets, chosen by its **Accelerator Link**
-setting (on the comma, in the models settings):
+One of two USB gadgets, per the comma's **Accelerator Link** setting (models
+settings):
 
-- **USB**, for a Jetson, a Mac or a Linux PC: the plain gadget, one
-  vendor-specific interface with one bulk endpoint pair, which the servers open
-  through libusb (IOUSBHost on the Mac). There is no network interface.
-- **iOS**, for an iPhone: a composite gadget. Interface 0 is the same vendor
-  interface, and after it comes a CDC-NCM network interface, because iOS gives
-  apps no access to a vendor USB device but drives a USB network adapter
-  itself. The comma is `192.168.60.1` on that network and runs a DHCP server
-  for it, so the phone gets a `192.168.60.x` address with no gateway and no
-  DNS, keeps its own route to the internet over Wi-Fi, and dials the comma at
-  `192.168.60.1:5599`. The vendor interface is never used on iOS.
+| Setting | For | Gadget |
+| --- | --- | --- |
+| **USB** | Jetson, Mac, Linux PC | Plain: one vendor-specific interface, one bulk endpoint pair, opened through libusb (IOUSBHost on the Mac). No network interface. |
+| **iOS** | iPhone | Composite: interface 0 is the same vendor interface (never used on iOS), then a CDC-NCM network interface, since iOS gives apps no vendor USB access but drives USB network adapters itself. |
 
-Moving the setting between USB and iOS rebuilds the gadget, which is an unplug,
-so the setting can only be changed while offroad.
-
-The comma's side of this is the `jetlink.comma` package: the owner process
-holds the gadget and lends modeld its endpoints, or the phone's dial, and every
-root step goes through `scripts/comma/jetlink-root.sh`. See the
-[installation reference](installation-reference.md#custom-usb-integrations).
+- iOS network: the comma is `192.168.60.1` and runs DHCP; the phone gets a
+  `192.168.60.x` address with no gateway or DNS, keeps its internet route over
+  Wi-Fi, and dials `192.168.60.1:5599`.
+- Changing the setting rebuilds the gadget (an unplug), so it changes only
+  offroad.
+- Comma side: the `jetlink.comma` package. The owner holds the gadget and lends
+  modeld its endpoints or the phone's dial; every root step goes through
+  `scripts/comma/jetlink-root.sh`. See the
+  [installation reference](installation-reference.md#custom-usb-integrations).
 
 ### Bus speed
 
-Latency depends on the link enumerating at USB 3 (SuperSpeed). A frame is about
-460 KB: around 1 ms on USB 3 and around 11 ms on USB 2. That is why the cable
-must be a USB 3 A-to-C data cable, and why a phone goes through a USB 3 hub.
-On the comma, the negotiated speed is in `/sys/class/udc/*/current_speed`:
-`super-speed` is USB 3 and `high-speed` is USB 2. `sudo
-scripts/comma/jetlink-root.sh check` prints it along with the gadget the comma
-has built.
+Latency needs USB 3 (SuperSpeed). A frame is about 460 KB: about 1 ms on USB 3,
+11 ms on USB 2 (hence USB 3 on every hop: cable, adapter, any hub).
+
+Negotiated speed on the comma: `/sys/class/udc/*/current_speed`
+(`super-speed` is USB 3, `high-speed` USB 2), also printed with the built
+gadget by `sudo scripts/comma/jetlink-root.sh check`.
 
 ### The network link on a Linux host
 
-The comma's kernel (4.9, Qualcomm's u_ether) sends NCM transfer blocks slowly
-when the host lets it pack several packets into one block. Measured on the
-bench mici at SuperSpeed with a Jetson as the host, comma to host: 16 KB
-blocks (the Linux default) carry 22 Mbit/s, 2 KB blocks carry 190 Mbit/s. The
-other direction is unaffected (340 Mbit/s), and CPU is not the limit. So a
-Linux host that wants to use the network link (a bench standing in for a
-phone, or a PC over the cable network) should cap the block size:
+The comma's kernel (4.9, Qualcomm's u_ether) sends NCM blocks slowly when the
+host lets it pack several packets into one. Comma to host, bench mici,
+SuperSpeed, Jetson host:
+
+| NCM block size | Throughput |
+| --- | ---: |
+| 16 KB (Linux default) | 22 Mbit/s |
+| 2 KB | 190 Mbit/s |
+
+Host to comma is unaffected (340 Mbit/s); CPU is not the limit. A Linux host
+using the network link (a bench standing in for a phone, or a PC over the cable
+network) should cap the block size:
 
     echo 2048 > /sys/class/net/<interface>/cdc_ncm/rx_max
 
 `scripts/99-jetlink-host.rules` does that on plug-in. Apple's NCM driver picks
-its own block size and did not show the slow path in the reference phone
-measurement (393 KB up in under 19 ms). With the cap, the parked live bench on
-the comma (Cinque Terre V3, 180 s, 3,416 big frames) runs at 36.4 ms p50 and
-40.6 ms p99 over the network link, every frame delivered, against 28.6 and
-30.3 ms over the vendor interface: about 8 ms more per frame, all of it in the
-comma's send of the 393 KB frame (`bench_link.py` sees 26 ms of transport
-against 8.6 ms). That is the network link's floor on this kernel; the vendor
-interface stays the link for every host that can open it.
+its own block size and showed no slow path (reference phone: 393 KB up in under
+19 ms).
+
+With the cap, parked live bench on the comma (Cinque Terre V3, 180 s, 3,416 big
+frames, every frame delivered):
+
+| Link | p50 | p99 |
+| --- | ---: | ---: |
+| Network link | 36.4 ms | 40.6 ms |
+| Vendor interface | 28.6 ms | 30.3 ms |
+
+The ~8 ms gap is all in the comma's send of the 393 KB frame (`bench_link.py`:
+26 ms of transport vs 8.6 ms). That is the network link's floor on this kernel;
+the vendor interface stays the link for every host that can open it.
 
 ## Power requirements
 
-Use separate power for the Jetson and comma. The Jetson's supply and cable
-must support at least 25 W and tolerate voltage drops when the engine starts.
-For help choosing **Always on** or **Switched**, use the
-[power setup table](jetson.md#1-choose-your-power-setup).
+Power the Jetson and comma separately. The Jetson's supply and cable must
+deliver at least 25 W and tolerate voltage drops at engine start. **Always on**
+or **Switched**: see the [power setup table](jetson.md#1-choose-your-power-setup).
 
 ### Recommended Jetson power setup
 
-For the Orin Nano Super devkit, we recommend a **straight 12 V-to-DC barrel
-adapter**, connected to a supply that **stays on when the ignition is off**,
-with Jetson **deep sleep** enabled. An always-on 12 V accessory socket and an
-adapter like the one below make this straightforward.
+Orin Nano Super devkit: a **straight 12 V-to-DC barrel adapter** on a supply
+that **stays on when the ignition is off** (such as an always-on 12 V accessory
+socket), with Jetson **deep sleep** enabled.
 
 <img src="images/jetson-12v-dc-adapter.jpg" width="320" alt="Example of a 12 V car accessory socket plug to DC barrel adapter cable">
 
-For the Orin Nano Super devkit, use a **5.5 mm outer / 2.5 mm inner,
-center-positive** plug. Check these specifications when buying; the photo
-shows the adapter style. Other Jetson carrier boards may have different
-power requirements.
-
-Check that the socket stays powered after the ignition is off, including after
-any delayed shutoff. Choose **Always on** in the installer to enable deep sleep.
-To change an existing setup, run `jetlink setup`.
+- Plug: **5.5 mm outer / 2.5 mm inner, center-positive**. Check this when
+  buying; the photo shows the style only. Other carrier boards may differ.
+- Confirm the socket stays powered after ignition off, including after any
+  delayed shutoff.
+- Choose **Always on** in the installer for deep sleep; `jetlink setup` changes
+  an existing setup.
 
 <a id="always-on-supply-and-suspend"></a>
 
 <a id="powering-off-with-the-comma"></a>
 
-For what happens when you park or start the car, and how battery-protection
-shutdown differs from sleep, see [Choose your power setup](jetson.md#1-choose-your-power-setup).
+Parking, starting, and how battery-protection shutdown differs from sleep:
+[Choose your power setup](jetson.md#1-choose-your-power-setup).
 
 ## TCP
 
-The comma links over USB only: the plain gadget, or for an iPhone the gadget's
-network interface. The server's TCP transport (`--transport tcp`) is for
-testing a server without a comma. It has no client authentication, so use a
-trusted network, and Wi-Fi misses the 50 ms frame budget.
-
-To test a server without a comma, follow [test without a
-comma](platforms.md#test-without-a-comma).
+The comma links over USB only (the plain gadget, or its network interface for
+an iPhone). `--transport tcp` tests a server without a comma: no client
+authentication (trusted network only), and Wi-Fi misses the 50 ms frame budget.
+See [test without a comma](platforms.md#test-without-a-comma).
 
 <a id="custom-usb-integrations"></a>
 
-For custom USB setups, see the [installation reference](installation-reference.md#custom-usb-integrations).
+Custom USB setups: [installation reference](installation-reference.md#custom-usb-integrations).

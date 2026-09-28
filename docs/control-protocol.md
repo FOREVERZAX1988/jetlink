@@ -1,7 +1,6 @@
 # Server control protocol
 
-Use the control channel to manage a running server from a script. The Mac app
-uses the same protocol.
+Manage a running server from a script; the Mac app uses the same protocol.
 
 ## Starting a server with a control socket
 
@@ -18,27 +17,22 @@ SIGTERM is handled like SIGINT: clean shutdown, engine released, exit code 0.
 
 ## The protocol
 
-The channel is a stream socket carrying UTF-8 JSON, one object per line, newline
-terminated, with no pretty printing. Absent optional fields are `null`, never
-missing, so a decoder can be strict.
-
-Client to server: `{"id": <int>, "cmd": "<name>", ...arguments}`. The client
-chooses `id`, positive and increasing.
-
-Server to client: `{"event": "<name>", "t": <unix time, float seconds>, ...}`.
-There is exactly one `reply` event per command, carrying that command's `id`.
-Any other event may arrive at any time, including between a command and its
-reply.
-
-Several clients may connect at once, and every event goes to all of them. A
-client that does not read fast enough, more than 1000 queued lines, is
-disconnected.
+- Stream socket, UTF-8 JSON, one object per line, newline terminated, no pretty
+  printing.
+- Absent optional fields are `null`, never missing, so a decoder can be strict.
+- Client to server: `{"id": <int>, "cmd": "<name>", ...arguments}`. The client
+  chooses `id`, positive and increasing.
+- Server to client: `{"event": "<name>", "t": <unix time, float seconds>, ...}`.
+- Exactly one `reply` event per command, carrying its `id`. Any other event can
+  arrive at any time, including between a command and its reply.
+- Several clients may connect; every event goes to all. A client more than 1000
+  queued lines behind is disconnected.
 
 ## On connect
 
-The server sends, in this order: `hello`, `server`, `link`, `engine`,
-`inventory`, `catalog`, then one `download` event per download in progress. A
-client can display this initial state without sending a command.
+The server sends `hello`, `server`, `link`, `engine`, `inventory`, `catalog`,
+then one `download` per download in progress, so a client can show state
+without sending a command.
 
 ## Example
 
@@ -48,21 +42,21 @@ Start a server with a socket:
 jetlink-server --transport usb --control-socket /tmp/jetlink-control.sock
 ```
 
-In another terminal, connect and watch the events:
+Watch events from another terminal:
 
 ```bash
 nc -U /tmp/jetlink-control.sock
 ```
 
-Send a command by typing a line into that same connection, or pipe one in:
+Send a command by typing a line into that connection, or pipe one in:
 
 ```bash
 printf '{"id":1,"cmd":"download","ref":"f877d7a0ccc3cce943c76e285214c020cd65c899"}\n' \
   | nc -U /tmp/jetlink-control.sock
 ```
 
-To download, prepare, and load a model without stopping the server, send
-`prepare`. Replace `<sha256>` with its full SHA-256 hash:
+Download, prepare, and load a model without stopping the server (`<sha256>` is
+the full SHA-256):
 
 ```bash
 printf '{"id":2,"cmd":"prepare","sha256":"<sha256>","frame_skip":4}\n' \
@@ -71,8 +65,8 @@ printf '{"id":2,"cmd":"prepare","sha256":"<sha256>","frame_skip":4}\n' \
 
 ## Events
 
-Values in angle brackets are placeholders. Timestamps use ISO 8601 strings or
-Unix seconds, as shown by each field.
+Angle brackets are placeholders. Timestamps are ISO 8601 strings or Unix
+seconds, as each field shows.
 
 ```jsonc
 {"event":"hello","t":0,"protocol":1,"pid":4242,"version":"0.2.0","python":"3.14.7",
@@ -146,16 +140,17 @@ Unix seconds, as shown by each field.
 | cmd | arguments | reply extras | behaviour |
 | --- | --- | --- | --- |
 | `status` | | | re-sends `server`, `link`, `engine`, `inventory`, `catalog` |
-| `catalog` | `refresh: bool` (default false) | `queued: true` | fetch the catalog when refresh is true, the cache is older than 3600 s, or missing; then resolve pointers for refs without one (parallel, 8 at a time); emit `catalog` when done (also when it fails, with `error`). Never blocks the reply. |
-| `download` | `ref` or `sha256` (one of them) | `sha256` | resolve the pointer if needed; enqueue a download (one runs at a time, FIFO); `download` events follow. Error if already downloaded, already queued, or the ref is unknown. |
-| `cancel_download` | `sha256` | | cancels a running or queued download; `.part` removed; a `download` event with `cancelled` |
-| `import` | `path` | `queued: true` | hash the file (streaming), copy it to `models/<sha16>.onnx` via a `.part`, record its name and size; `import` events, then `inventory` |
-| `prepare` | `sha256`, `frame_skip` (default 4) | `state`, and `sha256` when downloading | build if needed, then load the engine and keep it in memory. `state` is the engine state afterwards. With neither an artifact nor the model file on disk, download it first (joining a download already running for it) and reply `state: "downloading"`; the build starts when the `download` event says `done`, unless a comma connected meanwhile and is using another model. Error when the model is not in the catalog. |
-| `unload` | | | release the loaded engine; `engine` event with `none` |
-| `forget` | `sha256`, `artifacts: bool`, `model: bool` | | unload first if that model is loaded; delete every `engines/<sha16>.*` when artifacts, `models/<sha16>.onnx` (and `.part`) when model; remove `last-loaded.json` if it names this sha and its artifact is gone; then `inventory` |
-| `inventory` | | | emit `inventory` |
-| `shutdown` | | | reply, emit `server` with `stopping`, then exit cleanly as SIGINT would |
+| `catalog` | `refresh: bool` (default false) | `queued: true` | fetches the catalog if `refresh`, or if the cache is missing or older than 3600 s; resolves pointers for refs without one (8 in parallel); emits `catalog` when done, with `error` on failure. Never blocks the reply. |
+| `download` | `ref` or `sha256` (one) | `sha256` | resolves the pointer if needed; queues a download (one at a time, FIFO); `download` events follow. Error if already downloaded or queued, or the ref is unknown. |
+| `cancel_download` | `sha256` | | cancels a running or queued download, removes the `.part`, emits `download` with `cancelled` |
+| `import` | `path` | `queued: true` | hashes the file (streaming), copies it to `models/<sha16>.onnx` via a `.part`, records name and size; `import` events, then `inventory` |
+| `prepare` | `sha256`, `frame_skip` (default 4) | `state`; `sha256` when downloading | builds if needed, loads the engine and keeps it in memory; `state` is the engine state after. With neither artifact nor model file on disk: downloads first (joining a running download for it), replies `state: "downloading"`, builds when `download` reports `done`, unless a comma connected meanwhile and uses another model. Error if the model is not in the catalog. |
+| `unload` | | | releases the loaded engine; `engine` with `none` |
+| `forget` | `sha256`, `artifacts: bool`, `model: bool` | | unloads that model if loaded; `artifacts` deletes every `engines/<sha16>.*`, `model` deletes `models/<sha16>.onnx` (and `.part`); removes `last-loaded.json` if it names this sha and its artifact is gone; then `inventory` |
+| `inventory` | | | emits `inventory` |
+| `shutdown` | | | replies, emits `server` with `stopping`, exits cleanly as on SIGINT |
 
-Errors are plain English sentences in `error`. An unknown `cmd` replies
-`ok:false`. A malformed line, one that is not JSON or has no `id`, gets
-`{"event":"reply","id":null,"ok":false,"error":"…"}`.
+- Errors are plain English sentences in `error`.
+- Unknown `cmd`: `ok:false`.
+- Malformed line (not JSON, or no `id`):
+  `{"event":"reply","id":null,"ok":false,"error":"…"}`.
