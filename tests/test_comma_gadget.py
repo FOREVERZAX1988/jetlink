@@ -30,29 +30,19 @@ HEAVY = ('numpy', 'capnp', 'zmq', 'cereal', 'openpilot')
 class TestNothingHeavyIsReachable(unittest.TestCase):
   """The owner is only small while this holds, so it is a test and not a note."""
 
-  def imported_by(self, module: str) -> set[str]:
-    """Top-level packages a fresh interpreter has after importing `module`."""
+  def test_the_owner_and_the_transport_it_opens_stay_out_of_the_heavy_half(self):
+    # the owner brings the gadget, the lease, the port and root with it; the
+    # FunctionFS transport it opens is imported by name, since the owner
+    # imports it lazily
     roots = 'sorted({m.split(".")[0] for m in sys.modules})'
-    code = f'import sys, json; __import__("{module}"); print(json.dumps({roots}))'
+    code = f'import sys, json, jetlink.comma.owner, jetlink.transport.ffs; print(json.dumps({roots}))'
     env = {**os.environ, 'PYTHONPATH': str(REPO)}
     out = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True,
                          env=env, cwd=str(REPO), timeout=120)
     self.assertEqual(out.returncode, 0, out.stderr)
-    return set(json.loads(out.stdout))
-
-  def test_the_gadget_core_stays_out_of_the_heavy_half(self):
-    found = self.imported_by('jetlink.comma.gadget')
+    found = set(json.loads(out.stdout))
     self.assertEqual(sorted(found & set(HEAVY)), [],
-                     'the gadget owner has to stay small; see the module docstring')
-
-  def test_the_owner_itself_stays_out_of_the_heavy_half(self):
-    found = self.imported_by('jetlink.comma.owner')
-    self.assertEqual(sorted(found & set(HEAVY)), [],
-                     'everything the owner imports runs for the whole drive')
-
-  def test_the_transport_the_owner_opens_is_light_too(self):
-    found = self.imported_by('jetlink.transport.ffs')
-    self.assertEqual(sorted(found & set(HEAVY)), [])
+                     'everything the owner imports runs for the whole drive; see the gadget docstring')
 
 
 class TestParamsOffTheFilesystem(unittest.TestCase):
