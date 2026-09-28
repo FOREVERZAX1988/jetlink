@@ -5,6 +5,10 @@
 
 #include <onnxruntime/onnxruntime_c_api.h>
 
+#ifdef JL_ORT_DLOPEN
+#include <dlfcn.h>
+#endif
+
 struct jl_env {
   OrtEnv *env;
 };
@@ -20,10 +24,31 @@ struct jl_binding {
   size_t n_values;
 };
 
+#ifdef JL_ORT_DLOPEN
+// NULL when the library or its entry point is missing; jl_env_create says why.
+static const OrtApiBase *base(void) {
+  static const OrtApiBase *cached;
+  if (cached == NULL) {
+    void *library = dlopen("libonnxruntime.so", RTLD_NOW | RTLD_LOCAL);
+    if (library != NULL) {
+      const OrtApiBase *(*get)(void) = (const OrtApiBase *(*)(void))dlsym(library, "OrtGetApiBase");
+      if (get != NULL) {
+        cached = get();
+      }
+    }
+  }
+  return cached;
+}
+#else
+static const OrtApiBase *base(void) {
+  return OrtGetApiBase();
+}
+#endif
+
 static const OrtApi *api(void) {
   static const OrtApi *cached;
-  if (cached == NULL) {
-    cached = OrtGetApiBase()->GetApi(ORT_API_VERSION);
+  if (cached == NULL && base() != NULL) {
+    cached = base()->GetApi(ORT_API_VERSION);
   }
   return cached;
 }
@@ -56,7 +81,7 @@ static char *take(OrtStatus *status) {
   } while (0)
 
 const char *jl_version(void) {
-  return OrtGetApiBase()->GetVersionString();
+  return base() != NULL ? base()->GetVersionString() : "";
 }
 
 void jl_free(void *p) {
@@ -65,6 +90,14 @@ void jl_free(void *p) {
 
 char *jl_env_create(int log_severity, jl_env **out) {
   *out = NULL;
+  if (base() == NULL) {
+#ifdef JL_ORT_DLOPEN
+    const char *why = dlerror();
+    return copy(why != NULL ? why : "cannot open libonnxruntime.so");
+#else
+    return copy("onnxruntime is not linked");
+#endif
+  }
   if (api() == NULL) {
     return copy("this onnxruntime does not provide the C API version jetlink was built against");
   }
@@ -97,7 +130,9 @@ void jl_env_release(jl_env *env) {
 }
 
 char *jl_session_create(jl_env *env, const char *model_path, const char *provider,
-                        const jl_option *options, size_t n_options, jl_session **out) {
+                        const jl_option *options, size_t n_options,
+                        const jl_option *config, size_t n_config, int threads,
+                        jl_session **out) {
   *out = NULL;
   OrtSessionOptions *so = NULL;
   TRY(api()->CreateSessionOptions(&so));
@@ -107,10 +142,10 @@ char *jl_session_create(jl_env *env, const char *model_path, const char *provide
     error = take(api()->SetSessionLogSeverityLevel(so, 3));
   }
   // One thread each way, and none that spin between frames: the CPU's share
-  // of a CoreML session is a couple of nodes, and a pool spinning for the
-  // next frame burns a phone's battery and fights the frame path for cores.
+  // of an accelerator's session is a couple of nodes, and a pool spinning for
+  // the next frame burns a phone's battery and fights the frame path for cores.
   if (error == NULL) {
-    error = take(api()->SetIntraOpNumThreads(so, 1));
+    error = take(api()->SetIntraOpNumThreads(so, threads > 0 ? threads : 1));
   }
   if (error == NULL) {
     error = take(api()->SetInterOpNumThreads(so, 1));
@@ -120,6 +155,9 @@ char *jl_session_create(jl_env *env, const char *model_path, const char *provide
   }
   if (error == NULL) {
     error = take(api()->AddSessionConfigEntry(so, "session.inter_op.allow_spinning", "0"));
+  }
+  for (size_t i = 0; error == NULL && i < n_config; i++) {
+    error = take(api()->AddSessionConfigEntry(so, config[i].key, config[i].value));
   }
   if (error == NULL && provider != NULL) {
     const char **keys = calloc(n_options + 1, sizeof(char *));

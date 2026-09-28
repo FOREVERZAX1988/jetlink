@@ -37,6 +37,8 @@ public protocol EngineBackend: AnyObject, Sendable {
   var suffix: String { get }
   /// What an artifact is valid for: runtime version and device, sanitized.
   func tag() -> String
+  /// The device part of the tag: "ane-Apple_M1_Pro", "htp-SM8650".
+  func deviceTag() -> String
   /// backend, runtime_version, device: for the hello.
   func describe() -> [String: String]
   func deriveSpec(model: URL, sha256: String, nbytes: Int64, frameSkip: Int) throws -> ModelSpec

@@ -46,31 +46,44 @@ final class OrtEnvironment: @unchecked Sendable {
   }
 }
 
-/// One onnxruntime session: a model file, the CoreML provider with its options,
-/// and the inputs and outputs it declares.
+/// One onnxruntime session: a model file, an execution provider with its
+/// options, and the inputs and outputs it declares.
 final class OrtSession: @unchecked Sendable {
   let pointer: OpaquePointer
   let inputs: [TensorSpec]
   let outputs: [TensorSpec]
 
-  /// `coreML` nil runs the session on the CPU alone.
-  init(model: URL, coreML options: [String: String]?) throws {
+  /// `provider` nil runs the session on the CPU alone. `config` is session
+  /// config entries on top of jetlink's own; `threads` the intra-op pool.
+  init(model: URL, provider: String?, options: [String: String] = [:], config: [String: String] = [:], threads: Int = 1) throws {
     let env = try OrtEnvironment.shared()
     var session: OpaquePointer?
-    let pairs = (options ?? [:]).sorted { $0.key < $1.key }
-    let keys = pairs.map { strdup($0.key) }
-    let values = pairs.map { strdup($0.value) }
-    defer {
-      keys.forEach { free($0) }
-      values.forEach { free($0) }
+    var strings: [UnsafeMutablePointer<CChar>?] = []
+    defer { strings.forEach { free($0) } }
+    func entries(_ pairs: [String: String]) -> [jl_option] {
+      pairs.sorted { $0.key < $1.key }.map { key, value in
+        let k = strdup(key)
+        let v = strdup(value)
+        strings += [k, v]
+        return jl_option(key: k, value: v)
+      }
     }
-    var entries = zip(keys, values).map { jl_option(key: $0, value: $1) }
-    try entries.withUnsafeMutableBufferPointer { buffer in
-      try model.path.withCString { path in
-        if options != nil {
-          try OrtError.check(jl_session_create(env.pointer, path, "CoreML", buffer.baseAddress, buffer.count, &session))
-        } else {
-          try OrtError.check(jl_session_create(env.pointer, path, nil, nil, 0, &session))
+    let providerOptions = entries(options)
+    let configEntries = entries(config)
+    try providerOptions.withUnsafeBufferPointer { optionBuffer in
+      try configEntries.withUnsafeBufferPointer { configBuffer in
+        try model.path.withCString { path in
+          if let provider {
+            try provider.withCString { name in
+              try OrtError.check(
+                jl_session_create(
+                  env.pointer, path, name, optionBuffer.baseAddress, optionBuffer.count, configBuffer.baseAddress, configBuffer.count,
+                  Int32(threads), &session))
+            }
+          } else {
+            try OrtError.check(
+              jl_session_create(env.pointer, path, nil, nil, 0, configBuffer.baseAddress, configBuffer.count, Int32(threads), &session))
+          }
         }
       }
     }

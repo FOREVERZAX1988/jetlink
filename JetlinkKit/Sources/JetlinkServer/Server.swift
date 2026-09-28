@@ -1,6 +1,11 @@
-import Darwin
 import Foundation
 import JetlinkKit
+
+#if canImport(Darwin)
+  import Darwin
+#elseif canImport(Android)
+  import Android
+#endif
 
 /// Where a server dials to serve: the comma's end of a USB network link,
 /// which listens for the phone (192.168.60.1:5599 on the composite gadget).
@@ -48,8 +53,9 @@ public final class Server: @unchecked Sendable {
     public var host: String
     public var port: UInt16
     public var cacheRoot: URL
-    public var device: CoreMLBackend.Device
-    /// Keep the GPU clocked up between frames (MetalKeepAlive).
+    public var device: Device
+    /// Keep the accelerator clocked up between frames: MetalKeepAlive on
+    /// Apple, the NPU's burst mode on Android.
     public var keepAlive: Bool
     /// Keep a CPU core busy between frames while a Neural Engine session
     /// runs (CPUKeepWarm).
@@ -62,11 +68,11 @@ public final class Server: @unchecked Sendable {
     /// has no reason to open a port.
     public var listen: Bool
     /// Be the USB host: open the comma's gadget whenever it is on the bus.
-    /// macOS only.
+    /// macOS and Android only.
     public var usb: Bool
 
     public init(
-      host: String = "0.0.0.0", port: UInt16 = Wire.defaultPort, cacheRoot: URL, device: CoreMLBackend.Device = .ane, keepAlive: Bool = true,
+      host: String = "0.0.0.0", port: UInt16 = Wire.defaultPort, cacheRoot: URL, device: Device = Server.defaultDevice, keepAlive: Bool = true,
       keepCPUWarm: Bool = true, preload: Bool = true, dial: DialTarget? = nil, listen: Bool = true, usb: Bool = false
     ) {
       self.host = host
@@ -100,7 +106,7 @@ public final class Server: @unchecked Sendable {
   public let configuration: Configuration
   public let host: EngineHost
   public let cache: EngineCache
-  public let backend: CoreMLBackend
+  public let backend: any EngineBackend
   /// The piggybacked telemetry: what the comma logs about its accelerator.
   public var telemetry: @Sendable () -> [String: Any] = { [:] }
 
@@ -116,19 +122,21 @@ public final class Server: @unchecked Sendable {
   private var stopped = false
   private var dial: DialTarget?
   private var dialing = false
-  /// Where the USB loop finds the comma: IOKit on a Mac, none elsewhere.
-  /// Internal so a test can hand it a fake before `start`.
+  /// Where the USB loop finds the comma: IOKit on a Mac, the device the
+  /// app hands over on Android, none elsewhere. Internal so a test can hand
+  /// it a fake before `start`.
   var gadget: (any GadgetSource)?
 
   public init(configuration: Configuration, preparer: any ModelPreparer) throws {
     self.configuration = configuration
     self.dial = configuration.dial
-    backend = CoreMLBackend(
-      device: configuration.device, preparer: preparer, keepAlive: configuration.keepAlive, keepCPUWarm: configuration.keepCPUWarm)
+    backend = Server.makeBackend(configuration, preparer: preparer)
     cache = try EngineCache(root: configuration.cacheRoot, backend: backend)
     host = EngineHost(cache: cache)
     #if os(macOS)
       gadget = USBGadget()
+    #elseif os(Android)
+      gadget = AndroidGadget.shared
     #endif
     // A write to a socket the comma closed must be an error, not a signal
     // that kills the app.
@@ -404,7 +412,7 @@ public final class Server: @unchecked Sendable {
   private func startUSB() {
     guard configuration.usb else { return }
     guard let gadget else {
-      log.warning("serving over USB needs a Mac; this server only listens and dials")
+      log.warning("serving over USB needs a Mac or Android; this server only listens and dials")
       return
     }
     setLink(LinkEvent(state: .waiting, detail: Server.usbWaiting, peer: nil))
@@ -483,20 +491,27 @@ public final class Server: @unchecked Sendable {
   /// locked screen the Mac app ran the model at a p50 of 75 ms and dropped 45%
   /// of frames, where the same server as a command-line process ran at 36 ms.
   /// Not held while idle, and idle sleep stays allowed; frames are not user input.
-  private var servingActivity: NSObjectProtocol?
+  /// On Android the app's foreground service does this job.
+  #if canImport(Darwin)
+    private var servingActivity: NSObjectProtocol?
+  #endif
 
   /// Under `lock`.
   private func beginServing() {
-    guard servingActivity == nil else { return }
-    servingActivity = ProcessInfo.processInfo.beginActivity(
-      options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical], reason: "serving the comma's model")
+    #if canImport(Darwin)
+      guard servingActivity == nil else { return }
+      servingActivity = ProcessInfo.processInfo.beginActivity(
+        options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical], reason: "serving the comma's model")
+    #endif
   }
 
   /// Under `lock`.
   private func endServing() {
-    guard let held = servingActivity else { return }
-    ProcessInfo.processInfo.endActivity(held)
-    servingActivity = nil
+    #if canImport(Darwin)
+      guard let held = servingActivity else { return }
+      ProcessInfo.processInfo.endActivity(held)
+      servingActivity = nil
+    #endif
   }
 
   private var lastTick = ProcessInfo.processInfo.systemUptime
@@ -513,6 +528,28 @@ public final class Server: @unchecked Sendable {
     lock.unlock()
     guard connected, let stats = host.frameStats.summary(window: window, framesTotal: frames) else { return }
     host.emit(.stats(stats))
+  }
+}
+
+extension Server {
+  #if canImport(Metal)
+    /// Where the model runs: the Neural Engine, the GPU or the CPU.
+    public typealias Device = CoreMLBackend.Device
+    public static let defaultDevice: Device = .ane
+  #else
+    /// Where the model runs: the NPU, the GPU or the CPU.
+    public typealias Device = QNNBackend.Device
+    public static let defaultDevice: Device = .htp
+  #endif
+
+  /// onnxruntime with CoreML on Apple platforms, with QNN elsewhere.
+  static func makeBackend(_ configuration: Configuration, preparer: any ModelPreparer) -> any EngineBackend {
+    #if canImport(Metal)
+      CoreMLBackend(
+        device: configuration.device, preparer: preparer, keepAlive: configuration.keepAlive, keepCPUWarm: configuration.keepCPUWarm)
+    #else
+      QNNBackend(device: configuration.device, preparer: preparer, keepAlive: configuration.keepAlive, keepCPUWarm: configuration.keepCPUWarm)
+    #endif
   }
 }
 

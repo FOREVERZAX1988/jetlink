@@ -1,31 +1,55 @@
 import Foundation
 
-/// One session of a chain: its model file and the CoreML compute units to run it on.
+/// One session of a chain: its model file, the execution provider to run it
+/// on, and that provider's options.
 public struct SessionPlan: Sendable, Equatable {
   public let model: URL
-  /// "CPUAndNeuralEngine", "CPUAndGPU", "ALL", or nil for the CPU provider alone.
-  public let computeUnits: String?
-  /// Where CoreML's compiled model is kept, so a load does not compile again.
-  public let cacheDirectory: URL?
+  /// onnxruntime's name for the provider, "CoreML" or "QNN"; nil for the CPU
+  /// provider alone.
+  public let provider: String?
+  public let options: [String: String]
+  /// Session config entries on top of jetlink's own, as the QNN provider's
+  /// context cache takes them.
+  public let config: [String: String]
+  /// The CPU provider's intra-op pool: 1 where an accelerator does the work.
+  public let threads: Int
+  /// The session as the log and the hello name it: "CoreML(CPUAndGPU)",
+  /// "QNN(htp)", "CPU".
+  public let label: String
+  /// Runs on the GPU, so the Metal keep-alive helps it.
+  public let usesGPU: Bool
+  /// Runs on the Neural Engine, so the CPU keep-warm helps it.
+  public let usesNeuralEngine: Bool
 
-  public init(model: URL, computeUnits: String?, cacheDirectory: URL?) {
+  public init(
+    model: URL, provider: String?, options: [String: String] = [:], config: [String: String] = [:], threads: Int = 1, label: String,
+    usesGPU: Bool = false, usesNeuralEngine: Bool = false
+  ) {
     self.model = model
-    self.computeUnits = computeUnits
-    self.cacheDirectory = cacheDirectory
+    self.provider = provider
+    self.options = options
+    self.config = config
+    self.threads = threads
+    self.label = label
+    self.usesGPU = usesGPU
+    self.usesNeuralEngine = usesNeuralEngine
   }
 
-  static func usesNeuralEngine(_ computeUnits: String?) -> Bool {
-    computeUnits == "CPUAndNeuralEngine" || computeUnits == "ALL"
-  }
-
-  /// The provider options the Python backend passes (backends/ort/__init__.py).
-  var coreMLOptions: [String: String]? {
-    guard let computeUnits else { return nil }
+  /// A CoreML session on `computeUnits` ("CPUAndNeuralEngine", "CPUAndGPU",
+  /// "ALL", or nil for the CPU provider alone), with CoreML's compiled model
+  /// kept in `cacheDirectory` so a load does not compile again. The provider
+  /// options are the ones the Python backend passes (backends/ort/__init__.py).
+  public init(model: URL, computeUnits: String?, cacheDirectory: URL?) {
+    guard let computeUnits else {
+      self.init(model: model, provider: nil, label: "CPU")
+      return
+    }
+    let neuralEngine = computeUnits == "CPUAndNeuralEngine" || computeUnits == "ALL"
     var options = [
       "ModelFormat": "MLProgram",
       "MLComputeUnits": computeUnits,
     ]
-    if SessionPlan.usesNeuralEngine(computeUnits) {
+    if neuralEngine {
       // Apple's hint for a model that is predicted many times. Only where
       // the Neural Engine is in play: on the GPU it changed nothing.
       options["SpecializationStrategy"] = "FastPrediction"
@@ -33,7 +57,9 @@ public struct SessionPlan: Sendable, Equatable {
     if let cacheDirectory {
       options["ModelCacheDirectory"] = cacheDirectory.path
     }
-    return options
+    self.init(
+      model: model, provider: "CoreML", options: options, label: "CoreML(\(computeUnits))",
+      usesGPU: computeUnits == "CPUAndGPU" || computeUnits == "ALL", usesNeuralEngine: neuralEngine)
   }
 }
 
@@ -64,7 +90,9 @@ public final class OrtEngine: @unchecked Sendable {
   private var looped: [(input: String, output: String)] = []
   private var bindings: [[OrtBinding]] = []  // [parity][session]
   private var parity = 0
-  private let keepAlive: MetalKeepAlive?
+  #if canImport(Metal)
+    private let keepAlive: MetalKeepAlive?
+  #endif
   private let keepWarm: CPUKeepWarm?
   private var closed = false
 
@@ -74,10 +102,10 @@ public final class OrtEngine: @unchecked Sendable {
     self.device = device
     var chain: [OrtSession] = []
     for plan in plans {
-      chain.append(try OrtSession(model: plan.model, coreML: plan.coreMLOptions))
+      chain.append(try OrtSession(model: plan.model, provider: plan.provider, options: plan.options, config: plan.config, threads: plan.threads))
     }
     self.chain = chain
-    self.providers = plans.map { $0.computeUnits.map { "CoreML(\($0))" } ?? "CPU" }
+    self.providers = plans.map(\.label)
 
     var produced = Set<String>()
     var inputs: [String: TensorSpec] = [:]
@@ -109,10 +137,10 @@ public final class OrtEngine: @unchecked Sendable {
       buffer.initializeMemory(as: UInt8.self, repeating: 0, count: max(size, 1))
       buffers[name] = buffer
     }
-    let gpu = plans.contains { $0.computeUnits == "CPUAndGPU" || $0.computeUnits == "ALL" }
-    self.keepAlive = keepAlive && gpu ? MetalKeepAlive.make() : nil
-    let ane = plans.contains { SessionPlan.usesNeuralEngine($0.computeUnits) }
-    self.keepWarm = keepCPUWarm && ane ? CPUKeepWarm() : nil
+    #if canImport(Metal)
+      self.keepAlive = keepAlive && plans.contains(where: \.usesGPU) ? MetalKeepAlive.make() : nil
+    #endif
+    self.keepWarm = keepCPUWarm && plans.contains(where: \.usesNeuralEngine) ? CPUKeepWarm() : nil
     do {
       try rebind()
     } catch {
@@ -199,7 +227,9 @@ public final class OrtEngine: @unchecked Sendable {
 
   public func run() throws {
     guard !closed else { throw OrtError("engine is closed") }
-    keepAlive?.pulse()
+    #if canImport(Metal)
+      keepAlive?.pulse()
+    #endif
     keepWarm?.pulse()
     let started = DispatchTime.now().uptimeNanoseconds
     do {
@@ -207,7 +237,9 @@ public final class OrtEngine: @unchecked Sendable {
         try binding.run()
       }
     } catch {
-      keepAlive?.pause()
+      #if canImport(Metal)
+        keepAlive?.pause()
+      #endif
       throw error
     }
     if !looped.isEmpty {
@@ -216,8 +248,8 @@ public final class OrtEngine: @unchecked Sendable {
     lastGpuUs = UInt32(min(UInt64(UInt32.max), (DispatchTime.now().uptimeNanoseconds - started) / 1000))
   }
 
-  /// CoreML allocates its working set on the first run and the second is the
-  /// steady state.
+  /// CoreML and QNN allocate their working set on the first run and the
+  /// second is the steady state.
   public func warm() throws -> String {
     try run()
     try run()
@@ -227,7 +259,9 @@ public final class OrtEngine: @unchecked Sendable {
   public func close() {
     guard !closed else { return }
     closed = true
-    keepAlive?.close()
+    #if canImport(Metal)
+      keepAlive?.close()
+    #endif
     keepWarm?.close()
     release()
   }

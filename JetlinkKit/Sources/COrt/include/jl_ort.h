@@ -1,6 +1,11 @@
 // A few plain C calls over onnxruntime's C API, so Swift never walks OrtApi's
-// table of function pointers. Only what the server needs: sessions with the
-// CoreML provider, their inputs and outputs, and runs over caller-owned memory.
+// table of function pointers. Only what the server needs: sessions with an
+// execution provider (CoreML on Apple, QNN on Android), their inputs and
+// outputs, and runs over caller-owned memory.
+//
+// Built with JL_ORT_DLOPEN (Android), the runtime is opened at run time from
+// libonnxruntime.so, the app's copy from the onnxruntime AAR, so the build
+// needs its headers only.
 //
 // Every call that can fail returns NULL on success, or a message the caller
 // frees with jl_free.
@@ -46,15 +51,20 @@ typedef struct {
   size_t nbytes;
 } jl_tensor;
 
-// The runtime's version string, "1.29.0".
+// The runtime's version string, "1.29.0", or "" when it cannot be opened.
 const char *jl_version(void);
 
 char *jl_env_create(int log_severity, jl_env **out);
 void jl_env_release(jl_env *env);
 
-// provider is "CoreML" with its options, or NULL for the CPU alone.
+// provider is "CoreML" or "QNN" with its options, or NULL for the CPU alone.
+// config holds session config entries ("ep.context_enable" and the like),
+// added after jetlink's own. threads is the intra-op pool: 1 where an
+// accelerator does the work.
 char *jl_session_create(jl_env *env, const char *model_path, const char *provider,
-                        const jl_option *options, size_t n_options, jl_session **out);
+                        const jl_option *options, size_t n_options,
+                        const jl_option *config, size_t n_config, int threads,
+                        jl_session **out);
 void jl_session_release(jl_session *session);
 
 // output 0 counts inputs, 1 outputs.

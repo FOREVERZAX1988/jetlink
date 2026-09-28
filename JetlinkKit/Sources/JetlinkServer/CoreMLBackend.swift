@@ -148,7 +148,7 @@ public final class CoreMLBackend: EngineBackend {
 
     let weights = prepared.parts.reduce(0) { $0 + $1.weightBytes }
     let caches = manifest.compactMap { ($0["cache"] as? String).map { staged.appending(path: $0, directoryHint: .isDirectory) } }
-    let expect = sidecar(artifact)
+    let expect = ArtifactSidecar.read(artifact)
     let progress = CoreMLProgress(caches: caches, weightBytes: weights, expect: expect)
     report("convert", 0, "converting for CoreML")
     let ticker = Ticker(interval: 2) { elapsed in
@@ -204,7 +204,7 @@ public final class CoreMLBackend: EngineBackend {
       "freed_bytes": freed,
     ]
     for (key, value) in metaExtra { meta[key] = value }
-    try writeSidecar(artifact, meta)
+    try ArtifactSidecar.write(artifact, meta)
     report("build", 1, "done in \(meta["build_seconds"]!)s")
   }
 
@@ -225,21 +225,11 @@ public final class CoreMLBackend: EngineBackend {
         walker.skipDescendants()
       }
       for url in converted {
-        freed += treeBytes(url)
+        freed += ArtifactSidecar.treeBytes(url)
         try? fm.removeItem(at: url)
       }
     }
     return freed
-  }
-
-  private static func treeBytes(_ root: URL) -> Int64 {
-    guard let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey]) else { return 0 }
-    var total: Int64 = 0
-    for case let file as URL in walker {
-      guard let values = try? file.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey]), values.isRegularFile == true else { continue }
-      total += Int64(values.fileSize ?? 0)
-    }
-    return total
   }
 
   // MARK: load
@@ -251,7 +241,7 @@ public final class CoreMLBackend: EngineBackend {
     else {
       throw ArtifactInvalid("\(artifact.lastPathComponent): no readable \(CoreMLBackend.manifestName) inside")
     }
-    let meta = sidecar(artifact)
+    let meta = ArtifactSidecar.read(artifact)
     let version = (meta["prepare"] as? NSNumber)?.intValue ?? 1
     if version != CoreMLBackend.prepareVersion {
       throw ArtifactInvalid(
@@ -291,7 +281,7 @@ public final class CoreMLBackend: EngineBackend {
     if !meta.isEmpty {
       var updated = meta
       updated["load_seconds"] = pythonRound(seconds, 1)
-      try? writeSidecar(artifact, updated)
+      try? ArtifactSidecar.write(artifact, updated)
     }
     return engine
   }
@@ -303,18 +293,6 @@ public final class CoreMLBackend: EngineBackend {
         computeUnits: entry["units"] as? String,
         cacheDirectory: (entry["cache"] as? String).map { artifact.appending(path: $0, directoryHint: .isDirectory) })
     }
-  }
-
-  private func sidecar(_ artifact: URL) -> [String: Any] {
-    let url = artifact.deletingPathExtension().appendingPathExtension("json")
-    guard let data = try? Data(contentsOf: url) else { return [:] }
-    return ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any]) ?? [:]
-  }
-
-  private func writeSidecar(_ artifact: URL, _ meta: [String: Any]) throws {
-    let url = artifact.deletingPathExtension().appendingPathExtension("json")
-    let data = try JSONSerialization.data(withJSONObject: meta, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
-    try data.write(to: url, options: .atomic)
   }
 }
 
@@ -368,39 +346,4 @@ final class CoreMLProgress: @unchecked Sendable {
     let took = (expect["compile_seconds"] as? NSNumber)?.doubleValue ?? CoreMLProgress.expectedCompileSeconds
     return ("compile", min(0.95, elapsed / took), "compiling for CoreML, \(formatBytes(compiled)) written, \(Int(elapsed)) s elapsed")
   }
-}
-
-/// Calls `body(elapsed)` every `interval` seconds on its own thread until stopped.
-final class Ticker: @unchecked Sendable {
-  private let condition = NSCondition()
-  private var stopped = false
-
-  init(interval: TimeInterval, _ body: @escaping @Sendable (TimeInterval) -> Void) {
-    let started = Date()
-    let thread = Thread { [self] in
-      while true {
-        condition.lock()
-        if !stopped {
-          _ = condition.wait(until: Date().addingTimeInterval(interval))
-        }
-        let done = stopped
-        condition.unlock()
-        if done { return }
-        body(Date().timeIntervalSince(started))
-      }
-    }
-    thread.name = "jetlink-progress"
-    thread.start()
-  }
-
-  func stop() {
-    condition.lock()
-    stopped = true
-    condition.signal()
-    condition.unlock()
-  }
-}
-
-func formatBytes(_ n: Int64) -> String {
-  n >= 1_000_000_000 ? String(format: "%.1f GB", Double(n) / 1e9) : String(format: "%.0f MB", Double(n) / 1e6)
 }

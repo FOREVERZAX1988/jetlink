@@ -45,15 +45,43 @@ extension BenchmarkStats {
   }
 }
 
-func thermalLabel(_ state: ProcessInfo.ThermalState) -> String {
-  switch state {
-  case .nominal: return "nominal"
-  case .fair: return "fair"
-  case .serious: return "serious"
-  case .critical: return "critical"
-  @unknown default: return "unknown"
+/// The device's thermal state as the benchmark reports it: "nominal",
+/// "fair", "serious" or "critical". ProcessInfo's on Apple platforms; the
+/// Android app sets it from PowerManager, which Foundation there cannot read.
+public enum DeviceThermal {
+  private static let lock = NSLock()
+  nonisolated(unsafe) private static var reported: String?
+
+  public static var current: String {
+    lock.lock()
+    defer { lock.unlock() }
+    if let reported { return reported }
+    #if canImport(Darwin)
+      return thermalLabel(ProcessInfo.processInfo.thermalState)
+    #else
+      return "unknown"
+    #endif
+  }
+
+  /// Reports the state from outside; nil goes back to the platform's own.
+  public static func report(_ label: String?) {
+    lock.lock()
+    reported = label
+    lock.unlock()
   }
 }
+
+#if canImport(Darwin)
+  func thermalLabel(_ state: ProcessInfo.ThermalState) -> String {
+    switch state {
+    case .nominal: return "nominal"
+    case .fair: return "fair"
+    case .serious: return "serious"
+    case .critical: return "critical"
+    @unknown default: return "unknown"
+    }
+  }
+#endif
 
 extension EngineHost {
   /// Windows the run is reported in, seconds.
@@ -148,7 +176,7 @@ extension EngineHost {
     var frameMs: [Double] = [], accelMs: [Double] = [], queueMs: [Double] = [], outMs: [Double] = []
     var windows: [BenchmarkWindow] = []
     var windowFrames: [Double] = []
-    let thermalAtStart = ProcessInfo.processInfo.thermalState
+    let thermalAtStart = DeviceThermal.current
     let period = 1.0 / Double(ModelConstants.runFrequency)
     let warmup = EngineHost.benchmarkWarmup
     let build = EngineHost.buildLine(l.engine)
@@ -218,7 +246,7 @@ extension EngineHost {
       let second = Int(ProcessInfo.processInfo.systemUptime - t0)
       if second - windowStart >= EngineHost.benchmarkWindow {
         let window = BenchmarkWindow(
-          startSecond: windowStart, frame: BenchmarkStats.of(windowFrames), thermal: thermalLabel(ProcessInfo.processInfo.thermalState))
+          startSecond: windowStart, frame: BenchmarkStats.of(windowFrames), thermal: DeviceThermal.current)
         windows.append(window)
         windowFrames.removeAll(keepingCapacity: true)
         windowStart = second
@@ -229,12 +257,12 @@ extension EngineHost {
     }
     if !windowFrames.isEmpty {
       windows.append(
-        BenchmarkWindow(startSecond: windowStart, frame: BenchmarkStats.of(windowFrames), thermal: thermalLabel(ProcessInfo.processInfo.thermalState)))
+        BenchmarkWindow(startSecond: windowStart, frame: BenchmarkStats.of(windowFrames), thermal: DeviceThermal.current))
     }
     return BenchmarkReport(
       sha256: l.sha256, device: device, seconds: round2(ProcessInfo.processInfo.systemUptime - t0), frames: frameMs.count,
       frame: BenchmarkStats.of(frameMs), accelerator: BenchmarkStats.of(accelMs), queues: BenchmarkStats.of(queueMs), output: BenchmarkStats.of(outMs),
       build: build, over35: frameMs.filter { $0 > 35 }.count, over50: frameMs.filter { $0 > 50 }.count, windows: windows,
-      thermalAtStart: thermalLabel(thermalAtStart), thermalAtEnd: thermalLabel(ProcessInfo.processInfo.thermalState), cancelled: run.cancelled)
+      thermalAtStart: thermalAtStart, thermalAtEnd: DeviceThermal.current, cancelled: run.cancelled)
   }
 }

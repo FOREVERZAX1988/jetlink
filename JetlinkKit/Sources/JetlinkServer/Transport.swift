@@ -4,6 +4,8 @@ import Foundation
   import Darwin
 #elseif canImport(Glibc)
   import Glibc
+#elseif canImport(Android)
+  import Android
 #endif
 
 /// The link is unusable. The comma treats this as "fall back to the small model".
@@ -148,9 +150,9 @@ public final class TCPTransport: @unchecked Sendable {
     }
     Wire.packHeader(Wire.Header(msgType: type.rawValue, seq: seq, flags: flags.rawValue, length: UInt32(length)), into: tx)
     vectors.removeAll(keepingCapacity: true)
-    vectors.append(iovec(iov_base: tx, iov_len: Wire.headerSize))
+    vectors.append(iovec(iov_base: tx, iov_len: numericCast(Wire.headerSize)))
     for part in parts where part.count > 0 {
-      vectors.append(iovec(iov_base: UnsafeMutableRawPointer(mutating: part.baseAddress), iov_len: part.count))
+      vectors.append(iovec(iov_base: UnsafeMutableRawPointer(mutating: part.baseAddress), iov_len: numericCast(part.count)))
     }
     if padded {
       vectors.append(iovec(iov_base: tx + Wire.headerSize, iov_len: 1))
@@ -176,12 +178,14 @@ public final class TCPTransport: @unchecked Sendable {
       }
       var remaining = n
       while remaining > 0 && index < vectors.count {
-        if remaining >= vectors[index].iov_len {
-          remaining -= vectors[index].iov_len
+        // iov_len is size_t: Int on glibc, UInt on Bionic.
+        let length = Int(vectors[index].iov_len)
+        if remaining >= length {
+          remaining -= length
           index += 1
         } else {
           vectors[index].iov_base = vectors[index].iov_base.map { $0 + remaining }
-          vectors[index].iov_len -= remaining
+          vectors[index].iov_len = numericCast(length - remaining)
           remaining = 0
         }
       }
@@ -330,15 +334,20 @@ enum JSONLine {
 }
 
 /// The socket calls whose names the transports' own methods shadow, and the
-/// few constants that differ between Darwin and glibc. Linux is where the
-/// conformance suite runs the portable modules (docs/conformance.md).
+/// few constants that differ between Darwin, glibc and Bionic. Linux is where
+/// the conformance suite runs the portable modules (docs/conformance.md);
+/// Bionic is Android's libc.
 enum Sys {
   #if canImport(Darwin)
     static let stream = SOCK_STREAM
     static let keepIdle = TCP_KEEPALIVE
     static let iovMax = Int(IOV_MAX)
-  #else
+  #elseif canImport(Glibc)
     static let stream = Int32(SOCK_STREAM.rawValue)
+    static let keepIdle = TCP_KEEPIDLE
+    static let iovMax = 1024
+  #else
+    static let stream = SOCK_STREAM
     static let keepIdle = TCP_KEEPIDLE
     static let iovMax = 1024
   #endif
@@ -347,8 +356,10 @@ enum Sys {
   static func close(_ fd: Int32) -> Int32 {
     #if canImport(Darwin)
       Darwin.close(fd)
-    #else
+    #elseif canImport(Glibc)
       Glibc.close(fd)
+    #else
+      Android.close(fd)
     #endif
   }
 
@@ -356,16 +367,20 @@ enum Sys {
   static func shutdown(_ fd: Int32) -> Int32 {
     #if canImport(Darwin)
       Darwin.shutdown(fd, SHUT_RDWR)
-    #else
+    #elseif canImport(Glibc)
       Glibc.shutdown(fd, Int32(SHUT_RDWR))
+    #else
+      Android.shutdown(fd, Int32(SHUT_RDWR))
     #endif
   }
 
   static func read(_ fd: Int32, _ buffer: UnsafeMutableRawPointer, _ count: Int) -> Int {
     #if canImport(Darwin)
       Darwin.read(fd, buffer, count)
-    #else
+    #elseif canImport(Glibc)
       Glibc.read(fd, buffer, count)
+    #else
+      Android.read(fd, buffer, count)
     #endif
   }
 
@@ -373,27 +388,36 @@ enum Sys {
   static func writev(_ fd: Int32, _ vectors: UnsafePointer<iovec>, _ count: Int) -> Int {
     #if canImport(Darwin)
       Darwin.writev(fd, vectors, Int32(count))
-    #else
+    #elseif canImport(Glibc)
       var message = msghdr()
       message.msg_iov = UnsafeMutablePointer(mutating: vectors)
       message.msg_iovlen = count
       return Glibc.sendmsg(fd, &message, Int32(MSG_NOSIGNAL))
+    #else
+      var message = msghdr()
+      message.msg_iov = UnsafeMutablePointer(mutating: vectors)
+      message.msg_iovlen = count
+      return Android.sendmsg(fd, &message, MSG_NOSIGNAL)
     #endif
   }
 
   static func connect(_ fd: Int32, _ address: UnsafePointer<sockaddr>, _ length: socklen_t) -> Int32 {
     #if canImport(Darwin)
       Darwin.connect(fd, address, length)
-    #else
+    #elseif canImport(Glibc)
       Glibc.connect(fd, address, length)
+    #else
+      Android.connect(fd, address, length)
     #endif
   }
 
   static func accept(_ fd: Int32, _ address: UnsafeMutablePointer<sockaddr>, _ length: UnsafeMutablePointer<socklen_t>) -> Int32 {
     #if canImport(Darwin)
       Darwin.accept(fd, address, length)
-    #else
+    #elseif canImport(Glibc)
       Glibc.accept(fd, address, length)
+    #else
+      Android.accept(fd, address, length)
     #endif
   }
 }
