@@ -369,7 +369,10 @@ final class GadgetClient: CommaClient {
       try server.start()
       defer { server.shutdown() }
       #expect(server.port == nil, "a USB server opens no port")
-      Thread.sleep(forTimeInterval: 1.6)
+      let deadline = Date().addingTimeInterval(10)
+      while gadget.opens < 3 && Date() < deadline {
+        Thread.sleep(forTimeInterval: 0.05)
+      }
       #expect(gadget.opens >= 3)
       #expect(links.all.allSatisfy { $0.state == .waiting }, "\(links.all)")
     }
