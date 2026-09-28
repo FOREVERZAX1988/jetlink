@@ -9,20 +9,17 @@ import Testing
 @MainActor
 @Suite("Formatting")
 struct FormattingTests {
-  @Test("The runtime line names the runtime, its version and the hardware")
+  @Test("The runtime line names onnxruntime, its version and the hardware")
   func runtimeLine() {
-    #expect(StatusView.runtimeLine(backend: "trt", version: "10.3.0+cuda12", device: "cuda-Orin") == "TensorRT 10.3.0, Orin")
-    #expect(StatusView.runtimeLine(backend: "ort", version: "1.29.0", device: "coreml-Apple_M1_Pro") == "onnxruntime 1.29.0, Apple M1 Pro")
+    #expect(StatusView.runtimeLine(version: "1.29.0", device: "coreml-Apple_M1_Pro") == "onnxruntime 1.29.0, Apple M1 Pro")
+    #expect(StatusView.runtimeLine(version: "1.29.0+abc", device: "") == "onnxruntime 1.29.0")
   }
 
-  // MARK: Status view text
-
   @Test("Backends are named the way the Settings picker names them")
-  func backendDescription() {
-    #expect(StatusView.backendDescription(backend: "ort", device: "coreml-Apple_M1_Pro") == "CoreML on the GPU")
-    #expect(StatusView.backendDescription(backend: "ort", device: "ane-Apple_M1_Pro") == "CoreML with the Neural Engine")
-    #expect(StatusView.backendDescription(backend: "trt", device: "cuda") == "trt")
-    #expect(StatusView.backendDescription(backend: nil, device: nil) == "Unknown")
+  func backendTitles() {
+    #expect(BackendChoice.auto.title == "CoreML with the Neural Engine")
+    #expect(BackendChoice.coreml.title == "CoreML on the GPU")
+    #expect(BackendChoice.auto.shortTitle == "Neural Engine")
   }
 
   @Test("An uptime under a minute says so instead of showing zero")
@@ -33,14 +30,6 @@ struct FormattingTests {
     #expect(StatusView.uptimeText(from: start, to: start.addingTimeInterval(60)) == "1 minute")
     #expect(StatusView.uptimeText(from: start, to: start.addingTimeInterval(150)) == "2 minutes")
     #expect(StatusView.uptimeText(from: start, to: start.addingTimeInterval(3900)) == "1 hour, 5 minutes")
-  }
-
-  @Test("The toolbar names the backend in a word or two")
-  func backendShortName() {
-    #expect(StatusView.backendShortName(backend: "ort", device: "ane-Apple_M1_Pro") == "Neural Engine")
-    #expect(StatusView.backendShortName(backend: "ort", device: "coreml-Apple_M1_Pro") == "CoreML GPU")
-    #expect(StatusView.backendShortName(backend: "trt", device: "cuda-Orin") == "trt")
-    #expect(BackendChoice.auto.shortTitle == "Neural Engine")
   }
 
   @Test("Log lines are coloured by their level")

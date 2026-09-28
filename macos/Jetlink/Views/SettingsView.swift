@@ -92,23 +92,11 @@ struct GeneralSettingsView: View {
 struct ServerSettingsView: View {
   @Environment(AppSettings.self) private var settings
   @Environment(ServerStore.self) private var server
-  @State private var advancedExpanded = false
 
   var body: some View {
     @Bindable var settings = settings
     Form {
       Section {
-        VStack(alignment: .leading, spacing: 4) {
-          Picker("Server", selection: $settings.serverEngine) {
-            ForEach(ServerEngine.allCases, id: \.self) { engine in
-              Text(engine.title).tag(engine)
-            }
-          }
-          Text(ServerSettingsView.engineCaption(settings.serverEngine))
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-        }
         VStack(alignment: .leading, spacing: 4) {
           Picker("Backend", selection: $settings.backend) {
             ForEach(BackendChoice.allCases, id: \.self) { choice in
@@ -127,10 +115,6 @@ struct ServerSettingsView: View {
         if settings.transport == .tcp {
           TextField("Port", value: $settings.tcpPort, format: .number.grouping(.never))
         }
-        Picker("Log level", selection: $settings.logLevel) {
-          Text("Normal (INFO)").tag("INFO")
-          Text("Verbose (DEBUG)").tag("DEBUG")
-        }
       } footer: {
         HStack {
           Text("Changes apply when the server restarts.")
@@ -141,40 +125,8 @@ struct ServerSettingsView: View {
             .disabled(server.runState != .serving)
         }
       }
-
-      if settings.serverEngine == .python {
-        Section {
-          DisclosureGroup("Advanced", isExpanded: $advancedExpanded) {
-            VStack(alignment: .leading, spacing: 6) {
-              TextField(
-                "Python interpreter override",
-                text: Binding(
-                  get: { settings.pythonOverride ?? "" },
-                  set: { settings.pythonOverride = $0.isEmpty ? nil : $0 }
-                ))
-              Text("For development. Empty means the bundled runtime.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-              Text(bundledText)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-            }
-            .padding(.top, 4)
-          }
-        }
-      }
     }
     .formStyle(.grouped)
-  }
-
-  static func engineCaption(_ engine: ServerEngine) -> String {
-    switch engine {
-    case .python:
-      "The server Jetlink has always run, in a Python runtime inside the app. Measured on a comma, and the default for now."
-    case .swift:
-      "The server the iPhone app runs, built into Jetlink: no Python to find or start, and about 1 ms faster a frame on an M1 Pro. Not yet measured with a comma on USB."
-    }
   }
 
   static func backendCaption(_ backend: BackendChoice) -> String {
@@ -184,16 +136,6 @@ struct ServerSettingsView: View {
     case .coreml:
       "Slower. Use it if another app keeps the Neural Engine busy."
     }
-  }
-
-  private var bundledText: String {
-    guard let manifest = EmbeddedPython.manifest() else {
-      return "This build has no bundled Python runtime."
-    }
-    var parts: [String] = []
-    if let python = manifest["python"] { parts.append("Python \(python)") }
-    if let ort = manifest["onnxruntime"] { parts.append("onnxruntime \(ort)") }
-    return parts.isEmpty ? "This build has no bundled Python runtime." : "Bundled: " + parts.joined(separator: ", ")
   }
 }
 

@@ -1,8 +1,8 @@
 # Jetlink for Mac.
 #
-#   make app      the whole thing: project, embedded runtime, build, sign
-#   make python   just the embedded runtime (about 200 MB of downloads, cached)
-#   make dev      open the project in Xcode against the repo's .venv
+#   make app      the whole thing: project, build, sign
+#   make smoke    launch the built app and talk to its server over TCP
+#   make dev      open the project in Xcode
 #
 # Every recipe runs under bash with `set -euo pipefail`, so a failing command
 # in the middle of a recipe fails the target.
@@ -13,7 +13,6 @@ MACOS_DIR := $(patsubst %/,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 REPO_ROOT := $(patsubst %/,%,$(dir $(MACOS_DIR)))
 BUILD := $(MACOS_DIR)/build
 APP := $(BUILD)/Jetlink.app
-PYTHON_PREFIX := $(BUILD)/python
 
 # A tag like v0.2.0 becomes 0.2.0. An untagged tree makes `describe --always`
 # return a bare commit sha, which is not a legal CFBundleShortVersionString, so
@@ -24,11 +23,7 @@ SIGN_IDENTITY ?= -
 export JETLINK_VERSION
 export JETLINK_BUILD
 
-# The interpreter `make dev` hands to Xcode: the repo's development venv, which
-# needs `pip install -e ".[ort,usb]"`.
-JETLINK_PYTHON ?= $(REPO_ROOT)/.venv/bin/python
-
-.PHONY: all project python app sign notarize dmg test smoke dev clean
+.PHONY: all project app sign notarize dmg test smoke dev clean
 
 all: app
 
@@ -39,10 +34,7 @@ all: app
 project:
 	JETLINK_VERSION=0.0.0 JETLINK_BUILD=1 xcodegen generate --spec $(MACOS_DIR)/project.yml --project $(MACOS_DIR)
 
-python:
-	$(MACOS_DIR)/Python/embed-python.sh
-
-app: project python
+app: project
 	SIGN_IDENTITY="$(SIGN_IDENTITY)" $(MACOS_DIR)/scripts/build-app.sh
 	SIGN_IDENTITY="$(SIGN_IDENTITY)" $(MACOS_DIR)/scripts/sign.sh $(APP)
 
@@ -60,22 +52,17 @@ test: project
 	  -destination 'platform=macOS' -derivedDataPath $(BUILD)/DerivedData \
 	  CODE_SIGN_IDENTITY="$(SIGN_IDENTITY)" CODE_SIGNING_ALLOWED=YES
 
-# The embedded runtime as the app will run it: an environment built from
-# scratch, never inherited (01-contracts.md section 9).
+# The built bundle's server, over TCP, with a cache of its own: no comma and no
+# model. The client is a few lines of jetlink's protocol; any python3 with no
+# packages installed runs it.
 smoke:
-	test -x $(APP)/Contents/Resources/python/bin/python3 || { echo "no embedded runtime in $(APP); run make app" >&2; exit 1; }
-	env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME="$$HOME" TMPDIR="$${TMPDIR:-/tmp}" \
-	  LANG=en_US.UTF-8 PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONIOENCODING=utf-8 \
-	  $(APP)/Contents/Resources/python/bin/python3 -m jetlink.server.main --list-backends
-	env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME="$$HOME" TMPDIR="$${TMPDIR:-/tmp}" \
-	  LANG=en_US.UTF-8 PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONIOENCODING=utf-8 \
-	  $(APP)/Contents/Resources/python/bin/python3 -c "import usb1; usb1.USBContext(); print('usb1 ok')"
+	python3 $(MACOS_DIR)/scripts/smoke.py --app $(APP)
 
 dev: project
-	JETLINK_PYTHON=$(JETLINK_PYTHON) open $(MACOS_DIR)/Jetlink.xcodeproj
+	open $(MACOS_DIR)/Jetlink.xcodeproj
 
-# Keeps build/downloads: the interpreter tarball and the wheels are 200 MB and
-# never change for a given pin.
+# build/python and build/downloads are what the app's embedded Python runtime,
+# gone since this release, left behind; clean takes them too.
 clean:
-	rm -rf $(BUILD)/Jetlink.app $(BUILD)/DerivedData $(BUILD)/python $(BUILD)/dmg-stage
+	rm -rf $(BUILD)/Jetlink.app $(BUILD)/DerivedData $(BUILD)/python $(BUILD)/downloads $(BUILD)/dmg-stage
 	rm -f $(BUILD)/Jetlink-*.dmg $(BUILD)/Jetlink-*.zip $(BUILD)/SHA256SUMS $(BUILD)/icon.png

@@ -25,8 +25,8 @@ cd jetlink
 ## Mac (Apple silicon)
 
 Use the [Mac app](macos-app.md) from
-[Releases](https://github.com/zoompilot/jetlink/releases). It includes Python;
-no Homebrew needed.
+[Releases](https://github.com/zoompilot/jetlink/releases). The server is built
+in; no Python or Homebrew needed.
 
 ### From a terminal
 

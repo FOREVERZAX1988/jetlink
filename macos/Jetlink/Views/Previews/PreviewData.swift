@@ -2,16 +2,14 @@ import Foundation
 import JetlinkUI
 
 /// The Mac's own sample values, beside the events and rows JetlinkUI shares
-/// with the iPhone: the Python server's hello and its log. Nothing here is used
+/// with the iPhone: the server's description and its log. Nothing here is used
 /// by a running app.
 extension PreviewData {
   // MARK: Server
 
   static let serverInfo = ServerInfo(
-    pid: 4242,
-    version: "0.2.0",
-    python: "3.14.7",
-    backend: "ort",
+    version: "0.5.0",
+    choice: .coreml,
     runtimeVersion: "1.29.0",
     device: "coreml-Apple_M1_Pro",
     cache: "/Users/me/Library/Application Support/Jetlink/cache",

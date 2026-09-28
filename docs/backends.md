@@ -4,6 +4,11 @@ A backend prepares and runs the model. Defaults: TensorRT on NVIDIA, ONNX
 Runtime with CoreML on Apple silicon. Install: [platform setup](platforms.md).
 Mac detail: [performance reference](mac-performance.md).
 
+The table below is the Python server's, which runs on Jetsons, Linux PCs and
+from a checkout on a Mac. The Mac app runs the Swift server instead (the one
+the iPhone app runs): ONNX Runtime with CoreML only, in the `ane` and `coreml`
+layouts described below, and no tinygrad.
+
 ## Runtime comparison
 
 | Backend | Devices | Prepared files | Requirements |
@@ -30,7 +35,7 @@ On a Mac, `--device` picks the CoreML layout:
 | Jetson Orin | TensorRT | USB-A host with libusb | Tegra sensors | Suspend and poweroff |
 | Linux with NVIDIA GPU | TensorRT; ONNX Runtime as an alternative | libusb with `scripts/99-jetlink-host.rules` | NVML | `--sleep-after` requires `/sys/power`; USB wake depends on hardware |
 | Windows with NVIDIA GPU | TensorRT in WSL2 | Requires `usbipd-win` | NVML | None |
-| macOS with Apple silicon | ONNX Runtime with CoreML on the Neural Engine and GPU | USB 3 USB-C cable, or USB-A to USB-C with a USB-C adapter; libusb | Not available | `scripts/run-mac.sh` prevents idle sleep on AC power |
+| macOS with Apple silicon | ONNX Runtime with CoreML on the Neural Engine and GPU | USB 3 USB-C cable, or USB-A to USB-C with a USB-C adapter; the app uses macOS's USB framework, the Python server libusb | Not available | The app, or `scripts/run-mac.sh`, prevents idle sleep on AC power |
 
 Timing and power: [performance and operating limits](status.md).
 
@@ -42,9 +47,10 @@ Timing and power: [performance and operating limits](status.md).
 ## Mac, measured
 
 16 GB M1 Pro, paced 20 Hz: the default Neural Engine/GPU backend about 31 ms a
-frame, GPU-only 41 to 44 ms. Bench numbers only: some CoreML runs still had
-single frames over the deadline, so averages do not establish driving
-reliability. [Full measurements and test conditions](mac-performance.md).
+frame (about 30 ms in the app's Swift server), GPU-only 41 to 44 ms. Bench
+numbers only: some CoreML runs still had single frames over the deadline, so
+averages do not establish driving reliability. [Full measurements and test
+conditions](mac-performance.md).
 
 | If you need to... | Read |
 | --- | --- |

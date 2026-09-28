@@ -1,25 +1,38 @@
 import Foundation
+import JetlinkServer
 import Observation
 
-/// Which jetlink server the app runs. The Python server is the embedded
-/// runtime the app has shipped since 0.3; the Swift server is the one the
-/// iPhone runs, built into the app, with no Python at all.
-enum ServerEngine: String, CaseIterable, Codable, Sendable {
-  case python, swift
+/// Where the server runs the model. The Swift server has the two the Python
+/// server's CoreML backend had; tinygrad went with the Python server.
+enum BackendChoice: String, CaseIterable, Codable, Sendable {
+  case auto, coreml
+
+  /// What the Swift server is asked to be.
+  var device: CoreMLBackend.Device {
+    switch self {
+    case .auto: .ane
+    case .coreml: .coreml
+    }
+  }
 
   var title: String {
     switch self {
-    case .python: "Python (bundled runtime)"
-    case .swift: "Swift (built in)"
+    case .auto: "CoreML with the Neural Engine"
+    case .coreml: "CoreML on the GPU"
     }
   }
 
   var shortTitle: String {
     switch self {
-    case .python: "Python"
-    case .swift: "Swift"
+    case .auto: "Neural Engine"
+    case .coreml: "CoreML GPU"
     }
   }
+}
+
+/// How the comma reaches the server: its USB gadget, or TCP for a bench client.
+enum TransportChoice: String, CaseIterable, Codable, Sendable {
+  case usb, tcp
 }
 
 @MainActor
@@ -32,19 +45,12 @@ final class AppSettings {
     static let cacheDirectory = "cacheDirectory"
     static let startServerOnLaunch = "startServerOnLaunch"
     static let keepAwakeWhileServing = "keepAwakeWhileServing"
-    static let logLevel = "logLevel"
-    static let pythonOverride = "pythonOverride"
-    static let serverEngine = "serverEngine"
   }
 
   @ObservationIgnored private let defaults: UserDefaults
 
   var backend: BackendChoice {
     didSet { defaults.set(backend.rawValue, forKey: Key.backend) }
-  }
-
-  var serverEngine: ServerEngine {
-    didSet { defaults.set(serverEngine.rawValue, forKey: Key.serverEngine) }
   }
 
   var transport: TransportChoice {
@@ -67,24 +73,11 @@ final class AppSettings {
     didSet { defaults.set(keepAwakeWhileServing, forKey: Key.keepAwakeWhileServing) }
   }
 
-  var logLevel: String {
-    didSet { defaults.set(logLevel, forKey: Key.logLevel) }
-  }
-
-  var pythonOverride: String? {
-    didSet {
-      if let pythonOverride, !pythonOverride.isEmpty {
-        defaults.set(pythonOverride, forKey: Key.pythonOverride)
-      } else {
-        defaults.removeObject(forKey: Key.pythonOverride)
-      }
-    }
-  }
-
   init(defaults: UserDefaults = .standard) {
     self.defaults = defaults
+    // A stored "tinygrad" (the removed Python backend) or "ane" (an older name
+    // for the split) reads as Automatic.
     backend = BackendChoice(rawValue: defaults.string(forKey: Key.backend) ?? "") ?? .auto
-    serverEngine = ServerEngine(rawValue: defaults.string(forKey: Key.serverEngine) ?? "") ?? .python
     transport = TransportChoice(rawValue: defaults.string(forKey: Key.transport) ?? "") ?? .usb
     let storedPort = defaults.integer(forKey: Key.tcpPort)
     tcpPort = storedPort > 0 ? storedPort : AppSettings.defaultTCPPort
@@ -97,8 +90,6 @@ final class AppSettings {
     // (-startServerOnLaunch NO), which an `as? Bool` cast ignores.
     startServerOnLaunch = defaults.object(forKey: Key.startServerOnLaunch) == nil ? true : defaults.bool(forKey: Key.startServerOnLaunch)
     keepAwakeWhileServing = defaults.object(forKey: Key.keepAwakeWhileServing) == nil ? true : defaults.bool(forKey: Key.keepAwakeWhileServing)
-    logLevel = defaults.string(forKey: Key.logLevel) ?? "INFO"
-    pythonOverride = defaults.string(forKey: Key.pythonOverride)
   }
 
   nonisolated static let defaultTCPPort = 5599
@@ -112,12 +103,6 @@ final class AppSettings {
 
   nonisolated static var defaultCacheDirectory: URL {
     applicationSupportDirectory.appending(path: "cache")
-  }
-
-  /// The control socket lives in the per user temporary directory, because an
-  /// AF_UNIX path on macOS may not exceed 104 bytes.
-  nonisolated static var controlSocketURL: URL {
-    URL(filePath: NSTemporaryDirectory()).appending(path: "jetlink-control.sock")
   }
 
   nonisolated static var logFileURL: URL {

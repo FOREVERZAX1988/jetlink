@@ -63,6 +63,8 @@ Needs Apple silicon and macOS 15 or later (16 GB memory recommended).
 3. Wait for **Waiting for comma**.
 4. Keep the Mac powered and awake.
 
+Nothing else to install: the server is built into the app.
+
 ### iPhone and iPad (experimental)
 
 <a href="docs/images/iphone-demo.mp4"><img src="docs/images/iphone-demo.webp" width="100%" alt="Jetlink for iPhone, recorded in the iOS Simulator: Get downloads and prepares a model, the comma connects over USB, and Status shows each frame against the 50 ms budget, with timings modeled on an iPhone 17 Pro measurement"></a>

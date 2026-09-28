@@ -66,20 +66,8 @@ jobs:
       - name: Select Xcode
         uses: ./.github/actions/select-xcode
 
-      - name: Install xcodegen and libusb
-        run: brew install xcodegen libusb
-
-      - name: Restore the interpreter and wheel downloads
-        uses: actions/cache@v4
-        with:
-          path: macos/build/downloads
-          key: pbs-${{ hashFiles('macos/Python/embed-python.sh', 'macos/Python/requirements.txt') }}
-
-      - name: Restore the pip cache
-        uses: actions/cache@v4
-        with:
-          path: ~/Library/Caches/pip
-          key: pip-${{ hashFiles('macos/Python/requirements*.txt') }}
+      - name: Install xcodegen
+        run: brew install xcodegen
 
       - name: Report the signing mode
         run: |
@@ -122,11 +110,10 @@ jobs:
           # the scripts default it to "-" (ad hoc) otherwise.
           make -C macos app
 
-      - name: Check the embedded runtime
+      - name: Check the app serves
         run: make -C macos smoke
-
-      - name: Run the control channel smoke test
-        run: python3 macos/scripts/smoke-control.py
+        # The signed bundle's Swift server over TCP on a scratch cache: hello
+        # and ping over the wire protocol, then SIGTERM ends it.
 
       - name: Notarize the app
         if: env.HAVE_SIGNING == 'true'

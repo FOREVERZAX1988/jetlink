@@ -1,3 +1,10 @@
+Unreleased
+==========
+**Mac**
+* **Swift only:** The app runs the Swift server alone, with no bundled Python.
+* **Settings:** Server, Log level and the Python override are gone; a stored tinygrad backend reads as Automatic.
+* The Python server still runs from a checkout with `scripts/run-mac.sh`.
+
 Jetlink v0.5.0
 ==============
 **iPhone & iPad support!**

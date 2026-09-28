@@ -175,7 +175,7 @@ jobs:
         # (docs/conformance.md).
 
   app:
-    name: App bundle and control channel smoke test
+    name: App bundle and smoke test
     runs-on: macos-26
     needs: [python-lint]
     steps:
@@ -185,32 +185,18 @@ jobs:
       - name: Select Xcode
         uses: ./.github/actions/select-xcode
 
-      - name: Install xcodegen and libusb
-        run: brew install xcodegen libusb
+      - name: Install xcodegen
+        run: brew install xcodegen
 
-      - name: Restore the interpreter and wheel downloads
-        uses: actions/cache@v4
-        with:
-          path: macos/build/downloads
-          key: pbs-${{ hashFiles('macos/Python/embed-python.sh', 'macos/Python/requirements.txt') }}
-
-      - name: Restore the pip cache
-        uses: actions/cache@v4
-        with:
-          path: ~/Library/Caches/pip
-          key: pip-${{ hashFiles('macos/Python/requirements*.txt') }}
-
-      - name: Build the app with its embedded runtime
+      - name: Build the app
         run: make -C macos app
-        # `app` depends on `project` and `python`, so this is the whole thing,
-        # ad hoc signed. Running `make python` first would only build the
-        # runtime twice.
+        # `app` depends on `project`, so this is the whole thing, ad hoc signed.
 
-      - name: Check the embedded runtime
+      - name: Check the app serves
         run: make -C macos smoke
-
-      - name: Run the control channel smoke test
-        run: python3 macos/scripts/smoke-control.py
+        # The bundle's Swift server over TCP on a scratch cache: hello and ping
+        # over the wire protocol, then SIGTERM ends it. No Python in
+        # the app; the client is jetlink/protocol.py from this checkout.
 
       - name: Pack the app
         run: ditto -c -k --keepParent macos/build/Jetlink.app macos/build/Jetlink-unsigned.zip

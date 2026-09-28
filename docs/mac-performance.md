@@ -21,6 +21,7 @@ assumes Jetlink has it alone).
 | build / load in a fresh process | about 20 s / 0.6 to 11 s | about 10 s / 1.8 to 4.7 s |
 | artifact on disk | 2.1 GB | 2.3 GB |
 
+- The Python server's numbers, from before the app ran the Swift server only.
 - Measured 2026-09-26 in 300-frame blocks, alternating with the code before the
   change measured: six blocks for the default on V3, four for the rest. The p99
   is the range over blocks.
@@ -33,9 +34,10 @@ assumes Jetlink has it alone).
 
 ## The Python server and the Swift server
 
-The app runs either (Settings > Server). Both run the same prepared graph
-through onnxruntime's CoreML provider; they differ in queues, copies and process
-layout (Python runs the model in a worker process, Swift in the app's own).
+The measurements behind the app's move to the Swift server. Both run the same
+prepared graph through onnxruntime's CoreML provider; they differ in queues,
+copies and process layout (Python runs the model in a worker process, Swift in
+the app's own).
 
 2026-09-27, same M1 Pro, Cinque Terre V3, default split,
 `bench_link.py --rate 20 --n 1200` over TCP loopback, one server at a time.
@@ -63,11 +65,15 @@ times as the comma sees them):
 | USB 3 C-to-C | 36.9 ms | 45.7 ms | 0 |
 | USB 2 C-to-C | 46.7 ms | 54.3 ms | 0.88% |
 
-Not yet measured: the Swift server over USB, the gate for making it the default
-(p99 no worse than the Python server's, no frame dropped). To run it: plug the
-comma into the Mac, set Settings > Server to each in turn (or run
-`jetlink-serve --usb` from `JetlinkKit/.build/release`), and on the parked comma
-run `jetlink_repo/scripts/comma/jetlink_live_bench.sh 180` for each.
+Not yet measured: the Swift server over USB (the gate: p99 no worse than the
+Python server's, no frame dropped). To run it: plug the comma into the Mac, and
+on the parked comma run `jetlink_repo/scripts/comma/jetlink_live_bench.sh 180`
+with the app (or `jetlink-serve --usb` from `JetlinkKit/.build/release`), then
+with `scripts/run-mac.sh`, the Python server from a checkout, on the same cable.
+
+The release-built, ad hoc signed Swift-only app served the same model over
+loopback TCP at 29.83 ms p50, 32.87 ms p99 and 33.70 ms max, none of 190 frames
+over 50 ms, loading the engine in 9.2 s.
 
 One cache serves both: with matching prepare versions each loads what the
 other built ([conformance](conformance.md#one-cache-for-both-servers)).
