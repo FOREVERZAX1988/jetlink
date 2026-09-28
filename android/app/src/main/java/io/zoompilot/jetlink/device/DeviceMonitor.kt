@@ -11,12 +11,14 @@ import androidx.core.content.ContextCompat
 import io.zoompilot.jetlink.server.Native
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asExecutor
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.stateIn
+import kotlin.math.roundToInt
 
 /** The phone's own state, which is what slows a model down first. */
 data class DeviceHealth(
@@ -37,20 +39,17 @@ data class DeviceHealth(
 }
 
 /**
- * Battery, heat and memory, polled once a second while the app runs, and
- * the thermal state told to the server for its benchmark reports.
+ * Battery, heat and memory, read once a second while a screen shows them,
+ * and the thermal state told to the server as it changes, for its benchmark
+ * reports.
  */
-class DeviceMonitor(private val context: Context, private val scope: CoroutineScope) {
+class DeviceMonitor(context: Context, scope: CoroutineScope) {
     private val power = context.getSystemService(PowerManager::class.java)
     private val activity = context.getSystemService(ActivityManager::class.java)
-    private val state = MutableStateFlow(DeviceHealth())
-    val health: StateFlow<DeviceHealth> = state.asStateFlow()
 
-    private var battery: Intent? = null
-    /** What the server was last told, so it hears the first state and every change. */
-    private var reported: String? = null
+    @Volatile private var battery: Intent? = null
 
-    fun start() {
+    init {
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
                 battery = intent
@@ -59,16 +58,18 @@ class DeviceMonitor(private val context: Context, private val scope: CoroutineSc
         battery = ContextCompat.registerReceiver(
             context, receiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED,
         )
-        power.addThermalStatusListener(context.mainExecutor) { refresh() }
-        scope.launch(Dispatchers.Default) {
-            while (isActive) {
-                refresh()
-                delay(1000)
-            }
-        }
+        // Called at once with the current status, then on each change.
+        power.addThermalStatusListener(Dispatchers.Default.asExecutor()) { Native.reportThermal(thermalLabel(it)) }
     }
 
-    private fun refresh() {
+    val health: StateFlow<DeviceHealth> = flow {
+        while (true) {
+            emit(read())
+            delay(1000)
+        }
+    }.flowOn(Dispatchers.Default).stateIn(scope, SharingStarted.WhileSubscribed(5_000), DeviceHealth())
+
+    private fun read(): DeviceHealth {
         val memory = ActivityManager.MemoryInfo().also(activity::getMemoryInfo)
         val intent = battery
         val level = intent?.let {
@@ -78,27 +79,24 @@ class DeviceMonitor(private val context: Context, private val scope: CoroutineSc
         }
         val plugged = (intent?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0
         val tenths = intent?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, Int.MIN_VALUE) ?: Int.MIN_VALUE
-        val thermal = thermalLabel(power.currentThermalStatus)
         // The headroom forecast is rate limited to about once a second.
         val headroom = power.getThermalHeadroom(10).takeUnless { it.isNaN() }
-        val next = DeviceHealth(
-            thermal = thermal,
-            headroom = headroom,
+        // Rounded to what the tiles show, so a reading that moves by bytes is not a new state.
+        return DeviceHealth(
+            thermal = thermalLabel(power.currentThermalStatus),
+            headroom = headroom?.let { (it * 100).roundToInt() / 100f },
             batteryTemp = if (tenths != Int.MIN_VALUE) tenths / 10f else null,
             batteryLevel = level,
             charging = plugged,
             powerSave = power.isPowerSaveMode,
-            availableMemory = memory.availMem,
+            availableMemory = memory.availMem / MEMORY_STEP * MEMORY_STEP,
             lowMemory = memory.lowMemory,
         )
-        if (next.thermal != reported) {
-            reported = next.thermal
-            Native.reportThermal(next.thermal)
-        }
-        state.value = next
     }
 
     companion object {
+        private const val MEMORY_STEP = 100_000_000L
+
         /** PowerManager's thermal status in the benchmark's four words. */
         fun thermalLabel(status: Int): String = when (status) {
             PowerManager.THERMAL_STATUS_NONE, PowerManager.THERMAL_STATUS_LIGHT -> "nominal"

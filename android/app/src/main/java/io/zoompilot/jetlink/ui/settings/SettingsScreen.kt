@@ -191,7 +191,7 @@ private fun Connection(values: SettingsValues, info: SettingsInfo, actions: Sett
         }
         focus.clearFocus()
     }
-    val link = info.snapshot.medium?.takeIf { info.snapshot.connected }?.title
+    val link = info.snapshot.medium?.title
         ?: if (info.usb is UsbState.Attached) "Connecting" else "Not Connected"
     FormSection("Connection", footer = { FormFooter("The port is only for testing from a Mac over Wi-Fi.") }) {
         ValueRow("Link", link)
@@ -312,7 +312,7 @@ private fun SettingsPreview() {
                 SettingsInfo(
                     snapshot = PreviewData.serving,
                     runState = RunState.Serving,
-                    usb = UsbState.Attached("jetlink"),
+                    usb = UsbState.Attached,
                     wifi = "192.168.1.23",
                     runtime = "1.29.0",
                     chip = "Snapdragon 8 Gen 3",

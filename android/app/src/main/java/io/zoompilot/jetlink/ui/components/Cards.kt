@@ -27,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -188,7 +189,8 @@ fun EmptyState(
     modifier: Modifier = Modifier,
     description: String? = null,
     compact: Boolean = false,
-    iconAlpha: Float = 1f,
+    /** Read while drawing, so an animated alpha does not recompose the card. */
+    iconAlpha: () -> Float = { 1f },
     actions: (@Composable ColumnScope.() -> Unit)? = null,
 ) {
     val colors = JetlinkTheme.colors
@@ -201,7 +203,7 @@ fun EmptyState(
             icon,
             contentDescription = null,
             tint = colors.secondaryText,
-            modifier = Modifier.size(if (compact) 36.dp else 48.dp).alpha(iconAlpha),
+            modifier = Modifier.size(if (compact) 36.dp else 48.dp).graphicsLayer { alpha = iconAlpha() },
         )
         Text(title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
         if (description != null) {
@@ -274,17 +276,4 @@ fun Tag(text: String, color: Color, modifier: Modifier = Modifier) {
             .background(color.copy(alpha = 0.14f))
             .padding(horizontal = 6.dp, vertical = 1.dp),
     )
-}
-
-/** A coloured dot and a word in a capsule, where a state has to read at a glance. */
-@Composable
-fun StatusBadge(text: String, color: Color, modifier: Modifier = Modifier) {
-    Row(
-        modifier.clip(CircleShape).background(color.copy(alpha = 0.14f)).padding(horizontal = 8.dp, vertical = 3.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(Modifier.size(6.dp).clip(CircleShape).background(color))
-        Spacer(Modifier.width(6.dp))
-        Text(text, style = MaterialTheme.typography.labelMedium)
-    }
 }

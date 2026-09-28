@@ -56,6 +56,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.zoompilot.jetlink.AppGraph
 import io.zoompilot.jetlink.server.ImportState
 import io.zoompilot.jetlink.server.ModelRow
+import io.zoompilot.jetlink.server.Reply
 import io.zoompilot.jetlink.server.Snapshot
 import io.zoompilot.jetlink.ui.Format
 import io.zoompilot.jetlink.ui.JetlinkTheme
@@ -73,12 +74,10 @@ import kotlinx.coroutines.launch
  * disk, prepares it when it has no engine, and loads it. A row the catalog
  * has not resolved to a checksum yet is downloaded by its ref.
  */
-fun useModel(graph: AppGraph, row: ModelRow) {
-    graph.scope.launch {
-        val sha = row.sha256
-        val ref = row.ref
-        if (sha != null) graph.server.use(sha) else if (ref != null) graph.server.download(ref, null)
-    }
+suspend fun useModel(graph: AppGraph, row: ModelRow): Reply? {
+    val sha = row.sha256
+    val ref = row.ref
+    return if (sha != null) graph.server.use(sha) else if (ref != null) graph.server.download(ref, null) else null
 }
 
 /** What a row's buttons do, handed down from the screen. */
@@ -106,29 +105,36 @@ private sealed interface Confirmation {
 @Composable
 fun ModelsScreen(graph: AppGraph) {
     val snapshot by graph.server.snapshot.collectAsStateWithLifecycle()
-    val lastError by graph.server.lastError.collectAsStateWithLifecycle()
+    var error by remember { mutableStateOf<String?>(null) }
     var confirmation by remember { mutableStateOf<Confirmation?>(null) }
     var refreshing by remember { mutableStateOf(false) }
+    /** Runs a command off the main thread; a refusal shows in a dialog. */
+    val run = { command: suspend () -> Reply? ->
+        graph.scope.launch {
+            val reply = command()
+            if (reply != null && !reply.ok) error = reply.error
+        }
+        Unit
+    }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) graph.scope.launch { graph.server.importModel(uri) }
+        if (uri != null) run { graph.server.importModel(uri) }
     }
     val refresh = {
         refreshing = true
-        graph.scope.launch {
+        run {
             try {
                 graph.server.refreshCatalog()
             } finally {
                 refreshing = false
             }
         }
-        Unit
     }
     val actions = ModelActions(
         use = { row ->
-            if (ModelRules.useNeedsConfirmation(snapshot, row)) confirmation = Confirmation.Switch(row) else useModel(graph, row)
+            if (ModelRules.useNeedsConfirmation(snapshot, row)) confirmation = Confirmation.Switch(row) else run { useModel(graph, row) }
         },
-        cancel = { row -> row.sha256?.let { sha -> graph.scope.launch { graph.server.cancelDownload(sha) } } },
-        unload = { graph.scope.launch { graph.server.unload() } },
+        cancel = { row -> row.sha256?.let { sha -> run { graph.server.cancelDownload(sha) } } },
+        unload = { run { graph.server.unload() } },
         delete = { row -> confirmation = Confirmation.Delete(row) },
         refresh = refresh,
     )
@@ -162,24 +168,24 @@ fun ModelsScreen(graph: AppGraph) {
     when (val item = confirmation) {
         is Confirmation.Delete -> AlertDialog(
             onDismissRequest = { confirmation = null },
-            title = { Text("Delete ${ModelRules.title(item.row)}?") },
+            title = { Text("Delete ${item.row.title}?") },
             text = { Text("You can download it again later.") },
             confirmButton = {
                 TextButton(onClick = {
                     confirmation = null
-                    item.row.sha256?.let { sha -> graph.scope.launch { graph.server.forget(sha, artifacts = true, model = true) } }
+                    item.row.sha256?.let { sha -> run { graph.server.forget(sha, artifacts = true, model = true) } }
                 }) { Text("Delete", color = JetlinkTheme.colors.bad) }
             },
             dismissButton = { TextButton(onClick = { confirmation = null }) { Text("Cancel") } },
         )
         is Confirmation.Switch -> AlertDialog(
             onDismissRequest = { confirmation = null },
-            title = { Text("Use ${ModelRules.title(item.row)}?") },
+            title = { Text("Use ${item.row.title}?") },
             text = { Text("The comma uses its small model until this one is ready.") },
             confirmButton = {
                 TextButton(onClick = {
                     confirmation = null
-                    useModel(graph, item.row)
+                    run { useModel(graph, item.row) }
                 }) { Text("Use Model") }
             },
             dismissButton = { TextButton(onClick = { confirmation = null }) { Text("Cancel") } },
@@ -187,13 +193,12 @@ fun ModelsScreen(graph: AppGraph) {
         null -> {}
     }
 
-    val error = lastError
-    if (error != null) {
+    error?.let { message ->
         AlertDialog(
-            onDismissRequest = graph.server::clearError,
+            onDismissRequest = { error = null },
             title = { Text("Couldn't Complete") },
-            text = { Text(Format.sentence(error)) },
-            confirmButton = { TextButton(onClick = graph.server::clearError) { Text("OK") } },
+            text = { Text(Format.sentence(message)) },
+            confirmButton = { TextButton(onClick = { error = null }) { Text("OK") } },
         )
     }
 }
@@ -313,7 +318,7 @@ fun ModelRowView(row: ModelRow, actions: ModelActions) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
-                    ModelRules.title(row),
+                    row.title,
                     style = MaterialTheme.typography.bodyLarge,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,

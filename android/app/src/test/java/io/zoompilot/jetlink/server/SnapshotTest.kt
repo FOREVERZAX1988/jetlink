@@ -1,11 +1,12 @@
 package io.zoompilot.jetlink.server
 
+import io.zoompilot.jetlink.ui.status.StatusState
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.io.File
 
 /**
  * The snapshot the server hands over, parsed from the file the Swift side
@@ -79,8 +80,8 @@ class SnapshotTest {
 
     @Test
     fun theNotificationLine() {
-        assertEquals("Connected over USB 3 · BMRLNAP Model v4", ServerService.summary(snapshot))
-        assertEquals("Stopped", ServerService.summary(Snapshot()))
+        assertEquals("Connected over USB 3 · BMRLNAP Model v4", StatusState(RunState.Serving, snapshot).subtitle)
+        assertEquals("Stopped", StatusState(RunState.Stopped, Snapshot()).subtitle)
     }
 
     companion object {

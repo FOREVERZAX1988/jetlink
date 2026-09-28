@@ -37,11 +37,8 @@ data class Snapshot(
 
     fun row(sha256: String?): ModelRow? = sha256?.let { sha -> models.firstOrNull { it.sha256 == sha } }
 
-    /** The engine's model by name; "Uploaded Model" for one no catalog names. */
-    fun modelName(sha256: String?): String? {
-        val row = row(sha256) ?: return null
-        return if (row.isOrphan) "Uploaded Model" else row.displayName
-    }
+    /** The engine's model by name. */
+    fun modelName(sha256: String?): String? = row(sha256)?.title
 
     companion object {
         @OptIn(ExperimentalSerializationApi::class)
@@ -134,6 +131,9 @@ data class ModelRow(
 ) {
     /** Prepared for this phone's processor, and so quick to load. */
     val isPrepared: Boolean get() = preparedFor.any { it.current }
+
+    /** Its name; "Uploaded Model" for one no catalog names. */
+    val title: String get() = if (isOrphan) "Uploaded Model" else displayName
 }
 
 @Serializable

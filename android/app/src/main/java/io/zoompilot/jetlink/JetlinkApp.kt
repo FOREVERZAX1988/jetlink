@@ -26,7 +26,7 @@ class AppGraph(context: Context) {
     val settings = Settings(context)
     val server = ServerController(context, scope)
     val usb = CommaUsb(context)
-    val device = DeviceMonitor(context, scope).also { it.start() }
+    val device = DeviceMonitor(context, scope)
 }
 
 val Context.graph: AppGraph get() = (applicationContext as JetlinkApp).graph

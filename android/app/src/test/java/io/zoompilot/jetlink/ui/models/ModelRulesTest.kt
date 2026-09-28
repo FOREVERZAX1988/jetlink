@@ -59,8 +59,8 @@ class ModelRulesTest {
 
     @Test
     fun titles() {
-        assertEquals("Uploaded Model", ModelRules.title(PreviewData.orphan))
-        assertEquals("BMRLNAP Model v4", ModelRules.title(PreviewData.loaded))
+        assertEquals("Uploaded Model", PreviewData.orphan.title)
+        assertEquals("BMRLNAP Model v4", PreviewData.loaded.title)
     }
 
     @Test

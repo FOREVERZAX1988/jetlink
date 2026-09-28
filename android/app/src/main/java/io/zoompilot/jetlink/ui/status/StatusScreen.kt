@@ -58,7 +58,7 @@ fun rememberStatusState(graph: AppGraph): StatusState {
 fun StatusScreen(graph: AppGraph, state: StatusState, openModels: () -> Unit, openLogs: () -> Unit) {
     val context = LocalContext.current
     val actions = StatusActions(
-        useDefault = { state.defaultModel?.let { useModel(graph, it) } },
+        useDefault = { state.defaultModel?.let { row -> graph.scope.launch { useModel(graph, row) } } },
         openModels = openModels,
         retry = {
             val row = state.snapshot.row(state.engine.sha256)
@@ -72,7 +72,7 @@ fun StatusScreen(graph: AppGraph, state: StatusState, openModels: () -> Unit, op
                     }
                 }
                 // a failed model is asked for again
-                row != null -> useModel(graph, row)
+                row != null -> graph.scope.launch { useModel(graph, row) }
                 else -> openModels()
             }
         },
@@ -143,19 +143,19 @@ private fun PreviewFrame(state: StatusState, dark: Boolean = false) {
 @Preview(showBackground = true, heightDp = 1500)
 @Composable
 private fun ServingPreview() {
-    PreviewFrame(StatusState(RunState.Serving, PreviewData.serving, PreviewData.health, UsbState.Attached("jetlink")))
+    PreviewFrame(StatusState(RunState.Serving, PreviewData.serving, PreviewData.health, UsbState.Attached))
 }
 
 @Preview(showBackground = true, heightDp = 1500, uiMode = android.content.res.Configuration.UI_MODE_NIGHT_YES)
 @Composable
 private fun ServingDarkPreview() {
-    PreviewFrame(StatusState(RunState.Serving, PreviewData.serving, PreviewData.health, UsbState.Attached("jetlink")), dark = true)
+    PreviewFrame(StatusState(RunState.Serving, PreviewData.serving, PreviewData.health, UsbState.Attached), dark = true)
 }
 
 @Preview(showBackground = true, widthDp = 800, heightDp = 380)
 @Composable
 private fun SidewaysPreview() {
-    PreviewFrame(StatusState(RunState.Serving, PreviewData.serving, PreviewData.health, UsbState.Attached("jetlink")))
+    PreviewFrame(StatusState(RunState.Serving, PreviewData.serving, PreviewData.health, UsbState.Attached))
 }
 
 @Preview(showBackground = true, heightDp = 800)

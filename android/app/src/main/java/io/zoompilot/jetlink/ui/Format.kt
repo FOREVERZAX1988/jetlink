@@ -181,8 +181,10 @@ object Format {
     fun buildDate(iso: String?, zone: ZoneId = ZoneId.systemDefault(), locale: Locale = Locale.getDefault()): String {
         if (iso.isNullOrBlank()) return ""
         val instant = runCatching { OffsetDateTime.parse(iso).toInstant() }.getOrNull() ?: return ""
-        return DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withLocale(locale).format(instant.atZone(zone))
+        return mediumDate.withLocale(locale).format(instant.atZone(zone))
     }
+
+    private val mediumDate: DateTimeFormatter = DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM)
 
     /** A sentence from the server or Android, capitalised and closed with a full stop. */
     fun sentence(text: String): String {

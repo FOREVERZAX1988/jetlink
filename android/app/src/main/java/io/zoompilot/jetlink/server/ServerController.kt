@@ -54,10 +54,6 @@ class ServerController(private val context: Context, private val scope: Coroutin
     private val logLines = MutableStateFlow<List<String>>(emptyList())
     val logs: StateFlow<List<String>> = logLines.asStateFlow()
 
-    /** The last command that failed, for a banner. */
-    private val failure = MutableStateFlow<String?>(null)
-    val lastError: StateFlow<String?> = failure.asStateFlow()
-
     private val lifecycle = Mutex()
     private var polling: Job? = null
 
@@ -127,11 +123,7 @@ class ServerController(private val context: Context, private val scope: Coroutin
         logLines.value = emptyList()
     }
 
-    fun clearError() {
-        failure.value = null
-    }
-
-    /** One control command (docs/control-protocol.md); a failure is also kept for the banner. */
+    /** One control command (docs/control-protocol.md); a refusal always says why. */
     suspend fun command(name: String, vararg arguments: Pair<String, Any?>): Reply = withContext(Dispatchers.IO) {
         val request = buildJsonObject {
             put("cmd", name)
@@ -149,8 +141,7 @@ class ServerController(private val context: Context, private val scope: Coroutin
             .getOrElse { buildJsonObject { put("ok", false); put("error", it.message ?: "no reply") } }
         val ok = reply["ok"]?.jsonPrimitive?.booleanOrNull == true
         val error = (reply["error"] as? JsonPrimitive)?.contentOrNull
-        if (!ok) failure.value = error ?: "The $name command failed."
-        Reply(ok, error)
+        Reply(ok, if (ok) error else error ?: "The $name command failed.")
     }
 
     suspend fun refreshCatalog() = command("catalog", "refresh" to true)
@@ -176,7 +167,6 @@ class ServerController(private val context: Context, private val scope: Coroutin
             context.contentResolver.openInputStream(uri)?.use { input -> copy.outputStream().use { input.copyTo(it, 1 shl 20) } }
         }.getOrNull()
         if (copied == null) {
-            failure.value = "Couldn't read that file."
             return@withContext Reply(false, "Couldn't read that file.")
         }
         val reply = importModel(copy.absolutePath)

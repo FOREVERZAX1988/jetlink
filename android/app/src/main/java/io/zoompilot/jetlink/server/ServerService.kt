@@ -21,11 +21,15 @@ import io.zoompilot.jetlink.MainActivity
 import io.zoompilot.jetlink.R
 import io.zoompilot.jetlink.graph
 import io.zoompilot.jetlink.settings.SettingsValues
+import io.zoompilot.jetlink.ui.status.StatusState
 import io.zoompilot.jetlink.usb.CommaUsb
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Runs the server while Jetlink is on: a foreground service of the
@@ -40,10 +44,18 @@ class ServerService : LifecycleService() {
 
     private val usbEvents = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            when (intent.action) {
-                UsbManager.ACTION_USB_DEVICE_ATTACHED, CommaUsb.ACTION_PERMISSION -> graph.usb.connect()
-                UsbManager.ACTION_USB_DEVICE_DETACHED ->
-                    graph.usb.detached(IntentCompat.getParcelableExtra(intent, UsbManager.EXTRA_DEVICE, UsbDevice::class.java))
+            // Detaching waits for the server to let the descriptor go: not on the main thread.
+            val pending = goAsync()
+            graph.scope.launch(Dispatchers.IO) {
+                try {
+                    when (intent.action) {
+                        UsbManager.ACTION_USB_DEVICE_ATTACHED, CommaUsb.ACTION_PERMISSION -> graph.usb.connect()
+                        UsbManager.ACTION_USB_DEVICE_DETACHED ->
+                            graph.usb.detached(IntentCompat.getParcelableExtra(intent, UsbManager.EXTRA_DEVICE, UsbDevice::class.java))
+                    }
+                } finally {
+                    pending.finish()
+                }
             }
         }
     }
@@ -63,11 +75,14 @@ class ServerService : LifecycleService() {
         lifecycleScope.launch {
             graph.settings.values.map(::serverSettings).distinctUntilChanged().collectLatest {
                 graph.server.start(graph.settings.values.value)
-                graph.usb.connect()
+                withContext(Dispatchers.IO) { graph.usb.connect() }
             }
         }
         lifecycleScope.launch {
-            graph.server.snapshot.map { summary(it) to it.connected }.distinctUntilChanged().collectLatest { (text, connected) ->
+            // the line under the Status title
+            combine(graph.server.runState, graph.server.snapshot, graph.usb.usb) { run, snapshot, usb ->
+                StatusState(run, snapshot, usb = usb).subtitle to snapshot.connected
+            }.distinctUntilChanged().collectLatest { (text, connected) ->
                 getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(text))
                 holdWakeLock(connected)
             }
@@ -81,7 +96,7 @@ class ServerService : LifecycleService() {
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
-            ACTION_USB -> graph.usb.connect()
+            ACTION_USB -> graph.scope.launch(Dispatchers.IO) { graph.usb.connect() }
         }
         return START_STICKY
     }
@@ -89,8 +104,10 @@ class ServerService : LifecycleService() {
     override fun onDestroy() {
         unregisterReceiver(usbEvents)
         holdWakeLock(false)
-        graph.usb.disconnect()
-        graph.scope.launch { graph.server.stop() }
+        graph.scope.launch(Dispatchers.IO) {
+            graph.usb.disconnect()
+            graph.server.stop()
+        }
         super.onDestroy()
     }
 
@@ -146,19 +163,5 @@ class ServerService : LifecycleService() {
 
         /** The settings the server runs with; the screen's own do not restart it. */
         private fun serverSettings(values: SettingsValues) = values.copy(keepScreenOn = false)
-
-        /** The notification's line: the state in a few words. */
-        fun summary(snapshot: Snapshot): String {
-            val model = snapshot.modelName(snapshot.engine.sha256)
-            return when {
-                !snapshot.running -> "Stopped"
-                snapshot.engine.state == "building" -> "Preparing model"
-                snapshot.engine.state == "loading" -> "Loading model"
-                snapshot.engine.state == "failed" -> "Model failed"
-                snapshot.connected -> listOfNotNull("Connected over ${snapshot.medium?.title ?: "USB"}", model).joinToString(" · ")
-                snapshot.link.state == "disconnected" -> "Disconnected"
-                else -> "Waiting for comma"
-            }
-        }
     }
 }

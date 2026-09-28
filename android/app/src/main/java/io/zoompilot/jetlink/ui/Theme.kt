@@ -1,6 +1,10 @@
 package io.zoompilot.jetlink.ui
 
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.DeviceThermostat
+import androidx.compose.material.icons.filled.LocalFireDepartment
+import androidx.compose.material.icons.filled.Thermostat
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
@@ -10,6 +14,7 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 
 /**
  * The colours Material's scheme has no slot for: the grouped screen and its
@@ -170,3 +175,11 @@ object JetlinkTheme {
         @Composable @ReadOnlyComposable
         get() = LocalJetlinkColors.current
 }
+
+/** The thermometer for a phone's heat, a flame once it is critical. */
+val Thermal.icon: ImageVector
+    get() = when (this) {
+        Thermal.Nominal, Thermal.Fair -> Icons.Filled.DeviceThermostat
+        Thermal.Serious -> Icons.Filled.Thermostat
+        Thermal.Critical -> Icons.Filled.LocalFireDepartment
+    }

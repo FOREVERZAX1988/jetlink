@@ -26,9 +26,6 @@ enum class RowAction {
 
 /** How a model row reads and what it offers, the same as the iPhone's list. */
 object ModelRules {
-    /** The model's name; one no catalog names has only its checksum. */
-    fun title(row: ModelRow): String = if (row.isOrphan) "Uploaded Model" else row.displayName
-
     /** One line of facts or progress under the name. */
     fun subtitle(row: ModelRow): String {
         val status = row.status

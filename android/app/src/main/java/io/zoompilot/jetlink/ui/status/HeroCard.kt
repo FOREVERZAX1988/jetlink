@@ -32,7 +32,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -129,7 +128,7 @@ private fun Progress(engine: Engine, modelName: String?, modifier: Modifier) {
 
 @Composable
 private fun Waiting(description: String, modifier: Modifier, compact: Boolean) {
-    val pulse by rememberInfiniteTransition(label = "waiting").animateFloat(
+    val pulse = rememberInfiniteTransition(label = "waiting").animateFloat(
         initialValue = 1f,
         targetValue = 0.35f,
         animationSpec = infiniteRepeatable(tween(1000, easing = LinearEasing), RepeatMode.Reverse),
@@ -141,7 +140,7 @@ private fun Waiting(description: String, modifier: Modifier, compact: Boolean) {
         modifier,
         description = description,
         compact = compact,
-        iconAlpha = pulse,
+        iconAlpha = { pulse.value },
     )
 }
 

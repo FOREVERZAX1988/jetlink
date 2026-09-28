@@ -33,8 +33,8 @@ data class StatusState(
     val recent: Stats? get() = snapshot.recent
     val history: List<HistorySample> get() = snapshot.history
 
-    /** What the connected comma's link is carried over. */
-    val medium: Medium? get() = if (connected) snapshot.medium else null
+    /** What the connected comma's link is carried over; the server sends it only while one is. */
+    val medium: Medium? get() = snapshot.medium
 
     /** The model a comma nobody changed asks for, for the empty state. */
     val defaultModel: ModelRow? get() = snapshot.models.firstOrNull { it.isDefault }
@@ -57,21 +57,21 @@ data class StatusState(
         data object Waiting : Hero
         data object NoModel : Hero
         /** The server failed (`model` false) or the model did. */
-        data class Failed(val reason: String, val model: Boolean) : Hero
+        data class Failed(val model: Boolean) : Hero
         /** Stopped from the notification or Settings. */
         data object Stopped : Hero
     }
 
     val hero: Hero
         get() {
-            when (val run = runState) {
-                is RunState.Failed -> return Hero.Failed(run.reason, model = false)
+            when (runState) {
+                is RunState.Failed -> return Hero.Failed(model = false)
                 RunState.Stopped -> return Hero.Stopped
                 else -> {}
             }
             return when (engine.state) {
                 "building", "loading" -> Hero.Progress(engine)
-                "failed" -> Hero.Failed(engine.detail.ifBlank { "The model could not be prepared." }, model = true)
+                "failed" -> Hero.Failed(model = true)
                 "ready" -> if (connected) Hero.Budget(recent) else Hero.Waiting
                 else -> if (hasPreparedModel) Hero.Waiting else Hero.NoModel
             }

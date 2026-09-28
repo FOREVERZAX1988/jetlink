@@ -24,7 +24,7 @@ sealed interface UsbState {
     data object NeedsPermission : UsbState
 
     /** The server has the comma's gadget. */
-    data class Attached(val name: String) : UsbState
+    data object Attached : UsbState
 
     data class Failed(val reason: String) : UsbState
 }
@@ -86,7 +86,7 @@ class CommaUsb(private val context: Context) {
             return fail(error)
         }
         open = Opened(device, connection, iface)
-        state.value = UsbState.Attached(device.productName ?: "jetlink")
+        state.value = UsbState.Attached
         Log.i(TAG, "comma attached: ${device.deviceName}, endpoints ${hex(bulkIn.address)} in, ${hex(bulkOut.address)} out")
     }
 

@@ -23,7 +23,6 @@ import androidx.compose.material.icons.filled.Cable
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Dangerous
-import androidx.compose.material.icons.filled.DeviceThermostat
 import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Movie
@@ -31,7 +30,6 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.SlowMotionVideo
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.Thermostat
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material.icons.filled.Warning
@@ -93,6 +91,7 @@ import io.zoompilot.jetlink.ui.components.copy
 import io.zoompilot.jetlink.ui.components.rememberWifiAddress
 import io.zoompilot.jetlink.ui.components.share
 import io.zoompilot.jetlink.ui.components.tile
+import io.zoompilot.jetlink.ui.icon
 import kotlinx.coroutines.launch
 
 /** The phone's chip, as the run card names it. */
@@ -137,7 +136,6 @@ fun BenchmarkScreen(graph: AppGraph) {
                 val reply = graph.server.benchmark(seconds)
                 if (!reply.ok) {
                     refusal = listOfNotNull("Couldn't start the benchmark.", reply.error?.let(Format::sentence)).joinToString(" ")
-                    graph.server.clearError()
                 }
                 starting = false
             }
@@ -375,7 +373,7 @@ private fun Totals(report: BenchReport) {
         }
         MetricRow {
             MetricTile(
-                "Temperature", thermalIcon(thermal), colors.orange, thermal.title, tile(),
+                "Temperature", thermal.icon, colors.orange, thermal.title, tile(),
                 note = BenchmarkText.thermalNote(report),
                 noteColor = colors.tone(thermal.tone),
             )
@@ -386,12 +384,6 @@ private fun Totals(report: BenchReport) {
             )
         }
     }
-}
-
-private fun thermalIcon(thermal: Thermal): ImageVector = when (thermal) {
-    Thermal.Nominal, Thermal.Fair -> Icons.Filled.DeviceThermostat
-    Thermal.Serious -> Icons.Filled.Thermostat
-    Thermal.Critical -> Icons.Filled.LocalFireDepartment
 }
 
 /** The run ten seconds at a time, with the phone's temperature as each closed. */
@@ -417,7 +409,7 @@ private fun WindowsCard(windows: List<BenchWindow>) {
                         color = if (verdict == Verdict.Good) Color.Unspecified else colors.tone(verdict.tone),
                         modifier = Modifier.weight(1f),
                     )
-                    Icon(thermalIcon(thermal), contentDescription = null, tint = colors.tone(thermal.tone), modifier = Modifier.size(16.dp))
+                    Icon(thermal.icon, contentDescription = null, tint = colors.tone(thermal.tone), modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(4.dp))
                     Text(thermal.title, style = MaterialTheme.typography.bodyMedium, color = colors.tone(thermal.tone))
                 }

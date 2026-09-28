@@ -68,7 +68,7 @@ class StatusStateTest {
         assertEquals("BMRLNAP Model v4", state.accessoryDetail)
         assertEquals("Waiting", state.linkNote)
         assertEquals("Plug in the comma.", state.waitingDescription)
-        val plugged = state.copy(usb = UsbState.Attached("jetlink"))
+        val plugged = state.copy(usb = UsbState.Attached)
         assertEquals("Connecting", plugged.linkNote)
         assertEquals("Connecting over USB.", plugged.waitingDescription)
     }
@@ -107,11 +107,11 @@ class StatusStateTest {
     @Test
     fun failures() {
         val failed = StatusState(RunState.Failed("no libjetlink"), fixture)
-        assertEquals(StatusState.Hero.Failed("no libjetlink", model = false), failed.hero)
+        assertEquals(StatusState.Hero.Failed(model = false), failed.hero)
         assertEquals("Stopped", failed.summary.title)
         assertEquals(Tone.Bad, failed.summary.tone)
         val model = StatusState(RunState.Serving, fixture.copy(engine = Engine(state = "failed", sha256 = PreviewData.BIG_MODEL_SHA)))
-        assertEquals(StatusState.Hero.Failed("The model could not be prepared.", model = true), model.hero)
+        assertEquals(StatusState.Hero.Failed(model = true), model.hero)
         assertEquals("Model Failed · BMRLNAP Model v4", model.subtitle)
     }
 

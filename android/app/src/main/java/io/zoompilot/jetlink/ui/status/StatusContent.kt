@@ -22,18 +22,15 @@ import androidx.compose.material.icons.filled.BatteryAlert
 import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Cable
-import androidx.compose.material.icons.filled.DeviceThermostat
 import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.HourglassTop
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.LinkOff
-import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Report
 import androidx.compose.material.icons.filled.SlowMotionVideo
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.StopCircle
-import androidx.compose.material.icons.filled.Thermostat
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Usb
 import androidx.compose.material.icons.filled.Warning
@@ -56,6 +53,7 @@ import io.zoompilot.jetlink.ui.components.ReadableWidth
 import io.zoompilot.jetlink.ui.components.SectionHeader
 import io.zoompilot.jetlink.ui.components.SummaryCard
 import io.zoompilot.jetlink.ui.components.tile
+import io.zoompilot.jetlink.ui.icon
 import io.zoompilot.jetlink.usb.UsbState
 
 /** How the cards are set out, from the space there is. */
@@ -208,7 +206,7 @@ private fun DeviceTiles(state: StatusState) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         MetricRow {
             MetricTile(
-                "Temperature", thermalIcon(thermal), colors.orange, thermal.title, tile(),
+                "Temperature", thermal.icon, colors.orange, thermal.title, tile(),
                 note = DeviceText.temperatureNote(health),
                 noteColor = colors.tone(thermal.tone),
             )
@@ -234,12 +232,6 @@ private fun DeviceTiles(state: StatusState) {
             )
         }
     }
-}
-
-private fun thermalIcon(thermal: Thermal): ImageVector = when (thermal) {
-    Thermal.Nominal, Thermal.Fair -> Icons.Filled.DeviceThermostat
-    Thermal.Serious -> Icons.Filled.Thermostat
-    Thermal.Critical -> Icons.Filled.LocalFireDepartment
 }
 
 private fun batteryIcon(health: DeviceHealth): ImageVector {
