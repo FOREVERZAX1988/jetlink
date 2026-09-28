@@ -1,7 +1,7 @@
 # Server control protocol
 
-Manage a running Python server from a script. The Mac and iPhone apps run the
-Swift server in process: the same events and commands, without a socket.
+Manage a running Python server from a script. The Mac, iPhone and Android apps
+run the Swift server in process: the same events and commands, without a socket.
 
 ## Starting a server with a control socket
 
