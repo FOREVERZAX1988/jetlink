@@ -30,10 +30,8 @@ on every unplug and refuses a role written through the power supply once
 nothing is attached, so the policy engine's rev3_sink_only and dual_role/mode
 last one plug at most; a forced voter gates all of those writes.
 
-USB PD is left alone. Against an M1 Pro the comma took an explicit 3 A
-contract, answered the Mac's identity query and enumerated at 5 Gb/s, drawing
-0.25 A, the same as from a Jetson's USB-A port. The hold does not survive a
-reboot.
+USB PD is left alone; a host that comes back negotiates as over any cable.
+The hold does not survive a reboot.
 """
 from __future__ import annotations
 
