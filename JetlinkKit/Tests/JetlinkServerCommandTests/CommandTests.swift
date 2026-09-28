@@ -106,23 +106,20 @@
     }
   }
 
+  /// The Linux rules are JetlinkLinux's Platform, tested there.
   struct CacheDefaultTests {
     @Test func jetlinkCacheWins() {
-      #expect(defaultCache(environment: ["JETLINK_CACHE": "/somewhere"], tegra: { true }).path == "/somewhere")
-    }
-
-    @Test func aTegraUsesItsDataPartition() {
-      #expect(defaultCache(environment: [:], tegra: { true }).path == "/mnt/data/jetlink")
+      #expect(defaultCache(environment: ["JETLINK_CACHE": "/somewhere"]).path == "/somewhere")
     }
 
     @Test(.enabled(if: !FileManager.default.fileExists(atPath: "/mnt/data/jetlink")))
     func elseTheUsersCacheDirectory() {
       let home = FileManager.default.homeDirectoryForCurrentUser.path
       #if os(macOS)
-        #expect(defaultCache(environment: [:], tegra: { false }).path == home + "/Library/Caches/jetlink")
+        #expect(defaultCache(environment: [:]).path == home + "/Library/Caches/jetlink")
       #else
-        #expect(defaultCache(environment: [:], tegra: { false }).path == home + "/.cache/jetlink")
-        #expect(defaultCache(environment: ["XDG_CACHE_HOME": "/xdg"], tegra: { false }).path == "/xdg/jetlink")
+        #expect(defaultCache(environment: ["XDG_CACHE_HOME": "/xdg"]).path == "/xdg/jetlink")
+        #expect(defaultCache(environment: [:]).path == home + "/.cache/jetlink")
       #endif
     }
   }
