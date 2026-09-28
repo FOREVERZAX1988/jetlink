@@ -527,7 +527,6 @@ class Owner:
 
   def run(self) -> None:
     gadget.clear_link()   # ours to write, and a record from a previous owner is stale
-    gadget.migrate_link_mode()
     if not self.lender.start():
       gadget.log.error("jetlink: nothing can borrow the gadget from us; modeld will open it itself")
     try:

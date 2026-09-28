@@ -75,18 +75,19 @@ class TestParamsOffTheFilesystem(unittest.TestCase):
   def test_a_missing_param_is_not_a_false(self):
     # None and False are different answers: offroad treats an unwritten param
     # as parked, and enabled treats it as off
-    self.assertIsNone(gadget.param_bool(gadget.P_ENABLED))
+    self.assertIsNone(gadget.param_bool(gadget.P_OFFROAD))
     self.assertFalse(gadget.enabled())
     self.assertTrue(gadget.offroad())
 
-  def test_the_toggle_is_true_and_nothing_else(self):
+  def test_a_bool_is_true_and_nothing_else(self):
     for raw, expected in ((b'1', True), (b'0', False), (b'', False), (b'true', True)):
-      self.write(gadget.P_ENABLED, raw)
-      self.assertIs(gadget.enabled(), expected, raw)
+      self.write(gadget.P_OFFROAD, raw)
+      self.assertIs(gadget.param_bool(gadget.P_OFFROAD), expected, raw)
+      self.assertIs(gadget.offroad(), expected, raw)
 
   def test_an_unreadable_store_is_not_an_error(self):
     with unittest.mock.patch.dict(os.environ, {'PARAMS_ROOT': '/nonexistent'}):
-      self.assertIsNone(gadget.raw_param(gadget.P_ENABLED))
+      self.assertIsNone(gadget.raw_param(gadget.P_LINK))
       self.assertFalse(gadget.enabled())
 
 
@@ -267,8 +268,7 @@ class TestTheLogger(unittest.TestCase):
 
 
 class TestLinkMode(unittest.TestCase):
-  """Accelerator Link is one param, JetlinkLink: 0 off, 1 USB, 2 iOS. A comma
-  that predates it had JetlinkEnabled, and on is USB."""
+  """Accelerator Link is one param, JetlinkLink: 0 off, 1 USB, 2 iOS."""
 
   def setUp(self):
     self.dir = Path(tempfile.mkdtemp())
@@ -280,22 +280,15 @@ class TestLinkMode(unittest.TestCase):
     (self.dir / key).write_text(value)
 
   def test_the_three_modes(self):
-    for raw, mode in (('0', 'off'), ('1', 'usb'), ('2', 'ios'), ('7', 'off'), ('x', 'off')):
+    for raw, mode in (('0', 'off'), ('1', 'usb'), ('2', 'ios'), ('7', 'off'), ('x', 'off'), ('', 'off')):
       self.write('JetlinkLink', raw)
       self.assertEqual(gadget.link_mode(), mode, raw)
     self.write('JetlinkLink', '2')
     self.assertTrue(gadget.enabled() and gadget.ios())
 
-  def test_before_the_setting_on_is_usb(self):
+  def test_unset_is_off_whatever_the_old_switch_says(self):
+    # the fork's params migration carries JetlinkEnabled over, not this
     self.assertEqual(gadget.link_mode(), 'off')
     self.write('JetlinkEnabled', '1')
-    self.assertEqual(gadget.link_mode(), 'usb')
-
-  def test_the_owner_migrates_once_and_leaves_a_set_mode_alone(self):
-    self.write('JetlinkEnabled', '1')
-    gadget.migrate_link_mode()
-    self.assertEqual((self.dir / 'JetlinkLink').read_text(), '1')
-    self.write('JetlinkLink', '2')
-    gadget.migrate_link_mode()
-    self.assertEqual((self.dir / 'JetlinkLink').read_text(), '2')
-    self.assertEqual(sorted(p.name for p in self.dir.iterdir()), ['JetlinkEnabled', 'JetlinkLink'], 'left a temp file')
+    self.assertEqual(gadget.link_mode(), 'off')
+    self.assertEqual(sorted(p.name for p in self.dir.iterdir()), ['JetlinkEnabled'], 'wrote a param')

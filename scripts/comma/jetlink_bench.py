@@ -80,7 +80,7 @@ def main():
       if value is not None:
         params.put(key, value, block=True)
     params.put('CarParams', saved['CarParamsPersistent'], block=True)
-    params.put_bool('JetlinkEnabled', not args.small, block=True)
+    params.put('JetlinkLink', 0 if args.small else 1, block=True)   # Accelerator Link off, or USB
     pm = messaging.PubMaster(['selfdriveState', 'carState', 'carControl', 'deviceState', 'extrinsicsCalibration'])
     sm = messaging.SubMaster(['modelV2', 'modelDataV2SP'])
     calibration = None

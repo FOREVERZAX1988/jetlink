@@ -56,10 +56,8 @@ def set_logger(logger) -> None:
 # one. The path rule is params.cc's: PARAMS_ROOT or /data/params, plus "/" and
 # OPENPILOT_PREFIX, which defaults to "d".
 #
-# Every key the comma layer reads is named here and nowhere else in it.
-# openpilot declares them all (params_keys.h); the one written here is P_LINK,
-# by the migration.
-P_ENABLED = "JetlinkEnabled"        # the on/off switch before P_LINK; read once, to migrate
+# Every key the comma layer reads is named here and nowhere else in it, and
+# none is written. openpilot declares them all (params_keys.h).
 P_READY = "JetlinkEngineReady"      # sha256 of the model the Jetson has built
 P_SPEC = "JetlinkSpec"              # the spec a provisioning run recorded; the owner only stats it
 P_ENDPOINT = "JetlinkEndpoint"      # optional "host:port" to use TCP instead of USB
@@ -105,25 +103,14 @@ def param_bool(key: str) -> bool | None:
   return value.strip() in (b'1', b'true', b'True')
 
 
-def param_json(key: str):
-  value = raw_param(key)
-  if not value:
-    return None
-  try:
-    return json.loads(value)
-  except ValueError:
-    return None
-
-
 def link_mode() -> str:
-  """Accelerator Link: 'off', 'usb' or 'ios'. A comma that predates the setting
-  answers from its old on/off switch, on being USB, until the owner migrates it."""
+  """Accelerator Link: 'off', 'usb' or 'ios'. Unset or unreadable is 'off'.
+  manager writes the default before anything runs, and the fork's params
+  migration carries the old on/off switch over."""
   raw = raw_param(P_LINK)
-  if raw is None:
-    return 'usb' if param_bool(P_ENABLED) is True else 'off'
   try:
     return LINK_MODES[int(raw)]
-  except (ValueError, IndexError):
+  except (TypeError, ValueError, IndexError):
     return 'off'
 
 
@@ -138,23 +125,6 @@ def ios() -> bool:
   """Is the link set to iOS, an iPhone on the cable?"""
   return link_mode() == 'ios'
 
-
-def migrate_link_mode() -> None:
-  """Once, for a comma that predates the setting: write what its on/off switch
-  meant, so the panels show the mode the owner acts on. Written as params.cc
-  writes, a temporary file renamed over the key."""
-  if raw_param(P_LINK) is not None:
-    return
-  path = params_dir() / P_LINK
-  tmp = path.with_name(f".tmp_{P_LINK}")
-  try:
-    with open(tmp, 'w') as f:
-      f.write(str(LINK_MODES.index(link_mode())))
-      f.flush()
-      os.fsync(f.fileno())
-    os.replace(tmp, path)
-  except OSError:
-    log.exception("jetlink: could not migrate the link setting")
 
 
 def offroad() -> bool:

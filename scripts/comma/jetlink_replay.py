@@ -108,7 +108,7 @@ def jetlink_params() -> dict:
   the small model, which passes everything except modelV2.big."""
   from openpilot.common.params import Params
   params = Params()
-  out: dict = {'JetlinkEnabled': True}
+  out: dict = {'JetlinkLink': 1}   # Accelerator Link USB
   # the selection is the big-model slot and the identity its pointer, both params
   for key in ('JetlinkEngineReady', 'JetlinkSpec', 'JetlinkEndpoint', 'JetlinkModelPointers',
               'ModelManager_ActiveBundleChestnut', 'ModelManager_ModelsCache_Chestnut'):
