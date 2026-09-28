@@ -58,8 +58,7 @@ def set_logger(logger) -> None:
 #
 # Every key the comma layer reads is named here and nowhere else in it, and
 # none is written. openpilot declares them all (params_keys.h).
-P_READY = "JetlinkEngineReady"      # sha256 of the model the Jetson has built
-P_SPEC = "JetlinkSpec"              # the spec a provisioning run recorded; the owner only stats it
+P_SPEC = "JetlinkSpec"              # the spec and readiness a provisioning run recorded; the owner only stats it
 P_LINK = "JetlinkLink"              # Accelerator Link, an index into LINK_MODES
 P_OFFROAD = "IsOffroad"             # manager's: is the car parked
 P_BIG_MODEL = "ModelManager_ActiveBundleChestnut"  # the model manager's big-model pick

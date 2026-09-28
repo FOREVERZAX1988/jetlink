@@ -279,11 +279,10 @@ class TestTheRunThatFinishes(OwnerTest):
     o.worker = mock.Mock(**{'poll.return_value': 0, 'returncode': 0})
 
   def test_a_successful_provision_does_not_start_a_second_run(self):
-    # a run writes JetlinkSpec and JetlinkEngineReady itself, so a mark taken
-    # when it was spawned always differs by the time it exits
+    # a run writes JetlinkSpec itself, so a mark taken when it was spawned
+    # always differs by the time it exits
     o = self.owner()
     self.finished(o)
-    self.write('JetlinkEngineReady', b'a' * 64)
     self.write('JetlinkSpec', b'{}')
     o.step()
     o.spawn_worker.assert_not_called()

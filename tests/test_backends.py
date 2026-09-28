@@ -216,7 +216,7 @@ def test_an_invalid_artifact_with_no_model_asks_for_an_upload(linked, monkeypatc
     client.ensure_engine(spec.sha256, spec.nbytes, onnx_path=None, build_timeout=10.0)
   assert not entry.exists, 'the invalid artifact was left for the next connect to trip on'
   # The next ask is answered from the disk, not the failed job: EngineMissing
-  # is what makes the comma clear JetlinkEngineReady and provision again.
+  # is what makes the comma drop its ready record and provision again.
   from jetlink.client import EngineMissing
   with pytest.raises(EngineMissing):
     client.ensure_engine(spec.sha256, spec.nbytes, onnx_path=None, build_timeout=10.0)

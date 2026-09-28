@@ -73,7 +73,7 @@ WORKER_GRACE = 10.0
 LOG = Path('/data/log/jetlink-owner.log')
 LOG_BYTES = 1 << 20
 # params whose change is a reason to look again: the pick and what is built
-WATCHED = (gadget.P_BIG_MODEL, gadget.P_READY, gadget.P_SPEC)
+WATCHED = (gadget.P_BIG_MODEL, gadget.P_SPEC)
 
 
 def _own_logger(path: Path) -> logging.Logger:
@@ -314,9 +314,9 @@ class Owner:
     self.worker = None
     # the far end may still be waking; give it the hold before letting go
     self.idle_since = time.monotonic()
-    # after the run, not before it: a run writes JetlinkSpec and
-    # JetlinkEngineReady itself, so a mark taken at spawn always differs by the
-    # time it exits and every successful provision started a second one
+    # after the run, not before it: a run writes JetlinkSpec itself, so a mark
+    # taken at spawn always differs by the time it exits and every successful
+    # provision started a second one
     self.note_marks()
     return False
 
