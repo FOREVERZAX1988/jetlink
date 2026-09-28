@@ -64,17 +64,7 @@ jobs:
           fetch-depth: 0
 
       - name: Select Xcode
-        run: |
-          echo "Xcode versions on this runner:"
-          for app in /Applications/Xcode*.app; do
-            [ -e "$app" ] && echo "  $(basename "$app")"
-          done
-          if [ ! -d /Applications/Xcode_26.6.app ]; then
-            echo "error: /Applications/Xcode_26.6.app is missing on this runner image" >&2
-            exit 1
-          fi
-          sudo xcode-select -s /Applications/Xcode_26.6.app
-          xcodebuild -version
+        uses: ./.github/actions/select-xcode
 
       - name: Install xcodegen and libusb
         run: brew install xcodegen libusb
