@@ -1,5 +1,6 @@
 package io.zoompilot.jetlink.ui.logs
 
+import android.content.Context
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,6 +27,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -44,10 +46,11 @@ import io.zoompilot.jetlink.ui.JetlinkTheme
 import io.zoompilot.jetlink.ui.LogLevel
 import io.zoompilot.jetlink.ui.components.CardSpacing
 import io.zoompilot.jetlink.ui.components.PushedScreen
-import io.zoompilot.jetlink.ui.components.share
-
-/** An intent's text travels in one Binder transaction; this keeps a share of the log well under its limit. */
-private const val SHARE_CHARS = 200_000
+import io.zoompilot.jetlink.ui.components.shareFile
+import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * What the server and the app have logged, newest at the bottom, following
@@ -56,22 +59,24 @@ private const val SHARE_CHARS = 200_000
 @Composable
 fun LogsScreen(graph: AppGraph, back: () -> Unit) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val lines by graph.server.logs.collectAsStateWithLifecycle()
     LogsContent(
         lines = lines,
         back = back,
-        share = { share(context, shareText(lines), "Jetlink Logs") },
+        share = {
+            scope.launch {
+                val file = withContext(Dispatchers.IO) { logFile(context, lines) }
+                shareFile(context, file, "text/plain", "Jetlink Logs")
+            }
+        },
         clear = graph.server::clearLogs,
     )
 }
 
-/** The last lines that fit in a share, whole. */
-fun shareText(lines: List<String>): String {
-    val text = lines.joinToString("\n")
-    if (text.length <= SHARE_CHARS) return text
-    val tail = text.takeLast(SHARE_CHARS)
-    return tail.substringAfter('\n', tail)
-}
+/** The log as a file to share: an intent's text would have to fit one Binder transaction. */
+private fun logFile(context: Context, lines: List<String>): File =
+    File(context.cacheDir, "logs").apply { mkdirs() }.resolve("jetlink.log").apply { writeText(lines.joinToString("\n", postfix = "\n")) }
 
 @Composable
 fun LogsContent(lines: List<String>, back: () -> Unit, share: () -> Unit, clear: () -> Unit) {

@@ -64,13 +64,7 @@ fun StatusScreen(graph: AppGraph, state: StatusState, openModels: () -> Unit, op
             val row = state.snapshot.row(state.engine.sha256)
             when {
                 // a server that failed to start starts again
-                state.runState is RunState.Failed -> {
-                    ServerService.start(context)
-                    graph.scope.launch {
-                        graph.server.start(graph.settings.values.value)
-                        graph.usb.connect()
-                    }
-                }
+                state.runState is RunState.Failed -> graph.restartServer(context)
                 // a failed model is asked for again
                 row != null -> graph.scope.launch { useModel(graph, row) }
                 else -> openModels()

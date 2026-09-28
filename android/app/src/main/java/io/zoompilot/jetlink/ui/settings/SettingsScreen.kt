@@ -90,6 +90,7 @@ class SettingsActions(
     val openLogs: () -> Unit = {},
     val stopServer: () -> Unit = {},
     val startServer: () -> Unit = {},
+    val restartServer: () -> Unit = {},
 )
 
 /**
@@ -124,6 +125,7 @@ fun SettingsScreen(graph: AppGraph, openConnect: () -> Unit, openLogs: () -> Uni
         openLogs = openLogs,
         stopServer = { ServerService.start(context, ServerService.ACTION_STOP) },
         startServer = { ServerService.start(context) },
+        restartServer = { graph.restartServer(context) },
     )
     Scaffold(
         containerColor = JetlinkTheme.colors.grouped,
@@ -270,7 +272,7 @@ private fun Performance(values: SettingsValues, info: SettingsInfo, actions: Set
         RowDivider()
         SwitchRow(
             "Keep CPU Awake", values.keepCpuAwake, { on -> actions.update { it.copy(keepCpuAwake = on) } },
-            supporting = "Keeps a CPU core busy between frames.",
+            supporting = "Holds the CPU's clocks up between frames.",
         )
     }
 }
@@ -284,7 +286,6 @@ private fun About(info: SettingsInfo, actions: SettingsActions) {
         RunState.Serving -> "Running"
         is RunState.Failed -> "Failed"
     }
-    val running = info.runState == RunState.Serving || info.runState == RunState.Starting
     FormSection("About") {
         ValueRow("Version", info.version)
         RowDivider()
@@ -294,10 +295,13 @@ private fun About(info: SettingsInfo, actions: SettingsActions) {
         RowDivider()
         ValueRow("Server", server, valueColor = if (info.runState is RunState.Failed) colors.bad else null)
         RowDivider()
-        if (running) {
-            ActionRow("Stop Server", actions.stopServer, color = colors.bad, chevron = false)
-        } else {
+        if (info.runState == RunState.Stopped) {
             ActionRow("Start Server", actions.startServer, color = MaterialTheme.colorScheme.primary, chevron = false)
+        } else {
+            // a failed server's service still runs: it starts again, it is not started
+            ActionRow("Restart Server", actions.restartServer, color = MaterialTheme.colorScheme.primary, chevron = false)
+            RowDivider()
+            ActionRow("Stop Server", actions.stopServer, color = colors.bad, chevron = false)
         }
     }
 }

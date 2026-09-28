@@ -59,6 +59,17 @@
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
 
+        <!-- The log file Logs shares. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.files"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/shared_files" />
+        </provider>
+
         <!-- onnxruntime's Java telemetry; the server uses the C API only, and a
              car has no business sending any. -->
         <provider

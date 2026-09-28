@@ -119,7 +119,7 @@ and Jetlink keeps serving with the screen off or another app in front.
 ## Logs
 
 **Settings > Help > Logs**. Warnings are orange and errors red. The share
-button sends the whole text; **Clear** empties the view. Over USB debugging,
+button sends the log as a file; **Clear** empties the view. Over USB debugging,
 `adb logcat -s jetlink` shows the same lines.
 
 ## Heat
@@ -150,6 +150,7 @@ A hot phone slows down and frames miss 50 ms.
 | Wi-Fi | The phone's Wi-Fi address and port, for a Mac's bench tools |
 | Processor | **NPU + GPU** (default): the vision model on the NPU, the rest on the GPU, as a Mac splits it. **NPU**: the whole model on the NPU, as the iPhone runs it. **GPU**: when something else keeps the NPU busy. **CPU**: for the emulator. Changing it prepares the model again |
 | Keep NPU Awake | On by default. Holds the NPU at full speed between frames. Uses some power |
-| Keep CPU Awake | Keeps a CPU core busy between frames. Uses some power |
+| Keep CPU Awake | With the NPU: holds the CPU's clocks up between frames, through Android's performance hints, or a busy core on a phone without them. Uses some power |
 | Keep Screen On | On by default |
 | Help | How to connect the comma, and the logs |
+| Server | **Restart Server** starts it again with the same settings; **Stop Server** stops serving until **Start Server** |

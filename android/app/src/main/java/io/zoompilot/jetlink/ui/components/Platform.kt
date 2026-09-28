@@ -16,6 +16,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.FileProvider
+import java.io.File
 import java.net.Inet4Address
 
 /** Hands `text` to another app: Messages, Notes, a mail. */
@@ -24,6 +26,18 @@ fun share(context: Context, text: String, subject: String) {
         .setType("text/plain")
         .putExtra(Intent.EXTRA_TEXT, text)
         .putExtra(Intent.EXTRA_SUBJECT, subject)
+    context.startActivity(Intent.createChooser(send, null))
+}
+
+/** Hands a file in the app's cache to another app, through the app's FileProvider. */
+fun shareFile(context: Context, file: File, type: String, subject: String) {
+    val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", file)
+    val send = Intent(Intent.ACTION_SEND)
+        .setType(type)
+        .putExtra(Intent.EXTRA_STREAM, uri)
+        .putExtra(Intent.EXTRA_SUBJECT, subject)
+        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    send.clipData = ClipData.newRawUri(subject, uri)
     context.startActivity(Intent.createChooser(send, null))
 }
 
