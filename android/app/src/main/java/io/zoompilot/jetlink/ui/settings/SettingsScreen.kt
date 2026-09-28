@@ -1,0 +1,330 @@
+package io.zoompilot.jetlink.ui.settings
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.zoompilot.jetlink.AppGraph
+import io.zoompilot.jetlink.BuildConfig
+import io.zoompilot.jetlink.server.RunState
+import io.zoompilot.jetlink.server.ServerService
+import io.zoompilot.jetlink.server.Snapshot
+import io.zoompilot.jetlink.settings.Chip
+import io.zoompilot.jetlink.settings.Processor
+import io.zoompilot.jetlink.settings.SettingsValues
+import io.zoompilot.jetlink.ui.Format
+import io.zoompilot.jetlink.ui.JetlinkTheme
+import io.zoompilot.jetlink.ui.PreviewData
+import io.zoompilot.jetlink.ui.components.ActionRow
+import io.zoompilot.jetlink.ui.components.CardSpacing
+import io.zoompilot.jetlink.ui.components.FormFooter
+import io.zoompilot.jetlink.ui.components.FormSection
+import io.zoompilot.jetlink.ui.components.RowDivider
+import io.zoompilot.jetlink.ui.components.SwitchRow
+import io.zoompilot.jetlink.ui.components.ValueRow
+import io.zoompilot.jetlink.ui.components.rememberWifiAddress
+import io.zoompilot.jetlink.usb.UsbState
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+
+/** What the Settings rows show beyond the settings themselves. */
+data class SettingsInfo(
+    val snapshot: Snapshot,
+    val runState: RunState,
+    val usb: UsbState,
+    val wifi: String?,
+    /** onnxruntime's version, from the server's info. */
+    val runtime: String?,
+    val chip: String,
+    val version: String,
+    /** The emulator also offers the CPU. */
+    val offerCpu: Boolean,
+)
+
+/** What the Settings rows do. */
+class SettingsActions(
+    val update: ((SettingsValues) -> SettingsValues) -> Unit = {},
+    val openConnect: () -> Unit = {},
+    val openLogs: () -> Unit = {},
+    val stopServer: () -> Unit = {},
+    val startServer: () -> Unit = {},
+)
+
+/**
+ * Connection, performance, display, storage, help and versions. A change the
+ * server runs with restarts it (ServerService does that).
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SettingsScreen(graph: AppGraph, openConnect: () -> Unit, openLogs: () -> Unit) {
+    val context = LocalContext.current
+    val values by graph.settings.values.collectAsStateWithLifecycle()
+    val snapshot by graph.server.snapshot.collectAsStateWithLifecycle()
+    val runState by graph.server.runState.collectAsStateWithLifecycle()
+    val usb by graph.usb.usb.collectAsStateWithLifecycle()
+    val wifi = rememberWifiAddress()
+    val runtime by produceState<String?>(null, runState) {
+        value = withContext(Dispatchers.IO) {
+            (graph.server.info()["onnxruntime"] as? JsonPrimitive)?.contentOrNull
+        }
+    }
+    val info = SettingsInfo(
+        snapshot = snapshot,
+        runState = runState,
+        usb = usb,
+        wifi = wifi,
+        runtime = snapshot.server?.runtimeVersion ?: runtime,
+        chip = Chip.name,
+        version = BuildConfig.VERSION_NAME,
+        offerCpu = Chip.isEmulator || values.processor == Processor.Cpu,
+    )
+    val actions = SettingsActions(
+        update = graph.settings::update,
+        openConnect = openConnect,
+        openLogs = openLogs,
+        stopServer = { ServerService.start(context, ServerService.ACTION_STOP) },
+        startServer = { ServerService.start(context) },
+    )
+    Scaffold(
+        containerColor = JetlinkTheme.colors.grouped,
+        topBar = {
+            TopAppBar(
+                title = { Text("Settings", fontWeight = FontWeight.Bold) },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = JetlinkTheme.colors.grouped,
+                    scrolledContainerColor = JetlinkTheme.colors.grouped,
+                ),
+            )
+        },
+    ) { padding ->
+        SettingsContent(values, info, actions, Modifier.padding(padding).consumeWindowInsets(padding))
+    }
+}
+
+@Composable
+fun SettingsContent(values: SettingsValues, info: SettingsInfo, actions: SettingsActions, modifier: Modifier = Modifier) {
+    Column(
+        modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = CardSpacing)
+            .padding(top = 8.dp, bottom = 24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(20.dp),
+    ) {
+        Connection(values, info, actions)
+        Performance(values, info, actions)
+        FormSection("Display", footer = { FormFooter("Jetlink keeps serving with the screen off.") }) {
+            SwitchRow("Keep Screen On", values.keepScreenOn, { on -> actions.update { it.copy(keepScreenOn = on) } })
+        }
+        info.snapshot.disk?.let { disk ->
+            FormSection("Storage") {
+                ValueRow("Downloaded", Format.bytes(disk.modelsBytes))
+                RowDivider()
+                ValueRow("Prepared", Format.bytes(disk.enginesBytes))
+                disk.freeBytes?.let {
+                    RowDivider()
+                    ValueRow("Available", Format.bytes(it))
+                }
+            }
+        }
+        FormSection("Help") {
+            ActionRow("Connecting the Comma", actions.openConnect)
+            RowDivider()
+            ActionRow("Logs", actions.openLogs)
+        }
+        About(info, actions)
+    }
+}
+
+@Composable
+private fun Connection(values: SettingsValues, info: SettingsInfo, actions: SettingsActions) {
+    val colors = JetlinkTheme.colors
+    val focus = LocalFocusManager.current
+    var portText by remember(values.port) { mutableStateOf(values.port.toString()) }
+    val typed = portText.toIntOrNull()?.takeIf { it in 1..65535 }
+    val apply = {
+        if (typed != null && typed != values.port) {
+            actions.update { it.copy(port = typed) }
+        } else {
+            portText = values.port.toString()
+        }
+        focus.clearFocus()
+    }
+    val link = info.snapshot.medium?.takeIf { info.snapshot.connected }?.title
+        ?: if (info.usb is UsbState.Attached) "Connecting" else "Not Connected"
+    FormSection("Connection", footer = { FormFooter("The port is only for testing from a Mac over Wi-Fi.") }) {
+        ValueRow("Link", link)
+        RowDivider()
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Port", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+            BasicTextField(
+                value = portText,
+                onValueChange = { text -> portText = text.filter(Char::isDigit).take(5) },
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyLarge.copy(color = colors.secondaryText, textAlign = TextAlign.End),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { apply() }),
+                modifier = Modifier.width(96.dp),
+            )
+        }
+        if (typed != null && typed != values.port) {
+            RowDivider()
+            ActionRow("Use Port $typed", { apply() }, color = MaterialTheme.colorScheme.primary, chevron = false)
+        }
+        info.wifi?.let { address ->
+            RowDivider()
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Wi-Fi", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                SelectionContainer {
+                    Text("$address:${info.snapshot.port ?: values.port}", style = MaterialTheme.typography.bodyLarge, color = colors.secondaryText)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun Performance(values: SettingsValues, info: SettingsInfo, actions: SettingsActions) {
+    val colors = JetlinkTheme.colors
+    var choosing by remember { mutableStateOf(false) }
+    val choices = Processor.entries.filter { it != Processor.Cpu || info.offerCpu }
+    FormSection("Performance", footer = { FormFooter("Changing the processor prepares models again.") }) {
+        Box {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable(role = Role.DropdownList) { choosing = true }
+                    .heightIn(min = 48.dp)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Processor", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                Spacer(Modifier.width(12.dp))
+                Text(values.processor.title, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.primary)
+            }
+            DropdownMenu(expanded = choosing, onDismissRequest = { choosing = false }, modifier = Modifier.background(colors.card)) {
+                choices.forEach { processor ->
+                    DropdownMenuItem(
+                        text = { Text(processor.title, fontWeight = if (processor == values.processor) FontWeight.SemiBold else null) },
+                        onClick = {
+                            choosing = false
+                            if (processor != values.processor) actions.update { it.copy(processor = processor) }
+                        },
+                    )
+                }
+            }
+        }
+        RowDivider()
+        SwitchRow(
+            "Keep NPU Awake", values.keepNpuAwake, { on -> actions.update { it.copy(keepNpuAwake = on) } },
+            supporting = "Holds the NPU at full speed between frames.",
+        )
+        RowDivider()
+        SwitchRow(
+            "Keep CPU Awake", values.keepCpuAwake, { on -> actions.update { it.copy(keepCpuAwake = on) } },
+            supporting = "Keeps a CPU core busy between frames.",
+        )
+    }
+}
+
+@Composable
+private fun About(info: SettingsInfo, actions: SettingsActions) {
+    val colors = JetlinkTheme.colors
+    val server = when (info.runState) {
+        RunState.Stopped -> "Stopped"
+        RunState.Starting -> "Starting"
+        RunState.Serving -> "Running"
+        is RunState.Failed -> "Failed"
+    }
+    val running = info.runState == RunState.Serving || info.runState == RunState.Starting
+    FormSection("About") {
+        ValueRow("Version", info.version)
+        RowDivider()
+        ValueRow("Runtime", info.runtime?.let { "onnxruntime $it" } ?: "onnxruntime")
+        RowDivider()
+        ValueRow("Chip", info.chip)
+        RowDivider()
+        ValueRow("Server", server, valueColor = if (info.runState is RunState.Failed) colors.bad else null)
+        RowDivider()
+        if (running) {
+            ActionRow("Stop Server", actions.stopServer, color = colors.bad, chevron = false)
+        } else {
+            ActionRow("Start Server", actions.startServer, color = MaterialTheme.colorScheme.primary, chevron = false)
+        }
+    }
+}
+
+@Preview(showBackground = true, heightDp = 1300)
+@Composable
+private fun SettingsPreview() {
+    JetlinkTheme {
+        Column(Modifier.background(JetlinkTheme.colors.grouped)) {
+            SettingsContent(
+                SettingsValues(),
+                SettingsInfo(
+                    snapshot = PreviewData.serving,
+                    runState = RunState.Serving,
+                    usb = UsbState.Attached("jetlink"),
+                    wifi = "192.168.1.23",
+                    runtime = "1.29.0",
+                    chip = "Snapdragon 8 Gen 3",
+                    version = "0.5.0",
+                    offerCpu = false,
+                ),
+                SettingsActions(),
+            )
+        }
+    }
+}

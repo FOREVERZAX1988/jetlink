@@ -19,3 +19,6 @@ dist/
 
 # Your team and bundle identifier for the iPhone app (ios/Config/Local.xcconfig.example)
 /ios/Config/Local.xcconfig
+
+# SwiftPM writes it when a build resolves swift-crypto (Linux, Android); the package pins a range
+/JetlinkKit/Package.resolved
