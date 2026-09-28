@@ -68,31 +68,19 @@ public struct SessionPlan: Sendable, Equatable {
 /// leaving the engine, and after `loopState` a stateful graph's next_state_
 /// outputs feed its state_ inputs on the next run by swapping two buffers:
 /// the 12 MB of queues never cross to the host.
-public final class OrtEngine: @unchecked Sendable {
+public final class OrtEngine: EngineCore, @unchecked Sendable {
   public let device: String
-  /// What the host stages: every session's inputs no earlier session produces.
-  public let inputs: [String: TensorSpec]
-  /// What the host can read: every session's outputs no later session reads.
-  public let outputs: [String: TensorSpec]
-  /// How long the last `run()` took, the whole chain, in microseconds.
-  public private(set) var lastGpuUs: UInt32 = 0
   public let providers: [String]
   /// Whether the CPU is kept warm beside this engine: a busy thread, or
   /// Android's performance hints.
   public var keepsCPUWarm: Bool { keepWarm != nil || hint != nil }
-  public var notes: String { "CPU keep-warm \(keepsCPUWarm ? "on" : "off")" }
+  public override var notes: String { "CPU keep-warm \(keepsCPUWarm ? "on" : "off")" }
 
   private let chain: [OrtSession]
-  private var buffers: [String: UnsafeMutableRawPointer] = [:]
-  /// state_ input -> the buffer its next_state_ output writes, swapped each run.
-  private var spare: [String: UnsafeMutableRawPointer] = [:]
-  private var looped: [(input: String, output: String)] = []
   private var bindings: [[OrtBinding]] = []  // [parity][session]
-  private var parity = 0
   private let keepAlive: MetalKeepAlive?
   private let keepWarm: CPUKeepWarm?
   private let hint: PerformanceHint?
-  private var closed = false
 
   /// `keepAlive` keeps the GPU clocked up between frames, `keepCPUWarm` the
   /// CPU; each only where a plan runs on that unit.
@@ -105,6 +93,8 @@ public final class OrtEngine: @unchecked Sendable {
     self.chain = chain
     self.providers = plans.map(\.label)
 
+    // What the host stages: every session's inputs no earlier session
+    // produces. What it can read: every session's outputs no later one reads.
     var produced = Set<String>()
     var inputs: [String: TensorSpec] = [:]
     for session in chain {
@@ -120,20 +110,12 @@ public final class OrtEngine: @unchecked Sendable {
         outputs[spec.name] = spec
       }
     }
-    self.inputs = inputs
-    self.outputs = outputs
-
-    // One buffer per tensor name, zeroed: inputs, hand-offs and outputs alike.
+    // One buffer per tensor name: inputs, hand-offs and outputs alike.
     var sizes: [String: Int] = [:]
     for session in chain {
       for spec in session.inputs + session.outputs {
         sizes[spec.name] = max(sizes[spec.name] ?? 0, spec.byteCount)
       }
-    }
-    for (name, size) in sizes {
-      let buffer = UnsafeMutableRawPointer.allocate(byteCount: max(size, 1), alignment: 64)
-      buffer.initializeMemory(as: UInt8.self, repeating: 0, count: max(size, 1))
-      buffers[name] = buffer
     }
     self.keepAlive = keepAlive && plans.contains(where: \.usesGPU) ? MetalKeepAlive.make() : nil
     // Android holds the clocks up when told each frame's time; elsewhere a core spins.
@@ -141,135 +123,76 @@ public final class OrtEngine: @unchecked Sendable {
     let hint = warmCPU ? PerformanceHint.make() : nil
     self.hint = hint
     self.keepWarm = warmCPU && hint == nil ? CPUKeepWarm() : nil
-    do {
-      try rebind()
-    } catch {
-      release()
-      throw error
-    }
+    try super.init(inputs: inputs, outputs: outputs, sizes: sizes)
+    // A throw from here on closes through deinit.
+    try rebind([])
   }
 
   deinit {
     close()
   }
 
-  public func hostInput(_ name: String) -> UnsafeMutableRawPointer? {
-    guard inputs[name] != nil else { return nil }
-    return current(name)
-  }
-
-  public func output(_ name: String) -> UnsafeRawPointer? {
-    guard outputs[name] != nil else { return nil }
-    return UnsafeRawPointer(current(name))
-  }
-
-  /// Where a tensor is this run: a looped state input alternates between two buffers.
-  private func current(_ name: String) -> UnsafeMutableRawPointer {
-    if parity == 1, let other = spare[name] {
-      return other
-    }
-    return buffers[name]!
-  }
-
-  /// Keep a stateful graph's queues here, each next_state_ output fed back as
-  /// its state_ input on the next run. Always true: this engine can.
-  @discardableResult
-  public func loopState(_ pairs: [(input: String, output: String)]) throws -> Bool {
-    looped = pairs
-    for pair in pairs where spare[pair.input] == nil {
-      guard let spec = inputs[pair.input] else { continue }
-      let buffer = UnsafeMutableRawPointer.allocate(byteCount: max(spec.byteCount, 1), alignment: 64)
-      spare[pair.input] = buffer
-    }
-    try rebind()
-    resetState()
+  /// The state_ inputs double-buffered, the bindings made again to swap them.
+  public override func bindLoop(_ pairs: [(input: String, output: String)]) throws -> Bool {
+    try doubleBuffer(pairs.map(\.input))
+    try rebind(pairs)
     return true
-  }
-
-  /// Empty queues, as openpilot's warmup leaves them.
-  public func resetState() {
-    for pair in looped {
-      guard let spec = inputs[pair.input] else { continue }
-      buffers[pair.input]?.initializeMemory(as: UInt8.self, repeating: 0, count: spec.byteCount)
-      spare[pair.input]?.initializeMemory(as: UInt8.self, repeating: 0, count: spec.byteCount)
-    }
-    parity = 0
   }
 
   /// One binding per session, or two with a loop: parity 0 reads state_ from
   /// the first buffer and writes next_state_ into the second, parity 1 the
   /// other way round. The next_state_ output has no buffer of its own.
-  private func rebind() throws {
-    let parities = looped.isEmpty ? 1 : 2
+  private func rebind(_ pairs: [(input: String, output: String)]) throws {
+    let outputOf = Dictionary(uniqueKeysWithValues: pairs.map { ($0.output, $0.input) })
     var sets: [[OrtBinding]] = []
-    let outputOf = Dictionary(uniqueKeysWithValues: looped.map { ($0.output, $0.input) })
-    for p in 0..<parities {
+    for p in 0..<(pairs.isEmpty ? 1 : 2) {
       var set: [OrtBinding] = []
       for session in chain {
-        let ins = session.inputs.map { spec -> (TensorSpec, UnsafeMutableRawPointer) in
-          if p == 1, let other = spare[spec.name] { return (spec, other) }
-          return (spec, buffers[spec.name]!)
-        }
+        let ins = session.inputs.map { ($0, buffer($0.name, parity: p)!) }
         let outs = session.outputs.map { spec -> (TensorSpec, UnsafeMutableRawPointer) in
-          if let input = outputOf[spec.name] {
-            // writes the buffer the state_ input reads next run
-            return (spec, p == 0 ? spare[input]! : buffers[input]!)
-          }
-          return (spec, buffers[spec.name]!)
+          guard let input = outputOf[spec.name] else { return (spec, buffer(spec.name, parity: p)!) }
+          // writes the buffer the state_ input reads next run
+          return (spec, buffer(input, parity: p ^ 1)!)
         }
         set.append(try OrtBinding(session: session, inputs: ins, outputs: outs))
       }
       sets.append(set)
     }
     bindings = sets
-    parity = 0
   }
 
-  public func run() throws {
-    guard !closed else { throw OrtError("engine is closed") }
+  public override func run() throws {
     keepAlive?.pulse()
     keepWarm?.pulse()
-    let started = DispatchTime.now().uptimeNanoseconds
     do {
-      for binding in bindings[parity] {
-        try binding.run()
-      }
+      try super.run()
     } catch {
       keepAlive?.pause()
       throw error
     }
-    if !looped.isEmpty {
-      parity ^= 1
+    hint?.report(lastRunNanoseconds)
+  }
+
+  public override func execute() throws {
+    for binding in bindings[parity] {
+      try binding.run()
     }
-    let took = DispatchTime.now().uptimeNanoseconds - started
-    hint?.report(took)
-    lastGpuUs = UInt32(min(UInt64(UInt32.max), took / 1000))
   }
 
   /// CoreML and QNN allocate their working set on the first run and the
   /// second is the steady state.
-  public func warm() throws -> String {
-    try run()
-    try run()
+  public override func warm() throws -> String {
+    _ = try super.warm()
     return "onnxruntime \(OrtRuntime.version) on \(device) in process, sessions \(providers.joined(separator: " then "))"
   }
 
-  public func close() {
-    guard !closed else { return }
-    closed = true
+  public override func close() {
+    guard !isClosed else { return }
     keepAlive?.close()
     keepWarm?.close()
     hint?.close()
-    release()
-  }
-
-  private func release() {
+    // They bind the buffers the core frees.
     bindings = []
-    for buffer in buffers.values { buffer.deallocate() }
-    for buffer in spare.values { buffer.deallocate() }
-    buffers = [:]
-    spare = [:]
+    super.close()
   }
 }
-
-extension OrtEngine: Engine {}

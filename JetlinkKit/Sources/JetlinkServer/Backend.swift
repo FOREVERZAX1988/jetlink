@@ -26,6 +26,9 @@ public struct ArtifactInvalid: Error, CustomStringConvertible {
 public protocol Engine: AnyObject {
   var inputs: [String: TensorSpec] { get }
   var outputs: [String: TensorSpec] { get }
+  /// The outputs `output(_:)` serves after a run: all but the next_state_
+  /// ones a loop feeds back inside the engine, which never reach the host.
+  var hostOutputs: [String] { get }
   var lastGpuUs: UInt32 { get }
   /// What ran beside the model, for a benchmark report's build line: "CPU
   /// keep-warm on". Empty when there is nothing to say.
@@ -62,6 +65,7 @@ public protocol EngineBackend: AnyObject, Sendable {
 
 extension Engine {
   public var notes: String { "" }
+  public var hostOutputs: [String] { outputs.keys.sorted() }
 }
 
 extension EngineBackend {
