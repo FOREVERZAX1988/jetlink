@@ -29,7 +29,7 @@ struct ServerTests {
       #expect(hello["protocol"] as? Int == 2)
       #expect(hello["backend"] as? String == "ort")
       #expect(count == 8)
-      #expect(server.framesServed == count)
+      #expect(eventually { server.framesServed == count })
     }
   }
 

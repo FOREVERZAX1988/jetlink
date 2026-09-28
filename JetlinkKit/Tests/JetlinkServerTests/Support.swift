@@ -32,6 +32,18 @@ func cpuBackend() -> any EngineBackend {
   #endif
 }
 
+/// Whether `condition` holds within `timeout`. The session counts a frame
+/// after its reply is on the wire, so the client can read the last reply
+/// before the server has counted it.
+func eventually(timeout: TimeInterval = 2, _ condition: () -> Bool) -> Bool {
+  let deadline = Date().addingTimeInterval(timeout)
+  while !condition() {
+    if Date() >= deadline { return false }
+    Thread.sleep(forTimeInterval: 0.005)
+  }
+  return true
+}
+
 /// A fresh directory, removed when the test is done with it.
 final class TemporaryDirectory {
   let url: URL

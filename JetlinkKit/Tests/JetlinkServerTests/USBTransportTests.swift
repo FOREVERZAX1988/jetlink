@@ -411,6 +411,6 @@ struct ServerUSBTests {
     defer { server.shutdown() }
     let (_, count) = try GadgetClient(comma).replay(golden)
     #expect(comma.crossed == 0)
-    #expect(server.framesServed == count)
+    #expect(eventually { server.framesServed == count })
   }
 }
