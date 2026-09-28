@@ -3,6 +3,10 @@ import JetlinkKit
 import JetlinkORT
 import JetlinkServer
 
+#if canImport(Android)
+  import Android
+#endif
+
 // The Swift server on a Mac: the same code the iPhone runs and the Mac app
 // embeds, over USB to a comma, or over TCP to scripts/bench_link.py or a
 // comma on the LAN.
