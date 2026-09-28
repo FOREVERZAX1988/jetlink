@@ -435,7 +435,9 @@ public final class EngineHost: @unchecked Sendable {
   func progress(_ stage: String, _ frac: Double, _ msg: String, force: Bool = false) {
     let now = ProcessInfo.processInfo.systemUptime
     lock.lock()
-    if !force && frac < 1 && now - lastProgress < EngineHost.progressInterval {
+    // Throttled within a stage only: a new stage's first word is never held
+    // back, or the screen would show the last stage's until the next tick.
+    if !force && frac < 1 && stage == lastStage.stage && now - lastProgress < EngineHost.progressInterval {
       lock.unlock()
       return
     }

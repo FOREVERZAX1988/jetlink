@@ -52,6 +52,20 @@ struct ServerTests {
     #expect(media.dropLast().allSatisfy { $0 == .tcp })
   }
 
+  @Test("Progress is throttled within a stage, never across one")
+  func progressStages() throws {
+    try serve { server, _ in
+      let seen = LockedLines()
+      server.host.subscribe { if case .progress(let stage, _, let msg) = $0 { seen.append("\(stage) \(msg)") } }
+      server.host.progress("patch", 0, "preparing")
+      server.host.progress("patch", 0.5, "halfway")
+      server.host.progress("compile", 0, "compiling")
+      server.host.progress("compile", 0.1, "still compiling")
+      server.host.progress("compile", 1, "compiled")
+      #expect(seen.all == ["patch preparing", "compile compiling", "compile compiled"])
+    }
+  }
+
   @Test("A replayed request is dropped, and pings are answered")
   func dropsReplays() throws {
     try serve { _, client in
