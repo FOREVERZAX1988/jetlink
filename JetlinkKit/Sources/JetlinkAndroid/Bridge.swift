@@ -55,17 +55,6 @@ func parse(_ text: String) -> [String: Any] {
   (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any] ?? [:]
 }
 
-/// An Encodable event as the control protocol's snake_case object.
-func object<T: Encodable>(_ value: T?) -> Any {
-  guard let value else { return NSNull() }
-  let encoder = JSONEncoder()
-  encoder.keyEncodingStrategy = .convertToSnakeCase
-  guard let data = try? encoder.encode(value), let object = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) else {
-    return NSNull()
-  }
-  return object
-}
-
 // MARK: the calls
 
 /// `config` is JSON: cache (a directory), device ("htp", "htp-whole", "gpu",
@@ -99,7 +88,11 @@ public func nativeCommand(_ env: Env, _ cls: jclass?, _ command: jstring?) -> js
 /// either way.
 @_cdecl("Java_io_zoompilot_jetlink_server_Native_snapshot")
 public func nativeSnapshot(_ env: Env, _ cls: jclass?, _ after: jlong, _ timeoutMs: jint) -> jstring? {
-  jstring(env, json(Host.shared.state.snapshot(after: Int(after), timeout: Double(timeoutMs) / 1000, server: Host.shared.running)))
+  let server = Host.shared.running?.server
+  let snapshot = Host.shared.state.snapshot(after: Int(after), timeout: Double(timeoutMs) / 1000, port: server?.port.map { Int($0) }) {
+    server?.recentStats(window: AppSnapshot.recentWindow)
+  }
+  return jstring(env, json(snapshot))
 }
 
 /// Log lines numbered past `after`: `{"next": n, "lines": [...]}`.
@@ -161,7 +154,7 @@ public func nativeInfo(_ env: Env, _ cls: jclass?) -> jstring? {
 final class Host: @unchecked Sendable {
   static let shared = Host()
 
-  let state = AppState()
+  let state = AppSnapshot()
   let logs = LogRing(capacity: 5000)
   let telemetry = Locked<[String: Any]>([:])
   private let lock = NSLock()
@@ -268,7 +261,7 @@ final class Host: @unchecked Sendable {
     var out: [String: Any] = ["ok": reply.ok]
     if let error = reply.error { out["error"] = error }
     for (key, value) in reply.extras {
-      out[key] = object(value)
+      out[key] = controlJSON(value)
     }
     return out
   }

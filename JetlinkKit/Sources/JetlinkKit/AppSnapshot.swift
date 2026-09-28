@@ -1,15 +1,15 @@
 import Foundation
-import JetlinkKit
-import JetlinkServer
 
-/// Everything the Android app's screens show, kept from the server's events
-/// as the iPhone's PhoneServer and ModelStore keep it, behind a lock instead
-/// of the main actor. The app asks for a snapshot and draws it.
-final class AppState: @unchecked Sendable {
+/// Everything an app's screens show, kept from the server's events as the
+/// iPhone's PhoneServer and ModelStore keep it, behind a lock instead of the
+/// main actor, and handed out whole as JSON. The Android app draws these
+/// snapshots (JetlinkAndroid); `android_snapshot.json` in the tests' fixtures
+/// is one, which the Android app's own tests parse.
+public final class AppSnapshot: @unchecked Sendable {
   /// How long a finished download stays on its row, as on the other apps.
-  static let terminalDownloadLinger: TimeInterval = 3
+  public static let terminalDownloadLinger: TimeInterval = 3
   /// The window the headline numbers cover, as on the iPhone.
-  static let recentWindow: TimeInterval = 10
+  public static let recentWindow: TimeInterval = 10
 
   private let condition = NSCondition()
   private var version = 1
@@ -27,7 +27,9 @@ final class AppState: @unchecked Sendable {
   private var shutdownRequest: Any = NSNull()
   private var shutdownRequests = 0
 
-  func reset() {
+  public init() {}
+
+  public func reset() {
     condition.lock()
     server = nil
     link = .waiting
@@ -41,14 +43,14 @@ final class AppState: @unchecked Sendable {
     condition.unlock()
   }
 
-  func serverStarted() {
+  public func serverStarted() {
     condition.lock()
     running = true
     bump()
     condition.unlock()
   }
 
-  func serverStopped() {
+  public func serverStopped() {
     condition.lock()
     running = false
     link = .waiting
@@ -63,7 +65,7 @@ final class AppState: @unchecked Sendable {
     condition.broadcast()
   }
 
-  func apply(_ event: ControlEvent) {
+  public func apply(_ event: ControlEvent) {
     condition.lock()
     defer { condition.unlock() }
     switch event {
@@ -94,9 +96,15 @@ final class AppState: @unchecked Sendable {
         imports.append(value)
       }
     case .benchmark(let value):
-      benchmark = object(value)
+      // with the report as the other apps share it
+      var event = controlJSON(value)
+      if var object = event as? [String: Any], let text = value.report?.text {
+        object["report_text"] = text
+        event = object
+      }
+      benchmark = event
     case .shutdownRequest(let value):
-      shutdownRequest = object(value)
+      shutdownRequest = controlJSON(value)
       shutdownRequests += 1
     case .hello, .reply, .unknown:
       return
@@ -105,8 +113,10 @@ final class AppState: @unchecked Sendable {
   }
 
   /// Waits until the state is newer than `after`, or `timeout` passes, and
-  /// returns it whole.
-  func snapshot(after: Int, timeout: TimeInterval, server embedded: EmbeddedServer?) -> [String: Any] {
+  /// returns it whole. `port` is where the server listens; `recent` the
+  /// frames of the last `recentWindow` seconds, asked only while a comma is
+  /// connected.
+  public func snapshot(after: Int, timeout: TimeInterval, port: Int? = nil, recent: () -> StatsEvent? = { nil }) -> [String: Any] {
     condition.lock()
     defer { condition.unlock() }
     let deadline = Date().addingTimeInterval(max(0, timeout))
@@ -114,22 +124,22 @@ final class AppState: @unchecked Sendable {
       if !condition.wait(until: deadline) { break }
     }
     let now = Date()
-    for (sha, at) in finished where now.timeIntervalSince(at) >= AppState.terminalDownloadLinger {
+    for (sha, at) in finished where now.timeIntervalSince(at) >= AppSnapshot.terminalDownloadLinger {
       downloads[sha] = nil
       finished[sha] = nil
     }
     let rows = ModelRowBuilder.build(catalog: catalog, inventory: inventory, downloads: downloads, engine: engine, link: link)
-    let recent = link.state == .connected ? embedded?.server.recentStats(window: AppState.recentWindow) : nil
+    let recentStats = link.state == .connected ? recent() : nil
     return [
       "version": version,
       "running": running,
-      "port": embedded?.server.port.map { Int($0) } ?? NSNull(),
-      "server": object(server),
-      "link": object(link),
-      "engine": object(engine),
-      "recent": object(recent),
-      "history": history.map { ["at": $0.at.timeIntervalSince1970, "stats": object($0.stats)] as [String: Any] },
-      "models": rows.map(AppState.row),
+      "port": port ?? NSNull(),
+      "server": controlJSON(server),
+      "link": controlJSON(link),
+      "engine": controlJSON(engine),
+      "recent": controlJSON(recentStats),
+      "history": history.map { ["at": $0.at.timeIntervalSince1970, "stats": controlJSON($0.stats)] as [String: Any] },
+      "models": rows.map(AppSnapshot.row),
       "catalog": catalog.map { catalog -> Any in
         [
           "fetched_at": catalog.fetchedAt ?? NSNull(),
@@ -138,9 +148,9 @@ final class AppState: @unchecked Sendable {
           "count": catalog.models.count,
         ] as [String: Any]
       } ?? NSNull(),
-      "disk": inventory.map { object($0.disk) } ?? NSNull(),
+      "disk": inventory.map { controlJSON($0.disk) } ?? NSNull(),
       "loaded": inventory?.loaded ?? NSNull(),
-      "imports": imports.map { object($0) },
+      "imports": imports.map { controlJSON($0) },
       "benchmark": benchmark,
       "shutdown_request": shutdownRequest,
       "shutdown_requests": shutdownRequests,
@@ -148,7 +158,7 @@ final class AppState: @unchecked Sendable {
   }
 
   /// A Models row as the app draws it.
-  static func row(_ row: ModelRow) -> [String: Any] {
+  public static func row(_ row: ModelRow) -> [String: Any] {
     var status: [String: Any]
     switch row.status {
     case .unresolved: status = ["kind": "unresolved"]
@@ -174,7 +184,7 @@ final class AppState: @unchecked Sendable {
       "bytes": row.bytes ?? NSNull(),
       "build_time": row.buildTime ?? NSNull(),
       "status": status,
-      "prepared_for": row.preparedFor.map { object($0) },
+      "prepared_for": row.preparedFor.map { controlJSON($0) },
       "is_loaded": row.isLoaded,
       "is_default": row.isDefault,
       "is_requested_by_comma": row.isRequestedByComma,
@@ -183,4 +193,16 @@ final class AppState: @unchecked Sendable {
       "can_use": canUse,
     ]
   }
+}
+
+/// An Encodable event as the control protocol writes it: a snake_case
+/// object, or null.
+public func controlJSON<T: Encodable>(_ value: T?) -> Any {
+  guard let value else { return NSNull() }
+  let encoder = JSONEncoder()
+  encoder.keyEncodingStrategy = .convertToSnakeCase
+  guard let data = try? encoder.encode(value), let object = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) else {
+    return NSNull()
+  }
+  return object
 }
