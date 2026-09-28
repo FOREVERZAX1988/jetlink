@@ -150,17 +150,29 @@ def main():
             print(f't={last-start:.0f}s frames={len(rows)} big={sum(r[2] for r in rows)} engaged={engaged}',
                   f'latest={rows[-1] if rows else None}', flush=True)
           tick += 1
+          if tick % 100 == 0:
+            # parked, power saving comes back on and takes cores 4-7, which
+            # slows the comma's share of every frame; a drive keeps it off
+            HARDWARE.set_power_save(False)
           time.sleep(max(0, start + tick * 0.01 - time.monotonic()))
     finally:
+      stopping = time.monotonic()
       for child in reversed(children):
         if child.poll() is None:
           child.send_signal(signal.SIGINT)
       for child in children:
+        name = child.args[-1]
         try:
           child.wait(timeout=5)
         except subprocess.TimeoutExpired:
           child.kill()
-          child.wait(timeout=5)
+          try:
+            child.wait(timeout=30)
+          except subprocess.TimeoutExpired:
+            # stuck in the kernel; the numbers are still worth keeping
+            print(f'{name} still running 35 s after SIGINT', flush=True)
+            continue
+        print(f'{name} exited {time.monotonic() - stopping:.1f} s after SIGINT', flush=True)
       for log in files:
         log.close()
       # Power saving belongs to hardwared if real ignition changed.
