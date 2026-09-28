@@ -187,8 +187,9 @@ class FfsTransport(StreamTransport):
     That process holds ep0 and the UDC bind for its whole life, so the gadget
     does not leave the bus when the link changes hands: this end only opens the
     endpoint files and moves bytes, and nothing here writes descriptors, binds
-    or unbinds. The endpoint files take a second open happily; ep0 does not,
-    which is why the owner keeps it.
+    or unbinds. The endpoint files open again once nothing is reading them (a
+    read a dead link left queued keeps them busy: see _open_after_bounce); ep0
+    never does, which is why the owner keeps it.
 
     The ep0 rule is unchanged and `udc` is what keeps it: the endpoints are
     still opened only once that controller reads configured. `bounce` is how a
@@ -295,17 +296,44 @@ class FfsTransport(StreamTransport):
       if self.ep_out >= 0:
         return
       deadline = time.monotonic() + EP_OPEN_TIMEOUT
-      while not self._configured():
-        if self._closing:
-          raise LinkError("gadget closing")
-        if time.monotonic() >= deadline:
-          raise LinkTimeout(f"no host configured the gadget within {EP_OPEN_TIMEOUT:.0f}s")
-        time.sleep(0.02)
-      self.ep_out = os.open(os.path.join(self.mount, 'ep1'), os.O_RDWR)
+      self._wait_configured(deadline)
+      try:
+        self.ep_out = os.open(os.path.join(self.mount, 'ep1'), os.O_RDWR)
+      except OSError as e:
+        if e.errno != errno.EBUSY or self._bounce is None:
+          raise
+        self.ep_out = self._open_after_bounce(deadline)
       self.ep_in = os.open(os.path.join(self.mount, 'ep2'), os.O_RDWR)
       self._had_host = True
       self._reader = threading.Thread(target=self._read_loop, name='jetlink-ffs-read', daemon=True)
       self._reader.start()
+
+  def _wait_configured(self, deadline: float) -> None:
+    while not self._configured():
+      if self._closing:
+        raise LinkError("gadget closing")
+      if time.monotonic() >= deadline:
+        raise LinkTimeout(f"no host configured the gadget within {EP_OPEN_TIMEOUT:.0f}s")
+      time.sleep(0.02)
+
+  def _open_after_bounce(self, deadline: float) -> int:
+    """ep1 answered EBUSY: a transport this process closed after its link died
+    left a read queued on it, and FunctionFS keeps that read, and the endpoint
+    with it, until an unbind completes it. Seen when a Jetson's server
+    restarted mid-drive: some rejoins met EBUSY until the drive ended. The
+    unbind is the owner's, so a borrower asks for one, then opens once the
+    host has the gadget back and the stale read has let go."""
+    log.warning("jetlink: ep1 is held by a read the last link left queued, asking the owner to bounce the gadget")
+    if not self._bounce():
+      raise LinkError("ep1 is busy and the owner would not bounce the gadget")
+    while True:
+      self._wait_configured(deadline)
+      try:
+        return os.open(os.path.join(self.mount, 'ep1'), os.O_RDWR)
+      except OSError as e:
+        if e.errno != errno.EBUSY or time.monotonic() >= deadline:
+          raise
+      time.sleep(0.05)
 
   def release_endpoints(self) -> bool:
     """Put the endpoint files down, keeping ep0 and the descriptors.

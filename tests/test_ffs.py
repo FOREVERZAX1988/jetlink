@@ -12,6 +12,7 @@ with nothing written to it blocks a reader the same way.
 """
 from __future__ import annotations
 
+import errno
 import os
 import threading
 import time
@@ -624,6 +625,45 @@ def test_a_borrowed_gadget_still_waits_for_a_host(mount, tmp_path, monkeypatch):
     state.write_text('configured\n')
     t._ensure_epfiles()
     assert t.ep_out >= 0 and t.ep_in >= 0
+  finally:
+    t.close()
+
+
+def _busy_ep1_until(monkeypatch, freed):
+  """os.open answering EBUSY for ep1 until freed() says the stale read is gone."""
+  real_open = os.open
+
+  def fake_open(path, flags, *args):
+    if str(path).endswith('ep1') and not freed():
+      raise OSError(errno.EBUSY, 'Device or resource busy', path)
+    return real_open(path, flags, *args)
+  monkeypatch.setattr(ffs.os, 'open', fake_open)
+
+
+def test_a_borrowed_endpoint_a_stale_read_holds_asks_the_owner_to_bounce(mount, tmp_path, monkeypatch):
+  """A Jetson's server restarting mid-drive could leave the dead link's read
+  queued on ep1, and every rejoin met EBUSY until the drive ended. Only an
+  unbind completes that read, and the unbind is the owner's."""
+  _udc(tmp_path / 'sys', monkeypatch)
+  bounced = []
+  _busy_ep1_until(monkeypatch, lambda: bool(bounced))
+  t = FfsTransport.borrowed(str(mount), 'udc0', bounce=lambda: bounced.append(True) or True)
+  try:
+    t._ensure_epfiles()
+    assert bounced == [True]
+    assert t.ep_out >= 0 and t.ep_in >= 0
+  finally:
+    t.close()
+
+
+def test_a_busy_endpoint_the_owner_will_not_free_is_a_link_error(mount, tmp_path, monkeypatch):
+  _udc(tmp_path / 'sys', monkeypatch)
+  _busy_ep1_until(monkeypatch, lambda: False)
+  t = FfsTransport.borrowed(str(mount), 'udc0', bounce=lambda: False)
+  try:
+    with pytest.raises(LinkError):
+      t._ensure_epfiles()
+    assert t.ep_out == -1 and t.ep_in == -1
   finally:
     t.close()
 
