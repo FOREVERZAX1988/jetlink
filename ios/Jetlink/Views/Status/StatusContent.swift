@@ -60,14 +60,14 @@ struct StatusContent: View {
           SectionHeader("Link", detail: state.linkMedium?.phoneTitle)
           link(recent)
         }
-        SectionHeader("iPhone")
+        SectionHeader(state.deviceName)
         phone
       }
     }
   }
 
   /// Shown while the scene is not active, so it is what the person sees
-  /// when they come back to a phone iOS was about to suspend.
+  /// when they come back to an app the system was about to suspend.
   private var foregroundBanner: some View {
     Label {
       VStack(alignment: .leading, spacing: 2) {

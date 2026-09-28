@@ -3,7 +3,7 @@ import JetlinkUI
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// The catalog and what is on this iPhone. One button per model, as the App
+/// The catalog and what is on this device. One button per model, as the App
 /// Store has one: Get downloads, prepares and loads it; Use loads one that is
 /// here; a ring shows a download, and a tap on it stops it.
 struct ModelsScreen: View {
@@ -336,7 +336,7 @@ struct ModelRowView: View {
       .font(.subheadline.weight(.bold))
       .buttonStyle(.bordered)
       .buttonBorderShape(.capsule)
-      .accessibilityHint(ModelFormatting.useHelp(row, device: "this iPhone"))
+      .accessibilityHint(ModelFormatting.useHelp(row, device: "this \(ThisDevice.name)"))
   }
 }
 

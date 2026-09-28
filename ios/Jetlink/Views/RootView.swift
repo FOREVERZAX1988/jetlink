@@ -41,7 +41,7 @@ struct RootView: View {
       Button("OK") {}
     } message: {
       // The reason the comma gave is in Logs.
-      Text("Jetlink can't turn off your iPhone, but you can close the app.")
+      Text("Jetlink can't turn off your \(ThisDevice.name), but you can close the app.")
     }
   }
 

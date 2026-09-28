@@ -3,9 +3,9 @@ import JetlinkUI
 import SwiftUI
 import UIKit
 
-/// Is this phone fast enough, and does it stay fast enough? The loaded model
-/// at the comma's pace on the phone alone, then the commands that add the
-/// cable from the comma and check the numbers from a Mac.
+/// Is this iPhone or iPad fast enough, and does it stay fast enough? The
+/// loaded model at the comma's pace on the device alone, then the commands
+/// that add the cable from the comma and check the numbers from a Mac.
 struct BenchmarkScreen: View {
   @Environment(AppModel.self) private var app
   @State private var refusal: String?
@@ -105,7 +105,7 @@ struct BenchmarkScreen: View {
             .font(.footnote)
             .foregroundStyle(.orange)
         }
-        Text("Run it with the iPhone charging and in its mount.")
+        Text("Run it with the \(ThisDevice.name) charging and in its mount.")
           .font(.footnote)
           .foregroundStyle(.secondary)
       }

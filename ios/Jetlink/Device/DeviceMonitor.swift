@@ -22,7 +22,7 @@ final class DeviceMonitor {
     let center = NotificationCenter.default
     observers.append(
       center.addObserver(forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: .main) { [weak self] _ in
-        MainActor.assumeIsolated { self?.warn("iOS reports memory pressure; a model being prepared may not fit") }
+        MainActor.assumeIsolated { self?.warn("the system reports memory pressure; a model being prepared may not fit") }
       })
     memoryTask = Task { [weak self] in
       while !Task.isCancelled {
@@ -61,7 +61,7 @@ final class DeviceMonitor {
       }
     let thermal = ThermalLevel(ProcessInfo.processInfo.thermalState)
     if thermal.note != nil && health.thermal.note == nil {
-      warn("the phone is \(thermal.title.lowercased()); iOS slows the chip to cool it, and frames may miss 50 ms")
+      warn("the \(ThisDevice.name) is \(thermal.title.lowercased()); the system slows the chip to cool it, and frames may miss 50 ms")
     }
     health = DeviceHealth(
       thermal: thermal,
@@ -69,5 +69,19 @@ final class DeviceMonitor {
       power: power,
       lowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled,
       availableMemory: health.availableMemory)
+  }
+}
+
+/// The device in hand. Jetlink serves the comma the same way from an iPhone
+/// and an iPad; the words that name the device follow it.
+@MainActor
+enum ThisDevice {
+  /// "iPhone" or "iPad": "your iPad", and the Status tab's section.
+  static var name: String {
+    isPad ? "iPad" : "iPhone"
+  }
+
+  static var isPad: Bool {
+    UIDevice.current.userInterfaceIdiom == .pad
   }
 }

@@ -21,6 +21,8 @@ struct StatusState: Equatable {
   /// What the connected comma's link is carried over: USB 3, USB 2 or TCP.
   var linkMedium: LinkMedium?
   var health = DeviceHealth()
+  /// "iPhone" or "iPad", over the device's own tiles.
+  var deviceName = "iPhone"
   /// The model a comma nobody changed asks for, for the empty state.
   var defaultModel: ModelRow?
   var hasPreparedModel = false

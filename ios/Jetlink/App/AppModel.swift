@@ -30,7 +30,7 @@ final class AppModel {
     device.warn = { [weak server] in server?.note(.warning, $0) }
   }
 
-  /// The server starts with the app: an iPhone app has nothing else to do,
+  /// The server starts with the app: it has nothing else to do,
   /// and a comma may already be asking.
   func launch() {
     guard !launched else { return }
@@ -52,6 +52,7 @@ final class AppModel {
     state.cableAddress = network.cable?.address
     state.linkMedium = server.linkMedium
     state.health = device.health
+    state.deviceName = ThisDevice.name
     state.needsForeground = !sceneActive && server.runState == .serving
     state.defaultModel = models.rows.first { $0.isDefault }
     state.hasPreparedModel = !(models.inventory?.artifacts.filter(\.current).isEmpty ?? true)
