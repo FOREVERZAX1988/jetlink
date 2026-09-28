@@ -5,6 +5,13 @@ import JetlinkServer
 /// onnxruntime, through the C shim in COrt.
 public enum OrtRuntime {
   public static var version: String { String(cString: jl_version()) }
+
+  /// Opens onnxruntime and makes the process's environment, or throws why it
+  /// cannot: on Linux and Android the library is opened at run time, and a
+  /// machine may not have it.
+  public static func load() throws {
+    _ = try OrtEnvironment.shared()
+  }
 }
 
 public struct OrtError: Error, CustomStringConvertible {

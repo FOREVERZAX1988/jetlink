@@ -21,6 +21,7 @@
 //                    through sysfs, telemetry, sleep and power (Linux only)
 //   JetlinkStatusPage  the read-only status page the daemon serves
 //   JetlinkAndroid   the JNI library the Android app loads, libjetlink.so (Android only)
+//   jetlink-server   the server as a command and a daemon, on Linux and macOS
 //   jetlink-serve    the server on its own, for benches
 //   jetlink-onnx     the preparation on its own, for checking it against Python
 //
@@ -60,11 +61,13 @@ let package = Package(
     .library(name: "JetlinkServer", targets: ["JetlinkServer"]),
     .library(name: "JetlinkORT", targets: ["JetlinkORT"]),
     .library(name: "jetlink", type: .dynamic, targets: ["JetlinkAndroid"]),
+    .executable(name: "jetlink-server", targets: ["jetlink-server"]),
     .executable(name: "jetlink-serve", targets: ["jetlink-serve"]),
     .executable(name: "jetlink-onnx", targets: ["jetlink-onnx"]),
   ],
   dependencies: [
-    .package(url: "https://github.com/apple/swift-crypto.git", "3.0.0"..<"5.0.0")
+    .package(url: "https://github.com/apple/swift-crypto.git", "3.0.0"..<"5.0.0"),
+    .package(url: "https://github.com/apple/swift-argument-parser.git", exact: "1.8.2"),
   ],
   targets: [
     // os.Logger's shape, where there is no os module.
@@ -115,6 +118,15 @@ let package = Package(
     .target(
       name: "JetlinkAndroid", dependencies: ["JetlinkKit", "JetlinkServer", "JetlinkORT"],
       linkerSettings: [.linkedLibrary("log", .when(platforms: [.android]))]),
+    // Built for Linux and macOS; elsewhere its sources compile to an empty program.
+    .executableTarget(
+      name: "jetlink-server",
+      dependencies: [
+        "JetlinkKit", "JetlinkLog", "JetlinkRegistry", "JetlinkServer", "JetlinkORT", "JetlinkStatusPage",
+        .target(name: "JetlinkTRT", condition: .when(platforms: [.linux])),
+        .target(name: "JetlinkLinux", condition: .when(platforms: [.linux])),
+        .product(name: "ArgumentParser", package: "swift-argument-parser", condition: .when(platforms: [.macOS, .linux])),
+      ]),
     .executableTarget(name: "jetlink-serve", dependencies: ["JetlinkKit", "JetlinkServer", "JetlinkORT"]),
     .executableTarget(name: "jetlink-onnx", dependencies: ["JetlinkONNX"]),
     // Helpers more than one test target uses: JSON comparison, hex, the source tree.
