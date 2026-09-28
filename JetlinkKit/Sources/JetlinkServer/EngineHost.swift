@@ -317,8 +317,10 @@ public final class EngineHost: @unchecked Sendable {
       do {
         engine = try backend.load(artifact: entry.path, report: progressFn)
       } catch let invalid as ArtifactInvalid {
-        // Wrong on disk, not wrong here. Replace it from the ONNX when there is
-        // one, else let the client upload again.
+        // Wrong on disk, not wrong here, whichever backend says so. Replace it
+        // once from the ONNX when that is on disk, else let the client upload
+        // again. A preload names no size; a client's request does, and the
+        // model has to match it.
         log.warning("discarding \(entry.path.lastPathComponent): \(invalid.description)")
         entry.remove()
         let size = Files.size(of: modelPath)

@@ -7,8 +7,12 @@ public typealias ProgressFn = @Sendable (String, Double, String) -> Void
 /// A file or a directory: the cache names, stages and prunes by it.
 public typealias ArtifactKind = JetlinkRegistry.ArtifactKind
 
-/// The artifact on disk is not one this backend can load. The host answers by
-/// deleting it and rebuilding from the ONNX if it has one, as in Python.
+/// The artifact on disk is not one this backend can load: another runtime's
+/// compiled cache, an older preparation, a plan from another TensorRT build.
+/// Any backend's `load` throws it for what is wrong with the file itself, and
+/// the host deletes the artifact and rebuilds it once from the ONNX when that
+/// is on disk at the size asked for; without it the client uploads again.
+/// Anything else a load throws (memory, a device gone) leaves the artifact.
 public struct ArtifactInvalid: Error, CustomStringConvertible {
   public let description: String
 
