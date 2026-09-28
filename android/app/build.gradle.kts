@@ -139,7 +139,7 @@ val swiftBuild = tasks.register<SwiftBuild>("swiftBuild") {
     onnxruntime.from(onnxruntimeAar)
     script.set(rootDir.resolve("scripts/swift-build.sh"))
     prebuilt.set(providers.gradleProperty("jetlink.prebuiltSwift"))
-    prebuiltFiles.from(providers.gradleProperty("jetlink.prebuiltSwift").map { fileTree(it) })
+    providers.gradleProperty("jetlink.prebuiltSwift").orNull?.let { prebuiltFiles.from(fileTree(it)) }
     outputDir.set(layout.buildDirectory.dir("swift/jniLibs"))
 }
 
