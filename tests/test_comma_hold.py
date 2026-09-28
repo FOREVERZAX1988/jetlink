@@ -4,9 +4,9 @@ Copyright (c) 2026-, Zeph Leggett.
 This file is part of jetlink and is licensed under the MIT License.
 See the LICENSE file in the root directory for more details.
 
-scripts/comma/jetlink_hold.py, which keeps the Jetson awake by holding a loan
-of the gadget. Against a real Lender, as the owner runs it, on a socket of the
-test's own.
+The bench's ways of borrowing the gadget: scripts/comma/jetlink_hold.py, which
+keeps the Jetson awake, and bench_link.py --loan. Against a real Lender, as
+the owner runs it, on a socket of the test's own.
 """
 from __future__ import annotations
 
@@ -107,3 +107,20 @@ class NoLoan(HoldTest):
       hold.main(['--'], path=self.path)
     assert refused.exception.code == 2
 
+
+class BenchLoan(HoldTest):
+  def test_bench_link_opens_the_client_over_the_loan(self):
+    bench = script(SCRIPTS / 'bench_link.py')
+    lender = self.lender()
+    borrow, opened = lending.borrow, []
+    with mock.patch.object(lending, 'borrow', lambda name, timeout: borrow(name, timeout=timeout, path=self.path)), \
+         mock.patch.object(bench.JetlinkClient, 'open_borrowed_ffs',
+                           lambda mount, udc, bounce: opened.append((mount, udc, bounce)) or 'client'):
+      loan, client = bench.open_loan(timeout=1.0)
+    try:
+      assert client == 'client'
+      assert opened == [(str(lending.gadget.FFS_MOUNT), 'udc0', loan.bounce)]
+      assert lender.lent and lender.borrower == 'bench'
+    finally:
+      loan.close()
+    assert self.until(lambda: not lender.lent), 'the loan was not given back'
