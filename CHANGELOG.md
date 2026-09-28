@@ -1,33 +1,22 @@
-Unreleased
-==========
-* One root script on the comma, `scripts/comma/jetlink-root.sh`, for the comma four and the comma 3X: the gadget (`gadget`, `net`, `check`, `teardown`), the USB-C port hold (`port hold|off`) and the recording VM tuning (`vm apply|restore`), run through `jetlink.comma.root`. It replaces `scripts/setup_gadget.sh` and drops what neither comma needs: the CDC-ECM fallback, the MAC address writes the kernel refuses, and modprobe
-* The comma's device layer moved here from the zoompilot fork, as the `jetlink.comma` package: the gadget and the openpilot params it reads, the owner process that holds it, the endpoint lease, the USB-C port hold and the VM tuning. The fork keeps a shim that starts the owner with its provisioning worker. Standard library only, so the owner stays at about 10 MB
-* The comma links over USB only: `JetlinkEndpoint`, which sent the link to a server over Ethernet, is gone. The server's TCP transport stays, for testing
-* The owner builds the comma's gadget on its first step, so nothing runs once per boot and `scripts/deploy_to_comma.sh` no longer builds one
-* Only the owner ever holds the comma's gadget. If nothing can borrow it from the owner, the owner keeps it, tries again every 30 s, and the reason shows where a failed gadget build does
-* The comma's Accelerator Link setting is Off, USB or iOS
-  * USB, for a Jetson or a Mac, is the plain gadget as before, lent to modeld at once
-  * iOS adds a USB network interface (CDC-NCM) for an iPhone over one cable: `scripts/comma/jetlink-root.sh gadget --ios`, and `net` sets up the comma's end of that network after a bind
-  * `check` prints what the comma has built and the negotiated USB speed
-  * The cable's DHCP pool is the whole subnet with 10 minute leases
-  * The server finds the link by its vendor interface class, wherever the gadget puts it
-  * `bench_link.py` and `verify_parity.py` take a phone's dial with `--listen`
-* iPhone
-  * Connects over one cable: the app dials the comma as soon as it has the comma's address, and the title says Connected over USB
-  * Processor defaults to the whole model on the Neural Engine, with a Keep CPU Awake setting beside Keep GPU Awake
-  * A Benchmark tab: one or ten minutes at the comma's pace, a verdict, the run in ten-second windows with the phone's temperature, and the `bench_link.py` and `verify_parity.py` commands filled in
-  * A Logs screen, a Memory tile, log lines for memory pressure, heat and the app going to the background, a banner while the app is not on screen, and an alert when the comma asks to shut down
-  * Signing from a git-ignored `Local.xcconfig`, Release when run from Xcode, and a help page on connecting the comma
-* Mac
-  * Settings > Server can run the Swift server, the one the iPhone app runs, inside the app with no Python; the Python server stays the default until it is measured with a comma on USB
-  * The Swift server opens the comma's USB link through macOS's own USB framework, finds the link by its interface class, and waits quietly while the comma has nothing serving the link
-  * A Benchmark page for the Swift server, with the iPhone app's verdict
-  * `jetlink-serve --usb` runs the Swift server as the USB host from a checkout
-* Both apps say whether the comma is on USB 3, USB 2 or TCP, and warn on USB 2; on the iPhone the title turns orange
-  * The comma's hello names its link and the speed its USB controller negotiated; the server's link event carries it as `medium`
-* The tinygrad backend is gone: `--backend tinygrad`, the `jetlink[tinygrad]` extra, and tinygrad in the Mac app's Backend setting and bundled runtime. It missed the 50 ms frame budget on every Mac measured and no other host used it; a Mac that had it picked comes back on Automatic
-* The server's `--transport ffs`, which made the server the USB gadget, is gone with its `--ffs-mount`, `--gadget` and `--udc` flags; the comma is always the gadget
-* The old import paths `jetlink.server.builder`, `jetlink.server.engine` and `jetlink.server.cudart` are gone; they have been `jetlink.server.cache` and `jetlink.server.backends.trt` since v0.3.0a1
+Jetlink v0.5.0
+==============
+**iPhone & iPad support!**
+* Run big models on an iPhone or iPad over one USB cable (experimental, build with Xcode) <3
+* Turn on: Settings > Models > Accelerator Link > iOS.
+
+**One Swift engine**
+* The Mac and iPhone apps now share one Swift server, matched to the Python server's output.
+
+**General Updates & Fixes**
+* **Accelerator Link:** Now Off, USB or iOS. Set it again after updating.
+* **Default Model:** Cinque Terre V3.
+* **Model Switching:** New models download and build in one step.
+* **Reliability:** Recovers in seconds if the Jetson server restarts mid-drive.
+* **Jetson Power Off:** Fixed the comma not shutting the Jetson down.
+* **Mac:** Swift server option with no Python, and a Benchmark page.
+
+**Removed**
+* tinygrad backend and Jetson over Ethernet.
 
 Jetlink v0.4.3
 ==============
