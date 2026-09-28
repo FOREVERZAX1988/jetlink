@@ -83,6 +83,8 @@ Only tested with a Mac standing in for the phone. You need:
 
 ### Android (experimental)
 
+<a href="docs/images/android-demo.mp4"><img src="docs/images/android-demo.webp" width="100%" alt="Jetlink for Android, recorded in the Android emulator: Get downloads a model, the comma connects over USB, and Status shows each frame against the 50 ms budget. The download is sped up, the emulator's CPU preparation cut, and the model's time modeled on an estimate for a Snapdragon 8 Gen 3"></a>
+
 Not yet run on a phone. You need:
 
 * An Android phone with a Snapdragon 8 Gen 2 or newer and USB 3.
