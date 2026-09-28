@@ -37,10 +37,6 @@ SLEEP_AFTER = 120.0
 RETRY_MIN = 10.0
 RETRY_MAX = 300.0
 
-# The kernel's own freezer timeout; an attempt cannot take longer than this
-# and still have failed to freeze.
-FREEZER_TIMEOUT = 20.0
-
 # The USB wake is not guaranteed: a sleeping Jetson answered a bind with a bus
 # reset and no enumeration through four connect cycles and needed its button,
 # which in the car is a whole drive on the small model. An RTC alarm does not

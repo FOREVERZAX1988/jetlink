@@ -127,9 +127,8 @@ APPLE_ONNXRUNTIME = '1.29.0'
 EXPECTED_COREML_SECONDS = 10.0
 
 # The two subtrees onnxruntime fills in the cache directory, in the order it
-# fills them: it writes the MLProgram out first, then coremlc compiles that
-# into compiled_model.mlmodelc. Which one is growing is the stage.
-CONVERTED_DIR = 'Data'
+# fills them: it writes the MLProgram out first (Data/), then coremlc compiles
+# that into compiled_model.mlmodelc. Which one is growing is the stage.
 COMPILED_DIR = 'compiled_model.mlmodelc'
 
 

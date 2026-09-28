@@ -163,9 +163,6 @@ class Telemetry:
     }
 
 
-TegraTelemetry = Telemetry
-
-
 class NoTelemetry:
   """A host with no sensors this process may read. An empty sample is what the
   client already treats as "no health", so the comma logs nothing rather than
