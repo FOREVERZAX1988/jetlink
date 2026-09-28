@@ -38,6 +38,7 @@ import time
 from pathlib import Path
 from platform import python_version
 
+import jetlink
 from jetlink.server import platform
 from jetlink.server.backends import NAMES, available, select
 from jetlink.server.cache import EngineCache
@@ -141,14 +142,6 @@ def _interrupt_main() -> None:
     os.kill(os.getpid(), signal.SIGINT)
   except (AttributeError, OSError, ValueError):
     _thread.interrupt_main()
-
-
-def _package_version() -> str:
-  try:
-    import importlib.metadata
-    return importlib.metadata.version('jetlink')
-  except Exception:
-    return '0.0.0'
 
 
 class _WaitLog:
@@ -393,7 +386,7 @@ def main(argv=None) -> int:
     # The registry is control.py's to build: it is the only caller, and this
     # module must not pull the network code in when nothing asked for it.
     control = ControlServer(args.control_socket, host, cache, info={
-      'version': _package_version(), 'python': python_version(), 'platform': sys.platform,
+      'version': jetlink.__version__, 'python': python_version(), 'platform': sys.platform,
       'cache': str(cache.root), 'transport': args.transport,
       'port': args.port if args.transport == 'tcp' else None})
     control.start()

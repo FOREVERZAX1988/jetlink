@@ -7,8 +7,9 @@ images.
 Pushing a `v*` tag starts the Release workflow. It builds and publishes the
 macOS app, Python source distribution and wheel, and container images.
 
-1. Update `version` in `pyproject.toml`, add a `Jetlink vX.Y.Z` section to the
-   top of `CHANGELOG.md`, and commit. The tag version must match `pyproject.toml`;
+1. Update `__version__` in `jetlink/__init__.py` (`pyproject.toml` reads it
+   from there), add a `Jetlink vX.Y.Z` section to the top of `CHANGELOG.md`,
+   and commit. The tag version must match `__version__`;
    `macos/scripts/check-version.sh` checks this before the build. The section
    becomes the release notes, so write it for the people installing: what they
    will notice, not how it was done. Without one, GitHub generates the notes.
@@ -29,7 +30,7 @@ git push origin v0.3.0
 
 A prerelease tag is published as a prerelease. Supported formats include a
 hyphen (`v0.3.0-rc1`) and the PEP 440 suffixes (`v0.3.0a1`, `v0.3.0b2`,
-`v0.3.0rc1`). Use the same version string in `pyproject.toml` and the tag,
+`v0.3.0rc1`). Use the same version string in `jetlink/__init__.py` and the tag,
 excluding the leading `v`. Prefer PEP 440 suffixes to avoid wheel filename
 normalization.
 
