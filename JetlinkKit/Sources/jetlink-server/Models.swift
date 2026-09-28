@@ -165,7 +165,8 @@
 
       func run(_ registry: Registry, _ console: Console) async throws {
         let source = URL(fileURLWithPath: path)
-        let total = (try? FileManager.default.attributesOfItem(atPath: source.path))
+        let total =
+          (try? FileManager.default.attributesOfItem(atPath: source.path))
           .flatMap { $0[.type] as? FileAttributeType == .typeRegular ? ($0[.size] as? NSNumber)?.int64Value : nil } ?? 0
         let local = try await registry.importModel(at: source, name: name, progress: progressLine(total: total, console))
         console.err("\n")
@@ -191,7 +192,8 @@
         }
         console.out("models")
         for model in payload.models {
-          console.out("  \(model.sha256.prefix(16))  \(right("\(model.bytes / megabyte)", 6)) MB  \(model.name.flatMap { $0.isEmpty ? nil : $0 } ?? "(unknown)")")
+          console.out(
+            "  \(model.sha256.prefix(16))  \(right("\(model.bytes / megabyte)", 6)) MB  \(model.name.flatMap { $0.isEmpty ? nil : $0 } ?? "(unknown)")")
         }
         console.out("engines")
         for artifact in payload.artifacts {
@@ -267,7 +269,11 @@
     let shown = Locked(-1)
     return { frac in
       let percent = Int(frac * 100)
-      guard shown.withLock({ last in defer { last = percent }; return last != percent }) else { return }
+      let changed = shown.withLock { last in
+        defer { last = percent }
+        return last != percent
+      }
+      guard changed else { return }
       let done = Int64(frac * Double(total))
       console.err("\r\(right("\(percent)", 3))% \(done / megabyte)/\(total / megabyte) MB")
     }

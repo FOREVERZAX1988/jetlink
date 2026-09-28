@@ -2,6 +2,10 @@ import CTrt
 import Foundation
 import JetlinkServer
 
+#if canImport(Android)
+  import Android
+#endif
+
 /// A TensorRT plan, loaded: the Swift form of the Python server's
 /// trt/engine.py, the design the car was validated on.
 ///
@@ -322,7 +326,9 @@ private func deserialize(_ plan: URL, _ trt: TensorRT) throws -> OpaquePointer {
   guard fstat(fd, &status) == 0 else { throw TrtError("cannot stat \(name): \(String(cString: strerror(errno)))") }
   let size = Int(status.st_size)
   guard size > 0 else { throw ArtifactInvalid("\(name): the plan is empty") }
-  guard let base = mmap(nil, size, PROT_READ, MAP_PRIVATE, fd, 0), base != MAP_FAILED else {
+  // Optional on Glibc, not on Bionic, whose MAP_FAILED Swift cannot import.
+  let mapped: UnsafeMutableRawPointer? = mmap(nil, size, PROT_READ, MAP_PRIVATE, fd, 0)
+  guard let base = mapped, base != UnsafeMutableRawPointer(bitPattern: -1) else {
     throw TrtError("cannot map \(name): \(String(cString: strerror(errno)))")
   }
   defer { munmap(base, size) }

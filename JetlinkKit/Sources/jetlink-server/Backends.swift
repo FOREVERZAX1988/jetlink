@@ -31,16 +31,16 @@
 
     /// The options, with "auto" read as each backend's default device, as
     /// the Python server's --device took it.
-    func options(keepAlive: Bool = true, keepCPUWarm: Bool = true) -> BackendOptions {
-      BackendOptions(device: device == "auto" ? nil : device, keepAlive: keepAlive, keepCPUWarm: keepCPUWarm)
+    func options(keepAlive: Bool = true, keepCPUWarm: Bool = true, gpuTiming: Bool = false) -> BackendOptions {
+      BackendOptions(device: device == "auto" ? nil : device, keepAlive: keepAlive, keepCPUWarm: keepCPUWarm, gpuTiming: gpuTiming)
     }
 
     /// The backend asked for; with none, logs why and exits 1. `auto` logs
     /// why it passed over each one it did not take.
-    func pick(keepAlive: Bool = true, keepCPUWarm: Bool = true) throws -> any EngineBackend {
+    func pick(keepAlive: Bool = true, keepCPUWarm: Bool = true, gpuTiming: Bool = false) throws -> any EngineBackend {
       let log = ServerLog(category: "main")
       do {
-        return try options(keepAlive: keepAlive, keepCPUWarm: keepCPUWarm).pick(backend) { name, why in
+        return try options(keepAlive: keepAlive, keepCPUWarm: keepCPUWarm, gpuTiming: gpuTiming).pick(backend) { name, why in
           log.info("not using \(name.rawValue): \(why)")
         }
       } catch {
@@ -57,6 +57,9 @@
     var device: String?
     var keepAlive = true
     var keepCPUWarm = true
+    /// TensorRT times every launch with CUDA events, as
+    /// JETLINK_TRT_GPU_TIMING=1 has it do anywhere.
+    var gpuTiming = false
 
     /// TensorRT, if it loads here and the GPU answers. A build without
     /// TensorRT's headers has the fake shim, which never loads.
@@ -68,7 +71,7 @@
           index = parsed
         }
         do {
-          return try TrtBackend(device: index)
+          return gpuTiming ? TrtBackend(trt: try TensorRT(device: index), gpuTiming: true) : try TrtBackend(device: index)
         } catch {
           throw BackendUnusable(String(describing: error))
         }
