@@ -385,10 +385,9 @@ def net_up() -> bool:
   """Bring the gadget's network interface up, for a phone to dial over.
 
   The netdev does not exist until the first UDC bind (f_ncm registers it in
-  its bind), and the gadget subcommand never binds, so its own attempt at
-  setup time reports "error: no netdev yet". The owner runs this after it
-  binds. `net` is idempotent: nmcli unmanaged, 192.168.60.1/24, the DHCP
-  server, and NET_STATUS written as "ok 192.168.60.1 <netdev>" or
+  its bind), and the gadget subcommand never binds, so the owner runs this
+  after it binds. `net` is idempotent: nmcli unmanaged, 192.168.60.1/24, the
+  DHCP server, and NET_STATUS written as "ok 192.168.60.1 <netdev>" or
   "error: <reason>".
   """
   if not root.run('net'):

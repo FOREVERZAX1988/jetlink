@@ -5,9 +5,9 @@ This file is part of jetlink and is licensed under the MIT License.
 See the LICENSE file in the root directory for more details.
 
 The comma's USB-C port: when it is held at sink, when it is let go, and what it
-leaves alone. A USB-A host, a chestnut and a device without the lever must see
-no change at all; a C-to-C host that lost the toss gets one hold, and only for
-as long as it is plugged in.
+leaves alone. A USB-A host and a chestnut must see no change at all; a C-to-C
+host that lost the toss gets one hold, and only for as long as it is plugged
+in.
 """
 import tempfile
 import unittest
@@ -185,13 +185,14 @@ class TestTheLink(PortTest):
     self.port.off()
     self.assertEqual(self.commands(), ['off'])
 
-  def test_without_the_lever_the_port_is_not_watched(self):
-    self.script.return_value = False
+
+  def test_a_failed_first_off_does_not_stop_the_watch(self):
+    # both commas have the lever, so a failure is a failure, which root.run
+    # has logged, and not a device without one
+    self.script.side_effect = lambda command: command != 'off'
     self.plug('source')
-    with mock.patch.object(port, 'power_role') as role:
-      self.run_for(60)
-    self.assertEqual(self.commands(), ['off'])
-    role.assert_not_called()
+    self.run_for(SWAP + 1)
+    self.assertEqual(self.commands(), ['off', 'hold'])
 
   def test_no_policy_engine_is_no_role(self):
     self.role.unlink()
@@ -210,6 +211,6 @@ class TestTheScript(unittest.TestCase):
     run.assert_called_once_with('port', 'hold', timeout=root.PORT_TIMEOUT)
 
   def test_a_failure_is_a_false(self):
-    # root.run has logged why: no lever, sudo, or a timeout
+    # root.run has logged why: sudo, a write that failed, or a timeout
     ok, _ = self.run_with(False)
     self.assertFalse(ok)

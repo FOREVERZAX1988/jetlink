@@ -19,10 +19,10 @@ this port. So once the comma has been the host for a few seconds with no
 chestnut on the port, whatever is on the other end is a host that lost the
 toss, and the port is held at sink until that cable comes out. Nothing happens
 anywhere else: the comma as the device (every USB-A host, a C-to-C host that
-won), a power supply, a chestnut, and a device without the lever all leave the
-port as AGNOS boots it. Holding for the whole session would be simpler and
-would hide a chestnut plugged in while the link is on, since
-chestnut_present() needs the comma to host it before jetlink stands aside.
+won), a power supply and a chestnut all leave the port as AGNOS boots it.
+Holding for the whole session would be simpler and would hide a chestnut
+plugged in while the link is on, since chestnut_present() needs the comma to
+host it before jetlink stands aside.
 
 The lever is the charger's DISABLE_POWER_ROLE_SWITCH voter, forced from
 debugfs. It is the one that holds. The charger puts the port back to dual role
@@ -103,8 +103,8 @@ class Port:
     self._reset()
 
   def _reset(self) -> None:
-    self.able: bool | None = None   # is there a lever; None until the link is first on
-    self.held = False               # the voter is forced to sink
+    self.cleared = False   # the port put back as AGNOS boots it, once a session
+    self.held = False      # the voter is forced to sink
     # this plug has been judged, so leave it until it comes out. Also set for
     # the length of a hold until a host comes back
     self.settled = False
@@ -112,12 +112,10 @@ class Port:
     self.role_since = 0.0
 
   def update(self, now: float | None = None) -> None:
-    if self.able is None:
-      # the port as AGNOS boots it, whatever an owner killed mid-hold left
-      # behind, and the answer to whether there is a lever at all
-      self.able = run_script('off')
-    if not self.able:
-      return
+    if not self.cleared:
+      # whatever an owner killed mid-hold left behind
+      run_script('off')
+      self.cleared = True
     now = time.monotonic() if now is None else now
     role = power_role()
     if role != self.role:

@@ -6,10 +6,10 @@
 # Everything jetlink does as root on the comma, in one place. The owner runs it
 # through jetlink/comma/root.py, which is sudo -n and a timeout:
 #
-#   sudo scripts/comma/jetlink-root.sh gadget            # at boot: a Jetson or a Mac
-#   sudo scripts/comma/jetlink-root.sh gadget --ios      # at boot: an iPhone
+#   sudo scripts/comma/jetlink-root.sh gadget            # the gadget for a Jetson or a Mac
+#   sudo scripts/comma/jetlink-root.sh gadget --ios      # the gadget for an iPhone
 #   sudo scripts/comma/jetlink-root.sh net               # after a bind, iOS only: address, DHCP
-#   sudo scripts/comma/jetlink-root.sh check             # what this comma can do
+#   sudo scripts/comma/jetlink-root.sh check             # what is there now
 #   sudo scripts/comma/jetlink-root.sh teardown
 #   sudo scripts/comma/jetlink-root.sh port hold|off     # the USB-C port held as the device, or let go
 #   sudo scripts/comma/jetlink-root.sh vm apply|restore  # the link's VM tuning, or the stock values
@@ -29,35 +29,37 @@
 # 192.168.60.1:5599.
 #
 # It does not bind the UDC: a FunctionFS gadget cannot attach to a controller
-# until its descriptors are written, and whoever opens ep0 writes them and
-# binds. The NCM function rides on that bind, and its netdev exists only from
-# the first bind on, so the network part of setup is repeated by whoever binds
-# (net).
+# until its descriptors are written, and the owner, which opens ep0, writes
+# them and binds. The NCM function rides on that bind, and its netdev exists
+# only from the first bind on, so the network is set up by net, which the owner
+# runs after each bind.
 #
 # On failure the reason is left in $STATUS_FILE as well as on stderr, so the
-# openpilot side can say why the link is unavailable. The network part reports
-# separately in $NET_STATUS_FILE; it never fails the gadget.
+# openpilot side can say why the link is unavailable. net reports in
+# $NET_STATUS_FILE; it never fails the gadget.
 set -euo pipefail
 
 GADGET=/sys/kernel/config/usb_gadget/jetlink
-FFS_MOUNT=${FFS_MOUNT:-/dev/ffs-jetlink}
+FFS_MOUNT=/dev/ffs-jetlink
 FFS_NAME=jetlink
 CONFIGFS=/sys/kernel/config
+# who openpilot runs as: the owner opens the endpoints and binds the UDC as it
+OPENPILOT_USER=comma
 # tmpfs on purpose: per-boot state, and the comma's flash is precious
-STATUS_FILE=${JETLINK_STATUS_FILE:-/dev/shm/jetlink-gadget}
-NET_STATUS_FILE=${JETLINK_NET_STATUS_FILE:-/dev/shm/jetlink-net}
+STATUS_FILE=/dev/shm/jetlink-gadget
+NET_STATUS_FILE=/dev/shm/jetlink-net
 # pid.codes test allocation; get a real PID before distributing this
-VID=${JETLINK_VID:-0x1209}
-PID=${JETLINK_PID:-0x0001}
+VID=0x1209
+PID=0x0001
 NET_IF=usb0    # the function name suffix only; see net_ifname for the netdev
 # NCM batches packets, which a 460 KB frame benefits from
 NET_FN=ncm.$NET_IF
-COMMA_ADDR=${JETLINK_COMMA_ADDR:-192.168.60.1}
+COMMA_ADDR=192.168.60.1
 COMMA_PREFIX=24
 # The whole subnet and short leases: the comma's 4.9 kernel gives the host a new
 # random MAC every bind, so each bind is a new DHCP client. With 8 addresses and
 # an hour's lease, eight rebinds in an hour left the next host without one.
-DHCP_RANGE=${JETLINK_DHCP_RANGE:-192.168.60.2,192.168.60.254,10m}
+DHCP_RANGE=192.168.60.2,192.168.60.254,10m
 DNSMASQ_PID=/dev/shm/jetlink-dnsmasq.pid
 DNSMASQ_IF=/dev/shm/jetlink-dnsmasq.if
 DNSMASQ_LEASES=/dev/shm/jetlink-usb0.leases
@@ -74,7 +76,8 @@ USBPD=/sys/class/usbpd/usbpd0
 # System-wide, since the gadget read shares the kernel with every writer.
 VM_SYSCTLS=(vm.dirty_bytes=16777216 vm.dirty_background_bytes=8388608 vm.min_free_kbytes=131072)
 PROC_SYS=${JETLINK_PROC_SYS:-/proc/sys}
-# the stock values, as JSON, recorded by the first apply and dropped by restore
+# the stock values to write back, one key=value a line, recorded by the first
+# apply and dropped by restore
 SYSCTL_PREV=${JETLINK_SYSCTL_PREV:-/dev/shm/jetlink-sysctl-prev}
 
 usage() {
@@ -121,17 +124,10 @@ net_ifname() {
   echo "$name"
 }
 
-# The comma's end of the cable network. Idempotent, and never fatal: the gadget
-# is usable by a Jetson or a Mac with no network at all. Called at the end of
-# gadget --ios, where the netdev usually does not exist yet, and by the owner
-# through net once it has bound the UDC and the interface has appeared.
+# The comma's end of the cable network. Idempotent, and never fatal. The owner
+# runs it through net once it has bound the UDC and the interface has appeared.
 net_up() {
   local dev why
-  if ! net_present; then
-    net_status "net: unavailable"
-    echo "no network function in the gadget; the cable link is USB only" >&2
-    return 0
-  fi
   if ! dev=$(net_ifname); then
     net_status "error: no netdev yet; it appears when the owner binds the UDC (then run net)"
     echo "$NET_FN present, its netdev not yet created (appears at bind); run net after binding" >&2
@@ -204,7 +200,7 @@ net_remove() {
 # -- subcommands ----------------------------------------------------------------
 
 cmd_gadget() {
-  local ios=0 udcs other owner bound serial net=0 ffs_user ffs_opts
+  local ios=0 udcs other owner bound serial uid gid
   case "${1:-}" in
     "") ;;
     --ios) ios=1 ;;
@@ -302,54 +298,41 @@ cmd_gadget() {
   if [[ $ios -eq 0 ]]; then
     if net_present; then net_remove; fi
   else
-    if net_present || mkdir "functions/$NET_FN" 2>/dev/null; then
-      net=1
-      # after ffs, so it takes the next interface numbers
-      [[ -L "configs/c.1/$NET_FN" ]] ||
-        ln -s "$GADGET/functions/$NET_FN" "configs/c.1/$NET_FN" ||
-        fail "could not link $NET_FN into configs/c.1"
-    else
-      echo "jetlink: kernel has no ncm gadget function; no cable network" >&2
-    fi
+    mkdir -p "functions/$NET_FN" || fail "could not create the $NET_FN gadget function"
+    # after ffs, so it takes the next interface numbers
+    [[ -L "configs/c.1/$NET_FN" ]] ||
+      ln -s "$GADGET/functions/$NET_FN" "configs/c.1/$NET_FN" ||
+      fail "could not link $NET_FN into configs/c.1"
   fi
 
   mkdir -p "$FFS_MOUNT"
-  # Owned by the user openpilot runs as: on a root-only mount modeld and jetlinkd
-  # cannot open the endpoints, and Path.exists() raises rather than returning False.
-  ffs_user="${JETLINK_USER:-comma}"
-  if id -u "$ffs_user" >/dev/null 2>&1; then
-    ffs_opts="uid=$(id -u "$ffs_user"),gid=$(id -g "$ffs_user")"
-  else
-    ffs_opts=""
-  fi
-  mountpoint -q "$FFS_MOUNT" || mount -t functionfs ${ffs_opts:+-o "$ffs_opts"} "$FFS_NAME" "$FFS_MOUNT" ||
+  # Owned by the user openpilot runs as: on a root-only mount the owner and
+  # modeld cannot open the endpoints, and Path.exists() raises rather than
+  # returning False.
+  uid=$(id -u "$OPENPILOT_USER")
+  gid=$(id -g "$OPENPILOT_USER")
+  mountpoint -q "$FFS_MOUNT" || mount -t functionfs -o "uid=$uid,gid=$gid" "$FFS_NAME" "$FFS_MOUNT" ||
     fail "could not mount functionfs at $FFS_MOUNT"
 
-  # the check that proves the chain: ep0 is what a client opens to write the
+  # the check that proves the chain: ep0 is what the owner opens to write the
   # descriptors and bind the controller
   [[ -e "$FFS_MOUNT/ep0" ]] || fail "functionfs mounted at $FFS_MOUNT but has no ep0"
 
-  # the client binds the UDC as the openpilot user, so hand it that one attribute
-  if [[ -n "$ffs_opts" ]]; then
-    chown "$ffs_user" "$GADGET/UDC" 2>/dev/null || true
-  fi
+  # the owner binds the UDC as the openpilot user, so hand it that one attribute
+  chown "$OPENPILOT_USER" "$GADGET/UDC" 2>/dev/null || true
 
   status ok
   echo "gadget ready at $GADGET"
   echo "functionfs mounted at $FFS_MOUNT"
-  if [[ $net -eq 1 ]]; then
-    echo "network function: $NET_FN (after ffs.$FFS_NAME in configs/c.1)"
-  fi
-  echo "available UDCs: ${udcs[*]##*/}"
-  echo "now start the server; it writes the descriptors and binds the UDC"
-  # the netdev usually does not exist yet (it is created at bind), so this
-  # mostly records why and leaves the rest to net; on a re-run after a bind it
-  # is the whole thing. A USB gadget has no network to bring up.
   if [[ $ios -eq 1 ]]; then
-    net_up
+    echo "network function: $NET_FN (after ffs.$FFS_NAME in configs/c.1)"
+    # its netdev appears at the owner's bind, and net sets it up then
+    rm -f "$NET_STATUS_FILE" 2>/dev/null || true
   else
     net_status "net: off"
   fi
+  echo "available UDCs: ${udcs[*]##*/}"
+  echo "the owner writes the descriptors and binds the UDC"
 }
 
 cmd_net() {
@@ -389,37 +372,30 @@ cmd_teardown() {
 }
 
 cmd_check() {
-  local ok=1 u g found="" udcs dev probe
+  local u g dev udcs
   [[ $EUID -eq 0 ]] || { echo "run check as root (sudo)" >&2; exit 1; }
   echo "kernel: $(uname -r)"
   if mountpoint -q "$CONFIGFS" && [[ -d "$CONFIGFS/usb_gadget" ]]; then
     echo "configfs USB gadgets: yes"
   else
     echo "configfs USB gadgets: NO (no $CONFIGFS/usb_gadget)"
-    ok=0
   fi
   shopt -s nullglob
   udcs=(/sys/class/udc/*)
   shopt -u nullglob
-  if [[ ${#udcs[@]} -gt 0 ]]; then
-    for u in "${udcs[@]}"; do
-      # current_speed is the negotiated bus speed: super-speed is USB 3, and a
-      # 460 KB frame is ~1 ms there against ~11 ms at high-speed (USB 2). The
-      # owner logs it on every configured edge, since nothing in this script
-      # runs after enumeration.
-      echo "device controller: $(basename "$u"), state $(cat "$u/state" 2>/dev/null || echo unknown), speed $(cat "$u/current_speed" 2>/dev/null || echo unknown)"
-    done
-  else
-    echo "device controller: NONE"
-    ok=0
-  fi
+  for u in "${udcs[@]}"; do
+    # current_speed is the negotiated bus speed: super-speed is USB 3, and a
+    # 460 KB frame is ~1 ms there against ~11 ms at high-speed (USB 2). The
+    # owner logs it on every configured edge, since nothing in this script
+    # runs after enumeration.
+    echo "device controller: $(basename "$u"), state $(cat "$u/state" 2>/dev/null || echo unknown), speed $(cat "$u/current_speed" 2>/dev/null || echo unknown)"
+  done
+  [[ ${#udcs[@]} -gt 0 ]] || echo "device controller: NONE"
   for g in "$CONFIGFS"/usb_gadget/*/; do
     [[ -d "$g" ]] || continue
     echo "gadget $(basename "$g"): bound to '$(cat "$g/UDC" 2>/dev/null)'"
   done
-  if [[ -r /proc/config.gz ]]; then
-    zcat /proc/config.gz | grep -E '^CONFIG_USB_(CONFIGFS_(NCM|F_FS)|F_NCM|F_FS)=' | sed 's/^/kernel option: /' || true
-  fi
+  echo "gadget status: $(cat "$STATUS_FILE" 2>/dev/null || echo none)"
   # A phone plugged straight into the comma negotiates power and the comma may
   # end up sourcing it, which reboots the comma. Through a hub the comma sinks.
   # On a C-to-C cable the comma can come out the host instead; port hold fixes that.
@@ -429,54 +405,27 @@ cmd_check() {
   if [[ "$(cat "$POWER_ROLE_VOTER/force_active" 2>/dev/null || true)" == 1 ]]; then
     echo "USB-C port: held as the device (port hold)"
   fi
-  if [[ $ok -eq 1 ]]; then
-    if net_present; then
-      found="ncm (in the gadget)"
-    else
-      # a throwaway gadget: tries the function and removes it, never binds
-      probe="$CONFIGFS/usb_gadget/jetlink-probe"
-      mkdir -p "$probe" 2>/dev/null || true
-      if mkdir "$probe/functions/ncm.probe" 2>/dev/null; then
-        found=ncm
-        rmdir "$probe/functions/ncm.probe" 2>/dev/null || true
-      fi
-      rmdir "$probe" 2>/dev/null || true
-    fi
-    if [[ -n "$found" ]]; then
-      echo "network gadget function: $found"
-    else
-      echo "network gadget function: none"
-    fi
-    if dev=$(net_ifname); then
-      echo "$dev: $(cat "/sys/class/net/$dev/operstate" 2>/dev/null || echo unknown), $(ip -4 -o addr show dev "$dev" 2>/dev/null | awk '{print $4}' | tr '\n' ' ')"
-    else
-      echo "netdev: absent (it appears when the owner binds the UDC)"
-    fi
-    echo "network status: $(cat "$NET_STATUS_FILE" 2>/dev/null || echo unknown)"
-    if dnsmasq_alive; then echo "dnsmasq: running"; else echo "dnsmasq: not running"; fi
-    if [[ -n "$found" ]]; then
-      echo "RESULT: this comma can present a USB network adapter beside the jetlink link"
-      return 0
-    fi
-    echo "RESULT: this comma has no network gadget function; the link is USB only"
-    return 1
+  if ! net_present; then
+    echo "network function: none (the USB gadget, or no gadget)"
+    return 0
   fi
-  echo "RESULT: this comma cannot present a USB gadget"
-  return 1
+  echo "network function: $NET_FN"
+  if dev=$(net_ifname); then
+    echo "$dev: $(cat "/sys/class/net/$dev/operstate" 2>/dev/null || echo unknown), $(ip -4 -o addr show dev "$dev" 2>/dev/null | awk '{print $4}' | tr '\n' ' ')"
+  else
+    echo "netdev: absent (it appears when the owner binds the UDC)"
+  fi
+  echo "network status: $(cat "$NET_STATUS_FILE" 2>/dev/null || echo unknown)"
+  if dnsmasq_alive; then echo "dnsmasq: running"; else echo "dnsmasq: not running"; fi
 }
 
 # The comma's USB-C port, for a link that runs over USB. hold keeps the port at
 # sink, which makes the far end the host; off is dual role, as AGNOS boots it.
-# Exits 3 where there is no lever, and so nothing to do.
 cmd_port() {
   case "${1:-}" in
     hold|off) ;;
     *) usage ;;
   esac
-  if [[ ! -d "$POWER_ROLE_VOTER" ]]; then
-    echo "jetlink: no USB-C role lever ($POWER_ROLE_VOTER); the port stays as it is" >&2
-    exit 3
-  fi
   if [[ "$1" == hold ]]; then
     # force_val first: forcing applies whatever force_val holds at that moment
     { echo 1 > "$POWER_ROLE_VOTER/force_val" && echo 1 > "$POWER_ROLE_VOTER/force_active"; } 2>/dev/null ||
@@ -488,39 +437,12 @@ cmd_port() {
   fi
 }
 
-sysctl_file() {
-  echo "$PROC_SYS/${1//.//}"
-}
-
 # One key per write, so a value the kernel rejects does not take the rest with it.
 sysctl_write() {
-  if ! { echo "$2" > "$(sysctl_file "$1")"; } 2>/dev/null; then
+  if ! { echo "$2" > "$PROC_SYS/${1//.//}"; } 2>/dev/null; then
     echo "jetlink: could not set $1=$2" >&2
     return 1
   fi
-}
-
-# Stock AGNOS runs the dirty limits in ratio mode, so both *_bytes keys read 0,
-# and the kernel silently drops a 0 written back to them. Writing the ratio key
-# is what zeroes the bytes key, so the ratios are recorded alongside.
-ratio_key() {
-  case "$1" in
-    vm.dirty_bytes) echo vm.dirty_ratio ;;
-    vm.dirty_background_bytes) echo vm.dirty_background_ratio ;;
-  esac
-}
-
-# The value a record holds for a key: recorded RECORD KEY, where RECORD is the
-# one-line JSON object apply writes (and the fork's vmtune.py wrote before it).
-recorded() {
-  local k v
-  while IFS=: read -r k v; do
-    if [[ "$k" == "$2" && "$v" =~ ^[0-9]+$ ]]; then
-      echo "$v"
-      return 0
-    fi
-  done < <(printf '%s\n' "$1" | tr -d '{}" ' | tr ',' '\n')
-  return 1
 }
 
 # Applied while the link is on, so a device with the link off runs stock
@@ -528,20 +450,29 @@ recorded() {
 # exit and stopped at ignition would hand every drive the stock values. A
 # reboot resets them.
 vm_apply() {
-  local key value pair rec="" failed=0
+  local pair key value rec="" failed=0
   if [[ ! -e "$SYSCTL_PREV" ]]; then
     for pair in "${VM_SYSCTLS[@]}"; do
       key=${pair%%=*}
-      for key in "$key" $(ratio_key "$key"); do
-        if value=$(cat "$(sysctl_file "$key")" 2>/dev/null) && [[ -n "$value" ]]; then
-          rec="$rec${rec:+, }\"$key\": \"$value\""
-        else
-          echo "jetlink: could not read $key" >&2
-        fi
-      done
+      value=""
+      { read -r value < "$PROC_SYS/${key//.//}"; } 2>/dev/null || true
+      if [[ "$value" == 0 && "$key" == *_bytes ]]; then
+        # Stock AGNOS runs the dirty limits in ratio mode, so the *_bytes keys
+        # read 0, and the kernel silently drops a 0 written back to one.
+        # Writing the ratio key is what zeroes the bytes key, so that is the
+        # one to put back.
+        key=${key%_bytes}_ratio
+        value=""
+        { read -r value < "$PROC_SYS/${key//.//}"; } 2>/dev/null || true
+      fi
+      if [[ -n "$value" ]]; then
+        rec+="$key=$value"$'\n'
+      else
+        echo "jetlink: could not read $key" >&2
+      fi
     done
     if [[ -n "$rec" ]]; then
-      { echo "{$rec}" > "$SYSCTL_PREV" && chmod 0644 "$SYSCTL_PREV"; } 2>/dev/null ||
+      { printf '%s' "$rec" > "$SYSCTL_PREV" && chmod 0644 "$SYSCTL_PREV"; } 2>/dev/null ||
         echo "jetlink: could not record the previous sysctls in $SYSCTL_PREV" >&2
     fi
   fi
@@ -551,27 +482,18 @@ vm_apply() {
   return $failed
 }
 
+# Writes the record back line by line: a vm key and a number, nothing else.
 vm_restore() {
-  local record key value ratio ratio_value pair failed=0
+  local key value failed=0
   [[ -e "$SYSCTL_PREV" ]] || return 0
-  record=$(cat "$SYSCTL_PREV" 2>/dev/null || true)
-  if [[ "$record" != \{*\} ]]; then
-    echo "jetlink: unreadable sysctl record, leaving the values as they are" >&2
-    failed=1
-  else
-    for pair in "${VM_SYSCTLS[@]}"; do
-      key=${pair%%=*}
-      value=$(recorded "$record" "$key") || continue
-      ratio=$(ratio_key "$key")
-      if [[ "$value" == 0 && -n "$ratio" ]] && ratio_value=$(recorded "$record" "$ratio"); then
-        # the kernel drops a 0 written to a *_bytes key; the ratio key is the
-        # way back to ratio mode
-        sysctl_write "$ratio" "$ratio_value" || failed=1
-      else
-        sysctl_write "$key" "$value" || failed=1
-      fi
-    done
-  fi
+  while IFS='=' read -r key value; do
+    if [[ "$key" =~ ^vm\.[a-z_]+$ && "$value" =~ ^[0-9]+$ ]]; then
+      sysctl_write "$key" "$value" || failed=1
+    else
+      echo "jetlink: not restoring '$key=$value' from $SYSCTL_PREV" >&2
+      failed=1
+    fi
+  done < "$SYSCTL_PREV"
   rm -f "$SYSCTL_PREV" 2>/dev/null || true
   return $failed
 }

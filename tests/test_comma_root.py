@@ -12,7 +12,6 @@ bench-only.
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
 import shutil
@@ -86,14 +85,14 @@ def test_off_agnos_nothing_runs_and_nothing_is_logged(fake_run, monkeypatch, cap
 
 
 def test_a_failure_logs_the_last_stderr_line_once(fake_run, caplog):
-  fake_run(returncode=3, stderr='a warning first\njetlink: no USB-C role lever; the port stays as it is\n')
+  fake_run(returncode=1, stderr='a warning first\njetlink: could not release the voter\n')
   with caplog.at_level(logging.INFO, logger='jetlink.comma'):
     assert root.run('port', 'off', timeout=root.PORT_TIMEOUT) is False
   [record] = caplog.records
   assert record.levelno == logging.ERROR
   assert 'port off' in record.getMessage()
-  assert 'exit 3' in record.getMessage()
-  assert 'no USB-C role lever' in record.getMessage()
+  assert 'exit 1' in record.getMessage()
+  assert 'could not release the voter' in record.getMessage()
   assert 'a warning first' not in record.getMessage()
 
 
@@ -133,29 +132,31 @@ def test_the_script_passes_shellcheck():
 def test_vm_apply_records_the_stock_values_once_and_applies_ours(tmp_path):
   proc_sys(tmp_path, STOCK)
   assert run_script(tmp_path, 'vm', 'apply').returncode == 0
-  # JSON, as the fork's vmtune.py wrote it, so either can read the other's
-  assert json.loads(record(tmp_path).read_text()) == STOCK
+  # what restore writes back, a line each. Stock AGNOS runs the dirty limits in
+  # ratio mode and the kernel drops a 0 written to a *_bytes key, so their
+  # ratio keys stand in for them
+  stock = ''.join(f'{k}={STOCK[k]}\n' for k in ('vm.dirty_ratio', 'vm.dirty_background_ratio', 'vm.min_free_kbytes'))
+  assert record(tmp_path).read_text() == stock
   assert read_all(tmp_path, TUNED) == TUNED
   # a second apply keeps the first record, not our own values
   assert run_script(tmp_path, 'vm', 'apply').returncode == 0
-  assert json.loads(record(tmp_path).read_text()) == STOCK
+  assert record(tmp_path).read_text() == stock
 
 
 def test_vm_restore_goes_back_to_ratio_mode_and_drops_the_record(tmp_path):
   proc_sys(tmp_path, STOCK)
   assert run_script(tmp_path, 'vm', 'apply').returncode == 0
   assert run_script(tmp_path, 'vm', 'restore').returncode == 0
-  # the kernel drops a 0 written to a *_bytes key, so the ratios are written
-  # instead; the fake /proc cannot zero the bytes keys as the kernel does
-  assert read_sys(tmp_path, 'vm.dirty_ratio') == '20'
-  assert read_sys(tmp_path, 'vm.dirty_background_ratio') == '10'
-  assert read_sys(tmp_path, 'vm.min_free_kbytes') == '22528'
+  # the fake /proc cannot zero the bytes keys as the kernel does
+  for key in ('vm.dirty_ratio', 'vm.dirty_background_ratio', 'vm.min_free_kbytes'):
+    assert read_sys(tmp_path, key) == STOCK[key]
   assert not record(tmp_path).exists()
 
 
-def test_vm_restore_writes_bytes_that_were_set(tmp_path):
-  proc_sys(tmp_path, {**TUNED, 'vm.dirty_ratio': '20', 'vm.dirty_background_ratio': '10'})
-  record(tmp_path).write_text(json.dumps({**STOCK, 'vm.dirty_bytes': '33554432'}))
+def test_bytes_that_were_set_are_put_back_as_bytes(tmp_path):
+  proc_sys(tmp_path, {**STOCK, 'vm.dirty_bytes': '33554432'})
+  assert run_script(tmp_path, 'vm', 'apply').returncode == 0
+  assert 'vm.dirty_bytes=33554432\n' in record(tmp_path).read_text()
   assert run_script(tmp_path, 'vm', 'restore').returncode == 0
   assert read_sys(tmp_path, 'vm.dirty_bytes') == '33554432'
 
@@ -166,13 +167,16 @@ def test_vm_restore_without_a_record_changes_nothing(tmp_path):
   assert read_all(tmp_path, TUNED) == TUNED
 
 
-def test_an_unreadable_record_is_dropped_and_the_values_left(tmp_path):
+def test_restore_writes_only_vm_keys_and_numbers(tmp_path):
+  # /dev/shm is anyone's to write, and restore runs as root
   proc_sys(tmp_path, TUNED)
-  record(tmp_path).write_text('garbage\n')
+  record(tmp_path).write_text('garbage\nkernel.core_pattern=|/bin/sh\nvm.dirty_bytes=x\nvm.min_free_kbytes=22528\n')
   result = run_script(tmp_path, 'vm', 'restore')
   assert result.returncode == 1
-  assert 'unreadable sysctl record' in result.stderr
-  assert read_all(tmp_path, TUNED) == TUNED
+  assert result.stderr.count('not restoring') == 3
+  assert read_sys(tmp_path, 'vm.min_free_kbytes') == '22528'
+  assert read_sys(tmp_path, 'vm.dirty_bytes') == TUNED['vm.dirty_bytes']
+  assert not (tmp_path / 'sys' / 'kernel').exists()
   assert not record(tmp_path).exists()
 
 
@@ -199,10 +203,12 @@ def test_port_hold_forces_the_voter_and_off_lets_it_go(tmp_path):
   assert (lever / 'force_val').read_text().strip() == '0'
 
 
-def test_port_without_the_lever_exits_3(tmp_path):
-  result = run_script(tmp_path, 'port', 'hold')
-  assert result.returncode == 3
-  assert 'no USB-C role lever' in result.stderr
+def test_port_without_the_lever_fails(tmp_path):
+  # both commas have it, so its absence is a failure like any other
+  for command, verb in (('hold', 'force'), ('off', 'release')):
+    result = run_script(tmp_path, 'port', command)
+    assert result.returncode == 1
+    assert f'could not {verb}' in result.stderr
 
 
 @pytest.mark.parametrize('args', [(), ('setup',), ('--ios',), ('gadget', '--net'), ('port',), ('port', 'on'), ('vm',), ('vm', 'undo')])
