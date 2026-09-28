@@ -6,6 +6,19 @@ import Testing
 
 @Suite("Wire protocol")
 struct WireTests {
+  @Test("A closed listener frees its port at once, even with a thread waiting to accept")
+  func listenerFreesItsPort() throws {
+    let first = try TCPListener(host: "127.0.0.1", port: 0)
+    let port = first.port
+    let waiting = Thread { _ = first.accept() }
+    waiting.start()
+    Thread.sleep(forTimeInterval: 0.05)  // the accept is in its poll now
+    first.close()
+    // what a restart does next
+    let second = try TCPListener(host: "127.0.0.1", port: port)
+    second.close()
+  }
+
   /// protocol.pack_header(INFER_REQ, 7, 1234, WANT_STATE | PADDED), from Python.
   @Test("A header is the bytes Python packs")
   func headerBytes() throws {

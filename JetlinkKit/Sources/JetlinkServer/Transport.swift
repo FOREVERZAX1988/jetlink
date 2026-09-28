@@ -315,6 +315,10 @@ public final class TCPListener: @unchecked Sendable {
     defer { lock.unlock() }
     if !closed {
       closed = true
+      // Linux keeps a socket that another thread polls bound until the poll
+      // returns, so a restart's bind would fail for up to a poll's 250 ms.
+      // A shutdown takes it out of LISTEN and wakes the poll.
+      _ = Sys.shutdown(fd)
       Sys.close(fd)
     }
   }
