@@ -38,7 +38,7 @@ public struct CacheEntry: Sendable {
 public final class EngineCache: @unchecked Sendable {
   /// One per registry entry on a Mac: a rebuild costs a minute and 1 to 2
   /// GB. A phone's disk holds two.
-  #if os(iOS)
+  #if os(iOS) || os(Android)
     public static let keepPlans = 2
   #else
     public static let keepPlans = 6

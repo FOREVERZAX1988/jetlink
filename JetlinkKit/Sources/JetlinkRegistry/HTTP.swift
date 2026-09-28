@@ -34,9 +34,9 @@ struct HTTP: Sendable {
         return data
       }
       #if canImport(FoundationNetworking)
-        // swift-corelibs-foundation has no bytes(for:). The Linux build is a
-        // drift check that never fetches a model, so it reads the whole body
-        // and keeps the first `limit` bytes.
+        // swift-corelibs-foundation has no bytes(for:), so it reads the whole
+        // body and keeps the first `limit` bytes. Only small reads pass a
+        // limit; a model downloads through Transfer, not here.
         let (whole, response) = try await session.data(for: request)
         try HTTP.check(response, url: url)
         return Data(whole.prefix(max(0, limit)))

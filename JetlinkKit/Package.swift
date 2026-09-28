@@ -68,16 +68,15 @@ func portablePackage() -> Package {
     .testTarget(
       name: "JetlinkRegistryTests", dependencies: ["JetlinkRegistry", "JetlinkTestSupport", crypto],
       sources: ["ConformanceTests.swift", "Support.swift", "JSONTests.swift", "CacheLayoutTests.swift"]),
-    .testTarget(
-      name: "JetlinkServerTests", dependencies: ["JetlinkServer", "JetlinkTestSupport"], exclude: ["Fixtures"],
-      sources: [
-        "ConformanceTests.swift", "Support.swift", "WireTests.swift", "USBTransportTests.swift", "ConvertTests.swift", "SpecTests.swift",
-        "UsbfsPipesTests.swift",
-      ]),
+  ]
+  var serverTests = [
+    "ConformanceTests.swift", "Support.swift", "WireTests.swift", "USBTransportTests.swift", "ConvertTests.swift", "SpecTests.swift",
+    "UsbfsPipesTests.swift",
   ]
   var sources = portableServer
   if android {
     sources += androidServer
+    serverTests += ["ServerTests.swift", "ControllerTests.swift", "QNNBackendTests.swift"]
     server += ["JetlinkRegistry", "COrt", crypto]
     // The app's one native library: libjetlink.so.
     products.append(.library(name: "jetlink", type: .dynamic, targets: ["JetlinkAndroid"]))
@@ -89,7 +88,11 @@ func portablePackage() -> Package {
       .target(name: "JetlinkAndroid", dependencies: ["JetlinkKit", "JetlinkServer"], linkerSettings: [.linkedLibrary("log")]),
     ]
   }
-  targets.append(.target(name: "JetlinkServer", dependencies: server, sources: sources))
+  targets += [
+    .target(name: "JetlinkServer", dependencies: server, sources: sources),
+    .testTarget(
+      name: "JetlinkServerTests", dependencies: ["JetlinkServer", "JetlinkTestSupport"], exclude: ["Fixtures"], sources: serverTests),
+  ]
   return Package(
     name: "JetlinkKit",
     products: products,
