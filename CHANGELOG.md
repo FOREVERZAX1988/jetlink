@@ -25,6 +25,7 @@ Unreleased
   * `jetlink-serve --usb` runs the Swift server as the USB host from a checkout
 * Both apps say whether the comma is on USB 3, USB 2 or TCP, and warn on USB 2; on the iPhone the title turns orange
   * The comma's hello names its link and the speed its USB controller negotiated; the server's link event carries it as `medium`
+* The server's `--transport ffs`, which made the server the USB gadget, is gone with its `--ffs-mount`, `--gadget` and `--udc` flags; the comma is always the gadget
 * The old import paths `jetlink.server.builder`, `jetlink.server.engine` and `jetlink.server.cudart` are gone; they have been `jetlink.server.cache` and `jetlink.server.backends.trt` since v0.3.0a1
 
 Jetlink v0.4.3

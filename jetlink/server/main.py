@@ -57,7 +57,7 @@ def _serve(cache: EngineCache, open_transport, sleeper: Sleeper | None = None,
            host: EngineHost | None = None, control=None) -> None:
   """Serve one client at a time forever.
 
-  `open_transport()` returns a transport, or None to wait and retry; the three
+  `open_transport()` returns a transport, or None to wait and retry; the two
   transports differ only in how they open. The engine host is shared across
   sessions: the comma reconnects at every handover and the engine must not
   reload. With a `sleeper`, a long run of None suspends the box; see sleep.py.
@@ -147,7 +147,7 @@ def _interrupt_main() -> None:
 class _WaitLog:
   """Say why there is no client once, then keep quiet about it.
 
-  The USB and functionfs openers poll every 2 s, so a box parked offroad
+  The USB opener polls every 2 s, so a box parked offroad
   overnight wrote thousands of identical lines: the log file rolls over and the
   app's Logs view has nothing else in it. The first line is the one that means
   something; the rest go to debug. A different reason gets its own first line,
@@ -208,33 +208,6 @@ def _usb_opener(args, sleeper: Sleeper | None = None):
   return open_transport
 
 
-def _ffs_opener(args):
-  """This end is the USB gadget."""
-  from jetlink.transport.ffs import FfsTransport
-  mount = Path(args.ffs_mount)
-  waiting = _WaitLog()
-
-  def open_transport():
-    if not (mount / 'ep0').exists():
-      waiting("waiting for functionfs at %s (run scripts/comma/jetlink-root.sh gadget)", mount)
-      return None
-    try:
-      # This writes the descriptors and binds the UDC; either can fail
-      # transiently, and returning None just retries.
-      transport = FfsTransport(str(mount), gadget=args.gadget, udc=args.udc)
-      waiting.reset()
-      transport.peer = 'usb'
-      return transport
-    except Exception as e:
-      waiting("could not open the gadget: %s", e)
-      return None
-  open_transport.waiting_detail = f"waiting for functionfs at {mount}"
-  return open_transport
-
-
-OPENERS = {'tcp': _tcp_opener, 'usb': _usb_opener, 'ffs': _ffs_opener}
-
-
 def main(argv=None) -> int:
   p = argparse.ArgumentParser(description='jetlink inference server')
   p.add_argument('--backend', choices=('auto', *NAMES), default='auto',
@@ -248,15 +221,11 @@ def main(argv=None) -> int:
                       'GPU only), cuda or cpu for ort')
   p.add_argument('--list-backends', action='store_true',
                  help='print the backends whose runtime is installed here, and exit')
-  p.add_argument('--transport', choices=('tcp', 'usb', 'ffs'), default='tcp',
-                 help='usb = this end is the USB host (the usual case for a Jetson); '
-                      'ffs = this end is the USB gadget')
+  p.add_argument('--transport', choices=('tcp', 'usb'), default='tcp',
+                 help='usb = this end is the USB host and the comma the gadget (a Jetson in '
+                      'the car); tcp = listen, for development and benchmarking')
   p.add_argument('--host', default='0.0.0.0')
   p.add_argument('--port', type=int, default=5599)
-  p.add_argument('--ffs-mount', default='/dev/ffs-jetlink')
-  p.add_argument('--gadget', default='/sys/kernel/config/usb_gadget/jetlink',
-                 help='configfs gadget to bind once descriptors are written')
-  p.add_argument('--udc', default=None, help='UDC name (default: the first one)')
   p.add_argument('--vid', type=lambda x: int(x, 0), default=0x1209)
   p.add_argument('--pid', type=lambda x: int(x, 0), default=0x0001)
   p.add_argument('--usb-timeout-ms', type=int, default=2000)
@@ -365,8 +334,7 @@ def main(argv=None) -> int:
   sleeper = None
   if args.sleep_after > 0:
     if args.transport != 'usb':
-      # tcp blocks in accept and never sees an absent client; ffs is the
-      # Jetson-as-gadget inversion, where the host end is the one that sleeps.
+      # tcp blocks in accept and never sees an absent client
       p.error('--sleep-after only makes sense with --transport usb')
     if not platform.can_suspend():
       # macOS and Windows own their own sleep, and a laptop lid is not a USB
@@ -374,7 +342,7 @@ def main(argv=None) -> int:
       p.error('--sleep-after needs /sys/power, which this host has not got')
     sleeper = Sleeper(args.sleep_after)
     log.info("will suspend after %.0f s without a gadget", args.sleep_after)
-  opener = _usb_opener(args, sleeper) if args.transport == 'usb' else OPENERS[args.transport](args)
+  opener = _usb_opener(args, sleeper) if args.transport == 'usb' else _tcp_opener(args)
 
   # sleep_after goes out in the hello: the comma tells a box that suspends when
   # parked from one that is simply gone.

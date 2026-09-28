@@ -78,7 +78,7 @@ Unix seconds, as shown by each field.
 {"event":"hello","t":0,"protocol":1,"pid":4242,"version":"0.2.0","python":"3.14.7",
  "platform":"darwin","cache":"/Users/me/Library/Application Support/Jetlink/cache",
  "transport":"usb","port":null}
-// transport is "usb"|"tcp"|"ffs"; port is set for tcp.
+// transport is "usb"|"tcp"; port is set for tcp.
 
 {"event":"server","t":0,"state":"serving","detail":"","backend":"ort",
  "runtime_version":"1.29.0","device":"coreml-Apple_M1_Pro"}
