@@ -50,6 +50,7 @@ public final class QNNBackend: EngineBackend {
 
   public let name = "ort"
   public let suffix = ".ortcache"
+  public let artifactKind = ArtifactKind.directory
   public let device: Device
   /// Hold the NPU in burst mode between frames rather than let it settle.
   public let keepAlive: Bool
@@ -136,8 +137,8 @@ public final class QNNBackend: EngineBackend {
 
   public func build(model: URL, artifact: URL, report: @escaping ProgressFn, metaExtra: [String: Any]) throws {
     let started = Date()
-    let expect = ArtifactSidecar.read(artifact)
-    var meta = try OrtArtifact.build(artifact) { staged in
+    let expect = Artifact.sidecar(artifact)
+    try Artifact.build(artifact, kind: artifactKind, metaExtra: metaExtra, report: report) { staged in
       report("patch", 0, "preparing the model")
       let prepared = try preparer.prepare(model: model, into: staged, layout: layout) {
         CoreMLPreparation.cacheKey(stem: artifact.deletingPathExtension().lastPathComponent, part: $0)
@@ -160,12 +161,9 @@ public final class QNNBackend: EngineBackend {
       var meta = OrtArtifact.meta(
         self, manifest: manifest, providers: providers, model: model, prepareVersion: QNNBackend.prepareVersion, started: started)
       meta["compile_seconds"] = pythonRound(compileSeconds, 1)
-      meta["artifact_bytes"] = ArtifactSidecar.treeBytes(staged)
+      meta["artifact_bytes"] = Artifact.bytes(staged)
       return meta
     }
-    for (key, value) in metaExtra { meta[key] = value }
-    try ArtifactSidecar.write(artifact, meta)
-    report("build", 1, "done in \(meta["build_seconds"]!)s")
   }
 
   /// Compiles each NPU session into its EP context, which then replaces its
@@ -217,7 +215,7 @@ public final class QNNBackend: EngineBackend {
     let (manifest, meta) = try OrtArtifact.open(artifact, prepareVersion: QNNBackend.prepareVersion, builds: "QNN") { entry in
       (entry["unit"] as? String).flatMap(Unit.init(rawValue:)) == nil ? "a session names no unit" : nil
     }
-    let (engine, seconds) = try OrtArtifact.load(artifact, meta: meta, what: "the model", report: report) {
+    let (engine, seconds) = try Artifact.load(artifact, meta: meta, what: "the model", report: report) {
       try OrtEngine(plans: plans(artifact, manifest), device: deviceTag(), keepAlive: keepAlive, keepCPUWarm: keepCPUWarm)
     }
     log.info("onnxruntime sessions on \(device.rawValue) in \(String(format: "%.1f", seconds)) s: \(engine.providers.joined(separator: " then "))")

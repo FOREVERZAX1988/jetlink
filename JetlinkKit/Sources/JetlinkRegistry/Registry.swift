@@ -404,8 +404,10 @@ public final class Registry: Sendable {
     return nil
   }
 
-  static func hashFile(
-    _ url: URL, total: Int64, progress: @Sendable (Double) -> Void, shouldStop: @Sendable () -> Bool
+  /// The file's SHA-256 and size, read a megabyte at a time: an import's
+  /// first pass, and the server's check of an upload.
+  package static func hashFile(
+    _ url: URL, total: Int64 = 0, progress: @Sendable (Double) -> Void = { _ in }, shouldStop: @Sendable () -> Bool = { false }
   ) throws(RegistryError) -> (String, Int64) {
     guard let handle = try? FileHandle(forReadingFrom: url) else {
       throw .registry("could not read \(url.path(percentEncoded: false))")

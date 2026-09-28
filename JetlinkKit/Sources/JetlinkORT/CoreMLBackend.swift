@@ -37,6 +37,7 @@
 
     public let name = "ort"
     public let suffix = ".ortcache"
+    public let artifactKind = ArtifactKind.directory
     public let device: Device
     public let keepAlive: Bool
     public let keepCPUWarm: Bool
@@ -108,8 +109,8 @@
 
     public func build(model: URL, artifact: URL, report: @escaping ProgressFn, metaExtra: [String: Any]) throws {
       let started = Date()
-      let expect = ArtifactSidecar.read(artifact)
-      var meta = try OrtArtifact.build(artifact) { staged in
+      let expect = Artifact.sidecar(artifact)
+      try Artifact.build(artifact, kind: artifactKind, metaExtra: metaExtra, report: report) { staged in
         report("patch", 0, "preparing the model for CoreML")
         let prepared = try preparer.prepare(model: model, into: staged, layout: layout) {
           CoreMLBackend.cacheKey(artifact: artifact, part: $0)
@@ -166,9 +167,6 @@
         meta["freed_bytes"] = freed
         return meta
       }
-      for (key, value) in metaExtra { meta[key] = value }
-      try ArtifactSidecar.write(artifact, meta)
-      report("build", 1, "done in \(meta["build_seconds"]!)s")
     }
 
     /// Deletes each session's MLProgram `Data` directory once CoreML's
@@ -188,7 +186,7 @@
           walker.skipDescendants()
         }
         for url in converted {
-          freed += ArtifactSidecar.treeBytes(url)
+          freed += Artifact.bytes(url)
           try? fm.removeItem(at: url)
         }
       }
@@ -207,7 +205,7 @@
         let contents = (try? FileManager.default.contentsOfDirectory(atPath: artifact.appending(path: cache, directoryHint: .isDirectory).path)) ?? []
         return contents.isEmpty ? "the CoreML cache for \(entry["model"] as? String ?? cache) is empty" : nil
       }
-      let (engine, seconds) = try OrtArtifact.load(artifact, meta: meta, what: "the CoreML model", report: report) {
+      let (engine, seconds) = try Artifact.load(artifact, meta: meta, what: "the CoreML model", report: report) {
         try OrtEngine(plans: plans(artifact, manifest), device: deviceTag(), keepAlive: keepAlive, keepCPUWarm: keepCPUWarm)
       }
       log.info("onnxruntime sessions on \(device.rawValue) in \(String(format: "%.1f", seconds)) s")

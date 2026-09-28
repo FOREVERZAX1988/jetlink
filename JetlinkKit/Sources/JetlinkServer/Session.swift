@@ -1,5 +1,6 @@
 import Foundation
 import JetlinkKit
+import JetlinkRegistry
 
 /// One client's connection: the request loop, the Swift form of
 /// `session.Session`. One message at a time; builds run on the host's job
@@ -253,7 +254,7 @@ final class Session: @unchecked Sendable {
       try error(message.seq, "bad_upload", "chunk exceeds declared model size")
       return
     }
-    let path = host.cache.modelPath(request.sha256)
+    let path = host.cache.modelPath(request)
     if offset == 0 || !FileManager.default.fileExists(atPath: path.path) {
       FileManager.default.createFile(atPath: path.path, contents: nil)
     }
@@ -272,8 +273,8 @@ final class Session: @unchecked Sendable {
       try error(message.seq, "no_model", "send ENGINE_REQ first")
       return
     }
-    let path = host.cache.modelPath(request.sha256)
-    let digest = (try? sha256File(path))?.0
+    let path = host.cache.modelPath(request)
+    let digest = (try? Registry.hashFile(path))?.0
     if digest != request.sha256 {
       try? FileManager.default.removeItem(at: path)
       try sendJSON(

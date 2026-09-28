@@ -100,7 +100,7 @@ struct ServerTests {
       try client.sendJSON(.uploadDone, ["sha256": golden.sha256])
       let reply = try client.recv(.engineResp).json
       #expect(reply["state"] as? String == "failed")
-      #expect(!FileManager.default.fileExists(atPath: server.cache.modelPath(golden.sha256).path))
+      #expect(try !FileManager.default.fileExists(atPath: server.cache.modelPath(golden.sha256).path))
     }
   }
 

@@ -34,7 +34,7 @@ struct QNNBackendTests {
     let artifact = engines.appending(path: artifacts[0])
     let manifest = try JSONSerialization.jsonObject(with: Data(contentsOf: artifact.appending(path: "sessions.json"))) as? [[String: Any]]
     #expect(manifest?.map { $0["unit"] as? String } == ["cpu"])
-    let meta = ArtifactSidecar.read(artifact)
+    let meta = Artifact.sidecar(artifact)
     #expect(meta["prepare"] as? Int == QNNBackend.prepareVersion)
     #expect(meta["preparer"] as? String == "swift")
   }

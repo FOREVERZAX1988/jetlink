@@ -79,7 +79,7 @@ let package = Package(
     .target(name: "CUsbfs"),
     .target(
       name: "JetlinkServer",
-      dependencies: ["JetlinkKit", "JetlinkONNX", "JetlinkRegistry", "JetlinkLog", .target(name: "CUsbfs", condition: .when(platforms: linux)), crypto]),
+      dependencies: ["JetlinkKit", "JetlinkONNX", "JetlinkRegistry", "JetlinkLog", .target(name: "CUsbfs", condition: .when(platforms: linux))]),
     .target(
       name: "JetlinkORT", dependencies: ["JetlinkKit", "JetlinkONNX", "JetlinkServer", "COrt"],
       linkerSettings: [.linkedFramework("Metal", .when(platforms: apple))]),

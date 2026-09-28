@@ -1,7 +1,11 @@
 import Foundation
+import JetlinkRegistry
 
 /// Progress of a build or a load: stage, fraction, message.
 public typealias ProgressFn = @Sendable (String, Double, String) -> Void
+
+/// A file or a directory: the cache names, stages and prunes by it.
+public typealias ArtifactKind = JetlinkRegistry.ArtifactKind
 
 /// The artifact on disk is not one this backend can load. The host answers by
 /// deleting it and rebuilding from the ONNX if it has one, as in Python.
@@ -38,6 +42,7 @@ public protocol EngineBackend: AnyObject, Sendable {
   var name: String { get }
   /// The artifact's extension.
   var suffix: String { get }
+  var artifactKind: ArtifactKind { get }
   /// The runtime's release, "1.29.0".
   var runtimeVersion: String { get }
   /// The device part of the tag: "ane-Apple_M1_Pro", "htp-SM8650".

@@ -155,7 +155,7 @@ struct ControllerTests {
       let reply = await controller.handle(.forget(sha256: registry.sha256, artifacts: true, model: true))
       #expect(reply.ok)
       #expect(controller.server.host.loadedSHA() == nil)
-      #expect(!FileManager.default.fileExists(atPath: controller.server.cache.modelPath(registry.sha256).path))
+      #expect(try !FileManager.default.fileExists(atPath: controller.server.cache.modelPath(registry.sha256).path))
     }
   }
 
