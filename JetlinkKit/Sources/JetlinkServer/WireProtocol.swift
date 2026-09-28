@@ -1,24 +1,27 @@
 import Foundation
+import JetlinkKit
 
 /// The wire protocol, byte for byte what `jetlink/protocol.py` defines.
 ///
 /// Every message is a 32-byte header and an opaque payload. INFER is a fixed
 /// struct plus two raw arrays sized at handshake, not json: one vectored write
-/// out, one read into a preallocated buffer back.
+/// out, one read into a preallocated buffer back. The numbers come from
+/// `Pinned`, which make_pins.py writes from the Python; the enums below are
+/// checked against it in ConformanceTests.
 public enum Wire {
-  public static let magic: UInt32 = 0x4B4E_4C4A  // b'JLNK'
+  public static let magic = Pinned.magic  // b'JLNK'
   /// Bumped so a new client cannot silently pair with a legacy server.
-  public static let version: UInt16 = 2
-  public static let headerSize = 32
+  public static let version = Pinned.protocolVersion
+  public static let headerSize = Pinned.headerSize
   /// A bulk transfer ends on a short packet, so a message that is an exact
   /// multiple of the packet size gets a pad byte and Flag.padded. TCP keeps
   /// the rule so one client speaks to every transport the same way.
-  public static let packetMultiple = 1024
+  public static let packetMultiple = Pinned.packetMultiple
   /// The gadget pads every message it sends to a whole burst, so none ends on
   /// a short packet: dwc3 flushed its TX FIFO past one about once in 400
   /// frames. A USB host reads each message to that boundary. Host to device
   /// keeps the one-byte pad instead. `protocol.GADGET_TX_ALIGN`.
-  public static let gadgetTxAlign = 16 * packetMultiple
+  public static let gadgetTxAlign = Pinned.gadgetTxAlign
 
   /// Does a sent message with a `length` byte payload need the pad byte and
   /// Flag.padded? The rule every sender but the gadget keeps.
@@ -27,8 +30,8 @@ public enum Wire {
   }
   /// Stops a corrupt length field making the receive buffer allocate
   /// gigabytes. A frame is about 460 KB.
-  public static let maxMessage = 16 << 20
-  public static let defaultPort: UInt16 = 5599
+  public static let maxMessage = Pinned.maxMessage
+  public static let defaultPort = Pinned.defaultPort
 
   public enum Msg: UInt16, Sendable {
     case helloReq = 1
@@ -70,9 +73,9 @@ public enum Wire {
   }
 
   /// INFER_REQ: frame_id, flags.
-  public static let inferReqSize = 8
+  public static let inferReqSize = Pinned.inferReqSize
   /// INFER_RESP: frame_id, status, gpu_us, queue_us, total_us.
-  public static let inferRespSize = 20
+  public static let inferRespSize = Pinned.inferRespSize
 
   public struct Header: Equatable, Sendable {
     public var msgType: UInt16

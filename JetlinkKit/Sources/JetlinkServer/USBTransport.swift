@@ -53,8 +53,8 @@ protocol GadgetSource: Sendable {
 /// Every message lands at the start of the receive buffer, so the float32
 /// arrays inside an INFER stay aligned, and the steady state allocates nothing.
 final class USBTransport: MessageLink, @unchecked Sendable {
-  static let packetSize = Wire.packetMultiple
-  static let readChunk = 256 * packetSize
+  static let packetSize = Pinned.usbMaxPacket
+  static let readChunk = Pinned.usbReadChunk
   static let readSlack = packetSize
   static let writeTimeout: TimeInterval = 2
 

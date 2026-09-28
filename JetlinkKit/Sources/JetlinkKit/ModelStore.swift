@@ -19,7 +19,7 @@ public final class ModelStore {
   /// The last action that failed, for the view to show and clear.
   public var lastError: String?
 
-  public static let defaultFrameSkip = 4
+  public static let defaultFrameSkip = Pinned.defaultFrameSkip
   /// How long a finished download stays on screen before its row goes quiet.
   public static let terminalDownloadLinger: Duration = .seconds(3)
 

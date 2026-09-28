@@ -12,7 +12,7 @@ final class FrameStats: @unchecked Sendable {
   }
 
   /// Frames over this count as slow, as the Python server counts them.
-  static let slowUs: UInt32 = 60_000
+  static let slowUs = UInt32(Pinned.slowFrameUs)
 
   private let lock = NSLock()
   private var samples: [Sample] = []

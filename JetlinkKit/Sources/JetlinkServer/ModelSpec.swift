@@ -1,12 +1,13 @@
 import Foundation
+import JetlinkKit
 
 /// openpilot's ModelConstants, as `jetlink/spec.py` duplicates them.
 public enum ModelConstants {
-  public static let runFrequency = 20
-  public static let contextFrequency = 5
-  public static let defaultFrameSkip = runFrequency / contextFrequency  // 4
+  public static let runFrequency = Pinned.modelRunFrequency
+  public static let contextFrequency = Pinned.modelContextFrequency
+  public static let defaultFrameSkip = Pinned.defaultFrameSkip  // run / context, 4
   /// The upload chunk the comma sends a model in.
-  public static let chunk = 4 << 20
+  public static let chunk = Pinned.uploadChunk
   /// The driving output every layout has, 18452 floats in openpilot's layout.
   public static let drivingOutput = "outputs"
   /// The input only a stateful graph (openpilot #38916) has.
