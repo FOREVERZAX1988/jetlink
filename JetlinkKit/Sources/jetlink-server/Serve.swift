@@ -14,17 +14,20 @@
     case debug, info, warning, error
   }
 
+  /// --cache, which every command that touches the cache takes.
+  struct CacheArguments: ParsableArguments {
+    @Option(help: "Where models and built engines live. Default: $JETLINK_CACHE, else /mnt/data/jetlink on a Jetson, else the user's cache directory.")
+    var cache: String?
+
+    var root: URL { cache.map { URL(fileURLWithPath: $0, isDirectory: true) } ?? defaultCache() }
+  }
+
   /// `jetlink-server serve`, the default: serves the comma until SIGINT or
   /// SIGTERM, then exits 0.
   struct Serve: ParsableCommand {
     static let configuration = CommandConfiguration(abstract: "Serve the comma (the default).")
 
-    @Option(help: "auto, trt or ort. auto takes TensorRT where it loads, else onnxruntime; a named one that cannot run here is an error.")
-    var backend = BackendName.auto
-    @Option(
-      help: ArgumentHelp(
-        "trt: a CUDA device index (0). ort: ane (default), ane-whole, coreml or cpu on a Mac; cpu on Linux.", valueName: "device"))
-    var device: String?
+    @OptionGroup var chosen: BackendArguments
     @Flag(help: "Be the USB host for the comma's gadget. No TCP listener then, unless --listen too.")
     var usb = false
     @Flag(help: "Listen on TCP, as without --usb.")
@@ -35,8 +38,7 @@
     var port = Wire.defaultPort
     @Option(help: ArgumentHelp("Also dial this end and serve it, as the phone dials the comma over a USB network link.", valueName: "host[:port]"))
     var dial: String?
-    @Option(help: "Where models and built engines live. Default: $JETLINK_CACHE, else /mnt/data/jetlink on a Jetson, else the user's cache directory.")
-    var cache: String?
+    @OptionGroup var cache: CacheArguments
     @Option(help: "Suspend after this many seconds with no gadget (Linux, with --usb); 0 never.")
     var sleepAfter = 0.0
     @Option(help: "Serve the read-only status page on this port; 0 is off.")
@@ -55,6 +57,8 @@
         throw ValidationError("--dial wants HOST or HOST:PORT, not \(dial)")
       }
       guard sleepAfter >= 0 else { throw ValidationError("--sleep-after cannot be negative") }
+      // A TCP listener never sees the comma go, so nothing would say when to sleep.
+      guard sleepAfter == 0 || usb else { throw ValidationError("--sleep-after needs --usb") }
       guard (0...65535).contains(statusPort) else { throw ValidationError("--status-port \(statusPort) is not a port") }
     }
 
@@ -62,15 +66,8 @@
       holdStopSignals()
       setUpLogging(logLevel)
       let log = ServerLog(category: "main")
-      let options = BackendOptions(device: device, keepAlive: !noKeepAlive, keepCPUWarm: !noCPUKeepWarm)
-      let chosen: any EngineBackend
-      do {
-        chosen = try options.pick(backend) { name, why in log.info("not using \(name.rawValue): \(why)") }
-      } catch {
-        log.error("\(error)")
-        throw ExitCode.failure
-      }
-      let root = cache.map { URL(fileURLWithPath: $0, isDirectory: true) } ?? defaultCache()
+      let backend = try chosen.pick(keepAlive: !noKeepAlive, keepCPUWarm: !noCPUKeepWarm)
+      let root = cache.root
 
       var hooks = ServerHooks()
       var gadget: (any GadgetSource)?
@@ -92,8 +89,8 @@
         server = try Server(
           configuration: Server.Configuration(
             host: host, port: port, cacheRoot: root, preload: !noPreload, dial: dial.flatMap { DialTarget($0) }, listen: listen || !usb, usb: usb),
-          backend: chosen, gadget: gadget, hooks: hooks)
-        log.info("backend \(chosen.name) \(chosen.runtimeVersion) on \(chosen.deviceTag()), cache \(root.path)")
+          backend: backend, gadget: gadget, hooks: hooks)
+        log.info("backend \(backend.name) \(backend.runtimeVersion) on \(backend.deviceTag()), cache \(root.path)")
         try server.start()
       } catch {
         log.error("cannot serve: \(error)")
@@ -111,8 +108,20 @@
       }
       stopOnSignals { signal in
         log.info("stopping on \(signal)")
-        server.shutdown()
+        // The status page goes after the server, once it serves.
+        shutDown([("the server", server.shutdown)], log: log)
       }
+    }
+  }
+
+  /// Takes down what serves, in the order given, and says so: the comma's
+  /// server and its engine first, so a frame in flight is answered or cut
+  /// before anything else goes, then the status page, which shows the
+  /// server stopping until the end.
+  func shutDown(_ steps: [(name: String, stop: () -> Void)], log: ServerLog) {
+    for step in steps {
+      step.stop()
+      log.info("stopped \(step.name)")
     }
   }
 
@@ -183,14 +192,13 @@
 
   /// $JETLINK_CACHE, else the Jetson's data partition, else the user's cache
   /// directory, as the Python server chose.
-  func defaultCache() -> URL {
-    let environment = ProcessInfo.processInfo.environment
+  func defaultCache(environment: [String: String] = ProcessInfo.processInfo.environment, tegra: () -> Bool = isTegra) -> URL {
     if let named = environment["JETLINK_CACHE"], !named.isEmpty {
       return URL(fileURLWithPath: named, isDirectory: true)
     }
     let jetson = URL(fileURLWithPath: "/mnt/data/jetlink", isDirectory: true)
     var isDirectory: ObjCBool = false
-    if FileManager.default.fileExists(atPath: jetson.path, isDirectory: &isDirectory) && isDirectory.boolValue || isTegra() {
+    if FileManager.default.fileExists(atPath: jetson.path, isDirectory: &isDirectory) && isDirectory.boolValue || tegra() {
       return jetson
     }
     let home = FileManager.default.homeDirectoryForCurrentUser

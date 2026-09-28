@@ -20,6 +20,36 @@
     }
   }
 
+  /// --backend and --device, as every command that runs a model takes them.
+  struct BackendArguments: ParsableArguments {
+    @Option(help: "auto, trt or ort. auto takes TensorRT where it loads, else onnxruntime; a named one that cannot run here is an error.")
+    var backend = BackendName.auto
+    @Option(
+      help: ArgumentHelp(
+        "trt: a CUDA device index (0). ort: ane (default), ane-whole, coreml or cpu on a Mac; cpu on Linux.", valueName: "device"))
+    var device: String?
+
+    /// The options, with "auto" read as each backend's default device, as
+    /// the Python server's --device took it.
+    func options(keepAlive: Bool = true, keepCPUWarm: Bool = true) -> BackendOptions {
+      BackendOptions(device: device == "auto" ? nil : device, keepAlive: keepAlive, keepCPUWarm: keepCPUWarm)
+    }
+
+    /// The backend asked for; with none, logs why and exits 1. `auto` logs
+    /// why it passed over each one it did not take.
+    func pick(keepAlive: Bool = true, keepCPUWarm: Bool = true) throws -> any EngineBackend {
+      let log = ServerLog(category: "main")
+      do {
+        return try options(keepAlive: keepAlive, keepCPUWarm: keepCPUWarm).pick(backend) { name, why in
+          log.info("not using \(name.rawValue): \(why)")
+        }
+      } catch {
+        log.error("\(error)")
+        throw ExitCode.failure
+      }
+    }
+  }
+
   /// What the backends read from the command line.
   struct BackendOptions {
     /// trt: a CUDA device index. ort: ane, ane-whole, coreml or cpu on a Mac,
@@ -28,7 +58,8 @@
     var keepAlive = true
     var keepCPUWarm = true
 
-    /// TensorRT, if it loads here and this build has its backend.
+    /// TensorRT, if it loads here and the GPU answers. A build without
+    /// TensorRT's headers has the fake shim, which never loads.
     func trt() throws -> any EngineBackend {
       #if os(Linux)
         var index = 0
@@ -36,13 +67,11 @@
           guard let parsed = Int(device), parsed >= 0 else { throw BackendUnusable("--device \(device) is not a CUDA device index") }
           index = parsed
         }
-        let found: String
         do {
-          found = try TensorRT.probe(device: index)
+          return try TrtBackend(device: index)
         } catch {
           throw BackendUnusable(String(describing: error))
         }
-        throw BackendUnusable("\(found) loads, but this build has no TensorRT backend yet")
       #else
         throw BackendUnusable("TensorRT runs on Linux only")
       #endif
@@ -113,13 +142,10 @@
       abstract: "List the backends and why each can or cannot run here.",
       discussion: "Exits 0 when the backend --backend names can run: auto's pick by default, so --backend trt asks for TensorRT and a GPU.")
 
-    @Option(help: "auto, trt or ort.")
-    var backend = BackendName.auto
-    @Option(help: "trt: a CUDA device index (0). ort: ane, ane-whole, coreml or cpu on a Mac, cpu on Linux.")
-    var device: String?
+    @OptionGroup var chosen: BackendArguments
 
     func run() throws {
-      let found = BackendOptions(device: device).candidates()
+      let found = chosen.options().candidates()
       for (name, made) in found {
         switch made {
         case .success(let backend):
@@ -131,7 +157,7 @@
       }
       let usable = found.first { (name, made) in
         guard case .success = made else { return false }
-        return backend == .auto || backend == name
+        return chosen.backend == .auto || chosen.backend == name
       }
       guard usable != nil else { throw ExitCode.failure }
     }

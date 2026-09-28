@@ -192,6 +192,14 @@ public struct StatsEvent: Codable, Sendable, Equatable {
     }
   }
 
+  public struct Mean: Codable, Sendable, Equatable {
+    public let mean: Double
+
+    public init(mean: Double) {
+      self.mean = mean
+    }
+  }
+
   public let frames: Int
   public let fps: Double
   /// From a frame's arrival to its reply leaving.
@@ -199,14 +207,23 @@ public struct StatsEvent: Codable, Sendable, Equatable {
   public let stagesMs: Stages
   public let slow: Int
   public let windowS: Double
+  /// From a frame's arrival to its reply being ready, without the send: what
+  /// `slow` counts against. Nil from a server that does not send it.
+  public let totalMs: Total?
+  /// The model run, as the backend times it.
+  public let gpuMs: Mean?
 
-  public init(frames: Int, fps: Double, servedMs: Total, stagesMs: Stages, slow: Int, windowS: Double) {
+  public init(
+    frames: Int, fps: Double, servedMs: Total, stagesMs: Stages, slow: Int, windowS: Double, totalMs: Total? = nil, gpuMs: Mean? = nil
+  ) {
     self.frames = frames
     self.fps = fps
     self.servedMs = servedMs
     self.stagesMs = stagesMs
     self.slow = slow
     self.windowS = windowS
+    self.totalMs = totalMs
+    self.gpuMs = gpuMs
   }
 }
 
@@ -649,6 +666,112 @@ public enum ControlEvent: Sendable, Equatable {
   public var replyEvent: ReplyEvent? {
     if case .reply(let reply) = self { return reply }
     return nil
+  }
+}
+
+extension ControlEvent {
+  /// The event's name on the wire: "hello", "import", "shutdown_request".
+  public var name: String {
+    switch self {
+    case .hello: "hello"
+    case .server: "server"
+    case .link: "link"
+    case .engine: "engine"
+    case .stats: "stats"
+    case .inventory: "inventory"
+    case .catalog: "catalog"
+    case .download: "download"
+    case .importEvent: "import"
+    case .benchmark: "benchmark"
+    case .shutdownRequest: "shutdown_request"
+    case .reply: "reply"
+    case .unknown(let name): name
+    }
+  }
+
+  /// The event as the Python server wrote it on the control channel: one
+  /// JSON object with `event`, `t` (Unix seconds) and the payload's
+  /// snake_case keys, then a newline. What the status page streams.
+  public func jsonLine(at date: Date = Date()) -> Data {
+    var object = payload()
+    object["event"] = name
+    object["t"] = date.timeIntervalSince1970
+    var data = (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes])) ?? Data("{}".utf8)
+    data.append(0x0A)
+    return data
+  }
+
+  /// The payload alone, as JSONSerialization objects, with every absent
+  /// optional written as null the way Python writes None: a page reading a
+  /// key gets null, not undefined.
+  public func payload() -> [String: Any] {
+    switch self {
+    case .hello(let event): ControlEvent.object(event)
+    case .server(let event): ControlEvent.object(event)
+    case .link(let event): ControlEvent.object(event)
+    case .engine(let event): ControlEvent.object(event)
+    case .stats(let event): ControlEvent.object(event)
+    case .inventory(let event): ControlEvent.object(event)
+    case .catalog(let event): ControlEvent.object(event)
+    case .download(let event): ControlEvent.object(event)
+    case .importEvent(let event): ControlEvent.object(event)
+    case .benchmark(let event): ControlEvent.object(event)
+    case .shutdownRequest(let event): ControlEvent.object(event)
+    case .reply(let event): ControlEvent.object(event)
+    case .unknown: [:]
+    }
+  }
+
+  private static func object(_ value: some Encodable) -> [String: Any] {
+    let encoder = JSONEncoder()
+    encoder.keyEncodingStrategy = .convertToSnakeCase
+    guard let data = try? encoder.encode(value), let object = try? JSONSerialization.jsonObject(with: data) else { return [:] }
+    return withNulls(object, value) as? [String: Any] ?? [:]
+  }
+
+  /// JSONEncoder leaves a nil optional out, so each one the value holds is
+  /// put back as null under the key the encoder would have used.
+  private static func withNulls(_ encoded: Any, _ value: Any) -> Any {
+    let mirror = Mirror(reflecting: value)
+    switch (encoded, mirror.displayStyle) {
+    case (var object as [String: Any], .struct?):
+      for child in mirror.children {
+        guard let label = child.label else { continue }
+        let key = snakeCase(label)
+        if let nested = object[key] {
+          object[key] = withNulls(nested, child.value)
+        } else if isNil(child.value) {
+          object[key] = NSNull()
+        }
+      }
+      return object
+    case (let array as [Any], .collection?):
+      return zip(array, mirror.children).map { withNulls($0, $1.value) }
+    case (_, .optional?):
+      return mirror.children.first.map { withNulls(encoded, $0.value) } ?? encoded
+    default:
+      return encoded
+    }
+  }
+
+  private static func isNil(_ value: Any) -> Bool {
+    let mirror = Mirror(reflecting: value)
+    return mirror.displayStyle == .optional && mirror.children.isEmpty
+  }
+
+  /// `convertToSnakeCase` for the names these events use, none of which has
+  /// two capitals in a row: "runtimeVersion" is "runtime_version".
+  private static func snakeCase(_ name: String) -> String {
+    var out = ""
+    for character in name {
+      if character.isUppercase {
+        if !out.isEmpty { out.append("_") }
+        out.append(contentsOf: character.lowercased())
+      } else {
+        out.append(character)
+      }
+    }
+    return out
   }
 }
 
