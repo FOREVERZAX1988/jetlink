@@ -8,8 +8,9 @@ both devices powered and online.
 1. Update the comma in **Settings > Software** and let it reboot.
 2. Update the server:
 
-   - Jetson or Linux PC (installer): run `jetlink update`. It keeps your
-     settings and restores the previous server if the update fails.
+   - Jetson or Linux PC (installer): run `jetlink update`. It moves to the
+     newest release, keeps your settings, and restores the previous server if
+     the update fails.
    - Mac app: quit Jetlink, replace it with the new release, and reopen it.
    - iPhone app: run `git pull` in the checkout, then click **Run** in Xcode.
    - Source install: run `git pull` in the checkout. Mac script: restart
@@ -28,6 +29,8 @@ both devices powered and online.
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zoompilot/jetlink/v0.4.0/install.sh | bash -s -- --ref v0.4.0
 ```
+
+It stays there until `jetlink update --ref latest`.
 
 Specific versions and manual Docker rollback:
 [installation reference](installation-reference.md#versions-and-manual-rollback).

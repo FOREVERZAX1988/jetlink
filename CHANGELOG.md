@@ -13,6 +13,7 @@ Jetlink v0.5.0
 * **Model Switching:** New models download and build in one step.
 * **Reliability:** Recovers in seconds if the Jetson server restarts mid-drive.
 * **Jetson Power Off:** Fixed the comma not shutting the Jetson down.
+* **Installer:** Installs the latest release; `jetlink update` moves to the newest.
 * **Mac:** Swift server option with no Python, and a Benchmark page.
 
 **Removed**

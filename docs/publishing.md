@@ -54,8 +54,8 @@ full version and with `major.minor`:
   not run on JetPack 7 or generic Arm servers.
 - No `latest` tag.
 - Each push to `main` also publishes `edge-cuda` and `edge-jetpack6` (Docker
-  Images workflow), which the installer pulls. With neither for a machine, the
-  installer builds the image there.
+  Images workflow), which the installer pulls with `--ref main`. With no image
+  for a machine, the installer builds it there.
 - A failed image job does not block the release; the notes say which failed,
   and `install.sh --build` still works.
 

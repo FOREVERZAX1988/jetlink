@@ -100,15 +100,16 @@ Custom distributions need their own USB product ID.
 
 ### Choose a version
 
-- The installer follows `main`; Mac app releases build from it.
+- The installer installs the newest release; `jetlink update` moves to the
+  next. `jetlink update --ref main` switches to development builds.
 - The zoompilot fork pins the Jetlink commit it was tested with as its
   `jetlink_repo` submodule; `main` stays compatible with the fork's current
   `jetson-trt` branch.
 - On a protocol version mismatch the server rejects the connection and the
   comma drives on the small model.
 
-To install a release or the fork's pinned commit instead of `main`, pass it to
-the installer (replace `v0.4.0`):
+To pin a release or the fork's pinned commit, pass it to the installer (replace
+`v0.4.0`); `jetlink update --ref latest` follows releases again:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zoompilot/jetlink/v0.4.0/install.sh | bash -s -- --ref v0.4.0

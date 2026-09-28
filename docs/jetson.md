@@ -65,7 +65,8 @@ On the Jetson, open **Terminal** and paste:
 curl -fsSL https://raw.githubusercontent.com/zoompilot/jetlink/main/install.sh | bash
 ```
 
-Answer the power questions as above. Takes 10–30 minutes; leave it running.
+It installs the latest release. Answer the power questions as above. Takes
+10–30 minutes; leave it running.
 
 ## 3. Connect the comma
 
@@ -106,7 +107,7 @@ Read [daily use](using-jetlink.md) before driving.
 jetlink status     # check Jetlink and the comma connection
 jetlink logs       # view errors; Ctrl-C to stop watching
 jetlink restart    # restart Jetlink
-jetlink update     # update, keeping your settings
+jetlink update     # update to the newest release, keeping your settings
 jetlink setup      # change power settings
 jetlink uninstall  # remove Jetlink
 ```

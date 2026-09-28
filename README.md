@@ -49,7 +49,8 @@ Needs Ubuntu or Debian and an NVIDIA GeForce RTX 20 series or newer GPU. Run:
 curl -fsSL https://raw.githubusercontent.com/zoompilot/jetlink/main/install.sh | bash
 ```
 
-Takes 10–30 minutes. Help: [Linux setup](docs/platforms.md#linux-nvidia-gpu).
+Installs the latest release; `jetlink update` moves to the newest. Takes 10–30
+minutes. Help: [Linux setup](docs/platforms.md#linux-nvidia-gpu).
 
 ### Mac
 
