@@ -78,6 +78,16 @@ are the owner's: `port hold|off` keeps the USB-C port the device end of a USB
 link, and `vm apply|restore` sets and undoes the VM tuning the link needs while
 the comma records.
 
+The owner is the process that holds the gadget for as long as the link is on;
+openpilot lists it as `jetlinkd`. It and everything it uses on the comma live in
+`jetlink/comma/`: the gadget and the openpilot params it reads by name
+(`gadget.py`), the owner (`owner.py`), the lease modeld borrows the endpoints or
+a phone's dial on (`lending.py`), the USB-C port (`port.py`), the VM tuning
+(`vm.py`) and the wrapper that runs this script under `sudo -n` (`root.py`).
+It is standard library only, so the owner stays at about 10 MB. The zoompilot
+fork keeps a shim, `openpilot/sunnypilot/accelerators/jetlink/owner.py`, that
+starts it with the fork's provisioning worker.
+
 | Descriptor | Value |
 | --- | --- |
 | idVendor:idProduct | `1209:0001` (pid.codes test allocation) |

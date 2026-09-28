@@ -52,7 +52,7 @@ the GPU; tinygrad is Python only.
 
 **Fork** (`openpilot/sunnypilot/accelerators/jetlink/`): the phone dials the
 owner on 192.168.60.1:5599 over the composite gadget's network link, the loan
-carries the socket, and (new) `usbport.Port` holds the comma's USB-C port as
+carries the socket, and (new) `usbport.Port` (now `jetlink/comma/port.py`) holds the comma's USB-C port as
 the device for any host that is not a chestnut, so a C-to-C host (Mac or
 iPhone) gets the host role. It forces the charger's DISABLE_POWER_ROLE_SWITCH
 voter and leaves USB PD alone (fork f216abb5d2). See the fork commits.

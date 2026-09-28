@@ -4,6 +4,14 @@ Copyright (c) 2026-, Zeph Leggett.
 This file is part of jetlink and is licensed under the MIT License.
 See the LICENSE file in the root directory for more details.
 
-What runs on the comma itself, beside openpilot. Standard library only: the
-owner that imports it stays resident at about 10 MB.
+What runs on the comma itself, beside openpilot: the USB gadget and the
+openpilot params it reads (gadget), the process that holds it for the whole
+time the link is on (owner), the lease other processes borrow its endpoints
+on (lending), the USB-C port (port), the VM tuning (vm), and the one root
+script all of it goes through (root). For the comma four and the comma 3X.
+
+Standard library only: the owner that imports it stays resident at about
+10 MB. openpilot runs the owner through a shim in the fork,
+openpilot/sunnypilot/accelerators/jetlink/owner.py, which names its
+provisioning worker.
 """

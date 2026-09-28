@@ -36,6 +36,11 @@ setting (on the comma, in the models settings):
 Moving the setting between USB and iOS rebuilds the gadget, which is an unplug,
 so the comma applies it once the car is parked.
 
+The comma's side of this is the `jetlink.comma` package: the owner process
+holds the gadget and lends modeld its endpoints, or the phone's dial, and every
+root step goes through `scripts/comma/jetlink-root.sh`. See the
+[installation reference](installation-reference.md#custom-usb-integrations).
+
 ### Bus speed
 
 Latency depends on the link enumerating at USB 3 (SuperSpeed). A frame is about

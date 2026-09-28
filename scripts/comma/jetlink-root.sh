@@ -63,7 +63,7 @@ DNSMASQ_IF=/dev/shm/jetlink-dnsmasq.if
 DNSMASQ_LEASES=/dev/shm/jetlink-usb0.leases
 
 # port: the charger's DISABLE_POWER_ROLE_SWITCH voter on the PMI8998, the one
-# role lever that holds across plugs; the fork's usbport.py says why this one
+# role lever that holds across plugs; jetlink/comma/port.py says why this one
 POWER_ROLE_VOTER=${JETLINK_POWER_ROLE_VOTER:-/sys/kernel/debug/pmic-votable/DISABLE_POWER_ROLE_SWITCH}
 USBPD=/sys/class/usbpd/usbpd0
 
