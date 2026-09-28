@@ -231,14 +231,25 @@ public final class QNNBackend: EngineBackend {
     let compileSeconds = Date().timeIntervalSince(compileStarted)
     contextBytes = ArtifactSidecar.treeBytes(staged)
     try JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted]).write(to: staged.appending(path: QNNBackend.manifestName))
-    report("compile", 1, "compiled in \(Int(compileSeconds.rounded())) s")
+    if sessions.contains(where: { $0.unit == .htp }) {
+      report("compile", 1, "compiled in \(Int(compileSeconds.rounded())) s")
+    }
 
-    // Prove it runs before calling it built.
-    report("load", 0, "loading the compiled model")
-    let engine = try OrtEngine(plans: plans(staged, manifest), device: deviceTag(), keepAlive: false, keepCPUWarm: false)
-    try engine.run()
-    let providers = engine.providers
-    engine.close()
+    // Prove it runs before calling it built: minutes on a CPU, so it ticks.
+    let proving = Ticker(interval: 1) { elapsed in
+      report("load", 0, "loading the model to check it runs, \(Int(elapsed)) s elapsed")
+    }
+    let providers: [String]
+    do {
+      let engine = try OrtEngine(plans: plans(staged, manifest), device: deviceTag(), keepAlive: false, keepCPUWarm: false)
+      defer { engine.close() }
+      try engine.run()
+      providers = engine.providers
+    } catch {
+      proving.stop()
+      throw error
+    }
+    proving.stop()
 
     if fm.fileExists(atPath: artifact.path) {
       try fm.removeItem(at: artifact)
