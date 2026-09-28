@@ -20,8 +20,8 @@ model") and the ONNX is in comma's HuggingFace model repo, in the folder that
 id starts. sunnypilot's model builds find it the same way. That repo speaks
 the LFS batch protocol too, so it is one more endpoint to ask.
 
-This mirrors the fork's openpilot/sunnypilot/accelerators/jetlink/lfs.py: same
-URLs, same endpoint order, same verify rules, no openpilot imports.
+The zoompilot fork downloads through this module too, asking its own
+.lfsconfig endpoint first. No openpilot imports.
 """
 from __future__ import annotations
 
