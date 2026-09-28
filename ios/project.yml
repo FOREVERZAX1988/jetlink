@@ -1,4 +1,4 @@
-# xcodegen spec for the Jetlink iPhone app.
+# xcodegen spec for the Jetlink iPhone and iPad app.
 #
 # Regenerate with `make project`. The generated Jetlink.xcodeproj is committed
 # so `open Jetlink.xcodeproj` works without installing xcodegen. Signing comes
@@ -21,7 +21,7 @@ settings:
     MARKETING_VERSION: ${JETLINK_VERSION}
     CURRENT_PROJECT_VERSION: ${JETLINK_BUILD}
     CODE_SIGN_STYLE: Automatic
-    TARGETED_DEVICE_FAMILY: "1"
+    TARGETED_DEVICE_FAMILY: "1,2"
     ARCHS: arm64
     DEAD_CODE_STRIPPING: YES
 targets:
@@ -55,6 +55,16 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
+        # Every orientation, and no UIRequiresFullScreen: on an iPad the app
+        # runs beside others in Split View and Stage Manager. It says so when
+        # it leaves the screen, which is what stops the model.
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # A trackpad or mouse on an iPad drives the app as a pointer.
+        UIApplicationSupportsIndirectInputEvents: true
         UIRequiredDeviceCapabilities: [arm64, metal]
         NSLocalNetworkUsageDescription: Jetlink connects to your comma over the USB cable.
         # The browse that asks for Local Network access at launch.
@@ -69,7 +79,7 @@ targets:
       path: Resources/Jetlink.entitlements
       properties:
         # CoreML compiles the 766 MB model inside the app. On a Mac that
-        # peaked near 3 GB resident; this is headroom for it on a phone.
+        # peaked near 3 GB resident; this is headroom for it on an iPhone or iPad.
         com.apple.developer.kernel.increased-memory-limit: true
     settings:
       base:

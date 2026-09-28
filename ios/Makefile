@@ -1,4 +1,4 @@
-# Jetlink for iPhone.
+# Jetlink for iPhone and iPad.
 #
 #   make project   regenerate Jetlink.xcodeproj from project.yml (needs xcodegen)
 #   make build     compile for a device without signing (needs Xcode's iOS platform)
