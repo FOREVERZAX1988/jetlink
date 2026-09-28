@@ -124,7 +124,7 @@ public enum BenchmarkBlocker {
   public static func reason(serving: Bool, modelLoaded: Bool, commaConnected: Bool) -> String? {
     if !serving { return "The server is not running." }
     if !modelLoaded { return "Load a model first." }
-    if commaConnected { return "Disconnect the comma to benchmark. Its live numbers are on Status." }
+    if commaConnected { return "Disconnect the comma first." }
     return nil
   }
 }
