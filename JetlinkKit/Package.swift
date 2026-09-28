@@ -15,6 +15,11 @@
 //                    backend that runs the model, and the gadget.
 //   JetlinkORT       onnxruntime's backends: CoreML on Apple, QNN on Android, and the
 //                    CPU provider under either
+//   CTrt             TensorRT and CUDA as plain C calls (jl_trt.h), opened at run time
+//   JetlinkTRT       the TensorRT backend
+//   JetlinkLinux     a Jetson's or a Linux PC's side of the server: the comma's gadget
+//                    through sysfs, telemetry, sleep and power (Linux only)
+//   JetlinkStatusPage  the read-only status page the daemon serves
 //   JetlinkAndroid   the JNI library the Android app loads, libjetlink.so (Android only)
 //   jetlink-serve    the server on its own, for benches
 //   jetlink-onnx     the preparation on its own, for checking it against Python
@@ -24,11 +29,23 @@
 // tarball's on Linux. Building for either needs onnxruntime's C headers, with
 // -Xcc -I<a directory holding onnxruntime/onnxruntime_c_api.h>;
 // android/scripts/swift-build.sh passes the AAR's.
+//
+// CTrt is the real shim over TensorRT only on Linux with JETLINK_TENSORRT set to
+// a directory holding TensorRT's and CUDA's headers (scripts/build-linux.sh
+// fetches them). Everywhere else it is the fake over host memory, which the
+// tests run on and which never opens TensorRT, so a build without the headers
+// cannot serve with it.
 import PackageDescription
 
 let apple: [Platform] = [.macOS, .iOS]
 /// No CryptoKit and no onnxruntime framework: swift-crypto, and dlopen.
 let linux: [Platform] = [.linux, .android]
+
+#if os(Linux)
+  let tensorRT = Context.environment["JETLINK_TENSORRT"]
+#else
+  let tensorRT: String? = nil
+#endif
 
 let crypto: Target.Dependency = .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: linux))
 
@@ -84,6 +101,18 @@ let package = Package(
       name: "JetlinkORT", dependencies: ["JetlinkKit", "JetlinkONNX", "JetlinkServer", "COrt"],
       linkerSettings: [.linkedFramework("Metal", .when(platforms: apple))]),
     .target(
+      name: "CTrt",
+      exclude: ["tools", tensorRT == nil ? "jl_trt.cpp" : "jl_trt_fake.c"],
+      cxxSettings: tensorRT.map { [.unsafeFlags(["-isystem", $0])] } ?? [],
+      linkerSettings: [.linkedLibrary("dl", .when(platforms: [.linux])), .linkedLibrary("m", .when(platforms: [.linux]))]),
+    .target(name: "JetlinkTRT", dependencies: ["CTrt", "JetlinkServer", "JetlinkONNX"]),
+    .target(
+      name: "JetlinkLinux",
+      dependencies: [
+        "JetlinkKit", "JetlinkLog", "JetlinkServer", "JetlinkStatusPage", .target(name: "CUsbfs", condition: .when(platforms: linux)),
+      ]),
+    .target(name: "JetlinkStatusPage", dependencies: ["JetlinkKit", "JetlinkLog", "JetlinkServer"], resources: [.copy("Resources")]),
+    .target(
       name: "JetlinkAndroid", dependencies: ["JetlinkKit", "JetlinkServer", "JetlinkORT"],
       linkerSettings: [.linkedLibrary("log", .when(platforms: [.android]))]),
     .executableTarget(name: "jetlink-serve", dependencies: ["JetlinkKit", "JetlinkServer", "JetlinkORT"]),
@@ -96,5 +125,18 @@ let package = Package(
     .testTarget(name: "JetlinkRegistryTests", dependencies: ["JetlinkRegistry", "JetlinkTestSupport", crypto]),
     // The server's tests run it on onnxruntime's CPU provider.
     .testTarget(name: "JetlinkServerTests", dependencies: ["JetlinkServer", "JetlinkORT", "JetlinkTestSupport"], exclude: ["Fixtures"]),
-  ]
+    // On the fake shim (JL_TRT_FAKE), which jl_trt_fake.h drives.
+    .testTarget(
+      name: "JetlinkTRTTests", dependencies: ["JetlinkTRT", "CTrt", "JetlinkServer", "JetlinkONNX", "JetlinkTestSupport"],
+      swiftSettings: tensorRT == nil ? [.define("JL_TRT_FAKE")] : []),
+    // Captured sysfs trees, read in place.
+    .testTarget(
+      name: "JetlinkLinuxTests",
+      dependencies: [
+        "JetlinkLinux", "JetlinkServer", "JetlinkStatusPage", "JetlinkTestSupport", .target(name: "CUsbfs", condition: .when(platforms: linux)),
+      ],
+      exclude: ["Fixtures"]),
+    .testTarget(name: "JetlinkStatusPageTests", dependencies: ["JetlinkStatusPage", "JetlinkKit", "JetlinkServer", "JetlinkTestSupport"]),
+  ],
+  cxxLanguageStandard: .cxx17
 )
