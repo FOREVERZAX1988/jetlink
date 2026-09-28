@@ -137,11 +137,16 @@ do: with another process running a model on it back to back, the split measured
 
 `scripts/verify_parity.py` compares 32 frames against ONNX Runtime on the CPU,
 using the model's hidden-state feedback. Every output slice and column must have
-a correlation of at least 0.999 to pass.
+a correlation of at least 0.999 to pass. `scripts/verify_engine.py` checks a
+prepared engine on the machine that built it, without the link; with
+`--capture` it replays a `verify_parity.py` capture and must match what the
+comma received, bit for bit.
 
 `scripts/bench_link.py --rate 20` measures round-trip latency through the server
 over TCP loopback. Use the 20 Hz results when assessing the driving frame
 budget. See [test without a comma](platforms.md#test-without-a-comma).
+On the comma, `scripts/comma/jetlink_replay.py` replays a recorded segment
+through the real modeld on the accelerator.
 
 ## Keeping the Mac GPU responsive between frames
 
