@@ -150,7 +150,6 @@
     let logs = LogRing(capacity: 5000)
     /// The comma's descriptor, from the app's USB permission flow.
     let gadget = UsbfsGadget()
-    private let encoder = ControlJSONEncoder()
     private let lock = NSLock()
     private var embedded: EmbeddedServer?
     private var stream: LogStream?
@@ -256,7 +255,7 @@
         done.signal()
       }
       done.wait()
-      return encoder.object(reply)
+      return reply.map { ControlEvent.reply($0).payload() } ?? NSNull()
     }
   }
 

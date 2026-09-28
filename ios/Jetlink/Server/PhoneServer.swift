@@ -12,22 +12,19 @@ import os
 @Observable
 final class PhoneServer: ServerControlling {
   private(set) var runState: ServerRunState = .stopped
-  private(set) var link: LinkEvent = .waiting
-  private(set) var engine: EngineEvent = .none
-  /// backend, runtime version and device, as the hello reports them.
-  private(set) var info: ServerEvent?
+  /// What the screens show of the server, kept from its events.
+  let state = ServerViewState()
+  var link: LinkEvent { state.link }
+  var engine: EngineEvent { state.engine }
+  var info: ServerEvent? { state.server }
+  var statsHistory: [StatsSample] { state.statsHistory }
+  var benchmark: BenchmarkEvent? { state.benchmark }
+  var shutdownRequest: ShutdownRequestEvent? { state.shutdownRequest }
+  var shutdownRequests: Int { state.shutdownRequests }
   private(set) var port: UInt16?
   /// The last ten seconds of frames, refreshed once a second while serving.
   private(set) var recent: StatsEvent?
-  /// The last two minutes of `stats`, oldest first, while the comma stays connected.
-  private(set) var statsHistory: [StatsSample] = []
   private(set) var lastFailure: String?
-  /// The benchmark running or last run, if any.
-  private(set) var benchmark: BenchmarkEvent?
-  /// The comma's last request to power the phone off, which the server
-  /// refused, and how many there have been, so each one is shown.
-  private(set) var shutdownRequest: ShutdownRequestEvent?
-  private(set) var shutdownRequests = 0
   let modelEvents: AsyncStream<ControlEvent>
 
   /// How far back the dashboard's headline reaches.
@@ -230,36 +227,17 @@ final class PhoneServer: ServerControlling {
   // MARK: events
 
   func apply(_ event: ControlEvent) {
-    switch event {
-    case .server(let value):
-      info = value
-    case .link(let value):
-      link = value
-      if value.state != .connected {
-        recent = nil
-        statsHistory = []
-      }
-    case .engine(let value):
-      engine = value
-    case .stats(let value):
-      statsHistory = StatsSample.appending(value, to: statsHistory)
-    case .benchmark(let value):
-      benchmark = value
-    case .shutdownRequest(let value):
-      shutdownRequest = value
-      shutdownRequests += 1
-    case .hello, .reply, .unknown:
-      break
-    case .inventory, .catalog, .download, .importEvent:
+    if !state.apply(event) {
       modelEventsContinuation.yield(event)
+    }
+    if case .link(let value) = event, value.state != .connected {
+      recent = nil
     }
   }
 
   private func resetLiveState() {
-    link = .waiting
-    engine = .none
+    state.serverStopped()
     recent = nil
-    statsHistory = []
     port = nil
   }
 }
