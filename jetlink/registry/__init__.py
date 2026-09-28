@@ -10,7 +10,9 @@ One stdlib-only package every platform can run: a Jetson prefetching a model
 over its own network, a Mac app driving it through the control channel, and
 `jetlink-models` on a laptop all go through here. It knows the cache layout
 `jetlink.server.cache` defines and nothing about backends, sessions or the
-wire, so importing it never pulls in an inference runtime.
+wire, so importing it never pulls in an inference runtime. That module is
+imported only inside the methods that read the cache: the comma imports
+catalog and lfs through this package and must not load the server.
 
 State lives in `<cache>/registry/`:
 
@@ -34,12 +36,15 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from jetlink.registry.catalog import (CATALOG_URL, DEFAULT_BIG_MODEL_REF, REQUIRED_SELECTOR_VERSION, CatalogModel, NetworkError, RegistryError,
                                       VerifyError, fetch_catalogs, is_ref, is_sha256, parse_catalog)
 from jetlink.registry.lfs import (COMMIT_PATCH_URL, DRIVING_MODELS_TREE_URL, LFS_ENDPOINTS, POINTER_URL, Pointer, ProgressFn, StopFn,
                                   fetch_pointer, lfs_download, lfs_resolve, parse_pointer_text)
-from jetlink.server.cache import LAST_LOADED, EngineCache
+
+if TYPE_CHECKING:
+  from jetlink.server.cache import EngineCache
 
 log = logging.getLogger('jetlink.registry')
 
@@ -167,6 +172,7 @@ class Registry:
 
   def model_path(self, sha256: str) -> Path:
     """Where the server looks for an uploaded model. The rule is EngineCache's."""
+    from jetlink.server.cache import EngineCache
     EngineCache._validate_sha256(sha256)
     return self.models / f"{sha256[:16]}.onnx"
 
@@ -257,6 +263,7 @@ class Registry:
       artifacts.append(entry)
       engines_bytes += entry['bytes']
 
+    from jetlink.server.cache import EngineCache
     last = EngineCache(self.root).last_loaded()
     try:
       free = shutil.disk_usage(self.root).free
@@ -271,6 +278,7 @@ class Registry:
     The loaded engine is not this class's business: a control server unloads
     first, and a CLI is not running one.
     """
+    from jetlink.server.cache import LAST_LOADED, EngineCache
     EngineCache._validate_sha256(sha256)
     sha16 = sha256[:16]
     if artifacts:

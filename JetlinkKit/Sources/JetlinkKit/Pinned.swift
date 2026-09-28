@@ -6,6 +6,8 @@
 /// as the Python defines them. Each Swift constant that means the same thing
 /// is tested against these, and the Python tests that this file is current.
 public enum Pinned {
+  /// jetlink.__version__
+  public static let productVersion: String = "0.6.0"
   /// jetlink.protocol.MAGIC
   public static let magic: UInt32 = 0x4B4E_4C4A
   /// jetlink.protocol.VERSION
@@ -57,13 +59,13 @@ public enum Pinned {
     ("INFER_FAILED", 3),
     ("NOT_FINITE", 4),
   ]
-  /// jetlink.transport.usbbulk.JETLINK_VID
+  /// jetlink.protocol.USB_VID
   public static let usbVendorID: UInt16 = 0x1209
-  /// jetlink.transport.usbbulk.JETLINK_PID
+  /// jetlink.protocol.USB_PID
   public static let usbProductID: UInt16 = 0x0001
-  /// jetlink.transport.usbbulk.VENDOR_CLASS
+  /// jetlink.protocol.USB_VENDOR_CLASS
   public static let usbVendorClass: [UInt8] = [0xFF, 0xFF, 0xFF]
-  /// jetlink.transport.usbbulk.MAX_PACKET
+  /// jetlink.protocol.USB_MAX_PACKET
   public static let usbMaxPacket: Int = 1024
   /// jetlink.transport.base.LINK_MEDIA
   public static let linkMedia: [String] = ["usb3", "usb2", "usb1", "usb", "tcp"]
@@ -77,7 +79,7 @@ public enum Pinned {
   ]
   /// jetlink.transport.tcp.CABLE_ADDRESS
   public static let cableAddress: String = "192.168.60.1"
-  /// jetlink.transport.usbbulk.READ_CHUNK
+  /// jetlink.protocol.USB_READ_CHUNK
   public static let usbReadChunk: Int = 262144
   /// jetlink.spec.MODEL_RUN_FREQ
   public static let modelRunFrequency: Int = 20

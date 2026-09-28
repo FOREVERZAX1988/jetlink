@@ -61,7 +61,12 @@ class OwnerTest(unittest.TestCase):
     p.start()
 
   def write(self, key: str, value: bytes) -> None:
-    (self.params / key).write_bytes(value)
+    path = self.params / key
+    path.write_bytes(value)
+    # The owner sees a param move by its mtime, and Linux stamps files from a
+    # clock that ticks every few ms: two writes in one tick look like none.
+    self.stamp = max(getattr(self, 'stamp', 0), time.time_ns()) + 10_000_000
+    os.utime(path, ns=(self.stamp, self.stamp))
 
   def vm_calls(self) -> list[str]:
     """What the owner asked jetlink-root.sh vm to do, in order."""

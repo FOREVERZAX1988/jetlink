@@ -30,7 +30,7 @@ DENSITIES = {'mdpi': 1, 'hdpi': 1.5, 'xhdpi': 2, 'xxhdpi': 3, 'xxxhdpi': 4}
 
 def background(y: int, height: int) -> tuple:
   t = y / max(1, height - 1)
-  return tuple(round(a + (b - a) * t) for a, b in zip(TOP, BOTTOM))
+  return tuple(round(a + (b - a) * t) for a, b in zip(TOP, BOTTOM, strict=True))
 
 
 def extract(plate: Image.Image) -> Image.Image:
@@ -48,7 +48,7 @@ def extract(plate: Image.Image) -> Image.Image:
       if alpha <= 0:
         continue
       # the colour that, over the background at this alpha, gives this pixel
-      color = tuple(max(0, min(255, round((c - k * (1 - alpha)) / alpha))) for c, k in zip((r, g, b), bg))
+      color = tuple(max(0, min(255, round((c - k * (1 - alpha)) / alpha))) for c, k in zip((r, g, b), bg, strict=True))
       target[x, y] = (*color, round(alpha * 255))
   return out
 
