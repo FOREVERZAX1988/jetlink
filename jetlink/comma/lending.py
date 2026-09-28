@@ -162,7 +162,7 @@ class Loan:
       got = _ask(self.conn, self._buf, self.name, time.monotonic() + timeout)
     except (OSError, ValueError, KeyError):
       if not self._closed:   # a close() from another thread wakes the ask this way
-        gadget.log.exception("jetlink: could not ask jetlinkd for the link")
+        gadget.log.exception("jetlink: could not ask the owner for the link")
       self._closed = True
       _close(self.conn)
       return None
@@ -206,7 +206,7 @@ def borrow(name: str = 'modeld', timeout: float = BORROW_TIMEOUT, path: Path = S
   if reply is None:
     loan.close()
     return None
-  gadget.log.warning("jetlink: borrowed %s from jetlinkd", _what_was_lent(reply))
+  gadget.log.warning("jetlink: borrowed %s from the owner", _what_was_lent(reply))
   return loan
 
 
@@ -226,11 +226,11 @@ def _ask(conn: socket.socket, buf: bytearray, name: str,
         if not reply.get('cable'):
           return reply, None
         if not fds:
-          gadget.log.warning("jetlink: jetlinkd lent the cable link without its socket")
+          gadget.log.warning("jetlink: the owner lent the cable link without its socket")
           return None
         return reply, socket.socket(fileno=fds.pop(0))
       if not reply.get('retry'):
-        gadget.log.warning("jetlink: jetlinkd would not lend the gadget (%s)", reply.get('detail'))
+        gadget.log.warning("jetlink: the owner would not lend the gadget (%s)", reply.get('detail'))
         return None
       time.sleep(RETRY)
     return None

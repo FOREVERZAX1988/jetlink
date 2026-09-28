@@ -6,7 +6,7 @@ See the LICENSE file in the root directory for more details.
 
 Handing the endpoints over without handing the gadget over.
 
-jetlinkd holds ep0 and the UDC bind for as long as the link is enabled, so a
+The owner holds ep0 and the UDC bind for as long as the link is enabled, so a
 drive starting or ending is no longer an unplug the Jetson has to recover from.
 What still changes hands is the right to read the endpoint files, and this is
 the handshake for it.

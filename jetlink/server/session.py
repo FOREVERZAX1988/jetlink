@@ -706,7 +706,7 @@ class Session:
       'telemetry': self.telemetry.read(),
       # 0 when this server never suspends. The comma holds the gadget for the
       # whole parked period rather than letting go of it for a box that was
-      # never going to sleep; see jetlinkd.go_dormant.
+      # never going to sleep; see the comma owner's go_dormant.
       'sleep_after': self.host.sleep_after,
     }
     if info.get('backend') == 'trt':

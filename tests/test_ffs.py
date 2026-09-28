@@ -38,7 +38,7 @@ def test_no_endpoint_is_opened_before_a_host_has_enabled_it(mount):
 
   ffs_epfile_io sleeps on an endpoint no host has enabled, and unbind does not
   wake it. The stuck thread holds the struct file, so every later ffs_ep0_open
-  answers EBUSY, jetlinkd and the next drive's modeld included.
+  answers EBUSY, the owner and the next drive's modeld included.
   """
   t = FfsTransport(str(mount))
   try:
@@ -392,8 +392,9 @@ def test_gadget_receive_buffer_is_not_oversized(mount):
 
 
 def test_reader_widens_when_inherited_mask_is_several_cores(monkeypatch):
-  """Offroad jetlinkd is not pinned; the reader then just fills out the mask to
-  every core rather than excluding one (there is no single frame-loop core)."""
+  """The offroad provisioning run is not pinned; the reader then just fills out
+  the mask to every core rather than excluding one (there is no single
+  frame-loop core)."""
   from types import SimpleNamespace
   calls = {}
   monkeypatch.setattr(priority, 'os', SimpleNamespace(
@@ -591,7 +592,7 @@ def test_a_borrowed_gadget_opens_no_ep0_and_binds_nothing(mount, tmp_path, monke
   """The owner holds ep0 and the bind for its whole life, so the link changing
   hands is no longer an unplug the host has to recover from."""
   _udc(tmp_path / 'sys', monkeypatch)
-  owner = FfsTransport(str(mount))          # stands in for jetlinkd
+  owner = FfsTransport(str(mount))          # stands in for the comma owner
   t = FfsTransport.borrowed(str(mount), 'udc0')
   try:
     assert t.ep0 == -1 and t.gadget is None

@@ -54,7 +54,7 @@ class EngineMissing(LinkError):
   """The server has no engine and this caller has no ONNX to upload.
 
   Raised in modeld, which never carries the file: the Jetson's cache was pruned,
-  re-flashed or swapped since jetlinkd recorded it ready.
+  re-flashed or swapped since a provisioning run recorded it ready.
   """
 
 

@@ -21,13 +21,13 @@ since every unbind drops the phone's network interface with it.
 
 It is deliberately small. Everything heavy jetlink does is episodic, so none of
 it lives here: a download, an upload and a TensorRT build all belong to the
-provisioning worker (the fork's jetlinkd), which this spawns when there is
+provisioning run (the fork's worker), which this spawns when there is
 something to do and which exits when there is not. That keeps a parked car and
 a drive alike at one resident jetlink process of about 13 MB rather than
 47.5 MB, and it is why nothing in this module may import swaglog, Params,
 numpy, capnp or zmq; see gadget.py and tests/test_comma_gadget.py. The caller
 names the worker: the fork's accelerators/jetlink/owner.py runs main() with
-its jetlinkd's argv, so nothing here knows an openpilot module.
+the provisioning run's argv, so nothing here knows an openpilot module.
 
 manager stops this on shutdown with SIGINT and SIGKILLs it 5 s later, so every
 long wait polls `stop`: a FunctionFS owner killed mid-transfer leaves the

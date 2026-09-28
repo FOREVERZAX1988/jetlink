@@ -42,7 +42,8 @@ cat <<'NEXT'
 
 ==> done. The owner, the one resident jetlink process on the comma, builds the
     USB gadget on its first step, for USB or iOS as Accelerator Link says, and
-    binds it. jetlinkd is the provisioning run it starts, and that exits.
+    binds it. The provisioning run is what it starts when there is work, and
+    that exits.
 
     An owner or modeld that was already running still has the OLD package
     imported, and manager never respawns a process that exited on its own.

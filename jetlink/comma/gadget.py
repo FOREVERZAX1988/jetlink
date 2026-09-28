@@ -240,7 +240,7 @@ STATE = Path("/dev/shm/jetlink-owner-state")
 
 
 def owner_state() -> dict:
-  """What jetlinkd's runs left for the owner (see Jetlinkd.note_state), or {}."""
+  """What the provisioning runs left for the owner, or {}."""
   try:
     value = json.loads(STATE.read_text())
   except (OSError, ValueError):

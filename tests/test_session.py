@@ -331,8 +331,8 @@ def test_wrong_sized_request_is_rejected(link):
 
 class TestPreload:
   """A fresh server process has no engine loaded and the first client pays the
-  deserialize. Offroad jetlinkd absorbs that; at an ignition-on cold start there
-  is no jetlinkd and it lands on modeld's join instead."""
+  deserialize. Offroad the provisioning run absorbs that; at an ignition-on cold
+  start there is no run and it lands on modeld's join instead."""
 
   def _cache(self, tmp_path, spec, with_spec=True):
     cache = EngineCache(tmp_path, FakeBackend(spec))
@@ -415,7 +415,7 @@ class TestPreload:
 
 class TestRequestWithAPartialModel:
   """While the server has no engine the comma asks again every few seconds, and
-  an upload cut short (a jetlinkd to modeld handover, a dropped link) leaves
+  an upload cut short (a provisioning run to modeld handover, a dropped link) leaves
   its first chunks in models/. Every one of those requests found the file,
   parsed it, and logged a traceback for the upload it then asked for anyway."""
 
@@ -541,7 +541,7 @@ class TestHello:
   @pytest.mark.parametrize('sleep_after', [0.0, 120.0])
   def test_the_hello_says_whether_this_server_sleeps(self, tmp_path, sleep_after):
     # The comma only lets go of the gadget when parked if letting go buys the
-    # far end a suspend; see jetlinkd.go_dormant.
+    # far end a suspend; see the comma owner's go_dormant.
     session, sent = self._session(tmp_path, sleep_after=sleep_after)
     session.handle(self._hello(1))
     assert self._resp(sent)['sleep_after'] == sleep_after
