@@ -3,12 +3,22 @@ import JetlinkUI
 import SwiftUI
 
 /// The Status tab's cards, most important first: the headroom, where the time
-/// goes, the last two minutes, then the link and the phone. On its side the
-/// phone shows the ring on the left and the rest beside it. No UIKit here, so
-/// it renders anywhere SwiftUI does.
+/// goes, the last two minutes, then the link and the device. On its side a
+/// phone shows the ring on the left and the rest beside it; an iPad sets the
+/// cards in two columns. No UIKit here, so it renders anywhere SwiftUI does.
 struct StatusContent: View {
+  /// How the cards are set out, from the screen's size classes.
+  enum Arrangement {
+    /// One column, as an iPhone held upright or a narrow iPad window shows them.
+    case column
+    /// The ring and beside it the numbers, as an iPhone on its side shows them.
+    case sideways
+    /// Two columns, for the width of an iPad.
+    case columns
+  }
+
   let state: StatusState
-  var landscape = false
+  var arrangement = Arrangement.column
   var actions = StatusActions()
   /// Off only for snapshots: ImageRenderer draws nothing inside a ScrollView.
   var scrolls = true
@@ -31,28 +41,30 @@ struct StatusContent: View {
     }
   }
 
-  @ViewBuilder
   private var layout: some View {
-    if state.needsForeground {
-      foregroundBanner
-    }
-    if landscape {
-      HStack(alignment: .top, spacing: StatusContent.spacing) {
-        HeroCard(state: state, compact: true, actions: actions)
-          .frame(width: 330)
-        VStack(spacing: StatusContent.spacing) {
-          if let recent = state.recent, state.isServingFrames {
-            latency(recent, compact: true)
-            link(recent)
-          } else {
-            phone
-          }
-        }
+    VStack(spacing: StatusContent.spacing) {
+      if state.needsForeground {
+        foregroundBanner
       }
-    } else {
+      cards
+    }
+    // One column stays readable in a window wider than a phone.
+    .frame(maxWidth: arrangement == .column ? readableContentWidth : .infinity)
+    .frame(maxWidth: .infinity)
+  }
+
+  /// The comma's frames, while there are any to show.
+  private var serving: StatsEvent? {
+    state.isServingFrames ? state.recent : nil
+  }
+
+  @ViewBuilder
+  private var cards: some View {
+    switch arrangement {
+    case .column:
       VStack(spacing: StatusContent.spacing) {
         HeroCard(state: state, actions: actions)
-        if let recent = state.recent, state.isServingFrames {
+        if let recent = serving {
           latency(recent)
           if state.history.count > 1 {
             history
@@ -61,7 +73,42 @@ struct StatusContent: View {
           link(recent)
         }
         SectionHeader(state.deviceName)
-        phone
+        device
+      }
+    case .sideways:
+      HStack(alignment: .top, spacing: StatusContent.spacing) {
+        HeroCard(state: state, compact: true, actions: actions)
+          .frame(width: 330)
+        VStack(spacing: StatusContent.spacing) {
+          if let recent = serving {
+            latency(recent, compact: true)
+            link(recent)
+          } else {
+            device
+          }
+        }
+      }
+    case .columns:
+      // The headroom and where the time goes on the left; the history, the
+      // link and the device on the right.
+      HStack(alignment: .top, spacing: StatusContent.spacing) {
+        VStack(spacing: StatusContent.spacing) {
+          HeroCard(state: state, actions: actions)
+          if let recent = serving {
+            latency(recent)
+          }
+        }
+        VStack(spacing: StatusContent.spacing) {
+          if let recent = serving {
+            if state.history.count > 1 {
+              history
+            }
+            SectionHeader("Link", detail: state.linkMedium?.phoneTitle)
+            link(recent)
+          }
+          SectionHeader(state.deviceName)
+          device
+        }
       }
     }
   }
@@ -112,7 +159,7 @@ struct StatusContent: View {
     }
   }
 
-  private var phone: some View {
+  private var device: some View {
     let health = state.health
     return MetricGrid {
       GridRow {

@@ -56,6 +56,7 @@ struct SettingsScreen: View {
         help
         about
       }
+      .readableWidth()
       .navigationTitle("Settings")
       .navigationDestination(for: Destination.self) { destination in
         switch destination {

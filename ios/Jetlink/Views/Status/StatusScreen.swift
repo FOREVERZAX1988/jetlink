@@ -8,13 +8,15 @@ import UIKit
 struct StatusScreen: View {
   @Environment(AppModel.self) private var app
   @Environment(\.verticalSizeClass) private var verticalSizeClass
+  @Environment(\.horizontalSizeClass) private var horizontalSizeClass
   @Binding var tab: RootView.Tab
 
   var body: some View {
     let state = app.status
-    let landscape = verticalSizeClass == .compact
+    let arrangement = self.arrangement
+    let landscape = arrangement == .sideways
     NavigationStack {
-      StatusContent(state: state, landscape: landscape, actions: actions)
+      StatusContent(state: state, arrangement: arrangement, actions: actions)
         .navigationTitle("Jetlink")
         .navigationSubtitle(state.subtitle)
         .toolbarTitleDisplayMode(landscape ? .inline : .large)
@@ -28,13 +30,22 @@ struct StatusScreen: View {
           }
         }
     }
-    // On its side the phone is a dashboard: nothing but the numbers.
-    .toolbarVisibility(landscape ? .hidden : .automatic, for: .tabBar)
+    // On its side an iPhone is a dashboard: nothing but the numbers. An
+    // iPad keeps its tabs in any shape of window.
+    .toolbarVisibility(landscape && !ThisDevice.isPad ? .hidden : .automatic, for: .tabBar)
     .sensoryFeedback(trigger: state.link.state) { old, new in
       if new == .connected { return .success }
       if old == .connected { return .warning }
       return nil
     }
+  }
+
+  /// A short screen sets the cards side by side, as an iPhone on its side
+  /// has it; a wide one in two columns, as an iPad has it; anything else,
+  /// an iPhone upright or an iPad in a narrow window, in one.
+  private var arrangement: StatusContent.Arrangement {
+    if verticalSizeClass == .compact { return .sideways }
+    return horizontalSizeClass == .regular ? .columns : .column
   }
 
   private var actions: StatusActions {

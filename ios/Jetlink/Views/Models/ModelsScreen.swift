@@ -121,6 +121,7 @@ struct ModelsScreen: View {
         }
       }
       .listStyle(.insetGrouped)
+      .readableWidth()
       .refreshable { models.refreshCatalog() }
     }
   }

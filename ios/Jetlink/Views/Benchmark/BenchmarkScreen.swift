@@ -8,6 +8,7 @@ import UIKit
 /// that add the cable from the comma and check the numbers from a Mac.
 struct BenchmarkScreen: View {
   @Environment(AppModel.self) private var app
+  @Environment(\.horizontalSizeClass) private var horizontalSizeClass
   @State private var refusal: String?
   @State private var starting = false
   /// `-benchmark 60` on the command line runs one once a model is loaded,
@@ -17,31 +18,22 @@ struct BenchmarkScreen: View {
   var body: some View {
     NavigationStack {
       ScrollView {
-        VStack(spacing: StatusContent.spacing) {
-          runCard
-          if let report {
-            VerdictCard(report: report)
-            totals(report)
-            if report.windows.count > 1 {
-              WindowsCard(windows: report.windows)
+        Group {
+          // An iPad has room for the run and its results beside the
+          // commands; a narrower screen has them one under the other.
+          if horizontalSizeClass == .regular {
+            HStack(alignment: .top, spacing: StatusContent.spacing) {
+              VStack(spacing: StatusContent.spacing) { run }
+              VStack(spacing: StatusContent.spacing) { commands }
             }
+          } else {
+            VStack(spacing: StatusContent.spacing) {
+              run
+              commands
+            }
+            .frame(maxWidth: readableContentWidth)
+            .frame(maxWidth: .infinity)
           }
-          SectionHeader("From the Comma")
-          CommandCard(
-            title: "Over the Cable", systemImage: "cable.connector", command: commaCommand,
-            missing: "Load a model to get the command.",
-            note: "Run it on the comma over SSH, offroad, with Accelerator Link set to iOS."
-          )
-          SectionHeader("Accuracy")
-          CommandCard(
-            title: "From a Mac", systemImage: "checkmark.seal", command: parityCommand,
-            missing: app.network.wifi == nil ? "Join Wi-Fi and load a model to get the command." : "Load a model to get the command.",
-            note: "Run it in a jetlink checkout on a Mac on the same Wi-Fi."
-          )
-          Link("Learn More", destination: BenchmarkScreen.guide)
-            .font(.subheadline)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 16)
         }
         .padding(.bottom, 24)
       }
@@ -65,6 +57,40 @@ struct BenchmarkScreen: View {
   }
 
   static let guide = URL(string: "https://github.com/zoompilot/jetlink/blob/main/docs/iphone-app.md#benchmark")!
+
+  /// The run, then its verdict, totals and windows once there is a report.
+  @ViewBuilder
+  private var run: some View {
+    runCard
+    if let report {
+      VerdictCard(report: report)
+      totals(report)
+      if report.windows.count > 1 {
+        WindowsCard(windows: report.windows)
+      }
+    }
+  }
+
+  /// What the device cannot measure itself, as commands to copy.
+  @ViewBuilder
+  private var commands: some View {
+    SectionHeader("From the Comma")
+    CommandCard(
+      title: "Over the Cable", systemImage: "cable.connector", command: commaCommand,
+      missing: "Load a model to get the command.",
+      note: "Run it on the comma over SSH, offroad, with Accelerator Link set to iOS."
+    )
+    SectionHeader("Accuracy")
+    CommandCard(
+      title: "From a Mac", systemImage: "checkmark.seal", command: parityCommand,
+      missing: app.network.wifi == nil ? "Join Wi-Fi and load a model to get the command." : "Load a model to get the command.",
+      note: "Run it in a jetlink checkout on a Mac on the same Wi-Fi."
+    )
+    Link("Learn More", destination: BenchmarkScreen.guide)
+      .font(.subheadline)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .padding(.horizontal, 16)
+  }
 
   // MARK: state
 

@@ -34,6 +34,7 @@ struct ConnectHelpScreen: View {
         Link("Learn More", destination: ConnectHelpScreen.guide)
       }
     }
+    .readableWidth()
     .navigationTitle("Connecting the Comma")
     .navigationBarTitleDisplayMode(.inline)
   }

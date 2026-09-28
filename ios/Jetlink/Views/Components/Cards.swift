@@ -35,6 +35,39 @@ extension Color {
 /// The corner every card shares, so they read as one family.
 let cardCornerRadius: CGFloat = 26
 
+/// The widest one column of rows or cards grows, about what UIKit's readable
+/// content guide allows. Wider, and on an iPad a row's name and its button
+/// end up a screen apart.
+let readableContentWidth: CGFloat = 672
+
+extension View {
+  /// A list or form whose rows stay within `readableContentWidth`, centered,
+  /// on a screen wider than that; the system's own margins on a narrower one.
+  func readableWidth() -> some View {
+    modifier(ReadableWidth())
+  }
+}
+
+private struct ReadableWidth: ViewModifier {
+  @State private var width: CGFloat = 0
+
+  func body(content: Content) -> some View {
+    content
+      .contentMargins(.horizontal, margin, for: .scrollContent)
+      .onGeometryChange(for: CGFloat.self) {
+        $0.size.width
+      } action: {
+        width = $0
+      }
+  }
+
+  /// nil keeps the system's margin until centering needs more than it.
+  private var margin: CGFloat? {
+    let side = (width - readableContentWidth) / 2
+    return side > 20 ? side : nil
+  }
+}
+
 /// A card in the Health style: a tinted symbol and title, what it covers on
 /// the right, then the content. Content, not a control, so no glass.
 struct SummaryCard<Content: View>: View {
