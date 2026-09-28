@@ -1,10 +1,10 @@
 import Foundation
+import JetlinkTestSupport
 import Testing
 
 @testable import JetlinkRegistry
 
 /// tests/test_registry.py's pointers, lfs and precompiled-pkl sections.
-@Suite(.enabled(if: MockNet.intercepts))
 struct PointerTests {
   @Test func parsesTheFixture() {
     #expect(LFS.parsePointer(String(decoding: Fixture.data("pointer_f877d7a0.txt"), as: UTF8.self)) == Pointer(oid: fixtureOID, size: fixtureSize))
@@ -112,7 +112,6 @@ struct PointerTests {
   }
 }
 
-@Suite(.enabled(if: MockNet.intercepts))
 struct LFSBatchTests {
   private let pointer = Pointer(oid: fixtureOID, size: fixtureSize)
 
@@ -187,7 +186,6 @@ func exportRoutes(subject: String = "Use f78ed37d for the precompiled eGPU drivi
   ]
 }
 
-@Suite(.enabled(if: MockNet.intercepts))
 struct ExportPointerTests {
   @Test func aCommitWithoutTheONNXResolvesToTheExportItsSubjectNames() async throws {
     let tmp = try TempDir()

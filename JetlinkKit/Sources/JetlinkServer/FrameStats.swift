@@ -62,7 +62,9 @@ final class FrameStats: @unchecked Sendable {
       servedMs: spread(rows.map { $0.totalUs + $0.sendUs }),
       stagesMs: StatsEvent.Stages(queue: round2(queue), gpu: round2(gpu), other: round2(max(0, total - gpu - queue)), send: round2(mean(\.sendUs))),
       slow: rows.filter { $0.totalUs > FrameStats.slowUs }.count,
-      windowS: pythonRound(seconds, 1))
+      windowS: pythonRound(seconds, 1),
+      totalMs: spread(rows.map(\.totalUs)),
+      gpuMs: StatsEvent.Mean(mean: round2(gpu)))
   }
 }
 
