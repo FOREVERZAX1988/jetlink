@@ -99,8 +99,9 @@ extension EngineHost {
   /// Refuses while a comma is connected; a comma that connects meanwhile is
   /// told the engine is not ready until the run ends, rather than have its
   /// frames mixed into the benchmark's history. Blocks; call it off the
-  /// main thread.
-  public func benchmark(seconds: Double, run: BenchmarkRun) throws -> BenchmarkReport {
+  /// main thread. `logsReport` false leaves the report out of the log, for
+  /// a caller that prints it itself.
+  public func benchmark(seconds: Double, run: BenchmarkRun, logsReport: Bool = true) throws -> BenchmarkReport {
     lock.lock()
     guard let l = loaded else {
       lock.unlock()
@@ -129,7 +130,9 @@ extension EngineHost {
           BenchmarkEvent(
             state: report.cancelled ? "cancelled" : "done", elapsed: report.seconds, total: seconds, frames: report.frames, frame: report.frame,
             report: report, detail: "")))
-      log.info("benchmark done:\n\(report.text)")
+      if logsReport {
+        log.info("benchmark done:\n\(report.text)")
+      }
       return report
     } catch {
       emit(.benchmark(BenchmarkEvent(state: "failed", elapsed: 0, total: seconds, frames: 0, frame: nil, report: nil, detail: "\(error)")))

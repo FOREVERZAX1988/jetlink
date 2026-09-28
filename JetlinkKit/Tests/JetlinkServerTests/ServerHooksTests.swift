@@ -5,11 +5,12 @@ import Testing
 @testable import JetlinkServer
 
 /// The CPU backend with what a TensorRT one adds: fields in the hello, and
-/// runs that fail with an error of the test's choosing.
+/// runs or loads that fail with an error of the test's choosing.
 final class HookBackend: EngineBackend, @unchecked Sendable {
   private let inner = cpuBackend()
   private let lock = NSLock()
   private var failure: (any Error)?
+  private var loadFailure: (any Error)?
   let helloFields: [String: Any]
 
   init(helloFields: [String: Any] = [:]) {
@@ -29,6 +30,11 @@ final class HookBackend: EngineBackend, @unchecked Sendable {
 
   var runFailure: (any Error)? { lock.withLock { failure } }
 
+  /// Every load from now on throws `error`; nil loads again.
+  func failLoads(with error: (any Error)?) {
+    lock.withLock { loadFailure = error }
+  }
+
   func deriveSpec(model: URL, sha256: String, nbytes: Int64, frameSkip: Int) throws -> ModelSpec {
     try inner.deriveSpec(model: model, sha256: sha256, nbytes: nbytes, frameSkip: frameSkip)
   }
@@ -38,7 +44,8 @@ final class HookBackend: EngineBackend, @unchecked Sendable {
   }
 
   func load(artifact: URL, report: @escaping ProgressFn) throws -> any Engine {
-    FailingEngine(try inner.load(artifact: artifact, report: report), backend: self)
+    if let failure = lock.withLock({ loadFailure }) { throw failure }
+    return FailingEngine(try inner.load(artifact: artifact, report: report), backend: self)
   }
 }
 
@@ -110,14 +117,34 @@ final class ComingAndGoingGadget: GadgetSource, @unchecked Sendable {
 }
 
 final class Recorded<T>: @unchecked Sendable {
-  private let lock = NSLock()
+  private let condition = NSCondition()
   private var values: [T] = []
 
   func append(_ value: T) {
-    lock.withLock { values.append(value) }
+    condition.lock()
+    values.append(value)
+    condition.broadcast()
+    condition.unlock()
   }
 
-  var all: [T] { lock.withLock { values } }
+  var all: [T] {
+    condition.lock()
+    defer { condition.unlock() }
+    return values
+  }
+
+  /// Whether the values come to satisfy `done` within `timeout`. Each append
+  /// wakes it, so the bound is only for a test that fails: a loaded CI
+  /// runner can take seconds to get a thread to the event.
+  func wait(timeout: TimeInterval = 10, until done: ([T]) -> Bool) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
+    condition.lock()
+    defer { condition.unlock() }
+    while !done(values) {
+      if !condition.wait(until: deadline) { return done(values) }
+    }
+    return true
+  }
 }
 
 /// Each of `ServerHooks`, as the Linux daemon will use it, and the defaults
@@ -204,7 +231,7 @@ struct ServerHooksTests {
     try serve(hooks: ServerHooks(thermal: { "serious" })) { server, client in
       _ = try client.ensureEngine(model: golden.model, sha256: golden.sha256)
       client.close()
-      #expect(eventually(timeout: 5) { server.host.lock.withLock { server.host.session == nil } })
+      #expect(eventually(timeout: 10) { server.host.lock.withLock { server.host.session == nil } })
       let report = try server.host.benchmark(seconds: 1, run: BenchmarkRun())
       #expect(report.thermalAtStart == "serious" && report.thermalAtEnd == "serious")
       #expect(report.windows.allSatisfy { $0.thermal == "serious" })
@@ -231,7 +258,7 @@ struct ServerHooksTests {
       backend: cpuBackend(), gadget: gadget, hooks: hooks)
     try server.start()
     defer { server.shutdown() }
-    #expect(eventually(timeout: 5) { events.all.filter { $0 == .absent }.count >= 3 })
+    #expect(events.wait { $0.filter { $0 == .absent }.count >= 3 })
     // The first idle slept: the next look came at once, not a poll later.
     let woke = try #require(slept.all.first)
     let next = try #require(gadget.looks.first { $0 > woke })
@@ -243,7 +270,7 @@ struct ServerHooksTests {
     try client.sendJSON(.helloReq, ["client": ["name": "modeld", "nonce": 1]])
     _ = try client.recv(.helloResp)
     gadget.unplug()
-    #expect(eventually(timeout: 5) { events.all.last == .absent })
+    #expect(events.wait { $0.last == .absent })
     let seen = events.all.drop { $0 == .absent }
     #expect(Array(seen.prefix(3)) == [.present, .connected, .disconnected], "\(seen)")
     #expect(seen.dropFirst(3).allSatisfy { $0 == .absent }, "\(seen)")
@@ -253,15 +280,19 @@ struct ServerHooksTests {
   func noIdleWhileServed() throws {
     let gadget = ComingAndGoingGadget()
     let events = Recorded<GadgetIdleEvent>()
-    try serve(hooks: ServerHooks(gadgetIdle: { events.append($0); return false }), gadget: gadget) { _, client in
+    let hooks = ServerHooks(gadgetIdle: { event in
+      events.append(event)
+      return false
+    })
+    try serve(hooks: hooks, gadget: gadget) { _, client in
       try client.send(.ping)
       _ = try client.recv(.pong)
-      #expect(eventually { events.all.contains(.connected) })
+      #expect(events.wait { $0.contains(.connected) })
       let connected = events.all.count
       Thread.sleep(forTimeInterval: Server.usbPoll * 3)
       #expect(events.all.count == connected, "\(events.all)")
       client.close()
-      #expect(eventually(timeout: 5) { events.all.last == .absent })
+      #expect(events.wait { $0.last == .absent })
       #expect(events.all[connected...].first == .disconnected)
     }
   }
@@ -275,7 +306,7 @@ struct ServerHooksTests {
         try client.sendJSON(.shutdownReq, ["reason": "car battery"])
         let reply = try client.recv(.shutdownResp).json
         #expect(reply["ok"] as? Bool == false)
-        #expect(eventually { heard.all == ["car battery"] })
+        #expect(heard.wait { $0 == ["car battery"] })
       }
     }
   }
@@ -303,7 +334,7 @@ struct ServerHooksTests {
     let reply = try client.recv(.shutdownResp).json
     #expect(reply["ok"] as? Bool == true)
     #expect(reply["detail"] as? String == "powering off")
-    #expect(eventually { repliedFirst.all == [true] })
+    #expect(repliedFirst.wait { $0 == [true] })
     #expect(reasons.all == ["car battery"])
   }
 
@@ -322,7 +353,23 @@ struct ServerHooksTests {
       #expect(fatal.all.isEmpty)
       backend.failRuns(with: DeviceError(sticky: true))
       #expect(try frame(client, golden).status == Wire.Status.inferFailed.rawValue)
-      #expect(eventually { fatal.all == ["CUDA_ERROR_ILLEGAL_ADDRESS"] })
+      #expect(fatal.wait { $0 == ["CUDA_ERROR_ILLEGAL_ADDRESS"] })
+    }
+  }
+
+  @Test("A fatal engine error while preparing the engine fails the job, then is handed to the host; another only fails it")
+  func fatalWhilePreparing() throws {
+    let golden = try Golden("tiny_stateful")
+    let backend = HookBackend()
+    let fatal = Recorded<String>()
+    try serve(hooks: ServerHooks(fatal: { fatal.append(String(describing: $0)) }), backend: backend) { _, client in
+      backend.failLoads(with: DeviceError(sticky: false))
+      #expect(throws: TestError.self) { try client.ensureEngine(model: golden.model, sha256: golden.sha256) }
+      #expect(fatal.all.isEmpty)
+      // Built by the first try: this one only loads.
+      backend.failLoads(with: DeviceError(sticky: true))
+      #expect(throws: TestError.self) { try client.ensureEngine(model: golden.model, sha256: golden.sha256) }
+      #expect(fatal.wait { $0 == ["CUDA_ERROR_ILLEGAL_ADDRESS"] })
     }
   }
 }
