@@ -94,7 +94,7 @@ A direct cable is being worked on. The zoompilot `iphone` branch has the comma
 hold its USB-C port as the device whenever the far end of the cable is a host
 and not a chestnut, so the phone takes the host role as a hub gives it today.
 A Mac on a C-to-C cable already comes up as the host without it. Nobody has
-tried an iPhone yet; use the hub until the [status page](apple-status.md) says
+tried an iPhone yet; use the hub until the [changelog](../CHANGELOG.md) says
 it works. When trying it, use a USB 3 C-to-C cable: one whose e-marker says
 USB 2 runs at 480 Mb/s.
 
