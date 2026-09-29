@@ -27,25 +27,46 @@ from jetlink import protocol as P
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# What openpilot imports from each module (danger-unstable, 2026-09-28)
+# What openpilot imports from each module, and the members it calls, reads or
+# patches in its tests (danger-unstable 5be617a394, 2026-09-29). The fork keeps
+# its own copy of the integration until it moves onto jetlink.openpilot, and
+# runs against whatever jetlink_repo is pinned: a name dropped here breaks
+# that build.
 FORK_IMPORTS = {
   'jetlink.client': ('EngineMissing', 'FRAME_TIMEOUT', 'JetlinkClient'),
   'jetlink.spec': ('ModelSpec', 'sha256_file'),
   'jetlink.queues': ('PolicyQueues',),
   'jetlink.comma': ('gadget', 'lending', 'owner', 'port'),
-  'jetlink.comma.owner': ('WATCHED',),
+  'jetlink.comma.gadget': (
+    # production: the backend, helpers, joining, provision and spec_cache
+    'enabled', 'link_mode', 'link_kind', 'link_peer', 'link_configured', 'gadget_error', 'host_attached',
+    'port_has_host', 'dormant', 'wait_for_host', 'request_shutdown', 'pending_shutdown', 'finish_shutdown',
+    'far_end_sleeps', 'set_logger', 'SHUTDOWN_REQUEST', 'STATE', 'CC_ORIENTATION', 'P_SPEC',
+    # its tests, which call or patch these
+    'set_dormant', 'owner_state', 'note_lender_error', 'udc_state', 'ios', 'params_dir', 'raw_param',
+    'P_LINK', 'P_BIG_MODEL', 'P_OFFROAD', 'LINK_MODES', 'LINK', 'DORMANT', 'GADGET_STATUS', 'LENDER_STATUS',
+    'time',
+  ),
+  'jetlink.comma.lending': ('borrow', 'BORROW_TIMEOUT'),
+  'jetlink.comma.owner': ('main', 'WATCHED'),
+  'jetlink.comma.port': ('CHESTNUT_IDS',),
   'jetlink.registry.catalog': ('DEFAULT_BIG_MODEL_REF', 'NetworkError', 'RegistryError', 'fetch_catalogs', 'merge_catalogs'),
   'jetlink.registry.lfs': ('LFS_ENDPOINTS', 'POINTER_URL', 'Pointer', 'fetch_pointer', 'lfs_download', 'lfs_resolve'),
   'jetlink.transport.tcp': ('CABLE_ADDRESS', 'TcpTransport'),
 }
 # What openpilot calls on a client and reads off one (helpers.py, backend.py,
-# joining.py, provision.py, model_state.py)
-CLIENT_CALLS = ('open_socket', 'open_borrowed_ffs', 'open_ffs', 'hello', 'ensure_engine', 'infer_begin', 'infer_end',
-                'shutdown', 'rebind', 'close')
+# joining.py, provision.py, model_state.py). open_loan is what jetlink.openpilot
+# opens a loan with
+CLIENT_CALLS = ('open_socket', 'open_borrowed_ffs', 'open_ffs', 'open_loan', 'hello', 'ensure_engine', 'infer_begin',
+                'infer_end', 'ping', 'shutdown', 'rebind', 'close')
 CLIENT_FIELDS = ('t', 'dead', 'deadline', 'last_timings', 'last_state')
+# what it reads off a loan (backend._Link, helpers.connect) and off the
+# transport a client rides on (model_state)
+LOAN_MEMBERS = ('sock', 'mount', 'udc', 'bounce', 'closed', 'renew', 'close')
+TRANSPORT_CALLS = ('link_info',)
 # and the rest of what runs there
-COMMA_MODULES = (*FORK_IMPORTS, 'jetlink.protocol', 'jetlink.comma.gadget', 'jetlink.comma.lending', 'jetlink.comma.port',
-                 'jetlink.comma.root', 'jetlink.transport.ffs')
+COMMA_MODULES = tuple(dict.fromkeys((*FORK_IMPORTS, 'jetlink.protocol', 'jetlink.comma.gadget', 'jetlink.comma.lending',
+                                     'jetlink.comma.port', 'jetlink.comma.root', 'jetlink.transport.ffs')))
 
 PROBE = '''
 import importlib, json, sys
@@ -85,6 +106,26 @@ def test_the_client_has_what_openpilot_calls():
   assert [n for n in CLIENT_CALLS if not callable(getattr(JetlinkClient, n, None))] == []
   client = JetlinkClient(SimpleNamespace())
   assert [n for n in CLIENT_FIELDS if not hasattr(client, n)] == []
+
+
+def test_a_loan_has_what_openpilot_reads():
+  import socket
+
+  from jetlink.comma.lending import Loan
+  a, b = socket.socketpair()
+  try:
+    loan = Loan(a, bytearray(), '/dev/ffs-jetlink', 'udc0')
+    assert [n for n in LOAN_MEMBERS if not hasattr(loan, n)] == []
+  finally:
+    a.close()
+    b.close()
+
+
+def test_every_transport_says_what_it_is():
+  from jetlink.transport.ffs import FfsTransport
+  from jetlink.transport.tcp import TcpTransport
+  for transport in (FfsTransport, TcpTransport):
+    assert [n for n in TRANSPORT_CALLS if not callable(getattr(transport, n, None))] == [], transport
 
 
 def test_the_gadget_presents_what_a_host_looks_for():
