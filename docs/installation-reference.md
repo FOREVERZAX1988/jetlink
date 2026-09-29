@@ -10,17 +10,24 @@ and custom integrations.
 
 ### What the installer changes
 
-- Installs NVIDIA's TensorRT libraries if missing: `libnvinfer10` and
-  `libnvonnxparsers10` from JetPack's package source (on JetPack 7.2 the
-  newest, at least 10.16.2.10), or on a PC `libnvinfer11` and
-  `libnvonnxparsers11` 11.3.0.99 from NVIDIA's CUDA package source.
+- Installs TensorRT if it is missing:
+  - Jetson: JetPack's `libnvinfer10`, `libnvonnxparsers10` and
+    `libnvinfer-plugin10` from its package source (on JetPack 7.2 the newest
+    there, at least 10.16.2.10; a 2.3 GB download).
+  - PC and WSL2: no system package. NVIDIA's TensorRT 11.3.0.99 runtime wheel,
+    the build the server is compiled against (3.8 GB, checked against its
+    sha256), unpacked to `/opt/jetlink/tensorrt/11.3.0.99` (2.7 GB). The
+    service passes that folder to the server with `--tensorrt-libs`, and later
+    server versions reuse it. Only the NVIDIA driver comes from the system.
+- Installs `libcurl4` (the server needs it), `curl` and `git` if missing, and
+  `unzip` on a PC.
 - Unpacks the release's server to `/opt/jetlink/<version>`, with
   `/opt/jetlink/current` pointing at it and `previous` at the one before, and
   checks it can use the GPU before it replaces the running one.
 - Installs the `jetlink-server` service (runs as root) and its udev rules from
   the server's tarball, so they always match the binary, and the `jetlink`
-  command. Settings: `/etc/jetlink/server.env`; your answers:
-  `/etc/jetlink/install.conf`.
+  command. Settings: `/etc/jetlink/server.env` ([keys](#the-service));
+  your answers: `/etc/jetlink/install.conf`.
 - Serves the read-only status page on port 5600 (a question; 0 turns it off).
 - Keeps models and prepared engines in `/mnt/data/jetlink` on a Jetson,
   `/var/lib/jetlink` on a PC.
@@ -35,20 +42,47 @@ engines and Jetson setup, and saves the Docker setup in
 `/etc/jetlink/docker-era`. Jetlink's Docker images go once the new server runs;
 Docker itself stays.
 
+- Jetson: the host gets the JetPack TensorRT the Docker image had, so its
+  prepared engines load as they are (checked on JetPack 7.2.1). A later
+  TensorRT update from JetPack's package source prepares each model again,
+  once.
+- PC: the Docker image had the same TensorRT 11.3.0.99 build. An engine that
+  does not load is prepared again, once, from the downloaded model.
+
 ### Installing by hand
 
 The installer is the supported path. Its pieces, from a release tarball:
 
-1. TensorRT, as above.
-2. The tarball unpacked to `/opt/jetlink/<version>`, and
-   `sudo ln -sfn /opt/jetlink/<version> /opt/jetlink/current`.
+1. `libcurl4`, and TensorRT:
+   - Jetson: `sudo apt install libnvinfer10 libnvonnxparsers10 libnvinfer-plugin10`.
+   - PC: NVIDIA driver 580 or newer, and TensorRT 11.3.0.99's libraries from
+     NVIDIA's wheel. Its sha256 must equal `PC_TRT_SHA256` at the top of
+     `install.sh`:
+
+     ```bash
+     wheel=tensorrt_cu13_libs-11.3.0.99-py3-none-manylinux_2_28_x86_64.whl
+     curl -fLO "https://pypi.nvidia.com/tensorrt-cu13-libs/$wheel"
+     sha256sum "$wheel"
+     sudo unzip -j "$wheel" 'tensorrt_libs/lib*.so*' '*/LICENSE.txt' -x '*_win_*' \
+       -d /opt/jetlink/tensorrt/11.3.0.99
+     ```
+
+2. The tarball in `/opt/jetlink/<version>`, and `current` pointing at it:
+
+   ```bash
+   sudo mkdir -p /opt/jetlink/<version>
+   sudo tar -xzf jetlink-server-<version>-linux-<arch>.tar.gz --strip-components 1 -C /opt/jetlink/<version>
+   sudo ln -sfn /opt/jetlink/<version> /opt/jetlink/current
+   ```
+
 3. `/etc/jetlink/server.env`, which the service needs, with at least the
-   cache folder. `JETLINK_SLEEP_AFTER` and `JETLINK_STATUS_PORT` default to 0
-   (off):
+   cache folder, and on a PC the TensorRT folder ([keys](#the-service)):
 
    ```bash
    sudo mkdir -p /etc/jetlink
    echo JETLINK_CACHE_DIR=/var/lib/jetlink | sudo tee /etc/jetlink/server.env
+   # a PC only
+   echo 'JETLINK_TENSORRT="--tensorrt-libs /opt/jetlink/tensorrt/11.3.0.99"' | sudo tee -a /etc/jetlink/server.env
    ```
 
 4. `share/jetlink/systemd/jetlink-server.service` from the tarball in
@@ -58,9 +92,118 @@ The installer is the supported path. Its pieces, from a release tarball:
 6. Always-on supply only (lets the comma wake the Jetson):
    `share/jetlink/udev/99-jetlink-usb-wakeup.rules` in `/etc/udev/rules.d`.
 
-`jetlink run` runs the installed service's command line, with its settings, in
-the terminal instead (Ctrl-C stops it); extra flags go on the end, such as
-`--listen` for a TCP bench.
+The `jetlink` command needs the installer's files, so a hand install manages
+the service with `systemctl` and reads its log with
+`journalctl -u jetlink-server`.
+
+<a id="the-service"></a>
+
+### The service
+
+`jetlink-server.service` runs
+`/opt/jetlink/current/bin/jetlink-server --usb --backend trt` as root, and
+starts it again 2 seconds after it exits. Its settings come from
+`/etc/jetlink/server.env`:
+
+| Key | Passed as | The installer sets it to |
+| --- | --- | --- |
+| `JETLINK_CACHE_DIR` | `--cache` | `/mnt/data/jetlink` on a Jetson, `/var/lib/jetlink` on a PC |
+| `JETLINK_SLEEP_AFTER` | `--sleep-after` (0 when unset) | 120 for **Always on** with deep sleep, else 0 |
+| `JETLINK_STATUS_PORT` | `--status-port` (0 when unset) | the status page answer, 5600 by default |
+| `JETLINK_POWEROFF` | `--poweroff`, or nothing | `--poweroff` on a Jetson whose battery answer was Yes |
+| `JETLINK_TENSORRT` | `--tensorrt-libs DIR`, or nothing | the TensorRT folder on a PC; empty on a Jetson |
+
+- The installer also writes `JETLINK_JETSON`, `JETLINK_FLAVOR` and
+  `JETLINK_SERVER_VERSION` there, for the `jetlink` command.
+- It rewrites the file on every run. Change the answers with `jetlink setup`;
+  put anything else, such as `JETLINK_USB_LPM=1`, in a drop-in
+  (`sudo systemctl edit jetlink-server`, then `Environment=JETLINK_USB_LPM=1`
+  under `[Service]`).
+- Its own drop-ins wait for the cache's mount and, on a Jetson, run
+  `jetson_clocks` before each start.
+
+`jetlink run` runs the service's command line, with those settings, in the
+terminal instead (it stops the service first; Ctrl-C stops it). Extra flags go
+on the end: `jetlink run --listen` for a TCP bench, `jetlink run --log-level debug`.
+
+<a id="the-server-command"></a>
+
+## The server command
+
+`jetlink-server` is the one server on every platform: the service on a Jetson
+or PC, a Mac's server in a terminal ([from a terminal](platforms.md#from-a-terminal)),
+and the server inside the Mac, iPhone and Android apps.
+`jetlink-server <command> --help` lists each command's options.
+
+| Command | Does |
+| --- | --- |
+| `serve` (the default) | Serves the comma until SIGINT or SIGTERM. |
+| `build ONNX` | Builds this backend's engine for a model before a drive, and loads it once. The next `serve` on that cache preloads it. |
+| `models ...` | The model catalog and the cache: [model command reference](model-cli.md). |
+| `bench` | Runs a built engine at the comma's pace (20 frames a second) with no comma and no link, and prints its times. |
+| `backends` | Lists the backends and why each can or cannot run here. Exits 0 when one can. |
+| `spec ONNX` | Prints the spec the comma is sent for a model, as JSON (the file `scripts/bench_link.py --spec` reads). |
+
+`build`, `bench` and `models prepare` open the GPU and the cache on their own:
+stop any server using the same cache first.
+
+### serve
+
+| Option | Default | Does |
+| --- | --- | --- |
+| `--usb` | off | Be the USB host for the comma's gadget (usbfs on Linux, IOKit on a Mac). No TCP listener then, unless `--listen` too. |
+| `--listen` | on without `--usb` | Listen on TCP for bench tools. No authentication: trusted networks only. |
+| `--host ADDR` | `0.0.0.0` | The address to listen on. |
+| `--port N` | `5599` | The TCP port. |
+| `--dial HOST[:PORT]` | none | Also dial this address and serve it, as the phone apps dial the comma (`192.168.60.1:5599`) over its USB network interface. |
+| `--cache DIR` | [see below](#cache-folder-and-environment) | Models and prepared engines. |
+| `--backend B` | `auto` | `auto` takes TensorRT where it loads, else ONNX Runtime; `trt` or `ort` that cannot run here is an error. The service passes `trt`, so a machine without TensorRT fails loudly instead of serving from the CPU. |
+| `--device D` | per backend | `trt`: the CUDA device index (0). `ort`: `ane` (default), `ane-whole`, `coreml` or `cpu` on a Mac; `cpu` on Linux. |
+| `--tensorrt-libs DIR` | `lib/tensorrt` beside `bin/` if it exists, else the loader path | Where TensorRT's libraries are: a PC's own copy. A Jetson's are JetPack's, on the loader path. |
+| `--gpu-timing` | off | TensorRT: time each launch with CUDA events and log their spread every 1,200 frames. |
+| `--sleep-after S` | 0 (never) | Linux, with `--usb` only: suspend after S seconds with no comma on the bus. |
+| `--status-port P` | 0 (off) | Serve the read-only [status page](control-protocol.md#the-status-page) on port P. |
+| `--poweroff` | off | Linux: power the machine off when the comma asks (its battery-protection shutdown). Without it the comma is told yes and the machine stays up. |
+| `--no-preload` | off | Do not load the engine loaded last until a comma asks for it. |
+| `--no-keepalive` | off | Mac ONNX Runtime: no [GPU keep-alive](mac-performance.md#keeping-the-mac-gpu-responsive-between-frames) between frames. |
+| `--no-cpu-keepwarm` | off | Mac ONNX Runtime: no busy CPU core between Neural Engine frames. |
+| `--log-level L` | `info` | `debug`, `info`, `warning` or `error`, on standard error (the service's go to the journal: `jetlink logs`). |
+
+Exit status: 0 after SIGINT or SIGTERM; 1 when it cannot serve (no usable
+backend, a bad option, a cache it cannot create); 3 after a CUDA error that
+only a new process recovers from (the service starts one, which loads the
+engine again).
+
+### build, bench and backends
+
+- `build ONNX [--frame-skip N]`: N model frames per camera frame, 4 by default.
+  Copies the model into the cache first.
+- `bench [--seconds S] [--sha256 SHA] [--frame-skip N]`: S up to 3600, 60 by
+  default; the model loaded last unless `--sha256` names another one built
+  here. The report goes to standard output.
+- `backends`: `--backend trt` tries TensorRT alone, so it exits 0 only with a
+  usable GPU. The installer runs it before it replaces a server.
+- All three take `--backend`, `--device`, `--tensorrt-libs` and
+  `--gpu-timing`; `build` and `bench` also `--cache` and `--log-level`.
+
+<a id="cache-folder-and-environment"></a>
+
+### Cache folder and environment
+
+The cache is `--cache DIR`, else `$JETLINK_CACHE`, else:
+
+| Where | Cache |
+| --- | --- |
+| Jetson | `/mnt/data/jetlink` |
+| Linux, as root | `/var/lib/jetlink` |
+| Linux, as a user | `${XDG_CACHE_HOME:-~/.cache}/jetlink` |
+| Mac | `~/Library/Caches/jetlink` |
+
+| Variable | Does |
+| --- | --- |
+| `JETLINK_CACHE` | The cache folder when `--cache` is not given. |
+| `JETLINK_USB_LPM=1` | Linux: leaves USB 3 link power management on during a session, for comparing ([why it is off](#custom-usb-integrations)). |
+| `JETLINK_FAULT_CUDA_AFTER=N` | Tests only: every frame after the first N fails as a CUDA error the process cannot recover from, to exercise the exit and restart. |
 
 ## Custom USB integrations
 
@@ -68,9 +211,12 @@ the terminal instead (Ctrl-C stops it); extra flags go on the end, such as
 - The server is always the USB host, through usbfs (IOKit on a Mac): no driver
   and no gadget kernel modules on the host.
 - On Linux the server turns off USB 3 link power management (U1/U2) on the
-  comma's port each time it claims it: 3.9 of the 7.6 ms transport on the
-  bench Jetson. Deep sleep and USB wake are unaffected. `JETLINK_USB_LPM=1` in
-  the service's environment leaves it on.
+  comma's port while it serves the comma, and puts the kernel's default back
+  when the session ends or the server stops. On, waking the link cost 2.2 ms a
+  frame on the bench Jetson (4.2 against 2.0 ms of transport, p50); off, the
+  idle link drew 0.18 W more, so it is not off for the whole park. Deep sleep
+  and USB wake are unaffected. `JETLINK_USB_LPM=1` leaves it on.
+- How the link carries a frame: [link protocol](transport.md#link-protocol).
 - Nothing on the comma runs by hand. The owner builds the gadget on its first
   step, USB or iOS per the comma's Accelerator Link setting, and rebuilds it
   when the setting changes.
