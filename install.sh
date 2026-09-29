@@ -82,6 +82,14 @@ SYSTEMD_RUN="${JETLINK_TEST_SYSTEMD_RUN:-/run/systemd/system}"
 AWAKE_LOCK="${JETLINK_TEST_AWAKE_LOCK:-/run/jetlink-awake.lock}"
 # seconds between looks at something the installer waits on
 POLL_S="${JETLINK_TEST_POLL_S:-5}"
+# A new server has 3 minutes to say it serves, and then has to stay up. One
+# that loads the model it ran last is watched until that is done: a TensorRT
+# that changed makes it rebuild the plan, which takes minutes, so the 20
+# minute wait is only how long the installer watches, and the server serves
+# all the while.
+READY_S=180
+SETTLE_S="${JETLINK_TEST_SETTLE_S:-10}"
+PRELOAD_S="${JETLINK_TEST_PRELOAD_S:-1200}"
 
 OPT_YES=0 OPT_UPDATE=0 OPT_RECONFIGURE=0 OPT_DRY_RUN=0 OPT_UNINSTALL=0
 OPT_REF="" OPT_BINARY=""
@@ -1572,27 +1580,89 @@ start_server() {
   since="$(date '+%Y-%m-%d %H:%M:%S')"
   as_root systemctl restart "$UNIT"
   step "Starting the Jetlink server" wait_ready "$since"
+  if [[ $(server_journal "$since") == *"$PRELOAD_LINE"* ]]; then
+    step "Loading the model it ran last" wait_engine "$since"
+    if [ -z "$(engine_line "$since")" ]; then
+      note "It is still preparing that model, and goes on in the background: jetlink logs"
+    fi
+  fi
+  # only now, with the new server up and staying up: until then the old one,
+  # its settings and its images are the way back
   SERVER_STOPPED=0 CHANGED=0 SLEEP_HELD=0
   keep_previous
-  # only now: until the native server was ready they were the way back
   if [ "$DOCKER_ERA" = 1 ]; then remove_docker_images; fi
 }
 
-# Up means the server chose its backend and is waiting for the comma (or
-# already has it); systemd's third restart of it means a crash loop. The
-# journal is followed, so either shows the moment it is written. The follower
-# ends at its next line or at the timeout.
+# The server says the first once it serves, whatever the comma is doing; the
+# others are what builds before that line said, for a --binary of one.
+READY_RE='jetlink-server is serving|waiting for a jetlink gadget|client connected|nothing on the comma is serving it yet'
+# systemd's line when it starts a server that exited again
+RESTART_RE='restart counter is at [0-9]'
+# said before the server serves when it loads the model it ran last
+PRELOAD_LINE='preloading the engine loaded last'
+
+server_journal() {
+  as_root journalctl -u "$UNIT" --since "$1" --no-pager -o cat 2>/dev/null || true
+}
+
+# Up means the server said it serves and then stayed up; a restart means it
+# crashed. The journal is followed, so either shows the moment it is written.
+# The follower ends at its next line or at the timeout.
 wait_ready() {
   local since=$1 line
-  line="$(grep -m1 -E 'waiting for a jetlink gadget|client connected|restart counter is at 3\.' \
-    < <(as_root timeout 180 journalctl -f -u "$UNIT" --since "$since" -o cat 2>/dev/null) || true)"
+  line="$(grep -m1 -E "$READY_RE|$RESTART_RE" \
+    < <(as_root timeout "$READY_S" journalctl -f -u "$UNIT" --since "$since" -o cat 2>/dev/null) || true)"
   case "$line" in
-    *restart*|'')
-      as_root journalctl -u "$UNIT" --since "$since" --no-pager -o cat 2>/dev/null | tail -n 30 || true
-      if [ -n "$line" ]; then echo "the server keeps restarting"; else echo "the server did not report ready within 3 minutes"; fi
+    *"restart counter"*|'')
+      server_journal "$since" | tail -n 30
+      if [ -n "$line" ]; then echo "the server crashed, and systemd started it again"; else echo "the server did not report ready within 3 minutes"; fi
       return 1 ;;
   esac
   echo "$line"
+  # one loading a model is watched until that is done, by wait_engine
+  [[ $(server_journal "$since") == *"$PRELOAD_LINE"* ]] && return 0
+  stays_up "$since"
+}
+
+# The model the server ran last, loaded, or its preparation failed (the
+# server serves without it then, and the comma sends it again); a restart
+# means loading it crashed the server. After PRELOAD_S the server is left to it.
+wait_engine() {
+  local since=$1 line deadline=$((SECONDS + PRELOAD_S))
+  while :; do
+    line="$(engine_line "$since")"
+    case "$line" in
+      *"restart counter"*)
+        server_journal "$since" | tail -n 30
+        echo "loading the model crashed the server, and systemd started it again"
+        return 1 ;;
+      ?*) echo "$line"; break ;;
+    esac
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      echo "still preparing the model after $(elapsed "$PRELOAD_S"); the server serves meanwhile"
+      break
+    fi
+    sleep "$POLL_S"
+  done
+  stays_up "$since"
+}
+
+engine_line() {
+  server_journal "$1" | grep -m1 -E "engine ready|engine preparation failed|$RESTART_RE" || true
+}
+
+# Still running a moment later and never restarted: a server can crash just
+# after it said it serves, when the comma is first seen or the model loads.
+stays_up() {
+  local since=$1 restarts
+  sleep "$SETTLE_S"
+  restarts="$(as_root systemctl show -p NRestarts --value "$UNIT" 2>/dev/null || true)"
+  if as_root systemctl is-active --quiet "$UNIT" && [ "${restarts:-0}" = 0 ]; then
+    return 0
+  fi
+  server_journal "$since" | tail -n 30
+  echo "the server did not stay up: systemd started it again ${restarts:-?} times"
+  return 1
 }
 
 finish() {

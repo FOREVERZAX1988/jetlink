@@ -108,6 +108,11 @@ case "$name" in
           # which server came up, and whether it may sleep
           kind=native
           grep -qs run-server /etc/systemd/system/jetlink-server.service && kind=docker
+          # a native one that crashes once it serves, or loading the model
+          rm -f "$state/crashing"
+          if [ "$kind" = native ] && { [ "${FAKE_SERVER_CRASHLOOP:-0}" = 1 ] || [ "${FAKE_PRELOAD:-}" = crash ]; }; then
+            touch "$state/crashing"
+          fi
           printf 'jetlink-server started: %s, sleep %s\n' "$kind" \
             "$(sed -n 's/^JETLINK_SLEEP_AFTER=//p' /etc/jetlink/server.env 2>/dev/null | tail -n 1)" \
             >>"${FAKE_LOG:-/tmp/fake.log}"
@@ -118,6 +123,11 @@ case "$name" in
         # a unit with no [Install] section, like the poweroff flag's service
         elif [ -f "/etc/systemd/system/$u" ] && ! grep -q '^\[Install\]' "/etc/systemd/system/$u"; then echo static
         else echo enabled; fi ;;
+      show)
+        # -p NRestarts --value UNIT: systemd's restarts of it since it was started
+        if [[ " $* " == *" NRestarts "* ]]; then
+          if [ "${*: -1}" = jetlink-server ] && [ -f "$state/crashing" ]; then echo 2; else echo 0; fi
+        fi ;;
       list-unit-files)
         u=systemd-networkd-wait-online.service
         [ "$u" = "${*: -1}" ] && echo "$u enabled enabled" ;;
@@ -133,8 +143,27 @@ case "$name" in
         echo "jetlink-server.service: Scheduled restart job, restart counter is at $n."
       done
     else
+      plan=0123456789abcdef.trt10.16.2.10-Orin-sm87.plan
       echo "INFO io.zoompilot.jetlink.main: backend trt 10.16.2.10 on Orin-sm87, cache /mnt/data/jetlink"
-      echo "INFO io.zoompilot.jetlink.server: waiting for a jetlink gadget at 1209:0001"
+      # the model it ran last, which it starts loading before it serves;
+      # FAKE_PRELOAD says how that goes: ready, failed, crash, or slow
+      [ -z "${FAKE_PRELOAD:-}" ] || echo "INFO io.zoompilot.jetlink.engine: preloading the engine loaded last: $plan"
+      if [ "${FAKE_SERVER_OLD:-0}" = 1 ]; then
+        # a build from before the serving line, a comma on the bus that
+        # nothing on it serves yet
+        echo "WARNING io.zoompilot.jetlink.server: the comma's gadget is on the bus, but nothing on the comma is serving it yet"
+      else
+        echo "INFO io.zoompilot.jetlink.main: jetlink-server is serving"
+        echo "WARNING io.zoompilot.jetlink.server: waiting for a jetlink gadget at 1209:0001"
+      fi
+      case "${FAKE_PRELOAD:-}" in
+        ready) echo "INFO io.zoompilot.jetlink.engine: engine ready: $plan" ;;
+        failed) echo "ERROR io.zoompilot.jetlink.engine: engine preparation failed: failed(\"artifact invalid and the model is not on disk\")" ;;
+      esac
+      if [ -f "$state/crashing" ]; then
+        echo "jetlink-server.service: Main process exited, code=dumped, status=11/SEGV"
+        echo "jetlink-server.service: Scheduled restart job, restart counter is at 1."
+      fi
     fi ;;
 
   jetlink-server)
