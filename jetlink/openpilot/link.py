@@ -99,9 +99,12 @@ class Link:
 
   def note_server(self, hello: dict) -> None:
     """Pass the server's hello on to the owner over the lease, so every
-    drive's join refreshes what it knows of the far end (Loan.note_server)."""
-    if self.loan is not None:
-      self.loan.note_server(hello)
+    drive's join refreshes what it knows of the far end (Loan.note_server).
+    Raises when that let the lease go: a client whose bounce goes over a
+    closed loan cannot free a stuck write, so the attempt starts over."""
+    if self.loan is not None and not self.loan.note_server(hello) and self.loan.closed:
+      from jetlink.transport.base import LinkError
+      raise LinkError("the owner stopped answering on the loan")
 
   def close(self) -> None:
     """Let the link go. The lease stays: jetlinkd should hold the gadget for

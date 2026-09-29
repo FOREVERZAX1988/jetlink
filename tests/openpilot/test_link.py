@@ -352,6 +352,21 @@ class BuildingOnroad(OpenpilotTest):
     link.open_link(self.parts, self.link)
     self.link.loan.note_server.assert_called_once_with(self.client.hello.return_value)
 
+  def test_a_note_that_lost_the_lease_starts_the_attempt_over(self):
+    # its bounce would go over a closed loan, and a stuck write could not be freed
+    from jetlink.transport.base import LinkError
+    self.link.loan = mock.Mock(closed=True, **{'note_server.return_value': False})
+    self.link.client = self.client
+    with self.assertRaises(LinkError):
+      link.open_link(self.parts, self.link)
+    self.client.close.assert_called_once()
+    self.ensure.assert_not_called()
+
+  def test_an_owner_too_old_for_the_note_is_no_reason_to_stop(self):
+    self.link.loan = mock.Mock(closed=False, **{'note_server.return_value': False})
+    client, spec = link.open_link(self.parts, self.link)
+    assert spec is self.spec
+
   def test_without_a_lease_there_is_nobody_to_tell(self):
     self.link.loan = None
     link.open_link(self.parts, self.link)   # and nothing raised

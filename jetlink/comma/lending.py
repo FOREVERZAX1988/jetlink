@@ -140,7 +140,12 @@ class Loan:
     cannot ask for itself. Every borrower sends it after every hello, so
     modeld's join refreshes it each drive and a Jetson moved to another
     power supply is known by the next one. False when the owner did not
-    take it: an older owner answers "unknown op", which is not an error."""
+    take it: an older owner answers "unknown op", which is not an error.
+
+    An answer that does not come within NOTE_TIMEOUT, or is not one, closes
+    the loan. The exchange has no ids, so an answer that came later would be
+    read as the answer to the next request on it, a renewal's or a bounce's,
+    and every one after that would be one behind."""
     fields = {k: hello[k] for k in SERVER_FIELDS if k in hello}
     with self._lock:
       if self._closed:
@@ -149,9 +154,15 @@ class Loan:
         _send(self.conn, {'op': 'server', **fields})
         reply = _recv_line(self.conn, self._buf, time.monotonic() + NOTE_TIMEOUT)
       except (OSError, ValueError) as e:
-        gadget.log.warning("jetlink: could not tell the owner what the server said (%s)", e)
+        reply, why = None, str(e) or type(e).__name__
+      else:
+        why = 'no answer' if reply is None else f'the answer {reply!r}'
+      if not isinstance(reply, dict):
+        gadget.log.warning("jetlink: the owner did not take what the server said (%s), letting the loan go", why)
+        self._closed = True
+        _shut(self.conn)
         return False
-    return bool(reply and reply.get('ok'))
+    return bool(reply.get('ok'))
 
   def renew(self, timeout: float = BORROW_TIMEOUT) -> bool:
     """Ask again which link this loan is for, before another attempt at a join.
@@ -198,10 +209,7 @@ class Loan:
     # not behind the lock: a renewal holds it through a whole hold, and the
     # shutdown is what wakes that renewal
     self._closed = True
-    try:
-      self.conn.shutdown(socket.SHUT_RDWR)
-    except OSError:
-      pass
+    _shut(self.conn)
     with self._lock:
       _close(self.conn)
       _close(self.sock)
@@ -398,6 +406,14 @@ def _close(sock: socket.socket | None) -> None:
       sock.close()
     except OSError:
       pass
+
+
+def _shut(sock: socket.socket) -> None:
+  """End the connection for both ends, so the owner sees the lease end."""
+  try:
+    sock.shutdown(socket.SHUT_RDWR)
+  except OSError:
+    pass
 
 
 def hung_up(sock: socket.socket, wait: float = 0.0) -> bool:

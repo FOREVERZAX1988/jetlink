@@ -407,6 +407,50 @@ class TellingTheOwner(LendingTest):
       assert loan.note_server(self.HELLO) is False
     log.warning.assert_called_once()
 
+  def test_a_late_answer_lets_the_loan_go_and_never_answers_a_later_request(self):
+    # the exchange has no ids: read later, {'ok': True} would be a renewal's
+    # "lend" (and its missing mount a KeyError) or a bounce's answer
+    release = threading.Event()
+    self.addCleanup(release.set)
+    lender = self.lender(server=lambda who, fields: release.wait(2.0))
+    loan = self.take()
+    with mock.patch.object(lending, 'NOTE_TIMEOUT', 0.2), mock.patch.object(lending.gadget, 'log') as log:
+      assert loan.note_server(self.HELLO) is False
+    assert loan.closed
+    assert 'letting the loan go' in log.warning.call_args.args[0]
+    assert loan.renew(timeout=0.5) is False and loan.bounce() is False
+    release.set()
+    assert self.until(lambda: not lender.lent), 'the owner never saw the lease end'
+    again = self.take()
+    assert again is not None and again.bounce() is True
+
+  def test_an_answer_that_is_not_one_lets_the_loan_go(self):
+    # a fake owner that answers the note with a line that is not an answer
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    srv.bind(str(self.path))
+    srv.listen(1)
+    self.addCleanup(srv.close)
+
+    def owner():
+      conn, _ = srv.accept()
+      with conn:
+        f = conn.makefile('rwb')
+        f.readline()                                   # the borrow
+        f.write(b'{"ok": true, "udc": "udc0", "mount": "/m"}\n')
+        f.flush()
+        f.readline()                                   # the note
+        f.write(b'[1, 2]\n')
+        f.flush()
+        f.readline()                                   # nothing more comes: the loan went
+    t = threading.Thread(target=owner, daemon=True)
+    t.start()
+    loan = self.take()
+    with mock.patch.object(lending.gadget, 'log'):
+      assert loan.note_server(self.HELLO) is False
+    assert loan.closed
+    t.join(3.0)
+    assert not t.is_alive()
+
   def test_a_closed_loan_says_nothing(self):
     self.lender(server=lambda who, fields: None)
     loan = self.take()
