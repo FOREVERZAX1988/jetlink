@@ -234,9 +234,35 @@ class TestTheJoinFactory(OpenpilotTest):
     self.loaded.assert_called_once_with(1928, 1208, 512, 256)
 
   def test_a_warp_that_will_not_load_lets_the_link_go_and_raises(self):
+    from jetlink.openpilot import link
     self.loaded.side_effect = RuntimeError('stale warp')
-    with self.assertRaisesRegex(RuntimeError, 'stale warp'):
+    with mock.patch.object(link, 'Link') as made, self.assertRaisesRegex(RuntimeError, 'stale warp'):
       joining.join(self.parts, 1928, 1208, self.small)
+    made.return_value.close.assert_called_once_with()
+
+  def test_the_join_can_be_stopped_through_the_link_open(self):
+    from jetlink.openpilot import link
+    s = self.join()
+    stop = object()
+    with mock.patch.object(link, 'open_link', return_value=('client', 'spec')) as opened:
+      self.assertEqual(s._connect(stop), ('client', 'spec'))
+    parts, held, should_stop = opened.call_args.args
+    self.assertIs(parts, self.parts)
+    self.assertIsInstance(held, link.Link)
+    self.assertIs(should_stop, stop)
+
+  def test_the_small_models_reset_is_the_one_prepared(self):
+    s = self.join()
+    s._reset_small()
+    self.reset.return_value.assert_called_once_with()
+
+  def test_the_model_logs_its_telemetry_to_the_adapters_event(self):
+    s = self.join()
+    client = mock.Mock()
+    client.t.link_info.return_value = {'kind': 'usb'}
+    big = s._build(client, spec())
+    self.assertEqual(big._event, self.op.event)
+    self.assertIs(big._log, self.op.log)
 
   def test_it_runs_the_adapters_face_and_reports_through_jetlink(self):
     s = self.join()

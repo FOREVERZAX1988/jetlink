@@ -491,6 +491,9 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
   what the link will hand back; another geometry is rejected.
   """
   from jetlink.openpilot import link as links
+  # here rather than in build(): the import then costs modeld's main thread
+  # before the frame loop, not the frame the swap lands on
+  from jetlink.openpilot.model_state import JetlinkModelState
   op = parts.op
   face = op.model_face()
   ready: dict = {}
@@ -518,7 +521,6 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
     ready.update(warp=warp, geometry=geometry)
 
   def build(client, spec):
-    from jetlink.openpilot.model_state import JetlinkModelState
     img_h, img_w = spec.model_hw
     warp = ready.get('warp') if ready.get('geometry') == (img_w * 2, img_h * 2) else None
     if warp is None:

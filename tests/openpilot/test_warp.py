@@ -271,6 +271,22 @@ class TestTheBuild(OpenpilotTest):
     self.assertEqual(frame_size, fakes.frame_size(1344, 760))
     self.assertEqual(compile_warp.call_args.args[2], out)
 
+  def test_comma_s_graph_is_made_before_anything_of_tinygrad_is_imported(self):
+    # comma's graph module patches tinygrad's firmware fetch as it loads
+    order = []
+
+    def make_warp(*args):
+      order.append(('make_warp', sorted(m for m in sys.modules if m.split('.')[0] == 'tinygrad')))
+      return RecordingGraph(), 64
+
+    tinygrad_free = {m: v for m, v in sys.modules.items() if m.split('.')[0] != 'tinygrad'}
+    with mock.patch.dict(sys.modules, tinygrad_free, clear=True), \
+         mock.patch.object(self.op, 'make_warp', side_effect=make_warp), \
+         mock.patch('jetlink.openpilot.interface.load_adapter', return_value=self.op), \
+         mock.patch.object(warp, 'compile_warp', side_effect=lambda *a: order.append(('compile', None))):
+      warp.main(['--adapter', 'x', '--camera', '1928x1208', '--model', '512x256', '--output', str(self.tmp / 'w.pkl')])
+    self.assertEqual(order, [('make_warp', []), ('compile', None)])
+
   def test_sizes_are_w_by_h(self):
     self.assertEqual(warp.size('1928x1208'), (1928, 1208))
     for bad in ('1928', 'x', '1928xabc'):

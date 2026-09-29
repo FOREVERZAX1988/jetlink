@@ -124,9 +124,8 @@ class JetlinkModelState:
 
   def log_telemetry(self) -> None:
     """The server's health, piggybacked on the previous response, to the log
-    at 1 Hz: what modeld's per-frame status callback did before the model did
-    it itself. chestnutState is comma's board on the wire and a Jetson's
-    telemetry has no message yet."""
+    at 1 Hz. chestnutState is comma's board on the wire and a Jetson's
+    telemetry has no message of its own yet."""
     telemetry = self.client.last_state
     if not telemetry:
       return

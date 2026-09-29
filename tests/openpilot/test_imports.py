@@ -94,6 +94,28 @@ def test_the_owner_path_is_the_standard_library_and_jetlink():
   assert heavy == [], f"the owner's path loads jetlink's heavy half: {heavy}"
 
 
+HEAP = '''
+import importlib, sys, tracemalloc
+tracemalloc.start()
+importlib.import_module(sys.argv[1])
+importlib.import_module('jetlink.transport.ffs')
+print(tracemalloc.get_traced_memory()[0])
+'''
+
+
+def test_the_owner_path_costs_under_a_megabyte_more_than_the_comma_owner():
+  # a proxy for the owner's PSS on the comma, which bench A measures: the
+  # Python heap its imports allocate in a fresh interpreter, over the comma
+  # layer's own owner (0.6 MB when this was written, typing 0.4 of it)
+  def heap(module: str) -> int:
+    run = subprocess.run([sys.executable, '-S', '-c', HEAP, module], cwd=ROOT, capture_output=True, text=True,
+                         timeout=120)
+    assert run.returncode == 0, run.stderr
+    return int(run.stdout)
+  extra = heap('jetlink.openpilot.owner') - heap('jetlink.comma.owner')
+  assert extra < 1 << 20, f"the owner's path grew {extra >> 10} KB over the comma owner's"
+
+
 def _imports(path: Path) -> list[tuple[str, int, bool]]:
   """(module, line, at module level) for every import in a file."""
   tree = ast.parse(path.read_text(), filename=str(path))
