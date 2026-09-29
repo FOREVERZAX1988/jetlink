@@ -405,17 +405,19 @@ struct UsbfsPipesTests {
     #expect(throws: LinkError.self) { try pipes.read(into: scratch.pointer, count: 8, timeout: 0) }
   }
 
-  @Test("A new session's pipes on the same device start clean after the last one aborted")
+  @Test("A new session's pipes on the same device start clean after the last one aborted, on its URBs")
   func pipesPerSession() throws {
     let device = device
     let first = pipes(device)
+    let buffer = UnsafeMutableRawPointer.allocate(byteCount: 1024, alignment: 16)
+    defer { buffer.deallocate() }
+    #expect(try first.read(into: buffer, count: 1024, timeout: 0.01) == 0)
     first.abort()
     first.close()
     let second = pipes(device)
     kernel.feed(pattern(slot))
-    let buffer = UnsafeMutableRawPointer.allocate(byteCount: 1024, alignment: 16)
-    defer { buffer.deallocate() }
     #expect(try second.read(into: buffer, count: 1024, timeout: 0) == 1024)
+    #expect(kernel.urbs.count == ReadRing.depth)
   }
 
   @Test("Unplugging with a message half in the ring fails the read, and closing does not wait on the dead device")

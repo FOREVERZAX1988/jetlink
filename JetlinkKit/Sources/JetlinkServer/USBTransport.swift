@@ -73,23 +73,23 @@ final class USBTransport: MessageLink, @unchecked Sendable {
   static let drainTimeout: TimeInterval = 5.0
   private var interrupted = false
   private let pipes: any BulkPipes
-  private let reader = FrameReader(capacity: 2 << 20)
+  private let buffers: LinkBuffers
+  private var reader: FrameReader { buffers.reader }
   var desynced: Bool { reader.desynced }
-  private let sendLock = NSLock()
-  private var tx: UnsafeMutableRawPointer
-  private var txCapacity: Int
+  private var sendLock: NSLock { buffers.sendLock }
 
-  init(pipes: any BulkPipes, peer: String = "usb", medium: LinkMedium? = .usb) {
+  /// `buffers` may be the last session's on the same device, one session at
+  /// a time.
+  init(pipes: any BulkPipes, peer: String = "usb", medium: LinkMedium? = .usb, buffers: LinkBuffers = LinkBuffers()) {
     self.pipes = pipes
     self.peer = peer
     self.medium = medium
-    txCapacity = 1 << 20
-    tx = UnsafeMutableRawPointer.allocate(byteCount: txCapacity, alignment: 64)
+    self.buffers = buffers
+    buffers.reader.reset()
   }
 
   deinit {
     pipes.close()
-    tx.deallocate()
   }
 
   // MARK: receiving
@@ -135,11 +135,7 @@ final class USBTransport: MessageLink, @unchecked Sendable {
       flags.insert(.padded)
     }
     let total = Wire.headerSize + length + (padded ? 1 : 0)
-    if total > txCapacity {
-      tx.deallocate()
-      txCapacity = max(total, txCapacity * 2)
-      tx = UnsafeMutableRawPointer.allocate(byteCount: txCapacity, alignment: 64)
-    }
+    let tx = buffers.tx(total)
     Wire.packHeader(Wire.Header(msgType: type.rawValue, seq: seq, flags: flags.rawValue, length: UInt32(length)), into: tx)
     var offset = Wire.headerSize
     for part in parts where part.count > 0 {
@@ -173,5 +169,31 @@ final class USBTransport: MessageLink, @unchecked Sendable {
       drain(USBTransport.drainTimeout)
     }
     pipes.close()
+  }
+}
+
+/// A USB link's receive and send buffers, kept by a device across its
+/// sessions (`UsbfsGadget`), so a reopen neither allocates them nor faults
+/// them in again.
+final class LinkBuffers: @unchecked Sendable {
+  let reader = FrameReader(capacity: 2 << 20)
+  /// A build's progress can still be going out through the last session's
+  /// transport, so sends share the lock with the buffer.
+  let sendLock = NSLock()
+  private var send = UnsafeMutableRawPointer.allocate(byteCount: 1 << 20, alignment: 64)
+  private var sendCapacity = 1 << 20
+
+  deinit {
+    send.deallocate()
+  }
+
+  /// The send buffer, grown to `bytes` when it is smaller.
+  func tx(_ bytes: Int) -> UnsafeMutableRawPointer {
+    if bytes > sendCapacity {
+      send.deallocate()
+      sendCapacity = max(bytes, sendCapacity * 2)
+      send = UnsafeMutableRawPointer.allocate(byteCount: sendCapacity, alignment: 64)
+    }
+    return send
   }
 }

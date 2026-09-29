@@ -26,6 +26,13 @@ final class FrameReader {
     rx.deallocate()
   }
 
+  /// A new stream on the same buffer.
+  func reset() {
+    start = 0
+    end = 0
+    desynced = false
+  }
+
   /// The next message, its payload a view valid until the next call. `pad`
   /// is how many bytes follow a message's payload; `read` reads at most
   /// `missing` bytes into its pointer, and returns how many arrived.
