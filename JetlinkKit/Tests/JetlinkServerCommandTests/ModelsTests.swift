@@ -18,8 +18,8 @@
       let payload = try #require(try JSONSerialization.jsonObject(with: Data(run.out.utf8)) as? [String: Any])
       let rows = try #require(payload["models"] as? [[String: Any]])
       #expect(rows.count == 13 && rows.first?["ref"] as? String == RegistryFixture.newestRef)
-      #expect(payload["error"] is NSNull && rows.first?["sha256"] is NSNull, "absent is null, as Python wrote None")
-      #expect(Set(payload.keys) == ["fetched_at", "url", "default_ref", "error", "models"])
+      #expect(payload["error"] == nil && rows.first?["sha256"] == nil, "absent is left out")
+      #expect(Set(payload.keys) == ["fetched_at", "url", "default_ref", "models"])
     }
 
     @Test func theListTableShowsWhatIsDownloaded() async throws {
@@ -96,7 +96,7 @@
       let payload = try #require(try JSONSerialization.jsonObject(with: Data(inventory.out.utf8)) as? [String: Any])
       let rows = try #require(payload["models"] as? [[String: Any]])
       #expect(rows.map { $0["sha256"] as? String } == [sha256])
-      #expect(payload["loaded"] is NSNull && payload["last_loaded"] is NSNull)
+      #expect(payload["loaded"] == nil && payload["last_loaded"] == nil)
     }
 
     @Test func fetchOverARealSocket() async throws {

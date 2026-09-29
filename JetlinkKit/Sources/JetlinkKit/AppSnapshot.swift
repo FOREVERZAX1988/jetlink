@@ -84,7 +84,7 @@ public final class AppSnapshot: @unchecked Sendable {
       } else {
         imports.append(value)
       }
-    case .hello, .reply, .unknown:
+    case .hello, .reply:
       return
     case .server, .stats, .benchmark, .shutdownRequest:
       break

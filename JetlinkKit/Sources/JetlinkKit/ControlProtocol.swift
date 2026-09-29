@@ -1,12 +1,10 @@
 import Foundation
 
-// The control protocol, version 1. One JSON object per line, UTF-8, newline terminated.
-// Client to server: {"id": <int>, "cmd": "<name>", ...arguments}
-// Server to client: {"event": "<name>", "t": <float seconds>, ...}
-//
-// No socket carries it: the apps and the status page read ServerController in
-// process and get these values. The JSON is what the status page streams to a
-// browser and what the Android app gets across JNI.
+// The control protocol: the events ServerController publishes and the
+// commands it runs. No socket carries it: the apps and the status page read
+// the controller in process. The JSON is what the status page streams to a
+// browser, {"event": "<name>", "t": <float seconds>, ...}, and what the
+// Android app gets across JNI; it sends commands as {"cmd": "<name>", ...}.
 
 public enum EngineState: String, Codable, Sendable {
   case none, building, loading, ready, failed
@@ -16,31 +14,17 @@ public enum LinkState: String, Codable, Sendable {
   case waiting, connected, disconnected
 }
 
+/// What the status page opens with: the server's release.
 public struct HelloEvent: Codable, Sendable, Equatable {
-  public let protocolVersion: Int
-  public let pid: Int32
   public let version: String
-  public let python: String
-  public let platform: String
-  public let cache: String
-  public let transport: String
-  public let port: Int?
 
-  public init(protocolVersion: Int, pid: Int32, version: String, python: String, platform: String, cache: String, transport: String, port: Int?) {
-    self.protocolVersion = protocolVersion
-    self.pid = pid
+  public init(version: String) {
     self.version = version
-    self.python = python
-    self.platform = platform
-    self.cache = cache
-    self.transport = transport
-    self.port = port
   }
 
-  // "protocol" carries no underscore, so the snake case strategy leaves it alone.
-  enum CodingKeys: String, CodingKey {
-    case protocolVersion = "protocol"
-    case pid, version, python, platform, cache, transport, port
+  /// The control socket's hello, until the status page passes only the version.
+  public init(protocolVersion: Int, pid: Int32, version: String, python: String, platform: String, cache: String, transport: String, port: Int?) {
+    self.init(version: version)
   }
 }
 
@@ -409,8 +393,8 @@ public struct ReplyEvent: Codable, Sendable, Equatable {
   public func encode(to encoder: any Encoder) throws {
     var object = extras
     object["ok"] = .bool(ok)
-    object["id"] = id.map { JSONValue.number(Double($0)) } ?? .null
-    object["error"] = error.map { JSONValue.string($0) } ?? .null
+    object["id"] = id.map { JSONValue.number(Double($0)) }
+    object["error"] = error.map { JSONValue.string($0) }
     var container = encoder.singleValueContainer()
     try container.encode(object)
   }
@@ -633,45 +617,7 @@ public enum ControlEvent: Sendable, Equatable {
   case benchmark(BenchmarkEvent)
   case shutdownRequest(ShutdownRequestEvent)
   case reply(ReplyEvent)
-  case unknown(name: String)
 
-  private struct Envelope: Decodable {
-    let event: String
-  }
-
-  public static func makeDecoder() -> JSONDecoder {
-    let decoder = JSONDecoder()
-    decoder.keyDecodingStrategy = .convertFromSnakeCase
-    return decoder
-  }
-
-  public init(jsonLine: Data) throws {
-    let decoder = ControlEvent.makeDecoder()
-    let name = try decoder.decode(Envelope.self, from: jsonLine).event
-    switch name {
-    case "hello": self = .hello(try decoder.decode(HelloEvent.self, from: jsonLine))
-    case "server": self = .server(try decoder.decode(ServerEvent.self, from: jsonLine))
-    case "link": self = .link(try decoder.decode(LinkEvent.self, from: jsonLine))
-    case "engine": self = .engine(try decoder.decode(EngineEvent.self, from: jsonLine))
-    case "stats": self = .stats(try decoder.decode(StatsEvent.self, from: jsonLine))
-    case "inventory": self = .inventory(try decoder.decode(InventoryEvent.self, from: jsonLine))
-    case "catalog": self = .catalog(try decoder.decode(CatalogEvent.self, from: jsonLine))
-    case "download": self = .download(try decoder.decode(DownloadEvent.self, from: jsonLine))
-    case "import": self = .importEvent(try decoder.decode(ImportEvent.self, from: jsonLine))
-    case "benchmark": self = .benchmark(try decoder.decode(BenchmarkEvent.self, from: jsonLine))
-    case "shutdown_request": self = .shutdownRequest(try decoder.decode(ShutdownRequestEvent.self, from: jsonLine))
-    case "reply": self = .reply(try decoder.decode(ReplyEvent.self, from: jsonLine))
-    default: self = .unknown(name: name)
-    }
-  }
-
-  public var replyEvent: ReplyEvent? {
-    if case .reply(let reply) = self { return reply }
-    return nil
-  }
-}
-
-extension ControlEvent {
   /// The event's name on the wire: "hello", "import", "shutdown_request".
   public var name: String {
     switch self {
@@ -687,94 +633,44 @@ extension ControlEvent {
     case .benchmark: "benchmark"
     case .shutdownRequest: "shutdown_request"
     case .reply: "reply"
-    case .unknown(let name): name
     }
   }
 
-  /// The event as the Python server wrote it on the control channel: one
-  /// JSON object with `event`, `t` (Unix seconds) and the payload's
-  /// snake_case keys, then a newline. What the status page streams.
+  /// The event as the status page streams it: one JSON object with `event`,
+  /// `t` (Unix seconds) and the payload's keys, then a newline.
   public func jsonLine(at date: Date = Date()) -> Data {
-    var object = payload()
-    object["event"] = name
-    object["t"] = date.timeIntervalSince1970
-    var data = (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes])) ?? Data("{}".utf8)
-    data.append(0x0A)
-    return data
+    ControlJSON.line(event: name, payload(), at: date) ?? Data("{}\n".utf8)
   }
 
-  /// The payload alone, as JSONSerialization objects, with every absent
-  /// optional written as null the way Python writes None: a page reading a
-  /// key gets null, not undefined.
+  /// The payload alone, as JSONSerialization objects.
   public func payload() -> [String: Any] {
-    switch self {
-    case .hello(let event): ControlEvent.object(event)
-    case .server(let event): ControlEvent.object(event)
-    case .link(let event): ControlEvent.object(event)
-    case .engine(let event): ControlEvent.object(event)
-    case .stats(let event): ControlEvent.object(event)
-    case .inventory(let event): ControlEvent.object(event)
-    case .catalog(let event): ControlEvent.object(event)
-    case .download(let event): ControlEvent.object(event)
-    case .importEvent(let event): ControlEvent.object(event)
-    case .benchmark(let event): ControlEvent.object(event)
-    case .shutdownRequest(let event): ControlEvent.object(event)
-    case .reply(let event): ControlEvent.object(event)
-    case .unknown: [:]
-    }
+    (Mirror(reflecting: self).children.first?.value as? any Encodable).map { ControlEvent.object($0) } ?? [:]
   }
 
-  /// A value of the protocol as its JSON object, nulls included.
+  /// A value of the protocol as its JSON object: snake_case keys, and no key
+  /// for an absent optional, which every reader takes as null.
   static func object(_ value: some Encodable) -> [String: Any] {
     let encoder = JSONEncoder()
     encoder.keyEncodingStrategy = .convertToSnakeCase
-    guard let data = try? encoder.encode(value), let object = try? JSONSerialization.jsonObject(with: data) else { return [:] }
-    return withNulls(object, value) as? [String: Any] ?? [:]
+    guard let data = try? encoder.encode(value) else { return [:] }
+    return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+  }
+}
+
+/// JSON as every jetlink reader gets it: keys sorted, slashes left alone.
+public enum ControlJSON {
+  /// Nil for what JSON cannot hold.
+  public static func data(_ object: Any) -> Data? {
+    guard JSONSerialization.isValidJSONObject(object) else { return nil }
+    return try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes])
   }
 
-  /// JSONEncoder leaves a nil optional out, so each one the value holds is
-  /// put back as null under the key the encoder would have used.
-  private static func withNulls(_ encoded: Any, _ value: Any) -> Any {
-    let mirror = Mirror(reflecting: value)
-    switch (encoded, mirror.displayStyle) {
-    case (var object as [String: Any], .struct?):
-      for child in mirror.children {
-        guard let label = child.label else { continue }
-        let key = snakeCase(label)
-        if let nested = object[key] {
-          object[key] = withNulls(nested, child.value)
-        } else if isNil(child.value) {
-          object[key] = NSNull()
-        }
-      }
-      return object
-    case (let array as [Any], .collection?):
-      return zip(array, mirror.children).map { withNulls($0, $1.value) }
-    case (_, .optional?):
-      return mirror.children.first.map { withNulls(encoded, $0.value) } ?? encoded
-    default:
-      return encoded
-    }
-  }
-
-  private static func isNil(_ value: Any) -> Bool {
-    let mirror = Mirror(reflecting: value)
-    return mirror.displayStyle == .optional && mirror.children.isEmpty
-  }
-
-  /// `convertToSnakeCase` for the names these events use, none of which has
-  /// two capitals in a row: "runtimeVersion" is "runtime_version".
-  private static func snakeCase(_ name: String) -> String {
-    var out = ""
-    for character in name {
-      if character.isUppercase {
-        if !out.isEmpty { out.append("_") }
-        out.append(contentsOf: character.lowercased())
-      } else {
-        out.append(character)
-      }
-    }
-    return out
+  /// One event: `fields` with `event` and `t` (Unix seconds), then a newline.
+  public static func line(event: String, _ fields: [String: Any], at date: Date) -> Data? {
+    var object = fields
+    object["event"] = event
+    object["t"] = date.timeIntervalSince1970
+    return data(object).map { $0 + Data("\n".utf8) }
   }
 }
 
@@ -810,43 +706,8 @@ public enum ControlCommand: Sendable, Equatable {
     }
   }
 
-  // Absent optional arguments are written as null, never left out, the way
-  // section 4 of the contract describes the whole protocol.
-  private var arguments: [String: Any] {
-    switch self {
-    case .status, .unload, .inventory, .shutdown, .cancelBenchmark:
-      return [:]
-    case .benchmark(let seconds):
-      return ["seconds": seconds]
-    case .catalog(let refresh):
-      return ["refresh": refresh]
-    case .download(let ref, let sha256):
-      return ["ref": ref ?? NSNull(), "sha256": sha256 ?? NSNull()]
-    case .cancelDownload(let sha256):
-      return ["sha256": sha256]
-    case .importModel(let path):
-      return ["path": path]
-    case .prepare(let sha256, let frameSkip):
-      return ["sha256": sha256, "frame_skip": frameSkip]
-    case .forget(let sha256, let artifacts, let model):
-      return ["sha256": sha256, "artifacts": artifacts, "model": model]
-    }
-  }
-
-  public func jsonLine(id: Int) -> Data {
-    var object: [String: Any] = arguments
-    object["id"] = id
-    object["cmd"] = name
-    guard var data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes]) else {
-      return Data("{}\n".utf8)
-    }
-    data.append(0x0A)
-    return data
-  }
-
-  /// The command a control-protocol object names, `jsonLine(id:)` read back:
-  /// what the Android app sends, as the server's command. Absent arguments
-  /// take the Python server's defaults.
+  /// The command an object names, as the Android app sends it. Absent
+  /// arguments take the Python server's defaults.
   public init(object: [String: Any]) throws {
     let name = object["cmd"] as? String ?? ""
     func text(_ key: String) throws -> String {

@@ -20,7 +20,6 @@ struct ServerViewStateTests {
     let disk = InventoryDisk(modelsBytes: 0, enginesBytes: 0, freeBytes: 0)
     #expect(!state.apply(.inventory(InventoryEvent(loaded: nil, lastLoaded: nil, models: [], artifacts: [], disk: disk))))
     #expect(!state.apply(.reply(ReplyEvent(id: 1, ok: true, error: nil))))
-    #expect(!state.apply(.unknown(name: "later")))
   }
 
   @Test func theNumbersGoWithTheComma() {

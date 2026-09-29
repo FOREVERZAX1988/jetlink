@@ -52,10 +52,7 @@
   }
 
   func json(_ object: Any) -> String {
-    guard JSONSerialization.isValidJSONObject(object),
-      let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes])
-    else { return "{}" }
-    return String(decoding: data, as: UTF8.self)
+    ControlJSON.data(object).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
   }
 
   func parse(_ text: String) -> [String: Any] {
