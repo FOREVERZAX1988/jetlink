@@ -11,12 +11,15 @@ Jetlink v0.7.0
 * **Update the comma and Jetlink together:** New link protocol; zoompilot's `jetson-trt` branch pins Jetlink v0.7.0. A comma on an older build stays on the small model.
 
 **General Updates & Fixes**
-* **Faster Link:** Big-model frames 3 to 5 ms quicker on the bench Jetson: 2.2 ms of USB transport (was 8.5). Replies are 8 KB (was 74 KB): the hidden state stays on the server. USB 3 power saving is off only while the comma is connected.
+* **Faster Link:** Big-model frames 3 to 5 ms quicker on the bench Jetson: 2.2 ms of USB transport (was 8.5). Replies are 8 KB (was 74 KB): the hidden state stays on the server. USB 3 power saving is off only while the comma is sending.
+* **Parked:** The Jetson sleeps between its half-hourly wake checks: awake about 1% of a park (was 6%).
+* **Reliability:** The comma restarts Jetlink if it stops, alerts when it cannot, and no longer stalls at shutdown. A new model the Jetson has never seen uploads right away. "Power off with the comma" reaches the Jetson every time.
+* **Forks:** openpilot forks plug Jetlink in through one adapter module (developers: `jetlink/openpilot`).
 * **Status Page:** Watch the server from your phone at `http://<name>.local:5600`.
 * **Stay Awake:** `jetlink caffeinate` keeps a Jetson awake while you work on it.
 * **iPhone:** Neural Engine + GPU is the default (14 ms a frame on an iPhone 18 Pro).
 * **Linux PCs:** The installer puts NVIDIA's TensorRT 11.3 in `/opt/jetlink`; no system TensorRT.
-* **Tested:** JetPack 7.2.1. JetPack 6.2, Linux PCs and WSL2 are untested.
+* **Tested:** JetPack 7.2.1 and the Mac, in the car. JetPack 6.2, Linux PCs and WSL2 are untested.
 
 **Removed**
 * Python server, Docker images and `scripts/run-mac.sh` (use `jetlink-server`).
