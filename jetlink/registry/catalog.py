@@ -39,6 +39,10 @@ PROBE_LIMIT = 10
 REQUIRED_SELECTOR_VERSION = 19
 # Cinque Terre V3 Model (September 17, 2026)
 DEFAULT_BIG_MODEL_REF = 'bf3e3631b3f91d92a1020a5e0dd4298b93ff4244'
+# its name as sunnypilot's catalog lists it, without the build date: what a
+# comma with no catalog to name it from shows (jetlink.openpilot, on a fork
+# without sunnypilot's model manager)
+DEFAULT_BIG_MODEL_NAME = 'Cinque Terre V3 Model'
 CATALOG_TIMEOUT = 10.0
 
 _REF = re.compile(r'[0-9a-f]{40}')

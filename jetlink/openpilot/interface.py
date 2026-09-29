@@ -46,8 +46,11 @@ class Keys:
   progress: str                  # JSON {stage, frac, msg}: provisioning and join progress
   spec: str                      # JSON: the built model's spec and whether its engine is built
   pointers: str                  # JSON: catalog ref -> {oid, size}
-  big_model: str | None = None   # JSON {ref, displayName}: the big-model pick; None without a model manager
-  catalog: str | None = None     # JSON {bundles}: the big-model catalog; None without a model manager
+  # sunnypilot's model manager: the big-model pick, JSON {ref, displayName},
+  # and the big-model catalog, JSON {bundles}. Without one both are None, and
+  # jetlink runs its own default big model
+  big_model: str | None = None
+  catalog: str | None = None
 
 
 @dataclass(frozen=True)

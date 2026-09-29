@@ -16,7 +16,8 @@ export, and jetlink's registry follows that to comma's model repo; see
 jetlink.registry.lfs.
 
 Without a model manager (Keys.big_model and Keys.catalog None) there is no
-pick and no catalog, and nothing here names a model.
+pick and no catalog, and the large model is jetlink's own default, named by its
+ref: its pointer resolves from the ref as any pick's does.
 """
 from __future__ import annotations
 
@@ -24,7 +25,7 @@ import re
 import time
 from pathlib import Path
 
-from jetlink.registry.catalog import DEFAULT_BIG_MODEL_REF
+from jetlink.registry.catalog import DEFAULT_BIG_MODEL_NAME, DEFAULT_BIG_MODEL_REF
 
 POINTER_TIMEOUT = 10.0
 _REF = re.compile(r'[0-9a-f]{40}')
@@ -120,7 +121,11 @@ class Models:
 
   def default_model(self) -> dict | None:
     """What runs with no pick: jetlink's default big model, else the newest the
-    catalog lists. Not the chestnut's default, which is the model in the tree."""
+    catalog lists. Not the chestnut's default, which is the model in the tree.
+    A fork with no catalog at all (Keys.catalog None) gets jetlink's default by
+    its ref; one whose catalog has not been fetched yet waits for it, as ever."""
+    if self.op.keys.catalog is None:
+      return self._row(DEFAULT_BIG_MODEL_NAME, DEFAULT_BIG_MODEL_REF, self._index()[1])
     models = self.model_index()
     return next((m for m in models if m['ref'] == DEFAULT_BIG_MODEL_REF), models[0] if models else None)
 

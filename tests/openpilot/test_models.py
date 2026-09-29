@@ -74,7 +74,6 @@ class TestCatalog(ModelsTest):
     self.op.keys = dataclasses.replace(self.op.keys, catalog=None, big_model=None)
     self.catalog(bundle(REF_A, 'Alpha', 1))
     self.assertEqual(self.models.catalog(), [])
-    self.assertIsNone(self.models.selected_model())
 
 
 class TestModelIndex(ModelsTest):
@@ -221,6 +220,48 @@ class TestSelectedModel(ModelsTest):
     self.op.store['JetlinkModelPointers'] = dict(POINTERS)
     self.op.store['ModelManager_ActiveBundleChestnut'] = {'ref': REF_A, 'displayName': 'Alpha'}
     self.assertEqual(self.models.selected_model(), {'name': 'Alpha', 'ref': REF_A, 'oid': '1' * 64, 'size': 766_000_000})
+
+
+class TestWithoutAModelManager(ModelsTest):
+  """A fork without sunnypilot's model manager: no pick, no catalog. The
+  large model is jetlink's default, found by its ref like any pick."""
+
+  def setUp(self):
+    super().setUp()
+    self.op.keys = dataclasses.replace(self.op.keys, catalog=None, big_model=None)
+
+  def test_jetlinks_default_runs(self):
+    from jetlink.registry.catalog import DEFAULT_BIG_MODEL_NAME, DEFAULT_BIG_MODEL_REF
+    self.assertEqual(self.models.selected_model(),
+                     {'name': DEFAULT_BIG_MODEL_NAME, 'ref': DEFAULT_BIG_MODEL_REF, 'oid': None, 'size': None})
+    self.assertEqual(self.models.default_model_name(), 'Cinque Terre V3 Model')
+    self.assertEqual(self.jl.status().model, 'Cinque Terre V3 Model')
+
+  def test_once_resolved_it_carries_its_identity(self):
+    from jetlink.registry.catalog import DEFAULT_BIG_MODEL_REF
+    self.op.store['JetlinkModelPointers'] = {DEFAULT_BIG_MODEL_REF: {'oid': '9' * 64, 'size': 766_000_000}}
+    self.assertEqual(self.models.selected_model()['oid'], '9' * 64)
+    self.assertEqual(self.models.selected_model()['size'], 766_000_000)
+
+  def test_it_is_provisioned_like_any_pick(self):
+    from jetlink.openpilot import link, provision
+    from jetlink.registry.catalog import DEFAULT_BIG_MODEL_REF
+    client = mock.Mock()
+    client.hello.return_value = {}
+    client.ensure_engine.return_value = mock.Mock(sha256='9' * 64, to_dict=lambda: {'sha256': '9' * 64})
+    run = provision.ProvisioningRun(self.parts)
+    run.client = client
+    with mock.patch.object(self.models, 'fetch_pointer', return_value=('9' * 64, 766_000_000)) as fetch:
+      self.assertTrue(run.provision())
+    fetch.assert_called_once_with(DEFAULT_BIG_MODEL_REF)
+    self.assertEqual(client.ensure_engine.call_args.args[:2], ('9' * 64, 766_000_000))
+    self.assertTrue(self.parts.spec.engine_ready_for('9' * 64))
+    self.assertEqual(client.ensure_engine.call_args.kwargs['build_timeout'], link.BUILD_TIMEOUT)
+
+  def test_a_fork_whose_catalog_is_not_fetched_yet_still_waits_for_it(self):
+    # sunnypilot's model manager lists it shortly; its pick may not be the default
+    self.op.keys = dataclasses.replace(self.op.keys, catalog='ModelManager_ModelsCache_Chestnut')
+    self.assertIsNone(self.models.selected_model())
 
 
 class TestDefaultModelName(ModelsTest):
