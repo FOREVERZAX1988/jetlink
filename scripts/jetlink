@@ -31,6 +31,7 @@ ${B}jetlink${N}: manage the Jetlink server on this computer
   ${B}jetlink logs${N}        follow the server's log (Ctrl-C to stop)
   ${B}jetlink restart${N}     restart the server
   ${B}jetlink stop${N}        stop it until the next restart or ${B}jetlink start${N}
+  ${B}jetlink run${N} ...     run it in this terminal instead, with any flags added (for a bench)
   ${B}jetlink update${N}      update Jetlink, keeping your settings
   ${B}jetlink setup${N}       answer the setup questions again
   ${B}jetlink models${N} ...  list, download or prepare models (${B}jetlink models --help${N})

@@ -115,7 +115,7 @@ def main() -> int:
   p.add_argument('--gadget', default='/sys/kernel/config/usb_gadget/jetlink')
   p.add_argument('--wait-host', type=float, default=0.0, metavar='SECONDS',
                  help='gadget mode: wait for a host to enumerate us before starting')
-  p.add_argument('--spec', help='json spec file, as written by --dump-spec')
+  p.add_argument('--spec', help='json spec file, as `jetlink-server spec ONNX` prints it')
   p.add_argument('--onnx', help='read the spec from this model, uploading it if the server lacks it')
   p.add_argument('--sha256', help='model identity, for a model the server already has')
   p.add_argument('--nbytes', type=int, help='ONNX size in bytes, with --sha256')
