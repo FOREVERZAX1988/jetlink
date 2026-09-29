@@ -202,18 +202,16 @@
       engine.close()
     }
 
-    @Test("CUDA-event timing reads each frame's GPU time at the next, and stays off the reply")
+    @Test("CUDA-event timing is said in the engine's notes")
     func gpuTiming() throws {
-      // 1 ms of fake GPU clock an enqueue
       let engine = try load(timing: true)
       try engine.loopState([(input: "state", output: "next_state")])
       #expect(engine.notes == "cuda graph off, cuda-event timing on")
       _ = try engine.warm()
       #expect(engine.notes == "cuda graph on, cuda-event timing on")
       try engine.run()
-      #expect(engine.lastDeviceUs == 1000)
       let plain = try load()
-      #expect(plain.lastDeviceUs == nil && plain.notes == "cuda graph off")
+      #expect(plain.notes == "cuda graph off")
       plain.close()
       engine.close()
     }

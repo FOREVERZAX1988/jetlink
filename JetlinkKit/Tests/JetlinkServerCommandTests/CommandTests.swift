@@ -66,9 +66,9 @@
       let backends = try #require(try root(["backends", "--backend", "trt"]) as? ListBackends)
       #expect(backends.chosen.backend == .trt)
       let bench = try #require(try root(["bench", "--seconds", "5", "--sha256", String(repeating: "a", count: 64)]) as? Bench)
-      #expect(bench.seconds == 5 && bench.frameSkip == nil && !bench.gpuTiming)
+      #expect(bench.seconds == 5 && bench.frameSkip == nil && !bench.chosen.gpuTiming)
       let timed = try #require(try root(["bench", "--gpu-timing", "--backend", "trt"]) as? Bench)
-      #expect(timed.gpuTiming && timed.chosen.options(gpuTiming: timed.gpuTiming).gpuTiming)
+      #expect(timed.chosen.options().gpuTiming)
     }
 
     @Test func modelsSubcommands() throws {

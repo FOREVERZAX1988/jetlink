@@ -118,10 +118,6 @@
     var sha256: String?
     @Option(help: "Model frames per camera frame. Default: what it was loaded with last, else 4.")
     var frameSkip: Int?
-    @Flag(
-      name: .customLong("gpu-timing"),
-      help: "TensorRT: time each launch with CUDA events and log their spread every 1,200 frames (JETLINK_TRT_GPU_TIMING=1 does too).")
-    var gpuTiming = false
     @OptionGroup var chosen: BackendArguments
     @OptionGroup var cache: CacheArguments
     @Option(help: "debug, info, warning or error.")
@@ -136,10 +132,7 @@
     func run() throws {
       setUpLogging(logLevel)
       let log = ServerLog(category: "main")
-      let backend = try chosen.pick(gpuTiming: gpuTiming)
-      if gpuTiming && backend.name != BackendName.trt.rawValue {
-        log.warning("--gpu-timing times TensorRT's launches; \(backend.name) has no such timing")
-      }
+      let backend = try chosen.pick()
       do {
         let server = try Server(
           configuration: Server.Configuration(cacheRoot: cache.root, preload: false, listen: false), backend: backend)

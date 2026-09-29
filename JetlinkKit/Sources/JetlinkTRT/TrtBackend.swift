@@ -18,12 +18,6 @@ import JetlinkServer
 /// ships 10.x, and the car was validated on its weakly typed network with the
 /// FP16 flag. PCs run 11.x, which dropped weak typing and the precision flags
 /// with it: precision follows the ONNX, which is fp16 end to end.
-///
-/// Two environment variables, for the Jetson acceptance runs (plan section
-/// 7): JETLINK_TRT_GPU_TIMING=1 times every launch with CUDA events and logs
-/// the spread (the engine's `gpuTiming`), and JETLINK_FAULT_CUDA_AFTER=N makes
-/// every frame after the first N throw a sticky CUDA error, to exercise the
-/// fatal exit and restart (H6, D15).
 public final class TrtBackend: EngineBackend {
   public let name = "trt"
   public let suffix = ".plan"
@@ -43,17 +37,11 @@ public final class TrtBackend: EngineBackend {
   static let workspaceFraction = 0.4
   static let optimizationLevel = 3
 
-  /// TensorRT on CUDA device `device`, or `TensorRTUnavailable`.
-  public convenience init(device: Int = 0) throws {
-    let env = ProcessInfo.processInfo.environment
-    self.init(
-      trt: try TensorRT(device: device), gpuTiming: env["JETLINK_TRT_GPU_TIMING"] == "1",
-      faultAfter: env["JETLINK_FAULT_CUDA_AFTER"].flatMap { Int($0) })
-  }
-
-  package init(
-    trt: TensorRT, gpuTiming: Bool = false, faultAfter: Int? = nil, available: @escaping @Sendable () -> Int = TrtBackend.memAvailable
-  ) {
+  /// `gpuTiming` times every launch with CUDA events and logs the spread
+  /// (section 7's pure GPU time); `faultAfter` makes every frame after the
+  /// first N throw a sticky CUDA error, to exercise the fatal exit and
+  /// restart (H6, D15). `available` is MemAvailable in bytes, 0 for unknown.
+  public init(trt: TensorRT, gpuTiming: Bool = false, faultAfter: Int? = nil, available: @escaping @Sendable () -> Int) {
     self.trt = trt
     self.gpuTiming = gpuTiming
     self.faultAfter = faultAfter
@@ -85,21 +73,6 @@ public final class TrtBackend: EngineBackend {
   static func workspaceBytes(available: Int) -> Int {
     guard available > 0 else { return maxWorkspace }
     return max(minWorkspace, min(maxWorkspace, Int(Double(available) * workspaceFraction)))
-  }
-
-  /// MemAvailable, free plus what the kernel would reclaim, or 0 for "no
-  /// idea, use the cap". Swap does not count: on Tegra the GPU's memory is
-  /// pinned system RAM that cannot page out.
-  static func memAvailable() -> Int {
-    #if os(Linux)
-      guard let text = try? String(contentsOfFile: "/proc/meminfo", encoding: .utf8) else { return 0 }
-      for line in text.split(separator: "\n") where line.hasPrefix("MemAvailable:") {
-        return (Int(line.split(separator: " ").dropFirst().first ?? "") ?? 0) * 1024
-      }
-      return 0
-    #else
-      return 0
-    #endif
   }
 
   // MARK: build
@@ -212,12 +185,11 @@ public final class TrtBackend: EngineBackend {
 }
 
 /// TensorRT's build phases as one fraction, as trt/build.py's _Monitor made
-/// them: the root phase's step over its step count, named by the phase.
-/// Never stops the build.
+/// them: the root phase's step over its step count, named by the phase, sent
+/// again at every nested phase's start and step too. Never stops the build.
 final class BuildMonitor {
   private let report: ProgressFn
-  private var phases: [String: (step: Int, total: Int)] = [:]
-  private var root: String?
+  private var root: (phase: String, step: Int, total: Int)?
 
   init(_ report: @escaping ProgressFn) {
     self.report = report
@@ -226,26 +198,16 @@ final class BuildMonitor {
   func event(_ kind: Int32, phase: String, parent: String?, value: Int) {
     switch kind {
     case Int32(JL_TRT_PHASE_START):
-      if parent == nil {
-        root = phase
-      }
-      phases[phase] = (0, value)
-      emit()
+      if parent == nil { root = (phase, 0, value) }
     case Int32(JL_TRT_PHASE_STEP):
-      phases[phase] = (value, phases[phase]?.total ?? 0)
-      emit()
+      if phase == root?.phase { root?.step = value }
     default:
-      phases[phase] = nil
-      if phase == root {
-        root = nil
-      }
+      if phase == root?.phase { root = nil }
+      return
     }
-  }
-
-  private func emit() {
-    guard let root, let (step, total) = phases[root] else { return }
-    let frac = total != 0 ? Double(step) / Double(total) : 0
-    report("build", min(max(frac, 0), 1), root)
+    guard let root else { return }
+    let frac = root.total != 0 ? Double(root.step) / Double(root.total) : 0
+    report("build", min(max(frac, 0), 1), root.phase)
   }
 }
 

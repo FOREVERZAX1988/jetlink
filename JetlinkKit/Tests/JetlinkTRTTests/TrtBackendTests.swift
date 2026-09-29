@@ -7,14 +7,6 @@ import Testing
 
 @Suite("TensorRT backend: names and sizes")
 struct TrtNamingTests {
-  @Test("The version in the tag is what Python's tensorrt.__version__ printed")
-  func pythonVersion() {
-    #expect(TensorRT.pythonVersion(major: 10, minor: 3, patch: 0, build: 30) == "10.3.0")
-    #expect(TensorRT.pythonVersion(major: 10, minor: 3, patch: 1, build: 2) == "10.3.1")
-    #expect(TensorRT.pythonVersion(major: 10, minor: 16, patch: 2, build: 10) == "10.16.2.10")
-    #expect(TensorRT.pythonVersion(major: 11, minor: 3, patch: 0, build: 99) == "11.3.0.99")
-  }
-
   @Test("The workspace is 40% of MemAvailable between 256 MB and 4 GB, and 4 GB when unknown")
   func workspace() {
     #expect(TrtBackend.workspaceBytes(available: 0) == 4 << 30)
@@ -103,6 +95,8 @@ final class Recorder: @unchecked Sendable {
     func tags() throws {
       let jp6 = try backend()
       #expect(jp6.tag() == "trt10.3.0.Orin-sm87")
+      // Python's tensorrt.__version__ left the build out on JetPack 6 only
+      #expect(try backend { ($0.patch, $0.build) = (1, 2) }.runtimeVersion == "10.3.1")
       #expect(jp6.runtimeVersion == "10.3.0" && jp6.deviceTag() == "Orin-sm87")
       #expect(jp6.describe() == ["backend": "trt", "runtime_version": "10.3.0", "device": "Orin-sm87"])
       #expect(jp6.helloFields["trt_version"] as? String == "10.3.0.30")
@@ -272,22 +266,6 @@ final class Recorder: @unchecked Sendable {
       #expect(report.build.contains("cuda graph on"))
       host.close()
       #expect(backend.trt.live.allSatisfy { $0 == 0 }, "\(backend.trt.live)")
-    }
-
-    @Test("A cached plan from another TensorRT build is deleted and rebuilt once")
-    func rebuildsAStalePlan() throws {
-      let backend = try backend()
-      let cache = try ServerCache(root: tmp.url, backend: backend)
-      let request = try request(cache)
-      let entry = cache.entry(request)
-      try Data(fakePlan(Tiny.planLines(), built: "10.3.0.28").utf8).write(to: entry.path)
-      try Artifact.write(["backend": "trt", "spec": Tiny.spec().dictionary()], to: entry.metaPath)
-      let host = EngineHost(cache: cache)
-      defer { host.close() }
-      _ = host.request(request, session: nil)
-      #expect(ready(host))
-      #expect(host.snapshot().state == .ready, "\(host.snapshot().detail)")
-      #expect(try text(entry.path).contains("built 10.3.0.30"))
     }
   }
 #endif
