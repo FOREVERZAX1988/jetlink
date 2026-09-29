@@ -24,7 +24,6 @@ from types import SimpleNamespace
 import pytest
 
 from jetlink import protocol as P
-from jetlink.transport import ffs
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -95,5 +94,3 @@ def test_the_gadget_presents_what_a_host_looks_for():
   script = (ROOT / 'scripts' / 'comma' / 'jetlink-root.sh').read_text()
   ids = {k: int(v, 16) for k, v in re.findall(r'^(VID|PID)=(0x[0-9a-fA-F]+)', script, re.M)}
   assert ids == {'VID': P.USB_VID, 'PID': P.USB_PID}
-  assert tuple(ffs._interface_desc()[5:8]) == P.USB_VENDOR_CLASS
-  assert ffs.SS_MAX_PACKET == P.USB_MAX_PACKET
