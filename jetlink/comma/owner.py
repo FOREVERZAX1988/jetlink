@@ -208,6 +208,7 @@ class Owner:
     self.server: dict | None = None
     self.unfinished = False
     self.ep0_busy = False               # said once, until an open works
+    self.switch_waiting = False         # a rebuild held off by a borrower of a dead owner, said once
     # why a crash loop's backoff holds this start back, for the status record
     self.backing_off: str | None = None
     self.lock_fd: int | None = None      # gadget.OWNER_LOCK, held for the life of run()
@@ -297,8 +298,8 @@ class Owner:
         # refuses ep0 until they are closed. Nothing was opened, and the UDC
         # was never touched, so the borrower's link carries on meanwhile
         if not self.ep0_busy:
-          gadget.log.warning("jetlink: ep0 is busy, a borrower from before this owner still has the endpoints; "
-                             "presenting the gadget once it lets go")
+          gadget.log.warning("jetlink: ep0 is busy, something still has the gadget's endpoint files open "
+                             "(most likely a borrower from before this owner); presenting it once they are closed")
           self.ep0_busy = True
         self.next_attempt = time.monotonic() + EP0_BUSY_RETRY
         return False
@@ -755,6 +756,17 @@ class Owner:
       return False
     if ios == self.built_ios:
       return False
+    if self.transport is None and gadget.bound_udc():
+      # bound, and not by us: the borrower of an owner that died (its run) is
+      # still on the endpoints. The rebuild's unbind would pull the gadget
+      # from under it, so it waits for the borrower to let go, when the
+      # kernel unbinds
+      if not self.switch_waiting:
+        gadget.log.warning("jetlink: Accelerator Link is now %s; the gadget is still bound for a borrower from "
+                           "before this owner, rebuilding it once that lets go", 'iOS' if ios else 'USB')
+        self.switch_waiting = True
+      return False
+    self.switch_waiting = False
     if time.monotonic() < self.next_gadget_attempt:
       return True   # the last rebuild failed; build() says when to try again
     gadget.log.warning("jetlink: Accelerator Link is now %s, rebuilding the gadget", 'iOS' if ios else 'USB')

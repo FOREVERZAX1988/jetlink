@@ -69,6 +69,28 @@ class PortTest(unittest.TestCase):
     return [c.args[0] for c in self.script.call_args_list]
 
 
+class TestAfterAnOwnerDied(PortTest):
+  """An owner started after one that died can find a borrower still on the
+  gadget the dead one presented, maybe through a hold it made. The first
+  update leaves the port alone under that link, and clears it once it goes."""
+
+  def test_a_live_link_keeps_the_port_as_it_is_until_it_goes(self):
+    self.plug('sink')
+    with mock.patch.object(port.gadget, 'host_attached', return_value=True), \
+         mock.patch.object(port.gadget, 'log') as log:
+      self.run_for(3)
+    self.assertEqual(self.commands(), [])
+    log.warning.assert_called_once()
+    with mock.patch.object(port.gadget, 'host_attached', return_value=False):
+      self.run_for(3)
+    self.assertEqual(self.commands(), ['off'])
+
+  def test_a_boot_with_nothing_on_the_gadget_clears_at_once(self):
+    with mock.patch.object(port.gadget, 'host_attached', return_value=False):
+      self.run_for(1)
+    self.assertEqual(self.commands(), ['off'])
+
+
 class TestHosts(PortTest):
   def test_a_usb_a_host_changes_nothing(self):
     self.plug('sink')

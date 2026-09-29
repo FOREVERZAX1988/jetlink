@@ -102,6 +102,7 @@ class Port:
 
   def _reset(self) -> None:
     self.cleared = False   # the port put back as AGNOS boots it, once a session
+    self.deferred = False  # that waits for a host an owner before this one had
     self.held = False      # the voter is forced to sink
     # this plug has been judged, so leave it until it comes out. Also set for
     # the length of a hold until a host comes back
@@ -111,9 +112,18 @@ class Port:
 
   def update(self, now: float | None = None) -> None:
     if not self.cleared:
-      # whatever an owner killed mid-hold left behind
-      run_script('off')
-      self.cleared = True
+      # whatever an owner killed mid-hold left behind. Not under a live link:
+      # an owner started after one that died can find a borrower still on the
+      # gadget the dead one presented, through a hold it made, and back at
+      # dual role the port may toss the roles again. Once no host has us
+      # configured the link has gone anyway, and the hold goes then
+      if gadget.host_attached():
+        if not self.deferred:
+          gadget.log.warning("jetlink: a host is still on the gadget; leaving the USB-C port as it is until it goes")
+          self.deferred = True
+      else:
+        run_script('off')
+        self.cleared = True
     now = time.monotonic() if now is None else now
     role = power_role()
     if role != self.role:

@@ -884,6 +884,29 @@ class TestSwitchingMode(OwnerTest):
     o.step()
     self.setup_gadget.assert_called_once()
 
+  def test_a_dead_owners_borrower_holds_the_rebuild_back(self):
+    # the owner died parked during a run, and the run is still on the
+    # endpoints of the gadget the dead owner bound; the rebuild's unbind
+    # would pull it out from under the run
+    o = self.switched(presented=False)
+    with mock.patch.object(gadget, 'bound_udc', return_value='a600000.dwc3'), mock.patch.object(gadget, 'log') as log:
+      o.step()
+      o.step()
+    self.setup_gadget.assert_not_called()
+    self.assertFalse(o.built_ios)
+    self.assertEqual(sum('rebuilding it once that lets go' in c.args[0] for c in log.warning.call_args_list), 1)
+    # the run exits, its files close, the kernel unbinds
+    with mock.patch.object(gadget, 'bound_udc', return_value=None):
+      o.step()
+    self.setup_gadget.assert_called_once()
+    self.assertTrue(o.built_ios)
+
+  def test_our_own_bind_is_no_reason_to_wait(self):
+    o = self.switched()   # presented: the bind is ours
+    with mock.patch.object(gadget, 'bound_udc', return_value='a600000.dwc3'):
+      o.step()
+    self.setup_gadget.assert_called_once()
+
   def test_onroad_it_waits_for_the_car_to_park(self):
     self.write('IsOffroad', b'0')
     o = self.switched()
