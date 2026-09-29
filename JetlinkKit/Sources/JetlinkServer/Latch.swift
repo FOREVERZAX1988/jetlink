@@ -43,3 +43,22 @@ package final class Locked<Value>: @unchecked Sendable {
     set { withLock { $0 = newValue } }
   }
 }
+
+/// Waits on the calling thread for async work, for a synchronous caller: a
+/// command run on the main thread, a JNI call from a Kotlin worker.
+package func blocking<T: Sendable>(_ work: @escaping @Sendable () async throws -> T) throws -> T {
+  let result = Locked<Result<T, any Error>?>(nil)
+  let done = DispatchSemaphore(value: 0)
+  Task.detached {
+    let outcome: Result<T, any Error>
+    do {
+      outcome = .success(try await work())
+    } catch {
+      outcome = .failure(error)
+    }
+    result.withLock { $0 = outcome }
+    done.signal()
+  }
+  done.wait()
+  return try result.withLock { $0! }.get()
+}

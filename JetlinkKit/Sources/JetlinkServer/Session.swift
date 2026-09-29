@@ -216,9 +216,6 @@ final class Session: @unchecked Sendable {
     for (key, value) in host.backend.describe() {
       response[key] = value
     }
-    for (key, value) in host.backend.helloFields {
-      response[key] = value
-    }
     try sendJSON(.helloResp, seq: message.seq, response)
   }
 

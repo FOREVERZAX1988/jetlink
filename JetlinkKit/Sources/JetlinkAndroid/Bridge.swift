@@ -233,13 +233,7 @@
       } catch {
         return ["ok": false, "error": String(describing: error)]
       }
-      nonisolated(unsafe) var reply: ReplyEvent?
-      let done = DispatchSemaphore(value: 0)
-      Task.detached {
-        reply = await server.handle(command)
-        done.signal()
-      }
-      done.wait()
+      let reply = try? blocking { await server.handle(command) }
       return reply.map { ControlEvent.reply($0).payload() } ?? NSNull()
     }
   }

@@ -72,11 +72,9 @@ public protocol EngineBackend: AnyObject, Sendable {
   func deviceTag() -> String
   /// What an artifact is valid for: runtime version and device, sanitized.
   func tag() -> String
-  /// backend, runtime_version, device: for the hello.
+  /// backend, runtime_version, device, and whatever else the backend adds
+  /// (TensorRT's `trt_version`, which the comma logs): for the hello.
   func describe() -> [String: String]
-  /// What this backend adds to the hello besides `describe()`: TensorRT's
-  /// `trt_version`, which the comma logs.
-  var helloFields: [String: Any] { get }
   func deriveSpec(model: URL, sha256: String, nbytes: Int64, frameSkip: Int) throws -> ModelSpec
   func build(model: URL, artifact: URL, report: @escaping ProgressFn, metaExtra: [String: Any]) throws
   func load(artifact: URL, report: @escaping ProgressFn) throws -> any Engine
@@ -95,7 +93,6 @@ extension EngineBackend {
     ["backend": name, "runtime_version": runtimeVersion, "device": deviceTag()]
   }
 
-  public var helloFields: [String: Any] { [:] }
 }
 
 /// A version or device name as a filename component.

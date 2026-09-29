@@ -44,8 +44,9 @@ func serve(
   try body(server, client)
 }
 
-/// The CPU backend with what a TensorRT one adds: fields in the hello, and
-/// loads or runs that fail with an error of the test's choosing.
+/// The CPU backend with what a TensorRT one adds: fields it describes itself
+/// with in the hello, and loads or runs that fail with an error of the
+/// test's choosing.
 final class FlakyBackend: EngineBackend, @unchecked Sendable {
   private let inner = cpuBackend()
   private let lock = NSLock()
@@ -54,11 +55,13 @@ final class FlakyBackend: EngineBackend, @unchecked Sendable {
   private var loadFailures = 0
   private var built = 0
   private var loaded = 0
-  let helloFields: [String: Any]
+  private let fields: [String: String]
 
-  init(helloFields: [String: Any] = [:]) {
-    self.helloFields = helloFields
+  init(describing fields: [String: String] = [:]) {
+    self.fields = fields
   }
+
+  func describe() -> [String: String] { inner.describe().merging(fields) { $1 } }
 
   var name: String { inner.name }
   var suffix: String { inner.suffix }

@@ -72,7 +72,7 @@ struct ServerHooksTests {
       #expect(Set(hello.keys) == python)
       #expect(hello["sleep_after"] as? Double == 0)
     }
-    let trt = FlakyBackend(helloFields: ["trt_version": "10.3.0"])
+    let trt = FlakyBackend(describing: ["trt_version": "10.3.0"])
     try serve(hooks: ServerHooks(sleepAfter: 900), backend: trt) { _, client in
       let hello = try client.hello()
       #expect(Set(hello.keys) == python.union(["trt_version"]))
