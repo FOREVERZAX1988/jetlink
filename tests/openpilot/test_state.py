@@ -21,41 +21,41 @@ def spec(sha256: str) -> ModelSpec:
 
 class TestSpecRecord(OpenpilotTest):
   def test_a_stored_spec_is_ready_for_its_own_model_only(self):
-    self.jl.spec.store(spec('a' * 64))
-    self.assertTrue(self.jl.spec.engine_ready_for('a' * 64))
-    self.assertFalse(self.jl.spec.engine_ready_for('b' * 64))
-    self.assertFalse(self.jl.spec.engine_ready_for(None))
-    self.assertEqual(self.jl.spec.load().sha256, 'a' * 64)
+    self.parts.spec.store(spec('a' * 64))
+    self.assertTrue(self.parts.spec.engine_ready_for('a' * 64))
+    self.assertFalse(self.parts.spec.engine_ready_for('b' * 64))
+    self.assertFalse(self.parts.spec.engine_ready_for(None))
+    self.assertEqual(self.parts.spec.load().sha256, 'a' * 64)
 
   def test_nothing_recorded_is_not_ready(self):
-    self.assertIsNone(self.jl.spec.load())
-    self.assertFalse(self.jl.spec.engine_ready_for('a' * 64))
+    self.assertIsNone(self.parts.spec.load())
+    self.assertFalse(self.parts.spec.engine_ready_for('a' * 64))
 
   def test_clearing_keeps_the_spec(self):
     # it still sizes the warp; only the engine has to be asked for again
-    self.jl.spec.store(spec('a' * 64))
-    self.jl.spec.clear_ready()
-    self.assertFalse(self.jl.spec.engine_ready_for('a' * 64))
-    self.assertEqual(self.jl.spec.load(), spec('a' * 64))
-    self.jl.spec.store(spec('a' * 64))
-    self.assertTrue(self.jl.spec.engine_ready_for('a' * 64))
+    self.parts.spec.store(spec('a' * 64))
+    self.parts.spec.clear_ready()
+    self.assertFalse(self.parts.spec.engine_ready_for('a' * 64))
+    self.assertEqual(self.parts.spec.load(), spec('a' * 64))
+    self.parts.spec.store(spec('a' * 64))
+    self.assertTrue(self.parts.spec.engine_ready_for('a' * 64))
 
   def test_it_is_the_param_the_fork_declares(self):
-    self.jl.spec.store(spec('a' * 64))
+    self.parts.spec.store(spec('a' * 64))
     self.assertEqual(self.op.store['JetlinkSpec']['sha256'], 'a' * 64)
     self.assertIs(self.op.store['JetlinkSpec']['ready'], True)
 
   def test_an_unreadable_record_is_no_spec_and_says_so(self):
     self.op.store['JetlinkSpec'] = {'sha256': 'a' * 64, 'ready': True}   # no shapes
-    self.assertIsNone(self.jl.spec.load())
+    self.assertIsNone(self.parts.spec.load())
     self.assertTrue(self.op.log.has('cached spec is unreadable', 'exception'))
     # readiness does not need the shapes
-    self.assertTrue(self.jl.spec.engine_ready_for('a' * 64))
+    self.assertTrue(self.parts.spec.engine_ready_for('a' * 64))
 
   def test_something_that_is_not_a_record_is_none(self):
     self.op.store['JetlinkSpec'] = 'junk'
-    self.assertIsNone(self.jl.spec.load())
-    self.assertFalse(self.jl.spec.engine_ready_for('a' * 64))
+    self.assertIsNone(self.parts.spec.load())
+    self.assertFalse(self.parts.spec.engine_ready_for('a' * 64))
 
 
 if __name__ == '__main__':

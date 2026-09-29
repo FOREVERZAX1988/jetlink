@@ -231,7 +231,7 @@ def size(text: str) -> tuple[int, int]:
 
 def main(argv: list[str] | None = None) -> None:
   """Build the warp for one camera, as the fork's build runs it."""
-  from jetlink.openpilot import load_adapter
+  from jetlink.openpilot.interface import load_adapter
   p = argparse.ArgumentParser(prog='python -m jetlink.openpilot.warp', description=main.__doc__)
   p.add_argument('--adapter', required=True, help="the fork's adapter module")
   p.add_argument('--camera', type=size, required=True, help='camera resolution, WxH')

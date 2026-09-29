@@ -31,11 +31,11 @@ class SelectionTest(OpenpilotTest):
     else:
       self.op.store.pop('JetlinkSpec', None)
     for target, name, value in ((gadget, 'gadget_error', gadget_error),
-                                (self.jl.warps, 'built', warp),
+                                (self.parts.warps, 'built', warp),
                                 (gadget, 'host_attached', False),
                                 (gadget, 'dormant', False),
-                                (self.jl.models, 'selected_model', {'name': model, 'oid': 'a' * 64} if model else None),
-                                (self.jl.spec, 'load', SimpleNamespace(sha256=spec_sha) if spec_sha else None)):
+                                (self.parts.models, 'selected_model', {'name': model, 'oid': 'a' * 64} if model else None),
+                                (self.parts.spec, 'load', SimpleNamespace(sha256=spec_sha) if spec_sha else None)):
       self.patch(target, name, return_value=value)
 
   def test_the_link_off_or_unset_is_disabled(self):
@@ -82,12 +82,12 @@ class SelectionTest(OpenpilotTest):
     self.assertIsNone(s.reason)
     self.assertTrue(s.enabled)
     self.assertEqual(s.active_model, 'm')
-    self.assertEqual((status.ready(self.jl), status.unavailable_reason(self.jl)), (True, None))
+    self.assertEqual((status.ready(self.parts), status.unavailable_reason(self.parts)), (True, None))
 
   def test_an_old_engine_is_not_the_new_selection(self):
     self.configure(model='m', spec_sha='b' * 64, ready=True)
     self.assertFalse(self.jl.status().ready)
-    self.assertFalse(status.ready(self.jl))
+    self.assertFalse(status.ready(self.parts))
 
   def test_a_spec_whose_engine_is_not_built_is_not_ready(self):
     self.configure(model='m', spec_sha='a' * 64, ready=False)
@@ -109,7 +109,7 @@ class SelectionTest(OpenpilotTest):
     # it runs the big model natively; jetlinkd never takes the USB controller from it
     self.configure(model='m', spec_sha='a' * 64, ready=True)
     self.op.chestnut = True
-    self.jl._chestnut = None
+    self.parts._chestnut = None
     s = self.jl.status()
     self.assertEqual((s.enabled, s.ready, s.reason, s.mode), (False, False, None, 'usb'))
 
@@ -119,8 +119,8 @@ class SelectionTest(OpenpilotTest):
       for _ in range(10):
         self.jl.enabled()
       self.assertEqual(walk.call_count, 1)
-      import jetlink.openpilot as jo
-      with mock.patch.object(jo.time, 'monotonic', return_value=jo.time.monotonic() + jo.CHESTNUT_TTL + 1):
+      from jetlink.openpilot import parts
+      with mock.patch.object(parts.time, 'monotonic', return_value=parts.time.monotonic() + parts.CHESTNUT_TTL + 1):
         self.jl.enabled()
       self.assertEqual(walk.call_count, 2)
 
@@ -147,21 +147,21 @@ class TestPresence(OpenpilotTest):
   def test_dormant_counts_as_present_without_a_host(self):
     with mock.patch.object(gadget, 'host_attached', return_value=False):
       self.cc.write_text('1')
-      assert not self.jl.presence.present()
+      assert not self.parts.presence.present()
       gadget.set_dormant(True)
       self.addCleanup(gadget.set_dormant, False)
-      assert self.jl.presence.present()
+      assert self.parts.presence.present()
       self.cc.write_text('0')
-      assert not self.jl.presence.present()
+      assert not self.parts.presence.present()
 
   def test_a_host_is_held_through_a_blink(self):
     # a USB3 link recovery passes through "addressed"
     with mock.patch.object(gadget, 'host_attached', return_value=True):
-      assert self.jl.presence.present()
+      assert self.parts.presence.present()
     with mock.patch.object(gadget, 'host_attached', return_value=False):
-      assert self.jl.presence.present()
+      assert self.parts.presence.present()
       with mock.patch.object(status.time, 'monotonic', return_value=status.time.monotonic() + status.PRESENCE_HOLD):
-        assert not self.jl.presence.present()
+        assert not self.parts.presence.present()
 
   def test_the_port_is_the_cc_pin(self):
     self.assertIsNone(status.usb_port())
@@ -193,45 +193,45 @@ class TestTransport(OpenpilotTest):
 
 class TestProgress(OpenpilotTest):
   def test_nothing_recorded_is_no_progress(self):
-    self.assertIsNone(self.jl.progress.read())
+    self.assertIsNone(self.parts.progress.read())
 
   def test_a_dict_comes_through(self):
     payload = {'stage': 'build', 'frac': 0.5, 'msg': ''}
     self.op.store['AcceleratorProgress'] = payload
-    self.assertEqual(self.jl.progress.read(), payload)
+    self.assertEqual(self.parts.progress.read(), payload)
 
   def test_a_non_dict_is_ignored(self):
     self.op.store['AcceleratorProgress'] = "build 50%"
-    self.assertIsNone(self.jl.progress.read())
+    self.assertIsNone(self.parts.progress.read())
 
   def test_a_store_that_raises_does_not_take_down_the_ui(self):
     # the adapter's get never should; this is the reader's own guard
     with mock.patch.object(self.op, 'get', side_effect=RuntimeError("UnknownKeyName")):
-      self.assertIsNone(self.jl.progress.read())
+      self.assertIsNone(self.parts.progress.read())
 
   def test_reporting_never_raises(self):
     # called from except handlers in the run and the join
     self.op.put_error = RuntimeError("params gone")
-    self.jl.progress.report('build', 0.5)
+    self.parts.progress.report('build', 0.5)
     with mock.patch.object(self.op, 'remove', side_effect=RuntimeError("params gone")):
-      self.jl.progress.clear()
+      self.parts.progress.clear()
     self.assertEqual(len(self.op.log.lines('exception')), 2)
 
   def test_held_to_four_hertz_within_a_stage(self):
     with mock.patch.object(self.op, 'put', wraps=self.op.put) as put:
       for frac in (0.1, 0.2, 0.3):
-        self.jl.progress.report('upload', frac)
+        self.parts.progress.report('upload', frac)
       self.assertEqual(put.call_count, 1)
       # a new stage, and the end of one, always go through
-      self.jl.progress.report('build', 0.0)
-      self.jl.progress.report('build', 1.0)
+      self.parts.progress.report('build', 0.0)
+      self.parts.progress.report('build', 1.0)
       self.assertEqual(put.call_count, 3)
-    self.assertEqual(self.jl.progress.read(), {'stage': 'build', 'frac': 1.0, 'msg': ''})
+    self.assertEqual(self.parts.progress.read(), {'stage': 'build', 'frac': 1.0, 'msg': ''})
 
   def test_clearing_removes_it(self):
-    self.jl.progress.report('build', 1.0)
-    self.jl.progress.clear()
-    self.assertIsNone(self.jl.progress.read())
+    self.parts.progress.report('build', 1.0)
+    self.parts.progress.clear()
+    self.assertIsNone(self.parts.progress.read())
 
 
 class BuildEtaTest(OpenpilotTest):
@@ -240,10 +240,10 @@ class BuildEtaTest(OpenpilotTest):
 
   def report(self, *args, size=1_850_000_000):
     seen = []
-    with mock.patch.object(self.jl.models, 'selected_model', return_value={'size': size}), \
-         mock.patch.object(self.jl.progress, 'report', lambda *a: seen.append(a)):
+    with mock.patch.object(self.parts.models, 'selected_model', return_value={'size': size}), \
+         mock.patch.object(self.parts.progress, 'report', lambda *a: seen.append(a)):
       for call in args:
-        self.jl.progress.report_with_eta(*call)
+        self.parts.progress.report_with_eta(*call)
     return seen
 
   def test_the_build_stage_gets_a_time_remaining(self):
@@ -327,9 +327,9 @@ class TestTheSnapshot(OpenpilotTest):
 
   def test_it_reads_each_file_once(self):
     self.op.set_mode('usb')
-    with mock.patch.object(self.jl.warps, 'built', return_value=True), \
+    with mock.patch.object(self.parts.warps, 'built', return_value=True), \
          mock.patch.object(gadget, 'gadget_error', return_value=None) as error, \
-         mock.patch.object(self.jl.spec, 'load', return_value=None) as load:
+         mock.patch.object(self.parts.spec, 'load', return_value=None) as load:
       self.jl.status()
     self.assertEqual((error.call_count, load.call_count), (1, 1))
 
@@ -344,8 +344,8 @@ class TestTheSnapshot(OpenpilotTest):
 
   def test_names_come_from_the_models(self):
     self.op.set_mode('usb')
-    with mock.patch.object(self.jl.models, 'selected_model_name', return_value='Picked'), \
-         mock.patch.object(self.jl.models, 'default_model_name', return_value='Default'):
+    with mock.patch.object(self.parts.models, 'selected_model_name', return_value='Picked'), \
+         mock.patch.object(self.parts.models, 'default_model_name', return_value='Default'):
       s = self.jl.status()
     self.assertEqual((s.model, s.default_model, s.active_model), ('Picked', 'Default', None))
 

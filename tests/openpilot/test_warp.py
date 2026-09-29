@@ -56,7 +56,7 @@ class RecordingGraph:
 class WarpTest(OpenpilotTest):
   def setUp(self):
     super().setUp()
-    self.warps = self.jl.warps
+    self.warps = self.parts.warps
 
   def write(self, geom=GEOM, body=b'pickle'):
     pkl = self.warps.path(*geom)
@@ -262,7 +262,7 @@ class TestTheBuild(OpenpilotTest):
   def test_it_builds_the_adapters_graph_for_the_camera(self):
     out = self.tmp / 'warp.pkl'
     with mock.patch.object(warp, 'compile_warp', return_value=out) as compile_warp, \
-         mock.patch('jetlink.openpilot.load_adapter', return_value=self.op) as load, \
+         mock.patch('jetlink.openpilot.interface.load_adapter', return_value=self.op) as load, \
          mock.patch.object(self.op, 'make_warp', wraps=self.op.make_warp) as make_warp:
       warp.main(['--adapter', 'x.adapter', '--camera', '1344x760', '--model', '512x256', '--output', str(out)])
     load.assert_called_once_with('x.adapter')

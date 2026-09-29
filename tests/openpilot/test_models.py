@@ -30,7 +30,7 @@ POINTERS = {REF_A: {'oid': '1' * 64, 'size': 766_000_000},
 class ModelsTest(OpenpilotTest):
   def setUp(self):
     super().setUp()
-    self.models = self.jl.models
+    self.models = self.parts.models
 
   def catalog(self, *bundles):
     self.op.store['ModelManager_ModelsCache_Chestnut'] = {'bundles': list(bundles)}

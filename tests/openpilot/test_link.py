@@ -90,9 +90,9 @@ class HoldingTheLink(ClockedTest):
   def test_no_model_picked_yet_keeps_the_gadget_presented(self):
     # The panel says what is going on; a closed gadget would take the whole
     # link off the bus for the drive instead.
-    with mock.patch.object(self.jl.models, 'selected_model', return_value=None):
+    with mock.patch.object(self.parts.models, 'selected_model', return_value=None):
       with self.assertRaises(RuntimeError):
-        link.open_link(self.jl, self.link)
+        link.open_link(self.parts, self.link)
     assert self.link.client is self.client
     assert self.client.close.call_count == 0
 
@@ -318,14 +318,14 @@ class BuildingOnroad(OpenpilotTest):
     self.spec = mock.Mock(sha256=self.ENTRY['oid'])
     self.link = link.Link(self.op.log)
     self.patch(link, 'connect_patiently', return_value=self.client)
-    for target, name, value in ((self.jl.models, 'selected_model', dict(self.ENTRY)),
-                                (self.jl.models, 'shipped_model_path', None),
-                                (self.jl.spec, 'engine_ready_for', False)):
+    for target, name, value in ((self.parts.models, 'selected_model', dict(self.ENTRY)),
+                                (self.parts.models, 'shipped_model_path', None),
+                                (self.parts.spec, 'engine_ready_for', False)):
       self.patch(target, name, return_value=value)
     self.ensure = self.patch(link, 'ensure', return_value=self.spec)
 
   def test_the_model_the_picker_names_is_what_gets_built(self):
-    client, spec = link.open_link(self.jl, self.link)
+    client, spec = link.open_link(self.parts, self.link)
     assert spec is self.spec and client is self.client
     assert self.ensure.call_args.args[2:4] == (self.ENTRY['oid'], self.ENTRY['size'])
     assert self.op.log.has('CTM v2 is not built yet, building it with the small model driving')
@@ -333,17 +333,17 @@ class BuildingOnroad(OpenpilotTest):
 
   def test_the_frame_deadline_is_set_before_the_link_is_handed_over(self):
     # ensure_engine waits minutes; the frame path must not inherit that
-    client, _ = link.open_link(self.jl, self.link)
+    client, _ = link.open_link(self.parts, self.link)
     assert client.deadline == link.INFERENCE_TIMEOUT
 
   def test_the_join_thread_can_be_stopped_through_the_build(self):
     stop = object()
-    link.open_link(self.jl, self.link, should_stop=stop)
+    link.open_link(self.parts, self.link, should_stop=stop)
     assert self.ensure.call_args.kwargs['should_stop'] is stop
 
   def test_progress_reaches_the_panel(self):
-    link.open_link(self.jl, self.link)
-    assert self.ensure.call_args.kwargs['progress'] == self.jl.progress.report_with_eta
+    link.open_link(self.parts, self.link)
+    assert self.ensure.call_args.kwargs['progress'] == self.parts.progress.report_with_eta
 
   def test_bytes_neither_end_has_are_a_parked_job(self):
     # Downloading a gigabyte is the one part of provisioning that needs the
@@ -351,9 +351,9 @@ class BuildingOnroad(OpenpilotTest):
     from jetlink.client import EngineMissing
     self.ensure.side_effect = EngineMissing('no engine')
     self.link.client = self.client
-    with mock.patch.object(self.jl.spec, 'clear_ready') as cleared:
+    with mock.patch.object(self.parts.spec, 'clear_ready') as cleared:
       with self.assertRaises(EngineMissing):
-        link.open_link(self.jl, self.link)
+        link.open_link(self.parts, self.link)
     cleared.assert_called_once_with()
     self.client.close.assert_called_once()
 

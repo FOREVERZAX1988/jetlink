@@ -80,10 +80,10 @@ class TestProvisionCost(OpenpilotTest):
     self.model.write_bytes(b'x' * 4096)
     self.cache = FakeSpecRecord()
     self.hashed: list[str] = []
-    self.patch(self.jl, 'spec', self.cache)
-    self.progress = self.patch(self.jl, 'progress', mock.Mock())
+    self.patch(self.parts, 'spec', self.cache)
+    self.progress = self.patch(self.parts, 'progress', mock.Mock())
     for name, value in (('shipped_model_path', self.model), ('selected_model', dict(self.ENTRY))):
-      self.patch(self.jl.models, name, return_value=value)
+      self.patch(self.parts.models, name, return_value=value)
 
     def sha256_file(path, *args, **kwargs):
       self.hashed.append(path)
@@ -92,7 +92,7 @@ class TestProvisionCost(OpenpilotTest):
     self.patch(sys.modules['jetlink.spec'], 'sha256_file', side_effect=sha256_file)
 
   def run_with(self, client=None):
-    d = provision.ProvisioningRun(self.jl)
+    d = provision.ProvisioningRun(self.parts)
     d.client = client or serving_client()
     return d
 
@@ -106,8 +106,8 @@ class TestProvisionCost(OpenpilotTest):
 
   def test_a_model_asked_for_the_first_time_has_its_pointer_looked_up(self):
     d = self.run_with()
-    with mock.patch.object(self.jl.models, 'selected_model', return_value={**self.ENTRY, 'oid': None, 'size': None}), \
-         mock.patch.object(self.jl.models, 'resolve_pointer', return_value=('deadbeef', 4096)) as resolve:
+    with mock.patch.object(self.parts.models, 'selected_model', return_value={**self.ENTRY, 'oid': None, 'size': None}), \
+         mock.patch.object(self.parts.models, 'resolve_pointer', return_value=('deadbeef', 4096)) as resolve:
       assert d.provision() is True
     resolve.assert_called_once_with('f' * 40)
     args = d.client.ensure_engine.call_args.args
@@ -117,8 +117,8 @@ class TestProvisionCost(OpenpilotTest):
   def test_a_pointer_that_cannot_be_looked_up_is_a_failed_provision(self):
     # the ordinary failure path: logged, backed off, tried again next poll
     d = self.run_with()
-    with mock.patch.object(self.jl.models, 'selected_model', return_value={**self.ENTRY, 'oid': None, 'size': None}), \
-         mock.patch.object(self.jl.models, 'resolve_pointer', side_effect=OSError('offline')), \
+    with mock.patch.object(self.parts.models, 'selected_model', return_value={**self.ENTRY, 'oid': None, 'size': None}), \
+         mock.patch.object(self.parts.models, 'resolve_pointer', side_effect=OSError('offline')), \
          self.assertRaises(OSError):
       d.provision()
     d.client.ensure_engine.assert_not_called()
@@ -134,13 +134,13 @@ class TestProvisionCost(OpenpilotTest):
     # The Jetson keeps its own copy of every ONNX and never prunes them, so a
     # comma that has deleted its own can still use an engine already built.
     d = self.run_with()
-    with mock.patch.object(self.jl.models, 'shipped_model_path', return_value=None):
+    with mock.patch.object(self.parts.models, 'shipped_model_path', return_value=None):
       assert d.provision() is True
     assert d.client.ensure_engine.call_args.kwargs['onnx_path'] is None
 
   def test_a_server_that_wants_the_bytes_gets_them_in_the_same_run(self):
     d = self.run_with()
-    with mock.patch.object(self.jl.models, 'shipped_model_path', return_value=None), \
+    with mock.patch.object(self.parts.models, 'shipped_model_path', return_value=None), \
          mock.patch.object(d, 'fetch_model', return_value=self.model) as fetch, \
          mock.patch.object(link, 'ensure', side_effect=[EngineMissing('no engine'), FakeSpec()]) as ensure:
       # one run: the owner lends the link for all of it, and leaving after the
@@ -153,7 +153,7 @@ class TestProvisionCost(OpenpilotTest):
   def test_a_download_that_fails_leaves_the_engine_missing(self):
     d = self.run_with()
     d.client.ensure_engine.side_effect = EngineMissing('no engine')
-    with mock.patch.object(self.jl.models, 'shipped_model_path', return_value=None), \
+    with mock.patch.object(self.parts.models, 'shipped_model_path', return_value=None), \
          mock.patch.object(d, 'fetch_model', return_value=None), \
          self.assertRaises(EngineMissing):
       d.provision()
@@ -168,7 +168,7 @@ class TestProvisionCost(OpenpilotTest):
     # answering: uploading under a sha the bytes do not have would leave the
     # Jetson with a plan whose name lies about its contents.
     d = self._wants_the_bytes()
-    with mock.patch.object(self.jl.models, 'selected_model',
+    with mock.patch.object(self.parts.models, 'selected_model',
                            return_value={**self.ENTRY, 'oid': 'not-what-the-file-hashes-to'}), \
          self.assertRaises(EngineMissing):
       d.provision()
@@ -177,7 +177,7 @@ class TestProvisionCost(OpenpilotTest):
 
   def test_a_file_of_the_wrong_size_is_never_uploaded(self):
     d = self._wants_the_bytes()
-    with mock.patch.object(self.jl.models, 'selected_model',
+    with mock.patch.object(self.parts.models, 'selected_model',
                            return_value={**self.ENTRY, 'size': 999999}), \
          self.assertRaises(EngineMissing):
       d.provision()
@@ -220,7 +220,7 @@ class TestProvisionCost(OpenpilotTest):
     kwargs = d.client.ensure_engine.call_args.kwargs
     assert callable(kwargs['should_stop'])
     assert kwargs['build_timeout'] == link.BUILD_TIMEOUT
-    assert kwargs['progress'] == self.jl.progress.report_with_eta
+    assert kwargs['progress'] == self.parts.progress.report_with_eta
     assert self.cache.stores == 1 and self.cache.spec.sha256 == 'deadbeef'
 
   def test_stop_is_polled_through_the_long_wait(self):
@@ -237,7 +237,7 @@ class TestProvisionCost(OpenpilotTest):
 
   def test_no_pick_and_no_catalog_is_nothing_to_provision(self):
     d = self.run_with()
-    with mock.patch.object(self.jl.models, 'selected_model', return_value=None):
+    with mock.patch.object(self.parts.models, 'selected_model', return_value=None):
       assert d.provision() is False
     assert self.cache.ready is False
     self.progress.clear.assert_called_once_with()
@@ -246,9 +246,9 @@ class TestProvisionCost(OpenpilotTest):
 
 class TestFetching(OpenpilotTest):
   def test_a_download_reports_and_stops_with_the_run(self):
-    d = provision.ProvisioningRun(self.jl)
-    progress = self.patch(self.jl, 'progress', mock.Mock())
-    with mock.patch.object(self.jl.models, 'fetch_shipped_model', return_value=Path('/x')) as fetch:
+    d = provision.ProvisioningRun(self.parts)
+    progress = self.patch(self.parts, 'progress', mock.Mock())
+    with mock.patch.object(self.parts.models, 'fetch_shipped_model', return_value=Path('/x')) as fetch:
       self.assertEqual(d.fetch_model(), Path('/x'))
     fetch.call_args.kwargs['progress'](0.5)
     progress.report.assert_called_once_with('download', 0.5, 'downloading the large model')
@@ -258,9 +258,9 @@ class TestFetching(OpenpilotTest):
 
   def test_a_failed_download_is_one_attempt_a_run(self):
     # retrying a gigabyte on a loop is worse than staying small
-    d = provision.ProvisioningRun(self.jl)
-    progress = self.patch(self.jl, 'progress', mock.Mock())
-    with mock.patch.object(self.jl.models, 'fetch_shipped_model', side_effect=OSError('offline')) as fetch:
+    d = provision.ProvisioningRun(self.parts)
+    progress = self.patch(self.parts, 'progress', mock.Mock())
+    with mock.patch.object(self.parts.models, 'fetch_shipped_model', side_effect=OSError('offline')) as fetch:
       self.assertIsNone(d.fetch_model())
       self.assertIsNone(d.fetch_model())
     fetch.assert_called_once()
@@ -271,7 +271,7 @@ class TestTheLoan(OpenpilotTest):
   """Only the owner that started this run holds ep0; the run borrows from it."""
 
   def test_no_loan_is_one_error_and_no_gadget_of_our_own(self):
-    d = provision.ProvisioningRun(self.jl)
+    d = provision.ProvisioningRun(self.parts)
     with mock.patch.object(lending, 'borrow', return_value=None), \
          mock.patch('jetlink.client.JetlinkClient') as client:
       assert d.open_link() is False
@@ -280,7 +280,7 @@ class TestTheLoan(OpenpilotTest):
     assert d.client is None
 
   def test_a_loan_is_opened_over(self):
-    d = provision.ProvisioningRun(self.jl)
+    d = provision.ProvisioningRun(self.parts)
     loan = mock.Mock(sock=None, mount='/dev/ffs-jetlink', udc='udc0')
     with mock.patch.object(lending, 'borrow', return_value=loan) as borrow, \
          mock.patch.object(link, 'connect') as connect:
@@ -291,7 +291,7 @@ class TestTheLoan(OpenpilotTest):
     assert d.client is connect.return_value
 
   def test_a_link_that_will_not_open_is_logged(self):
-    d = provision.ProvisioningRun(self.jl)
+    d = provision.ProvisioningRun(self.parts)
     with mock.patch.object(lending, 'borrow', side_effect=OSError('no socket')):
       assert d.open_link() is False
     assert self.op.log.has('could not open the link', 'exception')
@@ -304,16 +304,16 @@ class TestTheRun(OpenpilotTest):
   def setUp(self):
     super().setUp()
     self.op.set_mode('usb')
-    self.patch(self.jl, 'progress', mock.Mock())
+    self.patch(self.parts, 'progress', mock.Mock())
     self.patch(gadget, 'STATE', self.tmp / 'state')
     self.patch(gadget, 'SHUTDOWN_REQUEST', self.tmp / 'shutdown')
 
   def worker(self, work=True):
-    d = provision.ProvisioningRun(self.jl)
+    d = provision.ProvisioningRun(self.parts)
     for name, value in (('has_work', work), ('open_link', True), ('provision', True)):
       self.patch(d, name, mock.Mock(return_value=value))
     for target, name, value in ((gadget, 'pending_shutdown', None), (gadget, 'wait_for_host', True),
-                                (self.jl.warps, 'built', True)):
+                                (self.parts.warps, 'built', True)):
       self.patch(target, name, mock.Mock(return_value=value))
     return d
 
@@ -339,7 +339,7 @@ class TestTheRun(OpenpilotTest):
     d.provision.side_effect = RuntimeError('the jetson went away')
     assert d.run() is False
     assert self.state()['unfinished'] is True
-    self.jl.progress.report.assert_called_with('failed', 1.0, 'see the log')
+    self.parts.progress.report.assert_called_with('failed', 1.0, 'see the log')
 
   def test_no_jetson_is_left_for_the_next_run(self):
     d = self.worker()
@@ -386,7 +386,7 @@ class TestTheRun(OpenpilotTest):
   def test_no_warp_for_this_camera_is_nothing_to_provision_for(self):
     # the engine could never run; waking the Jetson to build it changes nothing
     d = self.worker()
-    self.jl.warps.built.return_value = False
+    self.parts.warps.built.return_value = False
     assert d.run() is True
     d.open_link.assert_not_called()
     assert self.state()['unfinished'] is False
@@ -411,7 +411,7 @@ class TestShuttingTheJetsonDown(OpenpilotTest):
     self.request = self.tmp / 'shutdown'
     self.patch(gadget, 'SHUTDOWN_REQUEST', self.request)
     self.request.write_text(json.dumps({'reason': 'car battery'}))
-    self.d = provision.ProvisioningRun(self.jl)
+    self.d = provision.ProvisioningRun(self.parts)
     self.d.client = mock.Mock()
     self.wait = self.patch(gadget, 'wait_for_host', return_value=True)
 

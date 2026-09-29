@@ -482,7 +482,7 @@ class JoiningModelState:
       close()
 
 
-def join(jl, cam_w: int, cam_h: int, small) -> JoiningModelState:
+def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
   """The model modeld runs: the small model now, the Jetson once it is there.
   Returns straight away; the join runs in the background.
 
@@ -491,10 +491,10 @@ def join(jl, cam_w: int, cam_h: int, small) -> JoiningModelState:
   what the link will hand back; another geometry is rejected.
   """
   from jetlink.openpilot import link as links
-  op = jl.op
+  op = parts.op
   face = op.model_face()
   ready: dict = {}
-  link = links.Link(jl.log)
+  link = links.Link(parts.log)
 
   def prepare():
     from jetlink.openpilot.warp import prepare_reset, warm
@@ -502,15 +502,15 @@ def join(jl, cam_w: int, cam_h: int, small) -> JoiningModelState:
     # the join thread the bind landed ~3 s later, behind the small model's
     # first frame, and one ignition had a 655 ms frame during the bind
     links.present_early(link, background_thread)
-    cached = jl.spec.load()
+    cached = parts.spec.load()
     if cached is not None:
       img_h, img_w = cached.model_hw
       geometry = (img_w * 2, img_h * 2)
     else:
-      geometry = jl.warps.geometry()[2:]
+      geometry = parts.warps.geometry()[2:]
     try:
       ready['reset_small'] = prepare_reset(small)
-      warp = jl.warps.load(cam_w, cam_h, *geometry)
+      warp = parts.warps.load(cam_w, cam_h, *geometry)
       warm(warp, face.nv12_info(cam_w, cam_h)[3])
     except Exception:
       link.close()
@@ -523,10 +523,10 @@ def join(jl, cam_w: int, cam_h: int, small) -> JoiningModelState:
     warp = ready.get('warp') if ready.get('geometry') == (img_w * 2, img_h * 2) else None
     if warp is None:
       raise RuntimeError('no prepared warp for the server model geometry')
-    return JetlinkModelState(cam_w, cam_h, client, spec, warp, face=face, log=jl.log, event=op.event)
+    return JetlinkModelState(cam_w, cam_h, client, spec, warp, face=face, log=parts.log, event=op.event)
 
   def connect(should_stop=None):
-    return links.open_link(jl, link, should_stop)
+    return links.open_link(parts, link, should_stop)
 
   return JoiningModelState(small, connect, build, prepare, reset_small=lambda: ready['reset_small'](),
-                           progress=jl.progress, engagement=op.engagement, log=jl.log)
+                           progress=parts.progress, engagement=op.engagement, log=parts.log)

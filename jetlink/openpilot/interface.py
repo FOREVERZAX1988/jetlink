@@ -23,6 +23,7 @@ The standard library only: the owner imports this module.
 """
 from __future__ import annotations
 
+import importlib
 import inspect
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -146,6 +147,15 @@ class BuildSide(Protocol):
 @runtime_checkable
 class Openpilot(ModelSide, BuildSide, Protocol):
   """The whole adapter: one object implements every side."""
+
+
+def load_adapter(module: str) -> Openpilot:
+  """The adapter an adapter module makes. An adapter module is the fork's
+  module that holds every openpilot import jetlink needs: its top level
+  imports only the standard library, and it has adapter() -> Openpilot and
+  owner_config() -> OwnerConfig. The entry points that run as their own
+  process (the provisioning run, the warp build) are told its name."""
+  return importlib.import_module(module).adapter()
 
 
 def members(protocol: type) -> dict[str, inspect.Signature | None]:

@@ -157,32 +157,32 @@ def usb_port() -> str | None:
 NO_WARP = "no warp built for this camera"
 
 
-def unavailable(jl) -> str | None:
+def unavailable(parts) -> str | None:
   """Why an enabled link cannot run the large model, or None: a file read and
   a stat, since the UI asks at 5 Hz."""
   error = gadget.gadget_error()
   if error is not None:
     return error
-  return None if jl.warps.built() else NO_WARP
+  return None if parts.warps.built() else NO_WARP
 
 
-def _built_for_the_pick(jl) -> bool:
-  spec = jl.spec.load()
-  selected = jl.models.selected_model()
+def _built_for_the_pick(parts) -> bool:
+  spec = parts.spec.load()
+  selected = parts.models.selected_model()
   return (spec is not None and selected is not None and spec.sha256 == selected['oid']
-          and jl.spec.engine_ready_for(spec.sha256))
+          and parts.spec.engine_ready_for(spec.sha256))
 
 
-def ready(jl) -> bool:
+def ready(parts) -> bool:
   """Can the large model run right now? Params only, what the UI calls
   'compiled': the provisioning has already recorded the answer."""
-  return jl.enabled() and unavailable(jl) is None and _built_for_the_pick(jl)
+  return parts.enabled() and unavailable(parts) is None and _built_for_the_pick(parts)
 
 
-def unavailable_reason(jl) -> str | None:
+def unavailable_reason(parts) -> str | None:
   """For someone who asked for the link only: with it off, a device that
   cannot present the gadget simply does not offer the feature."""
-  return unavailable(jl) if jl.enabled() else None
+  return unavailable(parts) if parts.enabled() else None
 
 
 # -- the snapshot ----------------------------------------------------------------
@@ -239,21 +239,21 @@ class Status(NamedTuple):
     return 'failed'
 
 
-def read(jl) -> Status:
+def read(parts) -> Status:
   """ready() and unavailable_reason() as one pass: each file is read once."""
-  enabled = jl.enabled()
-  reason = unavailable(jl) if enabled else None
+  enabled = parts.enabled()
+  reason = unavailable(parts) if enabled else None
   return Status(
     enabled=enabled,
-    mode=jl.settings.mode(),
+    mode=parts.settings.mode(),
     transport=link_transport(),
-    present=jl.presence.present(),
+    present=parts.presence.present(),
     port=usb_port(),
-    ready=enabled and reason is None and _built_for_the_pick(jl),
+    ready=enabled and reason is None and _built_for_the_pick(parts),
     reason=reason,
-    progress=jl.progress.read(),
-    model=jl.models.selected_model_name(),
-    default_model=jl.models.default_model_name(),
+    progress=parts.progress.read(),
+    model=parts.models.selected_model_name(),
+    default_model=parts.models.default_model_name(),
   )
 
 

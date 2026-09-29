@@ -195,7 +195,7 @@ def connect_patiently(link: Link):
 
 # -- making the Jetson ready ------------------------------------------------------
 
-def identity(jl, entry: dict) -> tuple[str, int]:
+def identity(parts, entry: dict) -> tuple[str, int]:
   """The picked model's sha256 and byte count.
 
   From the catalog model's LFS pointer, so the comma can name the model
@@ -206,8 +206,8 @@ def identity(jl, entry: dict) -> tuple[str, int]:
   sha256, nbytes = entry.get('oid'), entry.get('size')
   if sha256 and nbytes:
     return sha256, int(nbytes)
-  jl.progress.report('connect', 0.0, 'looking up the model')
-  return jl.models.resolve_pointer(entry['ref'])
+  parts.progress.report('connect', 0.0, 'looking up the model')
+  return parts.models.resolve_pointer(entry['ref'])
 
 
 # What has already been hashed in this process, keyed on the file as it was
@@ -247,7 +247,7 @@ def verified_upload(log, model_path: Path | None, sha256: str, nbytes: int) -> P
   return model_path
 
 
-def ensure(jl, client, sha256: str, nbytes: int, model_path: Path | None, *,
+def ensure(parts, client, sha256: str, nbytes: int, model_path: Path | None, *,
            progress=None, should_stop=None, build_timeout: float = BUILD_TIMEOUT):
   """Make the server ready for this model and remember what it answered.
 
@@ -262,15 +262,15 @@ def ensure(jl, client, sha256: str, nbytes: int, model_path: Path | None, *,
   try:
     spec = ask(onnx_path=None)
   except EngineMissing:
-    upload = verified_upload(jl.log, model_path, sha256, nbytes)
+    upload = verified_upload(parts.log, model_path, sha256, nbytes)
     if upload is None:
       raise
     spec = ask(onnx_path=upload)
-  jl.spec.store(spec)
+  parts.spec.store(spec)
   return spec
 
 
-def open_link(jl, link: Link, should_stop=None):
+def open_link(parts, link: Link, should_stop=None):
   """Get a client and a spec. Link IO only, so it is safe off modeld's thread;
   everything that touches tinygrad stays in the joining state's build.
 
@@ -287,7 +287,7 @@ def open_link(jl, link: Link, should_stop=None):
   """
   from jetlink.client import EngineMissing
 
-  selected = jl.models.selected_model()
+  selected = parts.models.selected_model()
   if selected is None:
     raise RuntimeError('no large model has been picked yet')
 
@@ -296,24 +296,24 @@ def open_link(jl, link: Link, should_stop=None):
   client = connect_patiently(link)
   try:
     hello = client.hello(timeout=10.0)
-    jl.log.warning("jetlink: %s trt %s, engine %s, loaded %s",
+    parts.log.warning("jetlink: %s trt %s, engine %s, loaded %s",
                    hello.get('device'), hello.get('trt_version'),
                    hello.get('engine_state'), str(hello.get('loaded'))[:16])
-    sha256, nbytes = identity(jl, selected)
-    if not jl.spec.engine_ready_for(sha256):
-      jl.log.warning("jetlink: %s is not built yet, building it with the small model driving",
+    sha256, nbytes = identity(parts, selected)
+    if not parts.spec.engine_ready_for(sha256):
+      parts.log.warning("jetlink: %s is not built yet, building it with the small model driving",
                      selected.get('name', sha256[:16]))
     try:
       # normally one round trip, since the provisioning run left the engine loaded. A
       # server that restarted reloads from the plan cache, 13 to 25 s; one
       # that has never seen this model builds it, 102 to 294 s
-      spec = ensure(jl, client, sha256, nbytes, jl.models.shipped_model_path(),
-                    progress=jl.progress.report_with_eta, should_stop=should_stop)
+      spec = ensure(parts, client, sha256, nbytes, parts.models.shipped_model_path(),
+                    progress=parts.progress.report_with_eta, should_stop=should_stop)
     except EngineMissing:
       # neither end has the bytes. Fetching them needs the internet and a
       # gigabyte of it, which is a parked job; clear the record so the next
       # parked period provisions again
-      jl.spec.clear_ready()
+      parts.spec.clear_ready()
       raise
     client.deadline = INFERENCE_TIMEOUT
     return client, spec

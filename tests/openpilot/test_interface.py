@@ -72,12 +72,12 @@ class TestTheContract(unittest.TestCase):
   def test_every_side_is_as_pinned(self):
     for name, expected in SIDES.items():
       with self.subTest(name):
-        self.assertEqual(described(getattr(jo, name)), expected)
+        self.assertEqual(described(getattr(interface, name)), expected)
 
   def test_the_data_it_hands_over_is_as_pinned(self):
     for name, expected in FIELDS.items():
       with self.subTest(name):
-        cls = getattr(jo, name)
+        cls = getattr(interface, name)
         self.assertEqual([f.name for f in dataclasses.fields(cls)], expected)
         self.assertTrue(cls.__dataclass_params__.frozen, 'handed between processes and threads; nobody may change it')
 
@@ -113,8 +113,8 @@ class TestConformance(unittest.TestCase):
       def camera(self): ...
       def warp_path(self, cam_w, cam_h, model_w, model_h): ...
 
-    self.assertEqual(jo.conformance(Reader(), jo.StatusSide), [])
-    self.assertIn('put: missing', jo.conformance(Reader(), jo.WorkerSide))
+    self.assertEqual(jo.conformance(Reader(), interface.StatusSide), [])
+    self.assertIn('put: missing', jo.conformance(Reader(), interface.WorkerSide))
 
   def test_a_missing_member_is_named(self):
     del self.op.catalog_selector

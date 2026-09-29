@@ -36,9 +36,9 @@ WAKE_TIMEOUT = 20.0
 
 
 class ProvisioningRun:
-  def __init__(self, jl):
-    self.jl = jl
-    self.log = jl.log
+  def __init__(self, parts):
+    self.parts = parts
+    self.log = parts.log
     self.client = None
     self.stop = False
     self.fetch_failed = False
@@ -90,13 +90,13 @@ class ProvisioningRun:
     if self.fetch_failed:
       return None
     try:
-      path = self.jl.models.fetch_shipped_model(
-        progress=lambda frac: self.jl.progress.report('download', frac, 'downloading the large model'),
+      path = self.parts.models.fetch_shipped_model(
+        progress=lambda frac: self.parts.progress.report('download', frac, 'downloading the large model'),
         should_stop=lambda: self.stop,
       )
     except Exception:
       self.log.exception("jetlink: could not fetch the large model")
-      self.jl.progress.report('failed', 1.0, 'could not download the large model')
+      self.parts.progress.report('failed', 1.0, 'could not download the large model')
       # one attempt per run; retrying a gigabyte on a loop is worse than staying small
       self.fetch_failed = True
       return None
@@ -112,29 +112,29 @@ class ProvisioningRun:
     keeps its own copy of every ONNX and never prunes it.
     """
     from jetlink.client import EngineMissing
-    jl = self.jl
-    entry = jl.models.selected_model()
+    parts = self.parts
+    entry = parts.models.selected_model()
     if entry is None:
       # no catalog yet; not an error
-      jl.spec.clear_ready()
-      jl.progress.clear()
+      parts.spec.clear_ready()
+      parts.progress.clear()
       return False
-    sha256, nbytes = link.identity(jl, entry)
+    sha256, nbytes = link.identity(parts, entry)
 
     # only needed if the server turns out not to have this model; None is a
     # legitimate state here, see EngineMissing below
-    model_path = jl.models.shipped_model_path()
+    model_path = parts.models.shipped_model_path()
 
     self.log.warning("jetlink: provisioning %s (%d MB, sha %s)",
                      entry.get('name', sha256[:16]), nbytes >> 20, sha256[:16])
-    jl.progress.report('connect', 0.0, 'talking to the accelerator')
+    parts.progress.report('connect', 0.0, 'talking to the accelerator')
 
     hello = self.client.hello(timeout=10.0)
     self.note_sleep_after(hello)
     self.log.warning("jetlink: server %s trt %s", hello.get('device'), hello.get('trt_version'))
     try:
-      spec = link.ensure(jl, self.client, sha256, nbytes, model_path,
-                         progress=jl.progress.report_with_eta, should_stop=lambda: self.stop)
+      spec = link.ensure(parts, self.client, sha256, nbytes, model_path,
+                         progress=parts.progress.report_with_eta, should_stop=lambda: self.stop)
     except EngineMissing:
       # the server has nothing to build from, and neither have we: fetch the
       # model and hand it over in this run. The owner lends the link for the
@@ -144,10 +144,10 @@ class ProvisioningRun:
         raise
       # a download of minutes can outlast the session; a hello starts a new one
       self.client.hello(timeout=10.0)
-      spec = link.ensure(jl, self.client, sha256, nbytes, model_path,
-                         progress=jl.progress.report_with_eta, should_stop=lambda: self.stop)
+      spec = link.ensure(parts, self.client, sha256, nbytes, model_path,
+                         progress=parts.progress.report_with_eta, should_stop=lambda: self.stop)
 
-    jl.progress.report('ready', 1.0, 'engine ready')
+    parts.progress.report('ready', 1.0, 'engine ready')
     self.log.warning("jetlink: engine ready for %s", spec.sha256[:16])
     return True
 
@@ -172,10 +172,10 @@ class ProvisioningRun:
 
   def has_work(self) -> bool:
     """Is there a reason to wake the Jetson? Only things the link can fix count."""
-    spec = self.jl.spec.load()
-    if spec is None or not self.jl.spec.engine_ready_for(spec.sha256):
+    spec = self.parts.spec.load()
+    if spec is None or not self.parts.spec.engine_ready_for(spec.sha256):
       return True
-    selected = self.jl.models.selected_model()
+    selected = self.parts.models.selected_model()
     return selected is not None and selected.get('oid') != spec.sha256
 
   def shutdown_jetson(self, reason: str) -> None:
@@ -225,7 +225,7 @@ class ProvisioningRun:
   def run(self) -> bool:
     """One provisioning round. True when there is nothing left to do."""
     # the setting alone, as the owner that started this run reads it
-    if self.jl.settings.mode() == 'off':
+    if self.parts.settings.mode() == 'off':
       return True
 
     reason = gadget.pending_shutdown()
@@ -235,7 +235,7 @@ class ProvisioningRun:
 
     # without a warp for this camera the engine would never run; the offroad
     # alert says so, and waking the Jetson to build one would not change it
-    if not self.jl.warps.built():
+    if not self.parts.warps.built():
       self.log.warning("jetlink: no warp built for this camera, nothing to provision for")
       self.note_state(unfinished=False)
       return True
@@ -256,7 +256,7 @@ class ProvisioningRun:
       finished = self.provision()
     except Exception:
       self.log.exception("jetlink: provisioning failed")
-      self.jl.progress.report('failed', 1.0, 'see the log')
+      self.parts.progress.report('failed', 1.0, 'see the log')
     finally:
       self.note_state(unfinished=not finished)
       self.close_link()
@@ -265,11 +265,12 @@ class ProvisioningRun:
 
 def main(argv: list[str] | None = None) -> None:
   """One provisioning round over the fork's adapter, as the owner starts it."""
-  from jetlink.openpilot import bind, load_adapter
+  from jetlink.openpilot.interface import load_adapter
+  from jetlink.openpilot.parts import for_this_process
   p = argparse.ArgumentParser(prog='python -m jetlink.openpilot.provision', description=main.__doc__)
   p.add_argument('--adapter', required=True, help="the fork's adapter module")
   args = p.parse_args(argv)
-  d = ProvisioningRun(bind(load_adapter(args.adapter)))
+  d = ProvisioningRun(for_this_process(load_adapter(args.adapter)))
   # the owner stops this at the onroad transition; closing the link properly is
   # what keeps the driver healthy for modeld
   signal.signal(signal.SIGTERM, d.request_stop)

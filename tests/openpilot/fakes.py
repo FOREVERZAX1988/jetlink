@@ -267,6 +267,8 @@ class OpenpilotTest(unittest.TestCase):
     p.start()
     self.addCleanup(p.stop)
     self.jl = bind(self.op)
+    # what jetlink keeps behind the API, for the tests of its internals
+    self.parts = self.jl._parts
 
   def patch(self, target, name, *args, **kwargs):
     """mock.patch.object, undone after the test; the mock it made."""

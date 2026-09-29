@@ -24,6 +24,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import jetlink.openpilot as jo
+from jetlink.openpilot import interface
 from jetlink.comma import gadget
 from jetlink.openpilot import joining
 from jetlink.spec import ModelSpec
@@ -38,7 +39,7 @@ JETLINK = {
   'prepare': '()',
   'attach': '(small, cam_w, cam_h)',
   'shutdown': "(reason='', timeout=25.0)",
-  'extends_catalog': '()',
+  'should_extend_catalog': '()',
   'extend_catalog': '(catalog)',
 }
 
@@ -49,11 +50,29 @@ def plain(fn) -> str:
                          return_annotation=sig.empty))
 
 
+# what the package exports: the contract, and nothing jetlink keeps to itself
+EXPORTS = ['API', 'MODES', 'STATES', 'Jetlink', 'Keys', 'ModelFace', 'Openpilot', 'OwnerConfig', 'Status', 'bind',
+           'conformance']
+
+
 class TestTheSurface(OpenpilotTest):
   def test_the_methods_the_fork_calls(self):
     for name, expected in JETLINK.items():
       with self.subTest(name):
         self.assertEqual(plain(getattr(self.jl, name)), expected)
+
+  def test_a_jetlink_shows_the_fork_nothing_else(self):
+    # a part the fork could reach would become API without a bump noticing
+    self.assertEqual({n for n in dir(self.jl) if not n.startswith('_')}, set(JETLINK))
+
+  def test_the_package_exports_the_contract(self):
+    self.assertEqual(sorted(jo.__all__), sorted(EXPORTS))
+    for name in EXPORTS:
+      self.assertTrue(hasattr(jo, name), name)
+
+  def test_what_the_ui_calls_on_a_status(self):
+    self.assertEqual(plain(jo.Status.icon), '(self, started, model_seen, running_big, state)')
+    self.assertIsInstance(jo.Status.active_model, property)
 
   def test_the_entry_points_the_fork_names(self):
     from jetlink.openpilot import owner, provision, warp
@@ -61,18 +80,18 @@ class TestTheSurface(OpenpilotTest):
     for module in (provision, warp):
       self.assertEqual(plain(module.main), '(argv=None)', module)
     self.assertEqual(plain(jo.bind), '(op)')
-    self.assertEqual(plain(jo.load_adapter), '(module)')
+    self.assertEqual(plain(interface.load_adapter), '(module)')
 
   def test_bind_points_the_comma_layers_log_at_the_adapters(self):
     # a heavy process's lines belong in the drive's log
     self.assertIs(gadget.log, self.op.log)
     self.assertIs(gadget.root.log, self.op.log)
     self.assertIsInstance(self.jl, jo.Jetlink)
-    self.assertIs(self.jl.op, self.op)
+    self.assertIs(self.parts.op, self.op)
 
   def test_an_adapter_module_makes_its_adapter(self):
     with mock.patch.dict('os.environ', {'JETLINK_FAKE_ROOT': str(self.tmp)}):
-      op = jo.load_adapter('tests.openpilot.fakes')
+      op = interface.load_adapter('tests.openpilot.fakes')
     self.assertIsInstance(op, fakes.FakeOpenpilot)
     self.assertEqual(op.root, self.tmp)
 
@@ -89,7 +108,7 @@ class LenderFailureTest(OpenpilotTest):
     self.patch(gadget, 'GADGET_STATUS', built)
     self.patch(gadget, 'LENDER_STATUS', self.tmp / 'jetlink-lender')
     self.patch(gadget, 'link_configured', return_value=True)
-    self.patch(self.jl.warps, 'built', return_value=True)
+    self.patch(self.parts.warps, 'built', return_value=True)
     with mock.patch('jetlink.openpilot.warp.init_device'):
       gadget.note_lender_error('address in use')
       self.assertEqual(self.jl.status().reason, 'the lender could not listen: address in use')
@@ -112,14 +131,14 @@ class LoadTest(OpenpilotTest):
     """prepare() down its yes path, with nothing real behind it."""
     with mock.patch.object(self.jl, 'enabled', return_value=True), \
          mock.patch.object(gadget, 'link_configured', return_value=True), \
-         mock.patch.object(self.jl.warps, 'built', return_value=True):
+         mock.patch.object(self.parts.warps, 'built', return_value=True):
       self.assertTrue(self.jl.prepare())
     self.init_device.assert_called_once_with(self.op.log)
 
   def test_no_warp_is_no_before_the_gpu_comes_up(self):
     with mock.patch.object(self.jl, 'enabled', return_value=True), \
          mock.patch.object(gadget, 'link_configured', return_value=True), \
-         mock.patch.object(self.jl.warps, 'built', return_value=False):
+         mock.patch.object(self.parts.warps, 'built', return_value=False):
       self.assertFalse(self.jl.prepare())
     self.init_device.assert_not_called()
     self.assertTrue(self.op.log.has('no warp built for this camera, staying on the small model'))
@@ -157,7 +176,7 @@ class LoadTest(OpenpilotTest):
     joined = SimpleNamespace(client=object())
     with mock.patch.object(joining, 'join', return_value=joined) as join:
       model = self.jl.attach(self.small, 1928, 1208)
-    join.assert_called_once_with(self.jl, 1928, 1208, self.small)
+    join.assert_called_once_with(self.parts, 1928, 1208, self.small)
     self.assertIs(model, joined)
 
   def test_a_failed_build_drives_the_small_model_and_says_so(self):
@@ -188,18 +207,18 @@ class TestTheJoinFactory(OpenpilotTest):
     self.present = self.patch(link, 'present_early')
     self.reset = self.patch(warp, 'prepare_reset')
     self.warm = self.patch(warp, 'warm')
-    self.loaded = self.patch(self.jl.warps, 'load')
+    self.loaded = self.patch(self.parts.warps, 'load')
     # the join thread and the watcher are the joining state's; not here
     self.patch(joining.JoiningModelState, '_join_loop', lambda s: None)
     self.patch(joining.JoiningModelState, '_watch_engagement', lambda s: None)
 
   def join(self):
-    s = joining.join(self.jl, 1928, 1208, self.small)
+    s = joining.join(self.parts, 1928, 1208, self.small)
     self.addCleanup(s.close)
     return s
 
   def test_the_warp_is_sized_from_the_record(self):
-    self.jl.spec.store(spec(model_hw=(64, 128)))
+    self.parts.spec.store(spec(model_hw=(64, 128)))
     self.join()
     self.loaded.assert_called_once_with(1928, 1208, 256, 128)
     self.warm.assert_called_once_with(self.loaded.return_value, fakes.nv12_info(1928, 1208)[3])
@@ -219,11 +238,11 @@ class TestTheJoinFactory(OpenpilotTest):
   def test_a_warp_that_will_not_load_lets_the_link_go_and_raises(self):
     self.loaded.side_effect = RuntimeError('stale warp')
     with self.assertRaisesRegex(RuntimeError, 'stale warp'):
-      joining.join(self.jl, 1928, 1208, self.small)
+      joining.join(self.parts, 1928, 1208, self.small)
 
   def test_it_runs_the_adapters_face_and_reports_through_jetlink(self):
     s = self.join()
-    self.assertIs(s._progress, self.jl.progress)
+    self.assertIs(s._progress, self.parts.progress)
     self.assertEqual(s._engagement, self.op.engagement)
     client = mock.Mock()
     client.t.link_info.return_value = {'kind': 'usb'}
@@ -282,7 +301,7 @@ class ShuttingTheJetsonDown(OpenpilotTest):
 
   def shutdown(self, mode='usb', present=True, requested=True, taken=True):
     self.op.set_mode(mode)
-    with mock.patch.object(self.jl.presence, 'present', return_value=present), \
+    with mock.patch.object(self.parts.presence, 'present', return_value=present), \
          mock.patch.object(gadget, 'request_shutdown', return_value=requested) as request, \
          mock.patch.object(self.jl, '_await_shutdown', return_value=taken) as wait:
       self.jl._request_shutdown('car battery', 3.0)
@@ -344,8 +363,8 @@ class TestExtendsCatalog(OpenpilotTest):
   def extends(self, chestnut=False, mode='off'):
     self.op.chestnut = chestnut
     self.op.set_mode(mode)
-    self.jl._chestnut = None
-    return self.jl.extends_catalog()
+    self.parts._chestnut = None
+    return self.jl.should_extend_catalog()
 
   def test_without_a_chestnut_it_is_extended_whatever_the_setting(self):
     self.assertTrue(self.extends(mode='off'))
