@@ -115,26 +115,16 @@ with_trt() {  # with_trt VERSION MAJOR: TensorRT already on the host
 
 answers() { printf '%b' "$1" >/tmp/answers; }
 
-piped() {  # piped "answers" [installer args...]: as curl | bash runs it, the script on stdin
-  local a=$1
-  shift
-  if [ -n "$a" ]; then
-    answers "$a"
-    JETLINK_INPUT=/tmp/answers bash </src/install.sh -s -- "$@" >"$OUT" 2>&1
+# run_installer curl|checkout "answers" [installer args...]: as curl | bash
+# runs it, the script on stdin, or from the checkout; "" means no terminal
+run_installer() {
+  local how=$1 input=''
+  if [ -n "$2" ]; then answers "$2"; input=/tmp/answers; fi
+  shift 2
+  if [ "$how" = curl ]; then
+    JETLINK_INPUT=$input bash -s -- "$@" <"$SRC/install.sh" >"$OUT" 2>&1
   else
-    bash </src/install.sh -s -- "$@" >"$OUT" 2>&1
-  fi
-  RC=$?
-}
-
-install() {  # install "answers" [installer args...]: from the checkout; "" means no terminal
-  local a=$1
-  shift
-  if [ -n "$a" ]; then
-    answers "$a"
-    JETLINK_INPUT=/tmp/answers bash "$SRC/install.sh" "$@" >"$OUT" 2>&1
-  else
-    bash "$SRC/install.sh" "$@" >"$OUT" 2>&1 </dev/null
+    JETLINK_INPUT=$input bash "$SRC/install.sh" "$@" </dev/null >"$OUT" 2>&1
   fi
   RC=$?
 }
@@ -155,13 +145,19 @@ cli() {  # cli ARGS...: the jetlink command, as installed
   RC=$?
 }
 
+# scenario "name": the one before shows its output if it failed, and this one
+# starts with an empty command log
+FAILED_BEFORE=0
 scenario() {
-  SCENARIO="$1"
+  show_on_failure
+  : >"$FAKE_LOG"
+  FAILED_BEFORE=$FAILED SCENARIO="$1"
   printf '  %s\n' "$1"
 }
 
 show_on_failure() {
-  if [ "$FAILED" -gt "$1" ] || [ -n "${SHOW_OUTPUT:-}" ]; then
+  [ -n "$SCENARIO" ] || return 0
+  if [ "$FAILED" -gt "$FAILED_BEFORE" ] || [ -n "${SHOW_OUTPUT:-}" ]; then
     echo "    --- installer output ---"
     sed 's/^/    | /' "$OUT"
     echo "    --- commands run ---"
@@ -229,13 +225,16 @@ tar -czf /tmp/dev/jetlink-server-0.12.0-dev-linux-aarch64.tar.gz -C /tmp/dev jet
 echo "installer scenarios on $PRETTY_NAME"
 # NVIDIA's package source for this Ubuntu, as the installer picks it
 DIST="ubuntu${VERSION_ID//./}"
+# the TensorRT build a PC gets, which has to be the one build-linux.sh
+# compiles the x86_64 server against
+PC_TRT="$(sed -n 's/^PC_TRT=//p' "$SRC/install.sh")"
+PC_TRT_INSTALL="$(apt_install "libnvinfer11=$PC_TRT libnvonnxparsers11=$PC_TRT libnvinfer-plugin11=$PC_TRT")"
 
-# ---------------------------------------------------------------------------
 scenario "JetPack 7.2 Jetson, always-on power, fresh install"
-reset_box; jetson 39 2.1; f=$FAILED
+reset_box; jetson 39 2.1
 # questions: power (1 = always on), let the comma shut it down, the status
 # page's port (Enter), go ahead
-piped '1\ny\n\ny\n'
+run_installer curl '1\ny\n\ny\n'
 expect_rc 0
 expect_out "Orin Nano"
 expect_out "JetPack 7 (Jetson Linux 39.2.1)"
@@ -297,11 +296,8 @@ expect_ran "jetlink-server models --help"
 jetlink run --log-level debug >/dev/null 2>&1
 expect_ran "jetlink-server --usb --backend trt --cache /mnt/data/jetlink --sleep-after 120 --status-port 5600 --poweroff --log-level debug"
 systemctl start jetlink-server
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "update keeps the answers and asks nothing"
-: >"$FAKE_LOG"; f=$FAILED
 # a native server that sleeps, with the awake lock it makes at start
 : >"$LOCK" && chmod 644 "$LOCK"
 cli update
@@ -329,11 +325,8 @@ expect_not_ran "$(apt_install "libnvinfer10")"
 expect_ran "apt-cache policy libnvinfer10"
 expect_link /opt/jetlink/current /opt/jetlink/0.10.0
 expect_no_file /opt/jetlink/previous
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "jetlink caffeinate holds the server awake: a command, -t, until stopped"
-: >"$FAKE_LOG"; f=$FAILED
 lock_free() { flock --exclusive --nonblock "$LOCK" true; }
 # a command: held while it runs, and its exit status comes back
 jetlink caffeinate sh -c "flock -xn $LOCK true && echo free || echo held; exit 7" >"$OUT" 2>&1; RC=$?
@@ -367,25 +360,19 @@ rm -f "$LOCK"
 cli caffeinate
 expect_rc 1
 expect_out "The server is not running natively; nothing to hold."
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "a second run offers to keep the settings"
-: >"$FAKE_LOG"; f=$FAILED
-piped 'y\n'
+run_installer curl 'y\n'
 expect_rc 0
 expect_out "Jetlink is already installed. Keep your current settings and update it?"
 expect_no_out "How is the Jetson powered in the car?"
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "a failed update puts the previous server back"
-: >"$FAKE_LOG"; f=$FAILED
 echo '# the previous settings' >>/etc/jetlink/server.env
 echo "# 0.10.0's own unit" >>/opt/jetlink/0.10.0/share/jetlink/systemd/jetlink-server.service
 # the new server never gets as far as waiting for the comma
 export FAKE_SERVER_BROKEN=1
-piped '' --update --ref v0.9.0
+run_installer curl '' --update --ref v0.9.0
 expect_rc 1
 # systemd's third restart of it, seen as it is logged
 expect_in /var/log/jetlink-install.log "the server keeps restarting"
@@ -397,12 +384,10 @@ expect_in "$UNITS/jetlink-server.service" "# 0.10.0's own unit"
 check "the previous server was not started again" test "$(grep -c "systemctl restart jetlink-server" "$FAKE_LOG")" -ge 2
 refute "the unit was left stopped" test -f "$FAKE_STATE/stopped-jetlink-server"
 unset FAKE_SERVER_BROKEN
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "a fresh install has no server to stop"
-reset_box; jetson 39 2.1; f=$FAILED
-piped '' --yes
+reset_box; jetson 39 2.1
+run_installer curl '' --yes
 expect_rc 0
 expect_not_ran "systemctl stop jetlink-server"
 expect_no_file /etc/jetlink/server.env.prev
@@ -410,24 +395,20 @@ expect_no_file /etc/jetlink/server.env.prev
 expect_in /etc/jetlink/install.conf "JETLINK_POWER=always"
 expect_in /etc/jetlink/install.conf "JETLINK_POWEROFF_WITH_COMMA=1"
 expect_in /etc/jetlink/server.env "JETLINK_STATUS_PORT=5600"
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "a server that cannot use the GPU fails with advice, before anything changes"
-reset_box; jetson 39 2.1; f=$FAILED
-FAKE_GPU_BROKEN=1 piped '' --yes
+reset_box; jetson 39 2.1
+FAKE_GPU_BROKEN=1 run_installer curl '' --yes
 expect_rc 1
 expect_out "TensorRT cannot run on this computer."
 expect_out "The Jetlink server cannot use the GPU: no CUDA driver: libcuda.so.1: cannot open shared object file"
 expect_no_out "ort: not usable"
 expect_no_file "$UNITS/jetlink-server.service"
 expect_no_file /opt/jetlink/current
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "curl | bash installs the newest release, as GitHub's API names it"
-reset_box; jetson 39 2.1; f=$FAILED
-FAKE_LATEST=v0.9.0 piped '' --yes
+reset_box; jetson 39 2.1
+FAKE_LATEST=v0.9.0 run_installer curl '' --yes
 expect_rc 0
 # the API's answer, not the highest tag
 expect_out "Getting Jetlink (v0.9.0)"
@@ -439,11 +420,8 @@ expect_in /etc/jetlink/install.conf "JETLINK_VERSION=v0.9.0"
 expect_in /etc/jetlink/server.env "JETLINK_SERVER_VERSION=0.9.0"
 jetlink status >/tmp/status.txt 2>&1
 expect_in /tmp/status.txt "v0.9.0 (follows releases)"
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "jetlink update moves to the next release and keeps the one before"
-: >"$FAKE_LOG"; f=$FAILED
 cli update
 expect_rc 0
 expect_out "Getting the newest Jetlink (v0.10.0)"
@@ -452,15 +430,12 @@ expect_link /opt/jetlink/current /opt/jetlink/0.10.0
 expect_link /opt/jetlink/previous /opt/jetlink/0.9.0
 expect_in /etc/jetlink/install.conf "JETLINK_REF=latest"
 expect_in /etc/jetlink/install.conf "JETLINK_VERSION=v0.10.0"
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "an install that saved main before 0.5.0 follows releases; no API, so the tags"
-: >"$FAKE_LOG"; f=$FAILED
 # what the installer wrote before 0.5.0: its default, main, and no version
 sed -i -e 's/^JETLINK_REF=.*/JETLINK_REF=main/' -e '/^JETLINK_VERSION=/d' /etc/jetlink/install.conf
 unset FAKE_LATEST
-piped '' --update
+run_installer curl '' --update
 expect_rc 0
 expect_out "Jetlink now follows releases; for development builds, use --ref main."
 expect_ran "releases/latest"
@@ -468,13 +443,10 @@ expect_ran "releases/download/v0.10.0/jetlink-server-0.10.0-linux-aarch64.tar.gz
 expect_not_ran "0.11.0rc1"
 expect_in /etc/jetlink/install.conf "JETLINK_REF=latest"
 expect_in /etc/jetlink/install.conf "JETLINK_VERSION=v0.10.0"
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "--ref main pins development builds from the edge prerelease, and an update keeps them"
-: >"$FAKE_LOG"; f=$FAILED
 export FAKE_LATEST=v0.10.0
-piped '' --update --ref main
+run_installer curl '' --update --ref main
 expect_rc 0
 expect_ran "releases/download/edge/jetlink-server-edge-linux-aarch64.tar.gz"
 expect_in /etc/jetlink/install.conf "JETLINK_REF=main"
@@ -484,17 +456,14 @@ expect_link /opt/jetlink/previous /opt/jetlink/0.10.0
 # older than the one before: gone
 expect_no_file /opt/jetlink/0.9.0
 : >"$FAKE_LOG"
-piped '' --update
+run_installer curl '' --update
 expect_rc 0
 expect_no_out "now follows releases"
 expect_ran "releases/download/edge/jetlink-server-edge-linux-aarch64.tar.gz"
 expect_in /etc/jetlink/install.conf "JETLINK_REF=main"
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "--ref vX.Y.Z pins a release; --ref latest follows them again"
-: >"$FAKE_LOG"; f=$FAILED
-piped '' --update --ref v0.9.0
+run_installer curl '' --update --ref v0.9.0
 expect_rc 0
 # a server that sleeps and has no awake lock (from before it) stops first
 expect_before "systemctl stop jetlink-server" "releases/download/v0.9.0"
@@ -502,72 +471,61 @@ expect_not_ran "[held awake]"
 expect_ran "releases/download/v0.9.0/jetlink-server-0.9.0-linux-aarch64.tar.gz"
 expect_in /etc/jetlink/install.conf "JETLINK_REF=v0.9.0"
 : >"$FAKE_LOG"
-piped '' --update
+run_installer curl '' --update
 expect_rc 0
 expect_ran "releases/download/v0.9.0/"
 : >"$FAKE_LOG"
-piped '' --update --ref latest
+run_installer curl '' --update --ref latest
 expect_rc 0
 expect_ran "releases/download/v0.10.0/"
 expect_in /etc/jetlink/install.conf "JETLINK_REF=latest"
 expect_link /opt/jetlink/previous /opt/jetlink/0.9.0
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "no answer from GitHub: an update stays put, a first install stops"
-: >"$FAKE_LOG"; f=$FAILED
 unset FAKE_LATEST
 export JETLINK_REPO_URL=file:///nonexistent
-piped '' --update
+run_installer curl '' --update
 expect_rc 0
 expect_out "Could not look up the newest release; staying on v0.10.0."
 expect_ran "releases/download/v0.10.0/"
 reset_box; jetson 39 2.1
 unset FAKE_LATEST
 export JETLINK_REPO_URL=file:///nonexistent
-piped '' --yes
+run_installer curl '' --yes
 expect_rc 1
 expect_out "Could not find the newest Jetlink release."
 expect_no_file /etc/jetlink
 expect_not_ran "apt-get"
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "a download cut off part way is tried again"
-reset_box; jetson 39 2.1; f=$FAILED
-FAKE_DOWNLOAD_FAILS=2 piped '' --yes
+reset_box; jetson 39 2.1
+FAKE_DOWNLOAD_FAILS=2 run_installer curl '' --yes
 expect_rc 0
 expect_out "Downloading the Jetlink server (v0.10.0)"
 expect_in /var/log/jetlink-install.log "the download was interrupted; trying again"
 expect_in /etc/jetlink/server.env "JETLINK_SERVER_VERSION=0.10.0"
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "a damaged download is refused"
-reset_box; jetson 39 2.1; f=$FAILED
-FAKE_BAD_SUM=1 piped '' --yes
+reset_box; jetson 39 2.1
+FAKE_BAD_SUM=1 run_installer curl '' --yes
 expect_rc 1
 expect_out "its checksum does not match"
 expect_no_file /opt/jetlink/current
 expect_no_file "$UNITS/jetlink-server.service"
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "a branch with no ready-made server says how to build one"
-reset_box; jetson 39 2.1; f=$FAILED
-piped '' --yes --ref my-branch
+reset_box; jetson 39 2.1
+run_installer curl '' --yes --ref my-branch
 expect_rc 1
 expect_out "There is no ready-made Jetlink server for my-branch."
 expect_out "scripts/build-linux.sh linux-aarch64"
 expect_no_file /etc/jetlink
 expect_not_ran "apt-get"
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "JetPack 7.2 follows the newest TensorRT, and refuses one too old"
-reset_box; jetson 39 2.1; f=$FAILED
+reset_box; jetson 39 2.1
 with_trt 10.16.2.10-1+cuda13.2 10
-FAKE_TRT10=10.16.3.1-1+cuda13.2 piped '' --yes
+FAKE_TRT10=10.16.3.1-1+cuda13.2 run_installer curl '' --yes
 expect_rc 0
 expect_out "Updating TensorRT to 10.16.3.1"
 expect_ran "apt-get -o DPkg::Lock::Timeout=900 -y install --only-upgrade --no-install-recommends libnvinfer10 libnvonnxparsers10 libnvinfer-plugin10"
@@ -578,17 +536,15 @@ expect_ran "$(apt_install "libnvinfer-plugin10=10.16.3.1-1+cuda13.2")"
 check "wanted the package list fetched once" test "$(grep -c "apt-get .* update" "$FAKE_LOG")" = 1
 reset_box; jetson 39 2.1
 with_trt 10.16.1.1-1+cuda13.2 10
-FAKE_TRT10=10.16.1.1-1+cuda13.2 piped '' --yes
+FAKE_TRT10=10.16.1.1-1+cuda13.2 run_installer curl '' --yes
 expect_rc 1
 expect_out "Jetlink needs 10.16.2.10 or newer"
 expect_no_file "$UNITS/jetlink-server.service"
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "JetPack 6.2 Jetson, switched power"
-reset_box; jetson 36 4.3; f=$FAILED
+reset_box; jetson 36 4.3
 # questions: power (2 = switched), the status page's port (Enter), go ahead (Enter)
-piped '2\n\n\n'
+run_installer curl '2\n\n\n'
 expect_rc 0
 expect_out "JetPack 6 (Jetson Linux 36.4.3)"
 expect_ran "$(apt_install "libnvinfer10 libnvonnxparsers10")"
@@ -602,11 +558,8 @@ expect_in /etc/fstab "/mnt/data/jetlink-swapfile none swap sw 0 0"
 expect_no_file /etc/udev/rules.d/99-jetlink-usb-wakeup.rules
 expect_file "$UNITS/jetlink-server.service.d/20-jetson-clocks.conf"
 expect_in /etc/jetlink/server.env "JETLINK_POWEROFF=''"
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "jetlink setup changes the answers: power, and the status page off"
-: >"$FAKE_LOG"; f=$FAILED
 # questions: power (1 = always on), the comma may shut it down, port 0, go ahead
 answers '1\ny\n0\ny\n'
 JETLINK_INPUT=/tmp/answers jetlink setup >"$OUT" 2>&1; RC=$?
@@ -623,49 +576,45 @@ jetlink status >/tmp/status.txt 2>&1
 expect_not_in /tmp/status.txt "status page"
 # the file an earlier installer wrote for "no" goes; one made by hand stays
 echo "Written by the Jetlink installer: the comma may not power this computer off." >/mnt/data/jetlink/poweroff-dry-run
-piped '' --update
+run_installer curl '' --update
 expect_rc 0
 expect_no_file /mnt/data/jetlink/poweroff-dry-run
 touch /mnt/data/jetlink/poweroff-dry-run
-piped '' --update
+run_installer curl '' --update
 expect_rc 0
 expect_file /mnt/data/jetlink/poweroff-dry-run
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "a power mode that needs a restart says so"
-reset_box; jetson 39 2.1; f=$FAILED
-FAKE_PM_REBOOT=1 piped '' --yes
+reset_box; jetson 39 2.1
+FAKE_PM_REBOOT=1 run_installer curl '' --yes
 expect_rc 0
 expect_out "Restart this computer once"
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "PC with a driver too old for CUDA 13"
-reset_box; pc 575.64.03; f=$FAILED
-piped 'y\n'
+reset_box; pc 575.64.03
+run_installer curl 'y\n'
 expect_rc 0
 expect_out "has NVIDIA driver 575.64.03 and needs 580 or newer"
 expect_ran "ubuntu-drivers install nvidia:580-open"
 expect_out "Restart the computer, then run the installer again"
 expect_no_file /etc/jetlink/server.env
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "PC ready to go"
-reset_box; pc 580.95.05; f=$FAILED
+reset_box; pc 580.95.05
 export FAKE_NO_CURL=1
 # questions: start at boot, the status page's port (Enter), go ahead
-piped 'y\n\ny\n'
+run_installer curl 'y\n\ny\n'
 expect_rc 0
 expect_out "NVIDIA driver 580.95.05"
 expect_no_out "How is the Jetson powered"
-expect_out "Install NVIDIA TensorRT 11.3.0.99 from NVIDIA's package source"
+expect_out "Install NVIDIA TensorRT ${PC_TRT%%-*} from NVIDIA's package source"
+check "install.sh's PC_TRT $PC_TRT is not the build build-linux.sh compiles against" \
+  grep -qF "libnvinfer-headers-dev_${PC_TRT}_amd64.deb" "$SRC/scripts/build-linux.sh"
 check "never installed libcurl4" grep -qE '^apt-get .* install --no-install-recommends .*libcurl4' "$FAKE_LOG"
 expect_ran "https://developer.download.nvidia.com/compute/cuda/repos/$DIST/x86_64/cuda-keyring_1.1-1_all.deb"
 expect_ran "dpkg -i"
 # the CUDA 13 build, by its exact version, and never the meta packages
-expect_ran "$(apt_install "libnvinfer11=11.3.0.99-1+cuda13.4 libnvonnxparsers11=11.3.0.99-1+cuda13.4 libnvinfer-plugin11=11.3.0.99-1+cuda13.4")"
+expect_ran "$PC_TRT_INSTALL"
 refute "installed a TensorRT meta package" grep -qE 'install .*(tensorrt|cuda12\.9)' "$FAKE_LOG"
 # for libcurl4, then again for NVIDIA's new package source
 check "wanted the package list fetched twice" test "$(grep -c "apt-get .* update" "$FAKE_LOG")" = 2
@@ -684,14 +633,11 @@ cli update
 expect_rc 0
 expect_before "releases/download/v0.10.0" "systemctl stop jetlink-server"
 expect_before "jetlink-server backends" "systemctl stop jetlink-server"
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "uninstall removes it, keeps the models, and says how to remove TensorRT"
-: >"$FAKE_LOG"; f=$FAILED
 mkdir -p /var/lib/jetlink/models && echo x >/var/lib/jetlink/models/m.onnx
 # questions: remove?, delete the models?
-install 'y\nn\n' --uninstall
+run_installer checkout 'y\nn\n' --uninstall
 expect_rc 0
 expect_out "Jetlink is removed."
 expect_out "TensorRT stays installed; to remove it: sudo apt remove libnvinfer11 libnvonnxparsers11 libnvinfer-plugin11"
@@ -701,98 +647,82 @@ expect_no_file /usr/local/bin/jetlink
 expect_no_file "$UNITS/jetlink-server.service"
 expect_file /var/lib/jetlink/models/m.onnx
 refute "removed a package" grep -qE '^apt-get .* (remove|purge)' "$FAKE_LOG"
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "Windows (WSL) is allowed, and marked untested"
-reset_box; pc 580.95.05; wsl; f=$FAILED
-piped '' --yes
+reset_box; pc 580.95.05; wsl
+run_installer curl '' --yes
 expect_rc 0
 expect_out "Windows (WSL) support is untested."
 expect_out "usbipd"
-expect_ran "$(apt_install "libnvinfer11=11.3.0.99-1+cuda13.4 libnvonnxparsers11=11.3.0.99-1+cuda13.4 libnvinfer-plugin11=11.3.0.99-1+cuda13.4")"
+expect_ran "$PC_TRT_INSTALL"
 # a Linux driver or CUDA package inside WSL breaks the Windows driver's
 refute "installed CUDA or a driver in WSL" grep -qE 'install .*(cuda |cuda-drivers|cuda-toolkit|nvidia-driver)' "$FAKE_LOG"
 expect_in /etc/jetlink/install.conf "WSL"
 reset_box; pc 575.64.03; wsl
-piped '' --yes
+run_installer curl '' --yes
 expect_rc 1
 expect_out "Update the NVIDIA driver in Windows"
 expect_not_ran "ubuntu-drivers"
 reset_box; pc 580.95.05; wsl
-JETLINK_TEST_SYSTEMD_RUN=/nonexistent piped '' --yes
+JETLINK_TEST_SYSTEMD_RUN=/nonexistent run_installer curl '' --yes
 expect_rc 1
 expect_out "systemd=true"
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "a PC whose package source lacks the server's TensorRT build stops"
-reset_box; pc 580.95.05; f=$FAILED
-FAKE_TRT11_BUILDS="11.3.0.99-1+cuda12.9 11.2.1.2-1+cuda13.3" piped '' --yes
+reset_box; pc 580.95.05
+FAKE_TRT11_BUILDS="11.3.0.99-1+cuda12.9 11.2.1.2-1+cuda13.3" run_installer curl '' --yes
 expect_rc 1
-expect_out "NVIDIA's package source has no TensorRT 11.3.0.99-1+cuda13.4."
+expect_out "NVIDIA's package source has no TensorRT $PC_TRT."
 expect_not_ran "libnvinfer11="
 expect_no_file "$UNITS/jetlink-server.service"
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "dry run changes nothing"
-reset_box; jetson 39 2.1; f=$FAILED
-piped '' --yes --dry-run
+reset_box; jetson 39 2.1
+run_installer curl '' --yes --dry-run
 expect_rc 0
 expect_out "Dry run: stopping here. Nothing was changed."
 expect_no_file /etc/jetlink
 expect_no_file /opt/jetlink
 expect_not_ran "apt-get"
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "JetPack 5 is refused with a way forward"
-reset_box; jetson 35 6.0; f=$FAILED
-install '' --yes
+reset_box; jetson 35 6.0
+run_installer checkout '' --yes
 expect_rc 1
 expect_out "Flash JetPack 7.2.1"
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "a Jetson that cannot deep-sleep defaults to switched power"
-reset_box; jetson 39 2.1; f=$FAILED
+reset_box; jetson 39 2.1
 echo 's2idle' >/tmp/mem-sleep
-piped '' --yes
+run_installer curl '' --yes
 expect_rc 0
 expect_in /etc/jetlink/install.conf "JETLINK_POWER=switched"
 expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=0"
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "no swap on a disk too small for it, said plainly"
-reset_box; jetson 39 2.1; f=$FAILED
-JETLINK_TEST_FREE_GB=20 piped '' --yes
+reset_box; jetson 39 2.1
+JETLINK_TEST_FREE_GB=20 run_installer curl '' --yes
 expect_rc 0
 expect_out "Not enough disk space for 8 GB of swap"
 refute "no swap should be added" grep -q swapfile /etc/fstab
 expect_ran "nvpmodel -m 2"
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "no terminal and no --yes"
-reset_box; jetson 39 2.1; f=$FAILED
-install ''
+reset_box; jetson 39 2.1
+run_installer checkout ''
 expect_rc 1
 expect_out "There is no terminal to ask questions in."
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "--binary installs a server built elsewhere"
-reset_box; jetson 39 2.1; f=$FAILED
+reset_box; jetson 39 2.1
 # from a checkout the installer has nothing to download
-install '' --yes
+run_installer checkout '' --yes
 expect_rc 1
 expect_out "From a checkout, the installer installs a server you built"
-install '' --yes --binary /tmp/releases/v0.10.0/jetlink-server-0.10.0-linux-x86_64.tar.gz
+run_installer checkout '' --yes --binary /tmp/releases/v0.10.0/jetlink-server-0.10.0-linux-x86_64.tar.gz
 expect_rc 1
 expect_out "is for another kind of computer; this one needs a linux-aarch64 build"
-install '' --yes --binary /tmp/releases/v0.10.0/jetlink-server-0.10.0-linux-aarch64.tar.gz
+run_installer checkout '' --yes --binary /tmp/releases/v0.10.0/jetlink-server-0.10.0-linux-aarch64.tar.gz
 expect_rc 0
 expect_out "Install the Jetlink server from /tmp/releases/v0.10.0/jetlink-server-0.10.0-linux-aarch64.tar.gz"
 expect_not_ran "releases/download"
@@ -801,16 +731,14 @@ expect_in /etc/jetlink/install.conf "JETLINK_SOURCE=local"
 expect_in /etc/jetlink/install.conf "JETLINK_VERSION=local"
 # run from the checkout again, it keeps the server it has
 : >"$FAKE_LOG"
-install '' --update
+run_installer checkout '' --update
 expect_rc 0
 expect_out "Keep the Jetlink server that is installed"
 expect_link /opt/jetlink/current /opt/jetlink/0.10.0
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "--binary over a release install leaves its source where it is"
-reset_box; jetson 39 2.1; f=$FAILED
-piped '' --yes
+reset_box; jetson 39 2.1
+run_installer curl '' --yes
 head_before="$(git -C /opt/jetlink/src rev-parse HEAD)"
 : >"$FAKE_LOG"
 bash /opt/jetlink/src/install.sh --update --binary /tmp/dev/jetlink-server-0.12.0-dev-linux-aarch64.tar.gz >"$OUT" 2>&1; RC=$?
@@ -824,17 +752,15 @@ expect_in /etc/jetlink/install.conf "JETLINK_VERSION=v0.10.0"
 # the unit that came with the binary, not the source's
 expect_in "$UNITS/jetlink-server.service" "# the 0.12.0-dev build's unit"
 # a release's build says which release it is
-piped '' --update --binary /tmp/releases/v0.9.0/jetlink-server-0.9.0-linux-aarch64.tar.gz
+run_installer curl '' --update --binary /tmp/releases/v0.9.0/jetlink-server-0.9.0-linux-aarch64.tar.gz
 expect_rc 0
 expect_in /etc/jetlink/install.conf "JETLINK_VERSION=v0.9.0"
 expect_not_in "$UNITS/jetlink-server.service" "0.12.0-dev"
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "TensorRT already here without its plugins: they come, or it does without"
-reset_box; jetson 36 4.3; f=$FAILED
+reset_box; jetson 36 4.3
 with_trt 10.3.0.30-1+cuda12.5 10
-piped '' --yes
+run_installer curl '' --yes
 expect_rc 0
 expect_not_ran "$(apt_install "libnvinfer10")"
 expect_out "Installing TensorRT's plugins"
@@ -842,7 +768,7 @@ expect_ran "$(apt_install "libnvinfer-plugin10=10.3.0.30-1+cuda12.5")"
 # a package source without them: said, and not a failure
 reset_box; jetson 36 4.3
 with_trt 10.3.0.30-1+cuda12.5 10
-FAKE_NO_PLUGIN=1 piped '' --yes
+FAKE_NO_PLUGIN=1 run_installer curl '' --yes
 expect_rc 0
 expect_out "Could not install TensorRT's plugins; Jetlink's models do not need them."
 expect_out "Jetlink is installed and running"
@@ -850,17 +776,15 @@ expect_out "Jetlink is installed and running"
 reset_box; jetson 36 4.3
 with_trt 10.3.0.30-1+cuda12.5 10
 echo 10.3.0.30-1+cuda12.5 >"$FAKE_STATE/pkg-libnvinfer-plugin10"
-piped '' --yes
+run_installer curl '' --yes
 expect_rc 0
 expect_not_ran "install --no-install-recommends libnvinfer"
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 # From the Docker releases: each installed by its own installer, then moved by
 # its own `jetlink update`, which runs this tree's installer.
 
 scenario "a v0.4.3 JetPack 7.2 install moves out of Docker on jetlink update"
-reset_box; jetson 39 2.1; with_docker; f=$FAILED
+reset_box; jetson 39 2.1; with_docker
 old_install v0.4.3 --ref v0.4.3
 # what 0.4.x saved: main, its default, and no version
 sed -i -e 's/^JETLINK_REF=.*/JETLINK_REF=main/' -e '/^JETLINK_VERSION=/d' /etc/jetlink/install.conf
@@ -935,11 +859,9 @@ expect_ran "systemctl disable --now jetlink-poweroff.path"
 expect_in /usr/local/bin/jetlink "SERVER=/opt/jetlink/current/bin/jetlink-server"
 jetlink status >/tmp/status.txt 2>&1
 expect_in /tmp/status.txt "server         0.10.0"
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "a v0.5.0 JetPack 6 install moves out of Docker"
-reset_box; jetson 36 4.3; with_docker; f=$FAILED
+reset_box; jetson 36 4.3; with_docker
 old_install v0.5.0
 cli update
 expect_rc 0
@@ -952,11 +874,9 @@ expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=120"
 expect_in /etc/jetlink/server.env "JETLINK_FLAVOR=linux-aarch64"
 expect_in /etc/jetlink/install.conf "JETLINK_VERSION=v0.10.0"
 expect_no_file /usr/local/lib/jetlink
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "a v0.5.0 JetPack 7.2 install short of room on / deletes its images first"
-reset_box; jetson 39 2.1; with_docker; f=$FAILED
+reset_box; jetson 39 2.1; with_docker
 old_install v0.5.0
 FAKE_ROOT_FREE_GB=2 FAKE_IMAGE_GB=8 cli update
 expect_rc 0
@@ -976,16 +896,14 @@ expect_not_ran "$(apt_install "libnvinfer10")"
 expect_in "$UNITS/jetlink-server.service" "run-server"
 expect_in /etc/jetlink/server.env "JETLINK_IMAGE="
 expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=120"
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "a v0.6.0 PC install moves out of Docker"
-reset_box; pc 580.95.05; with_docker; f=$FAILED
+reset_box; pc 580.95.05; with_docker
 old_install v0.6.0
 cli update
 expect_rc 0
 expect_out "Jetlink is installed and running"
-expect_ran "$(apt_install "libnvinfer11=11.3.0.99-1+cuda13.4 libnvonnxparsers11=11.3.0.99-1+cuda13.4 libnvinfer-plugin11=11.3.0.99-1+cuda13.4")"
+expect_ran "$PC_TRT_INSTALL"
 expect_ran "releases/download/v0.10.0/jetlink-server-0.10.0-linux-x86_64.tar.gz"
 expect_ran "docker rmi ghcr.io/zoompilot/jetlink:0.6.0-cuda"
 refute "removed the toolkit" grep -qE '^apt-get .* (remove|purge)' "$FAKE_LOG"
@@ -996,11 +914,9 @@ expect_in /etc/jetlink/server.env "JETLINK_FLAVOR=linux-x86_64"
 expect_in /etc/jetlink/install.conf "JETLINK_AUTOSTART=1"
 expect_no_file "$UNITS/jetlink-server.service.d/20-jetson-clocks.conf"
 expect_in /etc/jetlink/server.env "JETLINK_POWEROFF=''"
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "a failed move puts the Docker server back, and the next update finishes it"
-reset_box; jetson 39 2.1; with_docker; f=$FAILED
+reset_box; jetson 39 2.1; with_docker
 old_install v0.6.0
 # the status page's own unit, from before it moved into the server
 printf '[Service]\nExecStart=/usr/bin/python3 /usr/local/lib/jetlink/web/jetlink_web.py\n[Install]\nWantedBy=multi-user.target\n' \
@@ -1043,11 +959,9 @@ expect_no_file "$UNITS/jetlink-web.service"
 expect_ran "systemctl disable --now jetlink-web.service"
 expect_ran "docker rmi ghcr.io/zoompilot/jetlink:0.6.0-cuda"
 expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=120"
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "a Docker server that will not stop keeps serving, and no native one starts beside it"
-reset_box; jetson 39 2.1; with_docker; f=$FAILED
+reset_box; jetson 39 2.1; with_docker
 old_install v0.6.0
 FAKE_DOCKER_STUCK=1 cli update
 expect_rc 1
@@ -1059,11 +973,8 @@ expect_in /etc/jetlink/server.env "JETLINK_IMAGE="
 expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=120"
 expect_out "The previous Jetlink server is running again."
 expect_not_ran "docker rmi"
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "going back to v0.6.0 runs its own installer, and the curl line comes forward"
-: >"$FAKE_LOG"; f=$FAILED
 FAKE_PUBLISHED=1 cli update --ref v0.6.0
 expect_rc 0
 expect_out "Go back to v0.6.0, which runs Jetlink in Docker"
@@ -1079,21 +990,18 @@ expect_in /etc/jetlink/install.conf "JETLINK_POWEROFF_WITH_COMMA=1"
 expect_file "$UNITS/jetlink-poweroff.path"
 expect_file /opt/jetlink/0.10.0/bin/jetlink-server
 : >"$FAKE_LOG"
-piped '' --update --ref latest
+run_installer curl '' --update --ref latest
 expect_rc 0
 expect_out "Move Jetlink out of Docker"
 expect_not_in /etc/jetlink/server.env "JETLINK_IMAGE"
 expect_in /etc/jetlink/install.conf "JETLINK_REF=latest"
 expect_in "$UNITS/jetlink-server.service" "/opt/jetlink/current/bin/jetlink-server"
-show_on_failure "$f"
 
-# ---------------------------------------------------------------------------
 scenario "uninstall after a move removes the Docker leftovers too"
-: >"$FAKE_LOG"; f=$FAILED
 echo "jetlink:local-cuda" >>"$FAKE_STATE/images"
 mkdir -p /mnt/data/jetlink/engines && echo plan >/mnt/data/jetlink/engines/abc.plan
 # questions: remove?, delete the old images?, delete the models?
-install 'y\ny\nn\n' --uninstall
+run_installer checkout 'y\ny\nn\n' --uninstall
 expect_rc 0
 expect_out "Jetlink is removed."
 expect_ran "docker rmi jetlink:local-cuda"
@@ -1101,7 +1009,7 @@ expect_no_file /etc/jetlink
 expect_no_file /opt/jetlink
 expect_out "sudo apt remove libnvinfer10 libnvonnxparsers10 libnvinfer-plugin10"
 expect_file /mnt/data/jetlink/engines/abc.plan
-show_on_failure "$f"
+show_on_failure
 
 echo
 if [ "$FAILED" -eq 0 ]; then
