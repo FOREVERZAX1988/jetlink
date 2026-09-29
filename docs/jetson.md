@@ -22,7 +22,7 @@ Pick the installer option for your car's power socket:
 | Socket powered with the ignition off? | Choose | Ignition off | Car started |
 | --- | --- | --- | --- |
 | Yes | **Always on** (recommended) | Jetson sleeps after a few minutes, using about **0.3 W** on 12 V. | The comma wakes it. |
-| No | **Switched** | Jetson loses power. | It boots; the large model takes about 1–2 minutes. |
+| No | **Switched** | Jetson loses power. | It boots, with the model ready about 30 seconds after power-on. |
 
 Socket turns off a few minutes after parking? Choose **Switched**.
 
@@ -66,9 +66,10 @@ On the Jetson, open **Terminal** and paste:
 curl -fsSL https://raw.githubusercontent.com/zoompilot/jetlink/main/install.sh | bash
 ```
 
-It installs the latest release, and NVIDIA's TensorRT if it is missing (about
-2.3 GB). Answer the power questions as above. Takes 10–30 minutes; leave it
-running.
+It installs the latest release, and JetPack's TensorRT if it is missing (a
+2.3 GB download). Answer the power questions as above. Takes 10–30 minutes;
+leave it running. An install from Jetlink 0.6.0 or earlier moves out of Docker
+on its next `jetlink update`, keeping its answers, models and prepared engines.
 
 ## 3. Connect the comma
 
@@ -87,7 +88,8 @@ wakes when you start the car.
 
 Read [daily use](using-jetlink.md) before driving. A phone on the same
 network can watch the server on its [status page](using-jetlink.md#status-page);
-`jetlink status` prints the address.
+`jetlink status` prints the address. Frame times per model on a Jetson:
+[performance](status.md#measured-performance).
 
 <a id="troubleshooting"></a>
 
