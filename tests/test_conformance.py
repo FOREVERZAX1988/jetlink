@@ -101,10 +101,11 @@ def test_the_swift_package_links_the_pinned_onnxruntime():
 
 
 def test_ci_regenerates_with_the_releases_the_fixtures_record():
-  """CI installs the pins file, or it regenerates with something else and
-  fails for no reason, or skips what it should compare."""
+  """CI's Linux test job constrains its install with the pins file, or it
+  regenerates with something else and fails for no reason, or skips what it
+  should compare."""
   ci = (ROOT / '.github' / 'workflows' / 'ci.yml').read_text()
-  assert f'-r {FIXTURE_PINS}' in ci, f'.github/workflows/ci.yml does not install {FIXTURE_PINS}'
+  assert f'-c {FIXTURE_PINS}' in ci, f'.github/workflows/ci.yml does not constrain its install with {FIXTURE_PINS}'
   assert {'numpy', 'onnx', 'onnxruntime', 'protobuf'} <= set(PINS)
 
 
