@@ -10,7 +10,7 @@ struct StagingTests {
   func needsHiddenState() throws {
     let fixture = try StagingCase(frameSkip: 4)
     let spec = fixture.spec
-    for slices in [[NamedRange("plan", 0..<16)], [NamedRange("hidden_state", 32..<60)]] {
+    for slices in [[NamedSlice("plan", 0..<16)], [NamedSlice("hidden_state", 32..<60)]] {
       let other = ModelSpec(
         sha256: spec.sha256, nbytes: spec.nbytes, frameSkip: 4, inputShapes: spec.inputShapes, outputShapes: spec.outputShapes,
         outputSlices: slices, checkpoint: nil)

@@ -1,19 +1,18 @@
 import Foundation
 
 /// One entry of openpilot's output_slices: where a named output sits in the
-/// model's flat output vector.
+/// model's flat output vector, as Python's `slice` holds it. Either end may
+/// be None, and either may count from the end.
 public struct OutputSlice: Sendable, Equatable {
   public let name: String
-  public let start: Int
-  public let stop: Int
+  public let start: Int?
+  public let stop: Int?
 
-  public init(name: String, start: Int, stop: Int) {
+  public init(name: String, start: Int?, stop: Int?) {
     self.name = name
     self.start = start
     self.stop = stop
   }
-
-  public var range: Range<Int> { start..<stop }
 }
 
 /// Reads output_slices, which openpilot stores in metadata_props as base64 of
@@ -45,13 +44,17 @@ public enum OutputSlices {
       guard case .slice(let start, let stop, let step) = value else {
         throw OnnxError("output_slices entry \(name) is \(value.kind), not a slice")
       }
-      guard case .int(let a) = start, case .int(let b) = stop else {
-        throw OnnxError("output_slices entry \(name) is not slice(int, int)")
+      func bound(_ value: PickleValue) throws -> Int? {
+        switch value {
+        case .int(let n): return n
+        case .none: return nil
+        default: throw OnnxError("output_slices entry \(name) has \(value.kind) for a bound; expected an int or None")
+        }
       }
-      guard case .none = step else {
+      guard step == .none || step == .int(1) else {
         throw OnnxError("output_slices entry \(name) has a step; expected None")
       }
-      return OutputSlice(name: name, start: a, stop: b)
+      return OutputSlice(name: name, start: try bound(start), stop: try bound(stop))
     }
   }
 }
