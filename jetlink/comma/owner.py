@@ -332,10 +332,6 @@ class Owner:
 
   # -- the worker -----------------------------------------------------------
 
-  def marks(self) -> dict[str, int]:
-    """When each watched param last changed, by name."""
-    return self.settings.marks()
-
   def worker_running(self) -> bool:
     if self.worker is None:
       return False
@@ -353,7 +349,7 @@ class Owner:
     return False
 
   def note_marks(self) -> None:
-    self.seen = self.marks()
+    self.seen = self.settings.marks()
     self.had_host = gadget.host_attached()
 
   def wanted(self, state: dict) -> str | None:
@@ -362,7 +358,7 @@ class Owner:
     decides; this only notices the things that could have changed the answer."""
     if not self.seen:
       return 'nothing has been checked since boot'
-    changed = [k for k, v in self.marks().items() if self.seen.get(k) != v]
+    changed = [k for k, v in self.settings.marks().items() if self.seen.get(k) != v]
     if changed:
       return f"{', '.join(changed)} changed"
     if self.dialed:

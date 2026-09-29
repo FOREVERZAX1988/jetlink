@@ -60,13 +60,6 @@ class FileParams:
     except (TypeError, ValueError):
       return None
 
-  def mtime(self, key: str) -> int:
-    """When a param was last written, in ns; 0 when it is unset."""
-    try:
-      return os.stat(self.path(key)).st_mtime_ns
-    except OSError:
-      return 0
-
 
 class Settings:
   """What jetlink reads of openpilot's params without the Params library."""
