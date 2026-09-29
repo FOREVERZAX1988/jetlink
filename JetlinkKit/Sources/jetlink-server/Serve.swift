@@ -96,7 +96,7 @@
           backend: backend, gadget: gadget, hooks: hooks)
         // Made before the server starts, so it hears the first link event:
         // a comma on the bus at boot connects at once.
-        controller = statusPort > 0 ? ServerController(server: server, registry: Registry(layout: server.cache.layout), streaming: false) : nil
+        controller = statusPort > 0 ? ServerController(server: server, registry: Registry(layout: server.cache.layout)) : nil
         log.info("backend \(backend.name) \(backend.runtimeVersion) on \(backend.deviceTag()), cache \(root.path)")
         try server.start()
       } catch {

@@ -90,7 +90,7 @@
           payload = await registry.catalog()
         }
         if json {
-          console.out(try jsonText(ControlEvent.catalog(payload).payload()))
+          console.out(jsonText(ControlEvent.catalog(payload).payload()) ?? "{}")
           return
         }
         if let error = payload.error {
@@ -128,7 +128,7 @@
       func run(_ registry: Registry, _ console: Console) async throws {
         guard CacheLayout.isRef(ref) else { throw HostError.invalid("'\(ref)' is not a 40 character commit") }
         let pointer = try await registry.resolve(ref: ref)
-        console.out(json ? try jsonText(["ref": ref, "sha256": pointer.oid, "bytes": pointer.size] as [String: Any]) : "\(pointer.oid) \(pointer.size)")
+        console.out(json ? jsonText(["ref": ref, "sha256": pointer.oid, "bytes": pointer.size] as [String: Any]) ?? "{}" : "\(pointer.oid) \(pointer.size)")
       }
     }
 
@@ -181,7 +181,7 @@
         // a key is "<sha16>.<tag>"
         let payload = last.map { registry.inventory(artifactTag: String($0.key.dropFirst(17)), artifactSuffix: "", loaded: nil) } ?? untagged
         if json {
-          console.out(try jsonText(ControlEvent.inventory(payload).payload()))
+          console.out(jsonText(ControlEvent.inventory(payload).payload()) ?? "{}")
           return
         }
         console.out("models")

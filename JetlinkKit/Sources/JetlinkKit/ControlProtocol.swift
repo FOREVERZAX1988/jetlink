@@ -21,11 +21,6 @@ public struct HelloEvent: Codable, Sendable, Equatable {
   public init(version: String) {
     self.version = version
   }
-
-  /// The control socket's hello, until the status page passes only the version.
-  public init(protocolVersion: Int, pid: Int32, version: String, python: String, platform: String, cache: String, transport: String, port: Int?) {
-    self.init(version: version)
-  }
 }
 
 public struct ServerEvent: Codable, Sendable, Equatable {

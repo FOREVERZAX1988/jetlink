@@ -108,7 +108,7 @@
 
   /// The sidecar on one line, as the journal keeps a line.
   private func sidecar(_ entry: CacheEntry) -> String {
-    (try? Data(contentsOf: entry.metaPath)).flatMap { try? JSONSerialization.jsonObject(with: $0) }.flatMap { try? jsonText($0) } ?? "(no sidecar)"
+    (try? Data(contentsOf: entry.metaPath)).flatMap { try? JSONSerialization.jsonObject(with: $0) }.flatMap(jsonText) ?? "(no sidecar)"
   }
 
   /// `jetlink-server spec ONNX`: the ModelSpec JSON the comma is sent for a
@@ -123,13 +123,13 @@
       let model = URL(fileURLWithPath: onnx)
       let (sha256, nbytes) = try Registry.hashFile(model)
       let spec = try ONNXPreparer().readSpec(model: model, sha256: sha256, nbytes: nbytes, frameSkip: Pinned.defaultFrameSkip)
-      print(try jsonText(spec.dictionary()))
+      print(jsonText(spec.dictionary()) ?? "{}")
     }
   }
 
   /// One line of JSON, keys sorted so two runs print the same.
-  func jsonText(_ object: Any) throws -> String {
-    String(decoding: try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes]), as: UTF8.self)
+  func jsonText(_ object: Any) -> String? {
+    ControlJSON.data(object).map { String(decoding: $0, as: UTF8.self) }
   }
 
   /// `jetlink-server bench`: a built engine at the comma's pace, 20 frames a
@@ -175,7 +175,7 @@
         let frameSkip = frameSkip ?? (last?.sha256 == wanted ? last!.frameSkip : Pinned.defaultFrameSkip)
         try blocking { try await prepare(wanted, frameSkip: frameSkip, on: server) }
         // The report goes to stdout alone, where a script reads it.
-        let report = try server.host.benchmark(seconds: seconds, run: BenchmarkRun(), logsReport: false)
+        let report = try server.host.benchmark(seconds: seconds, run: BenchmarkRun())
         print(report.text)
       } catch let exit as ExitCode {
         throw exit
@@ -184,24 +184,5 @@
         throw ExitCode.failure
       }
     }
-  }
-
-  /// Waits on the calling thread for async work: a command runs start to end
-  /// on the main thread, which the cooperative pool does not need.
-  func blocking<T: Sendable>(_ work: @escaping @Sendable () async throws -> T) throws -> T {
-    let result = Locked<Result<T, any Error>?>(nil)
-    let done = DispatchSemaphore(value: 0)
-    Task.detached {
-      let outcome: Result<T, any Error>
-      do {
-        outcome = .success(try await work())
-      } catch {
-        outcome = .failure(error)
-      }
-      result.withLock { $0 = outcome }
-      done.signal()
-    }
-    done.wait()
-    return try result.withLock { $0! }.get()
   }
 #endif

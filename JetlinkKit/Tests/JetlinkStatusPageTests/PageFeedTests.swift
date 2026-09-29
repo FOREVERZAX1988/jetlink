@@ -31,7 +31,7 @@ struct PageFeedTests {
   func replay() throws {
     let clock = Locked<TimeInterval>(1000)
     let feed = PageFeed(hardware: nil, clock: { clock.value })
-    feed.publish(.hello(HelloEvent(protocolVersion: 1, pid: 1, version: "0.7.0", python: "", platform: "linux", cache: "/c", transport: "usb", port: nil)))
+    feed.publish(.hello(HelloEvent(version: "0.7.0")))
     feed.publish(.server(ServerEvent(state: "serving", detail: "", backend: "trt", runtimeVersion: "10.16.2.10", device: "Orin")))
     feed.publish(.link(.waiting))
     feed.publish(.engine(.none))

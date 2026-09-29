@@ -174,7 +174,7 @@
       let server = try Server(
         configuration: Server.Configuration(host: "127.0.0.1", port: 0, cacheRoot: scratch.url, preload: false, listen: true), backend: NamingBackend())
       let registry = CountingRegistry()
-      let controller = ServerController(server: server, registry: registry, streaming: false)
+      let controller = ServerController(server: server, registry: registry)
       let page = try RunningPage()
       page.server.watch(controller, version: "0.7.0-test")
 

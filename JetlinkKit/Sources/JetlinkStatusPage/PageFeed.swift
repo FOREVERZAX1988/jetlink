@@ -261,16 +261,7 @@ final class PageFeed: @unchecked Sendable {
 
   /// A host-made event, keys sorted as `jsonLine()` sorts them.
   static func frame(_ name: String, _ fields: [String: Any], at date: Date = Date()) -> Data {
-    var object = fields
-    object["event"] = name
-    object["t"] = date.timeIntervalSince1970
-    // An object JSONSerialization cannot write raises rather than throws.
-    guard JSONSerialization.isValidJSONObject(object),
-      let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes])
-    else {
-      return sse(Data(#"{"error":"the host's \#(name) fields are not JSON","event":"\#(name)"}"#.utf8))
-    }
-    return sse(data)
+    sse(ControlJSON.line(event: name, fields, at: date) ?? Data(#"{"error":"the host's \#(name) fields are not JSON","event":"\#(name)"}"#.utf8))
   }
 }
 

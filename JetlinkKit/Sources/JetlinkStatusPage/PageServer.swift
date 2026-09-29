@@ -75,7 +75,7 @@
     /// read here, never from a page's thread, because it takes the host's
     /// lock, which a frame holds.
     func watch(_ controller: ServerController, version: String) {
-      feed.publish(.hello(StatusPage.hello(controller.server.configuration, version: version)))
+      feed.publish(.hello(HelloEvent(version: version)))
       let id = controller.observe { [feed] in feed.publish($0) }
       feed.seed(controller.currentState())
       condition.lock()
@@ -263,22 +263,6 @@
         }
         return true
       }
-    }
-  }
-
-  extension StatusPage {
-    /// The hello the Python server's control socket opened with, from what
-    /// this server was started with. The page shows its version.
-    static func hello(_ configuration: Server.Configuration, version: String) -> HelloEvent {
-      let transport = configuration.usb ? (configuration.listen ? "usb+tcp" : "usb") : "tcp"
-      #if os(Linux)
-        let platform = "linux"
-      #else
-        let platform = "darwin"
-      #endif
-      return HelloEvent(
-        protocolVersion: Pinned.controlProtocol, pid: getpid(), version: version, python: "", platform: platform,
-        cache: configuration.cacheRoot.path, transport: transport, port: configuration.listen ? Int(configuration.port) : nil)
     }
   }
 #endif
