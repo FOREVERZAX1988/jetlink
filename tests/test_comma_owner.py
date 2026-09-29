@@ -559,7 +559,7 @@ class IosTest(OwnerTest):
   def owner(self, **kw):
     o = super().owner(**kw)
     # built for iOS and said so, as the first step of a real owner does:
-    # without the record a reader falls back to the setting by gadget's rule
+    # without the record a reader falls back to the setting it was handed
     o.built_ios = True
     o.publish()
     return o

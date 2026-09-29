@@ -381,7 +381,7 @@ class TestTheSnapshot(OpenpilotTest):
          mock.patch.object(self.parts.spec, 'load', return_value=None) as load:
       self.jl.status()
     self.assertEqual((mode.call_count, error.call_count, load.call_count), (1, 1, 1))
-    # the transport's fallback is the setting already read, not a second read by gadget's rule
+    # the transport's fallback is the setting already read, not a second read
     kind.assert_called_once_with('usb')
 
   def test_a_failure_with_the_link_on_says_so(self):

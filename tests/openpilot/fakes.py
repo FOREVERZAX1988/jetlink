@@ -111,7 +111,7 @@ class FakeOpenpilot:
     self.catalog_selector = catalog_selector
     self.basedir = self.root / 'openpilot'
     self.basedir.mkdir(parents=True, exist_ok=True)
-    # the params store, where openpilot's rule puts it under PARAMS_ROOT=<root>/params
+    # the params store, laid out as openpilot's under <root>/params
     self.store_dir = self.root / 'params' / 'd'
     self.store_dir.mkdir(parents=True, exist_ok=True)
     self.store: dict[str, object] = {}
@@ -226,16 +226,13 @@ GADGET_FILES = ('LINK', 'NET_STATUS', 'GADGET_STATUS', 'LENDER_STATUS', 'DORMANT
 
 
 def redirect(root: Path) -> list:
-  """Point everything jetlink could read or write outside the fake under
-  `root`: openpilot's params store by gadget's own rule (PARAMS_ROOT and the
-  prefix, so it lands on FakeOpenpilot's store_dir), and the comma layer's
-  device files. The patchers, started; whoever called stops them."""
+  """Point every file of the comma layer's that jetlink could read or write
+  under `root`. The patchers, started; whoever called stops them."""
   from jetlink.comma import gadget, lending, port
   from jetlink.transport import base
   dev = root / 'dev'
   dev.mkdir(parents=True, exist_ok=True)
-  patchers = [mock.patch.dict(os.environ, {'PARAMS_ROOT': str(root / 'params'), 'OPENPILOT_PREFIX': 'd'})]
-  patchers += [mock.patch.object(gadget, name, dev / name.lower()) for name in GADGET_FILES]
+  patchers = [mock.patch.object(gadget, name, dev / name.lower()) for name in GADGET_FILES]
   patchers += [mock.patch.object(gadget, 'GADGET_PATH', root / 'configfs' / 'jetlink'),
                mock.patch.object(gadget, 'FFS_MOUNT', root / 'ffs-jetlink'),
                mock.patch.object(gadget, 'UDC_PATH', root / 'udc'),
