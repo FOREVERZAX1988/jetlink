@@ -37,6 +37,8 @@ JETLINK = {
   'prepare': '()',
   'attach': '(small, cam_w, cam_h)',
   'shutdown': "(reason='', timeout=25.0)",
+  'request_shutdown': "(reason='')",
+  'shutdown_pending': '()',
   'should_extend_catalog': '()',
   'extend_catalog': '(catalog)',
 }
@@ -368,6 +370,77 @@ class ShuttingTheJetsonDown(OpenpilotTest):
   def test_nobody_taking_it_is_logged(self):
     self.shutdown(taken=False)
     self.assertTrue(self.op.log.has('nobody took the shutdown request within 3 s'))
+
+
+class PoweringOffWithoutWaiting(OpenpilotTest):
+  """hardwared's power-off: it asks once and goes on publishing deviceState,
+  and puts DoShutdown once the request is taken or its 25 s have passed. The
+  request is the file the owner has always looked for."""
+
+  def setUp(self):
+    super().setUp()
+    self.op.set_mode('usb')
+    self.patch(gadget, 'host_attached', return_value=True)
+
+  def test_a_jetson_there_is_asked_and_the_answer_is_at_once(self):
+    t0 = time.monotonic()
+    self.assertTrue(self.jl.request_shutdown('car battery'))
+    self.assertLess(time.monotonic() - t0, 0.5)
+    self.assertEqual(gadget.pending_shutdown(), 'car battery')
+    self.assertTrue(self.jl.shutdown_pending())
+    self.assertTrue(self.op.log.has('asking the jetson to power off: car battery'))
+
+  def test_the_owners_run_taking_it_clears_it(self):
+    self.jl.request_shutdown('car battery')
+    gadget.finish_shutdown()   # what the owner's run does, whatever the jetson answered
+    self.assertFalse(self.jl.shutdown_pending())
+    self.assertTrue(self.op.log.has('shutdown request handed to the jetson after'))
+    self.assertFalse(self.jl.shutdown_pending())
+
+  def test_nothing_to_ask_is_nothing_to_wait_for(self):
+    self.op.set_mode('off')
+    self.assertFalse(self.jl.request_shutdown('car battery'))
+    self.op.set_mode('usb')
+    self.op.chestnut = True
+    self.parts._chestnut = None
+    self.assertFalse(self.jl.request_shutdown('car battery'))
+    self.op.chestnut = False
+    self.parts._chestnut = None
+    with mock.patch.object(gadget, 'host_attached', return_value=False), \
+         mock.patch.object(gadget, 'dormant', return_value=False):
+      self.assertFalse(self.jl.request_shutdown('car battery'))
+    self.assertFalse(self.jl.shutdown_pending())
+    self.assertFalse(gadget.SHUTDOWN_REQUEST.exists())
+
+  def test_a_sleeping_jetson_is_asked_too(self):
+    # the owner's bind wakes it, and the run asks it
+    with mock.patch.object(gadget, 'host_attached', return_value=False), \
+         mock.patch.object(gadget, 'dormant', return_value=True), \
+         mock.patch.object(gadget, 'port_has_host', return_value=True):
+      self.assertTrue(self.jl.request_shutdown('car battery'))
+
+  def test_it_never_raises(self):
+    with mock.patch.object(gadget, 'request_shutdown', side_effect=RuntimeError('boom')):
+      self.assertFalse(self.jl.request_shutdown('car battery'))
+    self.assertEqual(self.op.log.lines('exception'), ['jetlink: shutdown request failed'])
+    with mock.patch.object(gadget, 'request_shutdown', return_value=False):
+      self.assertFalse(self.jl.request_shutdown('car battery'))
+    with mock.patch.object(gadget, 'SHUTDOWN_REQUEST', mock.Mock(**{'exists.side_effect': PermissionError('no')})):
+      self.assertFalse(self.jl.shutdown_pending())
+
+  def test_the_owner_takes_it_as_it_always_has(self):
+    # the Jetson on the user's supply is armed with --poweroff: what reaches
+    # it has to be the owner's shutdown run, as before
+    from jetlink.comma.owner import Owner
+    o = Owner((), settings=self.parts.settings, chestnut_ids=())
+    self.addCleanup(o.cable.close)
+    o.lender = mock.Mock(lent=False, listening=True)
+    self.patch(o, 'open_link', return_value=True)
+    spawn = self.patch(o, 'spawn_worker')
+    self.assertTrue(self.jl.request_shutdown('comma shutting down, offroad since 12.0'))
+    o.step()
+    spawn.assert_called_once_with('the jetson has to be shut down: comma shutting down, offroad since 12.0')
+    self.assertTrue(o.shutting_down)
 
 
 class TestExtendsCatalog(OpenpilotTest):
