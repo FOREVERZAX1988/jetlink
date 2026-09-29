@@ -92,10 +92,12 @@ def trim_to_frames(msgs: list, n: int) -> list:
   return out
 
 
-def model_name() -> str:
-  """Which large model this run will put on the accelerator."""
-  from openpilot.sunnypilot.accelerators.jetlink import helpers
-  chosen = helpers.selected_model()
+def model_name(adapter: str) -> str:
+  """Which large model this run will put on the accelerator, as jetlink picks
+  it over the fork's adapter module."""
+  from jetlink.openpilot.interface import load_adapter
+  from jetlink.openpilot.parts import for_this_process
+  chosen = for_this_process(load_adapter(adapter)).models.selected_model()
   if chosen is None:
     return 'unknown'
   if not chosen['oid']:
@@ -213,6 +215,7 @@ def main() -> int:
   p.add_argument('--segment', required=True, help='a directory under /data/media/0/realdata')
   p.add_argument('--frames', type=int, default=60)
   p.add_argument('--dump', help='write per-frame model outputs to this .npz')
+  p.add_argument('--adapter', default='openpilot.sunnypilot.jetlink_adapter', help="the fork's adapter module")
   args = p.parse_args()
 
   seg = Path(args.segment)
@@ -237,7 +240,7 @@ def main() -> int:
   fingerprint = next((m.carParams.carFingerprint for m in full if m.which() == 'carParams'), None)
   print(f"segment {seg.name}: {len(lr)} of {len(full)} messages, {args.frames} frames")
   print(f"  car: {fingerprint}")
-  print(f"  model: {model_name()}")
+  print(f"  model: {model_name(args.adapter)}")
 
   frs = {}
   for state, name in CAMERAS.items():

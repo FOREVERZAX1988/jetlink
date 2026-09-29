@@ -32,10 +32,6 @@ from tests.openpilot.fakes import CHESTNUT_IDS, KEYS
 
 
 class OwnerTest(unittest.TestCase):
-  # the owner reads its settings through jetlink.openpilot's Settings, as
-  # jetlink.openpilot.owner has it, rather than by gadget's own rule
-  SETTINGS = False
-
   def setUp(self):
     self.tmp = Path(tempfile.mkdtemp())
     self.params = self.tmp / 'params'
@@ -47,8 +43,6 @@ class OwnerTest(unittest.TestCase):
                         ('STATE', self.tmp / 'state'),
                         ('GADGET_STATUS', self.tmp / 'gadget-status'),
                         ('LENDER_STATUS', self.tmp / 'lender-status'),
-                        # with Settings, gadget's own rule leads nowhere: nothing may read by it
-                        ('params_dir', mock.Mock(return_value=self.tmp / 'elsewhere' if self.SETTINGS else self.params)),
                         ('link_configured', mock.Mock(return_value=True)),
                         ('host_attached', mock.Mock(return_value=True)),
                         ('udc_state', mock.Mock(return_value='configured')),
@@ -83,10 +77,11 @@ class OwnerTest(unittest.TestCase):
     os.utime(path, ns=(self.stamp, self.stamp))
 
   def make(self, *args, **kwargs) -> owner.Owner:
-    if self.SETTINGS:
-      kwargs.setdefault('settings', Settings(FileParams(self.params), KEYS))
-      kwargs.setdefault('chestnut_ids', CHESTNUT_IDS)
-    return owner.Owner(*args, **kwargs)
+    """An owner over jetlink.openpilot's Settings, as jetlink.openpilot.owner
+    hands it over, on this test's params."""
+    kwargs.setdefault('settings', Settings(FileParams(self.params), KEYS))
+    kwargs.setdefault('chestnut_ids', CHESTNUT_IDS)
+    return owner.Owner(*(args or ((),)), **kwargs)
 
   def vm_calls(self) -> list[str]:
     """What the owner asked jetlink-root.sh vm to do, in order."""
@@ -925,11 +920,13 @@ class TestTheWorker(OwnerTest):
 
   def test_main_hands_the_worker_to_the_owner_and_logs_to_the_file(self):
     log = self.tmp / 'owner-main.log'
+    settings = Settings(FileParams(self.params), KEYS)
     with mock.patch.object(owner, 'Owner') as made, mock.patch.object(owner.signal, 'signal'), \
          mock.patch.object(gadget, 'set_logger') as set_logger:
-      owner.main(['python3', '-m', 'the.worker'], cwd='/x', env={'A': 'b'}, log_file=log)
-    made.assert_called_once_with(['python3', '-m', 'the.worker'], cwd='/x', env={'A': 'b'}, settings=None,
-                                 chestnut_ids=None)
+      owner.main(['python3', '-m', 'the.worker'], cwd='/x', env={'A': 'b'}, log_file=log, settings=settings,
+                 chestnut_ids=CHESTNUT_IDS)
+    made.assert_called_once_with(['python3', '-m', 'the.worker'], cwd='/x', env={'A': 'b'}, settings=settings,
+                                 chestnut_ids=CHESTNUT_IDS)
     made.return_value.run.assert_called_once()
     logger = set_logger.call_args.args[0]
     self.addCleanup(lambda: [logger.removeHandler(h) or h.close() for h in list(logger.handlers)])
@@ -970,9 +967,13 @@ class TestTheOpenpilotEntry(OwnerTest):
     self.make(chestnut_ids={(1, 2)})
     owner.port.Port.assert_called_with({(1, 2)})
 
-  def test_without_them_the_port_has_its_own(self):
-    owner.Owner()
-    owner.port.Port.assert_called_with(None)
+  def test_the_owner_knows_no_settings_or_ids_of_its_own(self):
+    # the fork's adapter names both; a caller that forgets them fails at once
+    # rather than running on a guess
+    with self.assertRaises(TypeError):
+      owner.Owner(())
+    with self.assertRaises(TypeError):
+      owner.main([])
 
 
 class TestLending(OwnerTest):
@@ -1000,9 +1001,3 @@ class TestLending(OwnerTest):
     o.transport.rebind.side_effect = OSError('no such device')
     self.assertFalse(o.bounce_gadget())
 
-
-
-# Every test above again, with the settings the fork's adapter names
-for _name, _cls in list(globals().items()):
-  if isinstance(_cls, type) and issubclass(_cls, OwnerTest) and _name.startswith('Test'):
-    globals()[f'{_name}WithSettings'] = type(f'{_name}WithSettings', (_cls,), {'SETTINGS': True})

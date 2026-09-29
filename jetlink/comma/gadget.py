@@ -8,19 +8,20 @@ The comma's USB gadget, and how to look at it, using nothing but the
 standard library and jetlink's own transport.
 
 Kept apart from openpilot so the process that owns the gadget can be small.
-Holding ep0 needs sysfs, a few params and a unix socket;
-`openpilot.common.swaglog` costs 28 MB because it drags numpy, capnp and zmq
-in to publish a log line, and `openpilot.common.params` imports swaglog, so a
-module that touches either prices the owner out of being minimal. Measured on
-the comma: python plus this plus the FunctionFS transport is 10.4 MB against
-47.5 MB for the daemon that imported the world.
+Holding ep0 needs sysfs and a unix socket; `openpilot.common.swaglog` costs
+28 MB because it drags numpy, capnp and zmq in to publish a log line, and
+`openpilot.common.params` imports swaglog, so a module that touches either
+prices the owner out of being minimal. Measured on the comma: python plus this
+plus the FunctionFS transport is 10.4 MB against 47.5 MB for the daemon that
+imported the world.
 
-Nothing in jetlink.comma may import openpilot; openpilot's params are read
-here as files, by name. tests/test_comma_gadget.py holds the line.
+Nothing in jetlink.comma may import openpilot or knows a param: the settings
+come from jetlink.openpilot.settings, over the directory and the keys the
+fork's adapter names. tests/test_comma_gadget.py holds the line.
 
-The fork's heavy processes import it directly, and its helpers module points
-`log` at cloudlog (set_logger), so their lines still reach swaglog while the
-owner's go to a file.
+jetlink.openpilot's heavy processes import it too, and bind() points `log` at
+the fork's cloudlog (set_logger), so their lines still reach the drive's log
+while the owner's go to a file.
 """
 from __future__ import annotations
 
@@ -43,96 +44,10 @@ log = logging.getLogger('jetlink.comma.gadget')
 
 def set_logger(logger) -> None:
   """Send this module's lines somewhere else, and the root script's failures
-  with them; the fork's helpers points it at cloudlog."""
+  with them: jetlink.openpilot.bind points it at the fork's cloudlog."""
   global log
   log = logger
   root.log = logger
-
-
-# -- params ---------------------------------------------------------------
-# openpilot's params, read straight off the filesystem. params.cc writes a
-# value to a temp file, fsyncs it, renames it over the key and fsyncs the
-# directory, so a plain read gets the old value or the new one and never a torn
-# one. The path rule is params.cc's: PARAMS_ROOT or /data/params, plus "/" and
-# OPENPILOT_PREFIX, which defaults to "d".
-#
-# Every key the comma layer reads is named here and nowhere else in it, and
-# none is written. openpilot declares them all (params_keys.h).
-P_SPEC = "JetlinkSpec"              # the spec and readiness a provisioning run recorded; the owner only stats it
-P_LINK = "JetlinkLink"              # Accelerator Link, an index into LINK_MODES
-P_OFFROAD = "IsOffroad"             # manager's: is the car parked
-P_BIG_MODEL = "ModelManager_ActiveBundleChestnut"  # the model manager's big-model pick
-LINK_MODES = ('off', 'usb', 'ios')  # off; a Jetson or a Mac on USB; an iPhone on the cable
-
-
-_dirs: dict[tuple[str, str], Path] = {}
-
-
-def params_dir() -> Path:
-  """Where the params live, by params.cc's rule. Memoised on the two variables
-  it depends on: this is on the path of every param read in the process."""
-  prefix = os.environ.get('OPENPILOT_PREFIX', 'd')
-  base = os.environ.get('PARAMS_ROOT', '')
-  key = (base, prefix)
-  found = _dirs.get(key)
-  if found is None:
-    # hw.h: PARAMS_ROOT, else /data/params on device. comma_home carries the
-    # prefix off-device, so a bench under its own store lands where Params does
-    home = base or ('/data/params' if root.AGNOS
-                    else os.path.join(os.path.expanduser('~'),
-                                      '.comma' + ('' if prefix == 'd' else prefix), 'params'))
-    found = _dirs[key] = Path(home) / prefix
-  return found
-
-
-def raw_param(key: str) -> bytes | None:
-  """A param's bytes, or None if it is unset or unreadable."""
-  try:
-    return (params_dir() / key).read_bytes()
-  except OSError:
-    return None
-
-
-def param_bool(key: str) -> bool | None:
-  """A param openpilot stores with put_bool. None when it is unset."""
-  value = raw_param(key)
-  if value is None:
-    return None
-  return value.strip() in (b'1', b'true', b'True')
-
-
-def link_mode() -> str:
-  """Accelerator Link: 'off', 'usb' or 'ios'. Unset or unreadable is 'off';
-  manager writes the default before anything runs."""
-  raw = raw_param(P_LINK)
-  try:
-    return LINK_MODES[int(raw)]
-  except (TypeError, ValueError, IndexError):
-    return 'off'
-
-
-def enabled() -> bool:
-  """Is the link on, for either host? Not "absent means auto": the gadget comes
-  up at boot with the package installed, so auto turned installation into
-  enablement."""
-  return link_mode() != 'off'
-
-
-def ios() -> bool:
-  """Is the link set to iOS, an iPhone on the cable?"""
-  return link_mode() == 'ios'
-
-
-
-def offroad() -> bool:
-  """Is the car parked?
-
-  The owner runs onroad too, to keep hold of the gadget, and everything else
-  jetlink does belongs to a parked car: a download, an upload, an engine build.
-  A missing param is manager not having written one yet, which reads as parked.
-  """
-  value = param_bool(P_OFFROAD)
-  return True if value is None else value
 
 
 # -- what carries the link ------------------------------------------------
@@ -161,14 +76,13 @@ def _link_record() -> list[str]:
 
 def link_kind(mode: str | None = None) -> str:
   """The gadget the owner built and published: 'cable' for iOS (the phone's
-  network interface on the gadget) or 'usb'. The setting stands in only until
-  the owner has said: it may have moved and be waiting for the car to park.
-  `mode` is the setting when the caller has read it; without it, it is read
-  here."""
+  network interface on the gadget) or 'usb'. `mode`, the Accelerator Link
+  setting as the caller read it, stands in only until the owner has said: it
+  may have moved and be waiting for the car to park. Without either, 'usb'."""
   record = _link_record()
   if record[:1] in (['cable'], ['usb']):
     return record[0]
-  return 'cable' if (ios() if mode is None else mode == 'ios') else 'usb'
+  return 'cable' if mode == 'ios' else 'usb'
 
 
 def link_peer() -> str | None:
@@ -348,7 +262,7 @@ STALLED_STATES = ('default', 'addressed')
 HOST_POLL = 0.5
 
 
-def wait_for_host(timeout: float, bounce=None, should_stop=None, report=None) -> bool:
+def wait_for_host(timeout: float, bounce=None, should_stop=None, report=None, mode: str | None = None) -> bool:
   """Wait for the Jetson to enumerate us, bouncing a bus that stalled.
 
   The gadget stays bound throughout. An unbind is an unplug as the far end sees
@@ -362,9 +276,10 @@ def wait_for_host(timeout: float, bounce=None, should_stop=None, report=None) ->
 
   On the cable there is nothing to wait for: the connect that made the client
   already reached the phone. The UDC is configured too, but by the phone, and
-  it is the dial that proved it is there.
+  it is the dial that proved it is there. `mode` is the link setting, for
+  before the owner has recorded which gadget it built (link_kind).
   """
-  if link_kind() == 'cable':
+  if link_kind(mode) == 'cable':
     return True
   deadline = time.monotonic() + timeout
   stalled_since = None

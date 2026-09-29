@@ -10,7 +10,7 @@ openpilot runs jetlink from a checkout on the comma (only jetlink/ and
 scripts/comma/ ship), imports the names below and patches some of them in its
 tests. Each module is imported in a fresh interpreter, so one module's imports
 cannot hide another's: none may load a package beyond numpy and the standard
-library.
+library. tests/openpilot/test_api.py pins the signatures of the API itself.
 """
 from __future__ import annotations
 
@@ -27,41 +27,33 @@ from jetlink import protocol as P
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# What openpilot imports from each module, and the members it calls, reads or
-# patches in its tests (danger-unstable 5be617a394, 2026-09-29). The fork keeps
-# its own copy of the integration until it moves onto jetlink.openpilot, and
-# runs against whatever jetlink_repo is pinned: a name dropped here breaks
-# that build.
+# What the fork imports from each module, and the members it calls, reads or
+# patches: its adapter (openpilot/sunnypilot/jetlink_adapter), which calls
+# jetlink.openpilot's API, and its tests, which also run jetlink's comma side
+# on the fork's own tinygrad and openpilot (fork branch jetlink-host-adapter,
+# 2026-09-29). The fork runs against whatever jetlink_repo is pinned: a name
+# dropped here breaks that build.
 FORK_IMPORTS = {
-  'jetlink.client': ('EngineMissing', 'FRAME_TIMEOUT', 'JetlinkClient'),
-  'jetlink.spec': ('ModelSpec', 'sha256_file'),
+  'jetlink.openpilot': ('API', 'MODES', 'STATES', 'Status', 'bind'),
+  'jetlink.openpilot.interface': ('Keys', 'ModelFace', 'Openpilot', 'OwnerConfig', 'conformance', 'load_adapter'),
+  'jetlink.openpilot.owner': ('main', 'worker'),
+  'jetlink.openpilot.settings': ('FileParams', 'Settings'),
+  # its tests only: the seam guard, and the comma side on the real tinygrad
+  'jetlink.openpilot.joining': ('JoiningModelState',),
+  'jetlink.openpilot.model_state': ('JetlinkModelState',),
+  'jetlink.openpilot.warp': ('WARP_INPUT_NAMES', 'Warps', 'call_warp', 'compile_warp', 'init_device', 'prepare_reset',
+                             'warm'),
+  'jetlink.spec': ('ModelSpec',),
   'jetlink.queues': ('PolicyQueues',),
-  'jetlink.comma': ('gadget', 'lending', 'owner', 'port'),
-  'jetlink.comma.gadget': (
-    # production: the backend, helpers, joining, provision and spec_cache
-    'enabled', 'link_mode', 'link_kind', 'link_peer', 'link_configured', 'gadget_error', 'host_attached',
-    'port_has_host', 'dormant', 'wait_for_host', 'request_shutdown', 'pending_shutdown', 'finish_shutdown',
-    'far_end_sleeps', 'set_logger', 'SHUTDOWN_REQUEST', 'STATE', 'CC_ORIENTATION', 'P_SPEC',
-    # its tests, which call or patch these
-    'set_dormant', 'owner_state', 'note_lender_error', 'udc_state', 'ios', 'params_dir', 'raw_param',
-    'P_LINK', 'P_BIG_MODEL', 'P_OFFROAD', 'LINK_MODES', 'LINK', 'DORMANT', 'GADGET_STATUS', 'LENDER_STATUS',
-    'time',
-  ),
-  'jetlink.comma.lending': ('borrow', 'BORROW_TIMEOUT'),
-  'jetlink.comma.owner': ('main', 'WATCHED'),
-  'jetlink.comma.port': ('CHESTNUT_IDS',),
-  'jetlink.registry.catalog': ('DEFAULT_BIG_MODEL_REF', 'NetworkError', 'RegistryError', 'fetch_catalogs', 'merge_catalogs'),
-  'jetlink.registry.lfs': ('LFS_ENDPOINTS', 'POINTER_URL', 'Pointer', 'fetch_pointer', 'lfs_download', 'lfs_resolve'),
-  'jetlink.transport.tcp': ('CABLE_ADDRESS', 'TcpTransport'),
+  'jetlink.comma': ('gadget',),
+  'jetlink.comma.gadget': ('gadget_error', 'link_configured'),
+  'jetlink.registry.catalog': ('fetch_catalogs',),
 }
-# What openpilot calls on a client and reads off one (helpers.py, backend.py,
-# joining.py, provision.py, model_state.py). open_loan is what jetlink.openpilot
-# opens a loan with
+# What jetlink.openpilot calls on a client and reads off one, off a loan, and
+# off the transport a client rides on: the comma's side of the link
 CLIENT_CALLS = ('open_socket', 'open_borrowed_ffs', 'open_ffs', 'open_loan', 'hello', 'ensure_engine', 'infer_begin',
                 'infer_end', 'ping', 'shutdown', 'rebind', 'close')
 CLIENT_FIELDS = ('t', 'dead', 'deadline', 'last_timings', 'last_state')
-# what it reads off a loan (backend._Link, helpers.connect) and off the
-# transport a client rides on (model_state)
 LOAN_MEMBERS = ('sock', 'mount', 'udc', 'bounce', 'closed', 'renew', 'close')
 TRANSPORT_CALLS = ('link_info',)
 # and the rest of what runs there
@@ -97,7 +89,7 @@ def test_a_comma_module_loads_only_what_the_comma_has(module):
   run = subprocess.run([sys.executable, '-c', PROBE, module, *FORK_IMPORTS.get(module, ())],
                        cwd=ROOT, capture_output=True, text=True, check=True)
   found = json.loads(run.stdout)
-  assert found['missing'] == [], f"openpilot imports {found['missing']} from {module}"
+  assert found['missing'] == [], f"the fork imports {found['missing']} from {module}"
   assert found['foreign'] == [], f"{module} needs {found['foreign']}; the comma has numpy and the standard library"
 
 

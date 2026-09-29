@@ -50,7 +50,7 @@ cat <<'NEXT'
     Reboot the comma, or restart them yourself (get the pid first: pkill -f
     over ssh matches your own ssh command line and kills the session):
 
-      pgrep -f "^openpilot.sunnypilot.accelerators.jetlink.owner$"
+      pgrep -f "^openpilot.sunnypilot.jetlink_adapter$"
 
     Sanity check with the Jetson cabled up and its server running
     (the jetlink-server service, or jetlink run):

@@ -26,11 +26,9 @@ something to do and which exits when there is not. That keeps a parked car and
 a drive alike at one resident jetlink process of about 13 MB rather than
 47.5 MB, and it is why nothing in this module may import swaglog, Params,
 numpy, capnp or zmq; see gadget.py and tests/test_comma_gadget.py. The caller
-names the worker and says where the settings are: jetlink.openpilot.owner runs
+names the worker and hands over the settings: jetlink.openpilot.owner runs
 main() with what the fork's adapter says (OwnerConfig), so nothing here knows an
-openpilot module or a param name. The fork's older shim,
-accelerators/jetlink/owner.py, names only the worker, and the settings are then
-read by gadget's own rule (GadgetSettings) until that shim goes.
+openpilot module or a param name.
 
 manager stops this on shutdown with SIGINT and SIGKILLs it 5 s later, so every
 long wait polls `stop`: a FunctionFS owner killed mid-transfer leaves the
@@ -76,9 +74,6 @@ WORKER_GRACE = 10.0
 # because the loop below logs a traceback per cycle if something stays broken
 LOG = Path('/data/log/jetlink-owner.log')
 LOG_BYTES = 1 << 20
-# params whose change is a reason to look again: the pick and what is built.
-# GadgetSettings' names; a caller that passes settings names its own
-WATCHED = (gadget.P_BIG_MODEL, gadget.P_SPEC)
 
 
 def _own_logger(path: Path) -> logging.Logger:
@@ -98,39 +93,9 @@ def _own_logger(path: Path) -> logging.Logger:
   return log
 
 
-class GadgetSettings:
-  """The settings as gadget reads them, by its own param names and path rule:
-  what the owner reads when its caller names none, which is the fork's shim
-  from before jetlink.openpilot. jetlink.openpilot.settings.Settings gives the
-  same three answers from the keys and the directory the fork's adapter names.
-  """
-
-  def __init__(self):
-    self._watched: dict[str, str] | None = None
-
-  def mode(self) -> str:
-    return gadget.link_mode()
-
-  def offroad(self) -> bool:
-    return gadget.offroad()
-
-  def marks(self) -> dict[str, int]:
-    """When each watched param last changed. A stat, not a read: the owner does
-    not parse the catalog or the spec, it only notices they moved."""
-    if self._watched is None:
-      self._watched = {k: str(gadget.params_dir() / k) for k in WATCHED}
-    out = {}
-    for key, path in self._watched.items():
-      try:
-        out[key] = os.stat(path).st_mtime_ns
-      except OSError:
-        out[key] = 0
-    return out
-
-
 class Owner:
-  def __init__(self, worker: Sequence[str] = (), cwd: str | None = None, env: Mapping[str, str] | None = None,
-               settings=None, chestnut_ids=None):
+  def __init__(self, worker: Sequence[str], cwd: str | None = None, env: Mapping[str, str] | None = None, *,
+               settings, chestnut_ids):
     # the provisioning run: its argv, its working directory, and what it gets
     # over this process's environment
     self.worker_argv = list(worker)
@@ -138,7 +103,7 @@ class Owner:
     self.worker_env = dict(env or {})
     # mode(), offroad() and marks(): the link setting, whether the car is
     # parked, and when the pick and the built model last changed
-    self.settings = GadgetSettings() if settings is None else settings
+    self.settings = settings
     self.transport = None
     self.stop = False
     self.dormant = False
@@ -612,12 +577,12 @@ class Owner:
 
 
 def main(worker: Sequence[str], cwd: str | None = None, env: Mapping[str, str] | None = None,
-         log_file: Path | None = None, settings=None, chestnut_ids=None) -> None:
+         log_file: Path | None = None, *, settings, chestnut_ids) -> None:
   """Hold the gadget until SIGTERM or SIGINT. `worker` is the provisioning
   run's argv, started in `cwd` with `env` over this process's environment;
-  `log_file` defaults to LOG. `settings` and `chestnut_ids` default to
-  gadget's own rule and port.CHESTNUT_IDS; jetlink.openpilot.owner passes
-  the fork adapter's."""
+  `log_file` defaults to LOG. `settings` (mode(), offroad(), marks()) and
+  `chestnut_ids` are the fork adapter's, as jetlink.openpilot.owner hands
+  them over."""
   gadget.set_logger(_own_logger(LOG if log_file is None else log_file))
   owner = Owner(worker, cwd=cwd, env=env, settings=settings, chestnut_ids=chestnut_ids)
   signal.signal(signal.SIGTERM, owner.request_stop)

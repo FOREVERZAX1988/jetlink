@@ -15,6 +15,7 @@ from pathlib import Path
 from unittest import mock
 
 from jetlink.comma import port, root
+from tests.openpilot.fakes import CHESTNUT_IDS
 
 SWAP = port.SWAP_AFTER
 RELEASE = port.RELEASE_AFTER
@@ -39,7 +40,8 @@ class PortTest(unittest.TestCase):
               mock.patch.object(port, 'run_script', self.script)):
       self.addCleanup(p.stop)
       p.start()
-    self.port = port.Port()
+    # openpilot's chestnut ids, as the fork's adapter hands them over
+    self.port = port.Port(CHESTNUT_IDS)
     self.now = 100.0
     # what is always there: the root hub, and the modem on the other controller
     self.enumerate('usb1', (0x1D6B, 0x0002))

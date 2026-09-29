@@ -43,12 +43,6 @@ from jetlink.comma import gadget, root
 
 POWER_ROLE = Path('/sys/class/usbpd/usbpd0/current_pr')
 USB_DEVICES = Path('/sys/bus/usb/devices')
-# CHESTNUT_USB_IDS and CHESTNUT_ROM_USB_IDS in openpilot's common/hardware/usb.py,
-# which the owner cannot import: the hardware package brings cereal and capnp
-# with it. The ROM ones too, so a chestnut being flashed is never taken for a
-# host. The fork's adapter hands its own over (OwnerConfig.chestnut_ids); this
-# copy is for a caller that names none, and the fork's tests check the two agree
-CHESTNUT_IDS = frozenset({(0xADD1, 0x0001), (0x3801, 0x0001), (0x174C, 0x2464), (0x174C, 0x2463)})
 # how long the comma hosts the far end before judging it. A chestnut enumerates
 # well inside this
 SWAP_AFTER = 3.0
@@ -68,7 +62,7 @@ def power_role() -> str | None:
     return None
 
 
-def chestnut_attached(chestnut_ids: frozenset[tuple[int, int]] = CHESTNUT_IDS) -> bool:
+def chestnut_attached(chestnut_ids: frozenset[tuple[int, int]]) -> bool:
   """Is a chestnut enumerated, running or in its ROM? It can only be on this port."""
   try:
     names = os.listdir(USB_DEVICES)
@@ -98,9 +92,12 @@ class Port:
   """Called once a cycle by the owner. A cycle reads one sysfs file; sudo only
   runs on a change."""
 
-  def __init__(self, chestnut_ids=None):
-    # what a chestnut enumerates as, running or in its ROM
-    self.chestnut_ids = CHESTNUT_IDS if chestnut_ids is None else frozenset(chestnut_ids)
+  def __init__(self, chestnut_ids):
+    # what a chestnut enumerates as, running or in its ROM: openpilot's
+    # CHESTNUT_USB_IDS and CHESTNUT_ROM_USB_IDS, as the fork's adapter hands
+    # them over (OwnerConfig.chestnut_ids), so a chestnut being flashed is
+    # never taken for a host
+    self.chestnut_ids = frozenset(chestnut_ids)
     self._reset()
 
   def _reset(self) -> None:
