@@ -103,14 +103,9 @@ class ProvisioningRun:
     return path
 
   def provision(self) -> bool:
-    """Make the Jetson ready for the selected model. Host must be attached.
-
-    The identity comes from the catalog model's LFS pointer (the oid is the
-    sha256, size the byte count), so the comma can ask without holding or
-    hashing the ONNX.
-    The file is only fetched when the server asks for the bytes; the Jetson
-    keeps its own copy of every ONNX and never prunes it.
-    """
+    """Make the Jetson ready for the selected model; a host is attached. The
+    file is fetched only when the server asks for the bytes: the Jetson keeps
+    its own copy of every ONNX and never prunes it."""
     from jetlink.client import EngineMissing
     parts = self.parts
     entry = parts.models.selected_model()
@@ -129,12 +124,15 @@ class ProvisioningRun:
                      entry.get('name', sha256[:16]), nbytes >> 20, sha256[:16])
     parts.progress.report('connect', 0.0, 'talking to the accelerator')
 
+    def ensure(path):
+      return link.ensure(parts, self.client, sha256, nbytes, path, progress=parts.progress.report_with_eta,
+                         should_stop=lambda: self.stop)
+
     hello = self.client.hello(timeout=10.0)
     self.note_sleep_after(hello)
     self.log.warning("jetlink: server %s trt %s", hello.get('device'), hello.get('trt_version'))
     try:
-      spec = link.ensure(parts, self.client, sha256, nbytes, model_path,
-                         progress=parts.progress.report_with_eta, should_stop=lambda: self.stop)
+      spec = ensure(model_path)
     except EngineMissing:
       # the server has nothing to build from, and neither have we: fetch the
       # model and hand it over in this run. The owner lends the link for the
@@ -144,8 +142,7 @@ class ProvisioningRun:
         raise
       # a download of minutes can outlast the session; a hello starts a new one
       self.client.hello(timeout=10.0)
-      spec = link.ensure(parts, self.client, sha256, nbytes, model_path,
-                         progress=parts.progress.report_with_eta, should_stop=lambda: self.stop)
+      spec = ensure(model_path)
 
     parts.progress.report('ready', 1.0, 'engine ready')
     self.log.warning("jetlink: engine ready for %s", spec.sha256[:16])
@@ -185,8 +182,7 @@ class ProvisioningRun:
     try:
       if not self.open_link():
         raise RuntimeError("could not open the link")
-      if not gadget.wait_for_host(WAKE_TIMEOUT, bounce=self.bounce,
-                                  should_stop=lambda: self.stop):
+      if not self.wait_for_jetson():
         raise TimeoutError(f"no jetson attached within {WAKE_TIMEOUT:.0f} s")
       resp = self.client.shutdown(reason, timeout=5.0)
       self.log.warning("jetlink: jetson answered the shutdown request: %s", resp)
@@ -196,6 +192,10 @@ class ProvisioningRun:
       gadget.finish_shutdown()
 
   # -- one run --------------------------------------------------------------
+
+  def wait_for_jetson(self) -> bool:
+    """Has a host enumerated within WAKE_TIMEOUT? A sleeping Jetson wakes to the bind."""
+    return gadget.wait_for_host(WAKE_TIMEOUT, bounce=self.bounce, should_stop=lambda: self.stop)
 
   def bounce(self) -> bool:
     """Ask the owner to bounce the gadget, over the lease. On a phone's cable
@@ -249,8 +249,7 @@ class ProvisioningRun:
     try:
       if not self.open_link():
         return False
-      if not gadget.wait_for_host(WAKE_TIMEOUT, bounce=self.bounce,
-                                  should_stop=lambda: self.stop):
+      if not self.wait_for_jetson():
         self.log.warning("jetlink: no jetson within %.0f s, leaving it for the next run", WAKE_TIMEOUT)
         return False
       finished = self.provision()

@@ -21,9 +21,9 @@ takes the same warped frame and the same scalars; its hidden state never
 leaves the Jetson, so there is no prev_feat to send back. The spec says which.
 
 What openpilot's modeld reads off a ModelState comes from the fork's adapter
-(ModelFace): comma's constants, parser, smoothing and action function, and the
-lat_delay a new model starts with. tinygrad is imported when a model is built,
-never at module level: only modeld and the build have it.
+(ModelFace): comma's constants, parser, smoothing and action function.
+tinygrad is imported when a model is built, never at module level: only
+modeld and the build have it.
 """
 from __future__ import annotations
 
