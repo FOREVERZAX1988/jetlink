@@ -199,7 +199,7 @@ extension EngineHost {
         throw error
       }
       let readStarted = DispatchTime.now().uptimeNanoseconds
-      let out = l.engine.output(ModelConstants.drivingOutput)!
+      let out = l.staging.layout.output!
       output.withUnsafeMutableBytes { o in
         if io.type == .float16 {
           Convert.f16ToF32(out, o.baseAddress!, count: spec.outputCount)
@@ -213,7 +213,7 @@ extension EngineHost {
       let accel = l.engine.lastGpuUs
       if finite {
         // the hidden state back into the queues, as a frame from the comma does
-        output.withUnsafeBufferPointer { l.staging.keep(outputs: $0.baseAddress!) }
+        l.staging.keep(outputs: out, type: io.type)
       }
       lock.unlock()
 

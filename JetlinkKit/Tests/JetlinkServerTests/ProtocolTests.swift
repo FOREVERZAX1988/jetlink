@@ -38,7 +38,7 @@ struct ProtocolTests {
           kept.withUnsafeMutableBytes { k in
             (k.baseAddress! + hidden.lowerBound * 4).copyMemory(from: packed + spec.packedBytes, byteCount: hidden.count * 4)
           }
-          kept.withUnsafeBufferPointer { loaded.staging.keep(outputs: $0.baseAddress!) }
+          kept.withUnsafeBytes { loaded.staging.keep(outputs: $0.baseAddress!, type: .float) }
           try loaded.staging.stage(warped: frame, packed: packed)
         }
         try loaded.engine.run()

@@ -212,7 +212,8 @@
       // Only the seed read the disk: every later page is given what the feed kept.
       #expect(registry.count("inventory") == 1)
 
-      // An observing controller buffers nothing for a stream nobody reads.
+      // An observing controller makes no stream, so it buffers nothing.
+      controller.finish()
       var buffered = 0
       for await _ in controller.events { buffered += 1 }
       #expect(buffered == 0)
