@@ -457,10 +457,13 @@ class TestShuttingTheJetsonDown(OpenpilotTest):
     self.addCleanup(ours.close)
     self.addCleanup(theirs.close)
     self.d.client = JetlinkClient(ours, name='provision')
+    self.d.loan = mock.Mock()
     self.d.shutdown_jetson('car battery')
     server.done.wait(5.0)
     self.assertEqual(server.shutdowns, [{'reason': 'car battery'}])
     self.assertEqual(server.dropped, [])
+    # and, like every hello, it reaches the owner
+    self.d.loan.note_server.assert_called_once_with({'protocol': P.VERSION, 'device': 'orin', 'sleep_after': 0.0})
     self.assertTrue(self.op.log.has("jetson answered the shutdown request: {'ok': True}"))
     self.assertFalse(self.request.exists())
 

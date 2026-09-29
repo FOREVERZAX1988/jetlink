@@ -179,7 +179,7 @@ class ProvisioningRun:
       # borrower, and the server's session with it. This client's seqs start
       # at 1 again, and the session drops anything at or below the last seq
       # it saw as a replay; only a hello starts it over
-      self.client.hello(timeout=10.0)
+      self.hello()
       resp = self.client.shutdown(reason, timeout=5.0)
       self.log.warning("jetlink: jetson answered the shutdown request: %s", resp)
     except Exception:
