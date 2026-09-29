@@ -1093,6 +1093,24 @@ class TestLeavingIos(IosTest):
     o.step()
     self.assert_usb(o)
 
+  def test_a_failed_usb_build_is_retried_onroad_never_back_to_ios(self):
+    # the USB build on the way out failed and the car started inside its backoff
+    o = self.owner()
+    self.setup_gadget.return_value = False
+    self.write('JetlinkLink', b'1')
+    o.step()
+    self.setup_gadget.assert_called_once_with(False)
+    self.write('IsOffroad', b'0')
+    for _ in range(3):
+      o.step()
+    self.setup_gadget.assert_called_once_with(False)
+    o.next_gadget_attempt = 0.0   # the backoff has passed
+    self.setup_gadget.return_value = True
+    o.step()
+    self.assertEqual(self.setup_gadget.call_args_list, [mock.call(False)] * 2)
+    self.assertFalse(o.built_ios)
+    self.assertFalse(o.holding())
+
   def test_off_lets_everything_go(self):
     o = self.owner()
     o.worker = worker = mock.Mock(**{'poll.return_value': None, 'wait.return_value': 0})

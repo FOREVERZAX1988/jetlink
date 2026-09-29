@@ -772,7 +772,9 @@ class Owner:
     if ios == self.built_ios and not half_built:
       return False
     if ios != self.built_ios:
-      if not offroad:
+      # the way out of iOS whose USB build failed is retried onroad too: held
+      # for the drive, the comma would sit on iOS waiting for a phone
+      if not offroad and not (not ios and self.failed_ios is False):
         return False
       if ios:
         if self.worker_running():
