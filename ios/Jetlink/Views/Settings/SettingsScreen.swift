@@ -30,7 +30,6 @@ struct SettingsScreen: View {
         connection
         Section {
           Picker("Processor", selection: $settings.device) {
-            Text(OrtProfile.aneWhole.title).tag(OrtProfile.aneWhole)
             Text(OrtProfile.ane.title).tag(OrtProfile.ane)
             Text(OrtProfile.coreml.title).tag(OrtProfile.coreml)
             #if targetEnvironment(simulator)
