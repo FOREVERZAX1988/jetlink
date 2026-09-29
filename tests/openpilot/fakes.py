@@ -222,7 +222,7 @@ def owner_config() -> OwnerConfig:
 # its records in /dev/shm, the gadget in configfs and FunctionFS, the UDC and
 # the USB-C port in sysfs, and the lend socket
 GADGET_FILES = ('LINK', 'NET_STATUS', 'GADGET_STATUS', 'LENDER_STATUS', 'DORMANT', 'SHUTDOWN_REQUEST', 'STATUS',
-                'STARTS', 'OWNER_LOCK', 'CC_ORIENTATION')
+                'STARTS', 'OWNER_LOCK', 'SERVER', 'CC_ORIENTATION')
 
 
 def redirect(root: Path) -> list:

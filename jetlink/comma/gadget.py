@@ -167,6 +167,9 @@ HEARTBEAT_TIMEOUT = 3.0
 STARTS = Path("/dev/shm/jetlink/starts.json")
 # held with flock by the owner for its whole life, so there is only ever one
 OWNER_LOCK = Path("/dev/shm/jetlink/owner.lock")
+# what the server's last hello said (lending.SERVER_FIELDS), kept apart from
+# the status record so a clean stop leaves it for the next owner
+SERVER = Path("/dev/shm/jetlink/server.json")
 # how long a host that stopped reading configured still counts as there. The
 # owner holds the gadget for as long as the link is enabled, so presence no
 # longer blinks at every handover; what is left to bridge is a USB3 link

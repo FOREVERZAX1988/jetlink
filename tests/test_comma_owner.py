@@ -44,6 +44,7 @@ class OwnerTest(unittest.TestCase):
                         ('STATUS', self.tmp / 'run' / 'status.json'),
                         ('STARTS', self.tmp / 'run' / 'starts.json'),
                         ('OWNER_LOCK', self.tmp / 'run' / 'owner.lock'),
+                        ('SERVER', self.tmp / 'run' / 'server.json'),
                         ('CC_ORIENTATION', self.tmp / 'cc'),
                         ('link_configured', mock.Mock(return_value=True)),
                         ('host_attached', mock.Mock(return_value=True)),
@@ -364,16 +365,39 @@ class TestWhatItIsTold(OwnerTest):
     self.assertEqual(gadget.owner_status()['server'], {'device': 'orin', 'sleep_after': 60.0, 'protocol': 3})
 
   def test_an_owner_started_again_keeps_what_the_last_one_heard(self):
-    # parked, with nobody to say hello again until the next drive
-    first = self.owner()
-    self.heard(first, sleep_after=0.0)
-    first.publish_status()
-    second = self.owner()
-    second.server = None
-    second.stop = True
-    with mock.patch.object(second, 'forget_status'):
-      second.run()
-    self.assertFalse(second.far_end_sleeps())
+    # parked, with nobody to say hello again until the next drive: after a
+    # crash, and after the link turned Off and On, whose clean stop removes
+    # the status record
+    for clean in (False, True):
+      first = self.owner()
+      self.heard(first, sleep_after=0.0)
+      if clean:
+        first.stop = True
+        first.run()
+        self.assertFalse(gadget.STATUS.exists())
+      second = self.make()   # not self.owner(), which passes on a hello of its own
+      self.addCleanup(second.cable.close)
+      second.adopt()
+      self.assertFalse(second.far_end_sleeps(), 'clean' if clean else 'crash')
+      gadget.SERVER.unlink()
+
+  def test_what_it_heard_is_kept_when_it_changes(self):
+    o = self.owner()   # heard sleep_after 1.0 already
+    with mock.patch.object(gadget, 'write_record', wraps=gadget.write_record) as write:
+      self.heard(o, sleep_after=1.0)
+      write.assert_not_called()
+      self.heard(o, sleep_after=0.0)
+    write.assert_called_once_with(gadget.SERVER, {'device': 'orin', 'sleep_after': 0.0})
+    self.assertEqual(json.loads(gadget.SERVER.read_text()), {'device': 'orin', 'sleep_after': 0.0})
+
+  def test_a_server_record_that_is_not_one_is_none(self):
+    gadget.SERVER.parent.mkdir(parents=True, exist_ok=True)
+    for text in ('', 'nope', '[0]'):
+      gadget.SERVER.write_text(text)
+      o = self.make()
+      self.addCleanup(o.cable.close)
+      o.adopt()
+      self.assertIsNone(o.server, text)
 
   def test_the_runs_exit_status_says_whether_it_left_work(self):
     o = self.owner()
@@ -994,7 +1018,7 @@ class TestTheStatusRecord(OwnerTest):
                      {'mode': 'usb', 'link': 'usb', 'peer': None, 'error': None, 'dormant': False, 'udc': 'configured',
                       'speed': 'super-speed', 'present': True, 'worker': False})
     # a whole record replaced, never a half written one beside it
-    self.assertEqual(os.listdir(gadget.STATUS.parent), ['status.json'])
+    self.assertEqual([n for n in os.listdir(gadget.STATUS.parent) if n.startswith('.')], [])
 
   def test_a_step_is_followed_by_a_record(self):
     o = self.owner()

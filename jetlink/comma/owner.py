@@ -398,12 +398,20 @@ class Owner:
   def note_server(self, borrower: str, fields: dict) -> None:
     """What a borrower passed on of the server's hello (lending.Loan.note_server),
     on the lender's thread. Said when it changes, which is how a server moved
-    to --sleep-after 0 or back shows in this log."""
+    to --sleep-after 0 or back shows in this log, and kept in gadget.SERVER,
+    which outlives this owner: a run with nothing to do never says hello, so
+    the next owner would otherwise take an always-on Jetson for one that
+    sleeps and let the gadget go until the next drive."""
     known, self.server = self.server or {}, dict(fields)
     if any(known.get(k) != fields.get(k) for k in ('device', 'sleep_after')) or not known:
       gadget.log.warning("jetlink: %s says the server on %s %s when the gadget goes (sleep_after %s)", borrower,
                          fields.get('device') or 'the far end', 'sleeps' if server_sleeps(fields) else 'stays up',
                          fields.get('sleep_after'))
+    if fields != known:
+      try:
+        gadget.write_record(gadget.SERVER, self.server)
+      except OSError as e:
+        gadget.log.warning("jetlink: could not keep what the server said (%s)", e)
 
   def far_end_sleeps(self) -> bool:
     """Does the far end suspend when the gadget goes, as its last hello said?"""
@@ -756,9 +764,10 @@ class Owner:
 
     The configfs gadget is used as it is: ensure_gadget and switch_mode look
     at it before building anything, and the first bind presents it again.
-    What the last owner heard of the server still holds; without it an owner
-    started again while parked took an always-on Jetson for one that sleeps,
-    and let the gadget go until the next drive's hello. The last owner's own
+    What the last owner heard of the server still holds (gadget.SERVER, which
+    a clean stop leaves); without it an owner started again while parked took
+    an always-on Jetson for one that sleeps, and let the gadget go until the
+    next drive's hello. The last owner's own
     records do not hold: the link it published, its dormant marker and its
     lender's error. The lender clears the socket it left once a connect
     proves it dead, and the port's first update lets go of its hold.
@@ -766,9 +775,12 @@ class Owner:
     gadget.clear_link()
     gadget.set_dormant(False)
     gadget.note_lender_error(None)
-    previous = gadget.owner_status()
-    if previous is not None and self.server is None and isinstance(previous.get('server'), dict):
-      self.server = previous['server']
+    if self.server is None:
+      try:
+        heard = json.loads(gadget.SERVER.read_text())
+      except (OSError, ValueError):
+        heard = None
+      self.server = heard if isinstance(heard, dict) else None
 
   def sit_out(self, until: float, died: int) -> None:
     """A crash loop's backoff: hold nothing, not the gadget, the lender or
