@@ -9,6 +9,7 @@
   import JetlinkStatusPage
   #if os(Linux)
     import JetlinkLinux
+    import JetlinkTRT
   #endif
 
   enum LogLevel: String, CaseIterable, ExpressibleByArgument {
@@ -17,7 +18,9 @@
 
   /// --cache, which every command that touches the cache takes.
   struct CacheArguments: ParsableArguments {
-    @Option(help: "Where models and built engines live. Default: $JETLINK_CACHE, else /mnt/data/jetlink on a Jetson, else the user's cache directory.")
+    @Option(
+      help: "Where models and built engines live. Default: $JETLINK_CACHE, else /mnt/data/jetlink on a Jetson, else /var/lib/jetlink as root, else the user's cache directory."
+    )
     var cache: String?
 
     var root: URL { cache.map { URL(fileURLWithPath: $0, isDirectory: true) } ?? defaultCache() }
@@ -44,6 +47,8 @@
     var sleepAfter = 0.0
     @Option(help: "Serve the read-only status page on this port; 0 is off.")
     var statusPort = 0
+    @Flag(help: "Power this machine off when the comma asks (Linux). Without it the comma is told ok and the machine stays up.")
+    var poweroff = false
     @Flag(name: .customLong("no-preload"), help: "Do not load the engine loaded last before a comma asks.")
     var noPreload = false
     @Flag(name: .customLong("no-keepalive"), help: "Do not keep the GPU clocked up between frames (a Mac's onnxruntime).")
@@ -80,8 +85,9 @@
         // The gadget through sysfs, and telemetry, the sleeper and poweroff
         // as hooks; NVML reads the GPU TensorRT runs on. The gadget hears the
         // sessions, and puts the link's power management back when it closes.
-        let sysfs = LinuxHost.gadget()
-        hooks = LinuxHost.hooks(cache: root, sleepAfter: sleepAfter, gpu: Int(chosen.options().device ?? "") ?? 0, gadget: sysfs)
+        let sysfs = SysfsGadget()
+        let telemetry = LinuxHost.telemetry(gpu: (backend as? TrtBackend)?.trt.device ?? 0)
+        hooks = LinuxHost.hooks(sleepAfter: sleepAfter, poweroff: poweroff, telemetry: telemetry, gadget: sysfs)
         gadget = sysfs
         closeGadget = { sysfs.close() }
       #endif
@@ -104,7 +110,11 @@
         log.error("cannot serve: \(error)")
         throw ExitCode.failure
       }
-      let page = controller.flatMap { startPage($0, log: log) }
+      var hardware: (any PageHardwareSource)?
+      #if os(Linux)
+        hardware = PageHardware(cache: root, gpu: telemetry)
+      #endif
+      let page = controller.flatMap { startPage($0, hardware: hardware, log: log) }
       stopOnSignals { signal in
         log.info("stopping on \(signal)")
         var steps: [(name: String, stop: () -> Void)] = [("the server", server.shutdown)]
@@ -118,11 +128,7 @@
     /// observes `controller` and sends it no command, so a page never starts
     /// a catalog fetch, a download or a build. Without its page it stays
     /// off: the comma matters more than a page.
-    private func startPage(_ controller: ServerController, log: ServerLog) -> PageServer? {
-      var hardware: (any PageHardwareSource)?
-      #if os(Linux)
-        hardware = PageHardware(cache: controller.server.configuration.cacheRoot, gpu: Int(chosen.options().device ?? "") ?? 0)
-      #endif
+    private func startPage(_ controller: ServerController, hardware: (any PageHardwareSource)?, log: ServerLog) -> PageServer? {
       do {
         let page = try PageServer.start(port: statusPort, controller: controller, version: productVersion(), hardware: hardware)
         log.info("status page on port \(page.port)")
@@ -212,16 +218,15 @@
     withExtendedLifetime(sources) { dispatchMain() }
   }
 
-  /// $JETLINK_CACHE, else on Linux the Jetson's data partition or the XDG
-  /// cache (JetlinkLinux's Platform), else a Mac's user cache directory, as
-  /// the Python server chose.
+  /// $JETLINK_CACHE, else Linux's rule (JetlinkLinux's Platform), else a
+  /// Mac's user cache directory.
   func defaultCache(environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
+    if let named = environment["JETLINK_CACHE"], !named.isEmpty {
+      return URL(fileURLWithPath: named, isDirectory: true)
+    }
     #if os(Linux)
-      Platform.defaultCache(environment: environment)
+      return Platform.defaultCache(environment: environment)
     #else
-      if let named = environment["JETLINK_CACHE"], !named.isEmpty {
-        return URL(fileURLWithPath: named, isDirectory: true)
-      }
       return FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Caches/jetlink", directoryHint: .isDirectory)
     #endif
   }

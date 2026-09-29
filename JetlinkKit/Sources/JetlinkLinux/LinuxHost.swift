@@ -3,25 +3,23 @@
   import JetlinkServer
 
   /// A Jetson's or a Linux PC's side of the server: what jetlink-server passes
-  /// it besides the backend. The comma's gadget through sysfs, and behind
-  /// `ServerHooks` the telemetry, the sleeper and the poweroff.
+  /// it besides the backend and the gadget, `SysfsGadget`.
   public enum LinuxHost {
-    /// The server's hooks on this machine. `sleepAfter` is what was asked
-    /// for; the hooks say what the host will do: 0 when it cannot suspend.
-    /// `gpu` is the CUDA device index NVML reports on (a PC's). `gadget`
-    /// hears when sessions start and end, for the link's power management.
-    public static func hooks(cache: URL, sleepAfter: Double, gpu: Int = 0, gadget: SysfsGadget? = nil) -> ServerHooks {
-      hooks(cache: cache, sleepAfter: sleepAfter, gpu: gpu, gadget: gadget, root: .system)
+    /// The server's hooks on this machine: `telemetry`'s readings, the
+    /// sleeper, the poweroff. `sleepAfter` is what was asked for; the hooks
+    /// say what the host will do: 0 when it cannot suspend. `gadget` hears
+    /// when sessions start and end, for the link's power management.
+    public static func hooks(sleepAfter: Double, poweroff: Bool, telemetry: GPUTelemetry?, gadget: SysfsGadget? = nil) -> ServerHooks {
+      hooks(sleepAfter: sleepAfter, poweroff: poweroff, telemetry: telemetry, gadget: gadget, root: .system)
     }
 
     static func hooks(
-      cache: URL, sleepAfter: Double, gpu: Int, gadget: SysfsGadget? = nil, root: HostRoot,
-      nvml: (Int) -> Result<NvmlTelemetry, NvmlUnavailable> = NvmlTelemetry.open, log: @escaping LinuxLog = serverLog("linux")
+      sleepAfter: Double, poweroff: Bool, telemetry: GPUTelemetry?, gadget: SysfsGadget? = nil, root: HostRoot,
+      log: @escaping LinuxLog = serverLog("linux")
     ) -> ServerHooks {
       var hooks = ServerHooks()
-      let tegra = Platform.isTegra(root)
-      if let source = telemetrySource(tegra: tegra, root: root, gpu: gpu, nvml: nvml, log: log) {
-        let sampler = TelemetrySampler(source: source)
+      if let telemetry {
+        let sampler = TelemetrySampler(source: telemetry.read)
         hooks.telemetry = { sampler.read() }
       }
 
@@ -52,34 +50,43 @@
         }
       }
 
-      hooks.shutdown = PowerOff.hook(cache: cache, tegra: tegra)
+      hooks.shutdown = PowerOff.hook(enabled: poweroff)
       return hooks
     }
 
-    /// Tegra sysfs on a Jetson, else NVML where the driver has it, else none,
-    /// which the comma is told as `{}` rather than zeros.
-    static func telemetrySource(
+    /// Tegra sysfs on a Jetson, else NVML for CUDA device `gpu` where the
+    /// driver has it, else none, which the comma is told as `{}` rather than
+    /// zeros.
+    public static func telemetry(gpu: Int) -> GPUTelemetry? {
+      telemetry(tegra: Platform.isTegra(), root: .system, gpu: gpu, nvml: NvmlTelemetry.open, log: serverLog("linux"))
+    }
+
+    static func telemetry(
       tegra: Bool, root: HostRoot, gpu: Int, nvml: (Int) -> Result<NvmlTelemetry, NvmlUnavailable>, log: LinuxLog
-    ) -> TelemetrySampler.Source? {
+    ) -> GPUTelemetry? {
       if tegra {
         let telemetry = TegraTelemetry(root: root)
         log(.info, "telemetry from Tegra sysfs")
-        return { telemetry.read() }
+        return GPUTelemetry(read: { telemetry.read() }, name: nil, tegra: true)
       }
       switch nvml(gpu) {
       case .success(let telemetry):
         log(.info, "telemetry from NVML on GPU \(gpu) (\(telemetry.name ?? "unnamed"))")
-        return { telemetry.read() }
+        return GPUTelemetry(read: { telemetry.read() }, name: telemetry.name, tegra: false)
       case .failure(let why):
         log(.info, "no telemetry on this host: \(why)")
         return nil
       }
     }
+  }
 
-    /// The comma's gadget, found through sysfs and claimed through usbfs.
-    /// Pass it to `hooks`, and `close()` it when the server stops.
-    public static func gadget() -> SysfsGadget {
-      SysfsGadget()
-    }
+  /// The GPU's readings in the keys the comma logs, from the one source this
+  /// host has: the telemetry hook and the status page's hardware panel read
+  /// the same one.
+  public struct GPUTelemetry: Sendable {
+    public let read: @Sendable () -> [String: Any]
+    /// NVML's name for the GPU; nil on a Jetson, whose device tree names it.
+    public let name: String?
+    public let tegra: Bool
   }
 #endif

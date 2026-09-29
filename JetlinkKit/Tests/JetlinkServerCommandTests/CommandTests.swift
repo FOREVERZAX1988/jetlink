@@ -114,16 +114,12 @@
       #expect(defaultCache(environment: ["JETLINK_CACHE": "/somewhere"]).path == "/somewhere")
     }
 
-    @Test(.enabled(if: !FileManager.default.fileExists(atPath: "/mnt/data/jetlink")))
-    func elseTheUsersCacheDirectory() {
-      let home = FileManager.default.homeDirectoryForCurrentUser.path
-      #if os(macOS)
+    #if os(macOS)
+      @Test func elseTheUsersCacheDirectory() {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
         #expect(defaultCache(environment: [:]).path == home + "/Library/Caches/jetlink")
-      #else
-        #expect(defaultCache(environment: ["XDG_CACHE_HOME": "/xdg"]).path == "/xdg/jetlink")
-        #expect(defaultCache(environment: [:]).path == home + "/.cache/jetlink")
-      #endif
-    }
+      }
+    #endif
   }
 
   struct BuildTests {

@@ -1,50 +1,47 @@
 #if os(Linux)
   import Foundation
   import Glibc
+  import JetlinkKit
   import JetlinkStatusPage
 
   /// The status page's hardware panel on a Jetson or a Linux PC, read the way
-  /// jtop reads it: procfs, sysfs, and NVML for a PC's NVIDIA GPU. Only the
-  /// page's sampler thread calls it, while a page is open. Paths are found at
-  /// the first call; a sample is then a few dozen small reads.
+  /// jtop reads it: procfs, sysfs, and the GPU's telemetry the server already
+  /// reads. Only the page's sampler thread calls it, while a page is open.
+  /// Paths are found at the first call; a sample is then a few dozen small
+  /// reads.
   public final class PageHardware: PageHardwareSource, @unchecked Sendable {
     let root: HostRoot
     let cache: URL?
-    private let gpu: Int
-    private let nvml: (Int) -> Result<NvmlTelemetry, NvmlUnavailable>
+    private let gpu: GPUTelemetry?
     private var found: Found?
     private var previous: [Int: (total: UInt64, idle: UInt64)] = [:]
 
     /// Everything a sample reads, found once.
     struct Found {
-      let tegra: Bool
       let zones: [(name: String, path: String)]
       let ina3221: String?
       let fanRPM: String?
       let fanPWM: String?
-      let gpuLoad: String?
-      let gpuFrequency: String?
-      let nvml: NvmlTelemetry?
       let cpus: [Int]
       let modes: [Int: String]
     }
 
     /// `cache` is the models folder, whose disk the panel shows; `gpu` the
-    /// device NVML reports on (a PC's).
-    public convenience init(cache: URL, gpu: Int = 0) {
-      self.init(root: .system, cache: cache, gpu: gpu, nvml: NvmlTelemetry.open)
+    /// telemetry the server reads (`LinuxHost.telemetry`).
+    public convenience init(cache: URL, gpu: GPUTelemetry?) {
+      self.init(root: .system, cache: cache, gpu: gpu)
     }
 
-    init(root: HostRoot, cache: URL?, gpu: Int = 0, nvml: @escaping (Int) -> Result<NvmlTelemetry, NvmlUnavailable>) {
+    init(root: HostRoot, cache: URL?, gpu: GPUTelemetry?) {
       self.root = root
       self.cache = cache
       self.gpu = gpu
-      self.nvml = nvml
     }
+
+    private var tegra: Bool { gpu?.tegra ?? false }
 
     private func paths() -> Found {
       if let found { return found }
-      let tegra = Platform.isTegra(root)
       var zones = ThermalZone.all(root).filter { $0.celsius() != nil }.map { ($0.type, $0.tempPath) }
       if zones.isEmpty {
         // A desktop without ACPI zones: its CPU package's sensor.
@@ -55,13 +52,9 @@
           }
         }
       }
-      let telemetry = tegra ? TegraTelemetry(root: root) : nil
-      // NVML initializes on a Tegra and then answers nothing: never there.
-      let nvml = tegra ? nil : try? nvml(gpu).get()
       let made = Found(
-        tegra: tegra, zones: zones, ina3221: hwmon(named: "ina3221", root), fanRPM: hwmon(named: "pwm_tach", root).map { "\($0)/rpm" },
-        fanPWM: hwmon(named: "pwmfan", root).map { "\($0)/pwm1" }, gpuLoad: telemetry?.gpuLoad, gpuFrequency: telemetry?.gpuFrequency, nvml: nvml,
-        cpus: PageHardware.cpuList(Sysfs.read(root.path("/sys/devices/system/cpu/possible"))),
+        zones: zones, ina3221: hwmon(named: "ina3221", root), fanRPM: hwmon(named: "pwm_tach", root).map { "\($0)/rpm" },
+        fanPWM: hwmon(named: "pwmfan", root).map { "\($0)/pwm1" }, cpus: PageHardware.cpuList(Sysfs.read(root.path("/sys/devices/system/cpu/possible"))),
         modes: PageHardware.powerModes(Sysfs.read(root.path("/etc/nvpmodel.conf"))))
       found = made
       return made
@@ -70,17 +63,16 @@
     // MARK: once
 
     public func host() -> [String: Any] {
-      let found = paths()
-      var host: [String: Any] = ["jetson": found.tegra]
+      var host: [String: Any] = ["jetson": tegra]
       host["hostname"] = Sysfs.read(root.path("/proc/sys/kernel/hostname"))
       host["kernel"] = Sysfs.read(root.path("/proc/sys/kernel/osrelease"))
       let model = Sysfs.read(root.path("/proc/device-tree/model"))?.trimmingCharacters(in: CharacterSet(charactersIn: "\0"))
         .replacingOccurrences(of: " Engineering Reference Developer Kit", with: "")
       host["board"] = model.flatMap { $0.isEmpty ? nil : $0 } ?? PageHardware.field("model name", in: Sysfs.read(root.path("/proc/cpuinfo")), separator: ":")
-      let jetpack = found.tegra ? PageHardware.jetpack(Sysfs.read(root.path("/etc/nv_tegra_release"))) : nil
+      let jetpack = tegra ? PageHardware.jetpack(Sysfs.read(root.path("/etc/nv_tegra_release"))) : nil
       let pretty = PageHardware.field("PRETTY_NAME", in: Sysfs.read(root.path("/etc/os-release")), separator: "=")
       host["os"] = jetpack ?? pretty?.trimmingCharacters(in: CharacterSet(charactersIn: "\""))
-      host["gpu"] = found.nvml?.name ?? (found.tegra ? PageHardware.tegraGPU(Sysfs.read(root.path("/proc/device-tree/compatible"))) : nil)
+      host["gpu"] = gpu?.name ?? (tegra ? PageHardware.tegraGPU(Sysfs.read(root.path("/proc/device-tree/compatible"))) : nil)
       return host
     }
 
@@ -154,9 +146,15 @@
     public func sample() -> [String: Any] {
       let found = paths()
       var sample: [String: Any] = ["cpu": cpu(found), "mem": memory(), "temps": temperatures(found)]
-      sample["gpu"] = gpuSample(found)
+      sample["gpu"] = gpuSample()
       if let directory = found.ina3221 {
-        let rails = PowerRail.all(ina3221: directory).map { ["name": $0.label, "w": rounded(Double($0.millivolts * $0.milliamps) / 1e6, 2)] as [String: Any] }
+        // Channel 1 is VDD_IN on an Orin: the whole board's input.
+        let rails = (1...3).compactMap { channel -> [String: Any]? in
+          guard let label = Sysfs.read("\(directory)/in\(channel)_label"), !label.isEmpty else { return nil }
+          let mv = Sysfs.readInt("\(directory)/in\(channel)_input") ?? 0
+          let ma = Sysfs.readInt("\(directory)/curr\(channel)_input") ?? 0
+          return ["name": label, "w": pythonRound(Double(mv * ma) / 1e6, 2)]
+        }
         sample["power"] = ["rails": rails]
       }
       let rpm = found.fanRPM.flatMap { Sysfs.readInt($0) }
@@ -200,7 +198,7 @@
         var entry: [String: Any] = ["online": true]
         if let before = previous[core], counters.total > before.total {
           let busy = 1 - Double(counters.idle &- before.idle) / Double(counters.total - before.total)
-          entry["load"] = rounded(min(max(busy, 0), 1) * 100, 1)
+          entry["load"] = pythonRound(min(max(busy, 0), 1) * 100, 1)
         }
         entry["mhz"] = Sysfs.readInt(root.path("/sys/devices/system/cpu/cpu\(core)/cpufreq/scaling_cur_freq")).map { $0 / 1000 }
         return entry
@@ -210,35 +208,31 @@
     }
 
     private func memory() -> [String: Any] {
-      var bytes: [String: Int] = [:]
-      for line in (Sysfs.read(root.path("/proc/meminfo")) ?? "").split(separator: "\n") {
-        let fields = line.split(separator: " ")
-        if fields.count >= 2, let kb = Int(fields[1]) { bytes[String(fields[0].dropLast())] = kb * 1024 }
-      }
+      let bytes = Platform.meminfo(root)
       let total = bytes["MemTotal"] ?? 0
       let swap = bytes["SwapTotal"] ?? 0
       return ["total": total, "used": total - (bytes["MemAvailable"] ?? total), "swap_total": swap, "swap_used": swap - (bytes["SwapFree"] ?? swap)]
     }
 
-    private func gpuSample(_ found: Found) -> [String: Any]? {
-      if let nvml = found.nvml {
-        let read = nvml.read()
-        return [
-          "load": read["gpu_load_pct"] ?? 0, "mhz": read["gpu_clock_mhz"] ?? 0, "temp": read["temp_c"] ?? 0, "power_w": read["power_w"] ?? 0,
-          "power_limit_w": read["power_limit_w"] ?? 0, "fan_pct": read["fan_pct"] ?? 0,
-        ]
+    /// A Jetson's temperatures, rails and fan have panels of their own, and
+    /// its GPU's memory is the system's.
+    private func gpuSample() -> [String: Any]? {
+      guard let gpu else { return nil }
+      let read = gpu.read()
+      var sample: [String: Any] = ["load": read["gpu_load_pct"] ?? 0, "mhz": read["gpu_clock_mhz"] ?? 0]
+      if !gpu.tegra {
+        sample["temp"] = read["temp_c"] ?? 0
+        sample["power_w"] = read["power_w"] ?? 0
+        sample["power_limit_w"] = read["power_limit_w"] ?? 0
+        sample["fan_pct"] = read["fan_pct"] ?? 0
       }
-      guard let loadPath = found.gpuLoad, let load = Sysfs.readInt(loadPath) else { return nil }
-      // Tegra: per mille, and the GPU's memory is the system's
-      var gpu: [String: Any] = ["load": min(100, load / 10)]
-      gpu["mhz"] = found.gpuFrequency.flatMap { Sysfs.readInt($0) }.map { $0 / 1_000_000 }
-      return gpu
+      return sample
     }
 
     private func temperatures(_ found: Found) -> [[String: Any]] {
       found.zones.compactMap { zone in
         guard let milli = Sysfs.readInt(zone.path), milli > -40_000, milli < 150_000 else { return nil }
-        return ["name": zone.name, "c": rounded(Double(milli) / 1000, 1)]
+        return ["name": zone.name, "c": pythonRound(Double(milli) / 1000, 1)]
       }
     }
 

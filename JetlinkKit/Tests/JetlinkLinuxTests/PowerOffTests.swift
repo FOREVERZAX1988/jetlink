@@ -7,12 +7,10 @@
 
   @Suite("Power off")
   struct PowerOffTests {
-    func run(tegra: Bool, dryRun: Bool) -> (calls: Int, lines: Lines) {
-      let tree = Tree()
-      if dryRun { tree.write("/\(PowerOff.dryRunName)", "") }
+    func run(enabled: Bool) -> (calls: Int, lines: Lines) {
       let calls = Dial(0)
       let lines = Lines()
-      let hook = PowerOff.hook(cache: tree.url, tegra: tegra, powerOff: { _ in calls.value += 1 }, log: lines.log)
+      let hook = PowerOff.hook(enabled: enabled, powerOff: { _ in calls.value += 1 }, log: lines.log)
       // Always accepted: the reply says ok and "powering off" either way.
       let action = hook("car battery")
       #expect(action != nil)
@@ -21,35 +19,18 @@
       return (calls.value, lines)
     }
 
-    @Test("A Jetson powers off once the reply is out")
-    func jetson() {
-      let (calls, lines) = run(tegra: true, dryRun: false)
+    @Test("With --poweroff the box powers off once the reply is out")
+    func enabled() {
+      let (calls, lines) = run(enabled: true)
       #expect(calls == 1)
       #expect(lines.has(.warning, "powering off"))
     }
 
-    @Test("The dry-run file keeps a Jetson up")
-    func dryRun() {
-      let (calls, lines) = run(tegra: true, dryRun: true)
+    @Test("Without it the box stays up")
+    func disabled() {
+      let (calls, lines) = run(enabled: false)
       #expect(calls == 0)
-      #expect(lines.has(.warning, "dry run: staying up"))
-    }
-
-    @Test("A PC never powers off", arguments: [false, true])
-    func pc(dryRun: Bool) {
-      let (calls, lines) = run(tegra: false, dryRun: dryRun)
-      #expect(calls == 0)
-      #expect(lines.has(.warning, "staying up"))
-    }
-
-    @Test("systemctl is looked up on PATH")
-    func which() {
-      let tree = Tree()
-      tree.write("/a/systemctl", "not executable")
-      tree.write("/b/systemctl", "#!/bin/sh\n")
-      chmod(tree.path("/b/systemctl"), 0o755)
-      #expect(Platform.which("systemctl", path: "\(tree.path("/a")):\(tree.path("/b"))") == tree.path("/b/systemctl"))
-      #expect(Platform.which("systemctl", path: tree.path("/a")) == nil)
+      #expect(lines.has(.warning, "staying up: this server runs without --poweroff"))
     }
 
     @Test("The child starts with no signal blocked and the stop signals at their defaults")
@@ -81,9 +62,10 @@
       }
     }
 
-    @Test("A failing child's status comes back")
+    @Test("A failing child's status comes back, a name is found on PATH")
     func exitStatus() throws {
       #expect(PowerOff.exitStatus(of: try PowerOff.spawn("/bin/sh", ["-c", "exit 3"])) == 3)
+      #expect(PowerOff.exitStatus(of: try PowerOff.spawn("sh", ["-c", "exit 4"])) == 4)
       #expect(throws: KernelError.self) { try PowerOff.spawn("/nonexistent/systemctl", ["poweroff"]) }
     }
   }

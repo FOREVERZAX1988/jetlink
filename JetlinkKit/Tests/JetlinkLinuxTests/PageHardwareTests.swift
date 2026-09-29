@@ -6,7 +6,8 @@
 
   @Suite("Status page hardware")
   struct PageHardwareTests {
-    let noNVML: (Int) -> Result<NvmlTelemetry, NvmlUnavailable> = { _ in .failure(NvmlUnavailable(reason: "no driver")) }
+    /// The bench Jetson's telemetry, as LinuxHost makes it there.
+    static let jetsonGPU = GPUTelemetry(read: { TegraTelemetry(root: jetson).read() }, name: nil, tegra: true)
 
     func valid(_ object: [String: Any]) -> Bool {
       JSONSerialization.isValidJSONObject(object) && (try? JSONSerialization.data(withJSONObject: object)) != nil
@@ -14,11 +15,7 @@
 
     @Test("The bench Jetson as the host event names it")
     func jetsonHost() {
-      let never: (Int) -> Result<NvmlTelemetry, NvmlUnavailable> = { _ in
-        Issue.record("NVML on a Tegra")
-        return .failure(NvmlUnavailable(reason: "never asked"))
-      }
-      let hardware = PageHardware(root: jetson, cache: nil, nvml: never)
+      let hardware = PageHardware(root: jetson, cache: nil, gpu: Self.jetsonGPU)
       let host = hardware.host()
       #expect(host["hostname"] as? String == "jetlink")
       #expect(host["board"] as? String == "NVIDIA Jetson Orin Nano Super")
@@ -32,7 +29,7 @@
     @Test("A sample of the bench Jetson")
     func jetsonSample() throws {
       let cache = FileManager.default.temporaryDirectory
-      let hardware = PageHardware(root: jetson, cache: cache, nvml: noNVML)
+      let hardware = PageHardware(root: jetson, cache: cache, gpu: Self.jetsonGPU)
       let sample = hardware.sample()
       #expect(valid(sample))
 
@@ -73,7 +70,7 @@
     @Test("CPU load between two samples, and a core the power mode took offline")
     func cpuLoad() throws {
       let tree = Tree.jetsonCopy()
-      let hardware = PageHardware(root: tree.root, cache: nil, nvml: noNVML)
+      let hardware = PageHardware(root: tree.root, cache: nil, gpu: Self.jetsonGPU)
       _ = hardware.sample()
       // cpu0: 100 jiffies, 50 idle. cpu1: 100, 70 idle (60 idle + 10 iowait).
       // cpu4 goes offline: out of /proc/stat and the online list.
@@ -115,7 +112,7 @@
       tree.write("/proc/stat", "cpu  2 0 2 10 0 0 0 0\ncpu0 1 0 1 5 0 0 0 0\ncpu1 1 0 1 5 0 0 0 0\n")
       tree.write("/sys/class/hwmon/hwmon0/name", "k10temp\n")
       tree.write("/sys/class/hwmon/hwmon0/temp1_input", "45300\n")
-      let hardware = PageHardware(root: tree.root, cache: nil, nvml: noNVML)
+      let hardware = PageHardware(root: tree.root, cache: nil, gpu: nil)
       let host = hardware.host()
       #expect(host["os"] as? String == "Ubuntu 24.04.1 LTS")
       #expect(host["board"] as? String == "AMD Ryzen 7 7700X 8-Core Processor")
@@ -127,16 +124,17 @@
       #expect((sample["cpu"] as? [[String: Any]])?.count == 2)
     }
 
-    @Test("A PC's NVIDIA GPU through NVML, named in the host event")
+    @Test("A PC's NVIDIA GPU, as NVML reads it, named in the host event")
     func nvmlGPU() throws {
       let tree = Tree()
       tree.write("/proc/stat", "cpu0 1 0 1 5 0 0 0 0\n")
-      let hardware = PageHardware(root: tree.root, cache: nil, gpu: 0) { index in
-        NvmlTelemetry.make(index: index) { PageNvml.table[$0] }
-      }
+      let nvml = GPUTelemetry(
+        read: { ["temp_c": 63.0, "power_w": 87.65, "power_limit_w": 170.0, "gpu_load_pct": 37, "gpu_clock_mhz": 2505, "fan_pct": 44] }, name: "Test GPU",
+        tegra: false)
+      let hardware = PageHardware(root: tree.root, cache: nil, gpu: nvml)
       #expect(hardware.host()["gpu"] as? String == "Test GPU")
       let gpu = try #require(hardware.sample()["gpu"] as? [String: Any])
-      #expect(gpu["load"] as? Int == 37 && gpu["mhz"] as? Int == 2505)
+      #expect(gpu["load"] as? Int == 37 && gpu["mhz"] as? Int == 2505 && gpu["temp"] as? Double == 63 && gpu["fan_pct"] as? Int == 44)
       #expect(Set(gpu.keys) == ["load", "mhz", "temp", "power_w", "power_limit_w", "fan_pct"])
     }
 
@@ -150,35 +148,5 @@
       #expect(PageHardware.powerModes("# < POWER_MODEL ID=id_num NAME=mode_name >\n< POWER_MODEL ID=0 NAME=15W >\n") == [0: "15W"])
       #expect(PageHardware.tegraGPU("nvidia,p3768-0000+p3767-0005-super\0nvidia,tegra234\0") == "Orin")
     }
-  }
-
-  /// Just enough of libnvidia-ml for a name, a load and a clock; the rest
-  /// read 0. C functions cannot capture, so the answers are constants.
-  enum PageNvml {
-    typealias Device = OpaquePointer?
-
-    nonisolated(unsafe) static let table: [String: UnsafeMutableRawPointer] = [
-      "nvmlInit_v2": unsafeBitCast(({ 0 } as @convention(c) () -> Int32), to: UnsafeMutableRawPointer.self),
-      "nvmlDeviceGetHandleByIndex_v2": unsafeBitCast(
-        ({
-          $1.pointee = OpaquePointer(bitPattern: 0x2000 + Int($0))
-          return 0
-        } as @convention(c) (UInt32, UnsafeMutablePointer<Device>) -> Int32), to: UnsafeMutableRawPointer.self),
-      "nvmlDeviceGetName": unsafeBitCast(
-        ({
-          for (offset, byte) in "Test GPU".utf8CString.prefix(Int($2)).enumerated() { $1[offset] = byte }
-          return 0
-        } as @convention(c) (Device, UnsafeMutablePointer<CChar>, UInt32) -> Int32), to: UnsafeMutableRawPointer.self),
-      "nvmlDeviceGetUtilizationRates": unsafeBitCast(
-        ({
-          $1[0] = 37
-          return 0
-        } as @convention(c) (Device, UnsafeMutablePointer<UInt32>) -> Int32), to: UnsafeMutableRawPointer.self),
-      "nvmlDeviceGetClockInfo": unsafeBitCast(
-        ({
-          $2.pointee = 2505
-          return 0
-        } as @convention(c) (Device, UInt32, UnsafeMutablePointer<UInt32>) -> Int32), to: UnsafeMutableRawPointer.self),
-    ]
   }
 #endif

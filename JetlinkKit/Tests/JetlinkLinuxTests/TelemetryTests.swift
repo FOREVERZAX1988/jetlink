@@ -34,18 +34,11 @@
       #expect(zones.first { $0.zone == "thermal_zone8" }?.celsius() == 58.937)
     }
 
-    @Test("hwmon devices by name, and the INA3221's rails")
-    func hwmonAndRails() throws {
-      let ina = try #require(hwmon(named: "ina3221", jetson))
-      #expect(ina.hasSuffix("/sys/class/hwmon/hwmon4"))
+    @Test("hwmon devices by name")
+    func hwmons() {
+      #expect(hwmon(named: "ina3221", jetson)?.hasSuffix("/sys/class/hwmon/hwmon4") == true)
       #expect(hwmon(named: "pwm_tach", jetson)?.hasSuffix("/sys/class/hwmon/hwmon2") == true)
       #expect(hwmon(named: "nothing", jetson) == nil)
-      #expect(
-        PowerRail.all(ina3221: ina) == [
-          PowerRail(channel: 1, label: "VDD_IN", millivolts: 4952, milliamps: 1744),
-          PowerRail(channel: 2, label: "VDD_CPU_GPU_CV", millivolts: 4944, milliamps: 400),
-          PowerRail(channel: 3, label: "VDD_SOC", millivolts: 4952, milliamps: 752),
-        ])
     }
 
     @Test("Without tj or soc0 it falls back to gpu and cpu, as a zone reading 0 does")
@@ -78,13 +71,6 @@
       #expect(sample["power_w"] as? Double == 0)
       #expect(sample["fan_rpm"] as? Int == 0)
       #expect(sample["power_limit_w"] as? Double == 25)
-    }
-
-    @Test("Rounding is Python's: ties go to even")
-    func rounding() {
-      #expect(rounded(58.25, 1) == 58.2)
-      #expect(rounded(58.35, 1) == 58.4)
-      #expect(rounded(8.636288, 2) == 8.64)
     }
   }
 
@@ -256,15 +242,17 @@
         return self.open(index)
       }
       let lines = Lines()
-      let tegra = LinuxHost.telemetrySource(tegra: true, root: jetson, gpu: 0, nvml: fake, log: lines.log)
-      #expect(tegra?()["supply_mv"] as? Int == 4952)
+      let tegra = LinuxHost.telemetry(tegra: true, root: jetson, gpu: 0, nvml: fake, log: lines.log)
+      #expect(tegra?.read()["supply_mv"] as? Int == 4952)
+      #expect(tegra?.tegra == true && tegra?.name == nil)
       #expect(asked.value.isEmpty)
       nvml.devices = 3
-      let pc = LinuxHost.telemetrySource(tegra: false, root: jetson, gpu: 2, nvml: fake, log: lines.log)
-      #expect(pc?()["fan_pct"] as? Int == 44)
+      let pc = LinuxHost.telemetry(tegra: false, root: jetson, gpu: 2, nvml: fake, log: lines.log)
+      #expect(pc?.read()["fan_pct"] as? Int == 44)
+      #expect(pc?.tegra == false && pc?.name == "NVIDIA GeForce RTX 4070")
       #expect(asked.value == [2])
       nvml.initStatus = 9
-      #expect(LinuxHost.telemetrySource(tegra: false, root: jetson, gpu: 0, nvml: fake, log: lines.log) == nil)
+      #expect(LinuxHost.telemetry(tegra: false, root: jetson, gpu: 0, nvml: fake, log: lines.log) == nil)
       #expect(lines.count("no telemetry on this host") == 1)
     }
   }

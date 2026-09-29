@@ -1,6 +1,7 @@
 #if os(Linux)
   import Foundation
   import Glibc
+  import JetlinkKit
 
   /// A PC's NVIDIA GPU through NVML, opened at run time from the driver's
   /// libnvidia-ml.so.1 (Python's `NvmlTelemetry`, without pynvml). The same
@@ -11,7 +12,7 @@
   ///
   /// Never on a Tegra: NVML initializes there and every query is
   /// NotSupported, which would tell the comma a cold board drawing nothing.
-  public final class NvmlTelemetry: @unchecked Sendable {
+  public struct NvmlTelemetry: @unchecked Sendable {
     /// dlsym over the opened library, or a test's table.
     typealias Lookup = (String) -> UnsafeMutableRawPointer?
 
@@ -66,35 +67,21 @@
       guard found == success, device != nil else {
         return .failure(NvmlUnavailable(reason: "no NVML device \(index) (NVML error \(found))"))
       }
+      var milliwatts: UInt32 = 0
+      let limit = symbol("nvmlDeviceGetEnforcedPowerLimit", UIntFn.self).map { $0(device, &milliwatts) == success ? Double(milliwatts) / 1000 : 0 }
+      let name = symbol("nvmlDeviceGetName", NameFn.self).flatMap { call in
+        // NVML_DEVICE_NAME_V2_BUFFER_SIZE
+        var buffer = [CChar](repeating: 0, count: 96)
+        return buffer.withUnsafeMutableBufferPointer { text in
+          call(device, text.baseAddress!, UInt32(text.count - 1)) == success ? String(cString: text.baseAddress!) : nil
+        }
+      }
       return .success(
         NvmlTelemetry(
           device: device, temperatureV: symbol("nvmlDeviceGetTemperatureV", TemperatureVFn.self),
           temperature: symbol("nvmlDeviceGetTemperature", WithKindFn.self), powerUsage: symbol("nvmlDeviceGetPowerUsage", UIntFn.self),
           utilization: symbol("nvmlDeviceGetUtilizationRates", UIntFn.self), clock: symbol("nvmlDeviceGetClockInfo", WithKindFn.self),
-          fanSpeed: symbol("nvmlDeviceGetFanSpeed", UIntFn.self), limit: symbol("nvmlDeviceGetEnforcedPowerLimit", UIntFn.self),
-          name: symbol("nvmlDeviceGetName", NameFn.self)))
-    }
-
-    private init(
-      device: Device, temperatureV: TemperatureVFn?, temperature: WithKindFn?, powerUsage: UIntFn?, utilization: UIntFn?, clock: WithKindFn?,
-      fanSpeed: UIntFn?, limit: UIntFn?, name: NameFn?
-    ) {
-      self.device = device
-      self.temperatureV = temperatureV
-      self.temperature = temperature
-      self.powerUsage = powerUsage
-      self.utilization = utilization
-      self.clock = clock
-      self.fanSpeed = fanSpeed
-      var milliwatts: UInt32 = 0
-      powerLimitW = limit.map { $0(device, &milliwatts) == NvmlTelemetry.success ? Double(milliwatts) / 1000 : 0 } ?? 0
-      self.name = name.flatMap { call in
-        // NVML_DEVICE_NAME_V2_BUFFER_SIZE
-        var buffer = [CChar](repeating: 0, count: 96)
-        return buffer.withUnsafeMutableBufferPointer { text in
-          call(device, text.baseAddress!, UInt32(text.count - 1)) == NvmlTelemetry.success ? String(cString: text.baseAddress!) : nil
-        }
-      }
+          fanSpeed: symbol("nvmlDeviceGetFanSpeed", UIntFn.self), powerLimitW: limit ?? 0, name: name))
     }
 
     public func read() -> [String: Any] {
@@ -102,7 +89,7 @@
       let busy = utilization.map { call in util.withUnsafeMutableBufferPointer { call(device, $0.baseAddress!) } == NvmlTelemetry.success } ?? false
       return [
         "temp_c": Double(gpuTemperature()),
-        "power_w": rounded(Double(value(powerUsage)) / 1000, 2),
+        "power_w": pythonRound(Double(value(powerUsage)) / 1000, 2),
         "power_limit_w": powerLimitW,
         "gpu_load_pct": busy ? Int(util[0]) : 0,
         "gpu_clock_mhz": Int(value(clock, NvmlTelemetry.clockGraphics)),

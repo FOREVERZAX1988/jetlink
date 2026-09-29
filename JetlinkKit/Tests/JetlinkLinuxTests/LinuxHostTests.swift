@@ -8,9 +8,7 @@
   @Suite("Linux host")
   struct LinuxHostTests {
     func hooks(_ tree: Tree, sleepAfter: Double, lines: Lines = Lines()) -> ServerHooks {
-      LinuxHost.hooks(
-        cache: tree.url, sleepAfter: sleepAfter, gpu: 0, root: tree.root, nvml: { _ in .failure(NvmlUnavailable(reason: "no driver")) },
-        log: lines.log)
+      LinuxHost.hooks(sleepAfter: sleepAfter, poweroff: false, telemetry: nil, root: tree.root, log: lines.log)
     }
 
     @Test("A Jetson suspends when asked to, and the hello says so")
@@ -40,33 +38,15 @@
     func gadgetHears() throws {
       let bus = Bus()
       try bus.claimed()
-      let hooks = LinuxHost.hooks(
-        cache: bus.tree.url, sleepAfter: 0, gpu: 0, gadget: bus.gadget, root: bus.tree.root,
-        nvml: { _ in .failure(NvmlUnavailable(reason: "no driver")) }, log: Lines().log)
+      let hooks = LinuxHost.hooks(sleepAfter: 0, poweroff: false, telemetry: nil, gadget: bus.gadget, root: bus.tree.root, log: Lines().log)
       #expect(hooks.sleepAfter == 0)
       #expect(hooks.gadgetIdle?(.connected) == false)
+      bus.settle()
       #expect(bus.permit == "0")
       #expect(hooks.gadgetIdle?(.absent) == false)
       _ = hooks.gadgetIdle?(.disconnected)
+      bus.settle()
       #expect(bus.permit == "u1_u2")
-    }
-
-    @Test("Every shutdown is accepted, so the comma hears ok")
-    func shutdown() {
-      let tree = Tree()
-      tree.write("/\(PowerOff.dryRunName)", "")
-      #expect(hooks(tree, sleepAfter: 0).shutdown?("car battery") != nil)
-    }
-
-    @Test("A Jetson's telemetry comes from its sysfs, a host with none sends {}")
-    func telemetry() {
-      let tree = Tree.jetsonCopy()
-      let jetson = hooks(tree, sleepAfter: 0)
-      #expect(eventually { jetson.telemetry()["supply_mv"] as? Int == 4952 })
-      withExtendedLifetime(tree) {}
-      let none = hooks(Tree(), sleepAfter: 0)
-      Thread.sleep(forTimeInterval: 0.05)
-      #expect(none.telemetry().isEmpty)
     }
   }
 
@@ -89,16 +69,17 @@
     @Test("MemAvailable in bytes, 0 when unknown")
     func memory() {
       #expect(Platform.memAvailableBytes(jetson) == 5_362_572 * 1024)
+      #expect(Platform.meminfo(jetson)["SwapFree"] == 10_481_400 * 1024)
       #expect(Platform.memAvailableBytes(Tree().root) == 0)
     }
 
-    @Test("The cache: $JETLINK_CACHE, else the Jetson's partition, else XDG's")
+    @Test("The cache: the Jetson's partition, else root's, else XDG's")
     func cache() {
       let pc = Tree().root
-      #expect(Platform.defaultCache(environment: ["JETLINK_CACHE": "/data/jl"], root: jetson).path == "/data/jl")
-      #expect(Platform.defaultCache(environment: [:], root: jetson).path == "/mnt/data/jetlink")
-      #expect(Platform.defaultCache(environment: ["XDG_CACHE_HOME": "/xdg"], root: pc).path == "/xdg/jetlink")
-      #expect(Platform.defaultCache(environment: ["XDG_CACHE_HOME": ""], root: pc).path.hasSuffix("/.cache/jetlink"))
+      #expect(Platform.defaultCache(environment: [:], root: jetson, asRoot: true).path == "/mnt/data/jetlink")
+      #expect(Platform.defaultCache(environment: ["XDG_CACHE_HOME": "/xdg"], root: pc, asRoot: true).path == "/var/lib/jetlink")
+      #expect(Platform.defaultCache(environment: ["XDG_CACHE_HOME": "/xdg"], root: pc, asRoot: false).path == "/xdg/jetlink")
+      #expect(Platform.defaultCache(environment: ["XDG_CACHE_HOME": ""], root: pc, asRoot: false).path.hasSuffix("/.cache/jetlink"))
     }
 
     @Test("Suspend needs /sys/power/state")
@@ -114,6 +95,14 @@
       #expect(Sysfs.read(jetson.path("/sys/devices/virtual/thermal/thermal_zone2/temp")) == nil)
       #expect(Sysfs.readInt(jetson.path("/sys/power/mem_sleep")) == nil)
       let tree = Tree()
+      // Past the first read's buffer, and every integer shape a kernel writes.
+      let long = (0..<200).map { "line \($0)" }.joined(separator: "\n")
+      tree.write("/long", "\t" + long + "\n\n")
+      #expect(Sysfs.read(tree.path("/long")) == long)
+      for (text, value) in [("-40000\n", -40000), ("0", 0), (" 17 \n", 17), ("", nil), ("-", nil), ("12a", nil), ("99999999999999999999", nil)] as [(String, Int?)] {
+        tree.write("/int", text)
+        #expect(Sysfs.readInt(tree.path("/int")) == value, "\(text)")
+      }
       tree.write("/attr", "old value\n")
       try Sysfs.write(tree.path("/attr"), "new")
       #expect(tree.read("/attr") == "new")
