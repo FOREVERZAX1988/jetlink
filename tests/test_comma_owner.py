@@ -43,6 +43,7 @@ class OwnerTest(unittest.TestCase):
                         ('LENDER_STATUS', self.tmp / 'lender-status'),
                         ('STATUS', self.tmp / 'run' / 'status.json'),
                         ('STARTS', self.tmp / 'run' / 'starts.json'),
+                        ('OWNER_LOCK', self.tmp / 'run' / 'owner.lock'),
                         ('CC_ORIENTATION', self.tmp / 'cc'),
                         ('link_configured', mock.Mock(return_value=True)),
                         ('host_attached', mock.Mock(return_value=True)),
@@ -1201,6 +1202,53 @@ class TestStartingAgain(OwnerTest):
     o.step()
     o.spawn_worker.assert_called_once()
     self.assertIn('shut down', o.spawn_worker.call_args.args[0])
+
+
+class TestOneOwnerAtATime(OwnerTest):
+  """A manager SIGKILLed without its cleanup starts jetlinkd again while the
+  orphaned owner still holds the gadget. The second one must leave it alone."""
+
+  def test_a_second_owner_touches_nothing_and_exits(self):
+    live = self.owner()
+    self.assertTrue(live.take_lock())
+    self.addCleanup(lambda: live.lock_fd is not None and os.close(live.lock_fd))
+    self.assertFalse(os.get_inheritable(live.lock_fd), 'a provisioning run would inherit the lock')
+    # the live owner's records
+    gadget.note_link('cable', '192.168.60.3')
+    gadget.DORMANT.write_text(str(os.getpid()))
+    gadget.note_lender_error('address in use')
+    second = self.owner()
+    with mock.patch.object(second, 'step') as step, mock.patch.object(gadget, 'log') as log:
+      second.run()
+    step.assert_not_called()
+    self.assertIn('another owner (pid %s) holds the gadget', log.error.call_args.args[0])
+    self.assertEqual(log.error.call_args.args[1], str(os.getpid()))
+    self.assertEqual(gadget.link_peer(), '192.168.60.3')
+    self.assertTrue(gadget.DORMANT.exists())
+    self.assertEqual(gadget.gadget_error(), 'the lender could not listen: address in use')
+    self.assertFalse(gadget.STATUS.exists())
+    self.assertEqual(owner._starts(), [])
+    second.port.off.assert_not_called()
+    second.lender.stop.assert_not_called()
+
+  def test_the_lock_goes_with_the_owner(self):
+    first = self.owner()
+    first.stop = True
+    first.run()
+    self.assertIsNone(first.lock_fd)
+    second = self.owner()
+    second.stop = True
+    with mock.patch.object(second, 'hold_the_gadget') as held:
+      second.run()
+    held.assert_called_once()
+
+  def test_without_a_place_to_lock_it_runs_as_before(self):
+    o = self.owner()
+    o.stop = True
+    with mock.patch.object(gadget, 'OWNER_LOCK', Path('/nonexistent-root/jetlink/owner.lock')), \
+         mock.patch.object(o, 'hold_the_gadget') as held, mock.patch.object(gadget, 'log'):
+      o.run()
+    held.assert_called_once()
 
 
 class TestABusyEp0(OwnerTest):

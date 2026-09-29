@@ -42,6 +42,7 @@ gadget in a state only a reboot clears.
 from __future__ import annotations
 
 import errno
+import fcntl
 import json
 import logging
 import os
@@ -209,6 +210,7 @@ class Owner:
     self.ep0_busy = False               # said once, until an open works
     # why a crash loop's backoff holds this start back, for the status record
     self.backing_off: str | None = None
+    self.lock_fd: int | None = None      # gadget.OWNER_LOCK, held for the life of run()
     self.port = port.Port(chestnut_ids)
     self.cable = lending.CableListener()
     self.lender = lending.Lender(self.lendable, self.bounce_gadget, holding=self.holding, cable=self.cable,
@@ -765,7 +767,47 @@ class Owner:
     finally:
       self.backing_off = None
 
+  def take_lock(self) -> bool:
+    """One owner at a time. A second owner beside a live one (a manager that
+    was SIGKILLed without its cleanup starts jetlinkd again while the orphan
+    still holds the gadget) would clear that owner's records, overwrite its
+    status record and release its port hold. The kernel lets an flock go with
+    the process however it dies, and the fd is not inherited by a run.
+    Without a /dev/shm to lock in, the owner runs as it did before."""
+    try:
+      gadget.OWNER_LOCK.parent.mkdir(parents=True, exist_ok=True)
+      fd = os.open(gadget.OWNER_LOCK, os.O_RDWR | os.O_CREAT, 0o644)
+    except OSError as e:
+      gadget.log.error("jetlink: could not open the owner's lock (%s), running without it", e)
+      return True
+    try:
+      fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+      try:
+        holder = os.pread(fd, 32, 0).decode(errors='replace').strip() or 'unknown'
+      except OSError:
+        holder = 'unknown'
+      os.close(fd)
+      gadget.log.error("jetlink: another owner (pid %s) holds the gadget, exiting", holder)
+      return False
+    os.ftruncate(fd, 0)
+    os.pwrite(fd, str(os.getpid()).encode(), 0)
+    self.lock_fd = fd
+    return True
+
   def run(self) -> None:
+    """Hold the gadget until stopped. Returns at once, touching nothing, when
+    another owner is alive."""
+    if not self.take_lock():
+      return
+    try:
+      self.hold_the_gadget()
+    finally:
+      fd, self.lock_fd = self.lock_fd, None
+      if fd is not None:
+        os.close(fd)
+
+  def hold_the_gadget(self) -> None:
     born = time.monotonic()
     wait, died = note_start(born)
     self.adopt()
