@@ -1,7 +1,7 @@
 # Updates and rollback
 
-The comma build and Jetlink server must be compatible. Update offroad, with
-both devices powered and online.
+Update the comma and Jetlink together: a comma on an older build stays on its
+small model. Update offroad, with both devices powered and online.
 
 ## Updating
 
@@ -10,39 +10,41 @@ both devices powered and online.
 
    - Jetson or Linux PC (installer): run `jetlink update`. It moves to the
      newest release, keeps your settings, and restores the previous server if
-     the update fails.
+     the update fails. An install from 0.6.0 or earlier also moves out of
+     Docker, keeping its models and prepared engines.
    - Mac app: quit Jetlink, replace it with the new release, and reopen it.
    - iPhone app: run `git pull` in the checkout, then click **Run** in Xcode.
    - Android app: run `git pull` in the checkout, then build and install it
      again ([Android development](../android/README.md#build)).
-   - Source install: run `git pull` in the checkout. Mac script: restart
-     `scripts/run-mac.sh`; recreate `.venv` if dependencies changed.
+   - Mac terminal: run `git pull`, then build `jetlink-server` again
+     ([from a terminal](platforms.md#from-a-terminal)).
 
 3. Connect the comma offroad and wait for green. A new Jetlink or model may
-   rebuild the engine.
+   prepare the engine again.
 
 ## Rolling back
 
 * Stop using Jetlink now: set **Settings > Models > Accelerator Link** to **Off**.
 * Roll back the comma build and server together; one alone can leave them
   incompatible. Keep the model cache.
-* Installer: rerun it with the release or commit to go back to:
+* Installer: `jetlink update --ref v0.7.0` (replace with the release to go
+  back to). It stays there until `jetlink update --ref latest`.
+* Going back to 0.6.0 puts the Docker server back. To come forward from it,
+  use the installer, since 0.6.0's `jetlink update` cannot:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zoompilot/jetlink/v0.4.0/install.sh | bash -s -- --ref v0.4.0
+curl -fsSL https://raw.githubusercontent.com/zoompilot/jetlink/main/install.sh | bash -s -- --update --ref latest
 ```
 
-It stays there until `jetlink update --ref latest`.
-
-Specific versions and manual Docker rollback:
-[installation reference](installation-reference.md#versions-and-manual-rollback).
+Manual rollback: [installation reference](installation-reference.md#versions-and-manual-rollback).
 
 <a id="which-jetlink-to-run"></a>
 
 ## Maintainer reference
 
-Release workflows, container tags, and signing secrets:
-[publishing guide](publishing.md).
+Releasing: [publishing guide](publishing.md). A version bump in
+`jetlink/__init__.py` means running `JetlinkKit/Scripts/make_pins.py` again;
+each release attaches the Linux server tarballs the installer downloads.
 
 <a id="installing-the-app"></a>
 <a id="the-container-images"></a>

@@ -1,58 +1,76 @@
 # Installation reference
 
 Normal setup: [Jetson guide](jetson.md), [Mac app](macos-app.md),
-[PC guide](platforms.md). This page: manual installs and custom integrations.
+[PC guide](platforms.md). This page: what the installer does, manual installs
+and custom integrations.
 
-## Jetson installation
+<a id="jetson-installation"></a>
+
+## Jetson and PC installation
 
 ### What the installer changes
 
-- Installs Docker and NVIDIA's container toolkit if missing.
-- Downloads the server image, or builds it on the Jetson when none exists for
-  its JetPack (10 to 30 minutes).
-- Checks the server can use the GPU.
-- Sets the MAXN SUPER power mode, which the large models need (the supply must
-  deliver it; may need one restart, which the installer reports).
-- Adds 8 GB of swap for preparing the 1.7 GB models.
-- Installs the `jetlink-server` boot service and the `jetlink` command.
-- Stops boot waiting for a network (none in the car; cost about two minutes)
-  and caps the system log at 200 MB.
-- Keeps models and prepared engines in `/mnt/data/jetlink`.
+- Installs NVIDIA's TensorRT libraries if missing: `libnvinfer10` and
+  `libnvonnxparsers10` from JetPack's package source (on JetPack 7.2 the
+  newest, at least 10.16.2.10), or on a PC `libnvinfer11` and
+  `libnvonnxparsers11` 11.3.0.99 from NVIDIA's CUDA package source.
+- Unpacks the release's server to `/opt/jetlink/<version>`, with
+  `/opt/jetlink/current` pointing at it and `previous` at the one before, and
+  checks it can use the GPU before it replaces the running one.
+- Installs the `jetlink-server` service (runs as root) and its udev rules from
+  the server's tarball, so they always match the binary, and the `jetlink`
+  command. Settings: `/etc/jetlink/server.env`; your answers:
+  `/etc/jetlink/install.conf`.
+- Serves the read-only status page on port 5600 (a question; 0 turns it off).
+- Keeps models and prepared engines in `/mnt/data/jetlink` on a Jetson,
+  `/var/lib/jetlink` on a PC.
+- Jetson only: sets the fastest power mode (MAXN SUPER on an Orin Nano; may
+  need one restart) and runs `jetson_clocks` before every start; adds 8 GB of
+  swap for preparing the 1.7 GB models; stops boot waiting for a network (none
+  in the car; about two minutes); caps the system log at 200 MB.
+
+An install from 0.6.0 or earlier runs the server in Docker. Its next
+`jetlink update` moves it to the native server, keeping the answers, models,
+engines and Jetson setup, and saves the Docker setup in
+`/etc/jetlink/docker-era`. Jetlink's Docker images go once the new server runs;
+Docker itself stays.
 
 ### Installing by hand
 
-The installer is the supported path. Its pieces, from a checkout:
+The installer is the supported path. Its pieces, from a release tarball:
 
-1. Docker, and the NVIDIA Container Toolkit with `sudo nvidia-ctk runtime
-   configure --runtime=docker`.
-   - JetPack 6: Ubuntu's `docker.io`; Docker 28+ cannot run containers on its
-     kernel.
-   - Jetson: `nvidia-container-toolkit`, not JetPack's `nvidia-container`,
-     which replaces Docker with the newest Docker CE in the background a minute
-     after apt finishes.
-2. Server image: `sudo docker/build.sh` picks `docker/Dockerfile` (CUDA 13:
-   JetPack 7.2 and PCs) or `docker/Dockerfile.jetpack6`.
-3. `/etc/jetlink/server.env`, read by `scripts/jetlink-run-server` to start the
-   container. Its header lists every setting. `JETLINK_IMAGE` is the image ID
-   from `sudo docker image inspect --format '{{.Id}}' jetlink:latest`.
-4. `scripts/jetlink-run-server` as `/usr/local/lib/jetlink/run-server`,
-   `scripts/jetlink-server.service` in `/etc/systemd/system`, then
-   `sudo systemctl enable --now jetlink-server`.
-5. Always-on supply only (lets the comma wake the Jetson):
-   `scripts/99-jetlink-usb-wakeup.rules` in `/etc/udev/rules.d`,
-   `scripts/jetlink-wake-setup.sh` as `/usr/local/lib/jetlink/wake-setup`;
-   optionally the `scripts/jetlink-poweroff.*` units.
+1. TensorRT, as above.
+2. The tarball unpacked to `/opt/jetlink/<version>`, and
+   `sudo ln -sfn /opt/jetlink/<version> /opt/jetlink/current`.
+3. `/etc/jetlink/server.env`, which the service needs, with at least the
+   cache folder. `JETLINK_SLEEP_AFTER` and `JETLINK_STATUS_PORT` default to 0
+   (off):
 
-Foreground run from a checkout (Ctrl-C stops):
+   ```bash
+   sudo mkdir -p /etc/jetlink
+   echo JETLINK_CACHE_DIR=/var/lib/jetlink | sudo tee /etc/jetlink/server.env
+   ```
 
-```bash
-sudo docker/run.sh --transport usb
-```
+4. `share/jetlink/systemd/jetlink-server.service` from the tarball in
+   `/etc/systemd/system`, then
+   `sudo systemctl daemon-reload && sudo systemctl enable --now jetlink-server`.
+5. Jetson: a drop-in for the service with `ExecStartPre=-/usr/bin/jetson_clocks`.
+6. Always-on supply only (lets the comma wake the Jetson):
+   `share/jetlink/udev/99-jetlink-usb-wakeup.rules` in `/etc/udev/rules.d`.
+
+`jetlink run` runs the installed service's command line, with its settings, in
+the terminal instead (Ctrl-C stops it); extra flags go on the end, such as
+`--listen` for a TCP bench.
 
 ## Custom USB integrations
 
 - comma 3X (AGNOS kernel 4.9.103) has FunctionFS and USB gadget support.
-- The server is always the USB host: libusb, no gadget kernel modules.
+- The server is always the USB host, through usbfs (IOKit on a Mac): no driver
+  and no gadget kernel modules on the host.
+- On Linux the server turns off USB 3 link power management (U1/U2) on the
+  comma's port each time it claims it: 3.9 of the 7.6 ms transport on the
+  bench Jetson. Deep sleep and USB wake are unaffected. `JETLINK_USB_LPM=1` in
+  the service's environment leaves it on.
 - Nothing on the comma runs by hand. The owner builds the gadget on its first
   step, USB or iOS per the comma's Accelerator Link setting, and rebuilds it
   when the setting changes.
@@ -101,50 +119,63 @@ Custom distributions need their own USB product ID.
 ### Choose a version
 
 - The installer installs the newest release; `jetlink update` moves to the
-  next. `jetlink update --ref main` switches to development builds.
-- The zoompilot fork pins the Jetlink commit it was tested with as its
-  `jetlink_repo` submodule; `main` stays compatible with the fork's current
-  `jetson-trt` branch.
-- On a protocol version mismatch the server rejects the connection and the
-  comma drives on the small model.
+  next. `jetlink update --ref main` switches to development builds (the `edge`
+  prerelease).
+- The zoompilot fork pins the Jetlink it was tested with as its `jetlink_repo`
+  submodule; its `jetson-trt` branch pins v0.7.0.
+- Update the comma and Jetlink together: a comma on an older build stays on
+  its small model.
 
-To pin a release or the fork's pinned commit, pass it to the installer (replace
-`v0.4.0`); `jetlink update --ref latest` follows releases again:
+To pin a release, pass it to the installer (replace `v0.7.0`);
+`jetlink update --ref latest` follows releases again:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zoompilot/jetlink/v0.4.0/install.sh | bash -s -- --ref v0.4.0
+curl -fsSL https://raw.githubusercontent.com/zoompilot/jetlink/v0.7.0/install.sh | bash -s -- --ref v0.7.0
 ```
 
-### Restore a Docker image
+<a id="restore-a-docker-image"></a>
 
-- The image that runs is `JETLINK_IMAGE` in `/etc/jetlink/server.env` (an ID
-  from `sudo docker image inspect --format '{{.Id}}' IMAGE`;
-  `sudo docker image ls` lists them). Set it, then `jetlink restart`.
-- Each update keeps the settings it replaced as `/etc/jetlink/server.env.prev`.
-  Back one update: `sudo cp /etc/jetlink/server.env.prev /etc/jetlink/server.env`,
-  then `jetlink restart`.
+### Roll back by hand
+
+- Back one update from 0.7.0 or later: point `current` at `previous` and
+  restart. `jetlink update` moves forward again.
+
+  ```bash
+  sudo ln -sfn "$(readlink -f /opt/jetlink/previous)" /opt/jetlink/current
+  jetlink restart
+  ```
+
+- Back to 0.6.0, the last Docker release: `jetlink update --ref v0.6.0`. Its
+  own installer takes over with the same answers. 0.6.0's `jetlink update`
+  cannot install a native release, so to come forward again run:
+
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/zoompilot/jetlink/main/install.sh | bash -s -- --update --ref latest
+  ```
 
 ## Deep sleep and USB wake
 
-**Always on** in the installer enables USB wake on the Jetson's hubs, gives the
-container `/sys/power`, sets `--sleep-after 120`, and checks for `deep` in
-`/sys/power/mem_sleep`.
+**Always on** in the installer installs a udev rule that lets the USB hubs wake
+the Jetson, sets `--sleep-after 120`, and checks for `deep` in
+`/sys/power/mem_sleep`. The server arms the hubs again before every suspend.
 
 - Ignition off: the comma releases USB once the engine is ready and at least
   one minute has passed.
 - The Jetson sleeps after 120 s without a USB connection. USB connect or
   disconnect wakes it; with no new connection it sleeps again after 120 s.
-- Failed sleep retries after 10 s, doubling up to 5 minutes. Check the logs,
-  write access to `/sys/power`, and USB wake on the root and onboard hubs.
-- Without `--sleep-after`, the link stays up while the comma is awake.
+- `jetlink caffeinate` keeps an awake Jetson awake, like the Mac's
+  `caffeinate`: until Ctrl-C, for `-t SECONDS`, or while `COMMAND` runs. No
+  sudo needed. Updates hold it awake on their own.
+- Failed sleep retries after 10 s, doubling up to 5 minutes. Check the logs and
+  USB wake on the root and onboard hubs.
+- With `--sleep-after 0`, the link stays up while the comma is awake.
 
 ## Battery-protection shutdown
 
-- When enabled, the comma requests shutdown at 11.8 V or after 30 hours parked.
-- The server writes a flag in the models folder; `jetlink-poweroff.path`
-  triggers the host service, which removes it and powers off. Flags from
-  earlier boots are ignored.
-- Dry run: `touch /mnt/data/jetlink/poweroff-dry-run`; remove the file to
-  restore shutdown.
+- The comma requests shutdown at 11.8 V or after 30 hours parked.
+- The Jetson powers off (`systemctl poweroff`) only if you answered Yes to the
+  installer's battery question: it then writes `JETLINK_POWEROFF=--poweroff` in
+  `/etc/jetlink/server.env`. Otherwise it stays up; so does a PC.
+  `jetlink setup` changes the answer.
 - Restart after full shutdown needs hardware that cycles DC power or triggers
   the J14 power-button input; the devkit boots when DC power returns.

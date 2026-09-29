@@ -1,157 +1,119 @@
-# Server control protocol
+# Control protocol
 
-Manage a running Python server from a script. The Mac, iPhone and Android apps
-run the Swift server in process: the same events and commands, without a socket.
+How the apps and the status page talk to the server. There is no socket: each
+runs the server in its own process and uses `ServerController` (in
+`JetlinkKit/Sources/JetlinkServer`) directly.
 
-## Starting a server with a control socket
+| Who | How |
+| --- | --- |
+| Mac and iPhone apps | Swift calls: `handle(_:)` runs a `ControlCommand`, `events` delivers each `ControlEvent` |
+| Android app | Each command as a JSON object through JNI (`Native.command`), a JSON reply back; the screens draw a snapshot built from the events |
+| Status page (Jetson, PC) | Listens only, never sends a command; relays events to browsers as Server-Sent Events |
 
-`jetlink-server` takes two extra flags:
+Version 1 (`Pinned.controlProtocol`). The JSON below is what
+`ControlEvent.jsonLine()` writes and the page streams: one object per line,
+snake_case keys, absent optional fields `null`, never missing.
 
-```
---control-socket ADDR   open a local control channel; ADDR is a filesystem path
-                        (AF_UNIX) or tcp://127.0.0.1:PORT (loopback only)
---parent-pid PID        exit cleanly when this process is no longer our parent
-                        (checked once a second; a dead parent means getppid() changed)
-```
+## The status page
 
-SIGTERM is handled like SIGINT: clean shutdown, engine released, exit code 0.
+`jetlink-server --status-port P` (the installed service uses 5600) serves, to
+any browser on the network, read-only and without a login:
 
-## The protocol
-
-- Stream socket, UTF-8 JSON, one object per line, newline terminated, no pretty
-  printing.
-- Absent optional fields are `null`, never missing, so a decoder can be strict.
-- Client to server: `{"id": <int>, "cmd": "<name>", ...arguments}`. The client
-  chooses `id`, positive and increasing.
-- Server to client: `{"event": "<name>", "t": <unix time, float seconds>, ...}`.
-- Exactly one `reply` event per command, carrying its `id`. Any other event can
-  arrive at any time, including between a command and its reply.
-- Several clients may connect; every event goes to all. A client more than 1000
-  queued lines behind is disconnected.
-
-## On connect
-
-The server sends `hello`, `server`, `link`, `engine`, `inventory`, `catalog`,
-then one `download` per download in progress, so a client can show state
-without sending a command.
-
-## Example
-
-Start a server with a socket:
+| Path | What |
+| --- | --- |
+| `/` | the page |
+| `/events` | Server-Sent Events: on connect the latest `hello`, `server`, `link`, `engine` and `inventory`, the last two minutes of `stats`, then `host` and one `hw` a second while a page is open |
+| `/logs` | the server's last 300 log lines, as text |
 
 ```bash
-jetlink-server --transport usb --control-socket /tmp/jetlink-control.sock
+curl -N http://<name>.local:5600/events
 ```
 
-Watch events from another terminal:
-
-```bash
-nc -U /tmp/jetlink-control.sock
-```
-
-Send a command by typing a line into that connection, or pipe one in:
-
-```bash
-printf '{"id":1,"cmd":"download","ref":"f877d7a0ccc3cce943c76e285214c020cd65c899"}\n' \
-  | nc -U /tmp/jetlink-control.sock
-```
-
-Download, prepare, and load a model without stopping the server (`<sha256>` is
-the full SHA-256):
-
-```bash
-printf '{"id":2,"cmd":"prepare","sha256":"<sha256>","frame_skip":4}\n' \
-  | socat - UNIX-CONNECT:/tmp/jetlink-control.sock
-```
+`host` (hostname, board, OS, kernel, GPU) and `hw` (CPU, memory, GPU,
+temperatures, power, fan, disk) come from the Linux host; other hosts leave
+them out.
 
 ## Events
 
-Angle brackets are placeholders. Timestamps are ISO 8601 strings or Unix
-seconds, as each field shows.
+`{"event": "<name>", "t": <unix time, float seconds>, ...}`. Placeholders in
+angle brackets.
 
 ```jsonc
-{"event":"hello","t":0,"protocol":1,"pid":4242,"version":"0.2.0","python":"3.14.7",
- "platform":"darwin","cache":"/Users/me/Library/Application Support/Jetlink/cache",
- "transport":"usb","port":null}
-// transport is "usb"|"tcp"; port is set for tcp.
+{"event":"server","t":0,"state":"serving","detail":"","backend":"trt",
+ "runtime_version":"10.16.2.10","device":"Orin-sm87"}
+// state: "serving" | "stopping". backend, runtime_version and device are what
+// the hello to the comma carries.
 
-{"event":"server","t":0,"state":"serving","detail":"","backend":"ort",
- "runtime_version":"1.29.0","device":"coreml-Apple_M1_Pro"}
-// state: "serving" | "stopping". backend/runtime_version/device are what the
-// hello to the comma carries.
+{"event":"link","t":0,"state":"connected","detail":"","peer":"usb","medium":"usb3"}
+// state: "waiting" | "connected" | "disconnected". medium, when connected:
+// "usb3" | "usb2" | "usb1" | "usb" (speed unknown) | "tcp", from the comma's
+// hello (a phone's cable is TCP over USB). Transitions only.
 
-{"event":"link","t":0,"state":"waiting","detail":"waiting for a jetlink gadget at 1209:0001","peer":null}
-// state: "waiting" | "connected" | "disconnected". peer: "usb" or "host:port" when connected.
-// medium, when connected and known: "usb3" | "usb2" | "usb1" | "usb" (speed unknown) | "tcp".
-// It starts from what the server sees and follows the comma's hello, which names its
-// link and the USB speed its controller negotiated (a phone's cable is TCP over USB),
-// with one more "connected" event if that changes it. Older servers leave it out.
-// Emitted on transitions only, never on every 2 s poll.
+{"event":"engine","t":0,"state":"building","sha256":"<sha256>","detail":"",
+ "stage":"build","frac":0.42,"msg":"","load_only":false}
+// state: "none" | "building" | "loading" | "ready" | "failed". Every state
+// change, and progress at most 4 times a second.
 
-{"event":"engine","t":0,"state":"none","sha256":null,"detail":"","stage":null,"frac":0.0,"msg":"","load_only":false}
-// state: "none" | "building" | "loading" | "ready" | "failed"
-// stage: "upload"|"patch"|"parse"|"build"|"save"|"load"|"failed"|null, frac 0..1, msg free text.
-// Emitted on every state change and on progress at most 4 times a second.
-
-{"event":"stats","t":0,"frames":1234,"fps":19.9,"total_ms":{"mean":31.2,"p99":38.0,"max":41.5},
- "gpu_ms":{"mean":29.4},"stages_ms":{"queue":0.6,"gpu":29.4,"other":1.2,"send":0.4},
- "served_ms":{"mean":31.6,"p99":38.4,"max":41.9},"slow":0,"window_s":1.0}
-// Once a second while a link is connected and at least one frame was served in
-// the window. slow counts frames over 60 ms in the window. total_ms runs from a
-// frame's arrival to its reply being ready; served_ms adds the reply's send.
-// stages_ms are means that add up to served_ms.mean: staging the inputs, the
-// model run as the backend times it, the rest of the run (a worker handoff,
-// the output check), and the send.
+{"event":"stats","t":0,"frames":20,"fps":19.9,"slow":0,"window_s":1.0,
+ "total_ms":{"mean":17.0,"p99":17.4,"max":18.1},"served_ms":{"mean":17.4,"p99":17.9,"max":18.6},
+ "gpu_ms":{"mean":15.7},"stages_ms":{"queue":0.5,"gpu":15.7,"other":0.8,"send":0.4}}
+// Once a second while frames arrive. total_ms: arrival to reply ready;
+// served_ms adds the send; stages_ms are means that add up to served_ms.mean.
+// slow: frames whose total was over 60 ms.
 
 {"event":"inventory","t":0,"loaded":"<sha256>|null","last_loaded":"<sha256>|null",
- "models":[{"sha256":"…","bytes":765953504,"path":"…/models/a086d5249fc308bb.onnx","name":"BMRLNAP Model v4","ref":"f877d7a0…|null"}],
- "artifacts":[{"sha256":"…","key":"a086d5249fc308bb.ort1.29.0.coreml-Apple_M1_Pro","path":"…/engines/a086….ortcache",
+ "models":[{"sha256":"<sha256>","bytes":765953504,"path":"<cache>/models/<sha16>.onnx",
+            "name":"Cinque Terre V3 Model","ref":"<ref>|null"}],
+ "artifacts":[{"sha256":"<sha256>","key":"<sha16>.ort1.29.0.coreml-Apple_M1_Pro",
+               "path":"<cache>/engines/<sha16>.ort1.29.0.coreml-Apple_M1_Pro.ortcache",
                "bytes":2300000000,"backend":"ort","runtime_version":"1.29.0","device":"coreml-Apple_M1_Pro",
-               "built_at":"<ISO 8601 timestamp>","build_seconds":8.2,"checkpoint":"b9facbcc-…","current":true}],
+               "built_at":"<ISO 8601>|null","build_seconds":8.2,"checkpoint":"<id>|null","current":true}],
  "disk":{"models_bytes":765953504,"engines_bytes":2300000000,"free_bytes":120000000000}}
-// models: every complete <sha16>.onnx in models/ (a .part is not listed).
-// artifacts: every engines/*.json sidecar with a spec.sha256, any backend.
-//   current is true when the key equals this server's cache key for that sha.
-// name: from the catalog or from an imported model, else null.
-// Emitted on connect, after every build or load completes, after forget, after
-// a download or import completes, and on the inventory command.
+// A Mac's. current: this server would load that artifact. After builds,
+// loads, downloads, imports, forget, and the inventory command.
 
-{"event":"catalog","t":0,"fetched_at":1757440000.0,"url":"https://…/driving_models_chestnut_v26.json",
- "default_ref":"bf3e3631b3f91d92a1020a5e0dd4298b93ff4244","error":null,
- "models":[{"name":"Cinque Terre Model V2","short_name":"CTMV2",
-            "ref":"37bfa1413edcdc2e8844984b83727c33f81d8f46","build_time":"<ISO 8601 timestamp>","index":12,
-            "sha256":"…|null","bytes":765950064}]}
-// Newest first (index descending). sha256/bytes are null until the pointer for
-// that ref has been resolved. error is set when a refresh failed and the list
-// is the previous cached one (possibly empty).
+{"event":"catalog","t":0,"fetched_at":1757440000.0,"url":"<catalog url>",
+ "default_ref":"<ref>","error":null,
+ "models":[{"name":"Cinque Terre V3 Model","short_name":"CTV3M","ref":"<ref>",
+            "build_time":"<ISO 8601>","index":13,"sha256":"<sha256>|null","bytes":765953504}]}
+// Newest first. sha256 and bytes are null until that ref's pointer is
+// resolved. error is set when a refresh failed and this is the cached list.
 
-{"event":"download","t":0,"sha256":"…","ref":"…|null","state":"progress","frac":0.42,
- "bytes":321000000,"total":765953504,"rate_bps":41000000.0,"detail":"","source":"https://gitlab.com/…/info/lfs"}
+{"event":"download","t":0,"sha256":"<sha256>","ref":"<ref>|null","state":"progress",
+ "frac":0.42,"bytes":321000000,"total":765953504,"rate_bps":41000000.0,"detail":"","source":"<url>"}
 // state: "started" | "progress" (at most 4 a second) | "done" | "failed" | "cancelled".
 
-{"event":"import","t":0,"path":"/Users/me/Downloads/big.onnx","state":"hashing","frac":0.3,"sha256":null,"detail":""}
-// state: "hashing" | "copying" | "done" | "failed". sha256 set from "copying" on.
+{"event":"import","t":0,"path":"<file>","state":"hashing","frac":0.3,"sha256":null,"detail":""}
+// state: "hashing" | "copying" | "done" | "failed".
 
-{"event":"reply","t":0,"id":7,"ok":true}
-{"event":"reply","t":0,"id":8,"ok":false,"error":"model a086d5249fc308bb is not downloaded"}
+{"event":"benchmark","t":0,"state":"running","elapsed":12.0,"total":60.0,"frames":240,
+ "frame":{...},"report":null,"detail":""}
+// state: "running" | "done" | "cancelled" | "failed"; report when done.
+
+{"event":"shutdown_request","t":0,"reason":"<why>"}
+// The comma asked a phone or Mac to power off; the apps refuse and say so.
+
+{"event":"hello","t":0,"protocol":1,"pid":4242,"version":"0.7.0","python":"",
+ "platform":"linux","cache":"/mnt/data/jetlink","transport":"usb","port":null}
+// The status page's first event.
 ```
 
 ## Commands
 
+`{"cmd": "<name>", ...arguments}`, answered by one reply:
+`{"ok": true, ...extras}` or `{"ok": false, "error": "<sentence>"}`.
+
 | cmd | arguments | reply extras | behaviour |
 | --- | --- | --- | --- |
 | `status` | | | re-sends `server`, `link`, `engine`, `inventory`, `catalog` |
-| `catalog` | `refresh: bool` (default false) | `queued: true` | fetches the catalog if `refresh`, or if the cache is missing or older than 3600 s; resolves pointers for refs without one (8 in parallel); emits `catalog` when done, with `error` on failure. Never blocks the reply. |
-| `download` | `ref` or `sha256` (one) | `sha256` | resolves the pointer if needed; queues a download (one at a time, FIFO); `download` events follow. Error if already downloaded or queued, or the ref is unknown. |
-| `cancel_download` | `sha256` | | cancels a running or queued download, removes the `.part`, emits `download` with `cancelled` |
-| `import` | `path` | `queued: true` | hashes the file (streaming), copies it to `models/<sha16>.onnx` via a `.part`, records name and size; `import` events, then `inventory` |
-| `prepare` | `sha256`, `frame_skip` (default 4) | `state`; `sha256` when downloading | builds if needed, loads the engine and keeps it in memory; `state` is the engine state after. With neither artifact nor model file on disk: downloads first (joining a running download for it), replies `state: "downloading"`, builds when `download` reports `done`, unless a comma connected meanwhile and uses another model. Error if the model is not in the catalog. |
-| `unload` | | | releases the loaded engine; `engine` with `none` |
-| `forget` | `sha256`, `artifacts: bool`, `model: bool` | | unloads that model if loaded; `artifacts` deletes every `engines/<sha16>.*`, `model` deletes `models/<sha16>.onnx` (and `.part`); removes `last-loaded.json` if it names this sha and its artifact is gone; then `inventory` |
+| `catalog` | `refresh` (default false) | `queued: true` | fetches the catalog if asked, or if the cache is missing or over an hour old, resolves missing pointers, then emits `catalog` |
+| `download` | `ref` or `sha256` | `sha256` | queues a download (one at a time, in order); `download` events follow |
+| `cancel_download` | `sha256` | | cancels it and removes the `.part` |
+| `import` | `path` | `queued: true` | hashes and copies the file in; `import` events, then `inventory` |
+| `prepare` | `sha256`, `frame_skip` (default 4) | `state`; `sha256` when downloading | builds if needed and loads it. With no model file or engine on disk it downloads first and replies `state: "downloading"` |
+| `unload` | | | releases the loaded engine |
+| `forget` | `sha256`, `artifacts` (default true), `model` (default false) | | unloads it if loaded, deletes its engines and/or download, then `inventory` |
 | `inventory` | | | emits `inventory` |
-| `shutdown` | | | replies, emits `server` with `stopping`, exits cleanly as on SIGINT |
-
-- Errors are plain English sentences in `error`.
-- Unknown `cmd`: `ok:false`.
-- Malformed line (not JSON, or no `id`):
-  `{"event":"reply","id":null,"ok":false,"error":"…"}`.
+| `benchmark` | `seconds` (default 60, up to 3600) | `queued: true` | runs the loaded model at the comma's pace with no comma; `benchmark` events. Refused while a comma is connected |
+| `cancel_benchmark` | | | stops it |
+| `shutdown` | | | emits `server` with `stopping`; the app stops the server |

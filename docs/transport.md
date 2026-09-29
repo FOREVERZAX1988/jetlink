@@ -25,7 +25,7 @@ settings):
 
 | Setting | For | Gadget |
 | --- | --- | --- |
-| **USB** | Jetson, Mac, Linux PC, Android | Plain: one vendor-specific interface, one bulk endpoint pair, opened through libusb (IOUSBHost on the Mac; usbdevfs on the descriptor Android's USB host API hands the app). No network interface. |
+| **USB** | Jetson, Mac, Linux PC, Android | Plain: one vendor-specific interface, one bulk endpoint pair, opened through usbfs on Linux (IOKit on the Mac; usbfs on the descriptor Android's USB host API hands the app). No network interface. |
 | **iOS** | iPhone | Composite: interface 0 is the same vendor interface (never used on iOS), then a CDC-NCM network interface, since iOS gives apps no vendor USB access but drives USB network adapters itself. |
 
 - iOS network: the comma is `192.168.60.1` and runs DHCP; the phone gets a
@@ -40,8 +40,13 @@ settings):
 
 ### Bus speed
 
-Latency needs USB 3 (SuperSpeed). A frame is about 400 KB: about 1 ms on USB 3,
+Latency needs USB 3 (SuperSpeed). A frame is about 400 KB to the server and
+8 KB back (the model's hidden state stays on the server): about 1 ms on USB 3,
 10 ms on USB 2 (hence USB 3 on every hop: cable, adapter, any hub).
+
+On Linux the server turns off USB 3 link power management on the comma's port:
+waking the link from its low-power states cost 3.9 of the 7.6 ms each frame
+spent in transport on the bench Jetson.
 
 Negotiated speed on the comma: `/sys/class/udc/*/current_speed`
 (`super-speed` is USB 3, `high-speed` USB 2), also printed with the built
@@ -111,7 +116,7 @@ Parking, starting, and how battery-protection shutdown differs from sleep:
 ## TCP
 
 The comma links over USB only (the plain gadget, or its network interface for
-an iPhone). `--transport tcp` tests a server without a comma: no client
+an iPhone). `jetlink-server --listen` tests a server without a comma: no client
 authentication (trusted network only), and Wi-Fi misses the 50 ms frame budget.
 See [test without a comma](platforms.md#test-without-a-comma).
 

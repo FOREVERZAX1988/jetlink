@@ -39,7 +39,8 @@ Socket turns off a few minutes after parking? Choose **Switched**.
 
 ## 2. Install Jetlink
 
-Needs **JetPack 7.2.1** (recommended) or **6.2**.
+Needs **JetPack 7.2.1** (tested) or **6.2** (untested with this release).
+JetPack 7.0 and 7.1 do not work.
 
 <details>
 <summary>New Jetson? Install JetPack first</summary>
@@ -65,8 +66,9 @@ On the Jetson, open **Terminal** and paste:
 curl -fsSL https://raw.githubusercontent.com/zoompilot/jetlink/main/install.sh | bash
 ```
 
-It installs the latest release. Answer the power questions as above. Takes
-10–30 minutes; leave it running.
+It installs the latest release, and NVIDIA's TensorRT if it is missing (about
+2.3 GB). Answer the power questions as above. Takes 10–30 minutes; leave it
+running.
 
 ## 3. Connect the comma
 
@@ -83,7 +85,9 @@ It installs the latest release. Answer the power questions as above. Takes
 Always-on power: leave both cables connected. The Jetson sleeps when parked and
 wakes when you start the car.
 
-Read [daily use](using-jetlink.md) before driving.
+Read [daily use](using-jetlink.md) before driving. A phone on the same
+network can watch the server on its [status page](using-jetlink.md#status-page);
+`jetlink status` prints the address.
 
 <a id="troubleshooting"></a>
 
@@ -94,8 +98,9 @@ Read [daily use](using-jetlink.md) before driving.
 | Installer stopped | Run the install command again. |
 | Icon never turns green | Run `jetlink status`. Use the Jetson's USB-A port; try another USB 3 data cable. |
 | Jetson will not wake | After a full shutdown, press its power button or reconnect power. Otherwise check **Always on** with `jetlink setup`. |
+| Jetson sleeps while you work on it over SSH | Run `jetlink caffeinate` and keep it running. |
 | Model fails to prepare or keeps disconnecting | Run `jetlink logs`. Check storage space, power, cable, and cooling. |
-| Connection fails after an update | [Update both the comma and Jetlink](releasing.md). |
+| Comma stays on its small model after an update | [Update both the comma and Jetlink](releasing.md). |
 
 <details>
 <summary>Commands and reporting a problem</summary>
@@ -104,12 +109,14 @@ Read [daily use](using-jetlink.md) before driving.
 <a id="reporting-a-problem"></a>
 
 ```bash
-jetlink status     # check Jetlink and the comma connection
-jetlink logs       # view errors; Ctrl-C to stop watching
-jetlink restart    # restart Jetlink
-jetlink update     # update to the newest release, keeping your settings
-jetlink setup      # change power settings
-jetlink uninstall  # remove Jetlink
+jetlink status      # check Jetlink, the comma connection, the status page address
+jetlink logs        # view errors; Ctrl-C to stop watching
+jetlink restart     # restart Jetlink
+jetlink update      # update to the newest release, keeping your settings
+jetlink setup       # change power settings or the status page port
+jetlink models      # list, download or prepare models (jetlink models --help)
+jetlink caffeinate  # keep it awake until Ctrl-C (-t SECONDS, or while a command runs)
+jetlink uninstall   # remove Jetlink
 ```
 
 Asking for help? Include `jetlink status` output, the model name, the exact

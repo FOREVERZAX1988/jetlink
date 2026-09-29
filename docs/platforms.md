@@ -1,197 +1,144 @@
 # Platform setup
 
-Run Jetlink on a Mac, Linux PC, or Windows PC with WSL2. Set up the comma per the
-[README](../README.md#quick-start). Jetson: [Jetson guide](jetson.md).
+Run Jetlink on a Mac, a Linux PC, or a Windows PC with WSL2. Set up the comma
+per the [README](../README.md#quick-start). Jetson: [Jetson guide](jetson.md).
 
 Set up outside the car or in the car while offroad. Keep the comma and computer
 online, and the computer powered and awake.
 
 - [Mac app](macos-app.md): no terminal commands.
-- [Linux installer](#linux-nvidia-gpu): an NVIDIA PC.
-- [Windows WSL2](#windows-nvidia-gpu): a Windows PC with an NVIDIA GPU.
-- [Docker](#docker-nvidia-laptops-and-desktops), [CPU](#cpu-only),
+- [Linux installer](#linux-nvidia-gpu): an NVIDIA PC. Untested on hardware.
+- [Windows WSL2](#windows-nvidia-gpu): untested.
+- [From a checkout](#from-a-checkout), [CPU only](#cpu-only),
   [test without a comma](#test-without-a-comma): development.
 
-## Before running from source
-
-The installer and Mac app need no checkout. For the terminal and Docker steps
-below, clone first:
-
-```bash
-git clone https://github.com/zoompilot/jetlink.git
-cd jetlink
-```
+<a id="before-running-from-source"></a>
+<a id="mac-apple-silicon"></a>
 
 ## Mac (Apple silicon)
 
 Use the [Mac app](macos-app.md) from
 [Releases](https://github.com/zoompilot/jetlink/releases). The server is built
-in; no Python or Homebrew needed.
+in.
 
 ### From a terminal
 
-Needs Python 3.10 or later and libusb from Homebrew:
+The app's server as a command. Needs Xcode 26:
 
 ```bash
-brew install python libusb
-scripts/run-mac.sh
+git clone https://github.com/zoompilot/jetlink.git && cd jetlink
+swift build -c release --package-path JetlinkKit --product jetlink-server
+caffeinate -i JetlinkKit/.build/release/jetlink-server --usb
 ```
 
-- The first run installs dependencies and starts the server.
-- Plug the comma in with a **USB 3 USB-C cable**, or a USB-A to USB-C cable with
-  a USB-C adapter.
-- Set the comma's **Accelerator Link** to **USB** (also for Android; **iOS** is for iPhone). See
-  [what the comma presents](transport.md#what-the-comma-presents).
-- CoreML prepares a model in **about 20 seconds** the first time, and loads it
-  in under a second to about 10 seconds on every server restart.
-- The script keeps the Mac awake on AC power. On battery, keep the lid open.
-- Models and prepared engines go in `models_cache/` in the checkout, about 3 GB
-  per model. Set `JETLINK_CACHE` to move them.
+- Quit the app first: one server holds the comma at a time.
+- `caffeinate -i` keeps the Mac awake while it serves.
+- Models and prepared engines go in `~/Library/Caches/jetlink`, about 3 GB per
+  model. `--cache DIR` moves them; the app's folder is
+  `~/Library/Application Support/Jetlink/cache`.
+- CoreML prepares a model in about 20 seconds the first time, then loads it in
+  under a second to about 10 seconds.
 
-Options:
+Options (`jetlink-server --help` lists the rest):
 
 ```bash
-# Serve a test client over TCP instead of the comma (see Test without a comma)
-JETLINK_TRANSPORT=tcp scripts/run-mac.sh
+# TCP for a bench tool instead of the comma (see Test without a comma)
+JetlinkKit/.build/release/jetlink-server --listen
 
-# The GPU only, if another app keeps the Neural Engine busy
-scripts/run-mac.sh --device coreml
+# the GPU only, if another app keeps the Neural Engine busy
+JetlinkKit/.build/release/jetlink-server --usb --device coreml
 
-# Prepare a model ahead of time, then exit
-scripts/run-mac.sh --build /path/to/big_driving_supercombo.onnx
+# prepare a model ahead of time, then exit
+JetlinkKit/.build/release/jetlink-server build /path/to/big_driving_supercombo.onnx
 ```
 
-Performance: [backends and measurements](backends.md#mac-measured).
+Performance: [backends](backends.md#mac-measured).
 
 ## Linux (NVIDIA GPU)
 
-For a GeForce RTX 20 series or newer GPU, on Ubuntu or Debian:
+Untested on hardware. For a GeForce RTX 20 series or newer GPU on Ubuntu 22.04
+or 24.04:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zoompilot/jetlink/main/install.sh | bash
 ```
 
-- The installer needs NVIDIA driver 580 or newer. On Ubuntu it can install it;
-  restart and rerun the installer if prompted.
-- It asks whether to start Jetlink with the computer.
+- Needs NVIDIA driver 580 or newer. On Ubuntu the installer can install it;
+  restart and rerun the installer when it says so.
+- Installs TensorRT 11.3 from NVIDIA's package source (about 1.9 GB).
+- Asks whether to start Jetlink with the computer.
 - Check it with `jetlink status`. Logs, updates, uninstalling:
   [everyday commands](jetson.md#everyday-use).
 - Plug the comma into a USB-A port. Keep the computer powered and awake while
   driving: sleep drops the link.
 
-### Without Docker
-
-For development. Needs a working NVIDIA driver and Python 3.10 or later.
-
-```bash
-sudo apt update
-sudo apt install -y python3-venv libusb-1.0-0
-python3 -m venv .venv
-source .venv/bin/activate
-python3 -m pip install -e ".[trt,usb,nvml]"
-sudo install -m 644 scripts/99-jetlink-host.rules /etc/udev/rules.d/
-sudo udevadm control --reload-rules
-jetlink-server --backend trt --transport usb
-```
-
-- The udev rule grants USB access without root. Replug the comma after
-  installing it.
-- In a new terminal, run `source .venv/bin/activate` before `jetlink-server`.
-- To prepare a model before connecting the comma, use `jetlink-models`, with the
-  server stopped. See [model management](models.md).
+<a id="docker-nvidia-laptops-and-desktops"></a>
 
 ## Windows (NVIDIA GPU)
 
-Use **Ubuntu in WSL2** and follow the Linux steps inside it, or use
-[Docker](#docker-nvidia-laptops-and-desktops). Start with a
-[TCP test](#test-without-a-comma). USB from WSL2 needs `usbipd-win` to attach
-the comma to Ubuntu.
+Untested. Run the Linux installer in Ubuntu 22.04 or 24.04 on WSL2:
 
-## Docker (NVIDIA laptops and desktops)
+1. Update the NVIDIA driver in Windows to 580 or newer. Never install one
+   inside WSL.
+2. Turn on systemd in WSL: add these lines to `/etc/wsl.conf`, then run
+   `wsl --shutdown` in Windows.
 
-The installer uses these images; this is for running them yourself (for
-example, on Windows with WSL2). They include Python, CUDA 13, TensorRT and USB
-support. The host needs NVIDIA driver 580 or newer.
+   ```
+   [boot]
+   systemd=true
+   ```
 
-| Image | For |
-| --- | --- |
-| `ghcr.io/zoompilot/jetlink:VERSION-cuda` | NVIDIA PCs (x86-64) and Jetsons on JetPack 7.2 or newer: one tag, and Docker pulls the right architecture |
-| `ghcr.io/zoompilot/jetlink:VERSION-jetpack6` | Jetsons on JetPack 6 (also tagged `-jetson`) |
-| `ghcr.io/zoompilot/jetlink:edge-cuda`, `edge-jetpack6` | the newest `main`, what the installer uses with `--ref main` |
+3. Run the installer in Ubuntu.
+4. Attach the comma to WSL with
+   [usbipd-win](https://learn.microsoft.com/windows/wsl/connect-usb).
 
-**Enable GPU access.** On Linux, install Docker Engine and the [NVIDIA Container
-Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html),
-then:
+Start with a [TCP test](#test-without-a-comma).
 
-```bash
-sudo nvidia-ctk runtime configure --runtime=docker
-sudo systemctl restart docker
-```
+<a id="without-docker"></a>
 
-On Windows, install Docker Desktop with the WSL 2 backend and follow [Docker's
-GPU guide](https://docs.docker.com/desktop/features/gpu/). Run the remaining
-commands in your Ubuntu WSL terminal. Verify GPU access:
+## From a checkout
+
+For development on Linux. Build the server tarball (in a Docker or podman
+container, or natively on a Jetson or PC), then install it:
 
 ```bash
-docker run --rm --gpus all nvidia/cuda:13.2.1-base-ubuntu24.04 nvidia-smi
+scripts/build-linux.sh linux-x86_64       # linux-aarch64 for a Jetson
+sudo ./install.sh --binary dist/jetlink-server-<version>-linux-x86_64.tar.gz
 ```
 
-**Pull or build.** Pull a release image, replacing `VERSION` with a release
-such as `0.4.0`, or use `edge-cuda`:
+Or run it in a terminal without installing. The host needs TensorRT (the
+installer's packages) and the udev rule, which grants USB access without root;
+replug the comma after installing the rule:
 
 ```bash
-docker pull ghcr.io/zoompilot/jetlink:VERSION-cuda
-docker tag ghcr.io/zoompilot/jetlink:VERSION-cuda jetlink:cuda
+sudo install -m 644 scripts/99-jetlink-host.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules
+tar -xzf dist/jetlink-server-<version>-linux-x86_64.tar.gz
+jetlink-server-<version>-linux-x86_64/bin/jetlink-server --usb --backend trt
 ```
 
-Or build it from the checkout (`docker/Dockerfile.jetpack6` on a JetPack 6
-Jetson):
-
-```bash
-docker build -f docker/Dockerfile -t jetlink:cuda .
-```
-
-**Run it.** For a TCP [test](#test-without-a-comma) on port 5599:
-
-```bash
-docker volume create jetlink-cache
-docker run --rm -it --gpus all --name jetlink-cuda \
-  -p 127.0.0.1:5599:5599 \
-  -v jetlink-cache:/var/cache/jetlink \
-  jetlink:cuda
-```
-
-For USB on native Linux:
-
-```bash
-docker run --rm -it --gpus all --name jetlink-cuda \
-  --device-cgroup-rule 'c 189:* rmw' \
-  --mount type=bind,source=/dev/bus/usb,target=/dev/bus/usb \
-  -v jetlink-cache:/var/cache/jetlink \
-  jetlink:cuda --transport usb
-```
-
-- Logs: `docker logs -f jetlink-cuda`.
-- If the container name is in use, run `docker stop jetlink-cuda` first.
-- Keep a laptop powered and awake: sleep disconnects the link.
+Without root it cannot turn off USB 3 link power management on the comma's
+port, which costs about 4 ms a frame; the log says so.
 
 ## CPU only
 
-Checks the protocol and model loading without a GPU. Too slow for driving.
+Checks the protocol and model loading without a GPU. Too slow for driving. The
+tarball has no onnxruntime; the build script fetches it and prints its folder:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python3 -m pip install -e ".[ort]"
-jetlink-server --backend ort --device cpu --transport tcp
+ORT=$(scripts/build-linux.sh linux-x86_64 ort)
+LD_LIBRARY_PATH=$ORT/lib jetlink-server-<version>-linux-x86_64/bin/jetlink-server \
+  --backend ort --device cpu --listen
 ```
+
+On a Mac, `--device cpu` does the same.
 
 ## Test without a comma
 
-You need a large driving-model ONNX file and a TCP server running (on an
-installed Jetson or PC: `jetlink stop`, then `sudo docker/run.sh --transport
-tcp` from a checkout). In a second terminal, from the checkout, replace
-`/path/to/big_model.onnx` with your model and run:
+You need a large driving-model ONNX file and a server listening on TCP: on an
+installed Jetson or PC, `jetlink run --listen` (it stops the service while it
+runs). In a second terminal, from a checkout, replace `/path/to/big_model.onnx`
+with your model:
 
 ```bash
 python3 -m venv .venv
@@ -206,30 +153,16 @@ python3 scripts/bench_link.py --host 127.0.0.1 --onnx /path/to/big_model.onnx --
 - TCP has no authentication: use a trusted network.
 - Wi-Fi does not meet the frame budget.
 
-With the Docker image, no Python install is needed. Put the model in a `models`
-folder in the checkout and run:
-
-```bash
-docker run --rm -it --network container:jetlink-cuda \
-  --mount "type=bind,source=$(pwd)/models,target=/models,readonly" \
-  --entrypoint python jetlink:cuda \
-  scripts/bench_link.py --host 127.0.0.1 --onnx /models/big_model.onnx --rate 20
-```
-
 ## Troubleshooting
 
 | Problem | Check |
 | --- | --- |
-| `python3` too old or not found | Install Python 3.10+ and reopen the terminal |
-| `jetlink-server` not found | Run `source .venv/bin/activate` from the project folder |
-| Backend missing | `jetlink-server --list-backends`; check that platform's dependencies and GPU driver |
-| USB library error | Install native libusb as well as the Python package |
-| USB permission error on Linux | Install the udev rule, then replug the comma |
-| TCP connection refused | Start the server with `--transport tcp`. Check the IP and allow port 5599 through the firewall |
-| GPU not found in Docker | Redo the GPU access setup and rerun the `nvidia-smi` check. The driver must be 580 or newer |
-| Mac looks stuck loading | On an M1 Pro, CoreML prepares in about 20 seconds and loads in up to 10. If loading takes minutes, remove the prepared engine and prepare again. Check the server output for errors |
-| Link drops when the laptop sleeps | Keep it awake, powered, and open |
+| Installer says the GPU is too old or has no driver | A GeForce RTX 20 series or newer, and driver 580 or newer. |
+| `jetlink status` says the server stopped | `jetlink logs`. `sudo /opt/jetlink/current/bin/jetlink-server backends --backend trt` says whether TensorRT loads. |
+| USB permission error | Install the udev rule, then replug the comma. |
+| TCP connection refused | Start the server with `--listen`. Check the IP and allow port 5599 through the firewall. |
+| Mac looks stuck loading | On an M1 Pro, CoreML prepares in about 20 seconds and loads in up to 10. If loading takes minutes, remove the prepared engine and prepare again. |
+| Link drops when the laptop sleeps | Keep it awake, powered, and open. |
 
-Desktop caches use `JETLINK_CACHE` if set, otherwise `~/.cache/jetlink`, or
-`~/Library/Caches/jetlink` on a Mac (the Mac script sets `models_cache/`).
+Cache folders: [model management](models.md#downloads-prepared-engines-and-disk-space).
 Comma-side alerts: [README](../README.md#if-something-is-wrong).

@@ -15,9 +15,9 @@ make -C macos app
 
 `make app` generates the Xcode project, builds Release for Apple silicon, and
 signs the app ad hoc. The result is `macos/build/Jetlink.app`. The server is
-the Swift one in `JetlinkKit` (the iPhone app runs the same code), linked into
+the Swift one in `JetlinkKit` (every platform runs the same code), linked into
 the app with onnxruntime's static xcframework, which Xcode downloads (61 MB)
-the first time it resolves the package. There is no Python in the app.
+the first time it resolves the package.
 
 Check the built app with `make -C macos smoke`: it launches the bundle with TCP
 on a free port and a cache of its own, says hello and pings over the wire
@@ -32,16 +32,13 @@ make -C macos dev
 
 This opens `Jetlink.xcodeproj`. The Swift server itself lives in
 `JetlinkKit/Sources/JetlinkServer`; `swift test --package-path JetlinkKit`
-runs its tests, and `JetlinkKit/.build/release/jetlink-serve` (from
-`swift build -c release --package-path JetlinkKit`) runs it without the app.
+runs its tests, and `jetlink-server` runs it without the app
+([from a terminal](../docs/platforms.md#from-a-terminal)).
 
 `make -C macos project` regenerates the project from `project.yml` alone;
 `make -C macos test` runs the Swift Testing suites. The test host starts no
 server. The generated `Jetlink.xcodeproj` is committed, so
 `open macos/Jetlink.xcodeproj` works without xcodegen installed.
-
-The Python server still runs on a Mac from a checkout, for work on the Python
-side: `scripts/run-mac.sh`.
 
 ## Sign, notarize, release
 

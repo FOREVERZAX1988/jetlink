@@ -21,10 +21,12 @@ assumes Jetlink has it alone).
 | build / load in a fresh process | about 20 s / 0.6 to 11 s | about 10 s / 1.8 to 4.7 s |
 | artifact on disk | 2.1 GB | 2.3 GB |
 
-- The Python server's numbers, from before the app ran the Swift server only.
-- Measured 2026-09-26 in 300-frame blocks, alternating with the code before the
-  change measured: six blocks for the default on V3, four for the rest. The p99
-  is the range over blocks.
+- Measured 2026-09-26 on the Python server Jetlink ran then, with the same
+  prepared graphs and CoreML provider; the Swift server is about 1 ms faster
+  (below).
+- 300-frame blocks, alternating with the code before the change measured: six
+  blocks for the default on V3, four for the rest. The p99 is the range over
+  blocks.
 - Another process was busy throughout. It got busier in the last GPU-only V2
   block (43.6 ms mean, 7 frames over), most of that column's p99 range and
   misses; the other three blocks ran 40.8 to 41.0 ms.
@@ -32,64 +34,47 @@ assumes Jetlink has it alone).
   another (macOS prepares the Neural Engine part again).
 - Mean: average frame. p99: 99% of frames at or below. Max: slowest frame.
 
-## The Python server and the Swift server
+<a id="the-python-server-and-the-swift-server"></a>
 
-The measurements behind the app's move to the Swift server. Both run the same
-prepared graph through onnxruntime's CoreML provider; they differ in queues,
-copies and process layout (Python runs the model in a worker process, Swift in
-the app's own).
+## The Swift server
 
 2026-09-27, same M1 Pro, Cinque Terre V3, default split,
-`bench_link.py --rate 20 --n 1200` over TCP loopback, one server at a time.
-Swift: `jetlink-serve` release build. Python:
-`python -m jetlink.server.main --transport tcp`.
+`bench_link.py --rate 20 --n 1200` over TCP loopback:
 
 | Run | round trip p50 / p99 / max | server-side total | over 50 ms |
 | --- | ---: | ---: | ---: |
-| Python 1 | 31.20 / 57.63 / 96.35 ms | 30.92 ms | 18 of 1,190 |
-| Python 2 | 31.16 / 51.34 / 145.63 ms | 30.50 ms | 15 of 1,190 |
-| Python 3 | 31.03 / 34.54 / 45.07 ms | 29.92 ms | 0 of 1,190 |
 | Swift 1 | 29.81 / 33.51 / 36.90 ms | 28.87 ms | 0 of 1,190 |
 | Swift 2 | 30.14 / 33.90 / 34.76 ms | 29.06 ms | 0 of 1,190 |
+| Python, clean run, for comparison | 31.03 / 34.54 / 45.07 ms | 29.92 ms | 0 of 1,190 |
 
-- A container build ran during Python 1 and 2; Python 3 had the Swift runs' load.
-- Clean runs: Swift about 1 ms faster at p50, 0.6 to 1 ms at p99. Server only;
-  loopback TCP adds about 1.4 ms to both.
+- Loopback TCP adds about 1.4 ms to both.
+- The release-built app served the same model at 29.83 ms p50, 32.87 ms p99 and
+  33.70 ms max, none of 190 frames over 50 ms, loading the engine in 9.2 s.
 
-Over USB, Python server only: 2026-09-27, comma four, Jetlink v0.4.3 app
-(Python server, Neural Engine), this M1 Pro, parked live bench (big model frame
-times as the comma sees them):
+Over USB, 2026-09-27, comma four, the Jetlink 0.4.3 app (Python server, Neural
+Engine), this M1 Pro, parked live bench (big model frame times as the comma
+sees them):
 
 | Cable | p50 | p99 | Dropped |
 | --- | ---: | ---: | ---: |
 | USB 3 C-to-C | 36.9 ms | 45.7 ms | 0 |
 | USB 2 C-to-C | 46.7 ms | 54.3 ms | 0.88% |
 
-Not yet measured: the Swift server over USB (the gate: p99 no worse than the
-Python server's, no frame dropped). To run it: plug the comma into the Mac, and
-on the parked comma run `jetlink_repo/scripts/comma/jetlink_live_bench.sh 180`
-with the app (or `jetlink-serve --usb` from `JetlinkKit/.build/release`), then
-with `scripts/run-mac.sh`, the Python server from a checkout, on the same cable.
-
-The release-built, ad hoc signed Swift-only app served the same model over
-loopback TCP at 29.83 ms p50, 32.87 ms p99 and 33.70 ms max, none of 190 frames
-over 50 ms, loading the engine in 9.2 s.
-
-One cache serves both: with matching prepare versions each loads what the
-other built ([conformance](conformance.md#one-cache-for-both-servers)).
+Not yet measured: the Swift server over USB (the gate: p99 no worse, no frame
+dropped). To run it, plug the comma into the Mac with the app serving, and on
+the parked comma run `jetlink_repo/scripts/comma/jetlink_live_bench.sh 180`.
 
 ## How the default runs
 
-`--device ane`, which `auto` picks on Apple silicon:
+`--device ane`, the default:
 
 - The convolutional trunk (reads the camera frames) runs on the Neural Engine in
   about 20 ms (GPU: 31 ms); everything after it runs on the GPU.
 - Every model is cut where the trunk ends and run as two CoreML sessions
   exchanging 32 KB per frame (V3's policy and history; V2's policy with the
   history the server keeps).
-- V3's history stays in the worker process that runs the sessions, each frame's
-  outputs feeding the next frame's inputs there, instead of crossing to the
-  server and back as 12 MB a frame (worth 0.6 ms mean, 1.1 ms p99).
+- V3's history stays in the engine: onnxruntime double-buffers it, so each
+  frame's outputs become the next frame's inputs without a copy.
 
 Against one session with every compute unit, mean / p99 in ms at 20 Hz,
 interleaved on 2026-09-25:
@@ -132,8 +117,9 @@ only 43.5 ms. Then use `--device coreml` (**CoreML on the GPU** in the Mac app).
 | Tool | Does |
 | --- | --- |
 | `scripts/verify_parity.py` | compares 32 frames against ONNX Runtime on the CPU, with the model's hidden-state feedback; passes when every output slice and column has a correlation of at least 0.999 |
-| `scripts/verify_engine.py` | checks a prepared engine on the machine that built it, without the link; with `--capture` it replays a `verify_parity.py` capture and must match what the comma received, bit for bit |
 | `scripts/bench_link.py --rate 20` | round-trip latency through the server over TCP loopback; use 20 Hz results for the driving frame budget ([test without a comma](platforms.md#test-without-a-comma)) |
+| `jetlink-server bench` | runs a prepared engine at the comma's pace with no comma and no link, and reports its times |
+| `scripts/comma/jetlink_live_bench.sh` | on the comma: the big model's frame times as the car sees them |
 | `scripts/comma/jetlink_replay.py` | on the comma: replays a recorded segment through the real modeld on the accelerator |
 
 ## Keeping the Mac GPU responsive between frames
@@ -166,20 +152,16 @@ The helper:
   own thread;
 - does not change model inputs, hidden state, precision, or CoreML compute
   units;
-- stops after one second without an inference request, on inference errors, or
-  when the worker exits;
+- stops after one second without an inference request;
 - runs whenever a session uses the GPU, the default's GPU half included; CPU
   sessions do not start it;
-- on a Metal initialization or helper command failure, logs a warning and
-  inference continues without it.
+- if Metal cannot start it, inference continues without it.
 
 It trades GPU activity and power for latency; it does not change thermal limits
-or force a GPU clock. To disable it for comparison, set
-`JETLINK_METAL_KEEPALIVE=0`:
+or force a GPU clock. `--no-keepalive` turns it off for comparison:
 
 ```bash
-JETLINK_METAL_KEEPALIVE=0 JETLINK_TRANSPORT=tcp \
-  scripts/run-mac.sh --backend ort --device coreml --host 127.0.0.1
+JetlinkKit/.build/release/jetlink-server --listen --host 127.0.0.1 --device coreml --no-keepalive
 ```
 
 Compare with the same model and a sustained paced benchmark

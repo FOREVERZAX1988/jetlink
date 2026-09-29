@@ -9,7 +9,8 @@
 </p>
 
 **Jetlink is experimental.** It needs zoompilot's
-[`jetson-trt` branch](https://github.com/zoompilot/zoompilot/tree/jetson-trt).
+[`jetson-trt` branch](https://github.com/zoompilot/zoompilot/tree/jetson-trt);
+update the comma and Jetlink together.
 If the link drops while engaged, the comma soft-disables: take over.
 Read the [operating limits](docs/status.md) first.
 
@@ -43,7 +44,8 @@ Follow the **[Jetson setup guide](docs/jetson.md)** (power, JetPack, installer).
 
 ### Linux PC
 
-Needs Ubuntu or Debian and an NVIDIA GeForce RTX 20 series or newer GPU. Run:
+Untested on hardware. Needs Ubuntu 22.04 or 24.04 and an NVIDIA GeForce RTX 20
+series or newer GPU. Run:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zoompilot/jetlink/main/install.sh | bash
@@ -69,7 +71,8 @@ Nothing else to install: the server is built into the app.
 
 <a href="docs/images/iphone-demo.mp4"><img src="docs/images/iphone-demo.webp" width="100%" alt="Jetlink for iPhone, recorded in the iOS Simulator: Get downloads and prepares a model, the comma connects over USB, and Status shows each frame against the 50 ms budget, with timings modeled on an iPhone 17 Pro measurement"></a>
 
-Only tested with a Mac standing in for the phone. You need:
+The link to the comma is only tested with a Mac standing in for the phone. You
+need:
 
 * An iPhone or iPad with USB-C on iOS or iPadOS 26.1 or later. For USB 3: an
   iPhone 15 Pro or later Pro, or an iPad Pro, Air, or mini.
@@ -130,6 +133,7 @@ More: [daily use and icon meanings](docs/using-jetlink.md).
 | Model list is empty | Connect the comma to the internet, then use Refresh Model List. |
 | Setup alert or orange icon | Read the alert. Check internet, then set Accelerator Link to Off and back to USB or iOS. |
 | Alert says **no warp built for this camera** | Update or reinstall the `jetson-trt` branch. |
+| Comma stays on its small model after an update | Update both the comma and Jetlink: [updates](docs/releasing.md). |
 | Link drops repeatedly | Check the cable, separate power, cooling, and computer sleep. |
 
 Logs and more: [Jetson](docs/jetson.md#troubleshooting),
