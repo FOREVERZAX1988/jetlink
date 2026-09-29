@@ -722,7 +722,8 @@ extension ControlEvent {
     }
   }
 
-  private static func object(_ value: some Encodable) -> [String: Any] {
+  /// A value of the protocol as its JSON object, nulls included.
+  static func object(_ value: some Encodable) -> [String: Any] {
     let encoder = JSONEncoder()
     encoder.keyEncodingStrategy = .convertToSnakeCase
     guard let data = try? encoder.encode(value), let object = try? JSONSerialization.jsonObject(with: data) else { return [:] }

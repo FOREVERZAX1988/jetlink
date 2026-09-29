@@ -124,10 +124,7 @@ struct PinnedConstantTests {
 
   @Test("Builds carry the Python's prepare version, on the Python's onnxruntime")
   func preparation() {
-    #if canImport(Metal)
-      #expect(CoreMLBackend.prepareVersion == Pinned.prepareVersion)
-    #endif
-    #expect(QNNBackend.prepareVersion == Pinned.prepareVersion)
+    #expect(OrtBackend.prepareVersion == Pinned.prepareVersion)
     #expect(OrtRuntime.version == Pinned.onnxruntimeVersion)
   }
 }

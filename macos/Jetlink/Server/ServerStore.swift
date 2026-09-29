@@ -39,14 +39,14 @@ enum ServerStoreError: Error, LocalizedError, Equatable {
 final class ServerStore: ServerControlling {
   private(set) var runState: ServerRunState = .stopped
   private(set) var info: ServerInfo?
-  private(set) var link: LinkEvent = .waiting
-  private(set) var engine: EngineEvent = .none
-  /// The last two minutes of `stats` events, oldest first, while the comma stays connected.
-  private(set) var statsHistory: [StatsSample] = []
-  var stats: StatsEvent? { statsHistory.last?.stats }
+  /// What the screens show of the server, kept from its events.
+  let state = ServerViewState()
+  var link: LinkEvent { state.link }
+  var engine: EngineEvent { state.engine }
+  var statsHistory: [StatsSample] { state.statsHistory }
+  var stats: StatsEvent? { state.stats }
+  var benchmark: BenchmarkEvent? { state.benchmark }
   private(set) var startedAt: Date?
-  /// The benchmark running or last run, if any.
-  private(set) var benchmark: BenchmarkEvent?
   var lastFailure: String?
 
   let settings: AppSettings
@@ -218,20 +218,12 @@ final class ServerStore: ServerControlling {
     case .server(let server):
       if let version = server.runtimeVersion { info?.runtimeVersion = version }
       if let device = server.device { info?.device = device }
-    case .link(let value):
-      link = value
-      if value.state != .connected { statsHistory = [] }
-    case .engine(let value):
-      engine = value
-    case .stats(let value):
-      statsHistory = StatsSample.appending(value, to: statsHistory)
-    case .benchmark(let value):
-      benchmark = value
     case .shutdownRequest(let value):
       log.warning("the comma asked this Mac to power off (\(value.reason, privacy: .public)); a Mac does not")
-    case .hello, .reply:
-      break
     default:
+      break
+    }
+    if !state.apply(event) {
       modelEventsContinuation.yield(event)
     }
   }
@@ -246,8 +238,8 @@ final class ServerStore: ServerControlling {
 
   /// What runs the model: CoreML on the device the setting names, with the
   /// GPU and a CPU core kept up between frames.
-  nonisolated static func backend(for choice: BackendChoice) -> CoreMLBackend {
-    CoreMLBackend(device: choice.device, preparer: ONNXPreparer(), keepAlive: true, keepCPUWarm: true)
+  nonisolated static func backend(for choice: BackendChoice) -> OrtBackend {
+    OrtBackend(profile: choice.profile, preparer: ONNXPreparer(), keepAlive: true, keepCPUWarm: true)
   }
 
   nonisolated static var appVersion: String {
@@ -255,9 +247,7 @@ final class ServerStore: ServerControlling {
   }
 
   private func resetLiveState() {
-    link = .waiting
-    engine = .none
-    statsHistory = []
+    state.serverStopped()
     startedAt = nil
   }
 
@@ -291,10 +281,12 @@ extension ServerStore {
     let store = ServerStore(settings: AppSettings.preview(), logs: LogBuffer(), logFile: nil, isLive: false)
     store.runState = runState
     store.info = info
-    store.link = link
-    store.engine = engine
+    store.state.apply(.link(link))
+    store.state.apply(.engine(engine))
     // One sample of `stats` unless a history is given, which ends with its own.
-    store.statsHistory = statsHistory.isEmpty ? stats.map { [StatsSample(at: Date(), stats: $0)] } ?? [] : statsHistory
+    for sample in statsHistory.isEmpty ? stats.map { [StatsSample(at: Date(), stats: $0)] } ?? [] : statsHistory {
+      store.state.apply(.stats(sample.stats), at: sample.at)
+    }
     store.startedAt = Date(timeIntervalSinceNow: -3600)
     return store
   }
