@@ -260,6 +260,12 @@ case "$name" in
         [ -f "$file" ] || { echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; }
         case "$file" in
           *.tar.gz)
+            if [ "${FAKE_DOWNLOAD_HANG:-0}" = 1 ]; then
+              # until the scenario's signal cuts it off; the sleep is a backstop
+              touch "$state/download-hanging"
+              sleep 30
+              exit 18
+            fi
             left="$(cat "$state/download-fails" 2>/dev/null || echo "${FAKE_DOWNLOAD_FAILS:-0}")"
             if [ "$left" -gt 0 ]; then
               echo $((left - 1)) >"$state/download-fails"

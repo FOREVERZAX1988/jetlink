@@ -78,7 +78,7 @@ reset_box() {
   done
   unset FAKE_ARCH FAKE_SMI FAKE_PUBLISHED FAKE_PM_REBOOT FAKE_SERVER_BROKEN FAKE_GPU_BROKEN \
     FAKE_TRT10 FAKE_NO_CURL FAKE_ROOT_FREE_GB FAKE_IMAGE_GB FAKE_DOWNLOAD_FAILS FAKE_BAD_SUM FAKE_NO_PLUGIN \
-    FAKE_DOCKER_STUCK FAKE_BAD_WHEEL FAKE_SERVER_CRASHLOOP FAKE_PRELOAD FAKE_SERVER_OLD \
+    FAKE_DOCKER_STUCK FAKE_BAD_WHEEL FAKE_SERVER_CRASHLOOP FAKE_PRELOAD FAKE_SERVER_OLD FAKE_DOWNLOAD_HANG \
     JETLINK_TEST_PRELOAD_S
   export JETLINK_REPO_URL=file:///tmp/repo FAKE_LATEST=v0.10.0 JETLINK_TEST_SYSTEMD_RUN=/tmp
 }
@@ -143,6 +143,28 @@ old_install() {  # old_install TAG [args...]: that Docker release's curl | bash,
 
 cli() {  # cli ARGS...: the jetlink command, as installed
   jetlink "$@" >"$OUT" 2>&1
+  RC=$?
+}
+
+# interrupted SIGNAL COMMAND...: COMMAND in a session of its own, as a terminal
+# runs it, and SIGNAL to all of it once the server download has started, as
+# Ctrl-C (INT) or a dropped ssh session (HUP) sends it, or KILL for a power cut.
+# A command started with & ignores SIGINT, as a shell without job control
+# starts it, and a terminal's would not: perl puts it back.
+interrupted() {
+  local sig=$1 pid tries=300
+  shift
+  rm -f "$FAKE_STATE/download-hanging"
+  # shellcheck disable=SC2016  # perl's variables, not the shell's
+  FAKE_DOWNLOAD_HANG=1 setsid perl -e '$SIG{INT} = "DEFAULT"; exec @ARGV or die "exec: $!"' -- "$@" >"$OUT" 2>&1 &
+  pid=$!
+  while [ ! -e "$FAKE_STATE/download-hanging" ] && [ "$tries" -gt 0 ]; do
+    tries=$((tries - 1))
+    sleep 0.1
+  done
+  check "the download never started" test -e "$FAKE_STATE/download-hanging"
+  kill -s "$sig" -- "-$pid"
+  wait "$pid"
   RC=$?
 }
 
@@ -423,6 +445,21 @@ FAKE_SERVER_OLD=1 run_installer curl '' --yes
 expect_rc 0
 expect_in /var/log/jetlink-install.log "nothing on the comma is serving it yet"
 expect_out "Jetlink is installed and running"
+
+scenario "Ctrl-C during an update starts the server it stopped again"
+reset_box; jetson 39 2.1
+run_installer curl '' --yes
+: >"$FAKE_LOG"
+# a server that sleeps and has no awake lock stops for the update
+interrupted INT bash /opt/jetlink/src/install.sh --update --ref v0.9.0
+expect_rc 130
+expect_out "Stopped by SIGINT."
+expect_out "The previous Jetlink server is running again."
+expect_before "systemctl stop jetlink-server" "releases/download/v0.9.0/jetlink-server-0.9.0-linux-aarch64.tar.gz"
+refute "the unit was left stopped" test -f "$FAKE_STATE/stopped-jetlink-server"
+expect_link /opt/jetlink/current /opt/jetlink/0.10.0
+expect_in /etc/jetlink/install.conf "JETLINK_REF=latest"
+expect_file /var/log/jetlink-install.log
 
 scenario "a fresh install has no server to stop"
 reset_box; jetson 39 2.1
@@ -1092,6 +1129,36 @@ expect_in /etc/jetlink/server.env "JETLINK_IMAGE="
 expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=120"
 expect_not_ran "docker rmi"
 expect_no_out "Jetlink is installed and running"
+
+scenario "a move stopped part way puts Docker back with its sleep; one killed keeps the sleep for the next"
+reset_box; jetson 39 2.1; with_docker
+old_install v0.6.0
+# the ssh session drops while the server downloads, with Docker held awake
+interrupted HUP jetlink update
+expect_rc 129
+expect_ran "jetlink-server started: docker, sleep 0"
+expect_in /var/log/jetlink-install.log "Stopped by SIGHUP."
+expect_in /var/log/jetlink-install.log "The previous Jetlink server is running again."
+check "not started again with its sleep" test "$(grep 'jetlink-server started' "$FAKE_LOG" | tail -n 1)" = "jetlink-server started: docker, sleep 120"
+expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=120"
+expect_not_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER_HELD"
+expect_in "$UNITS/jetlink-server.service" "run-server"
+# killed outright, nothing puts it back, but the sleep it held is kept beside the 0
+: >"$FAKE_LOG"
+interrupted KILL jetlink update
+expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=0"
+expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER_HELD=120"
+: >"$FAKE_LOG"
+cli update
+expect_rc 0
+expect_out "Jetlink is installed and running"
+expect_in /etc/jetlink/server.env.prev "JETLINK_SLEEP_AFTER=120"
+expect_not_in /etc/jetlink/server.env.prev "JETLINK_SLEEP_AFTER_HELD"
+expect_in /etc/jetlink/docker-era/server.env "JETLINK_SLEEP_AFTER=120"
+expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=120"
+expect_not_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER_HELD"
+expect_ran "jetlink-server started: docker, sleep 0"
+expect_ran "jetlink-server started: native, sleep 120"
 
 scenario "a Docker server that will not stop keeps serving, and no native one starts beside it"
 reset_box; jetson 39 2.1; with_docker

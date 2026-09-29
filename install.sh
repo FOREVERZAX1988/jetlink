@@ -117,6 +117,8 @@ die() {
   local line
   for line in "$@"; do printf '  %s\n' "$line"; done
   printf '\n'
+  # a second Ctrl-C must not cut the way back short
+  trap '' INT TERM HUP
   restore_previous_server
   save_log
   exit 1
@@ -142,6 +144,22 @@ on_error() {
   fi
   printf '\n  Running the installer again is safe. If it keeps failing, open an issue at\n'
   printf '  https://github.com/zoompilot/jetlink/issues with the log attached.\n\n'
+  trap '' INT TERM HUP
+  restore_previous_server
+  save_log
+  exit "$rc"
+}
+
+# Ctrl-C, a closed terminal or ssh session, or a kill: the way back a failure
+# takes, then out with the signal's status. A closed terminal takes the output
+# with it, so from then on everything goes to the log.
+on_signal() {
+  local sig=$1 rc=$2
+  trap '' INT TERM HUP
+  trap - ERR
+  set +e
+  if [ "$sig" = HUP ]; then exec >>"$LOG" 2>&1; else exec 1>&4 2>&5; fi
+  printf '\n%sStopped by %s.%s\n' "$R$B" "SIG$sig" "$N"
   restore_previous_server
   save_log
   exit "$rc"
@@ -160,7 +178,9 @@ run_step() {
   printf '\n==> %s\n' "$label" >>"$LOG"
   local rc=0 t0=$SECONDS
   if [ -t 1 ]; then
-    "$@" </dev/null >>"$LOG" 2>&1 &
+    # a failure is the step's to report: the ERR trap, inherited, would put
+    # the old server back from in here, and then the step's die again
+    ( trap - ERR; "$@" ) </dev/null >>"$LOG" 2>&1 &
     local pid=$! i=0 frames=$'|/-\\'
     while kill -0 "$pid" 2>/dev/null; do
       printf '\r  %s%s%s %s %s%s%s ' "$D" "${frames:i++%4:1}" "$N" "$label" "$D" "$(elapsed $((SECONDS - t0)))" "$N"
@@ -547,14 +567,15 @@ load_previous() {
   [ -r "$CONF" ] || return 0
   HAD_INSTALL=1
   # only from the files: the jetlink command runs this with them exported
-  local JETLINK_REF='' JETLINK_VERSION='' JETLINK_STATUS_PORT=''
+  local JETLINK_REF='' JETLINK_VERSION='' JETLINK_STATUS_PORT='' JETLINK_SLEEP_AFTER_HELD=''
   # shellcheck disable=SC1090
   . "$CONF"
   # what the server runs with, the sleep delay and the cache among it
   # shellcheck disable=SC1090
   [ -r "$ENV_FILE" ] && . "$ENV_FILE"
   POWER="${JETLINK_POWER:-}"
-  SLEEP_AFTER="${JETLINK_SLEEP_AFTER:-0}"
+  # a run stopped while hold_sleep held the server awake left the answer here
+  SLEEP_AFTER="${JETLINK_SLEEP_AFTER_HELD:-${JETLINK_SLEEP_AFTER:-0}}"
   POWEROFF_WITH_COMMA="${JETLINK_POWEROFF_WITH_COMMA:-0}"
   AUTOSTART="${JETLINK_AUTOSTART:-1}"
   CACHE_DIR="${JETLINK_CACHE_DIR:-}"
@@ -977,7 +998,14 @@ ENV_PREV="$ETC_DIR/server.env.prev"
 CONF_PREV="$ETC_DIR/install.conf.prev"
 
 backup_install() {
-  if [ -f "$ENV_FILE" ]; then as_root cp -p "$ENV_FILE" "$ENV_PREV"; fi
+  local held
+  held="$(sed -n 's/^JETLINK_SLEEP_AFTER_HELD=//p' "$ENV_FILE" 2>/dev/null | tail -n 1 || true)"
+  if [ -n "$held" ]; then
+    # a run stopped while it held the server awake: its sleep is the setting
+    { grep -Ev '^JETLINK_SLEEP_AFTER(_HELD)?=' "$ENV_FILE"; echo "JETLINK_SLEEP_AFTER=$held"; } | root_write "$ENV_PREV"
+  elif [ -f "$ENV_FILE" ]; then
+    as_root cp -p "$ENV_FILE" "$ENV_PREV"
+  fi
   if [ -f "$CONF" ]; then as_root cp -p "$CONF" "$CONF_PREV"; fi
   [ "$DOCKER_ERA" = 1 ] || return 0
   # everything the move replaces, and which of the units were enabled
@@ -997,9 +1025,11 @@ backup_install() {
   done
   printf '%s' "$enabled" | root_write "$DOCKER_ERA_DIR/enabled"
   if [ -d "$LIB_DIR" ]; then as_root cp -a "$LIB_DIR" "$DOCKER_ERA_DIR/lib"; fi
-  for f in "$BIN" "$CONF" "$ENV_FILE"; do
+  for f in "$BIN" "$CONF"; do
     if [ -f "$f" ]; then as_root cp -p "$f" "$DOCKER_ERA_DIR/"; fi
   done
+  # the settings as they were, not as a held sleep left them
+  if [ -f "$ENV_FILE" ]; then as_root cp -p "$ENV_PREV" "$DOCKER_ERA_DIR/$(basename "$ENV_FILE")"; fi
   good "The Docker setup is saved in $DOCKER_ERA_DIR"
 }
 
@@ -1007,11 +1037,14 @@ backup_install() {
 # moment the comma lets go. A native one does not while its awake lock is held
 # (jetlink caffeinate), so this run holds it until it exits; one from before
 # the lock stops now instead of at the switch. The Docker era's does not know
-# the lock: it restarts without sleeping, and a failure puts its server.env back.
+# the lock: it restarts without sleeping, and a failure or an interruption puts
+# its server.env back. The sleep it had stays in server.env beside the 0, for
+# the next run, should this one be killed before it can put it back.
 hold_sleep() {
   local after
   [ -f "$UNIT_DIR/$UNIT.service" ] && [ -f "$ENV_FILE" ] || return 0
-  after="$(sed -n 's/^JETLINK_SLEEP_AFTER=//p' "$ENV_FILE" | tail -n 1)"
+  # from the copy backup_install made, which a held sleep does not change
+  after="$(sed -n 's/^JETLINK_SLEEP_AFTER=//p' "$ENV_PREV" 2>/dev/null | tail -n 1 || true)"
   [ "${after%.*}" -gt 0 ] 2>/dev/null || return 0
   as_root systemctl is-active --quiet "$UNIT" || return 0
   if [ "$DOCKER_ERA" = 0 ]; then
@@ -1022,8 +1055,9 @@ hold_sleep() {
     fi
     return 0
   fi
-  { grep -v '^JETLINK_SLEEP_AFTER=' "$ENV_PREV"; echo 'JETLINK_SLEEP_AFTER=0'; } | root_write "$ENV_FILE"
   SLEEP_HELD=1
+  { grep -v '^JETLINK_SLEEP_AFTER=' "$ENV_PREV"; echo 'JETLINK_SLEEP_AFTER=0'; echo "JETLINK_SLEEP_AFTER_HELD=$after"; } \
+    | root_write "$ENV_FILE"
   step "Keeping this computer awake for the update" as_root systemctl restart "$UNIT"
 }
 
@@ -1810,7 +1844,12 @@ main() {
   ARGS=("$@")
   parse_args "$@"
   setup_colors
+  # the output as it is here, for on_signal: a step sends its own to the log
+  exec 4>&1 5>&2
   trap 'on_error $LINENO' ERR
+  trap 'on_signal INT 130' INT
+  trap 'on_signal TERM 143' TERM
+  trap 'on_signal HUP 129' HUP
   : >"$LOG"
 
   printf '\n%sJetlink installer%s\n' "$B" "$N"
