@@ -1093,6 +1093,129 @@ expect_out "sudo apt remove libnvinfer10 libnvonnxparsers10 libnvinfer-plugin10"
 expect_file /mnt/data/jetlink/engines/abc.plan
 show_on_failure "$f"
 
+# ---------------------------------------------------------------------------
+# The real server, from a tarball scripts/build-linux.sh made: run.sh mounts
+# the ones JETLINK_REAL_SERVER names at /real, and the one for this
+# container's processor is installed and run. The GPU is a stand-in
+# (fake_gpu.c) under the real loader; apt and systemd are fake.sh as above.
+
+REAL_ARCH="$(/usr/bin/uname -m)"
+REAL="$(find /real -maxdepth 1 -name "jetlink-server-*-linux-$REAL_ARCH.tar.gz" 2>/dev/null | head -n 1)"
+
+real_box() {  # the computer the tarball is for
+  reset_box
+  if [ "$REAL_ARCH" = aarch64 ]; then jetson 39 2.1; else pc 580.95.05; fi
+}
+
+# A stand-in NVIDIA driver and TensorRT the real server can open: where the
+# loader finds them, which is not where fake.sh's ldconfig says TensorRT is.
+GPU_TRT=10.16.2.10
+[ "$REAL_ARCH" = x86_64 ] && GPU_TRT=11.3.0.99
+fake_gpu() {
+  local v
+  IFS=. read -ra v <<<"$GPU_TRT"
+  gcc -shared -fPIC -O1 -Wall -Wextra -Werror -DFAKE_CUDA -o /usr/lib/libcuda.so.1 "$SRC/tests/installer/fake_gpu.c"
+  gcc -shared -fPIC -O1 -Wall -Wextra -Werror -DFAKE_TRT -DTRT_MAJOR="${v[0]}" -DTRT_MINOR="${v[1]}" \
+    -DTRT_PATCH="${v[2]}" -DTRT_BUILD="${v[3]}" -o "/usr/lib/libnvinfer.so.${v[0]}" "$SRC/tests/installer/fake_gpu.c"
+  /sbin/ldconfig
+}
+no_gpu() {
+  rm -f /usr/lib/libcuda.so.1 /usr/lib/libnvinfer.so.10 /usr/lib/libnvinfer.so.11
+  /sbin/ldconfig
+}
+
+# The unit's ExecStart, its ${VAR}s filled from server.env as systemd fills
+# them, run in the background with its log in /tmp/serve.txt.
+SERVE_PID=''
+serve_as_unit() {
+  local line
+  line="$(sed -n 's/^ExecStart=//p' "$UNITS/jetlink-server.service")"
+  # shellcheck disable=SC1091
+  (set -a && . /etc/jetlink/server.env && set +a && eval "exec $line") >/tmp/serve.txt 2>&1 &
+  SERVE_PID=$!
+  local _
+  for _ in $(seq 1 60); do
+    grep -q "waiting for a jetlink gadget" /tmp/serve.txt && return 0
+    kill -0 "$SERVE_PID" 2>/dev/null || return 1
+    sleep 0.25
+  done
+  return 1
+}
+
+# GET PATH from the status page on PORT, over bash's /dev/tcp
+page_get() {
+  (
+    exec 3<>"/dev/tcp/127.0.0.1/$1" || exit 1
+    printf 'GET %s HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' "$2" >&3
+    timeout 5 cat <&3
+  )
+}
+
+if [ -z "$REAL" ]; then
+  echo "  (no real server tarball for $REAL_ARCH: set JETLINK_REAL_SERVER for run.sh to run those)"
+else
+  REAL_VER="$(tar -xzOf "$REAL" --wildcards '*/VERSION' | tr -d '[:space:]')"
+  echo "  real server: $(basename "$REAL"), version $REAL_VER"
+
+  # -------------------------------------------------------------------------
+  scenario "the real server, with no GPU or TensorRT: the GPU check refuses it and says why"
+  real_box; no_gpu; f=$FAILED
+  install '' --yes --binary "$REAL"
+  expect_rc 1
+  expect_out "The Jetlink server cannot use the GPU: no CUDA driver: libcuda.so.1: cannot open shared object file"
+  expect_out "TensorRT cannot run on this computer."
+  expect_no_file "$UNITS/jetlink-server.service"
+  expect_no_file /opt/jetlink/current
+  # unpacked whole, bin/ as it was built
+  expect_file "/opt/jetlink/$REAL_VER/bin/jetlink-server"
+  expect_file "/opt/jetlink/$REAL_VER/bin/JetlinkKit_JetlinkStatusPage.resources/Resources/index.html"
+  "/opt/jetlink/$REAL_VER/bin/jetlink-server" backends --backend trt >/tmp/backends.txt 2>&1
+  RC=$?
+  check "backends --backend trt exited 0 without a GPU" test "$RC" != 0
+  expect_in /tmp/backends.txt "trt: not usable: no CUDA driver"
+  show_on_failure "$f"
+
+  # -------------------------------------------------------------------------
+  scenario "the real server installs on a stand-in GPU and runs as its unit runs it"
+  real_box; fake_gpu; f=$FAILED
+  install '' --yes --binary "$REAL"
+  expect_rc 0
+  expect_out "The server can use the GPU: TensorRT $GPU_TRT on Fake_GPU-sm87"
+  expect_out "Jetlink is installed and running"
+  expect_link /opt/jetlink/current "/opt/jetlink/$REAL_VER"
+  version="$(/opt/jetlink/current/bin/jetlink-server --version 2>&1)"
+  check "--version said '$version', wanted $REAL_VER" test "$version" = "$REAL_VER"
+  expect_file /opt/jetlink/current/bin/JetlinkKit_JetlinkStatusPage.resources/Resources/index.html
+  expect_in /etc/jetlink/server.env "JETLINK_SERVER_VERSION=$REAL_VER"
+  jetlink status >/tmp/status.txt 2>&1
+  expect_in /tmp/status.txt "server         $REAL_VER (TensorRT"
+  # every flag the unit passes, as the server's own parser reads them
+  /opt/jetlink/current/bin/jetlink-server serve --help >/tmp/help.txt 2>&1
+  for flag in --usb --backend --cache --sleep-after --status-port; do
+    expect_in /tmp/help.txt "  $flag"
+  done
+  # the unit's command line, run: it waits for the comma, serves its page
+  # from the bundle beside it, and stops cleanly on SIGTERM
+  check "the server did not come up as its unit runs it" serve_as_unit
+  page_get "$(sed -n 's/^JETLINK_STATUS_PORT=//p' /etc/jetlink/server.env)" / >/tmp/page.txt 2>&1
+  expect_in /tmp/page.txt "HTTP/1.1 200"
+  expect_in /tmp/page.txt "<title>Jetlink</title>"
+  kill -TERM "$SERVE_PID" 2>/dev/null
+  wait "$SERVE_PID"
+  RC=$?
+  check "the server exited $RC on SIGTERM" test "$RC" = 0
+  expect_in /tmp/serve.txt "backend trt $GPU_TRT on Fake_GPU-sm87, cache"
+  expect_in /tmp/serve.txt "status page on port 5600"
+  expect_in /tmp/serve.txt "stopping on SIGTERM"
+  expect_in /tmp/serve.txt "stopped the server"
+  expect_in /tmp/serve.txt "stopped the status page"
+  # its awake lock, which jetlink caffeinate holds
+  expect_file /run/jetlink-awake.lock
+  [ "$FAILED" -gt "$f" ] && sed 's/^/    serve | /' /tmp/serve.txt
+  show_on_failure "$f"
+  no_gpu
+fi
+
 echo
 if [ "$FAILED" -eq 0 ]; then
   echo "installer scenarios: $PASSED checks passed"
