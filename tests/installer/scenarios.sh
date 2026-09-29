@@ -1321,6 +1321,10 @@ expect_rc 0
 expect_out "runs the server in Docker. Nothing changed."
 expect_not_ran "systemctl"
 expect_link /opt/jetlink/current /opt/jetlink/0.12.0-dev
+# the build names itself, not the release it came over from
+jetlink status >/tmp/status.txt 2>&1
+expect_in /tmp/status.txt "0.12.0-dev (a build between releases)"
+expect_not_in /tmp/status.txt "v0.6.0 ("
 
 scenario "uninstall after a move removes the Docker leftovers too"
 echo "jetlink:local-cuda" >>"$FAKE_STATE/images"

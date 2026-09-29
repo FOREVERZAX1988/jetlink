@@ -81,8 +81,13 @@ comma_state() {
 
 # What runs, and what an update moves to: the newest release, or what --ref named.
 version_line() {
-  local version="${JETLINK_VERSION:-${JETLINK_REF:-unknown}}"
-  if [ "$version" = local ]; then
+  local version="${JETLINK_VERSION:-${JETLINK_REF:-unknown}}" built
+  # a build between releases, installed with --binary, keeps the release it
+  # came over from as its version; the build names itself
+  built="$("$SERVER" --version 2>/dev/null | head -n 1 || true)"
+  if [[ $built == *-dev* ]] && [[ $version =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "$built ${D}(a build between releases)${N}"
+  elif [ "$version" = local ]; then
     echo "checkout at ${JETLINK_SOURCE_DIR:-?} ${D}(${JETLINK_COMMIT:-?})${N}"
   elif [ "${JETLINK_REF:-}" = latest ]; then
     echo "$version ${D}(follows releases)${N}"
