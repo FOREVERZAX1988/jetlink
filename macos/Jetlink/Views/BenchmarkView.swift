@@ -35,12 +35,10 @@ struct BenchmarkView: View {
       } header: {
         Text("Benchmark")
       } footer: {
-        Text(
-          "Runs the loaded model 20 times a second, as the comma will, on made-up camera frames: the history queues, the model, and reading the answer back. The cable is not in it. A laptop should be on power, as it will be in the car."
-        )
-        .font(.callout)
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
+        Text("Runs the selected model at 20 Hz with mock camera frames. Does not include USB latency.")
+          .font(.callout)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
       }
 
       if let report {
