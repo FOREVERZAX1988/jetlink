@@ -15,9 +15,10 @@ Every file comes from the code the comma runs, on fixed inputs:
             take the gadget's stream in
   staging   .../conformance/staging*: the tensors PolicyQueues.step feeds for
             the tiny queued graph at frame_skip 1, 2 and 4, with the hidden
-            state each frame's output feeds back, a hello, a non-finite frame
-            and a reset included; checked here against protocol 2's staging,
-            where modeld fed the hidden state back through prev_feat
+            state each frame's output feeds back, a hello, a non-finite frame,
+            a reset, and desires with NaNs and signed zeros included; checked
+            here against protocol 2's staging, where modeld fed the hidden
+            state back through prev_feat
   registry  tests/fixtures/conformance/registry.json: LFS pointers, model
             identities, catalog parsing and merging. Its `cache` block (one
             cache directory's catalog and inventory payloads) was written by
@@ -249,6 +250,25 @@ STAGING_HELLO_BEFORE = 5
 # an output with a NaN in it: its hidden state is not fed back
 STAGING_NOT_FINITE = 3
 STAGING_INPUTS = ('img', 'big_img', 'features_buffer', 'desire_pulse', 'traffic_convention', 'action_t')
+# Desires whose max over a frame_skip group numpy decides by its own rules: a
+# NaN wins and keeps its payload (the first of two), and of two equal values
+# the first stays (0 then -0 gives 0, -0 then 0 gives -0). One column each, as
+# float32 bits over four frames; frames 0 to 3 and again 8 to 11, after the
+# reset, carry them instead of random desires.
+DESIRE_EDGES = np.array([
+  [0x3F800000, 0x7FC00000, 0x40000000, 0x40400000],   # 1, NaN, 2, 3
+  [0x3F800000, 0x7FC02000, 0x7FC04000, 0x40C00000],   # 1, two NaN payloads, 6
+  [0x00000000, 0x80000000, 0xBF800000, 0xC0000000],   # 0, -0, -1, -2
+  [0x80000000, 0x00000000, 0xBF800000, 0xC0000000],   # -0, 0, -1, -2
+  [0x3F800000, 0x40400000, 0x40000000, 0xBF800000],   # 1, 3, 2, -1
+  [0xFFC00000, 0x3F800000, 0x40000000, 0x40400000],   # a negative NaN first
+  [0xFF800000, 0xC0A00000, 0x7FC00000, 0x40E00000],   # -inf, -5, NaN, 7
+  [0x40000000, 0x7F800000, 0x40400000, 0x40800000],   # 2, inf, 3, 4
+], np.uint32).view(np.float32).T
+
+
+def _desire_edges(f: int) -> np.ndarray | None:
+  return DESIRE_EDGES[f % 4] if f % 8 < 4 else None
 
 
 def _protocol2_staging(spec, frames) -> list[dict[str, np.ndarray]]:
@@ -316,6 +336,9 @@ def staging(root: Path) -> None:
       for f in range(STAGING_FRAMES):
         warped = rng.integers(0, 256, spec.warped_shape, dtype=np.uint8)
         packed = (rng.standard_normal(spec.packed_nelem) * 2.0).astype(np.float32)
+        edges = _desire_edges(f)
+        if edges is not None:
+          packed[spec.packed_layout['desire'][0]] = edges
         # what the engine returned for this frame, which the next feeds back
         output = (rng.standard_normal(spec.output_nelem) * 2.0).astype(np.float32)
         if f == STAGING_NOT_FINITE:
@@ -343,6 +366,7 @@ def staging(root: Path) -> None:
                     'inputs': [{'name': n, 'shape': list(spec.input_shapes[n])} for n in STAGING_INPUTS]})
   (out / 'staging.json').write_text(dump({
     'frames': STAGING_FRAMES, 'reset_before': STAGING_RESET_BEFORE, 'hello_before': STAGING_HELLO_BEFORE,
+    'desire_edges': 'frames 0 to 3 and 8 to 11 carry desires with NaNs, signed zeros and infinities',
     'dtype': 'float16',
     'frame_layout': 'warped uint8, packed float32, then the driving output float32 the frame returned, per frame',
     'feedback': 'the output\'s hidden_state is fed back after the frame when every value is finite',
