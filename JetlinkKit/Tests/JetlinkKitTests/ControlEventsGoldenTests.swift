@@ -4,12 +4,13 @@ import Testing
 
 @testable import JetlinkKit
 
-/// The lines a Python ControlServer wrote over a real Registry and cache
-/// (JetlinkKit/Scripts/make_conformance_fixtures.py, `control`). Every field
-/// the Swift decodes must be what the Python sent, and every field the Python
-/// sends must be one the Swift reads or one named here as not needed.
-struct PythonControlEventsTests {
+/// The lines the Python ControlServer wrote over a real Registry and cache,
+/// kept as a golden since that server was deleted (docs/conformance.md).
+/// Every field the Swift decodes must be what the golden has, and every field
+/// the golden has must be one the Swift reads or one named here as not needed.
+struct ControlEventsGoldenTests {
   static let ignored: Set<String> = ["*/event", "*/t"]
+  static let golden = "control_events_golden.jsonl"
 
   private static func payload(_ event: ControlEvent) throws -> (String, Data)? {
     let encoder = JSONEncoder()
@@ -40,44 +41,44 @@ struct PythonControlEventsTests {
   }
 
   @Test func theFixtureCoversEveryEventTheMacHears() throws {
-    let lines = try Fixture.lines("python_control_events.jsonl")
+    let lines = try Fixture.lines(ControlEventsGoldenTests.golden)
     let names = Set(try lines.map { line in (try JSONSerialization.jsonObject(with: line) as! [String: Any])["event"] as! String })
     #expect(names == ["hello", "server", "link", "engine", "stats", "inventory", "catalog", "download", "import", "reply"])
   }
 
-  @Test func everyLineDecodesToWhatThePythonWrote() throws {
-    for (number, line) in try Fixture.lines("python_control_events.jsonl").enumerated() {
-      let python = try JSONSerialization.jsonObject(with: line) as! [String: Any]
-      let name = python["event"] as! String
+  @Test func everyLineDecodesToWhatTheGoldenHas() throws {
+    for (number, line) in try Fixture.lines(ControlEventsGoldenTests.golden).enumerated() {
+      let expected = try JSONSerialization.jsonObject(with: line) as! [String: Any]
+      let name = expected["event"] as! String
       let event = try ControlEvent(jsonLine: line)
-      guard let (decoded, data) = try PythonControlEventsTests.payload(event) else {
+      guard let (decoded, data) = try ControlEventsGoldenTests.payload(event) else {
         Issue.record("line \(number + 1): \(name) decoded as unknown")
         continue
       }
       #expect(decoded == name, "line \(number + 1)")
       let swift = try JSONSerialization.jsonObject(with: data)
-      var comparison = JSONComparison(ignoring: PythonControlEventsTests.ignored)
-      comparison.compare(python: python, swift: swift, at: "")
+      var comparison = JSONComparison(ignoring: ControlEventsGoldenTests.ignored)
+      comparison.compare(python: expected, swift: swift, at: "")
       #expect(comparison.differences.isEmpty, "line \(number + 1) (\(name)): \(comparison.differences)")
     }
   }
 
   /// What the status page reads: `jsonLine` writes each line back as the
-  /// Python did, nulls included, in any key order. It may add a null the
-  /// Python left out (a waiting link's medium): a page reads both the same.
-  @Test func jsonLineWritesWhatThePythonWrote() throws {
-    for (number, line) in try Fixture.lines("python_control_events.jsonl").enumerated() {
-      let python = try JSONSerialization.jsonObject(with: line) as! [String: Any]
-      let t = (python["t"] as! NSNumber).doubleValue
+  /// golden has it, nulls included, in any key order. It may add a null the
+  /// golden leaves out (a waiting link's medium): a page reads both the same.
+  @Test func jsonLineWritesWhatTheGoldenHas() throws {
+    for (number, line) in try Fixture.lines(ControlEventsGoldenTests.golden).enumerated() {
+      let expected = try JSONSerialization.jsonObject(with: line) as! [String: Any]
+      let t = (expected["t"] as! NSNumber).doubleValue
       let written = try ControlEvent(jsonLine: line).jsonLine(at: Date(timeIntervalSince1970: t))
       #expect(written.last == 0x0A && written.dropLast().firstIndex(of: 0x0A) == nil, "line \(number + 1) is one line")
       let swift = try JSONSerialization.jsonObject(with: written)
-      let (pythonKeys, swiftKeys) = (PythonControlEventsTests.keys(python), PythonControlEventsTests.keys(swift))
-      let added = swiftKeys.subtracting(pythonKeys)
-      #expect(pythonKeys.isSubset(of: swiftKeys), "line \(number + 1) lacks \(pythonKeys.subtracting(swiftKeys))")
-      #expect(added.allSatisfy { PythonControlEventsTests.value(at: $0, in: swift) is NSNull }, "line \(number + 1) adds \(added)")
+      let (expectedKeys, swiftKeys) = (ControlEventsGoldenTests.keys(expected), ControlEventsGoldenTests.keys(swift))
+      let added = swiftKeys.subtracting(expectedKeys)
+      #expect(expectedKeys.isSubset(of: swiftKeys), "line \(number + 1) lacks \(expectedKeys.subtracting(swiftKeys))")
+      #expect(added.allSatisfy { ControlEventsGoldenTests.value(at: $0, in: swift) is NSNull }, "line \(number + 1) adds \(added)")
       var comparison = JSONComparison()
-      comparison.compare(python: python, swift: swift, at: "")
+      comparison.compare(python: expected, swift: swift, at: "")
       let differences = comparison.differences.filter { difference in !added.contains { difference == "only Swift has \($0)" } }
       #expect(differences.isEmpty, "line \(number + 1): \(differences)")
     }
