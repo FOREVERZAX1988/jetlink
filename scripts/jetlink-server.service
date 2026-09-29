@@ -11,6 +11,9 @@
 #   sudo mkdir -p /etc/jetlink && echo JETLINK_CACHE_DIR=/var/lib/jetlink | sudo tee /etc/jetlink/server.env
 #   sudo install -m 644 share/jetlink/systemd/jetlink-server.service /etc/systemd/system/
 #   sudo systemctl daemon-reload && sudo systemctl enable --now jetlink-server
+# The server needs libcurl4 (sudo apt install libcurl4) and TensorRT: JetPack's
+# on a Jetson; on a PC, its own copy, named in server.env with
+# JETLINK_TENSORRT="--tensorrt-libs /path/to/tensorrt/libs".
 #
 # It runs as root: it is the USB host for the comma's gadget, writes
 # /sys/power to sleep, arms the hubs for remote wakeup and powers off.

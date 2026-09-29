@@ -120,7 +120,11 @@
       #expect(!process.isRunning)
       #expect(process.terminationReason == .exit && process.terminationStatus == 0)
       let text = String(decoding: try Data(contentsOf: log), as: UTF8.self)
+      // The line install.sh waits for, said once, with no comma anywhere.
+      let ready = try #require(text.range(of: "jetlink-server is serving"), "\(text)")
+      #expect(text.components(separatedBy: "jetlink-server is serving").count == 2, "\(text)")
       let stopping = try #require(text.range(of: "stopping on SIGTERM"), "\(text)")
+      #expect(ready.upperBound <= stopping.lowerBound)
       let server = try #require(text.range(of: "stopped the server"), "\(text)")
       let statusPage = try #require(text.range(of: "stopped the status page"), "\(text)")
       #expect(stopping.upperBound <= server.lowerBound)
