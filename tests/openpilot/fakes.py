@@ -221,7 +221,7 @@ def owner_config() -> OwnerConfig:
 # every file of the comma layer's that a jetlink.openpilot test could reach:
 # its records in /dev/shm, the gadget in configfs and FunctionFS, the UDC and
 # the USB-C port in sysfs, and the lend socket
-GADGET_FILES = ('LINK', 'NET_STATUS', 'GADGET_STATUS', 'LENDER_STATUS', 'DORMANT', 'SHUTDOWN_REQUEST', 'STATE', 'STATUS',
+GADGET_FILES = ('LINK', 'NET_STATUS', 'GADGET_STATUS', 'LENDER_STATUS', 'DORMANT', 'SHUTDOWN_REQUEST', 'STATUS',
                 'CC_ORIENTATION')
 
 

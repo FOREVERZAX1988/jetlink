@@ -156,10 +156,6 @@ CC_ORIENTATION = Path('/sys/class/power_supply/usb/typec_cc_orientation')
 DORMANT = Path("/dev/shm/jetlink-dormant")
 # hardwared's request to power the Jetson off; see backend.shutdown
 SHUTDOWN_REQUEST = Path("/dev/shm/jetlink-shutdown")
-# what a provisioning run leaves for the owner: whether the far end suspends
-# when the gadget goes, and whether the run left anything undone. The owner
-# never speaks the protocol, so it cannot learn either for itself
-STATE = Path("/dev/shm/jetlink-owner-state")
 # the owner's status record: everything the readers used to take from the
 # files above one by one, rewritten whole every step, which makes it the
 # owner's heartbeat too. A clean stop removes it
@@ -200,21 +196,6 @@ def owner_alive(record: dict) -> bool:
   unlike the wall clock it does not jump when the comma sets its time."""
   at = record.get('at')
   return isinstance(at, (int, float)) and time.monotonic() - at < HEARTBEAT_TIMEOUT
-
-
-def owner_state() -> dict:
-  """What the provisioning runs left for the owner, or {}."""
-  try:
-    value = json.loads(_read(STATE))
-  except ValueError:
-    return {}
-  return value if isinstance(value, dict) else {}
-
-
-def far_end_sleeps(state: dict | None = None) -> bool:
-  """Does the far end suspend when the gadget goes, as the runs recorded it?
-  No record means it does: letting go of one that does not only costs a rebind."""
-  return (owner_state() if state is None else state).get('sleep_after', 1.0) > 0
 
 
 def _status_error(path: Path) -> str | None:

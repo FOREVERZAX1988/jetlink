@@ -44,8 +44,14 @@ SOCKET = Path('/dev/shm/jetlink-lend.sock')
 BORROW_TIMEOUT = 8.0
 # a stuck write is already 15 s old by the time this is asked for
 BOUNCE_TIMEOUT = 10.0
+# the owner records a note at once; this only bounds one that is wedged
+NOTE_TIMEOUT = 5.0
 RETRY = 0.25
 POLL = 0.5
+# what a borrower passes on of the server's hello (Loan.note_server): the owner
+# never speaks the protocol, and sleep_after is how it knows whether letting
+# go of the gadget lets the Jetson sleep. The rest is for its status record
+SERVER_FIELDS = ('protocol', 'device', 'backend', 'runtime_version', 'trt_version', 'sleep_after')
 
 
 def _send(conn: socket.socket, msg: dict) -> None:
@@ -128,6 +134,24 @@ class Loan:
         gadget.log.exception("jetlink: could not ask for a gadget bounce")
         return False
       return bool(reply and reply.get('ok'))
+
+  def note_server(self, hello: dict) -> bool:
+    """Tell the owner what the server said in its hello, which the owner
+    cannot ask for itself. Every borrower sends it after every hello, so
+    modeld's join refreshes it each drive and a Jetson moved to another
+    power supply is known by the next one. False when the owner did not
+    take it: an older owner answers "unknown op", which is not an error."""
+    fields = {k: hello[k] for k in SERVER_FIELDS if k in hello}
+    with self._lock:
+      if self._closed:
+        return False
+      try:
+        _send(self.conn, {'op': 'server', **fields})
+        reply = _recv_line(self.conn, self._buf, time.monotonic() + NOTE_TIMEOUT)
+      except (OSError, ValueError) as e:
+        gadget.log.warning("jetlink: could not tell the owner what the server said (%s)", e)
+        return False
+    return bool(reply and reply.get('ok'))
 
   def renew(self, timeout: float = BORROW_TIMEOUT) -> bool:
     """Ask again which link this loan is for, before another attempt at a join.
@@ -399,16 +423,19 @@ class Lender:
   answered "retry" and the daemon's own loop puts it there. `holding` says the
   host is a phone (Accelerator Link iOS): "retry" until it dials, so nobody
   writes a hello over FunctionFS to a phone. With `cable` holding a dial, the
-  loan carries the phone's socket instead of the endpoint files.
+  loan carries the phone's socket instead of the endpoint files. `server`
+  takes what a borrower passes on of the server's hello (Loan.note_server),
+  with the borrower's name, on this thread.
   """
 
   def __init__(self, lendable: Callable[[], bool], bounce: Callable[[], bool],
                path: Path | None = None, holding: Callable[[], bool] | None = None,
-               cable: CableListener | None = None):
+               cable: CableListener | None = None, server: Callable[[str, dict], None] | None = None):
     self._lendable = lendable
     self._bounce = bounce
     self._holding = holding or (lambda: False)
     self._cable = cable
+    self._server = server
     self._cable_lent = False
     # what this borrower was last told it has, so each change is logged once
     self._told = ''
@@ -562,5 +589,13 @@ class Lender:
     elif op == 'bounce':
       gadget.log.warning("jetlink: %s asked for a gadget bounce", self.borrower)
       _send(conn, {'ok': bool(self._bounce())})
+    elif op == 'server' and self._server is not None:
+      try:
+        self._server(self.borrower or 'a borrower', {k: msg[k] for k in SERVER_FIELDS if k in msg})
+      except Exception:
+        # a note is never worth the lease: a raise here would end the loan
+        # under a borrower that is using the endpoints
+        gadget.log.exception("jetlink: could not record what the server said")
+      _send(conn, {'ok': True})
     else:
       _send(conn, {'ok': False, 'detail': f'unknown op {op!r}'})

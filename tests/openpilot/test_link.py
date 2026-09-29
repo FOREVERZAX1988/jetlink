@@ -345,6 +345,17 @@ class BuildingOnroad(OpenpilotTest):
     link.open_link(self.parts, self.link)
     assert self.ensure.call_args.kwargs['progress'] == self.parts.progress.report_with_eta
 
+  def test_every_join_passes_the_hello_on_to_the_owner(self):
+    # so the owner's idea of whether the far end sleeps is refreshed every
+    # drive, and not only by a provisioning run that had work
+    self.link.loan = mock.Mock(closed=False)
+    link.open_link(self.parts, self.link)
+    self.link.loan.note_server.assert_called_once_with(self.client.hello.return_value)
+
+  def test_without_a_lease_there_is_nobody_to_tell(self):
+    self.link.loan = None
+    link.open_link(self.parts, self.link)   # and nothing raised
+
   def test_bytes_neither_end_has_are_a_parked_job(self):
     # Downloading a gigabyte is the one part of provisioning that needs the
     # internet, and it is not something to start mid-drive.

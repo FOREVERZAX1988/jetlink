@@ -95,6 +95,17 @@ def logger(path: Path) -> logging.Logger:
   return log
 
 
+def server_sleeps(server: dict | None) -> bool:
+  """Does the far end suspend when the gadget goes, by its hello's
+  sleep_after? No hello yet, or a server too old to say, is a yes: letting go
+  of one that stays up only costs a rebind, and holding on to one that sleeps
+  keeps it awake all night."""
+  try:
+    return float((server or {}).get('sleep_after', 1.0)) > 0
+  except (TypeError, ValueError):
+    return True
+
+
 class Owner:
   def __init__(self, worker: Sequence[str], cwd: str | None = None, env: Mapping[str, str] | None = None, *,
                settings, chestnut_ids):
@@ -141,9 +152,16 @@ class Owner:
     self.last_configured = 0.0
     self.published = 0.0
     self.status_error: str | None = None
+    # what this process never speaks the protocol to learn: the fields of the
+    # server's last hello, which every borrower passes on over its loan
+    # (lending.SERVER_FIELDS), and whether the last run left work undone, from
+    # its exit status
+    self.server: dict | None = None
+    self.unfinished = False
     self.port = port.Port(chestnut_ids)
     self.cable = lending.CableListener()
-    self.lender = lending.Lender(self.lendable, self.bounce_gadget, holding=self.holding, cable=self.cable)
+    self.lender = lending.Lender(self.lendable, self.bounce_gadget, holding=self.holding, cable=self.cable,
+                                 server=self.note_server)
 
   # -- the gadget -----------------------------------------------------------
 
@@ -303,6 +321,20 @@ class Owner:
     self.dormant = False
     self.idle_since = time.monotonic()
 
+  def note_server(self, borrower: str, fields: dict) -> None:
+    """What a borrower passed on of the server's hello (lending.Loan.note_server),
+    on the lender's thread. Said when it changes, which is how a server moved
+    to --sleep-after 0 or back shows in this log."""
+    known, self.server = self.server or {}, dict(fields)
+    if any(known.get(k) != fields.get(k) for k in ('device', 'sleep_after')) or not known:
+      gadget.log.warning("jetlink: %s says the server on %s %s when the gadget goes (sleep_after %s)", borrower,
+                         fields.get('device') or 'the far end', 'sleeps' if server_sleeps(fields) else 'stays up',
+                         fields.get('sleep_after'))
+
+  def far_end_sleeps(self) -> bool:
+    """Does the far end suspend when the gadget goes, as its last hello said?"""
+    return server_sleeps(self.server)
+
   # -- the worker -----------------------------------------------------------
 
   def worker_running(self) -> bool:
@@ -311,6 +343,9 @@ class Owner:
     if self.worker.poll() is None:
       return True
     gadget.log.warning("jetlink: the provisioning run finished (%s)", self.worker.returncode)
+    # 0 is a run with nothing left to do; anything else, a crash included, is
+    # tried again once WORKER_BACKOFF has passed
+    self.unfinished = self.worker.returncode != 0
     self.worker = None
     self.shutting_down = False
     # the far end may still be waking; give it the hold before letting go
@@ -325,7 +360,7 @@ class Owner:
     self.seen = self.settings.marks()
     self.had_host = gadget.host_attached()
 
-  def wanted(self, state: dict) -> str | None:
+  def wanted(self) -> str | None:
     """Why the worker should run, or None. Everything that decides whether
     there is work needs the catalog, the spec and the Jetson, so the worker
     decides; this only notices the things that could have changed the answer."""
@@ -338,7 +373,7 @@ class Owner:
       return 'a phone dialed in'
     if self.attached and not self.had_host:
       return 'a jetson turned up'
-    if time.monotonic() >= self.next_worker and state.get('unfinished'):
+    if time.monotonic() >= self.next_worker and self.unfinished:
       return 'the last run left something to do'
     return None
 
@@ -361,11 +396,13 @@ class Owner:
     deadline = time.monotonic() + WORKER_GRACE
     while True:
       try:
-        self.worker.wait(POLL)
+        # a run that finished its round on the way out says so like any other
+        self.unfinished = self.worker.wait(POLL) != 0
         break
       except subprocess.TimeoutExpired:
         if time.monotonic() >= deadline:
           self.worker.kill()
+          self.unfinished = True
           break
         self.beat()   # a run inside a hello can take the whole grace
     self.worker = None
@@ -399,7 +436,9 @@ class Owner:
       'udc': state,
       'speed': gadget.usb_speed() if configured else None,
       'present': present,
+      'server': self.server,
       'worker': self.worker is not None and self.worker.poll() is None,
+      'unfinished': self.unfinished,
     }
 
   def publish_status(self) -> None:
@@ -542,8 +581,7 @@ class Owner:
     if time.monotonic() < max(self.next_attempt, self.lease_settled):
       return
 
-    state = gadget.owner_state()
-    why = self.wanted(state)
+    why = self.wanted()
     if why is not None:
       if not self.ensure_gadget(ios):
         return
@@ -554,7 +592,7 @@ class Owner:
 
     # a phone never sleeps, and letting go takes the network interface it
     # dials over: for iOS the gadget stays up whatever the record says
-    sleeps = gadget.far_end_sleeps(state) and not self.built_ios
+    sleeps = self.far_end_sleeps() and not self.built_ios
     if self.transport is None:
       # nothing to do and nothing presented: only worth a bind if the far end
       # stays awake for it
@@ -624,6 +662,12 @@ class Owner:
 
   def run(self) -> None:
     gadget.clear_link()   # ours to write, and a record from a previous owner is stale
+    # what the last owner learned of the far end still holds: without it, an
+    # owner started again while parked took an always-on Jetson for one that
+    # sleeps, and let the gadget go until the next drive's hello
+    previous = gadget.owner_status()
+    if previous is not None and self.server is None and isinstance(previous.get('server'), dict):
+      self.server = previous['server']
     # the heartbeat from the start: the first step builds the gadget
     self.publish_status()
     try:

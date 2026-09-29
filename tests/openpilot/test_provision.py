@@ -236,6 +236,18 @@ class TestProvisionCost(OpenpilotTest):
     d.request_stop()
     assert should_stop() is True
 
+  def test_every_hello_is_passed_on_to_the_owner(self):
+    # the owner never speaks the protocol; this is how it learns sleep_after
+    client = serving_client()
+    client.ensure_engine.side_effect = [EngineMissing('no bytes'), FakeSpec()]
+    d = self.run_with(client)
+    d.loan = mock.Mock()
+    self.patch(self.parts.models, 'shipped_model_path', return_value=None)
+    self.patch(d, 'fetch_model', return_value=self.model)
+    assert d.provision() is True
+    # the first hello, and the one after the download started a new session
+    assert d.loan.note_server.call_args_list == [mock.call(client.hello.return_value)] * 2
+
   def test_no_pick_and_no_catalog_is_nothing_to_provision(self):
     d = self.run_with()
     with mock.patch.object(self.parts.models, 'selected_model', return_value=None):
@@ -306,7 +318,6 @@ class TestTheRun(OpenpilotTest):
     super().setUp()
     self.op.set_mode('usb')
     self.patch(self.parts, 'progress', mock.Mock())
-    self.patch(gadget, 'STATE', self.tmp / 'state')
     self.patch(gadget, 'SHUTDOWN_REQUEST', self.tmp / 'shutdown')
 
   def worker(self, work=True):
@@ -318,63 +329,41 @@ class TestTheRun(OpenpilotTest):
       self.patch(target, name, mock.Mock(return_value=value))
     return d
 
-  def state(self) -> dict:
-    return gadget.owner_state()
-
   def test_nothing_to_do_never_opens_the_link(self):
     d = self.worker(work=False)
     assert d.run() is True
     d.open_link.assert_not_called()
-    assert self.state()['unfinished'] is False
 
   def test_a_finished_round_says_so_and_lets_the_link_go(self):
     d = self.worker()
     d.client = mock.Mock()
     assert d.run() is True
     d.provision.assert_called_once()
-    assert self.state()['unfinished'] is False
     assert d.client is None, 'left the gadget open after the run'
 
   def test_a_round_that_fails_leaves_the_work_for_the_next_one(self):
     d = self.worker()
     d.provision.side_effect = RuntimeError('the jetson went away')
     assert d.run() is False
-    assert self.state()['unfinished'] is True
     self.parts.progress.report.assert_called_with('failed', 1.0, 'see the log')
+
+  def test_no_loan_is_left_for_the_next_run(self):
+    d = self.worker()
+    d.open_link.return_value = False
+    assert d.run() is False
+    d.provision.assert_not_called()
 
   def test_no_jetson_is_left_for_the_next_run(self):
     d = self.worker()
     gadget.wait_for_host.return_value = False
     assert d.run() is False
     d.provision.assert_not_called()
-    assert self.state()['unfinished'] is True
 
-  def test_what_the_far_end_does_when_the_gadget_goes_is_recorded(self):
-    # the owner never speaks the protocol, so this is the only way it learns
-    d = self.worker()
-    d.note_sleep_after({'sleep_after': 0.0})
-    d.run()
-    assert self.state()['sleep_after'] == 0.0
-    assert self.op.log.has('the jetson stays up when the gadget goes')
-
-  def test_a_server_too_old_to_say_sleeps(self):
-    d = self.worker()
-    for hello in ({}, {'sleep_after': 'soon'}, {'sleep_after': 120}):
-      d.note_sleep_after(hello)
-      assert d.server_sleeps is True, hello
-
-  def test_a_run_that_never_asked_keeps_what_was_recorded(self):
-    # a run with nothing to do sends no hello; writing the default told the
-    # owner a phone sleeps, and it let the gadget go
-    gadget.STATE.write_text(json.dumps({'sleep_after': 0.0, 'unfinished': True}))
+  def test_nothing_is_left_behind_in_dev_shm(self):
+    # what the owner needs goes over the loan and in the exit status
     d = self.worker(work=False)
-    assert d.run() is True
-    assert self.state() == {'sleep_after': 0.0, 'unfinished': False}
-
-  def test_with_nothing_recorded_the_far_end_is_taken_to_sleep(self):
-    d = self.worker(work=False)
-    d.run()
-    assert self.state()['sleep_after'] == 1.0
+    with mock.patch('pathlib.Path.write_text', side_effect=AssertionError('a record written')):
+      assert d.run() is True
 
   def test_a_shutdown_request_is_the_whole_round(self):
     d = self.worker()
@@ -390,7 +379,6 @@ class TestTheRun(OpenpilotTest):
     self.parts.warps.built.return_value = False
     assert d.run() is True
     d.open_link.assert_not_called()
-    assert self.state()['unfinished'] is False
 
   def test_the_link_off_is_not_a_round(self):
     d = self.worker()
@@ -461,8 +449,9 @@ class TestTheEntryPoint(unittest.TestCase):
     env = {**os.environ, 'JETLINK_FAKE_ROOT': str(root), 'JETLINK_FAKE_ISOLATE': '1', 'PYTHONPATH': str(ROOT)}
     run = subprocess.run([sys.executable, '-m', 'jetlink.openpilot.provision', '--adapter', 'tests.openpilot.fakes'],
                          cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
-    self.assertEqual(run.returncode, 0, run.stderr)
-    self.assertEqual(json.loads((root / 'dev' / 'state').read_text()), {'sleep_after': 1.0, 'unfinished': True})
+    # unfinished is the exit status, and the owner tries again after its backoff
+    self.assertEqual(run.returncode, 1, run.stderr)
+    self.assertFalse((root / 'dev' / 'state').exists())
 
   def test_a_borrower_asks_the_socket_as_it_is_when_it_asks(self):
     # a default bound when lending was imported would ask the real owner
@@ -477,15 +466,25 @@ class TestTheEntryPoint(unittest.TestCase):
     with self.assertRaises(SystemExit):
       provision.main([])
 
-  def test_stops_are_signals(self):
+  def main(self, finished: bool):
+    """main() over a round that finishes or not: its exit status, the round, the signals."""
     # binding points jetlink.comma's log at the adapter's; put it back after
-    with mock.patch.object(provision.ProvisioningRun, 'run') as run, \
+    with mock.patch.object(provision.ProvisioningRun, 'run', return_value=finished) as run, \
          mock.patch.object(provision.signal, 'signal') as signal, \
          mock.patch.object(gadget, 'log', gadget.log), mock.patch.object(gadget.root, 'log', gadget.root.log), \
-         mock.patch.dict(os.environ, {'JETLINK_FAKE_ROOT': tempfile.mkdtemp()}):
+         mock.patch.dict(os.environ, {'JETLINK_FAKE_ROOT': tempfile.mkdtemp()}), \
+         self.assertRaises(SystemExit) as exited:
       provision.main(['--adapter', 'tests.openpilot.fakes'])
+    return exited.exception.code, run, signal
+
+  def test_stops_are_signals(self):
+    code, run, signal = self.main(finished=True)
     run.assert_called_once_with()
     self.assertEqual({c.args[0] for c in signal.call_args_list}, {provision.signal.SIGTERM, provision.signal.SIGINT})
+
+  def test_the_exit_status_says_whether_work_is_left(self):
+    self.assertEqual(self.main(finished=True)[0], 0)
+    self.assertEqual(self.main(finished=False)[0], 1)
 
 
 if __name__ == '__main__':

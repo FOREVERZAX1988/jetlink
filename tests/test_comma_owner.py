@@ -22,7 +22,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from jetlink.comma import gadget, owner, root
+from jetlink.comma import gadget, lending, owner, root
 from jetlink.openpilot import owner as openpilot_owner
 from jetlink.openpilot.settings import FileParams, Settings
 from tests import comma_fakes
@@ -38,7 +38,6 @@ class OwnerTest(unittest.TestCase):
     self.write('IsOffroad', b'1')
     for name, value in (('DORMANT', self.tmp / 'dormant'),
                         ('SHUTDOWN_REQUEST', self.tmp / 'shutdown'),
-                        ('STATE', self.tmp / 'state'),
                         ('GADGET_STATUS', self.tmp / 'gadget-status'),
                         ('LENDER_STATUS', self.tmp / 'lender-status'),
                         ('STATUS', self.tmp / 'run' / 'status.json'),
@@ -84,8 +83,9 @@ class OwnerTest(unittest.TestCase):
     """What the owner asked jetlink-root.sh vm to do, in order."""
     return [c.args[1] for c in self.root_run.call_args_list if c.args[0] == 'vm']
 
-  def note_state(self, **kw) -> None:
-    gadget.STATE.write_text(json.dumps(kw))
+  def heard(self, o, sleep_after=1.0) -> None:
+    """A borrower passed on the server's hello (lending.Loan.note_server)."""
+    o.note_server('modeld', {'device': 'orin', 'sleep_after': sleep_after})
 
   def owner(self, presented=True, lendable=False):
     o = self.make()
@@ -99,8 +99,8 @@ class OwnerTest(unittest.TestCase):
     self.addCleanup(p.stop)
     p.start()
     self.addCleanup(o.cable.close)
-    # a run has already reported, so nothing is outstanding and the far end sleeps
-    self.note_state(sleep_after=1.0, unfinished=False)
+    # a hello has been passed on, and nothing is outstanding: the far end sleeps
+    self.heard(o, sleep_after=1.0)
     o.seen = o.settings.marks()
     o.had_host = True
     return o
@@ -190,15 +190,15 @@ class TestParked(OwnerTest):
     # on ignition power the Jetson stays up, and letting go would leave a
     # powered awake box unenumerated for the whole parked period
     o = self.owner()
-    self.note_state(sleep_after=0.0, unfinished=False)
+    self.heard(o, sleep_after=0.0)
     o.idle_since = time.monotonic() - owner.DORMANT_HOLD
     o.step()
     self.assertFalse(o.dormant)
     o.close_link.assert_not_called()
 
   def test_a_far_end_too_old_to_say_keeps_the_release_it_always_had(self):
-    gadget.STATE.unlink(missing_ok=True)
     o = self.owner()
+    o.server = None
     o.idle_since = time.monotonic() - owner.DORMANT_HOLD
     o.step()
     self.assertTrue(o.dormant)
@@ -259,7 +259,7 @@ class TestStartingTheHeavyHalf(OwnerTest):
 
   def test_an_unfinished_run_is_tried_again_on_its_own_timer(self):
     o = self.owner()
-    self.note_state(sleep_after=1.0, unfinished=True)
+    o.unfinished = True
     o.next_worker = time.monotonic() + owner.WORKER_BACKOFF
     o.step()
     o.spawn_worker.assert_not_called()
@@ -316,13 +316,98 @@ class TestTheRunThatFinishes(OwnerTest):
     o.worker = mock.Mock(**{'poll.return_value': None})
     o.step()
     self.write('ModelManager_ActiveBundleChestnut', b'{"ref": "c"}')
-    o.worker.poll.return_value = 0
+    o.worker.poll.return_value = o.worker.returncode = 0
     o.step()
     # the mark is retaken when the run exits, so this looks unchanged...
     o.spawn_worker.assert_not_called()
     self.write('ModelManager_ActiveBundleChestnut', b'{"ref": "d"}')
     o.step()
     o.spawn_worker.assert_called_once()   # ...and a later pick still starts one
+
+
+class TestWhatItIsTold(OwnerTest):
+  """What the owner never speaks the protocol to learn: the server's hello, as
+  every borrower passes it on after every hello, and whether a run left work,
+  which is the run's exit status."""
+
+  def test_every_hello_passed_on_refreshes_the_far_end(self):
+    # memory reinstalled-jetson-not-reprovisioned: the record was refreshed
+    # only by a run that had work, so a Jetson moved to always-on power was
+    # still let go, drive after drive
+    o = self.owner()
+    self.heard(o, sleep_after=0.0)
+    o.idle_since = time.monotonic() - owner.DORMANT_HOLD
+    o.step()
+    self.assertFalse(o.dormant, 'let an always-on jetson go')
+    self.heard(o, sleep_after=60.0)   # the next drive's hello, with no model change
+    o.step()
+    self.assertTrue(o.dormant)
+
+  def test_a_server_that_does_not_say_sleeps(self):
+    for said in ({}, {'sleep_after': None}, {'sleep_after': 'soon'}, {'sleep_after': 120}):
+      self.assertTrue(owner.server_sleeps(said), said)
+    self.assertTrue(owner.server_sleeps(None))
+    self.assertFalse(owner.server_sleeps({'sleep_after': 0}))
+
+  def test_it_is_in_the_record_and_said_when_it_changes(self):
+    o = self.owner()
+    with mock.patch.object(gadget, 'log') as log:
+      for _ in range(3):
+        o.note_server('modeld', {'device': 'orin', 'sleep_after': 0.0, 'protocol': 3})
+      o.note_server('provision', {'device': 'orin', 'sleep_after': 60.0, 'protocol': 3})
+    self.assertEqual(log.warning.call_count, 2)
+    self.assertIn('stays up', log.warning.call_args_list[0].args[3])
+    o.publish_status()
+    self.assertEqual(gadget.owner_status()['server'], {'device': 'orin', 'sleep_after': 60.0, 'protocol': 3})
+
+  def test_an_owner_started_again_keeps_what_the_last_one_heard(self):
+    # parked, with nobody to say hello again until the next drive
+    first = self.owner()
+    self.heard(first, sleep_after=0.0)
+    first.publish_status()
+    second = self.owner()
+    second.server = None
+    second.stop = True
+    with mock.patch.object(second, 'forget_status'):
+      second.run()
+    self.assertFalse(second.far_end_sleeps())
+
+  def test_the_runs_exit_status_says_whether_it_left_work(self):
+    o = self.owner()
+    for code, unfinished in ((0, False), (1, True), (-9, True), (0, False)):
+      o.worker = mock.Mock(**{'poll.return_value': code, 'returncode': code})
+      self.assertFalse(o.worker_running())
+      self.assertEqual(o.unfinished, unfinished, code)
+    o.publish_status()
+    self.assertIs(gadget.owner_status()['unfinished'], False)
+
+  def test_a_run_stopped_on_the_way_says_so_too(self):
+    o = self.owner()
+    o.worker = mock.Mock(**{'wait.return_value': 1})
+    o.stop_worker()
+    self.assertTrue(o.unfinished)
+    o.worker = mock.Mock(**{'wait.return_value': 0})
+    o.stop_worker()
+    self.assertFalse(o.unfinished, 'a run that finished its round as it was stopped')
+    o.worker = mock.Mock(**{'wait.side_effect': subprocess.TimeoutExpired('run', owner.POLL)})
+    with mock.patch.object(owner, 'WORKER_GRACE', 0.0):
+      o.stop_worker()
+    self.assertTrue(o.unfinished, 'killed')
+
+  def test_a_borrowers_note_reaches_it_through_the_lender(self):
+    o = self.make()
+    self.addCleanup(o.cable.close)
+    with mock.patch.object(lending, 'SOCKET', self.tmp / 'lend.sock'):
+      o.lender = lending.Lender(o.lendable, o.bounce_gadget, server=o.note_server)
+      self.assertTrue(o.lender.start())
+      self.addCleanup(o.lender.stop)
+      conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+      conn.settimeout(lending.POLL)
+      conn.connect(str(o.lender.path))
+      loan = lending.Loan(conn, bytearray(), '', '', name='modeld')
+      self.addCleanup(loan.close)
+      self.assertTrue(loan.note_server({'device': 'orin', 'sleep_after': 0.0, 'loaded': 'x' * 64, 'engine_state': 'ready'}))
+    self.assertEqual(o.server, {'device': 'orin', 'sleep_after': 0.0})
 
 
 class TestShutdown(OwnerTest):

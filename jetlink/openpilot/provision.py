@@ -19,11 +19,15 @@ The result is cached on the Jetson, recorded in the spec record and left
 loaded on the server. The owner stops a run at the onroad transition with
 SIGTERM, so every long wait polls `stop`; the server's build thread carries on
 regardless and modeld picks the engine up over its own link.
+
+What the owner cannot learn for itself it hears from the run: the server's
+hello, passed on over the loan (lending.Loan.note_server), and whether the
+round left work undone, which is the exit status: 0 when nothing is left,
+anything else to be tried again once the owner's backoff has passed.
 """
 from __future__ import annotations
 
 import argparse
-import json
 import signal
 
 from jetlink.comma import gadget, lending
@@ -40,13 +44,9 @@ class ProvisioningRun:
     self.parts = parts
     self.log = parts.log
     self.client = None
+    self.loan = None
     self.stop = False
     self.fetch_failed = False
-    # does the far end suspend when the gadget goes? From the server's hello.
-    # The owner needs it to decide whether letting go is worth what it costs,
-    # and cannot ask: it never speaks the protocol. None until a hello says:
-    # a run with nothing to do never asks
-    self.server_sleeps: bool | None = None
 
   # -- lifecycle ------------------------------------------------------------
 
@@ -69,11 +69,11 @@ class ProvisioningRun:
     if self.client is not None:
       return True
     try:
-      loan = lending.borrow('provision')
-      if loan is None:
+      self.loan = lending.borrow('provision')
+      if self.loan is None:
         self.log.error("jetlink: the owner lent no link, nothing to provision over")
         return False
-      self.client = link.connect(self.log, loan, deadline=5.0, name='provision')
+      self.client = link.connect(self.log, self.loan, deadline=5.0, name='provision')
       return True
     except Exception:
       self.log.exception("jetlink: could not open the link")
@@ -128,8 +128,7 @@ class ProvisioningRun:
       return link.ensure(parts, self.client, sha256, nbytes, path, progress=parts.progress.report_with_eta,
                          should_stop=lambda: self.stop)
 
-    hello = self.client.hello(timeout=10.0)
-    self.note_sleep_after(hello)
+    hello = self.hello()
     self.log.warning("jetlink: server %s trt %s", hello.get('device'), hello.get('trt_version'))
     try:
       spec = ensure(model_path)
@@ -141,31 +140,23 @@ class ProvisioningRun:
       if model_path is not None or (model_path := self.fetch_model()) is None:
         raise
       # a download of minutes can outlast the session; a hello starts a new one
-      self.client.hello(timeout=10.0)
+      self.hello()
       spec = ensure(model_path)
 
     parts.progress.report('ready', 1.0, 'engine ready')
     self.log.warning("jetlink: engine ready for %s", spec.sha256[:16])
     return True
 
+  def hello(self) -> dict:
+    """Say hello, and pass the answer on to the owner, which needs its
+    sleep_after to decide whether letting go of the gadget is worth what it
+    costs and never speaks the protocol to learn it."""
+    hello = self.client.hello(timeout=10.0)
+    if self.loan is not None:
+      self.loan.note_server(hello)
+    return hello
+
   # -- the parked car -------------------------------------------------------
-
-  def note_sleep_after(self, hello: dict) -> None:
-    """Record whether the server suspends itself when the gadget goes.
-
-    Letting go is only worth what it costs if the Jetson sleeps when it is
-    orphaned. On ignition power it does not, and releasing anyway meant a
-    powered, awake box spent the whole parked period unenumerated: the icon
-    read DISCONNECTED five seconds later, and every handover after that was an
-    unplug the server had to recover from.
-    """
-    try:
-      after = hello.get('sleep_after')
-      self.server_sleeps = True if after is None else float(after) > 0
-    except (TypeError, ValueError):
-      self.server_sleeps = True
-    self.log.warning("jetlink: the jetson %s when the gadget goes",
-                     "sleeps" if self.server_sleeps else "stays up")
 
   def has_work(self) -> bool:
     """Is there a reason to wake the Jetson? Only things the link can fix count."""
@@ -207,24 +198,9 @@ class ProvisioningRun:
       self.log.exception("jetlink: could not bounce the gadget")
       return False
 
-  def note_state(self, unfinished: bool) -> None:
-    """What the owner cannot work out for itself: whether the far end sleeps
-    when the gadget goes, and whether this run left anything undone.
-
-    A run that never heard a hello keeps what an earlier one learned. Writing
-    the default instead told the owner a phone or an always-on Jetson sleeps
-    after every run with nothing to do, and it let the gadget go."""
-    sleeps = gadget.far_end_sleeps() if self.server_sleeps is None else self.server_sleeps
-    try:
-      gadget.STATE.write_text(json.dumps({
-        'sleep_after': 1.0 if sleeps else 0.0,
-        'unfinished': unfinished,
-      }))
-    except OSError:
-      self.log.exception("jetlink: could not record what the owner needs")
-
   def run(self) -> bool:
-    """One provisioning round. True when there is nothing left to do."""
+    """One provisioning round. True when there is nothing left to do, which
+    main() makes the exit status the owner reads."""
     # the setting alone, as the owner that started this run reads it
     if self.parts.settings.mode() == 'off':
       return True
@@ -238,12 +214,10 @@ class ProvisioningRun:
     # alert says so, and waking the Jetson to build one would not change it
     if not self.parts.warps.built():
       self.log.warning("jetlink: no warp built for this camera, nothing to provision for")
-      self.note_state(unfinished=False)
       return True
 
     if not self.has_work():
       self.log.warning("jetlink: nothing to provision")
-      self.note_state(unfinished=False)
       return True
 
     finished = False
@@ -258,13 +232,13 @@ class ProvisioningRun:
       self.log.exception("jetlink: provisioning failed")
       self.parts.progress.report('failed', 1.0, 'see the log')
     finally:
-      self.note_state(unfinished=not finished)
       self.close_link()
     return finished
 
 
 def main(argv: list[str] | None = None) -> None:
-  """One provisioning round over the fork's adapter, as the owner starts it."""
+  """One provisioning round over the fork's adapter, as the owner starts it.
+  Exits 0 when nothing is left to do, and 1 when the owner should try again."""
   from jetlink.openpilot.interface import load_adapter
   from jetlink.openpilot.parts import for_this_process
   p = argparse.ArgumentParser(prog='python -m jetlink.openpilot.provision', description=main.__doc__)
@@ -275,7 +249,7 @@ def main(argv: list[str] | None = None) -> None:
   # what keeps the driver healthy for modeld
   signal.signal(signal.SIGTERM, d.request_stop)
   signal.signal(signal.SIGINT, d.request_stop)
-  d.run()
+  raise SystemExit(0 if d.run() else 1)
 
 
 if __name__ == "__main__":

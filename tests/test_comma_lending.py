@@ -46,9 +46,9 @@ class LendingTest(unittest.TestCase):
     p.start()
     self.holding = False
 
-  def lender(self, cable: lending.CableListener | None = None) -> lending.Lender:
+  def lender(self, cable: lending.CableListener | None = None, server=None) -> lending.Lender:
     lender = lending.Lender(lambda: self.free, self.bounce, path=self.path,
-                            holding=lambda: self.holding, cable=cable)
+                            holding=lambda: self.holding, cable=cable, server=server)
     assert lender.start()
     self.addCleanup(lender.stop)
     return lender
@@ -359,6 +359,59 @@ class Bouncing(LendingTest):
     loan.close()
     assert loan.closed and loan.bounce() is False
     assert self.bounced == 0
+
+
+class TellingTheOwner(LendingTest):
+  """What a borrower passes on of the server's hello, over the loan it already
+  holds: the owner never speaks the protocol, and sleep_after is how it knows
+  whether letting go of the gadget lets the Jetson sleep."""
+
+  HELLO = {'protocol': 3, 'device': 'orin', 'backend': 'tensorrt', 'runtime_version': '10.16', 'sleep_after': 0.0,
+           'engine_state': 'ready', 'loaded': 'a' * 64, 'cached_models': ['a' * 64], 'telemetry': {'gpu_c': 50}}
+
+  def test_the_hello_reaches_the_owner_and_the_loan_carries_on(self):
+    heard = []
+    self.lender(server=lambda who, fields: heard.append((who, fields)))
+    loan = self.take(name='modeld')
+    assert loan.note_server(self.HELLO) is True
+    assert heard == [('modeld', {'protocol': 3, 'device': 'orin', 'backend': 'tensorrt', 'runtime_version': '10.16',
+                                 'sleep_after': 0.0})]
+    # the answer was read, so the next exchange on the loan gets its own
+    assert loan.bounce() is True and self.bounced == 1
+    assert loan.renew(timeout=1.0)
+
+  def test_an_older_owner_answering_unknown_op_is_ignored(self):
+    lender = self.lender()   # no `server`: answered as an owner from before the op
+    loan = self.take()
+    assert loan.note_server(self.HELLO) is False
+    assert not loan.closed and lender.lent
+    assert loan.bounce() is True and self.bounced == 1
+
+  def test_a_note_the_owner_cannot_record_keeps_the_lease(self):
+    # a raise on the lender's thread would end the loan under a borrower
+    # that is using the endpoints
+    def broken(who, fields):
+      raise RuntimeError('boom')
+    lender = self.lender(server=broken)
+    loan = self.take()
+    with mock.patch.object(lending.gadget, 'log'):
+      assert loan.note_server(self.HELLO) is True
+    assert lender.lent and not loan.closed
+    assert loan.bounce() is True
+
+  def test_an_owner_that_is_gone_is_not_an_error(self):
+    lender = self.lender(server=lambda who, fields: None)
+    loan = self.take()
+    lender.stop()
+    with mock.patch.object(lending.gadget, 'log') as log:
+      assert loan.note_server(self.HELLO) is False
+    log.warning.assert_called_once()
+
+  def test_a_closed_loan_says_nothing(self):
+    self.lender(server=lambda who, fields: None)
+    loan = self.take()
+    loan.close()
+    assert loan.note_server(self.HELLO) is False
 
 
 class StaleSockets(LendingTest):
