@@ -1,4 +1,5 @@
 import Foundation
+import JetlinkTestSupport
 import Testing
 
 @testable import JetlinkONNX
@@ -26,7 +27,6 @@ import Testing
   func matchesPython(_ fixture: String) throws {
     let expected = try #require(Self.python["\(fixture).trt"])
     let out = try TemporaryDirectory()
-    defer { out.cleanup() }
     let prepare = {
       try CoreMLPreparation.prepare(source: Fixtures.url("\(fixture).onnx"), into: out.url, layout: .trt, cacheKey: { _ in "unused" })
     }
@@ -49,7 +49,6 @@ import Testing
   /// export's CACHE_KEY included.
   @Test func keepsTheModelsProps() throws {
     let out = try TemporaryDirectory()
-    defer { out.cleanup() }
     let report = try CoreMLPreparation.prepare(source: Fixtures.url("queued.onnx"), into: out.url, layout: .trt, cacheKey: { $0 })
     let meta = try OnnxMeta.read(contentsOf: report.parts[0].url)
     let source = try OnnxMeta.read(contentsOf: Fixtures.url("queued.onnx"))

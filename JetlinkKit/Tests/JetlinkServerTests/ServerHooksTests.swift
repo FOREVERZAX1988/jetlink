@@ -1,80 +1,9 @@
 import Foundation
 import JetlinkKit
+import JetlinkTestSupport
 import Testing
 
 @testable import JetlinkServer
-
-/// The CPU backend with what a TensorRT one adds: fields in the hello, and
-/// runs or loads that fail with an error of the test's choosing.
-final class HookBackend: EngineBackend, @unchecked Sendable {
-  private let inner = cpuBackend()
-  private let lock = NSLock()
-  private var failure: (any Error)?
-  private var loadFailure: (any Error)?
-  let helloFields: [String: Any]
-
-  init(helloFields: [String: Any] = [:]) {
-    self.helloFields = helloFields
-  }
-
-  var name: String { inner.name }
-  var suffix: String { inner.suffix }
-  var artifactKind: ArtifactKind { inner.artifactKind }
-  var runtimeVersion: String { inner.runtimeVersion }
-  func deviceTag() -> String { inner.deviceTag() }
-
-  /// Every run from now on throws `error`; nil runs the model again.
-  func failRuns(with error: (any Error)?) {
-    lock.withLock { failure = error }
-  }
-
-  var runFailure: (any Error)? { lock.withLock { failure } }
-
-  /// Every load from now on throws `error`; nil loads again.
-  func failLoads(with error: (any Error)?) {
-    lock.withLock { loadFailure = error }
-  }
-
-  func deriveSpec(model: URL, sha256: String, nbytes: Int64, frameSkip: Int) throws -> ModelSpec {
-    try inner.deriveSpec(model: model, sha256: sha256, nbytes: nbytes, frameSkip: frameSkip)
-  }
-
-  func build(model: URL, artifact: URL, report: @escaping ProgressFn, metaExtra: [String: Any]) throws {
-    try inner.build(model: model, artifact: artifact, report: report, metaExtra: metaExtra)
-  }
-
-  func load(artifact: URL, report: @escaping ProgressFn) throws -> any Engine {
-    if let failure = lock.withLock({ loadFailure }) { throw failure }
-    return FailingEngine(try inner.load(artifact: artifact, report: report), backend: self)
-  }
-}
-
-/// The engine it loads: the real one, whose run throws when told to.
-final class FailingEngine: Engine {
-  let inner: any Engine
-  unowned let backend: HookBackend
-
-  init(_ inner: any Engine, backend: HookBackend) {
-    self.inner = inner
-    self.backend = backend
-  }
-
-  var inputs: [String: TensorSpec] { inner.inputs }
-  var outputs: [String: TensorSpec] { inner.outputs }
-  var hostOutputs: [String] { inner.hostOutputs }
-  var lastGpuUs: UInt32 { inner.lastGpuUs }
-  func hostInput(_ name: String) -> UnsafeMutableRawPointer? { inner.hostInput(name) }
-  func output(_ name: String) -> UnsafeRawPointer? { inner.output(name) }
-  func loopState(_ pairs: [(input: String, output: String)]) throws -> Bool { try inner.loopState(pairs) }
-  func resetState() { inner.resetState() }
-  func warm() throws -> String { try inner.warm() }
-  func close() { inner.close() }
-
-  func run() throws {
-    if let failure = backend.runFailure { throw failure }
-    try inner.run()
-  }
-}
 
 /// A CUDA error as the TensorRT backend will throw it: sticky or not.
 struct DeviceError: FatalEngineError, CustomStringConvertible {
@@ -116,59 +45,10 @@ final class ComingAndGoingGadget: GadgetSource, @unchecked Sendable {
   }
 }
 
-final class Recorded<T>: @unchecked Sendable {
-  private let condition = NSCondition()
-  private var values: [T] = []
-
-  func append(_ value: T) {
-    condition.lock()
-    values.append(value)
-    condition.broadcast()
-    condition.unlock()
-  }
-
-  var all: [T] {
-    condition.lock()
-    defer { condition.unlock() }
-    return values
-  }
-
-  /// Whether the values come to satisfy `done` within `timeout`. Each append
-  /// wakes it, so the bound is only for a test that fails: a loaded CI
-  /// runner can take seconds to get a thread to the event.
-  func wait(timeout: TimeInterval = 10, until done: ([T]) -> Bool) -> Bool {
-    let deadline = Date().addingTimeInterval(timeout)
-    condition.lock()
-    defer { condition.unlock() }
-    while !done(values) {
-      if !condition.wait(until: deadline) { return done(values) }
-    }
-    return true
-  }
-}
-
 /// Each of `ServerHooks`, as the Linux daemon will use it, and the defaults
 /// the apps keep.
 @Suite("Server hooks", .serialized)
 struct ServerHooksTests {
-  func serve(
-    hooks: ServerHooks, backend: any EngineBackend = cpuBackend(), gadget: (any GadgetSource)? = nil, _ body: (Server, TestClient) throws -> Void
-  ) throws {
-    let cache = try TemporaryDirectory()
-    let server = try Server(
-      configuration: Server.Configuration(host: "127.0.0.1", port: 0, cacheRoot: cache.url, preload: false, usb: gadget != nil),
-      backend: backend, gadget: gadget, hooks: hooks)
-    try server.start()
-    defer { server.shutdown() }
-    let client = try TestClient(port: server.port!)
-    defer { client.close() }
-    try body(server, client)
-  }
-
-  func hello(_ client: TestClient) throws -> [String: Any] {
-    try client.hello()
-  }
-
   /// One frame of `golden`'s model, zeros throughout.
   func frame(_ client: TestClient, _ golden: Golden, flags: Wire.Flag = []) throws -> Reply {
     let spec = try ModelSpec.from(golden.spec)
@@ -188,13 +68,13 @@ struct ServerHooksTests {
       "protocol", "backend", "runtime_version", "device", "engine_state", "loaded", "frames_served", "cached_models", "telemetry", "sleep_after",
     ]
     try serve(hooks: ServerHooks()) { _, client in
-      let hello = try hello(client)
+      let hello = try client.hello()
       #expect(Set(hello.keys) == python)
       #expect(hello["sleep_after"] as? Double == 0)
     }
-    let trt = HookBackend(helloFields: ["trt_version": "10.3.0"])
+    let trt = FlakyBackend(helloFields: ["trt_version": "10.3.0"])
     try serve(hooks: ServerHooks(sleepAfter: 900), backend: trt) { _, client in
-      let hello = try hello(client)
+      let hello = try client.hello()
       #expect(Set(hello.keys) == python.union(["trt_version"]))
       #expect(hello["trt_version"] as? String == "10.3.0")
       #expect(hello["sleep_after"] as? Double == 900)
@@ -208,8 +88,10 @@ struct ServerHooksTests {
     func readings(_ object: Any?) -> [String: Double]? {
       (object as? [String: Any])?.compactMapValues { ($0 as? NSNumber)?.doubleValue }
     }
-    try serve(hooks: hooks) { _, client in
-      #expect(readings(try hello(client)["telemetry"]) == ["temp_c": 51.5, "power_w": 12.25])
+    try serve(hooks: hooks) { server, client in
+      // The server samples the host's sensors on a thread of its own.
+      #expect(eventually { !server.host.telemetry.read().isEmpty })
+      #expect(readings(try client.hello()["telemetry"]) == ["temp_c": 51.5, "power_w": 12.25])
       try client.send(.stateReq)
       let state = try client.recv(.stateResp).json
       #expect(state["temp_c"] as? Double == 51.5 && state["engine_state"] as? String == "none")
@@ -340,7 +222,7 @@ struct ServerHooksTests {
   @Test("A fatal engine error is answered INFER_FAILED, then handed to the host; another is only answered")
   func fatal() throws {
     let golden = try Golden("tiny_stateful")
-    let backend = HookBackend()
+    let backend = FlakyBackend()
     let fatal = Recorded<String>()
     try serve(hooks: ServerHooks(fatal: { fatal.append(String(describing: $0)) }), backend: backend) { _, client in
       _ = try client.ensureEngine(model: golden.model, sha256: golden.sha256)
@@ -359,7 +241,7 @@ struct ServerHooksTests {
   @Test("A fatal engine error while preparing the engine fails the job, then is handed to the host; another only fails it")
   func fatalWhilePreparing() throws {
     let golden = try Golden("tiny_stateful")
-    let backend = HookBackend()
+    let backend = FlakyBackend()
     let fatal = Recorded<String>()
     try serve(hooks: ServerHooks(fatal: { fatal.append(String(describing: $0)) }), backend: backend) { _, client in
       backend.failLoads(with: DeviceError(sticky: false))

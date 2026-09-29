@@ -22,7 +22,7 @@ extension JSON {
 }
 
 struct RegistryConformanceTests {
-  private var fixture: JSON { Fixture.json("conformance/registry.json") }
+  private var fixture: JSON { RegistryFixture.json("conformance/registry.json") }
 
   @Test func pointersParseAsPythonParsesThem() throws {
     let cases = try #require(fixture["pointers"]?.array)
@@ -46,7 +46,7 @@ struct RegistryConformanceTests {
     let cases = try #require(fixture["parses"]?.array)
     for c in cases {
       let name = c["name"]?.string ?? "?"
-      let catalog = c["catalog_file"]?.string.map { Fixture.json($0) } ?? c["catalog"] ?? .null
+      let catalog = c["catalog_file"]?.string.map { RegistryFixture.json($0) } ?? c["catalog"] ?? .null
       let expected = (c["expected"]?.array ?? []).map { m in
         Catalog.Entry(
           name: m["name"]?.string ?? "", shortName: m["short_name"]?.string ?? "", ref: m["ref"]?.string ?? "",
@@ -71,7 +71,7 @@ struct RegistryConformanceTests {
       let url = root.appending(path: relative)
       try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
       if let file = content["raw_file"]?.string, var object = content["json"]?.object {
-        object["raw"] = Fixture.json(file)
+        object["raw"] = RegistryFixture.json(file)
         try JSON.object(object).data().write(to: url)
       } else if let json = content["json"] {
         try json.data().write(to: url)
@@ -102,11 +102,10 @@ struct RegistryConformanceTests {
   }
 
   @Test func oneCacheDirectoryReadsTheSameFromBothSides() throws {
-    let raw = try Data(contentsOf: Fixture.directory.appending(path: "conformance/registry.json"))
+    let raw = try Data(contentsOf: RegistryFixture.directory.appending(path: "conformance/registry.json"))
     let python = try #require((try JSONSerialization.jsonObject(with: raw) as? [String: Any])?["cache"] as? [String: Any])
     let cache = try #require(fixture["cache"]?.object)
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let tmp = try TemporaryDirectory()
     try writeTree(try #require(cache["tree"]?.object), under: tmp.url)
     let registry = Registry(layout: tmp.layout)
 

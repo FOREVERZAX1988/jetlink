@@ -1,5 +1,6 @@
 import Foundation
 import JetlinkKit
+import JetlinkTestSupport
 import Testing
 
 @testable import JetlinkServer

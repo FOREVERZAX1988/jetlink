@@ -1,4 +1,5 @@
 import Foundation
+import JetlinkTestSupport
 import Testing
 
 @testable import JetlinkRegistry
@@ -7,7 +8,7 @@ import Testing
 struct CacheLayoutTests {
   private let sha = String(repeating: "b", count: 64)
 
-  private func fake(_ tmp: TempDir, version: String = "0.1", device: String = "test", suffix: String = ".fake") -> EngineCache {
+  private func fake(_ tmp: TemporaryDirectory, version: String = "0.1", device: String = "test", suffix: String = ".fake") -> EngineCache {
     EngineCache(layout: tmp.layout, tag: "fake\(version).\(device)", suffix: suffix, backend: "fake")
   }
 
@@ -30,12 +31,11 @@ struct CacheLayoutTests {
     #expect(layout.localModelsURL.path(percentEncoded: false) == "/cache/registry/local-models.json")
     #expect(layout.lastLoadedURL.path(percentEncoded: false) == "/cache/last-loaded.json")
     #expect(CacheLayout.isSHA256(sha) && !CacheLayout.isSHA256(sha.uppercased()) && !CacheLayout.isSHA256(String(sha.dropLast())))
-    #expect(CacheLayout.isRef(fixtureRef) && !CacheLayout.isRef(fixtureOID))
+    #expect(CacheLayout.isRef(RegistryFixture.ref) && !CacheLayout.isRef(RegistryFixture.oid))
   }
 
   @Test func theKeyIsTheModelAndTheBackendTag() throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let tmp = try TemporaryDirectory()
     let cache = fake(tmp, version: "2.0", device: "gpu9")
     let entry = try cache.entry(sha)
     #expect(entry.path == cache.layout.engines.appending(path: "\(sha.prefix(16)).fake2.0.gpu9.fake"))
@@ -45,8 +45,7 @@ struct CacheLayoutTests {
 
   @Test(arguments: ["../escape", "/tmp/escape", "", String(repeating: "a", count: 63), String(repeating: "z", count: 64)])
   func modelIdentityCannotEscapeTheCache(identity: String) throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let tmp = try TemporaryDirectory()
     let cache = fake(tmp)
     let entryError = #expect(throws: RegistryError.self) { try cache.entry(identity) }
     #expect(entryError?.message.contains("SHA-256") == true)
@@ -55,8 +54,7 @@ struct CacheLayoutTests {
   }
 
   @Test func twoBackendsKeepSeparateArtifactsForOneModel() throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let tmp = try TemporaryDirectory()
     let a = fake(tmp, version: "1")
     let b = fake(tmp, version: "2")
     try Data("a".utf8).write(to: a.entry(sha).path)
@@ -67,8 +65,7 @@ struct CacheLayoutTests {
   }
 
   @Test func pruneKeepsTheNewestArtifactsOfThisBackendOnly() throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let tmp = try TemporaryDirectory()
     let cache = fake(tmp)
     for i in 0..<4 {
       try artifact(cache, "m\(i)", mtime: 1_000_000 + Double(i))
@@ -84,8 +81,7 @@ struct CacheLayoutTests {
   /// oldest file on disk. Pruning by mtime would delete the build that just
   /// finished and leave the caller reading a sidecar that no longer exists.
   @Test func pruneNeverDropsTheArtifactJustBuilt() throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let tmp = try TemporaryDirectory()
     let cache = fake(tmp)
     try artifact(cache, "old_a", mtime: 2_000_000)
     try artifact(cache, "old_b", mtime: 2_000_001)
@@ -100,8 +96,7 @@ struct CacheLayoutTests {
 
   /// onnxruntime's artifact is a directory: the model plus a compiled cache.
   @Test func pruneRemovesADirectoryArtifactWhole() throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let tmp = try TemporaryDirectory()
     let cache = fake(tmp, suffix: ".dir")
     for i in 0..<3 {
       let directory = tmp.layout.engines.appending(path: "m\(i).dir")
@@ -116,8 +111,7 @@ struct CacheLayoutTests {
   }
 
   @Test func entryRemoveTakesBothHalves() throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let tmp = try TemporaryDirectory()
     let cache = fake(tmp)
     let url = try artifact(cache, "gone", mtime: 1)
     let entry = CacheEntry(path: url, metaPath: tmp.layout.engines.appending(path: "gone.json"))
@@ -128,8 +122,7 @@ struct CacheLayoutTests {
   }
 
   @Test func sweepTempDropsOnlyStaleBuildDirectories() throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let tmp = try TemporaryDirectory()
     let cache = fake(tmp)
     let stale = tmp.layout.engines.appending(path: "tmpstale")
     let fresh = tmp.layout.engines.appending(path: "tmpfresh")
@@ -147,8 +140,7 @@ struct CacheLayoutTests {
   }
 
   @Test func lastLoadedSurvivesAndNamesTheBackend() throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let tmp = try TemporaryDirectory()
     let cache = fake(tmp)
     #expect(tmp.layout.lastLoaded() == nil)
     cache.rememberLoaded(sha256: sha, frameSkip: 4)
@@ -158,8 +150,7 @@ struct CacheLayoutTests {
 
   /// The Jetson's marker has no backend field; it must still preload.
   @Test func aMarkerWrittenBeforeBackendsStillReads() throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let tmp = try TemporaryDirectory()
     try JSON.object(["sha256": .string(sha), "frame_skip": 4]).data().write(to: tmp.layout.lastLoadedURL)
     #expect(tmp.layout.lastLoaded() == LastLoaded(sha256: sha, frameSkip: 4))
     try Data(#"{"sha256": "nothex", "frame_skip": 4}"#.utf8).write(to: tmp.layout.lastLoadedURL)
@@ -167,8 +158,7 @@ struct CacheLayoutTests {
   }
 
   @Test func inventoryRequiresACompatibleArtifactAndSpec() throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let tmp = try TemporaryDirectory()
     let cache = fake(tmp)
     let entry = try cache.entry(sha)
     try Data("plan".utf8).write(to: entry.path)
@@ -180,8 +170,7 @@ struct CacheLayoutTests {
 
   /// A Jetson's sidecars carry trt_version and no backend field.
   @Test func aSidecarFromBeforeBackendsCounts() throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let tmp = try TemporaryDirectory()
     let cache = fake(tmp)
     let entry = try cache.entry(sha)
     try Data("plan".utf8).write(to: entry.path)

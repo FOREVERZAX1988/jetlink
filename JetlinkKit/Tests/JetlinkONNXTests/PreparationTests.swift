@@ -1,4 +1,5 @@
 import Foundation
+import JetlinkTestSupport
 import Testing
 
 @testable import JetlinkONNX
@@ -47,7 +48,6 @@ import Testing
     let layoutName = String(name.split(separator: ".")[1])
     let layout = try #require(Self.layouts[layoutName])
     let out = try TemporaryDirectory()
-    defer { out.cleanup() }
 
     let prepare = {
       try CoreMLPreparation.prepare(
@@ -113,7 +113,6 @@ import Testing
   /// file the Swift preparation wrote (the bytes are checked above).
   @Test func aneWholeVariantsLayout() throws {
     let out = try TemporaryDirectory()
-    defer { out.cleanup() }
     let report = try CoreMLPreparation.prepare(
       source: Fixtures.url("variants.onnx"), into: out.url, layout: .aneWhole, cacheKey: { $0 })
     #expect(report.norms == 3 && report.heads == 6)
@@ -146,7 +145,6 @@ import Testing
 
   @Test func progressRisesToOne() throws {
     let out = try TemporaryDirectory()
-    defer { out.cleanup() }
     var seen: [Double] = []
     _ = try CoreMLPreparation.prepare(
       source: Fixtures.url("stateful.onnx"), into: out.url, layout: .split,
@@ -160,7 +158,6 @@ import Testing
   /// The caller's key is written as it is given, replacing CACHE_KEY.
   @Test func cacheKeyReplacesOldKeys() throws {
     let out = try TemporaryDirectory()
-    defer { out.cleanup() }
     let report = try CoreMLPreparation.prepare(
       source: Fixtures.url("queued.onnx"), into: out.url, layout: .whole, cacheKey: { "abc\($0)" })
     let meta = try OnnxMeta.read(contentsOf: report.parts[0].url)
@@ -171,7 +168,6 @@ import Testing
   /// The split parts carry only the key: Extractor copies no metadata_props.
   @Test func splitPartsCarryOnlyTheKey() throws {
     let out = try TemporaryDirectory()
-    defer { out.cleanup() }
     let report = try CoreMLPreparation.prepare(
       source: Fixtures.url("queued.onnx"), into: out.url, layout: .split, cacheKey: { $0 })
     let vision = try OnnxMeta.read(contentsOf: report.parts[0].url)
@@ -187,7 +183,6 @@ import Testing
   /// Two branches that never meet: the cut is every tensor the policy reads.
   @Test func noSingleCut() throws {
     let out = try TemporaryDirectory()
-    defer { out.cleanup() }
     let report = try CoreMLPreparation.prepare(
       source: Fixtures.url("nocut.onnx"), into: out.url, layout: .split, cacheKey: { $0 })
     let vision = try OnnxMeta.read(contentsOf: report.parts[0].url)
@@ -208,7 +203,6 @@ import Testing
 
   @Test func missingSourceIsAnError() throws {
     let out = try TemporaryDirectory()
-    defer { out.cleanup() }
     #expect(throws: (any Error).self) {
       try CoreMLPreparation.prepare(
         source: out.url.appendingPathComponent("none.onnx"), into: out.url, layout: .whole, cacheKey: { $0 })

@@ -1,5 +1,6 @@
 import Foundation
 import JetlinkKit
+import JetlinkTestSupport
 import Testing
 
 @testable import JetlinkServer
@@ -330,17 +331,6 @@ func unservedPipes() -> FakePipes {
   return pipes
 }
 
-final class LockedLinks: @unchecked Sendable {
-  private let lock = NSLock()
-  private var links: [LinkEvent] = []
-
-  func append(_ link: LinkEvent) {
-    lock.withLock { links.append(link) }
-  }
-
-  var all: [LinkEvent] { lock.withLock { links } }
-}
-
 /// The comma over a fake USB link.
 final class GadgetClient: CommaClient {
   let pipes: any FakeGadgetEnd
@@ -389,7 +379,7 @@ struct ServerUSBTests {
     let cache = try TemporaryDirectory()
     let gadget = FakeGadget(then: unservedPipes)
     let server = try makeServer(cache, gadget: gadget)
-    let links = LockedLinks()
+    let links = Recorded<LinkEvent>()
     server.host.subscribe { if case .link(let link) = $0 { links.append(link) } }
     try server.start()
     defer { server.shutdown() }
@@ -408,7 +398,7 @@ struct ServerUSBTests {
     let comma = FakePipes()
     let gadget = FakeGadget([unservedPipes(), comma], then: unservedPipes)
     let server = try makeServer(cache, gadget: gadget)
-    let links = LockedLinks()
+    let links = Recorded<LinkEvent>()
     server.host.subscribe { if case .link(let link) = $0 { links.append(link) } }
     try server.start()
     defer { server.shutdown() }
