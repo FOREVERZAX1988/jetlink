@@ -130,24 +130,27 @@
     let permits = Dial<[String]>([])
     lazy var gadget = SysfsGadget(
       root: tree.root, node: node, target: target, environment: environment,
-      write: { [lpmTakes, permits] path, text throws(KernelError) in
+      write: { [tree, lpmTakes, permits] path, text throws(KernelError) in
         try Sysfs.write(path, text)
-        let suffix = "/port/usb3_lpm_permit"
-        guard path.hasSuffix(suffix) else { return }
+        guard path.hasSuffix("/usb3_lpm_permit") else { return }
         permits.value.append(text)
-        guard lpmTakes.value else { return }
-        let device = String(path.dropLast(suffix.count))
+        // The kernel applies a permit to the port's child at once, if it has one.
+        let child = "/sys/bus/usb/devices/2-1.3/power"
+        guard lpmTakes.value, tree.read("\(child)/usb3_hardware_lpm_u1") != nil else { return }
         for state in ["u1", "u2"] {
-          try Sysfs.write("\(device)/power/usb3_hardware_lpm_\(state)", text == "0" ? "disabled\n" : "enabled\n")
+          tree.write("\(child)/usb3_hardware_lpm_\(state)", text == "0" ? "disabled\n" : "enabled\n")
         }
       }, log: lines.log)
+
+    /// The comma's port, which outlives the comma.
+    static let port = "/sys/devices/usb2/2-1/2-1:1.0/2-1-port3/usb3_lpm_permit"
 
     init() {
       // A hub and its interface, which the scan passes over.
       device("2-1", vendor: "0bda", product: "0489", bus: 2, device: 2)
       tree.write("/sys/bus/usb/devices/2-1:1.0/bInterfaceClass", "09\n")
       // Its port 3, whose permit outlives the devices plugged into it.
-      tree.write("/sys/devices/usb2/2-1/2-1:1.0/2-1-port3/usb3_lpm_permit", "u1_u2\n")
+      tree.write(Bus.port, "u1_u2\n")
     }
 
     func device(
@@ -179,6 +182,15 @@
 
     func lpm(_ state: String) -> String? {
       tree.read("/sys/bus/usb/devices/2-1.3/power/usb3_hardware_lpm_\(state)")
+    }
+
+    var permit: String? { tree.read(Bus.port) }
+
+    /// Plugged, claimed and waiting for the comma's first message.
+    func claimed(lpm: Bool = true, speed: String = "5000") throws {
+      plug(speed: speed, lpm: lpm)
+      #expect(gadget.present())
+      _ = try gadget.open()
     }
   }
 
@@ -346,41 +358,74 @@
 
   @Suite("USB 3 link power management")
   struct LinkPowerManagementTests {
-    @Test("Turned off on the comma's own port at the claim, and read back")
-    func off() throws {
+    @Test("Left alone at the claim; off when a session starts, read back, once per session")
+    func offForASession() throws {
       let bus = Bus()
-      bus.plug(lpm: true)
-      #expect(bus.gadget.present())
-      _ = try bus.gadget.open()
+      try bus.claimed()
+      #expect(bus.permits.value.isEmpty)
+      bus.gadget.hear(.connected)
       #expect(bus.permits.value == ["0"])
-      #expect(bus.tree.read("/sys/devices/usb2/2-1/2-1:1.0/2-1-port3/usb3_lpm_permit") == "0")
+      #expect(bus.permit == "0")
       #expect(bus.lpm("u1") == "disabled\n" && bus.lpm("u2") == "disabled\n")
-      #expect(bus.lines.count("usb 3 link power management off for the comma's link") == 1)
-      // Not again for the comma's per-run reopens.
+      #expect(bus.lines.count("usb 3 link power management off for the comma's session") == 1)
+      // The comma's per-run reopens change nothing.
       _ = try bus.gadget.open()
+      bus.gadget.hear(.present)
       #expect(bus.permits.value == ["0"])
     }
 
-    @Test("A write that does not take is a warning with what the device reads")
-    func notTaken() throws {
+    @Test("Back to the kernel's default when the session ends, with the comma still on the bus")
+    func stockAfterTheSession() throws {
       let bus = Bus()
-      bus.plug(lpm: true)
-      bus.lpmTakes.value = false
-      #expect(bus.gadget.present())
-      _ = try bus.gadget.open()
-      #expect(bus.permits.value == ["0"])
-      #expect(bus.lines.has(.warning, "usb 3 link power management is still on for the comma's link after writing 0"))
-      #expect(bus.lines.has(.warning, "u1 enabled, u2 enabled"))
-      #expect(bus.lines.count("usb 3 link power management off") == 0)
+      try bus.claimed()
+      bus.gadget.hear(.connected)
+      bus.gadget.hear(.disconnected)
+      #expect(bus.permits.value == ["0", "u1_u2"])
+      #expect(bus.permit == "u1_u2")
+      #expect(bus.lpm("u1") == "enabled\n" && bus.lpm("u2") == "enabled\n")
+      #expect(bus.lines.count("usb 3 link power management back to stock for the comma's link") == 1)
+      // A second end says nothing: there is nothing to put back.
+      bus.gadget.hear(.disconnected)
+      #expect(bus.permits.value == ["0", "u1_u2"])
     }
 
-    @Test("Written again after every re-enumeration, with the comma on the bus")
+    @Test("Back to the default when the server stops, and not off again after")
+    func stockAtStop() throws {
+      let bus = Bus()
+      try bus.claimed()
+      bus.gadget.hear(.connected)
+      bus.gadget.close()
+      #expect(bus.permit == "u1_u2")
+      #expect(bus.lpm("u1") == "enabled\n")
+      bus.gadget.hear(.connected)
+      #expect(bus.permits.value == ["0", "u1_u2"])
+    }
+
+    @Test("The comma re-enumerates mid-session: the port goes back to stock, and off again for the next session")
     func reenumerated() throws {
       let bus = Bus()
-      bus.plug(device: 3, lpm: true)
+      try bus.claimed()
+      bus.gadget.hear(.connected)
+      bus.unplug()
+      bus.gadget.hear(.disconnected)
+      // Written to the port itself: the comma's `port` link left with it.
+      #expect(bus.permit == "u1_u2")
+      #expect(bus.lines.has(.info, "back to stock for the comma's port (the comma is off the bus)"))
+      bus.plug(device: 8, lpm: true)
       #expect(bus.gadget.present())
       _ = try bus.gadget.open()
-      bus.unplug(device: 3)
+      #expect(bus.permits.value == ["0", "u1_u2"])
+      bus.gadget.hear(.connected)
+      #expect(bus.permits.value == ["0", "u1_u2", "0"])
+      #expect(bus.lpm("u1") == "disabled\n" && bus.lpm("u2") == "disabled\n")
+    }
+
+    @Test("Claimed again while a session is still served: off again at the claim")
+    func claimedMidSession() throws {
+      let bus = Bus()
+      try bus.claimed()
+      bus.gadget.hear(.connected)
+      bus.unplug()
       #expect(!bus.gadget.present())
       // It comes back with U1/U2 on, as after a write made while it was away.
       bus.plug(device: 8, lpm: true)
@@ -389,37 +434,69 @@
       _ = try bus.gadget.open()
       #expect(bus.permits.value == ["0", "0"])
       #expect(bus.lpm("u1") == "disabled\n" && bus.lpm("u2") == "disabled\n")
-      #expect(bus.lines.count("usb 3 link power management off for the comma's link") == 2)
     }
 
-    @Test("Nothing on a USB 2 link, or for a device the kernel runs without LPM")
+    @Test("A write that does not take is a warning with what the device reads")
+    func notTaken() throws {
+      let bus = Bus()
+      try bus.claimed()
+      bus.lpmTakes.value = false
+      bus.gadget.hear(.connected)
+      #expect(bus.lines.has(.warning, "is still on for the comma's session after writing 0"))
+      #expect(bus.lines.has(.warning, "u1 enabled, u2 enabled"))
+      #expect(bus.lines.count("off for the comma's session") == 0)
+    }
+
+    @Test("A port an earlier server left off goes back to stock at the claim")
+    func leftOff() throws {
+      let bus = Bus()
+      bus.tree.write(Bus.port, "0\n")
+      bus.plug(lpm: true)
+      bus.tree.write("/sys/bus/usb/devices/2-1.3/power/usb3_hardware_lpm_u1", "disabled\n")
+      bus.tree.write("/sys/bus/usb/devices/2-1.3/power/usb3_hardware_lpm_u2", "disabled\n")
+      #expect(bus.gadget.present())
+      _ = try bus.gadget.open()
+      #expect(bus.permit == "u1_u2")
+      #expect(bus.lpm("u1") == "enabled\n")
+      #expect(bus.lines.has(.info, "back to stock for the comma's link (an earlier server left it off)"))
+    }
+
+    @Test("Nothing on a USB 2 link, for a device the kernel runs without LPM, or with no comma claimed")
     func skipped() throws {
       let usb2 = Bus()
-      usb2.plug(speed: "480", lpm: true)
-      #expect(usb2.gadget.present())
-      _ = try usb2.gadget.open()
+      try usb2.claimed(speed: "480")
+      usb2.gadget.hear(.connected)
+      usb2.gadget.hear(.disconnected)
       #expect(usb2.permits.value.isEmpty)
-      #expect(usb2.lpm("u1") == "enabled\n")
 
       let bare = Bus()
-      bare.plug()
-      #expect(bare.gadget.present())
-      _ = try bare.gadget.open()
+      try bare.claimed(lpm: false)
+      bare.gadget.hear(.connected)
+      bare.gadget.hear(.disconnected)
+      bare.gadget.close()
       #expect(bare.permits.value.isEmpty)
       #expect(bare.lines.count("link power management") == 0)
+
+      // A comma over TCP, with no gadget on the bus.
+      let tcp = Bus()
+      tcp.gadget.hear(.connected)
+      tcp.gadget.hear(.disconnected)
+      #expect(tcp.permits.value.isEmpty)
     }
 
-    @Test("JETLINK_USB_LPM=1 keeps it on, putting back the kernel's default")
+    @Test("JETLINK_USB_LPM=1 keeps it on for the session, putting back a port left off")
     func keptOn() throws {
       let bus = Bus()
       bus.environment = ["JETLINK_USB_LPM": "1"]
-      bus.tree.write("/sys/devices/usb2/2-1/2-1:1.0/2-1-port3/usb3_lpm_permit", "0\n")
-      bus.plug(lpm: true)
-      #expect(bus.gadget.present())
-      _ = try bus.gadget.open()
+      bus.tree.write(Bus.port, "0\n")
+      try bus.claimed()
+      bus.gadget.hear(.connected)
       #expect(bus.permits.value == ["u1_u2"])
       #expect(bus.lpm("u1") == "enabled\n" && bus.lpm("u2") == "enabled\n")
-      #expect(bus.lines.has(.info, "usb 3 link power management left on for the comma's link (JETLINK_USB_LPM=1)"))
+      #expect(bus.lines.has(.info, "usb 3 link power management left on for the comma's session (JETLINK_USB_LPM=1)"))
+      bus.gadget.hear(.disconnected)
+      bus.gadget.close()
+      #expect(bus.permits.value == ["u1_u2"])
     }
   }
 

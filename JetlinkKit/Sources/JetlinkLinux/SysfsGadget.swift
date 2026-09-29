@@ -63,6 +63,12 @@
     private let lock = NSLock()
     private var claimed: Claimed?
     private var seen: Found?
+    /// A comma session is being served: between `.connected` and `.disconnected`.
+    private var serving = false
+    /// The comma's port while its link power management is off, as a real
+    /// path: the device's `port` link goes with the device, the port stays.
+    private var lpmOff: (port: String, device: String)?
+    private var closed = false
 
     public convenience init() {
       self.init(root: .system, node: DevUsbfs(), target: UsbfsGadget())
@@ -75,8 +81,7 @@
       self.root = root
       self.node = node
       self.target = target
-      // A bench switch for A/B runs: it writes the kernel's default (u1_u2)
-      // back, since a port set to 0 stays so until a reboot.
+      // A bench switch for A/B runs: sessions keep the kernel's default.
       keepLPM = environment["JETLINK_USB_LPM"] == "1"
       self.write = write
       self.log = log
@@ -130,7 +135,7 @@
           .info,
           "claimed the comma's gadget at \(found.name) (\(path), \(found.speed.map { "\($0) Mb/s" } ?? "unknown speed")): interface \(picked.interface), bulk in \(hex(picked.inEndpoint)) out \(hex(picked.outEndpoint))"
         )
-        linkPowerManagement(found)
+        linkPowerAtClaim(found)
         return Claimed(found: found, fd: fd, interface: picked.interface)
       } catch {
         node.close(fd)
@@ -138,36 +143,115 @@
       }
     }
 
-    /// Turns USB 3 link power management (U1/U2) off on the comma's own port,
-    /// the largest single cost of the link: every idle gap between frames
-    /// otherwise ends in an exit from U1 or U2, 3.9 ms of the 7.6 ms onroad
-    /// transport on the bench. The hub then keeps its uplink in U0 by itself.
-    /// Deep suspend and the USB wake are unaffected (U3 is separate).
+    // MARK: link power management
+
+    /// USB 3 link power management (U1/U2) is off on the comma's own port
+    /// while a session is served, and the kernel's default otherwise. On it
+    /// is the largest single cost of the link: every idle gap between frames
+    /// ends in an exit from U1 or U2, 3.9 ms of the 7.6 ms onroad transport on
+    /// the bench. Off only the comma's port: the hub then keeps its uplink in
+    /// U0 by itself. Between sessions (parked, the comma holding the gadget)
+    /// the link dozes in U2 again. Suspend is U3 and is unaffected.
     ///
-    /// The permit belongs to the port and survives re-enumerations, but a
-    /// write while the comma is off the bus reports success and changes
-    /// nothing, so it is written at every claim, with the comma present, and
-    /// the device's own U1/U2 state is read back. Nothing to do on a USB 2
-    /// link, or for a device the kernel runs without LPM (no such files).
-    private func linkPowerManagement(_ found: Found) {
+    /// The kernel applies a permit to the attached device at once, but a
+    /// write that cannot reach it (the bus suspended) reports success and
+    /// changes nothing, so the device's own U1/U2 state is read back after
+    /// each write. Nothing to do on a USB 2 link, or for a device the kernel
+    /// runs without LPM (no such files).
+    ///
+    /// Heard through `ServerHooks.gadgetIdle`, which reports any link: a comma
+    /// served over TCP while this gadget is claimed turns it off too.
+    public func hear(_ event: GadgetIdleEvent) {
+      lock.withLock {
+        switch event {
+        case .connected:
+          serving = true
+          if let claimed { linkPowerOff(claimed.found) }
+        case .disconnected:
+          serving = false
+          linkPowerStock()
+        case .present, .absent:
+          break
+        }
+      }
+    }
+
+    /// The server is stopping: the comma's link goes back to the default.
+    public func close() {
+      lock.withLock {
+        closed = true
+        serving = false
+        linkPowerStock()
+      }
+    }
+
+    /// The comma's permit, its port's real path and its U1/U2 state files,
+    /// when its link has any.
+    private func linkPowerFiles(_ found: Found) -> (permit: String, port: String, device: String, states: [String])? {
       let device = root.path("/sys/bus/usb/devices/\(found.name)")
       let permit = "\(device)/port/usb3_lpm_permit"
       let states = ["u1", "u2"].map { "\(device)/power/usb3_hardware_lpm_\($0)" }
-      guard (found.speed.flatMap { Int($0) } ?? 5000) >= 5000, Sysfs.read(permit) != nil, states.allSatisfy({ Sysfs.read($0) != nil })
-      else { return }
-      do throws(KernelError) {
-        try write(permit, keepLPM ? "u1_u2" : "0")
-      } catch {
-        log(.warning, "could not set usb 3 link power management for the comma's link: \(error)")
+      guard (found.speed.flatMap { Int($0) } ?? 5000) >= 5000, Sysfs.read(permit) != nil, states.allSatisfy({ Sysfs.read($0) != nil }),
+        let port = realpath("\(device)/port", nil)
+      else { return nil }
+      defer { free(port) }
+      return (permit, String(cString: port), device, states)
+    }
+
+    /// Under `lock`, with the comma on the bus: a session starts.
+    private func linkPowerOff(_ found: Found) {
+      guard !closed, let files = linkPowerFiles(found) else { return }
+      if keepLPM {
+        // A port an earlier session left off would stay so until a reboot.
+        try? write(files.permit, "u1_u2")
+        log(.info, "usb 3 link power management left on for the comma's session (JETLINK_USB_LPM=1)")
         return
       }
-      let read = states.map { Sysfs.read($0) ?? "unreadable" }
-      if keepLPM {
-        log(.info, "usb 3 link power management left on for the comma's link (JETLINK_USB_LPM=1): u1 \(read[0]), u2 \(read[1])")
-      } else if read.allSatisfy({ $0 == "disabled" }) {
-        log(.info, "usb 3 link power management off for the comma's link")
+      do throws(KernelError) {
+        try write(files.permit, "0")
+      } catch {
+        log(.warning, "could not turn usb 3 link power management off for the comma's session: \(error)")
+        return
+      }
+      lpmOff = (files.port, files.device)
+      let read = files.states.map { Sysfs.read($0) ?? "unreadable" }
+      if read.allSatisfy({ $0 == "disabled" }) {
+        log(.info, "usb 3 link power management off for the comma's session")
       } else {
-        log(.warning, "usb 3 link power management is still on for the comma's link after writing 0 to \(permit): u1 \(read[0]), u2 \(read[1])")
+        log(.warning, "usb 3 link power management is still on for the comma's session after writing 0 to \(files.permit): u1 \(read[0]), u2 \(read[1])")
+      }
+    }
+
+    /// Under `lock`: the session ended or the server stops. Written to the
+    /// port itself, which outlives a comma that left the bus.
+    private func linkPowerStock(_ why: String = "") {
+      guard let off = lpmOff else { return }
+      lpmOff = nil
+      do throws(KernelError) {
+        try write("\(off.port)/usb3_lpm_permit", "u1_u2")
+      } catch {
+        log(.warning, "could not put usb 3 link power management back to stock for the comma's link: \(error)")
+        return
+      }
+      let read = ["u1", "u2"].map { Sysfs.read("\(off.device)/power/usb3_hardware_lpm_\($0)") }
+      if read.contains(nil) {
+        log(.info, "usb 3 link power management back to stock for the comma's port (the comma is off the bus)\(why)")
+      } else if read.allSatisfy({ $0 == "enabled" }) {
+        log(.info, "usb 3 link power management back to stock for the comma's link\(why)")
+      } else {
+        log(.warning, "usb 3 link power management back to stock for the comma's link, but u1 \(read[0]!), u2 \(read[1]!)\(why)")
+      }
+    }
+
+    /// Under `lock`, at a claim: a session in progress (the comma came back
+    /// under it) gets its link off again; otherwise a port an earlier server
+    /// left off, by crashing mid-session, goes back to stock for the park.
+    private func linkPowerAtClaim(_ found: Found) {
+      if serving {
+        linkPowerOff(found)
+      } else if !keepLPM, let files = linkPowerFiles(found), Sysfs.read(files.permit) == "0" {
+        lpmOff = (files.port, files.device)
+        linkPowerStock(" (an earlier server left it off)")
       }
     }
 
