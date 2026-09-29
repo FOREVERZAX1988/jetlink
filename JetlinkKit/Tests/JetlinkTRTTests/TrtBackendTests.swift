@@ -255,6 +255,24 @@ extension Recorded<Event> {
       #expect(backend.trt.live.allSatisfy { $0 == 0 }, "\(backend.trt.live)")
     }
 
+    @Test("With --gpu-timing a benchmark's launches are said at its end, however few")
+    func benchmarkTiming() throws {
+      let trt = try fakeTensorRT()
+      trt.setBuild(tinyPlanLines)
+      let backend = TrtBackend(trt: trt, gpuTiming: true, available: { 1 << 30 })
+      let cache = try ServerCache(root: tmp.url, backend: backend)
+      let request = try request(cache)
+      let host = EngineHost(cache: cache)
+      defer { host.close() }
+      _ = host.request(request, session: nil)
+      #expect(host.settles(timeout: 60) && host.snapshot().state == .ready)
+      let report = try host.benchmark(seconds: 0.5, run: BenchmarkRun())
+      // the warm-up frames are launches too
+      let launches = report.frames + EngineHost.benchmarkWarmup
+      #expect(launches < GPUTiming.block)
+      #expect(timingLines("\(launches) frames") == 1)
+    }
+
     @Test("A plan TensorRT refuses is rebuilt once; one that met a full device or no runtime stays, and only the job fails")
     func refusedPlans() throws {
       let backend = try backend()

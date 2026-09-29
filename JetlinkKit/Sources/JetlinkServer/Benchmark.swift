@@ -120,6 +120,8 @@ extension EngineHost {
     defer {
       lock.lock()
       benchmarking = false
+      // The benchmark's own GPU times, before a comma's frames join the block.
+      if loaded === l { l.engine.flushTiming() }
       loaded?.staging.reset()
       lock.unlock()
     }

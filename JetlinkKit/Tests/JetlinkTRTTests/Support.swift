@@ -1,5 +1,6 @@
 import CTrt
 import Foundation
+import JetlinkLog
 import JetlinkTestSupport
 
 @testable import JetlinkServer
@@ -25,6 +26,12 @@ let tinyPlanLines = """
 
 func tinySpec() throws -> ModelSpec {
   try ModelSpec.from(TinyModel.spec(TinyModel.stateful))
+}
+
+/// How many lines the CUDA-event timing has logged for a block of `frames`
+/// ("7 frames"), from the ring every server line goes to.
+func timingLines(_ frames: String) -> Int {
+  LogRing.shared.lines().filter { $0.contains("jetlink.trt: gpu (cuda events), \(frames): mean") }.count
 }
 
 #if JL_TRT_FAKE
