@@ -30,8 +30,8 @@ struct SettingsScreen: View {
         connection
         Section {
           Picker("Processor", selection: $settings.device) {
-            Text(OrtProfile.aneWhole.title).tag(OrtProfile.aneWhole)
             Text(OrtProfile.ane.title).tag(OrtProfile.ane)
+            Text(OrtProfile.aneWhole.title).tag(OrtProfile.aneWhole)
             Text(OrtProfile.coreml.title).tag(OrtProfile.coreml)
             #if targetEnvironment(simulator)
               // The simulator has no Neural Engine and runs CoreML on the CPU anyway.
