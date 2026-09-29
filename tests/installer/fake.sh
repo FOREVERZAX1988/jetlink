@@ -1,15 +1,27 @@
 #!/usr/bin/env bash
 # One stand-in for every system command the installer touches, dispatched on
-# the name it is called by (scenarios.sh symlinks each name to this file). Each
-# call is appended to $FAKE_LOG, and the answers come from $FAKE_* variables,
-# so a scenario can say "Docker is missing" or "only CDI reaches the GPU".
+# the name it is called by: scenarios.sh symlinks each name to this file, and
+# the release tarballs it makes carry it as bin/jetlink-server. Each call is
+# appended to $FAKE_LOG, and the answers come from $FAKE_* variables and the
+# files in $FAKE_STATE, so a scenario can say "TensorRT is missing" or "the
+# server cannot reach the GPU". The Docker releases' installers run on it too,
+# which is why Docker and the container toolkit are still here.
 #
 # Test code only: nothing here runs outside tests/installer.
 set -u
 name="$(basename "$0")"
 state="${FAKE_STATE:-/tmp/fake-state}"
 mkdir -p "$state"
-printf '%s %s\n' "$name" "$*" >>"${FAKE_LOG:-/tmp/fake.log}"
+# and whether the server's awake lock was held at the time
+held=''
+lock="${JETLINK_TEST_AWAKE_LOCK:-/nonexistent}"
+if [ -e "$lock" ] && ! flock --exclusive --nonblock "$lock" true 2>/dev/null; then held=' [held awake]'; fi
+printf '%s %s%s\n' "$name" "$*" "$held" >>"${FAKE_LOG:-/tmp/fake.log}"
+
+# an installed package's version; fails when it is not installed
+pkg() { cat "$state/pkg-$1" 2>/dev/null; }
+# what JetPack's repository offers
+TRT10="${FAKE_TRT10:-10.16.2.10-1+cuda13.2}"
 
 case "$name" in
   uname)
@@ -20,13 +32,68 @@ case "$name" in
     esac ;;
 
   apt-get)
-    # installing Docker or the toolkit makes their commands appear
-    for pkg in "$@"; do
-      case "$pkg" in
+    # installing a package makes its commands and libraries appear; an
+    # upgrade leaves alone what is not installed
+    upgrade=0
+    [[ " $* " == *" --only-upgrade "* ]] && upgrade=1
+    if [ "${FAKE_NO_PLUGIN:-0}" = 1 ] && [[ " $* " == *" libnvinfer-plugin"* ]]; then
+      echo "E: Unable to locate package libnvinfer-plugin" >&2
+      exit 100
+    fi
+    for arg in "$@"; do
+      [ "$upgrade" = 1 ] && ! pkg "${arg%%=*}" >/dev/null && continue
+      case "$arg" in
         docker.io|docker-ce) ln -sf "$0" "$FAKE_BIN/docker" ;;
         nvidia-container-toolkit) ln -sf "$0" "$FAKE_BIN/nvidia-ctk" ;;
+        libnvinfer10|libnvonnxparsers10|libnvinfer-plugin10) echo "$TRT10" >"$state/pkg-$arg" ;;
+        libnvinfer*=*|libnvonnxparsers*=*) echo "${arg#*=}" >"$state/pkg-${arg%%=*}" ;;
+        libcurl4) echo 8.5.0 >"$state/pkg-libcurl4" ;;
       esac
     done ;;
+
+  apt-cache)
+    case "${1:-}" in
+      policy) printf '%s:\n  Installed: %s\n  Candidate: %s\n' "$2" "$(pkg "$2" || echo '(none)')" "$TRT10" ;;
+    esac ;;
+
+  dpkg)
+    case "${1:-}" in
+      --print-architecture) if [ "${FAKE_ARCH:-aarch64}" = x86_64 ]; then echo amd64; else echo arm64; fi ;;
+    esac ;;
+
+  dpkg-query)
+    # -W -f FORMAT PACKAGE...
+    fmt="$3" rc=0
+    shift 3
+    for p in "$@"; do
+      if v="$(pkg "$p")"; then
+        printf '%s' "$v"
+        [[ $fmt == *'\n'* ]] && echo
+      else
+        echo "dpkg-query: no packages found matching $p" >&2
+        rc=1
+      fi
+    done
+    exit "$rc" ;;
+
+  ldconfig)
+    # the loader's cache: libcurl unless a scenario takes it away, and
+    # TensorRT's libraries once their packages are in
+    echo "fake libs found in cache"
+    if [ "${FAKE_NO_CURL:-0}" = 0 ] || pkg libcurl4 >/dev/null; then
+      printf '\tlibcurl.so.4 (libc6) => /usr/lib/libcurl.so.4\n'
+    fi
+    for m in 10 11; do
+      pkg "libnvinfer$m" >/dev/null && printf '\tlibnvinfer.so.%s (libc6) => /usr/lib/libnvinfer.so.%s\n' "$m" "$m"
+      pkg "libnvonnxparsers$m" >/dev/null && printf '\tlibnvonnxparser.so.%s (libc6) => /usr/lib/libnvonnxparser.so.%s\n' "$m" "$m"
+      pkg "libnvinfer-plugin$m" >/dev/null && printf '\tlibnvinfer_plugin.so.%s (libc6) => /usr/lib/libnvinfer_plugin.so.%s\n' "$m" "$m"
+    done ;;
+
+  df)
+    # every filesystem is /: FAKE_ROOT_FREE_GB, plus what deleted images freed
+    free=$((${FAKE_ROOT_FREE_GB:-100} + $(cat "$state/freed-gb" 2>/dev/null || echo 0)))
+    printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/fake 999999999 0 %s 1%% /\n' \
+      $((free * 1048576)) ;;
 
   systemctl)
     case "${1:-}" in
@@ -35,37 +102,56 @@ case "$name" in
         [ -f "$state/stopped-${*: -1}" ] && { [ "$quiet" = 1 ] || echo inactive; exit 3; }
         [ "$quiet" = 1 ] || echo active ;;
       stop) touch "$state/stopped-${*: -1}" ;;
-      start|restart) rm -f "$state/stopped-${*: -1}" ;;
-      is-enabled) if [ -f "$state/masked-${*: -1}" ]; then echo masked; else echo enabled; fi ;;
+      start|restart)
+        rm -f "$state/stopped-${*: -1}"
+        if [ "${*: -1}" = jetlink-server ]; then
+          # which server came up, and whether it may sleep
+          kind=native
+          grep -qs run-server /etc/systemd/system/jetlink-server.service && kind=docker
+          printf 'jetlink-server started: %s, sleep %s\n' "$kind" \
+            "$(sed -n 's/^JETLINK_SLEEP_AFTER=//p' /etc/jetlink/server.env 2>/dev/null | tail -n 1)" \
+            >>"${FAKE_LOG:-/tmp/fake.log}"
+        fi ;;
+      is-enabled)
+        u="${*: -1}"
+        if [ -f "$state/masked-$u" ]; then echo masked
+        # a unit with no [Install] section, like the poweroff flag's service
+        elif [ -f "/etc/systemd/system/$u" ] && ! grep -q '^\[Install\]' "/etc/systemd/system/$u"; then echo static
+        else echo enabled; fi ;;
       list-unit-files)
         u=systemd-networkd-wait-online.service
         [ "$u" = "${*: -1}" ] && echo "$u enabled enabled" ;;
       mask) for u in "${@:2}"; do touch "$state/masked-$u"; done ;;
       unmask) for u in "${@:2}"; do rm -f "$state/masked-$u"; done ;;
-      show)
-        case " $* " in
-          *" nv-install-docker.service "*)
-            # JetPack's own Docker install: running for FAKE_NV_DOCKER_POLLS
-            # looks, and Docker is there once it has finished
-            left="$(cat "$state/nv-docker" 2>/dev/null || echo "${FAKE_NV_DOCKER_POLLS:-0}")"
-            if [ "$left" -gt 0 ]; then
-              echo $((left - 1)) >"$state/nv-docker"
-              echo activating
-            else
-              [ -f "$state/nv-docker" ] && ln -sf "$0" "$FAKE_BIN/docker"
-              echo inactive
-            fi ;;
-          *) echo "${FAKE_RESTARTS:-0}" ;;
-        esac ;;
     esac ;;
 
   journalctl)
+    # the server's log, as it writes it, and systemd's lines about the unit
     if [ "${FAKE_SERVER_BROKEN:-0}" = 1 ]; then
-      echo "ImportError: libnvinfer.so.10: cannot open shared object file"
+      for n in 1 2 3; do
+        echo "ERROR io.zoompilot.jetlink.main: no TensorRT 10: libnvinfer.so.10: cannot open shared object file"
+        echo "jetlink-server.service: Scheduled restart job, restart counter is at $n."
+      done
     else
-      echo "backend trt 10.16.2.10 on Orin-sm87, cache /var/cache/jetlink"
-      echo "waiting for a jetlink gadget at 1209:0001"
+      echo "INFO io.zoompilot.jetlink.main: backend trt 10.16.2.10 on Orin-sm87, cache /mnt/data/jetlink"
+      echo "INFO io.zoompilot.jetlink.server: waiting for a jetlink gadget at 1209:0001"
     fi ;;
+
+  jetlink-server)
+    # the server from a release tarball: bin/ in the version's directory
+    home="$(dirname "$(dirname "$0")")"
+    case "${1:-}" in
+      --version) cat "$home/VERSION" ;;
+      backends)
+        if [ "${FAKE_GPU_BROKEN:-0}" = 1 ]; then
+          echo "trt: not usable: no CUDA driver: libcuda.so.1: cannot open shared object file: No such file or directory"
+          echo "ort: not usable: libonnxruntime.so: cannot open shared object file: No such file or directory"
+          exit 1
+        fi
+        echo "trt: usable: TensorRT 10.16.2.10 on Orin-sm87"
+        echo "ort: not usable: libonnxruntime.so: cannot open shared object file: No such file or directory" ;;
+      *) echo "serving" ;;
+    esac ;;
 
   docker)
     case "${1:-}" in
@@ -73,49 +159,39 @@ case "$name" in
       info) if [ -f "$state/nvidia-runtime" ]; then
               echo '{"nvidia":{"path":"nvidia-container-runtime"},"runc":{"path":"runc"}}'
             else echo '{"runc":{"path":"runc"}}'; fi ;;
-      manifest)
-        # the first FAKE_MANIFEST_HANGS requests hang on a dead connection
-        left="$(cat "$state/manifest-hangs" 2>/dev/null || echo "${FAKE_MANIFEST_HANGS:-0}")"
-        if [ "$left" -gt 0 ]; then
-          echo $((left - 1)) >"$state/manifest-hangs"
-          sleep 30
-        fi
-        [ "${FAKE_PUBLISHED:-0}" = 1 ] || { echo "no such manifest" >&2; exit 1; } ;;
-      pull)
-        # the first FAKE_PULL_FAILS pulls are cut off part way
-        left="$(cat "$state/pull-fails" 2>/dev/null || echo "${FAKE_PULL_FAILS:-0}")"
-        if [ "$left" -gt 0 ]; then
-          echo $((left - 1)) >"$state/pull-fails"
-          echo "failed to copy: failed to send write: EOF" >&2
-          exit 1
-        fi ;;
-      build|rm|rmi|stop) ;;
+      manifest) [ "${FAKE_PUBLISHED:-0}" = 1 ] || { echo "no such manifest" >&2; exit 1; } ;;
+      pull) echo "$2" >>"$state/images" ;;
+      build)
+        prev=''
+        for a in "$@"; do [ "$prev" = -t ] && echo "$a" >>"$state/images"; prev=$a; done ;;
+      rmi)
+        # each image deleted frees FAKE_IMAGE_GB on /
+        shift
+        for a in "$@"; do
+          grep -qxF -- "$a" "$state/images" 2>/dev/null || continue
+          grep -vxF -- "$a" "$state/images" >"$state/images.new"
+          mv "$state/images.new" "$state/images"
+          echo $(($(cat "$state/freed-gb" 2>/dev/null || echo 0) + ${FAKE_IMAGE_GB:-5})) >"$state/freed-gb"
+        done ;;
+      rm|stop) ;;
+      ps)
+        # a container that outlived docker rm -f
+        [ "${FAKE_DOCKER_STUCK:-0}" = 1 ] && echo 0123456789ab ;;
       image)
         case "${2:-}" in
           inspect) echo "sha256:$(printf '%064d' 7)" ;;
-          ls) echo "jetlink:local-cuda" ;;
+          ls) sort -u "$state/images" 2>/dev/null ;;
         esac ;;
       run)
+        # the Docker installers' GPU probe; every way in works
         case " $* " in
-          *" -m jetlink.registry "*) echo "fake model list" ;;
-          *" --entrypoint python3 "*)
-            # the GPU probe: only the way this scenario says works, and a
-            # CDI-only toolkit only once its device list has been generated
-            ok="${FAKE_GPU_OK:---runtime nvidia --gpus all}"
-            if [[ " $* " == *" --network host $ok --entrypoint "* ]] \
-                && { [ "$ok" != "--device nvidia.com/gpu=all" ] || [ -f "$state/cdi" ]; }; then
-              echo "Orin (compute 8.7), TensorRT 10.16.2.10"
-              exit 0
-            fi
-            echo "could not select device driver" >&2
-            exit 125 ;;
+          *" --entrypoint python3 "*) echo "Orin (compute 8.7), TensorRT 10.16.2.10" ;;
         esac ;;
     esac ;;
 
   nvidia-ctk)
     case "${1:-} ${2:-}" in
       "runtime configure") touch "$state/nvidia-runtime" ;;
-      "cdi generate") touch "$state/cdi" ;;
     esac ;;
 
   nvpmodel)
@@ -133,15 +209,48 @@ case "$name" in
 
   curl)
     # the network the installer needs, answered from here; anything else fails
-    case " $* " in
-      *" https://github.com "*) ;;
-      *" https://api.github.com/repos/zoompilot/jetlink/releases/latest "*)
+    out='' url=''
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -o) out=$2; shift ;;
+        http*) url=$1 ;;
+      esac
+      shift
+    done
+    case "$url" in
+      https://github.com) ;;
+      https://api.github.com/repos/zoompilot/jetlink/releases/latest)
         # the newest release, FAKE_LATEST; without one, GitHub's rate limit
         [ -n "${FAKE_LATEST:-}" ] || { echo "curl: (22) The requested URL returned error: 403" >&2; exit 22; }
         printf '{\n  "html_url": "https://github.com/zoompilot/jetlink/releases/tag/%s",\n  "tag_name": "%s",\n  "prerelease": false\n}\n' \
           "$FAKE_LATEST" "$FAKE_LATEST" ;;
+      https://github.com/zoompilot/jetlink/releases/download/*)
+        # the assets scenarios.sh made; the first FAKE_DOWNLOAD_FAILS server
+        # downloads are cut off part way
+        file="/tmp/releases/${url#*/releases/download/}"
+        [ -f "$file" ] || { echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; }
+        case "$file" in
+          *.tar.gz)
+            left="$(cat "$state/download-fails" 2>/dev/null || echo "${FAKE_DOWNLOAD_FAILS:-0}")"
+            if [ "$left" -gt 0 ]; then
+              echo $((left - 1)) >"$state/download-fails"
+              echo "curl: (18) transfer closed with outstanding read data remaining" >&2
+              exit 18
+            fi ;;
+          *.sha256)
+            if [ "${FAKE_BAD_SUM:-0}" = 1 ]; then
+              printf '%064d  %s\n' 0 "${file##*/}" >"$out"
+              exit 0
+            fi ;;
+        esac
+        cp "$file" "$out" ;;
+      https://pypi.nvidia.com/*.whl)
+        # NVIDIA's wheel index: the stand-in scenarios.sh made, or a damaged one
+        file="/tmp/pypi/${url##*/}"
+        [ -f "$file" ] || { echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; }
+        if [ "${FAKE_BAD_WHEEL:-0}" = 1 ]; then echo "not the wheel" >"$out"; else cp "$file" "$out"; fi ;;
       *download.docker.com*|*nvidia.github.io*) echo "deb https://example.invalid/fake stable main" ;;
-      *) echo "fake curl: no route for $*" >&2; exit 22 ;;
+      *) echo "fake curl: no route for $url" >&2; exit 22 ;;
     esac ;;
 
   gpg) cat >/dev/null ;;
