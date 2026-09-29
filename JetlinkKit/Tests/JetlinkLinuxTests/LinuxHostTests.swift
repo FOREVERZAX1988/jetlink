@@ -96,7 +96,10 @@
       let long = (0..<200).map { "line \($0)" }.joined(separator: "\n")
       tree.write("/long", "\t" + long + "\n\n")
       #expect(Sysfs.read(tree.path("/long")) == long)
-      for (text, value) in [("-40000\n", -40000), ("0", 0), (" 17 \n", 17), ("", nil), ("-", nil), ("12a", nil), ("99999999999999999999", nil)] as [(String, Int?)] {
+      let cases: [(String, Int?)] = [
+        ("-40000\n", -40000), ("0", 0), (" 17 \n", 17), ("", nil), ("-", nil), ("12a", nil), ("99999999999999999999", nil),
+      ]
+      for (text, value) in cases {
         tree.write("/int", text)
         #expect(Sysfs.readInt(tree.path("/int")) == value, "\(text)")
       }

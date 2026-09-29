@@ -17,7 +17,7 @@
   /// --cache, which every command that touches the cache takes.
   struct CacheArguments: ParsableArguments {
     @Option(
-      help: "Where models and built engines live. Default: $JETLINK_CACHE, else /mnt/data/jetlink on a Jetson, else /var/lib/jetlink as root, else the user's cache directory."
+      help: "Where models and engines live. Default: $JETLINK_CACHE, /mnt/data/jetlink on a Jetson, /var/lib/jetlink as root, else the user's cache."
     )
     var cache: String?
 
