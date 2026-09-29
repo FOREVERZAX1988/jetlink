@@ -12,10 +12,6 @@ public enum Pinned {
   public static let magic: UInt32 = 0x4B4E_4C4A
   /// jetlink.protocol.VERSION
   public static let protocolVersion: UInt16 = 3
-  /// jetlink.protocol.ENVELOPE_VERSION
-  public static let envelopeVersion: UInt16 = 2
-  /// jetlink.protocol.ENVELOPE
-  public static let envelopeMessages: [UInt16] = [1, 2, 14, 17, 18]
   /// jetlink.protocol.HEADER_SIZE
   public static let headerSize: Int = 32
   /// jetlink.protocol.PACKET_MULTIPLE

@@ -83,7 +83,7 @@ def test_invalid_inference_response_abandons_the_stream(kind):
     payload = payload[:-1]
   transport = SimpleNamespace(send=lambda *a, **kw: None,
                               recv=lambda **kw: SimpleNamespace(msg_type=P.Msg.INFER_RESP, seq=1,
-                                                               payload=memoryview(payload), version=P.VERSION))
+                                                               payload=memoryview(payload)))
   client = JetlinkClient(transport)
   client.spec = spec
   seq = client.infer_begin(bytes(spec.warped_nbytes), bytes(spec.packed_nbytes), frame_id=7)

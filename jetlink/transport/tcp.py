@@ -92,7 +92,7 @@ class TcpTransport(StreamTransport):
       self._timeout = timeout
 
   def _write(self, bufs: list[memoryview]) -> int:
-    # sendmsg keeps the header and a 460 KB body in one syscall, so with NODELAY
+    # sendmsg keeps the header and a 393 KB body in one syscall, so with NODELAY
     # they go out as one segment train.
     self._set_timeout(self._write_timeout())
     try:

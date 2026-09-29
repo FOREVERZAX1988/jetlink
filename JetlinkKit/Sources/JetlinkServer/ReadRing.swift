@@ -62,7 +62,7 @@ final class ReadRing: @unchecked Sendable {
   }
 
   static let slotSize = Wire.gadgetTxAlign
-  /// 512 KB: a whole 475 KB inference request streams without the reader
+  /// 512 KB: a whole 400 KB inference request streams without the reader
   /// posting anything, with slots to spare.
   static let depth = 32
 

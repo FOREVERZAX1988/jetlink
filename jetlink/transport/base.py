@@ -12,8 +12,8 @@ from dataclasses import dataclass
 
 from jetlink import protocol as P
 
-# Stops a corrupt length field making RxBuffer allocate gigabytes. A frame is
-# ~460 KB.
+# Stops a corrupt length field making RxBuffer allocate gigabytes. A big
+# model's request is 393 KB.
 MAX_MESSAGE = 16 << 20
 _PAD = bytes(P.GADGET_TX_ALIGN)
 
@@ -75,8 +75,6 @@ class Message:
   seq: int
   flags: int
   payload: memoryview  # valid only until the next recv() on this transport
-  # the header's; see protocol.same_protocol
-  version: int = P.VERSION
 
 
 class Transport(ABC):
@@ -321,7 +319,7 @@ class StreamTransport(Transport):
     end = None if timeout is None else time.monotonic() + timeout
     self._fill(P.HEADER_SIZE, timeout)
     try:
-      _, version, msg_type, seq, flags, length, _reserved = P.unpack_header(
+      _, _, msg_type, seq, flags, length, _reserved = P.unpack_header(
         self.rx.view[self.rx.start:self.rx.start + P.HEADER_SIZE])
       if length > MAX_MESSAGE:
         raise P.ProtocolError(f"message claims {length} bytes, over the {MAX_MESSAGE} cap")
@@ -343,7 +341,7 @@ class StreamTransport(Transport):
     payload = self.rx.take(length)
     self.rx.take(pad)
     self.rx.consumed()
-    return Message(msg_type, seq, flags, payload, version)
+    return Message(msg_type, seq, flags, payload)
 
 
 def take(bufs: list[memoryview], n: int) -> list[memoryview]:
