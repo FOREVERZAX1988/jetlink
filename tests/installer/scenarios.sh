@@ -76,7 +76,7 @@ reset_box() {
       udevadm fallocate mkswap swapon swapoff jetson_clocks curl gpg; do
     ln -sf "$SRC/tests/installer/fake.sh" "$FAKE_BIN/$c"
   done
-  unset FAKE_ARCH FAKE_SMI FAKE_PUBLISHED FAKE_PM_REBOOT FAKE_SERVER_BROKEN FAKE_RESTARTS FAKE_GPU_BROKEN \
+  unset FAKE_ARCH FAKE_SMI FAKE_PUBLISHED FAKE_PM_REBOOT FAKE_SERVER_BROKEN FAKE_GPU_BROKEN \
     FAKE_TRT10 FAKE_NO_CURL FAKE_ROOT_FREE_GB FAKE_IMAGE_GB FAKE_DOWNLOAD_FAILS FAKE_BAD_SUM FAKE_NO_PLUGIN \
     FAKE_DOCKER_STUCK FAKE_TRT11_BUILDS
   export JETLINK_REPO_URL=file:///tmp/repo FAKE_LATEST=v0.10.0 JETLINK_TEST_SYSTEMD_RUN=/tmp
@@ -384,9 +384,11 @@ scenario "a failed update puts the previous server back"
 echo '# the previous settings' >>/etc/jetlink/server.env
 echo "# 0.10.0's own unit" >>/opt/jetlink/0.10.0/share/jetlink/systemd/jetlink-server.service
 # the new server never gets as far as waiting for the comma
-export FAKE_SERVER_BROKEN=1 FAKE_RESTARTS=3
+export FAKE_SERVER_BROKEN=1
 piped '' --update --ref v0.9.0
 expect_rc 1
+# systemd's third restart of it, seen as it is logged
+expect_in /var/log/jetlink-install.log "the server keeps restarting"
 expect_out "The previous Jetlink server is running again."
 expect_in /etc/jetlink/server.env "# the previous settings"
 expect_in /etc/jetlink/install.conf "JETLINK_REF=latest"
@@ -394,7 +396,7 @@ expect_link /opt/jetlink/current /opt/jetlink/0.10.0
 expect_in "$UNITS/jetlink-server.service" "# 0.10.0's own unit"
 check "the previous server was not started again" test "$(grep -c "systemctl restart jetlink-server" "$FAKE_LOG")" -ge 2
 refute "the unit was left stopped" test -f "$FAKE_STATE/stopped-jetlink-server"
-unset FAKE_SERVER_BROKEN FAKE_RESTARTS
+unset FAKE_SERVER_BROKEN
 show_on_failure "$f"
 
 # ---------------------------------------------------------------------------
@@ -1011,7 +1013,7 @@ check "not started again with its sleep" test "$(grep 'jetlink-server started' "
 expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=120"
 expect_out "The previous Jetlink server is running again."
 : >"$FAKE_LOG"
-export FAKE_SERVER_BROKEN=1 FAKE_RESTARTS=3
+export FAKE_SERVER_BROKEN=1
 cli update
 expect_rc 1
 expect_ran "jetlink-server started: docker, sleep 0"
@@ -1031,7 +1033,7 @@ expect_ran "systemctl enable --now jetlink-web.service"
 expect_not_ran "docker rmi"
 check "the Docker server was not started again" test "$(grep -c "systemctl restart jetlink-server" "$FAKE_LOG")" -ge 2
 refute "the unit was left stopped" test -f "$FAKE_STATE/stopped-jetlink-server"
-unset FAKE_SERVER_BROKEN FAKE_RESTARTS
+unset FAKE_SERVER_BROKEN
 : >"$FAKE_LOG"
 cli update
 expect_rc 0

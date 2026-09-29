@@ -1547,26 +1547,20 @@ start_server() {
 }
 
 # Up means the server chose its backend and is waiting for the comma (or
-# already has it). A crash loop shows as a restart count.
+# already has it); systemd's third restart of it means a crash loop. The
+# journal is followed, so either shows the moment it is written. The follower
+# ends at its next line or at the timeout.
 wait_ready() {
-  local since=$1 deadline=$((SECONDS + 180)) out restarts
-  while [ $SECONDS -lt $deadline ]; do
-    out="$(as_root journalctl -u "$UNIT" --since "$since" --no-pager -o cat 2>/dev/null || true)"
-    if printf '%s' "$out" | grep -qE 'waiting for a jetlink gadget|client connected'; then
-      printf '%s\n' "$out" | tail -n 5
-      return 0
-    fi
-    restarts="$(as_root systemctl show -p NRestarts --value "$UNIT" 2>/dev/null || echo 0)"
-    if [ "${restarts:-0}" -ge 3 ]; then
-      printf '%s\n' "$out" | tail -n 30
-      echo "the server keeps restarting"
-      return 1
-    fi
-    sleep 2
-  done
-  printf '%s\n' "$out" | tail -n 30
-  echo "the server did not report ready within 3 minutes"
-  return 1
+  local since=$1 line
+  line="$(grep -m1 -E 'waiting for a jetlink gadget|client connected|restart counter is at 3\.' \
+    < <(as_root timeout 180 journalctl -f -u "$UNIT" --since "$since" -o cat 2>/dev/null) || true)"
+  case "$line" in
+    *restart*|'')
+      as_root journalctl -u "$UNIT" --since "$since" --no-pager -o cat 2>/dev/null | tail -n 30 || true
+      if [ -n "$line" ]; then echo "the server keeps restarting"; else echo "the server did not report ready within 3 minutes"; fi
+      return 1 ;;
+  esac
+  echo "$line"
 }
 
 finish() {

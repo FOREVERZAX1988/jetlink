@@ -130,13 +130,15 @@ case "$name" in
         [ "$u" = "${*: -1}" ] && echo "$u enabled enabled" ;;
       mask) for u in "${@:2}"; do touch "$state/masked-$u"; done ;;
       unmask) for u in "${@:2}"; do rm -f "$state/masked-$u"; done ;;
-      show) echo "${FAKE_RESTARTS:-0}" ;;
     esac ;;
 
   journalctl)
-    # the server's log, as it writes it
+    # the server's log, as it writes it, and systemd's lines about the unit
     if [ "${FAKE_SERVER_BROKEN:-0}" = 1 ]; then
-      echo "ERROR io.zoompilot.jetlink.main: no TensorRT 10: libnvinfer.so.10: cannot open shared object file"
+      for n in 1 2 3; do
+        echo "ERROR io.zoompilot.jetlink.main: no TensorRT 10: libnvinfer.so.10: cannot open shared object file"
+        echo "jetlink-server.service: Scheduled restart job, restart counter is at $n."
+      done
     else
       echo "INFO io.zoompilot.jetlink.main: backend trt 10.16.2.10 on Orin-sm87, cache /mnt/data/jetlink"
       echo "INFO io.zoompilot.jetlink.server: waiting for a jetlink gadget at 1209:0001"
