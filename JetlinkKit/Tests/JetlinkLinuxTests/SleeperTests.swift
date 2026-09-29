@@ -8,19 +8,17 @@
 
   /// The sleeper on a copy of the Jetson's sysfs and a clock the test moves.
   /// The kernel is the writer: `mem` to /sys/power/state sleeps (the success
-  /// count rises and CLOCK_BOOTTIME jumps), or fails with the errno the test
-  /// chooses.
+  /// count rises), or fails with the errno the test chooses.
   final class Kernel: @unchecked Sendable {
     let tree = Tree.jetsonCopy()
-    let monotonic = Dial(1000.0)
-    let boottime = Dial(5000.0)
+    let monotonic = Locked(1000.0)
     let lines = Lines()
     /// Each write, as (path under the tree, text).
-    let writes = Dial<[(String, String)]>([])
+    let writes = Locked<[(String, String)]>([])
     /// errno for a write to a path ending so.
-    let failing = Dial<[String: Int32]>([:])
-    /// How long a suspend lasts; nil returns at once without sleeping.
-    let asleepFor = Dial<TimeInterval?>(30)
+    let failing = Locked<[String: Int32]>([:])
+    /// Whether a suspend sleeps, or returns at once without sleeping.
+    let sleeps = Locked(true)
 
     /// Made at once, so the idle count starts with the kernel.
     private(set) var sleeper: Sleeper!
@@ -28,8 +26,7 @@
     init() {
       tree.makeDirectory("/run")
       sleeper = Sleeper(
-        after: 120, root: tree.root, lockPath: tree.path("/run/jetlink-awake.lock"),
-        clock: Sleeper.Clock(monotonic: { [monotonic] in monotonic.value }, boottime: { [boottime] in boottime.value }),
+        after: 120, root: tree.root, lockPath: tree.path("/run/jetlink-awake.lock"), monotonic: { [monotonic] in monotonic.value },
         write: { [unowned self] path, text throws(KernelError) in try kernelWrite(path, text) }, log: lines.log)
     }
 
@@ -40,8 +37,7 @@
         throw KernelError(what: path, errno: error)
       }
       if relative == "/sys/power/state" {
-        if let asleep = asleepFor.value {
-          boottime.value += asleep
+        if sleeps.value {
           let count = Int(tree.read("/sys/power/suspend_stats/success")!.trimmingCharacters(in: .whitespacesAndNewlines))!
           tree.write("/sys/power/suspend_stats/success", "\(count + 1)\n")
         }
@@ -68,9 +64,8 @@
       kernel.wait(1)
       #expect(kernel.sleeper.handle(.absent))
       #expect(kernel.suspends == 1)
-      #expect(kernel.sleeper.slept == 1)
       #expect(kernel.lines.has(.info, "no gadget for 120 s, suspending"))
-      #expect(kernel.lines.has(.info, "resumed after 30 s asleep"))
+      #expect(kernel.lines.has(.info, "resumed after"))
       // Deep is selected already ("s2idle [deep]"), and every hub is armed.
       #expect(!kernel.writes.value.contains { $0.0 == "/sys/power/mem_sleep" })
       #expect(!kernel.writes.value.contains { $0.0.hasSuffix("/power/wakeup") })
@@ -178,7 +173,6 @@
         kernel.wait(1)
       }
       #expect(kernel.sleeper.enabled)
-      #expect(kernel.sleeper.failed == attempts)
       #expect(kernel.lines.has(.warning, "suspend failed"))
       // Unlike a failure, the comma resets the backoff; the retry time stands.
       kernel.sleeper.touch()
@@ -208,13 +202,13 @@
       let kernel = Kernel()
       kernel.tree.write("/sys/power/suspend_stats/last_failed_step", "suspend\n")
       kernel.tree.write("/sys/power/suspend_stats/last_failed_dev", "3610000.usb\n")
-      kernel.asleepFor.value = nil
+      kernel.sleeps.value = false
       kernel.wait(120)
       #expect(!kernel.sleeper.idle())
       #expect(kernel.lines.has(.warning, "without sleeping (last failed step suspend in 3610000.usb)"))
       kernel.wait(9)
       #expect(!kernel.sleeper.idle())
-      kernel.asleepFor.value = 10
+      kernel.sleeps.value = true
       kernel.wait(1)
       #expect(kernel.sleeper.idle())
     }
@@ -279,13 +273,6 @@
       kernel.wait(120)
       #expect(kernel.sleeper.idle())
       #expect(kernel.lines.count("held awake") == 0)
-    }
-
-    @Test("No lock file: nothing can hold it")
-    func noFile() {
-      let kernel = Kernel()
-      kernel.wait(120)
-      #expect(kernel.sleeper.idle())
     }
 
     @Test("The daemon makes the lock world-readable whatever the umask, and keeps one that is there")

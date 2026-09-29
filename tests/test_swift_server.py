@@ -45,8 +45,6 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / 'JetlinkKit'
 FIXTURES = PACKAGE / 'Tests' / 'JetlinkServerTests' / 'Fixtures'
 QUEUED, STATEFUL = FIXTURES / 'tiny_queued.onnx', FIXTURES / 'tiny_stateful.onnx'
-# In the cache, it makes a SHUTDOWN_REQ log instead of powering the host off
-DRY_RUN = 'poweroff-dry-run'
 HELLO_KEYS = {'protocol', 'backend', 'runtime_version', 'device', 'engine_state', 'loaded', 'frames_served', 'cached_models',
               'telemetry', 'sleep_after'}
 
@@ -125,8 +123,8 @@ def _wait_listening(server: Server, timeout: float = 30.0) -> None:
 def running(tmp: Path, *extra: str):
   cache = tmp / 'cache'
   cache.mkdir(parents=True)
-  (cache / DRY_RUN).touch()   # before the server starts: a shutdown test must never power a machine off
-  # and a stand-in on PATH, so a server that ignored the file would call this
+  # Run without --poweroff, a shutdown must never power a machine off; a
+  # stand-in on PATH catches a server that tried
   fake = tmp / 'bin'
   fake.mkdir()
   (fake / 'systemctl').write_text(f'#!/bin/sh\necho "$@" >> "{tmp / "systemctl.called"}"\n')
@@ -386,20 +384,19 @@ def test_wrong_sized_request_is_rejected(queued):
 
 
 def _may_power_off() -> bool:
-  """A booted systemd host outside CI: a server that got the dry run wrong could take it down."""
+  """A booted systemd host outside CI: a server that got --poweroff wrong could take it down."""
   return Path('/run/systemd/system').exists() and not (os.environ.get('CI') or os.environ.get('JETLINK_TEST_SHUTDOWN'))
 
 
 @pytest.mark.skipif(_may_power_off(), reason='a real systemd host; JETLINK_TEST_SHUTDOWN=1 runs it anyway')
-def test_shutdown_replies_and_a_dry_run_stays_up(server, queued):
-  assert (server.cache / DRY_RUN).exists()
+def test_shutdown_replies_and_without_poweroff_stays_up(server, queued):
   resp = queued.shutdown('car battery', timeout=5)
   assert isinstance(resp.get('ok'), bool) and isinstance(resp.get('detail'), str)
   if sys.platform.startswith('linux'):
     assert resp['ok'] is True
   time.sleep(0.5)
   assert server.proc.poll() is None, server.tail()
-  assert not (server.cache.parent / 'systemctl.called').exists(), 'the dry run called systemctl'
+  assert not (server.cache.parent / 'systemctl.called').exists(), 'a server without --poweroff called systemctl'
   assert queued.ping(timeout=5) < 5.0   # the host is what goes down, not the session
 
 

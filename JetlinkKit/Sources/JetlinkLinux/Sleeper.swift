@@ -30,35 +30,15 @@
     /// unlinks it under a holder.
     public static let awakeLock = "/run/jetlink-awake.lock"
 
-    /// CLOCK_MONOTONIC for the idle count, which stands still while asleep,
-    /// and CLOCK_BOOTTIME, which does not, to time the sleep.
-    public struct Clock: Sendable {
-      public var monotonic: @Sendable () -> TimeInterval
-      public var boottime: @Sendable () -> TimeInterval
-
-      public init(monotonic: @escaping @Sendable () -> TimeInterval, boottime: @escaping @Sendable () -> TimeInterval) {
-        self.monotonic = monotonic
-        self.boottime = boottime
-      }
-
-      public static let system = Clock(monotonic: { now(CLOCK_MONOTONIC) }, boottime: { now(CLOCK_BOOTTIME) })
-
-      private static func now(_ clock: clockid_t) -> TimeInterval {
-        var time = timespec()
-        clock_gettime(clock, &time)
-        return TimeInterval(time.tv_sec) + TimeInterval(time.tv_nsec) / 1e9
-      }
-    }
-
     public let after: TimeInterval
     let root: HostRoot
     let lockPath: String
-    let backstop: TimeInterval
-    let clock: Clock
+    /// CLOCK_MONOTONIC, for the idle count: it stands still while asleep.
+    let monotonic: @Sendable () -> TimeInterval
     /// Every write to sysfs: `mem` to /sys/power/state returns once the box
     /// is back. A test's stand-in for the kernel.
     let write: @Sendable (String, String) throws(KernelError) -> Void
-    let log: LinuxLog
+    let log: ServerLog
 
     private let lock = NSLock()
     private(set) var enabled = true
@@ -66,29 +46,28 @@
     private var retryAt: TimeInterval = 0
     private var backoff = Sleeper.retryMin
     private var held = false
-    private(set) var slept = 0
-    private(set) var failed = 0
-
-    public convenience init(after: TimeInterval) {
-      self.init(after: after, root: .system)
-    }
 
     init(
-      after: TimeInterval, root: HostRoot, lockPath: String? = nil, backstop: TimeInterval = Sleeper.wakeBackstop, clock: Clock = .system,
-      write: @escaping @Sendable (String, String) throws(KernelError) -> Void = Sysfs.write, log: @escaping LinuxLog = serverLog("sleep")
+      after: TimeInterval, root: HostRoot, lockPath: String, monotonic: @escaping @Sendable () -> TimeInterval = { Sleeper.now(CLOCK_MONOTONIC) },
+      write: @escaping @Sendable (String, String) throws(KernelError) -> Void = Sysfs.write, log: ServerLog = ServerLog(category: "sleep")
     ) {
       self.after = after
       self.root = root
-      self.lockPath = lockPath ?? root.path(Sleeper.awakeLock)
-      self.backstop = backstop
-      self.clock = clock
+      self.lockPath = lockPath
+      self.monotonic = monotonic
       self.write = write
       self.log = log
-      lastSeen = clock.monotonic()
+      lastSeen = monotonic()
     }
 
-    /// `ServerHooks.gadgetIdle`: any sign of the comma restarts the count;
-    /// only an absent gadget may end in a suspend. True when the box slept.
+    static func now(_ clock: clockid_t) -> TimeInterval {
+      var time = timespec()
+      clock_gettime(clock, &time)
+      return TimeInterval(time.tv_sec) + TimeInterval(time.tv_nsec) / 1e9
+    }
+
+    /// `ServerHooks.gadgetIdle`: only an absent gadget may end in a suspend.
+    /// True when the box slept.
     public func handle(_ event: GadgetIdleEvent) -> Bool {
       switch event {
       case .present, .connected, .disconnected:
@@ -101,40 +80,36 @@
 
     public func touch() {
       lock.withLock {
-        lastSeen = clock.monotonic()
+        lastSeen = monotonic()
         backoff = Sleeper.retryMin
       }
     }
 
-    /// Called while no gadget is present. Suspends once the count has run
-    /// out and returns true when the box slept, back awake.
+    /// True when the box slept, and is back.
     public func idle() -> Bool {
       let due = lock.withLock {
-        let now = clock.monotonic()
+        let now = monotonic()
         return enabled && now - lastSeen >= after && now >= retryAt
       }
       guard due else { return false }
-      if heldAwake() {
-        let first = lock.withLock {
-          defer { held = true }
-          return !held
-        }
-        if first { log(.info, "held awake by jetlink caffeinate") }
-        return false
-      }
-      let released = lock.withLock {
-        defer { held = false }
+      let holding = heldAwake()
+      let wasHeld = lock.withLock {
+        defer { held = holding }
         return held
       }
-      if released {
+      if holding {
+        if !wasHeld { log.info("held awake by jetlink caffeinate") }
+        return false
+      }
+      if wasHeld {
         // The count starts again from the release, not from the comma.
-        log(.info, "no longer held awake; suspending after \(Int(after)) s more without a gadget")
+        log.info("no longer held awake; suspending after \(Int(after)) s more without a gadget")
         touch()
         return false
       }
       let ok = suspend()
       lock.withLock {
-        let now = clock.monotonic()
+        let now = monotonic()
         if ok {
           // Woken by an edge: give whatever caused it the whole count to show up.
           lastSeen = now
@@ -179,37 +154,35 @@
       }
       let power = root.path("/sys/power")
       let successes = Sysfs.readInt("\(power)/suspend_stats/success") ?? -1
-      let start = clock.boottime()
-      log(.info, "no gadget for \(Int(after)) s, suspending")
+      // CLOCK_BOOTTIME keeps counting while asleep
+      let start = Sleeper.now(CLOCK_BOOTTIME)
+      log.info("no gadget for \(Int(after)) s, suspending")
       armHubWakeup()
       let armed = armBackstop()
       do throws(KernelError) {
         try write("\(power)/state", "mem")
       } catch {
         disarmBackstop(armed)
-        lock.withLock { failed += 1 }
         if [EACCES, EPERM, EROFS, ENOENT].contains(error.errno) {
           // Configuration, not weather: nothing will change by the next try.
-          log(.error, "cannot write \(power)/state (\(error)); sleep disabled")
+          log.error("cannot write \(power)/state (\(error)); sleep disabled")
           lock.withLock { enabled = false }
         } else {
           // EBUSY is the freezer giving up, EINVAL a mode the platform
           // refused: both are worth another try later.
-          log(.warning, "suspend failed: \(error) (\(failure()))")
+          log.warning("suspend failed: \(error) (\(failure()))")
         }
         return false
       }
       disarmBackstop(armed)
-      let asleep = clock.boottime() - start
+      let asleep = Sleeper.now(CLOCK_BOOTTIME) - start
       if successes >= 0 && (Sysfs.readInt("\(power)/suspend_stats/success") ?? -1) <= successes {
         // A clean return with the counter unmoved: a wake edge landed during
         // the freeze and the box never left.
-        log(.warning, "suspend returned after \(String(format: "%.1f", asleep)) s without sleeping (\(failure()))")
-        lock.withLock { failed += 1 }
+        log.warning("suspend returned after \(String(format: "%.1f", asleep)) s without sleeping (\(failure()))")
         return false
       }
-      lock.withLock { slept += 1 }
-      log(.info, "resumed after \(Int(asleep.rounded())) s asleep")
+      log.info("resumed after \(Int(asleep.rounded())) s asleep")
       return true
     }
 
@@ -221,13 +194,13 @@
       guard let modes = Sysfs.read(path), !modes.isEmpty else { return true }
       if modes.contains("[deep]") { return true }
       guard modes.split(separator: " ").contains("deep") else {
-        log(.error, "deep suspend is not available (mem_sleep: \(modes)), not sleeping")
+        log.error("deep suspend is not available (mem_sleep: \(modes)), not sleeping")
         return false
       }
       do {
         try write(path, "deep")
       } catch {
-        log(.error, "could not select deep suspend: \(error)")
+        log.error("could not select deep suspend: \(error)")
         return false
       }
       return true
@@ -255,19 +228,18 @@
         }
       }
       if !disarmed.isEmpty {
-        log(
-          .error,
+        log.error(
           "hub(s) \(disarmed.joined(separator: ", ")) could not be armed for remote wakeup: the comma presenting its gadget may not wake this box"
         )
       }
       return disarmed
     }
 
-    /// An RTC alarm `backstop` seconds out, against the RTC's own count:
+    /// An RTC alarm `wakeBackstop` seconds out, against the RTC's own count:
     /// this box boots unset and never sees NTP in the car, so only both sides
     /// coming from the same counter matters.
     private func armBackstop() -> Bool {
-      guard backstop > 0 else { return false }
+      let backstop = Int(Sleeper.wakeBackstop)
       let rtc = root.path("/sys/class/rtc/rtc0")
       do {
         guard let now = Sysfs.readInt("\(rtc)/since_epoch") else {
@@ -275,11 +247,11 @@
         }
         // A stale alarm blocks setting a new one.
         try write("\(rtc)/wakealarm", "0\n")
-        try write("\(rtc)/wakealarm", "\(now + Int(backstop))\n")
+        try write("\(rtc)/wakealarm", "\(now + backstop)\n")
         return true
       } catch {
         // The USB edge is still the wake source; this was only the backstop.
-        log(.warning, "could not arm the \(Int(backstop)) s wake backstop: \(error)")
+        log.warning("could not arm the \(backstop) s wake backstop: \(error)")
         return false
       }
     }

@@ -1,5 +1,6 @@
 import CTrt
 import Foundation
+import JetlinkKit
 import JetlinkServer
 
 #if canImport(Android)
@@ -39,16 +40,14 @@ public final class TrtEngine: EngineCore, @unchecked Sendable {
   private let log = ServerLog(category: "trt")
 
   public var graphCaptured: Bool { graph != nil }
-  /// The GPU time of the last frame whose events are done, when timing.
-  public var lastDeviceUs: UInt32? { timing?.last }
 
   public override var notes: String {
     "cuda graph \(graph != nil ? "on" : "off")" + (timing != nil ? ", cuda-event timing on" : "")
   }
 
   /// `gpuTiming` puts a pair of timing events around every launch, off the
-  /// reply's path, and logs their spread every 1,200 frames: section 7's
-  /// pure GPU time. `faultAfter` is the H6 fault hook (TrtBackend).
+  /// reply's path, and logs their spread every 1,200 frames. `faultAfter` is
+  /// TrtBackend's H6 fault hook.
   public init(plan: URL, trt: TensorRT, gpuTiming: Bool = false, faultAfter: Int? = nil) throws {
     let parts = try Parts(plan: plan, trt: trt)
     self.trt = trt
@@ -124,6 +123,9 @@ public final class TrtEngine: EngineCore, @unchecked Sendable {
       }
       zeroState = false
     }
+    // The warm-up's runs pay for lazy CUDA state and the capture, so the
+    // timing starts after them.
+    let timing = warmed ? self.timing : nil
     try timing?.begin(trt, stream: stream, log: log)
     if let graph {
       try trt.check { jl_trt_graph_launch(h, graph, stream, $0, $1) }
@@ -258,24 +260,20 @@ public final class TrtEngine: EngineCore, @unchecked Sendable {
 /// What a plan loads into besides the host buffers: the engine, its context
 /// and stream, and a device buffer per IO tensor.
 private struct Parts {
-  let engine: OpaquePointer
-  let context: OpaquePointer
-  let stream: OpaquePointer
-  let inputs: [String: TensorSpec]
-  let outputs: [String: TensorSpec]
-  let device: [String: jl_trt_dptr]
+  var engine: OpaquePointer?
+  var context: OpaquePointer?
+  var stream: OpaquePointer?
+  var inputs: [String: TensorSpec] = [:]
+  var outputs: [String: TensorSpec] = [:]
+  var device: [String: jl_trt_dptr] = [:]
 
   init(plan: URL, trt: TensorRT) throws {
     let h = trt.handle
     let engine = try deserialize(plan, trt)
-    var context: OpaquePointer?
-    var stream: OpaquePointer?
-    var device: [String: jl_trt_dptr] = [:]
+    self.engine = engine
     do {
       try trt.check { jl_trt_context_create(engine, &context, $0, $1) }
       try trt.check { jl_trt_stream_create(h, &stream, $0, $1) }
-      var inputs: [String: TensorSpec] = [:]
-      var outputs: [String: TensorSpec] = [:]
       for index in 0..<jl_trt_engine_io_count(engine) {
         let tensor = try io(engine, index, trt)
         var address: jl_trt_dptr = 0
@@ -287,17 +285,8 @@ private struct Parts {
           outputs[tensor.spec.name] = tensor.spec
         }
       }
-      self.engine = engine
-      self.context = context!
-      self.stream = stream!
-      self.inputs = inputs
-      self.outputs = outputs
-      self.device = device
     } catch {
-      for address in device.values { jl_trt_mem_free(h, address) }
-      jl_trt_context_destroy(context)
-      jl_trt_engine_destroy(engine)
-      jl_trt_stream_destroy(h, stream)
+      release(trt)
       throw error
     }
   }
@@ -370,7 +359,6 @@ private final class GPUTiming {
   private var stop: OpaquePointer?
   private var pending = false
   private var samples: [Double] = []
-  private(set) var last: UInt32?
 
   init(_ trt: TensorRT) throws {
     let h = trt.handle
@@ -385,30 +373,24 @@ private final class GPUTiming {
     samples.reserveCapacity(Self.block)
   }
 
-  func begin(_ trt: TensorRT, stream: OpaquePointer, log: ServerLog) throws(TrtError) {
+  func begin(_ trt: TensorRT, stream: OpaquePointer?, log: ServerLog) throws(TrtError) {
     let h = trt.handle
     if pending {
       var ms: Float = 0
       try trt.check { jl_trt_event_sync(h, stop, $0, $1) }
       try trt.check { jl_trt_event_elapsed(h, start, stop, &ms, $0, $1) }
       pending = false
-      last = UInt32(max(0, Double(ms) * 1000).rounded())
       samples.append(Double(ms))
       if samples.count == Self.block {
-        let sorted = samples.sorted()
-        let mean = samples.reduce(0, +) / Double(samples.count)
-        let at = { (q: Double) in sorted[min(sorted.count - 1, Int(q * Double(sorted.count)))] }
-        log.info(
-          String(
-            format: "gpu (cuda events), %d frames: mean %.2f p50 %.2f p99 %.2f max %.2f ms", samples.count, mean, at(0.5), at(0.99),
-            sorted.last!))
+        let stats = BenchmarkStats.of(samples)
+        log.info("gpu (cuda events), \(samples.count) frames: mean \(stats.mean) p50 \(stats.p50) p99 \(stats.p99) max \(stats.max) ms")
         samples.removeAll(keepingCapacity: true)
       }
     }
     try trt.check { jl_trt_event_record(h, start, stream, 0, $0, $1) }
   }
 
-  func end(_ trt: TensorRT, stream: OpaquePointer) throws(TrtError) {
+  func end(_ trt: TensorRT, stream: OpaquePointer?) throws(TrtError) {
     try trt.check { jl_trt_event_record(trt.handle, stop, stream, 0, $0, $1) }
     pending = true
   }

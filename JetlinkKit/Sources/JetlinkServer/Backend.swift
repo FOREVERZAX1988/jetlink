@@ -4,9 +4,6 @@ import JetlinkRegistry
 /// Progress of a build or a load: stage, fraction, message.
 public typealias ProgressFn = @Sendable (String, Double, String) -> Void
 
-/// Until TensorRT's backend stops naming it.
-public typealias ArtifactKind = JetlinkRegistry.ArtifactKind
-
 /// The artifact on disk is not one this backend can load: another runtime's
 /// compiled cache, an older preparation, a plan from another TensorRT build.
 /// Any backend's `load` throws it for what is wrong with the file itself, and

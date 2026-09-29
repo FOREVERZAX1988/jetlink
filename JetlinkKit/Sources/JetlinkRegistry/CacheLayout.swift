@@ -99,13 +99,6 @@ public struct LastLoaded: Sendable, Equatable {
   }
 }
 
-/// Whether a backend's artifact is a file or a directory: nothing in the
-/// cache asks any more. Until TensorRT's backend stops naming it.
-public enum ArtifactKind: Sendable {
-  case file
-  case directory
-}
-
 /// One backend's view of the cache: the Python `EngineCache` with its backend
 /// reduced to what the cache uses of it. The key is the model's identity plus
 /// the backend's tag, so two backends keep two artifacts per model and each

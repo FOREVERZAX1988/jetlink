@@ -1,7 +1,6 @@
 #if os(Linux)
   import Foundation
   import Glibc
-  import JetlinkServer
 
   /// Where this host's kernel files are: `/` on a real host, a captured or
   /// made-up tree in the tests. Every path the Linux host reads or writes
@@ -43,30 +42,74 @@
   }
 
   /// Small kernel files, read and written with one call each and no
-  /// Foundation in between: the sampler reads a handful ten times a second,
-  /// and a write's errno decides what the sleeper does next.
+  /// Foundation in between: the sampler reads a handful every second, and a
+  /// write's errno decides what the sleeper does next.
   public enum Sysfs {
-    /// The file's text with the newline trimmed, or nil on any error: a
-    /// Jetson's cv* thermal zones answer ENODATA.
+    /// The file's text without the whitespace around it, or nil on any
+    /// error: a Jetson's cv* thermal zones answer ENODATA.
     public static func read(_ path: String) -> String? {
+      bytes(path) { String(decoding: $0, as: UTF8.self) }
+    }
+
+    public static func readInt(_ path: String) -> Int? {
+      bytes(path) { text -> Int? in
+        var digits = text[...]
+        let negative = digits.first == UInt8(ascii: "-")
+        if negative { digits = digits.dropFirst() }
+        guard !digits.isEmpty else { return nil }
+        var value = 0
+        for byte in digits {
+          guard byte >= UInt8(ascii: "0") && byte <= UInt8(ascii: "9") else { return nil }
+          let (times, overflow) = value.multipliedReportingOverflow(by: 10)
+          let (sum, carry) = times.addingReportingOverflow(Int(byte - UInt8(ascii: "0")))
+          guard !overflow && !carry else { return nil }
+          value = sum
+        }
+        return negative ? -value : value
+      } ?? nil
+    }
+
+    /// The file's bytes, whitespace trimmed, handed to `body` from the stack.
+    /// sysfs and procfs make a small file whole at the first read, so a read
+    /// that comes back short is the end, with no second one to see EOF; only
+    /// a file that fills the buffer is read on to its end. (A seq file of
+    /// many records, /proc/cpuinfo, can stop short at a record: the page reads
+    /// only its first.)
+    private static func bytes<T>(_ path: String, _ body: (UnsafeBufferPointer<UInt8>) -> T) -> T? {
       let fd = open(path, O_RDONLY | O_CLOEXEC)
       guard fd >= 0 else { return nil }
       defer { close(fd) }
-      var bytes: [UInt8] = []
-      var chunk = [UInt8](repeating: 0, count: 4096)
-      while true {
-        let n = chunk.withUnsafeMutableBytes { Glibc.read(fd, $0.baseAddress, $0.count) }
-        if n < 0 && errno == EINTR { continue }
-        guard n >= 0 else { return nil }
-        if n == 0 { break }
-        bytes += chunk[..<n]
+      return withUnsafeTemporaryAllocation(of: UInt8.self, capacity: 256) { buffer -> T? in
+        guard let first = fill(fd, buffer) else { return nil }
+        if first < buffer.count {
+          return body(trimmed(UnsafeBufferPointer(rebasing: buffer[..<first])))
+        }
+        var whole = Array(buffer)
+        var chunk = [UInt8](repeating: 0, count: 4096)
+        while true {
+          guard let n = chunk.withUnsafeMutableBufferPointer({ fill(fd, $0) }) else { return nil }
+          whole += chunk[..<n]
+          if n < chunk.count { break }
+        }
+        return whole.withUnsafeBufferPointer { body(trimmed($0)) }
       }
-      return String(decoding: bytes, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// A decimal integer file, or nil.
-    public static func readInt(_ path: String) -> Int? {
-      read(path).flatMap { Int($0) }
+    /// One read into `buffer`, or nil on an error.
+    private static func fill(_ fd: Int32, _ buffer: UnsafeMutableBufferPointer<UInt8>) -> Int? {
+      while true {
+        let n = Glibc.read(fd, buffer.baseAddress, buffer.count)
+        if n >= 0 { return n }
+        if errno != EINTR { return nil }
+      }
+    }
+
+    private static func trimmed(_ bytes: UnsafeBufferPointer<UInt8>) -> UnsafeBufferPointer<UInt8> {
+      let space: (UInt8) -> Bool = { $0 == 0x20 || (0x09...0x0D).contains($0) }
+      guard let start = bytes.firstIndex(where: { !space($0) }), let end = bytes.lastIndex(where: { !space($0) }) else {
+        return UnsafeBufferPointer(rebasing: bytes[0..<0])
+      }
+      return UnsafeBufferPointer(rebasing: bytes[start...end])
     }
 
     /// Writes `text` to an existing file in one write, as the kernel wants a
@@ -99,26 +142,36 @@
       return ["/etc/nv_tegra_release", "/sys/devices/platform/bus@0/17000000.gpu"].contains { root.exists($0) }
     }
 
-    /// MemAvailable in bytes, or 0 for "no idea". Swap does not count: on a
-    /// Tegra the GPU's memory is pinned system RAM and cannot page out.
-    public static func memAvailableBytes(_ root: HostRoot = .system) -> Int {
-      guard let text = try? String(contentsOfFile: root.path("/proc/meminfo"), encoding: .utf8) else { return 0 }
-      for line in text.split(separator: "\n") where line.hasPrefix("MemAvailable:") {
+    /// /proc/meminfo's fields in bytes ("MemAvailable", "SwapFree", ...);
+    /// empty when it cannot be read.
+    public static func meminfo(_ root: HostRoot = .system) -> [String: Int] {
+      var bytes: [String: Int] = [:]
+      for line in (Sysfs.read(root.path("/proc/meminfo")) ?? "").split(separator: "\n") {
         let fields = line.split(separator: " ")
-        if fields.count >= 2, let kb = Int(fields[1]) { return kb * 1024 }
+        if fields.count >= 2, let kb = Int(fields[1]) { bytes[String(fields[0].dropLast())] = kb * 1024 }
       }
-      return 0
+      return bytes
     }
 
-    /// $JETLINK_CACHE, else the Jetson's data partition when it exists or
-    /// this is a Tegra, else ${XDG_CACHE_HOME:-~/.cache}/jetlink.
-    public static func defaultCache(environment: [String: String] = ProcessInfo.processInfo.environment, root: HostRoot = .system) -> URL {
-      if let named = environment["JETLINK_CACHE"], !named.isEmpty {
-        return URL(fileURLWithPath: named, isDirectory: true)
-      }
+    /// MemAvailable, or 0 for "no idea". Swap does not count: on a Tegra the
+    /// GPU's memory is pinned system RAM and cannot page out.
+    public static func memAvailableBytes(_ root: HostRoot = .system) -> Int {
+      meminfo(root)["MemAvailable"] ?? 0
+    }
+
+    /// The Jetson's data partition when it exists or this is a Tegra, else
+    /// /var/lib/jetlink for root, where the installed unit keeps it, else
+    /// ${XDG_CACHE_HOME:-~/.cache}/jetlink. $JETLINK_CACHE comes first
+    /// (jetlink-server's --cache).
+    public static func defaultCache(
+      environment: [String: String] = ProcessInfo.processInfo.environment, root: HostRoot = .system, asRoot: Bool = geteuid() == 0
+    ) -> URL {
       var isDirectory: ObjCBool = false
       if FileManager.default.fileExists(atPath: root.path(jetsonCache), isDirectory: &isDirectory) && isDirectory.boolValue || isTegra(root) {
         return URL(fileURLWithPath: jetsonCache, isDirectory: true)
+      }
+      if asRoot {
+        return URL(fileURLWithPath: "/var/lib/jetlink", isDirectory: true)
       }
       let base =
         environment["XDG_CACHE_HOME"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true) }
@@ -130,22 +183,5 @@
     public static func canSuspend(_ root: HostRoot = .system) -> Bool {
       root.exists("/sys/power/state")
     }
-
-    /// `name` found on `path` (a PATH value) as an executable, or nil.
-    static func which(_ name: String, path: String?) -> String? {
-      for directory in (path ?? "/usr/sbin:/usr/bin:/sbin:/bin").split(separator: ":") where !directory.isEmpty {
-        let candidate = "\(directory)/\(name)"
-        if access(candidate, X_OK) == 0 { return candidate }
-      }
-      return nil
-    }
-  }
-
-  /// Where the Linux host's own lines go: the server's log, or a test's list.
-  typealias LinuxLog = @Sendable (Log.Level, String) -> Void
-
-  func serverLog(_ category: String) -> LinuxLog {
-    let log = ServerLog(category: category)
-    return { level, message in log.write(level, message) }
   }
 #endif

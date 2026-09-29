@@ -2,22 +2,12 @@ import CTrt
 import Foundation
 import JetlinkServer
 
-/// Why TensorRT cannot run here: no driver, no TensorRT of the shim's major,
-/// no such device, or the fake shim.
-public struct TensorRTUnavailable: Error, CustomStringConvertible {
-  public let description: String
-
-  public init(_ description: String) {
-    self.description = description
-  }
-}
-
 /// A shim call that failed: TensorRT's reason, or CUDA's error name and
 /// description. A sticky CUDA error breaks the context for the life of the
 /// process, so it is fatal (D15): the session answers the frame, then the
 /// daemon exits for systemd to start it again.
 public struct TrtError: FatalEngineError, CustomStringConvertible, Equatable {
-  /// JL_TRT_ERROR, JL_TRT_CUDA_ERROR or JL_TRT_CUDA_STICKY.
+  /// A JL_TRT_ code: JL_TRT_UNAVAILABLE when TensorRT cannot run here at all.
   public let code: Int32
   public let description: String
 
@@ -47,43 +37,46 @@ private func forwardLog(_ ctx: UnsafeMutableRawPointer?, _ severity: Int32, _ me
 /// handles must go before it does.
 public final class TensorRT: @unchecked Sendable {
   let handle: OpaquePointer
+  /// The CUDA device index.
+  public let device: Int
   public let major: Int
   public let minor: Int
   public let patch: Int
   public let build: Int
   public let deviceName: String
   public let computeCapability: (major: Int, minor: Int)
-  /// TensorRT 11: every network strongly typed, no FP16 flag.
   public let stronglyTyped: Bool
   public let plugins: Bool
   /// cuDriverGetVersion: 12060 for CUDA 12.6.
   public let cudaDriver: Int
 
-  /// Opens `device`, and checks it answers. Throws `TensorRTUnavailable`
-  /// on a machine without a driver, a TensorRT of the shim's major, or the
+  /// Opens `device`, and checks it answers. Throws JL_TRT_UNAVAILABLE on a
+  /// machine without a driver, a TensorRT of the shim's major, or the
   /// device, and always on the fake shim: a build without TensorRT's
   /// headers never runs a model.
-  public convenience init(device: Int = 0) throws {
-    guard let index = Int32(exactly: device), index >= 0 else { throw TensorRTUnavailable("no CUDA device \(device)") }
+  public convenience init(device: Int = 0) throws(TrtError) {
+    let unavailable = Int32(JL_TRT_UNAVAILABLE)
+    guard let index = Int32(exactly: device), index >= 0 else { throw TrtError(code: unavailable, "no CUDA device \(device)") }
     var handle: OpaquePointer?
     var err = [CChar](repeating: 0, count: 512)
     guard jl_trt_open(index, &handle, &err, err.count) == JL_TRT_OK, let handle else {
-      throw TensorRTUnavailable(string(err))
+      throw TrtError(code: unavailable, string(err))
     }
-    self.init(handle: handle)
+    self.init(handle: handle, device: device)
     do {
       var free = 0
       var total = 0
       try check { jl_trt_mem_info(handle, &free, &total, $0, $1) }
     } catch {
-      throw TensorRTUnavailable("the GPU is not usable: \(error)")
+      throw TrtError(code: unavailable, "the GPU is not usable: \(error)")
     }
   }
 
   /// Takes over an open handle, jl_trt_open's (or jl_trt_fake_open's in the
   /// tests), and closes it when the last engine and backend let go.
-  package init(handle: OpaquePointer) {
+  package init(handle: OpaquePointer, device: Int = 0) {
     self.handle = handle
+    self.device = device
     var info = jl_trt_info()
     jl_trt_get_info(handle, &info)
     major = Int(info.major)

@@ -3,7 +3,7 @@
 # TensorRT shim and its selftest. One entry point for CI (plain ubuntu-22.04
 # and ubuntu-22.04-arm runners), local Docker or podman, and a device.
 #
-#   scripts/build-linux.sh [--release] [--container] <linux-aarch64|linux-x86_64> [step...]
+#   scripts/build-linux.sh [--container] <linux-aarch64|linux-x86_64> [step...]
 #
 # Steps, run in the order given (default: server):
 #   headers    fetch and unpack the flavor's pinned TensorRT + CUDA headers
@@ -18,8 +18,8 @@
 # linux-aarch64 is TensorRT 10 for the Jetson, compiled against 10.3 (JetPack
 # 6.2's, the oldest it runs on); linux-x86_64 is TensorRT 11.3 for PCs.
 #
-# The version is jetlink/__init__.py's __version__ for a release (--release,
-# or HEAD tagged v<__version__>), else <__version__>-dev.<short sha>.
+# The version is jetlink/__init__.py's __version__ when HEAD is tagged
+# v<__version__>, else <__version__>-dev.<short sha>; $JETLINK_VERSION wins.
 #
 # A step runs where its tools are: `server` in $JETLINK_SWIFT_IMAGE
 # (swift:6.3.3-jammy, CI's) unless already inside it, the C and C++ steps in
@@ -33,8 +33,11 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 CACHE=${JETLINK_BUILD_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/jetlink-build}
 CTRT=$ROOT/JetlinkKit/Sources/CTrt
 SWIFT_IMAGE=${JETLINK_SWIFT_IMAGE:-swift:6.3.3-jammy}
-SWIFT_VERSION=6.3.3
-C_IMAGE=ubuntu:22.04
+# 6.3.3 from swift:6.3.3-jammy
+SWIFT_VERSION=${SWIFT_IMAGE#*:}
+SWIFT_VERSION=${SWIFT_VERSION%%-*}
+C_BASE=ubuntu:22.04
+C_IMAGE=jetlink-build-c:22.04
 
 die() {
   echo "build-linux: $*" >&2
@@ -53,7 +56,9 @@ usage() {
 
 JETSON=https://repo.download.nvidia.com/jetson/common/pool/main
 CUDA_X86=https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64
-ORT_RELEASES=https://github.com/microsoft/onnxruntime/releases/download/v1.29.0
+# the release fixture-pins.txt names, as everything else does
+ORT_VERSION=$(sed -n 's/^onnxruntime==//p' "$ROOT/JetlinkKit/Scripts/fixture-pins.txt")
+ORT_RELEASES=https://github.com/microsoft/onnxruntime/releases/download/v$ORT_VERSION
 
 # Sets BUNDLE (its cache directory's name) and DEBS ("url sha256" each), and
 # ORT: onnxruntime's official tarball ("url sha256"), whose C headers COrt
@@ -61,7 +66,7 @@ ORT_RELEASES=https://github.com/microsoft/onnxruntime/releases/download/v1.29.0
 pins() {
   case $FLAVOR in
   aarch64)
-    ORT="$ORT_RELEASES/onnxruntime-linux-aarch64-1.29.0.tgz e1799098ebc054b370f6176a450f158720f297818c613e5dc99b92e2ec82346f"
+    ORT="$ORT_RELEASES/onnxruntime-linux-aarch64-$ORT_VERSION.tgz e1799098ebc054b370f6176a450f158720f297818c613e5dc99b92e2ec82346f"
     BUNDLE=trt10.3.0.30-cuda12.6-aarch64
     DEBS=(
       "$JETSON/t/tensorrt/libnvinfer-headers-dev_10.3.0.30-1+cuda12.5_arm64.deb 40a4fa566218f71176144a0eafa5aef8cf0af7ee9211b20487f1970d5344bbb8"
@@ -71,7 +76,7 @@ pins() {
     )
     ;;
   x86_64)
-    ORT="$ORT_RELEASES/onnxruntime-linux-x64-1.29.0.tgz c3fddc4f139a045b0c4902c57410f0694f1c2fdf9b6939fbe38b1aeae7cd14ba"
+    ORT="$ORT_RELEASES/onnxruntime-linux-x64-$ORT_VERSION.tgz c3fddc4f139a045b0c4902c57410f0694f1c2fdf9b6939fbe38b1aeae7cd14ba"
     # 11.x keeps NvOnnxParser.h in libnvonnxparsers-dev, not the headers package
     BUNDLE=trt11.3.0.99-cuda13.4-x86_64
     DEBS=(
@@ -92,14 +97,19 @@ sha256() {
   fi
 }
 
-fetch() {
-  if command -v curl >/dev/null; then
-    curl -fsSL --retry 3 -o "$2" "$1"
-  elif command -v wget >/dev/null; then
-    wget -q -O "$2" "$1"
-  else
-    python3 -c 'import sys, urllib.request; urllib.request.urlretrieve(sys.argv[1], sys.argv[2])' "$1" "$2"
+# $1, a URL, into $CACHE/debs unless it is there already, held to its pinned
+# sha256 $2. Prints where it is.
+fetch_pinned() {
+  local file
+  file=$CACHE/debs/$(basename "$1")
+  mkdir -p "$CACHE/debs"
+  if [[ ! -f $file || $(sha256 "$file") != "$2" ]]; then
+    echo "headers: fetching $(basename "$1")" >&2
+    curl -fsSL --retry 3 -o "$file.part" "$1"
+    mv "$file.part" "$file"
   fi
+  [[ $(sha256 "$file") == "$2" ]] || die "$(basename "$1") does not match its pinned sha256"
+  echo "$file"
 }
 
 # A deb's files into $2: dpkg-deb where there is one, else bsdtar (macOS),
@@ -119,17 +129,10 @@ ort_dir() {
 # onnxruntime's headers under include/onnxruntime/, where COrt looks for them,
 # and its library under lib/, which the tests open.
 ort_headers() {
-  local url=${ORT% *} want=${ORT#* } file dir
+  local url=${ORT% *} file dir
   dir=$(ort_dir)
   [[ -f $dir/.complete && $(cat "$dir/.complete") == "$ORT lib" ]] && return
-  file=$CACHE/debs/$(basename "$url")
-  mkdir -p "$CACHE/debs"
-  if [[ ! -f $file || $(sha256 "$file") != "$want" ]]; then
-    echo "headers: fetching $(basename "$url")" >&2
-    fetch "$url" "$file.part"
-    mv "$file.part" "$file"
-  fi
-  [[ $(sha256 "$file") == "$want" ]] || die "$(basename "$url") does not match its pinned sha256"
+  file=$(fetch_pinned "$url" "${ORT#* }")
   rm -rf "$dir"
   mkdir -p "$dir/include/onnxruntime"
   tar -xzf "$file" -C "$dir/include/onnxruntime" --strip-components 2 "$(basename "$url" .tgz)/include"
@@ -143,26 +146,17 @@ step_ort() {
 }
 
 step_headers() {
-  local dir=$CACHE/$BUNDLE stamp entry url want file
+  local dir=$CACHE/$BUNDLE stamp entry file
   ort_headers
   stamp=$(printf '%s\n' "${DEBS[@]}")
   if [[ -f $dir/.complete && $(cat "$dir/.complete") == "$stamp" ]]; then
     echo "headers: $dir/include"
     return
   fi
-  mkdir -p "$CACHE/debs"
   rm -rf "$dir" "$dir.tmp"
   mkdir -p "$dir.tmp" "$dir/include"
   for entry in "${DEBS[@]}"; do
-    url=${entry% *}
-    want=${entry#* }
-    file=$CACHE/debs/$(basename "$url")
-    if [[ ! -f $file || $(sha256 "$file") != "$want" ]]; then
-      echo "headers: fetching $(basename "$url")"
-      fetch "$url" "$file.part"
-      mv "$file.part" "$file"
-    fi
-    [[ $(sha256 "$file") == "$want" ]] || die "$(basename "$url") does not match its pinned sha256"
+    file=$(fetch_pinned "${entry% *}" "${entry#* }")
     unpack_deb "$file" "$dir.tmp"
   done
   # one flat include dir: TensorRT's from usr/include/<triplet>, CUDA's from
@@ -231,12 +225,12 @@ version() {
   base=$(sed -n "s/^__version__ = '\(.*\)'$/\1/p" "$ROOT/jetlink/__init__.py")
   [[ -n $base ]] || die "no __version__ in jetlink/__init__.py"
   tag=$(git -C "$ROOT" -c safe.directory='*' describe --exact-match --tags HEAD 2>/dev/null || true)
-  if [[ $RELEASE == 1 || $tag == "v$base" ]]; then
+  if [[ $tag == "v$base" ]]; then
     echo "$base"
     return
   fi
   sha=$(git -C "$ROOT" -c safe.directory='*' rev-parse --short HEAD 2>/dev/null) ||
-    die "no git here to name a dev build: pass --release or set JETLINK_VERSION"
+    die "no git here to name the build: set JETLINK_VERSION"
   echo "$base-dev.$sha"
 }
 
@@ -250,20 +244,18 @@ step_server() {
   # its own scratch path, so a Mac's JetlinkKit/.build is never touched
   JETLINK_TENSORRT=$CACHE/$BUNDLE/include swift build --package-path "$ROOT/JetlinkKit" --scratch-path "$scratch" \
     -c release --static-swift-stdlib --product jetlink-server -Xcc -I"$ort/include"
-  bin=$(swift build --package-path "$ROOT/JetlinkKit" --scratch-path "$scratch" -c release --show-bin-path)
+  # SwiftPM keeps release/ as a link to the configuration's bin directory
+  bin=$scratch/release
   stage=$ROOT/dist/$name
   rm -rf "$stage"
-  mkdir -p "$stage/bin" "$stage/share/jetlink/systemd" "$stage/share/jetlink/udev" "$stage/share/jetlink/web"
+  mkdir -p "$stage/bin" "$stage/share/jetlink/systemd" "$stage/share/jetlink/udev"
   # stripped: the symbol table is a third of the binary
   strip -o "$stage/bin/jetlink-server" "$bin/jetlink-server"
   # SwiftPM looks for a target's resources in a bundle beside the executable
-  find "$bin" -maxdepth 1 -name '*.resources' -exec cp -R {} "$stage/bin/" \;
+  cp -R "$bin"/*.resources "$stage/bin/"
   # the installer's own unit and rules, as they are in this tree
   cp "$ROOT/scripts/jetlink-server.service" "$stage/share/jetlink/systemd/"
   cp "$ROOT"/scripts/99-jetlink-*.rules "$stage/share/jetlink/udev/"
-  if [[ -d $ROOT/JetlinkKit/Sources/JetlinkStatusPage/Resources ]]; then
-    cp -R "$ROOT/JetlinkKit/Sources/JetlinkStatusPage/Resources/." "$stage/share/jetlink/web/"
-  fi
   cp "$ROOT/LICENSE" "$stage/"
   echo "$version" >"$stage/VERSION"
   # no onnxruntime: a TensorRT host needs none
@@ -299,12 +291,17 @@ image_for() {
 }
 
 container() {
-  local image=$1 engine platform=linux/arm64 prepare=true swift=()
+  local image=$1 engine platform=linux/arm64 swift=()
   shift
   engine=$(command -v docker || command -v podman) || die "$* needs docker or podman, or a matching host"
   [[ $FLAVOR == x86_64 ]] && platform=linux/amd64
   if [[ $image == "$C_IMAGE" ]]; then
-    prepare="apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends g++ binutils >/dev/null"
+    # the compilers installed once, not at every run
+    image=$C_IMAGE-$FLAVOR
+    if ! "$engine" image inspect "$image" >/dev/null 2>&1; then
+      printf 'FROM %s\nRUN apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends g++ binutils >/dev/null && rm -rf /var/lib/apt/lists/*\n' \
+        "$C_BASE" | "$engine" build -q --platform "$platform" -t "$image" - >/dev/null
+    fi
   else
     # Swift needs no packages, so it runs as the caller and leaves files the
     # caller owns; the version comes from here, where git is
@@ -314,19 +311,14 @@ container() {
   # ${a[@]+...}: bash 3.2, the Mac's, calls an empty array unbound
   "$engine" run --rm --platform "$platform" ${swift[@]+"${swift[@]}"} -v "$ROOT:/src" -v "$CACHE:/cache" \
     -e JETLINK_BUILD_CACHE=/cache -e JETLINK_IN_CONTAINER=1 -e JETLINK_SANITIZE="${JETLINK_SANITIZE:-1}" -w /src "$image" \
-    bash -c "$prepare && scripts/build-linux.sh linux-$FLAVOR $*"
+    scripts/build-linux.sh "linux-$FLAVOR" "$@"
 }
 
-RELEASE=0
 FORCE_CONTAINER=0
-while [[ ${1:-} == --* ]]; do
-  case $1 in
-  --release) RELEASE=1 ;;
-  --container) FORCE_CONTAINER=1 ;;
-  *) usage ;;
-  esac
+if [[ ${1:-} == --container ]]; then
+  FORCE_CONTAINER=1
   shift
-done
+fi
 case ${1:-} in
 linux-aarch64 | aarch64) FLAVOR=aarch64 ;;
 linux-x86_64 | x86_64) FLAVOR=x86_64 ;;

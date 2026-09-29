@@ -9,15 +9,16 @@
   import JetlinkStatusPage
   #if os(Linux)
     import JetlinkLinux
+    import JetlinkTRT
   #endif
 
-  enum LogLevel: String, CaseIterable, ExpressibleByArgument {
-    case debug, info, warning, error
-  }
+  extension Log.Level: ExpressibleByArgument {}
 
   /// --cache, which every command that touches the cache takes.
   struct CacheArguments: ParsableArguments {
-    @Option(help: "Where models and built engines live. Default: $JETLINK_CACHE, else /mnt/data/jetlink on a Jetson, else the user's cache directory.")
+    @Option(
+      help: "Where models and built engines live. Default: $JETLINK_CACHE, else /mnt/data/jetlink on a Jetson, else /var/lib/jetlink as root, else the user's cache directory."
+    )
     var cache: String?
 
     var root: URL { cache.map { URL(fileURLWithPath: $0, isDirectory: true) } ?? defaultCache() }
@@ -44,6 +45,8 @@
     var sleepAfter = 0.0
     @Option(help: "Serve the read-only status page on this port; 0 is off.")
     var statusPort = 0
+    @Flag(help: "Power this machine off when the comma asks (Linux). Without it the comma is told ok and the machine stays up.")
+    var poweroff = false
     @Flag(name: .customLong("no-preload"), help: "Do not load the engine loaded last before a comma asks.")
     var noPreload = false
     @Flag(name: .customLong("no-keepalive"), help: "Do not keep the GPU clocked up between frames (a Mac's onnxruntime).")
@@ -51,7 +54,7 @@
     @Flag(name: .customLong("no-cpu-keepwarm"), help: "Do not keep a CPU core busy between Neural Engine frames (a Mac's onnxruntime).")
     var noCPUKeepWarm = false
     @Option(help: "debug, info, warning or error.")
-    var logLevel = LogLevel.info
+    var logLevel = Log.Level.info
 
     func validate() throws {
       if let dial, DialTarget(dial) == nil {
@@ -72,18 +75,14 @@
 
       var hooks = ServerHooks()
       var gadget: (any GadgetSource)?
-      let closeGadget: (@Sendable () -> Void)?
       #if os(macOS)
         gadget = USBGadget()
-        closeGadget = nil
       #elseif os(Linux)
         // The gadget through sysfs, and telemetry, the sleeper and poweroff
-        // as hooks; NVML reads the GPU TensorRT runs on. The gadget hears the
-        // sessions, and puts the link's power management back when it closes.
-        let sysfs = LinuxHost.gadget()
-        hooks = LinuxHost.hooks(cache: root, sleepAfter: sleepAfter, gpu: Int(chosen.options().device ?? "") ?? 0, gadget: sysfs)
-        gadget = sysfs
-        closeGadget = { sysfs.close() }
+        // as hooks; NVML reads the GPU TensorRT runs on.
+        gadget = SysfsGadget()
+        let telemetry = LinuxHost.telemetry(gpu: (backend as? TrtBackend)?.trt.device ?? 0)
+        hooks = LinuxHost.hooks(sleepAfter: sleepAfter, poweroff: poweroff, telemetry: telemetry)
       #endif
       hooks.fatal = exitOnFatal
 
@@ -97,20 +96,29 @@
           backend: backend, gadget: gadget, hooks: hooks)
         // Made before the server starts, so it hears the first link event:
         // a comma on the bus at boot connects at once.
-        controller = statusPort > 0 ? ServerController(server: server, registry: Registry(layout: server.cache.layout), streaming: false) : nil
+        controller = statusPort > 0 ? ServerController(server: server, registry: Registry(layout: server.cache.layout)) : nil
         log.info("backend \(backend.name) \(backend.runtimeVersion) on \(backend.deviceTag()), cache \(root.path)")
         try server.start()
       } catch {
         log.error("cannot serve: \(error)")
         throw ExitCode.failure
       }
-      let page = controller.flatMap { startPage($0, log: log) }
+      var hardware: (any PageHardwareSource)?
+      #if os(Linux)
+        hardware = PageHardware(cache: root, gpu: telemetry)
+      #endif
+      let page = controller.flatMap { startPage($0, hardware: hardware, log: log) }
       stopOnSignals { signal in
         log.info("stopping on \(signal)")
-        var steps: [(name: String, stop: () -> Void)] = [("the server", server.shutdown)]
-        if let closeGadget { steps.append(("the comma's link", closeGadget)) }
-        if let page { steps.append(("the status page", page.stop)) }
-        shutDown(steps, log: log)
+        // The comma's server, its engine and gadget first, so a frame in
+        // flight is answered or cut before anything else goes, then the
+        // status page, which shows the server stopping until the end.
+        server.shutdown()
+        log.info("stopped the server")
+        if let page {
+          page.stop()
+          log.info("stopped the status page")
+        }
       }
     }
 
@@ -118,11 +126,7 @@
     /// observes `controller` and sends it no command, so a page never starts
     /// a catalog fetch, a download or a build. Without its page it stays
     /// off: the comma matters more than a page.
-    private func startPage(_ controller: ServerController, log: ServerLog) -> PageServer? {
-      var hardware: (any PageHardwareSource)?
-      #if os(Linux)
-        hardware = PageHardware(cache: controller.server.configuration.cacheRoot, gpu: Int(chosen.options().device ?? "") ?? 0)
-      #endif
+    private func startPage(_ controller: ServerController, hardware: (any PageHardwareSource)?, log: ServerLog) -> PageServer? {
       do {
         let page = try PageServer.start(port: statusPort, controller: controller, version: productVersion(), hardware: hardware)
         log.info("status page on port \(page.port)")
@@ -134,37 +138,14 @@
     }
   }
 
-  /// Takes down what serves, in the order given, and says so: the comma's
-  /// server and its engine first, so a frame in flight is answered or cut
-  /// before anything else goes, then the status page, which shows the
-  /// server stopping until the end.
-  func shutDown(_ steps: [(name: String, stop: () -> Void)], log: ServerLog) {
-    for step in steps {
-      step.stop()
-      log.info("stopped \(step.name)")
-    }
-  }
-
   /// Log lines on standard error, from `threshold` up: journald adds the time
   /// under systemd. Linux's loggers write there already; a Mac's go to the
   /// unified log, so they are copied out.
-  func setUpLogging(_ threshold: LogLevel) {
-    #if os(Linux)
-      Logger.threshold =
-        switch threshold {
-        case .debug: .debug
-        case .info: .info
-        case .warning: .warning
-        case .error: .error
-        }
-    #else
-      let rank: [Log.Level: Int] = [.info: 1, .warning: 2, .error: 3]
-      let least = [LogLevel.debug: 0, .info: 1, .warning: 2, .error: 3][threshold]!
+  func setUpLogging(_ threshold: Log.Level) {
+    Log.threshold = threshold
+    #if os(macOS)
       Log.sink = { level, category, message in
-        guard rank[level]! >= least else { return }
         FileHandle.standardError.write(Data((EmbeddedServer.logLine(level, category, message) + "\n").utf8))
-        // The status page's /logs; Linux's loggers keep their own lines there.
-        LogRing.shared.append("\(level.rawValue.uppercased()) jetlink.\(category): \(message)")
       }
     #endif
   }
@@ -212,16 +193,15 @@
     withExtendedLifetime(sources) { dispatchMain() }
   }
 
-  /// $JETLINK_CACHE, else on Linux the Jetson's data partition or the XDG
-  /// cache (JetlinkLinux's Platform), else a Mac's user cache directory, as
-  /// the Python server chose.
+  /// $JETLINK_CACHE, else Linux's rule (JetlinkLinux's Platform), else a
+  /// Mac's user cache directory.
   func defaultCache(environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
+    if let named = environment["JETLINK_CACHE"], !named.isEmpty {
+      return URL(fileURLWithPath: named, isDirectory: true)
+    }
     #if os(Linux)
-      Platform.defaultCache(environment: environment)
+      return Platform.defaultCache(environment: environment)
     #else
-      if let named = environment["JETLINK_CACHE"], !named.isEmpty {
-        return URL(fileURLWithPath: named, isDirectory: true)
-      }
       return FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Caches/jetlink", directoryHint: .isDirectory)
     #endif
   }

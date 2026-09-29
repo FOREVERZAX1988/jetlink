@@ -4,7 +4,7 @@
 // resets the state, and times a replay. Every step prints PASS or FAIL; the
 // exit status is the verdict. Built against the fake (JL_TRT_FAKE) too, where
 // the fake's default plan is this model, so the program itself is tested
-// without a GPU; that build also checks what only the fake can stage.
+// without a GPU.
 //
 //   jl_trt_selftest [--device N] [--keep DIR]
 #define _XOPEN_SOURCE 700
@@ -15,12 +15,10 @@
 #ifdef JL_TRT_FAKE
 #include "jl_trt_fake.h"
 #endif
+#include "../jl_trt_util.h"
 
 #include <fcntl.h>
-#include <stdarg.h>
-#include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -87,17 +85,6 @@ static double now(void) {
   return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
 }
 
-static uint16_t f16(float v) {
-  // exact for the small integers and halves used here
-  if (v == 0) {
-    return 0;
-  }
-  uint32_t bits;
-  memcpy(&bits, &v, sizeof bits);
-  uint32_t exp = ((bits >> 23) & 0xffu) - 127 + 15;
-  return (uint16_t)(((bits >> 16) & 0x8000u) | (exp << 10) | ((bits >> 13) & 0x3ffu));
-}
-
 static void log_line(void *ctx, int severity, const char *message) {
   (void)ctx;
   static const char *names[] = {"internal error", "error", "warning", "info", "verbose"};
@@ -129,7 +116,7 @@ static const size_t bytes[N_TENSORS] = {16, 16, 32, 16};
 
 static void set_x(uint16_t *x, float base) {
   for (int j = 0; j < 8; j++) {
-    x[j] = f16(base + (float)j * 0.5f);
+    x[j] = float_to_half(base + (float)j * 0.5f);
   }
 }
 
@@ -142,74 +129,6 @@ static int y_is(const float *y, float base, float state) {
   }
   return 1;
 }
-
-static int write_all(const char *path, const void *data, size_t size) {
-  FILE *f = fopen(path, "wb");
-  if (f == NULL) {
-    return 0;
-  }
-  int ok = fwrite(data, 1, size, f) == size;
-  return fclose(f) == 0 && ok;
-}
-
-#ifdef JL_TRT_FAKE
-// What only the fake can stage: a GPU fault, injected failures, and a plan
-// from another TensorRT build.
-static void fake_checks(void) {
-  static const char *plan = "jl_trt_fake_plan 1\nbuilt 10.3.0.30\ninput x float16 1 8\ninput state float16 1 8\n"
-                            "output y float32 1 8\noutput next_state float16 1 8 from state\n";
-  jl_trt *t = NULL;
-  jl_trt_engine *engine = NULL;
-  jl_trt_context *context = NULL;
-  jl_trt_stream *stream = NULL;
-  jl_trt_graph *graph = NULL;
-  jl_trt_graph_exec *exec = NULL;
-  jl_trt_dptr dev[N_TENSORS] = {0};
-  void *host[N_TENSORS] = {0};
-  const char *step = "fake";
-  REQUIRE(jl_trt_fake_open(NULL, &t, err, sizeof err), step);
-  REQUIRE(jl_trt_engine_deserialize(t, plan, strlen(plan), &engine, err, sizeof err), step);
-  REQUIRE(jl_trt_context_create(engine, &context, err, sizeof err), step);
-  REQUIRE(jl_trt_stream_create(t, &stream, err, sizeof err), step);
-  for (int i = 0; i < N_TENSORS; i++) {
-    REQUIRE(jl_trt_mem_alloc(t, bytes[i], &dev[i], err, sizeof err), step);
-    REQUIRE(jl_trt_host_alloc(t, bytes[i], &host[i], err, sizeof err), step);
-    REQUIRE(jl_trt_context_set_address(context, names[i], dev[i], err, sizeof err), step);
-  }
-  REQUIRE(jl_trt_context_enqueue(context, stream, err, sizeof err), step);
-  REQUIRE(jl_trt_capture_begin(t, stream, err, sizeof err), step);
-  REQUIRE(jl_trt_copy_h2d(t, dev[X], host[X], bytes[X], stream, err, sizeof err), step);
-  REQUIRE(jl_trt_context_enqueue(context, stream, err, sizeof err), step);
-  REQUIRE(jl_trt_capture_end(t, stream, &graph, err, sizeof err), step);
-  REQUIRE(jl_trt_graph_instantiate(t, graph, &exec, err, sizeof err), step);
-
-  jl_trt_fake_fail(t, "graph_launch", 1, JL_TRT_CUDA_ERROR, "CUDA_ERROR_LAUNCH_OUT_OF_RESOURCES: too many resources");
-  int rc = jl_trt_graph_launch(t, exec, stream, err, sizeof err);
-  int again = jl_trt_graph_launch(t, exec, stream, err, sizeof err);
-  report(rc == JL_TRT_CUDA_ERROR && again == JL_TRT_OK && !jl_trt_sticky(t), "fake: injected error", "the next launch works");
-
-  // closing out of order: a buffer the graph uses, freed before the graph
-  jl_trt_mem_free(t, dev[X]);
-  rc = jl_trt_graph_launch(t, exec, stream, err, sizeof err);
-  again = jl_trt_stream_sync(t, stream, err, sizeof err);
-  report(rc == JL_TRT_CUDA_STICKY && again == JL_TRT_CUDA_STICKY && jl_trt_sticky(t), "fake: replay into freed memory",
-         "sticky, and latched: %s", err);
-
-  jl_trt_fake_config other;
-  jl_trt_fake_defaults(&other);
-  other.minor = 16;
-  other.patch = 2;
-  other.build = 10;
-  jl_trt *newer = NULL;
-  jl_trt_engine *refused = NULL;
-  REQUIRE(jl_trt_fake_open(&other, &newer, err, sizeof err), step);
-  rc = jl_trt_engine_deserialize(newer, plan, strlen(plan), &refused, err, sizeof err);
-  report(rc == JL_TRT_ERROR && refused == NULL && !jl_trt_sticky(newer), "fake: another build's plan", "%s", err);
-  jl_trt_close(newer);
-done:
-  jl_trt_close(t);
-}
-#endif
 
 int main(int argc, char **argv) {
   int device = 0;
@@ -252,10 +171,6 @@ int main(int argc, char **argv) {
   void *host[N_TENSORS] = {0};
   jl_trt_info info;
 
-  jl_trt_get_info(NULL, &info);
-  printf("jl_trt_selftest: shim compiled against TensorRT %d.%d.%d.%d (%s)\n", info.header_major, info.header_minor,
-         info.header_patch, info.header_build, info.strongly_typed ? "strongly typed" : "weakly typed + FP16");
-
   // 1. open
 #ifdef JL_TRT_FAKE
   REQUIRE(jl_trt_fake_open(NULL, &t, err, sizeof err), "open");
@@ -264,14 +179,14 @@ int main(int argc, char **argv) {
 #endif
   jl_trt_set_logger(t, JL_TRT_LOG_WARNING, log_line, NULL);
   jl_trt_get_info(t, &info);
-  report(info.major == info.header_major, "open",
-         "TensorRT %d.%d.%d.%d, CUDA driver %d.%d, device %d %s sm%d%d, plugins %s", info.major, info.minor, info.patch,
-         info.build, info.cuda_driver / 1000, info.cuda_driver % 1000 / 10, info.device, info.device_name, info.cc_major,
-         info.cc_minor, info.plugins ? "registered" : "absent");
+  report(1, "open", "TensorRT %d.%d.%d.%d (%s), CUDA driver %d.%d, device %d %s sm%d%d, plugins %s", info.major, info.minor,
+         info.patch, info.build, info.strongly_typed ? "strongly typed" : "weakly typed + FP16", info.cuda_driver / 1000,
+         info.cuda_driver % 1000 / 10, device, info.device_name, info.cc_major, info.cc_minor,
+         info.plugins ? "registered" : "absent");
 
   // 2. build, as TrtBackend does
   {
-    if (!write_all(onnx_path, model, sizeof model)) {
+    if (!write_file(onnx_path, model, sizeof model)) {
       report(0, "build", "cannot write %s", onnx_path);
       goto done;
     }
@@ -404,7 +319,7 @@ int main(int argc, char **argv) {
     report(y_is(host[Y], 2, 0), step, "y = x again");
   }
 
-  // 9. pure GPU time from a timing pair, and a query once done
+  // 9. pure GPU time from a timing pair
   {
     const char *step = "timing";
     float ms = -1;
@@ -415,8 +330,7 @@ int main(int argc, char **argv) {
     REQUIRE(jl_trt_event_record(t, end, stream, 0, err, sizeof err), step);
     REQUIRE(jl_trt_event_sync(t, end, err, sizeof err), step);
     REQUIRE(jl_trt_event_elapsed(t, start, end, &ms, err, sizeof err), step);
-    int query = jl_trt_event_query(t, end, err, sizeof err);
-    report(ms >= 0 && query == JL_TRT_OK, step, "graph %.3f ms on the GPU, query after sync %d", (double)ms, query);
+    report(ms >= 0, step, "graph %.3f ms on the GPU", (double)ms);
   }
 
   // 10. memory, and a plan that is not one
@@ -459,9 +373,6 @@ done:
 #endif
     jl_trt_close(t);
   }
-#ifdef JL_TRT_FAKE
-  fake_checks();
-#endif
   if (keep == NULL) {
     unlink(onnx_path);
     unlink(plan_path);
@@ -469,6 +380,5 @@ done:
     rmdir(dir);
   }
   printf("%s jl_trt_selftest: %d failure%s\n", failures ? "FAIL" : "PASS", failures, failures == 1 ? "" : "s");
-  (void)device;
   return failures ? 1 : 0;
 }

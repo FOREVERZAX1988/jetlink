@@ -1,6 +1,7 @@
 #if os(Linux)
   import Foundation
   import Glibc
+  import JetlinkLog
   import JetlinkServer
   import JetlinkTestSupport
 
@@ -69,23 +70,26 @@
     }
   }
 
-  /// Log lines, kept.
-  final class Lines: @unchecked Sendable {
-    private let lock = NSLock()
-    private var kept: [(Log.Level, String)] = []
+  /// A logger of the test's own, and what it wrote, read back from the ring
+  /// every server line goes to.
+  final class Lines: Sendable {
+    let log = ServerLog(category: "test-\(UUID().uuidString.prefix(8))")
 
-    var log: LinuxLog {
-      { level, message in self.lock.withLock { self.kept.append((level, message)) } }
+    /// (LEVEL, message), oldest first.
+    var all: [(level: String, message: String)] {
+      let tag = " jetlink.\(log.category): "
+      return LogRing.shared.lines().compactMap { line in
+        guard let at = line.range(of: tag) else { return nil }
+        return (line[..<at.lowerBound].split(separator: " ").last.map(String.init) ?? "", String(line[at.upperBound...]))
+      }
     }
 
-    var all: [String] { lock.withLock { kept.map(\.1) } }
-
     func count(_ fragment: String) -> Int {
-      all.filter { $0.contains(fragment) }.count
+      all.filter { $0.message.contains(fragment) }.count
     }
 
     func has(_ level: Log.Level, _ fragment: String) -> Bool {
-      lock.withLock { kept.contains { $0.0 == level && $0.1.contains(fragment) } }
+      all.contains { $0.level == level.name && $0.message.contains(fragment) }
     }
   }
 #endif

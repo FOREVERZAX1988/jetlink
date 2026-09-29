@@ -222,7 +222,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ~/.cache/jetlink-build
-          key: jetlink-build-${{ matrix.flavor }}-${{ hashFiles('scripts/build-linux.sh') }}
+          key: jetlink-build-${{ matrix.flavor }}-${{ hashFiles('scripts/build-linux.sh', 'JetlinkKit/Scripts/fixture-pins.txt') }}
       - name: Build the shim and its selftest; run the selftest on the fake
         run: scripts/build-linux.sh ${{ matrix.flavor }} headers fake-test shim selftest
       - uses: actions/upload-artifact@v4

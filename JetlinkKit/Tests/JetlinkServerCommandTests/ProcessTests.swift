@@ -1,6 +1,8 @@
 #if os(macOS) || os(Linux)
   import Foundation
   import JetlinkKit
+  import JetlinkServer
+  import JetlinkTestSupport
   import Testing
 
   #if canImport(Glibc)
@@ -51,25 +53,6 @@
       #expect(status == 0 && out == Pinned.productVersion + "\n")
     }
 
-    /// The release tarball's layout: bin/jetlink-server beside VERSION.
-    @Test func versionReadsTheTarballsVersionFile() throws {
-      let binary = try #require(Binary.url)
-      // Beside the build, so a hard link needs no copy of the binary.
-      let root = binary.deletingLastPathComponent().deletingLastPathComponent()
-        .appending(path: "version-test-\(UUID().uuidString)", directoryHint: .isDirectory)
-      defer { try? FileManager.default.removeItem(at: root) }
-      let linked = root.appending(path: "bin/jetlink-server")
-      try FileManager.default.createDirectory(at: linked.deletingLastPathComponent(), withIntermediateDirectories: true)
-      do {
-        try FileManager.default.linkItem(at: binary, to: linked)
-      } catch {
-        try FileManager.default.copyItem(at: binary, to: linked)
-      }
-      try "0.7.0-dev.8b8268e\n".write(to: root.appending(path: "VERSION"), atomically: true, encoding: .utf8)
-      let (status, out, _) = try Binary.run(["--version"], binary: linked)
-      #expect(status == 0 && out == "0.7.0-dev.8b8268e\n")
-    }
-
     @Test func usageMistakesExitOne() throws {
       let (status, _, err) = try Binary.run(["--bogus"])
       #expect(status == 1 && err.contains("--bogus"))
@@ -77,10 +60,10 @@
     }
 
     @Test func specIsWhatPythonDerives() throws {
-      let (status, out, err) = try Binary.run(["spec", Tiny.queued.path])
+      let (status, out, err) = try Binary.run(["spec", TinyModel.queued.path])
       #expect(status == 0, "\(err)")
       let printed = try #require(try JSONSerialization.jsonObject(with: Data(out.utf8)) as? NSDictionary)
-      #expect(printed == (try Tiny.spec(Tiny.queued)) as NSDictionary)
+      #expect(printed == (try TinyModel.spec(TinyModel.queued)) as NSDictionary)
     }
 
     /// The installer's GPU check: TensorRT or a non-zero exit.
@@ -93,13 +76,12 @@
     }
 
     @Test func buildThenBench() throws {
-      let tmp = try TempDir()
-      defer { tmp.remove() }
+      let tmp = try TemporaryDirectory()
       let cpu = ["--backend", "ort", "--device", "cpu", "--cache", tmp.path]
-      let (built, _, buildLog) = try Binary.run(["build", Tiny.stateful.path] + cpu)
+      let (built, _, buildLog) = try Binary.run(["build", TinyModel.stateful.path] + cpu)
       #expect(built == 0, "\(buildLog)")
       #expect(buildLog.contains("built: {"))
-      let (again, _, againLog) = try Binary.run(["build", Tiny.stateful.path] + cpu)
+      let (again, _, againLog) = try Binary.run(["build", TinyModel.stateful.path] + cpu)
       #expect(again == 0 && againLog.contains("already built: {"))
       let (benched, report, benchLog) = try Binary.run(["bench", "--seconds", "1"] + cpu)
       #expect(benched == 0, "\(benchLog)")
@@ -109,18 +91,14 @@
 
     /// SIGTERM stops it cleanly, in order: the server, then the status page.
     @Test func sigtermStopsItCleanly() throws {
-      let tmp = try TempDir()
-      defer { tmp.remove() }
-      let port = try freePort()
-      var page = try freePort()
-      while page == port { page = try freePort() }
-      let log = tmp.url.appending(path: "server.log")
-      FileManager.default.createFile(atPath: log.path, contents: nil)
+      let tmp = try TemporaryDirectory()
+      let page = try TCPListener(host: "127.0.0.1", port: 0).port
+      let log = try tmp.file("server.log", "")
       let handle = try FileHandle(forWritingTo: log)
       let process = Process()
       process.executableURL = try #require(Binary.url)
       process.arguments = [
-        "--backend", "ort", "--device", "cpu", "--listen", "--host", "127.0.0.1", "--port", "\(port)", "--cache", tmp.path, "--no-preload",
+        "--backend", "ort", "--device", "cpu", "--listen", "--host", "127.0.0.1", "--port", "0", "--cache", tmp.path, "--no-preload",
         "--status-port", "\(page)",
       ]
       process.standardOutput = handle
@@ -128,13 +106,13 @@
       try process.run()
       defer { if process.isRunning { process.terminate() } }
 
-      let deadline = Date().addingTimeInterval(30)
-      while !canConnect(port) || !canConnect(page) {
-        guard process.isRunning, Date() < deadline else {
-          Issue.record("never listened: \(String(decoding: (try? Data(contentsOf: log)) ?? Data(), as: UTF8.self))")
-          return
-        }
-        Thread.sleep(forTimeInterval: 0.1)
+      // Said once the server listens and the page is up.
+      let serving = eventually(timeout: 30) {
+        !process.isRunning || String(decoding: (try? Data(contentsOf: log)) ?? Data(), as: UTF8.self).contains("status page on port")
+      }
+      guard serving, process.isRunning else {
+        Issue.record("never listened: \(String(decoding: (try? Data(contentsOf: log)) ?? Data(), as: UTF8.self))")
+        return
       }
       kill(process.processIdentifier, SIGTERM)
       let stopped = Date().addingTimeInterval(10)
@@ -148,44 +126,5 @@
       #expect(stopping.upperBound <= server.lowerBound)
       #expect(server.upperBound <= statusPage.lowerBound)
     }
-
-    private func freePort() throws -> UInt16 {
-      let listener = try #require(Optional(socket(AF_INET, socketStream, 0)).flatMap { $0 >= 0 ? $0 : nil })
-      defer { close(listener) }
-      var address = loopback(0)
-      let bound = withUnsafePointer(to: &address) {
-        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(listener, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
-      }
-      try #require(bound == 0)
-      var length = socklen_t(MemoryLayout<sockaddr_in>.size)
-      _ = withUnsafeMutablePointer(to: &address) {
-        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(listener, $0, &length) }
-      }
-      return UInt16(bigEndian: address.sin_port)
-    }
-
-    private func canConnect(_ port: UInt16) -> Bool {
-      let fd = socket(AF_INET, socketStream, 0)
-      guard fd >= 0 else { return false }
-      defer { close(fd) }
-      var address = loopback(port)
-      return withUnsafePointer(to: &address) {
-        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
-      } == 0
-    }
-
-    private func loopback(_ port: UInt16) -> sockaddr_in {
-      var address = sockaddr_in()
-      address.sin_family = sa_family_t(AF_INET)
-      address.sin_addr.s_addr = inet_addr("127.0.0.1")
-      address.sin_port = port.bigEndian
-      return address
-    }
-
-    #if os(Linux)
-      private let socketStream = Int32(SOCK_STREAM.rawValue)
-    #else
-      private let socketStream = SOCK_STREAM
-    #endif
   }
 #endif

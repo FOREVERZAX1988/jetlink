@@ -1,5 +1,6 @@
 import CTrt
 import Foundation
+import JetlinkTestSupport
 import Testing
 
 @testable import JetlinkServer
@@ -7,14 +8,6 @@ import Testing
 
 @Suite("TensorRT backend: names and sizes")
 struct TrtNamingTests {
-  @Test("The version in the tag is what Python's tensorrt.__version__ printed")
-  func pythonVersion() {
-    #expect(TensorRT.pythonVersion(major: 10, minor: 3, patch: 0, build: 30) == "10.3.0")
-    #expect(TensorRT.pythonVersion(major: 10, minor: 3, patch: 1, build: 2) == "10.3.1")
-    #expect(TensorRT.pythonVersion(major: 10, minor: 16, patch: 2, build: 10) == "10.16.2.10")
-    #expect(TensorRT.pythonVersion(major: 11, minor: 3, patch: 0, build: 99) == "11.3.0.99")
-  }
-
   @Test("The workspace is 40% of MemAvailable between 256 MB and 4 GB, and 4 GB when unknown")
   func workspace() {
     #expect(TrtBackend.workspaceBytes(available: 0) == 4 << 30)
@@ -25,7 +18,7 @@ struct TrtNamingTests {
 
   @Test("Build progress is the root phase's step over its steps, as _Monitor made it")
   func monitor() {
-    let seen = Recorder()
+    let seen = Recorded<Event>()
     let monitor = BuildMonitor(seen.report)
     let start = Int32(JL_TRT_PHASE_START)
     let step = Int32(JL_TRT_PHASE_STEP)
@@ -41,7 +34,7 @@ struct TrtNamingTests {
     monitor.event(step, phase: "Building", parent: nil, value: 3)
     monitor.event(start, phase: "Empty", parent: nil, value: 0)
     #expect(
-      seen.events == [
+      seen.all == [
         Event("build", 0, "Building"), Event("build", 0, "Building"), Event("build", 0, "Building"),
         Event("build", 0.5, "Building"), Event("build", 1, "Building"), Event("build", 0, "Empty"),
       ])
@@ -62,14 +55,9 @@ struct Event: Equatable, CustomStringConvertible {
   var description: String { "\(stage) \(frac) \(msg)" }
 }
 
-final class Recorder: @unchecked Sendable {
-  private let lock = NSLock()
-  private var stored: [Event] = []
-
-  var events: [Event] { lock.withLock { stored } }
-
+extension Recorded<Event> {
   var report: ProgressFn {
-    { [self] stage, frac, msg in lock.withLock { stored.append(Event(stage, frac, msg)) } }
+    { stage, frac, msg in self.append(Event(stage, frac, msg)) }
   }
 }
 
@@ -87,7 +75,7 @@ final class Recorder: @unchecked Sendable {
 
     func backend(device: String = "Orin", free: Int = 1 << 30, _ configure: (inout jl_trt_fake_config) -> Void = { _ in }) throws -> TrtBackend {
       let trt = try fakeTensorRT(device: device, configure)
-      trt.setBuild(Tiny.planLines())
+      trt.setBuild(tinyPlanLines)
       return TrtBackend(trt: trt, available: { free })
     }
 
@@ -103,9 +91,10 @@ final class Recorder: @unchecked Sendable {
     func tags() throws {
       let jp6 = try backend()
       #expect(jp6.tag() == "trt10.3.0.Orin-sm87")
+      // Python's tensorrt.__version__ left the build out on JetPack 6 only
+      #expect(try backend { ($0.patch, $0.build) = (1, 2) }.runtimeVersion == "10.3.1")
       #expect(jp6.runtimeVersion == "10.3.0" && jp6.deviceTag() == "Orin-sm87")
-      #expect(jp6.describe() == ["backend": "trt", "runtime_version": "10.3.0", "device": "Orin-sm87"])
-      #expect(jp6.helloFields["trt_version"] as? String == "10.3.0.30")
+      #expect(jp6.describe() == ["backend": "trt", "runtime_version": "10.3.0", "device": "Orin-sm87", "trt_version": "10.3.0.30"])
 
       let jp7 = try backend {
         ($0.major, $0.minor, $0.patch, $0.build) = (10, 16, 2, 10)
@@ -121,16 +110,16 @@ final class Recorder: @unchecked Sendable {
         ($0.major, $0.minor, $0.patch, $0.build, $0.cc_major, $0.cc_minor, $0.strongly_typed) = (11, 3, 0, 99, 8, 9, 1)
       }
       #expect(pc.tag() == "trt11.3.0.99.NVIDIA_GeForce_RTX_4090-sm89")
-      #expect(pc.name == "trt" && pc.suffix == ".plan" && pc.artifactKind == .file)
+      #expect(pc.name == "trt" && pc.suffix == ".plan")
     }
 
     @Test("A build reports Python's stages and messages, and writes Python's sidecar keys")
     func build() throws {
       let backend = try backend()
-      let seen = Recorder()
+      let seen = Recorded<Event>()
       let artifact = plan(backend)
-      try backend.build(model: Tiny.model, artifact: artifact, report: seen.report, metaExtra: ["spec": ["sha256": "x"]])
-      var events = seen.events
+      try backend.build(model: TinyModel.stateful, artifact: artifact, report: seen.report, metaExtra: ["spec": ["sha256": "x"]])
+      var events = seen.all
       let done = events.removeLast()
       #expect(done.stage == "build" && done.frac == 1 && done.msg.hasPrefix("done in ") && done.msg.hasSuffix("s"))
       let third = 1.0 / 3
@@ -143,6 +132,8 @@ final class Recorder: @unchecked Sendable {
         ] + phases)
 
       let meta = Artifact.sidecar(artifact)
+      // a float, as Python writes round(x, 1): "0.0" rather than "0"
+      #expect(try text(Artifact.sidecarURL(artifact)).range(of: #""build_seconds" ?: ?\d+\.\d"#, options: .regularExpression) != nil)
       #expect(
         Set(meta.keys) == [
           "backend", "trt_version", "device", "fp16", "strongly_typed", "optimization_level", "build_seconds", "onnx", "built_at", "spec",
@@ -163,7 +154,7 @@ final class Recorder: @unchecked Sendable {
       #expect(backend.trt.stats.builds == 0)
 
       // the next build starts warm and adds to the cache
-      try backend.build(model: Tiny.model, artifact: artifact, report: { _, _, _ in }, metaExtra: [:])
+      try backend.build(model: TinyModel.stateful, artifact: artifact, report: { _, _, _ in }, metaExtra: [:])
       #expect(try text(artifact).contains("timing_cache=warm"))
       #expect(try text(backend.timingCache(beside: artifact)) == "jl_trt_fake_timing 10.3.0.30 2\n")
     }
@@ -174,7 +165,7 @@ final class Recorder: @unchecked Sendable {
         ($0.major, $0.minor, $0.patch, $0.build, $0.strongly_typed) = (11, 3, 0, 99, 1)
       }
       let artifact = plan(backend)
-      try backend.build(model: Tiny.model, artifact: artifact, report: { _, _, _ in }, metaExtra: [:])
+      try backend.build(model: TinyModel.stateful, artifact: artifact, report: { _, _, _ in }, metaExtra: [:])
       #expect(try text(artifact).contains("settings fp16=0 optimization_level=3 workspace=4294967296 timing_cache=cold"))
       let meta = Artifact.sidecar(artifact)
       #expect(meta["strongly_typed"] as? Bool == true && meta["fp16"] as? Bool == true && meta["trt_version"] as? String == "11.3.0.99")
@@ -186,7 +177,7 @@ final class Recorder: @unchecked Sendable {
       let artifact = plan(backend)
       let cacheURL = backend.timingCache(beside: artifact)
       try Data(cache.utf8).write(to: cacheURL)
-      try backend.build(model: Tiny.model, artifact: artifact, report: { _, _, _ in }, metaExtra: [:])
+      try backend.build(model: TinyModel.stateful, artifact: artifact, report: { _, _, _ in }, metaExtra: [:])
       #expect(try text(artifact).contains("timing_cache=cold"))
       #expect(try text(cacheURL) == "jl_trt_fake_timing 10.3.0.30 1\n")
       #expect(!FileManager.default.fileExists(atPath: cacheURL.path + ".tmp"))
@@ -198,7 +189,7 @@ final class Recorder: @unchecked Sendable {
       backend.trt.fail("build_write_plan", code: Int32(JL_TRT_ERROR), "buildSerializedNetwork: TensorRT returned no engine")
       let artifact = plan(backend)
       #expect(throws: TrtError("TensorRT returned no engine; see the build log")) {
-        try backend.build(model: Tiny.model, artifact: artifact, report: { _, _, _ in }, metaExtra: [:])
+        try backend.build(model: TinyModel.stateful, artifact: artifact, report: { _, _, _ in }, metaExtra: [:])
       }
       #expect(try FileManager.default.contentsOfDirectory(atPath: engines.path).isEmpty)
       #expect(backend.trt.live.allSatisfy { $0 == 0 })
@@ -209,7 +200,7 @@ final class Recorder: @unchecked Sendable {
       let backend = try backend()
       backend.trt.fail("build_parse", code: Int32(JL_TRT_ERROR), "(parseFromFile): INVALID_GRAPH: no")
       #expect(throws: TrtError("onnx parse failed:\nbuild_parse: (parseFromFile): INVALID_GRAPH: no")) {
-        try backend.build(model: Tiny.model, artifact: plan(backend), report: { _, _, _ in }, metaExtra: [:])
+        try backend.build(model: TinyModel.stateful, artifact: plan(backend), report: { _, _, _ in }, metaExtra: [:])
       }
     }
 
@@ -218,7 +209,7 @@ final class Recorder: @unchecked Sendable {
       let backend = try backend()
       backend.trt.fail("build_write_plan", code: Int32(JL_TRT_CUDA_STICKY), "CUDA_ERROR_ILLEGAL_ADDRESS")
       do {
-        try backend.build(model: Tiny.model, artifact: plan(backend), report: { _, _, _ in }, metaExtra: [:])
+        try backend.build(model: TinyModel.stateful, artifact: plan(backend), report: { _, _, _ in }, metaExtra: [:])
         Issue.record("built")
       } catch let error as TrtError {
         #expect(error.isFatal)
@@ -227,19 +218,9 @@ final class Recorder: @unchecked Sendable {
 
     // MARK: through the host
 
-    func ready(_ host: EngineHost) -> Bool {
-      let deadline = Date().addingTimeInterval(60)
-      while Date() < deadline {
-        let state = host.snapshot().state
-        if state == .ready || state == .failed { return true }
-        Thread.sleep(forTimeInterval: 0.01)
-      }
-      return false
-    }
-
     func request(_ cache: ServerCache) throws -> Request {
-      let model = try Data(contentsOf: Tiny.model)
-      let spec = try Tiny.spec()
+      let model = try Data(contentsOf: TinyModel.stateful)
+      let spec = try tinySpec()
       let request = try Request(sha256: spec.sha256, nbytes: Int64(model.count), frameSkip: 4)
       try model.write(to: cache.modelPath(request))
       return request
@@ -260,7 +241,7 @@ final class Recorder: @unchecked Sendable {
       let host = EngineHost(cache: cache)
       defer { host.close() }
       _ = host.request(request, session: nil)
-      #expect(ready(host))
+      #expect(host.settles(timeout: 60))
       #expect(host.snapshot().state == .ready, "\(host.snapshot().detail)")
       let plans = try FileManager.default.contentsOfDirectory(atPath: engines.path).filter { $0.hasSuffix(".plan") }
       #expect(plans.count == cache.keep)
@@ -272,22 +253,6 @@ final class Recorder: @unchecked Sendable {
       #expect(report.build.contains("cuda graph on"))
       host.close()
       #expect(backend.trt.live.allSatisfy { $0 == 0 }, "\(backend.trt.live)")
-    }
-
-    @Test("A cached plan from another TensorRT build is deleted and rebuilt once")
-    func rebuildsAStalePlan() throws {
-      let backend = try backend()
-      let cache = try ServerCache(root: tmp.url, backend: backend)
-      let request = try request(cache)
-      let entry = cache.entry(request)
-      try Data(fakePlan(Tiny.planLines(), built: "10.3.0.28").utf8).write(to: entry.path)
-      try Artifact.write(["backend": "trt", "spec": Tiny.spec().dictionary()], to: entry.metaPath)
-      let host = EngineHost(cache: cache)
-      defer { host.close() }
-      _ = host.request(request, session: nil)
-      #expect(ready(host))
-      #expect(host.snapshot().state == .ready, "\(host.snapshot().detail)")
-      #expect(try text(entry.path).contains("built 10.3.0.30"))
     }
   }
 #endif

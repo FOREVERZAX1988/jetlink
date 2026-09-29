@@ -1,5 +1,6 @@
 #if os(Linux)
   import Foundation
+  import JetlinkKit
 
   /// One of the kernel's thermal zones: its type ("tj-thermal") and where
   /// its temperature is.
@@ -30,25 +31,6 @@
     root.list("/sys/class/hwmon").lazy.map { root.path("/sys/class/hwmon/\($0)") }.first { Sysfs.read("\($0)/name") == name }
   }
 
-  /// One INA3221 channel: a rail's label, millivolts and milliamps.
-  public struct PowerRail: Sendable, Equatable {
-    public let channel: Int
-    public let label: String
-    public let millivolts: Int
-    public let milliamps: Int
-
-    /// The channels with a label, from an ina3221 hwmon directory. Channel 1
-    /// is VDD_IN on an Orin: the whole board's input.
-    public static func all(ina3221 directory: String) -> [PowerRail] {
-      (1...3).compactMap { channel in
-        guard let label = Sysfs.read("\(directory)/in\(channel)_label"), !label.isEmpty else { return nil }
-        return PowerRail(
-          channel: channel, label: label, millivolts: Sysfs.readInt("\(directory)/in\(channel)_input") ?? 0,
-          milliamps: Sysfs.readInt("\(directory)/curr\(channel)_input") ?? 0)
-      }
-    }
-  }
-
   /// A Jetson's health from Tegra sysfs, in the keys the comma logs as
   /// `jetlinkTelemetry` (Python's `telemetry.Telemetry`). Paths are found
   /// once; a sample is then a handful of small reads, each of which may fail
@@ -59,8 +41,10 @@
     public static let powerLimitW = 25.0
 
     let zones: [String: String]
-    let ina3221: String?
-    let fan: String?
+    /// INA3221 channel 1, VDD_IN on an Orin: the whole board's input.
+    let supplyMV: String?
+    let supplyMA: String?
+    let fanRPM: String?
     let gpuLoad: String
     let gpuFrequency: String
 
@@ -70,8 +54,10 @@
         zones[zone.type] = zone.tempPath
       }
       self.zones = zones
-      ina3221 = hwmon(named: "ina3221", root)
-      fan = hwmon(named: "pwm_tach", root)
+      let ina3221 = hwmon(named: "ina3221", root)
+      supplyMV = ina3221.map { "\($0)/in1_input" }
+      supplyMA = ina3221.map { "\($0)/curr1_input" }
+      fanRPM = hwmon(named: "pwm_tach", root).map { "\($0)/rpm" }
       gpuLoad = root.path("/sys/devices/platform/bus@0/17000000.gpu/load")
       gpuFrequency = root.path("/sys/class/devfreq/17000000.gpu/cur_freq")
     }
@@ -82,18 +68,18 @@
       // reading 0 counts as none.
       let temp = celsius(["tj-thermal", "gpu-thermal"])
       let memoryTemp = celsius(["soc0-thermal", "cpu-thermal"])
-      let mv = ina3221.flatMap { Sysfs.readInt("\($0)/in1_input") } ?? 0
-      let ma = ina3221.flatMap { Sysfs.readInt("\($0)/curr1_input") } ?? 0
+      let mv = supplyMV.flatMap(Sysfs.readInt) ?? 0
+      let ma = supplyMA.flatMap(Sysfs.readInt) ?? 0
       let loadPermille = Sysfs.readInt(gpuLoad) ?? 0
       let frequency = Sysfs.readInt(gpuFrequency) ?? 0
       return [
-        "temp_c": rounded(temp, 1),
-        "memory_temp_c": rounded(memoryTemp, 1),
-        "power_w": rounded(Double(mv * ma) / 1e6, 2),
+        "temp_c": pythonRound(temp, 1),
+        "memory_temp_c": pythonRound(memoryTemp, 1),
+        "power_w": pythonRound(Double(mv * ma) / 1e6, 2),
         "power_limit_w": TegraTelemetry.powerLimitW,
         "gpu_load_pct": min(100, loadPermille / 10),
         "gpu_clock_mhz": frequency / 1_000_000,
-        "fan_rpm": fan.flatMap { Sysfs.readInt("\($0)/rpm") } ?? 0,
+        "fan_rpm": fanRPM.flatMap(Sysfs.readInt) ?? 0,
         "supply_mv": mv,
         "supply_ma": ma,
       ]
@@ -107,11 +93,5 @@
       }
       return 0
     }
-  }
-
-  /// Python's round(x, digits) on the values it sees: ties to even.
-  func rounded(_ value: Double, _ digits: Int) -> Double {
-    let scale = pow(10, Double(digits))
-    return (value * scale).rounded(.toNearestOrEven) / scale
   }
 #endif
