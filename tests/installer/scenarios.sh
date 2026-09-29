@@ -22,7 +22,7 @@ LOCK=$JETLINK_TEST_AWAKE_LOCK
 # the same questions on every machine: plenty of disk, and no swap yet
 export JETLINK_TEST_FREE_GB=100 JETLINK_TEST_SWAPS=/tmp/swaps
 # nothing waited on here is real, so there is nothing to wait for
-export JETLINK_TEST_POLL_S=0
+export JETLINK_TEST_POLL_S=0 JETLINK_TEST_SETTLE_S=0
 printf 'Filename\tType\tSize\tUsed\tPriority\n/dev/zram0 partition 1000000 0 5\n' >/tmp/swaps
 PATH="$FAKE_BIN:$PATH"
 OUT=/tmp/out.txt
@@ -78,7 +78,8 @@ reset_box() {
   done
   unset FAKE_ARCH FAKE_SMI FAKE_PUBLISHED FAKE_PM_REBOOT FAKE_SERVER_BROKEN FAKE_GPU_BROKEN \
     FAKE_TRT10 FAKE_NO_CURL FAKE_ROOT_FREE_GB FAKE_IMAGE_GB FAKE_DOWNLOAD_FAILS FAKE_BAD_SUM FAKE_NO_PLUGIN \
-    FAKE_DOCKER_STUCK FAKE_BAD_WHEEL
+    FAKE_DOCKER_STUCK FAKE_BAD_WHEEL FAKE_SERVER_CRASHLOOP FAKE_PRELOAD FAKE_SERVER_OLD FAKE_DOWNLOAD_HANG \
+    FAKE_DOCKER_ROOT FAKE_OTHER_FS JETLINK_TEST_PRELOAD_S
   export JETLINK_REPO_URL=file:///tmp/repo FAKE_LATEST=v0.10.0 JETLINK_TEST_SYSTEMD_RUN=/tmp
 }
 
@@ -142,6 +143,28 @@ old_install() {  # old_install TAG [args...]: that Docker release's curl | bash,
 
 cli() {  # cli ARGS...: the jetlink command, as installed
   jetlink "$@" >"$OUT" 2>&1
+  RC=$?
+}
+
+# interrupted SIGNAL COMMAND...: COMMAND in a session of its own, as a terminal
+# runs it, and SIGNAL to all of it once the server download has started, as
+# Ctrl-C (INT) or a dropped ssh session (HUP) sends it, or KILL for a power cut.
+# A command started with & ignores SIGINT, as a shell without job control
+# starts it, and a terminal's would not: perl puts it back.
+interrupted() {
+  local sig=$1 pid tries=300
+  shift
+  rm -f "$FAKE_STATE/download-hanging"
+  # shellcheck disable=SC2016  # perl's variables, not the shell's
+  FAKE_DOWNLOAD_HANG=1 setsid perl -e '$SIG{INT} = "DEFAULT"; exec @ARGV or die "exec: $!"' -- "$@" >"$OUT" 2>&1 &
+  pid=$!
+  while [ ! -e "$FAKE_STATE/download-hanging" ] && [ "$tries" -gt 0 ]; do
+    tries=$((tries - 1))
+    sleep 0.1
+  done
+  check "the download never started" test -e "$FAKE_STATE/download-hanging"
+  kill -s "$sig" -- "-$pid"
+  wait "$pid"
   RC=$?
 }
 
@@ -284,6 +307,13 @@ expect_in /etc/jetlink/install.conf "JETLINK_VERSION=v0.10.0"
 check "the unit is not the server's own" cmp -s "$UNITS/jetlink-server.service" /opt/jetlink/0.10.0/share/jetlink/systemd/jetlink-server.service
 expect_in "$UNITS/jetlink-server.service.d/10-cache.conf" "RequiresMountsFor=/mnt/data/jetlink"
 expect_in "$UNITS/jetlink-server.service.d/20-jetson-clocks.conf" "ExecStartPre=-/usr/bin/jetson_clocks"
+# after the power mode is set at boot, which would undo it
+expect_in "$UNITS/jetlink-server.service.d/20-jetson-clocks.conf" "After=nvpmodel.service"
+# up once it says it serves: the line the Swift server says, whatever the comma does
+expect_in /var/log/jetlink-install.log "jetlink-server is serving"
+check "Serve.swift no longer says the line install.sh waits for" \
+  grep -qF 'servingLine = "jetlink-server is serving"' "$SRC/JetlinkKit/Sources/jetlink-server/Serve.swift"
+expect_ran "systemctl show -p NRestarts --value jetlink-server"
 expect_file /usr/local/bin/jetlink
 expect_file /etc/udev/rules.d/99-jetlink-usb-wakeup.rules
 expect_no_file /usr/local/lib/jetlink
@@ -386,8 +416,8 @@ echo "# 0.10.0's own unit" >>/opt/jetlink/0.10.0/share/jetlink/systemd/jetlink-s
 export FAKE_SERVER_BROKEN=1
 run_installer curl '' --update --ref v0.9.0
 expect_rc 1
-# systemd's third restart of it, seen as it is logged
-expect_in /var/log/jetlink-install.log "the server keeps restarting"
+# systemd's restart of it, seen as it is logged
+expect_in /var/log/jetlink-install.log "the server crashed, and systemd started it again"
 expect_out "The previous Jetlink server is running again."
 expect_in /etc/jetlink/server.env "# the previous settings"
 expect_in /etc/jetlink/install.conf "JETLINK_REF=latest"
@@ -396,6 +426,42 @@ expect_in "$UNITS/jetlink-server.service" "# 0.10.0's own unit"
 check "the previous server was not started again" test "$(grep -c "systemctl restart jetlink-server" "$FAKE_LOG")" -ge 2
 refute "the unit was left stopped" test -f "$FAKE_STATE/stopped-jetlink-server"
 unset FAKE_SERVER_BROKEN
+
+scenario "a new server that crashes after it said it serves is taken back out"
+reset_box; jetson 39 2.1
+run_installer curl '' --yes
+: >"$FAKE_LOG"
+FAKE_SERVER_CRASHLOOP=1 run_installer curl '' --update --ref v0.9.0
+expect_rc 1
+expect_in /var/log/jetlink-install.log "jetlink-server is serving"
+expect_in /var/log/jetlink-install.log "the server did not stay up: systemd started it again 2 times"
+expect_out "The previous Jetlink server is running again."
+expect_no_out "Jetlink is installed and running"
+expect_link /opt/jetlink/current /opt/jetlink/0.10.0
+expect_no_file /opt/jetlink/previous
+expect_in /etc/jetlink/install.conf "JETLINK_REF=latest"
+
+scenario "a build from before the serving line is up with a comma nothing on it serves"
+reset_box; jetson 39 2.1
+FAKE_SERVER_OLD=1 run_installer curl '' --yes
+expect_rc 0
+expect_in /var/log/jetlink-install.log "nothing on the comma is serving it yet"
+expect_out "Jetlink is installed and running"
+
+scenario "Ctrl-C during an update starts the server it stopped again"
+reset_box; jetson 39 2.1
+run_installer curl '' --yes
+: >"$FAKE_LOG"
+# a server that sleeps and has no awake lock stops for the update
+interrupted INT bash /opt/jetlink/src/install.sh --update --ref v0.9.0
+expect_rc 130
+expect_out "Stopped by SIGINT."
+expect_out "The previous Jetlink server is running again."
+expect_before "systemctl stop jetlink-server" "releases/download/v0.9.0/jetlink-server-0.9.0-linux-aarch64.tar.gz"
+refute "the unit was left stopped" test -f "$FAKE_STATE/stopped-jetlink-server"
+expect_link /opt/jetlink/current /opt/jetlink/0.10.0
+expect_in /etc/jetlink/install.conf "JETLINK_REF=latest"
+expect_file /var/log/jetlink-install.log
 
 scenario "a fresh install has no server to stop"
 reset_box; jetson 39 2.1
@@ -794,6 +860,30 @@ expect_rc 0
 expect_out "Keep the Jetlink server that is installed"
 expect_link /opt/jetlink/current /opt/jetlink/0.10.0
 
+scenario "--ref from a checkout, which installs what is in it, says what to run instead"
+reset_box; jetson 39 2.1
+run_installer checkout '' --yes --ref v0.9.0
+expect_rc 1
+expect_out "--ref does nothing from a checkout"
+expect_out "curl -fsSL https://raw.githubusercontent.com/zoompilot/jetlink/v0.9.0/install.sh | bash -s -- --update --ref v0.9.0"
+expect_no_file /etc/jetlink
+
+scenario "a tarball from a tree before the native server is refused"
+reset_box; jetson 39 2.1
+old=/tmp/dev/old-unit
+rm -rf "$old" && mkdir -p "$old/bin" "$old/share/jetlink/systemd"
+ln -s "$SRC/tests/installer/fake.sh" "$old/bin/jetlink-server"
+echo 0.6.9 >"$old/VERSION"
+printf '[Service]\nExecStart=/usr/local/lib/jetlink/run-server\n' >"$old/share/jetlink/systemd/jetlink-server.service"
+tar -czf /tmp/dev/jetlink-server-0.6.9-linux-aarch64.tar.gz -C "$old" .
+run_installer checkout '' --yes --binary /tmp/dev/jetlink-server-0.6.9-linux-aarch64.tar.gz
+expect_rc 1
+expect_out "does not start /opt/jetlink/current/bin/jetlink-server"
+expect_out "scripts/build-linux.sh linux-aarch64"
+expect_no_file /opt/jetlink/0.6.9
+check "a stage was left" test -z "$(find /opt/jetlink -maxdepth 1 -name '.new-*' 2>/dev/null)"
+expect_no_file "$UNITS/jetlink-server.service"
+
 scenario "--binary over a release install leaves its source where it is"
 reset_box; jetson 39 2.1
 run_installer curl '' --yes
@@ -814,6 +904,47 @@ run_installer curl '' --update --binary /tmp/releases/v0.9.0/jetlink-server-0.9.
 expect_rc 0
 expect_in /etc/jetlink/install.conf "JETLINK_VERSION=v0.9.0"
 expect_not_in "$UNITS/jetlink-server.service" "0.12.0-dev"
+
+scenario "while the newest release runs in Docker, a native install stays put unless --ref says"
+reset_box; jetson 39 2.1
+run_installer curl '' --yes
+head_before="$(git -C /opt/jetlink/src rev-parse HEAD)"
+: >"$FAKE_LOG"
+FAKE_LATEST=v0.6.0 cli update
+expect_rc 0
+expect_out "runs the server in Docker. Nothing changed."
+expect_out "curl -fsSL https://raw.githubusercontent.com/zoompilot/jetlink/v0.6.0/install.sh | bash -s -- --update --ref v0.6.0"
+expect_not_ran "systemctl"
+check "the source moved" test "$(git -C /opt/jetlink/src rev-parse HEAD)" = "$head_before"
+# the installer run by itself, as curl | bash or jetlink setup runs it, keeps the server too
+FAKE_LATEST=v0.6.0 run_installer curl '' --update
+expect_rc 0
+expect_out "v0.6.0 runs Jetlink in Docker, so the server installed here stays."
+expect_out "Keep the Jetlink server that is installed"
+expect_no_out "its own installer takes over"
+expect_not_ran "releases/download"
+expect_link /opt/jetlink/current /opt/jetlink/0.10.0
+expect_in "$UNITS/jetlink-server.service" "/opt/jetlink/current/bin/jetlink-server"
+check "the source moved" test "$(git -C /opt/jetlink/src rev-parse HEAD)" = "$head_before"
+answers '1\ny\n\ny\n'
+FAKE_LATEST=v0.6.0 JETLINK_INPUT=/tmp/answers jetlink setup >"$OUT" 2>&1; RC=$?
+expect_rc 0
+expect_out "Keep the Jetlink server that is installed"
+expect_in "$UNITS/jetlink-server.service" "/opt/jetlink/current/bin/jetlink-server"
+# nor to a release older than the server here
+bash /opt/jetlink/src/install.sh --update --binary /tmp/dev/jetlink-server-0.12.0-dev-linux-aarch64.tar.gz >"$OUT" 2>&1
+: >"$FAKE_LOG"
+cli update
+expect_rc 0
+expect_out "v0.10.0, the release this install follows, is older than the server here (0.12.0-dev)."
+expect_not_ran "systemctl"
+expect_link /opt/jetlink/current /opt/jetlink/0.12.0-dev
+# --ref goes back, as asked
+FAKE_LATEST=v0.6.0 FAKE_PUBLISHED=1 cli update --ref v0.6.0
+expect_rc 0
+expect_in "$UNITS/jetlink-server.service" "run-server"
+expect_in /etc/jetlink/server.env "JETLINK_IMAGE_REF=ghcr.io/zoompilot/jetlink:0.6.0-cuda"
+expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=120"
 
 scenario "TensorRT already here without its plugins: they come, or it does without"
 reset_box; jetson 36 4.3
@@ -955,6 +1086,18 @@ expect_in "$UNITS/jetlink-server.service" "run-server"
 expect_in /etc/jetlink/server.env "JETLINK_IMAGE="
 expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=120"
 
+scenario "Docker's images on another disk are not deleted for room on /"
+reset_box; jetson 39 2.1; with_docker
+old_install v0.5.0
+FAKE_ROOT_FREE_GB=2 FAKE_IMAGE_GB=8 FAKE_DOCKER_ROOT=/mnt/data/docker FAKE_OTHER_FS=/mnt/data cli update
+expect_rc 1
+expect_out "Jetlink's Docker images are not on the disk TensorRT goes on (/mnt/data/docker), so they stay."
+expect_out "Not enough free space for TensorRT: 2 GB on /, and it needs 6 GB."
+expect_not_ran "docker rmi"
+expect_not_ran "systemctl stop jetlink-server"
+expect_in "$UNITS/jetlink-server.service" "run-server"
+expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=120"
+
 scenario "a v0.6.0 PC install moves out of Docker"
 reset_box; pc 580.95.05; with_docker
 old_install v0.6.0
@@ -980,6 +1123,9 @@ old_install v0.6.0
 # the status page's own unit, from before it moved into the server
 printf '[Service]\nExecStart=/usr/bin/python3 /usr/local/lib/jetlink/web/jetlink_web.py\n[Install]\nWantedBy=multi-user.target\n' \
   >"$UNITS/jetlink-web.service"
+# and a unit of the bench's own, which is not the installer's to save or start
+printf '[Service]\nExecStart=/usr/local/bin/jetlink-swift\n[Install]\nWantedBy=multi-user.target\n' \
+  >"$UNITS/jetlink-swift.service"
 # a failure while it serves without sleeping puts the sleep back
 FAKE_BAD_SUM=1 cli update
 expect_rc 1
@@ -1005,6 +1151,11 @@ expect_file "$UNITS/jetlink-poweroff.path"
 expect_file "$UNITS/jetlink-web.service"
 expect_ran "systemctl enable --now jetlink-poweroff.path"
 expect_ran "systemctl enable --now jetlink-web.service"
+expect_out "jetlink-swift.service is not the installer's, and stays as it is."
+expect_no_file /etc/jetlink/docker-era/systemd/jetlink-swift.service
+expect_not_in /etc/jetlink/docker-era/enabled "jetlink-swift.service"
+expect_not_ran "systemctl enable --now jetlink-swift.service"
+expect_file "$UNITS/jetlink-swift.service"
 expect_not_ran "docker rmi"
 check "the Docker server was not started again" test "$(grep -c "systemctl restart jetlink-server" "$FAKE_LOG")" -ge 2
 refute "the unit was left stopped" test -f "$FAKE_STATE/stopped-jetlink-server"
@@ -1018,6 +1169,83 @@ expect_no_file "$UNITS/jetlink-web.service"
 expect_ran "systemctl disable --now jetlink-web.service"
 expect_ran "docker rmi ghcr.io/zoompilot/jetlink:0.6.0-cuda"
 expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=120"
+
+scenario "a move that crashes the new server puts Docker back; one that loads the model waits for it"
+reset_box; jetson 39 2.1; with_docker
+old_install v0.6.0
+echo '{"sha256": "abc", "frame_skip": 1}' >/mnt/data/jetlink/last-loaded.json
+# the model it ran last crashes the new server as it loads
+FAKE_PRELOAD=crash cli update
+expect_rc 1
+expect_out "Loading the model it ran last"
+expect_in /var/log/jetlink-install.log "loading the model crashed the server, and systemd started it again"
+expect_out "The previous Jetlink server is running again."
+expect_in "$UNITS/jetlink-server.service" "run-server"
+expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=120"
+expect_not_ran "docker rmi"
+check "an image went" test -s "$FAKE_STATE/images"
+# a rebuild that outlasts the wait is the server's to finish; it serves meanwhile
+: >"$FAKE_LOG"
+FAKE_PRELOAD=slow JETLINK_TEST_PRELOAD_S=0 cli update
+expect_rc 0
+expect_in /var/log/jetlink-install.log "still preparing the model after 0s; the server serves meanwhile"
+expect_out "It is still preparing that model, and goes on in the background: jetlink logs"
+expect_out "Jetlink is installed and running"
+expect_ran "docker rmi ghcr.io/zoompilot/jetlink:0.6.0-cuda"
+# a failed preparation is not a failed server: the comma sends the model again
+: >"$FAKE_LOG"
+FAKE_PRELOAD=failed run_installer curl '' --update
+expect_rc 0
+expect_in /var/log/jetlink-install.log "engine preparation failed"
+expect_no_out "still preparing"
+: >"$FAKE_LOG"
+FAKE_PRELOAD=ready run_installer curl '' --update
+expect_rc 0
+expect_in /var/log/jetlink-install.log "engine ready: 0123456789abcdef"
+expect_no_out "still preparing"
+
+scenario "a move from Docker that crashes after it serves puts Docker back, images and all"
+reset_box; jetson 39 2.1; with_docker
+old_install v0.6.0
+FAKE_SERVER_CRASHLOOP=1 cli update
+expect_rc 1
+expect_in /var/log/jetlink-install.log "the server did not stay up"
+expect_out "The previous Jetlink server is running again."
+expect_in "$UNITS/jetlink-server.service" "run-server"
+expect_in /etc/jetlink/server.env "JETLINK_IMAGE="
+expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=120"
+expect_not_ran "docker rmi"
+expect_no_out "Jetlink is installed and running"
+
+scenario "a move stopped part way puts Docker back with its sleep; one killed keeps the sleep for the next"
+reset_box; jetson 39 2.1; with_docker
+old_install v0.6.0
+# the ssh session drops while the server downloads, with Docker held awake
+interrupted HUP jetlink update
+expect_rc 129
+expect_ran "jetlink-server started: docker, sleep 0"
+expect_in /var/log/jetlink-install.log "Stopped by SIGHUP."
+expect_in /var/log/jetlink-install.log "The previous Jetlink server is running again."
+check "not started again with its sleep" test "$(grep 'jetlink-server started' "$FAKE_LOG" | tail -n 1)" = "jetlink-server started: docker, sleep 120"
+expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=120"
+expect_not_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER_HELD"
+expect_in "$UNITS/jetlink-server.service" "run-server"
+# killed outright, nothing puts it back, but the sleep it held is kept beside the 0
+: >"$FAKE_LOG"
+interrupted KILL jetlink update
+expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=0"
+expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER_HELD=120"
+: >"$FAKE_LOG"
+cli update
+expect_rc 0
+expect_out "Jetlink is installed and running"
+expect_in /etc/jetlink/server.env.prev "JETLINK_SLEEP_AFTER=120"
+expect_not_in /etc/jetlink/server.env.prev "JETLINK_SLEEP_AFTER_HELD"
+expect_in /etc/jetlink/docker-era/server.env "JETLINK_SLEEP_AFTER=120"
+expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=120"
+expect_not_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER_HELD"
+expect_ran "jetlink-server started: docker, sleep 0"
+expect_ran "jetlink-server started: native, sleep 120"
 
 scenario "a Docker server that will not stop keeps serving, and no native one starts beside it"
 reset_box; jetson 39 2.1; with_docker
@@ -1055,6 +1283,44 @@ expect_out "Move Jetlink out of Docker"
 expect_not_in /etc/jetlink/server.env "JETLINK_IMAGE"
 expect_in /etc/jetlink/install.conf "JETLINK_REF=latest"
 expect_in "$UNITS/jetlink-server.service" "/opt/jetlink/current/bin/jetlink-server"
+
+scenario "the bench's round trip: the v0.6.0 curl line goes back, a --binary from the clone comes forward"
+reset_box; jetson 39 2.1; with_docker
+old_install v0.6.0
+cli update
+expect_rc 0
+expect_link /opt/jetlink/current /opt/jetlink/0.10.0
+# back, with that release's own installer
+FAKE_LATEST=v0.6.0 FAKE_PUBLISHED=1 bash -s -- --update --ref v0.6.0 </releases/v0.6.0/install.sh >"$OUT" 2>&1; RC=$?
+expect_rc 0
+expect_in "$UNITS/jetlink-server.service" "run-server"
+expect_file /opt/jetlink/src/scripts/jetlink-run-server
+# forward: a --binary with the clone still on v0.6.0 would install its Docker jetlink command
+: >"$FAKE_LOG"
+FAKE_LATEST=v0.6.0 run_installer curl '' --update --binary /tmp/dev/jetlink-server-0.12.0-dev-linux-aarch64.tar.gz
+expect_rc 1
+expect_out "/opt/jetlink/src holds Jetlink from before the native server"
+expect_in "$UNITS/jetlink-server.service" "run-server"
+# with the clone moved to the tree the server was built from
+git -C /opt/jetlink/src fetch -q --depth 1 origin v0.10.0 && git -C /opt/jetlink/src reset -q --hard FETCH_HEAD
+: >"$FAKE_LOG"
+FAKE_LATEST=v0.6.0 bash /opt/jetlink/src/install.sh --update --binary /tmp/dev/jetlink-server-0.12.0-dev-linux-aarch64.tar.gz >"$OUT" 2>&1; RC=$?
+expect_rc 0
+expect_out "Move Jetlink out of Docker"
+expect_link /opt/jetlink/current /opt/jetlink/0.12.0-dev
+expect_link /opt/jetlink/previous /opt/jetlink/0.10.0
+expect_in "$UNITS/jetlink-server.service" "/opt/jetlink/current/bin/jetlink-server"
+expect_in /usr/local/bin/jetlink "SERVER=/opt/jetlink/current/bin/jetlink-server"
+expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=120"
+expect_ran "jetlink-server started: native, sleep 120"
+# the release it went back to stays pinned, and an update does not follow it into Docker
+expect_in /etc/jetlink/install.conf "JETLINK_REF=v0.6.0"
+: >"$FAKE_LOG"
+FAKE_LATEST=v0.6.0 cli update
+expect_rc 0
+expect_out "runs the server in Docker. Nothing changed."
+expect_not_ran "systemctl"
+expect_link /opt/jetlink/current /opt/jetlink/0.12.0-dev
 
 scenario "uninstall after a move removes the Docker leftovers too"
 echo "jetlink:local-cuda" >>"$FAKE_STATE/images"

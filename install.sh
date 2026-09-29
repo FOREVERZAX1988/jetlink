@@ -42,6 +42,10 @@ UNIT_DIR=/etc/systemd/system
 UNIT=jetlink-server
 # in a server's directory: the unit and udev rules built with it
 SHARE=share/jetlink
+# what the Docker-era installers made (the status page's own unit was never
+# released, but a bench has it): a move from Docker saves these, and a failed
+# one puts them back
+DOCKER_ERA_UNITS="$UNIT.service $UNIT.service.d jetlink-poweroff.path jetlink-poweroff.service jetlink-web.service jetlink-web.service.d"
 CLOCKS_DROPIN="$UNIT_DIR/$UNIT.service.d/20-jetson-clocks.conf"
 WAKE_RULE=/etc/udev/rules.d/99-jetlink-usb-wakeup.rules
 JOURNALD_DROPIN=/etc/systemd/journald.conf.d/60-jetlink.conf
@@ -82,6 +86,14 @@ SYSTEMD_RUN="${JETLINK_TEST_SYSTEMD_RUN:-/run/systemd/system}"
 AWAKE_LOCK="${JETLINK_TEST_AWAKE_LOCK:-/run/jetlink-awake.lock}"
 # seconds between looks at something the installer waits on
 POLL_S="${JETLINK_TEST_POLL_S:-5}"
+# A new server has 3 minutes to say it serves, and then has to stay up. One
+# that loads the model it ran last is watched until that is done: a TensorRT
+# that changed makes it rebuild the plan, which takes minutes, so the 20
+# minute wait is only how long the installer watches, and the server serves
+# all the while.
+READY_S=180
+SETTLE_S="${JETLINK_TEST_SETTLE_S:-10}"
+PRELOAD_S="${JETLINK_TEST_PRELOAD_S:-1200}"
 
 OPT_YES=0 OPT_UPDATE=0 OPT_RECONFIGURE=0 OPT_DRY_RUN=0 OPT_UNINSTALL=0
 OPT_REF="" OPT_BINARY=""
@@ -109,6 +121,8 @@ die() {
   local line
   for line in "$@"; do printf '  %s\n' "$line"; done
   printf '\n'
+  # a second Ctrl-C must not cut the way back short
+  trap '' INT TERM HUP
   restore_previous_server
   save_log
   exit 1
@@ -134,6 +148,22 @@ on_error() {
   fi
   printf '\n  Running the installer again is safe. If it keeps failing, open an issue at\n'
   printf '  https://github.com/zoompilot/jetlink/issues with the log attached.\n\n'
+  trap '' INT TERM HUP
+  restore_previous_server
+  save_log
+  exit "$rc"
+}
+
+# Ctrl-C, a closed terminal or ssh session, or a kill: the way back a failure
+# takes, then out with the signal's status. A closed terminal takes the output
+# with it, so from then on everything goes to the log.
+on_signal() {
+  local sig=$1 rc=$2
+  trap '' INT TERM HUP
+  trap - ERR
+  set +e
+  if [ "$sig" = HUP ]; then exec >>"$LOG" 2>&1; else exec 1>&4 2>&5; fi
+  printf '\n%sStopped by %s.%s\n' "$R$B" "SIG$sig" "$N"
   restore_previous_server
   save_log
   exit "$rc"
@@ -152,7 +182,9 @@ run_step() {
   printf '\n==> %s\n' "$label" >>"$LOG"
   local rc=0 t0=$SECONDS
   if [ -t 1 ]; then
-    "$@" </dev/null >>"$LOG" 2>&1 &
+    # a failure is the step's to report: the ERR trap, inherited, would put
+    # the old server back from in here, and then the step's die again
+    ( trap - ERR; "$@" ) </dev/null >>"$LOG" 2>&1 &
     local pid=$! i=0 frames=$'|/-\\'
     while kill -0 "$pid" 2>/dev/null; do
       printf '\r  %s%s%s %s %s%s%s ' "$D" "${frames:i++%4:1}" "$N" "$label" "$D" "$(elapsed $((SECONDS - t0)))" "$N"
@@ -539,14 +571,15 @@ load_previous() {
   [ -r "$CONF" ] || return 0
   HAD_INSTALL=1
   # only from the files: the jetlink command runs this with them exported
-  local JETLINK_REF='' JETLINK_VERSION='' JETLINK_STATUS_PORT=''
+  local JETLINK_REF='' JETLINK_VERSION='' JETLINK_STATUS_PORT='' JETLINK_SLEEP_AFTER_HELD=''
   # shellcheck disable=SC1090
   . "$CONF"
   # what the server runs with, the sleep delay and the cache among it
   # shellcheck disable=SC1090
   [ -r "$ENV_FILE" ] && . "$ENV_FILE"
   POWER="${JETLINK_POWER:-}"
-  SLEEP_AFTER="${JETLINK_SLEEP_AFTER:-0}"
+  # a run stopped while hold_sleep held the server awake left the answer here
+  SLEEP_AFTER="${JETLINK_SLEEP_AFTER_HELD:-${JETLINK_SLEEP_AFTER:-0}}"
   POWEROFF_WITH_COMMA="${JETLINK_POWEROFF_WITH_COMMA:-0}"
   AUTOSTART="${JETLINK_AUTOSTART:-1}"
   CACHE_DIR="${JETLINK_CACHE_DIR:-}"
@@ -563,6 +596,12 @@ load_previous() {
 # main, their default, without asking, and no JETLINK_VERSION: such an
 # install follows releases now.
 choose_ref() {
+  # a checkout installs what is in it, so a ref there would do nothing
+  if [ "$SOURCE" = local ] && [ -n "$OPT_REF" ]; then
+    die "--ref does nothing from a checkout, which installs what is in it." \
+      "For $OPT_REF, run the installer of that ref instead:" \
+      "  curl -fsSL $RAW_URL/$OPT_REF/install.sh | bash -s -- --update --ref $OPT_REF"
+  fi
   if [ -n "$OPT_REF" ]; then
     REF="$OPT_REF"
   elif [ "$REF" = main ] && [ -z "$RESOLVED" ]; then
@@ -837,6 +876,14 @@ check_binary() {
         || die "$(basename "$OPT_BINARY") is for another kind of computer; this one needs a $FLAVOR build." ;;
   esac
   if [ "$SOURCE" = local ] || [ -f "$SOURCE_DIR/install.sh" ]; then KEEP_SOURCE=1; fi
+  # the jetlink command comes from that source too, and a release's from
+  # before the native server drives the Docker one
+  if [ "$KEEP_SOURCE" = 1 ] && [ -f "$SOURCE_DIR/scripts/jetlink-run-server" ]; then
+    die "$SOURCE_DIR holds Jetlink from before the native server, and --binary installs its scripts." \
+      "Move it to the tree the server was built from first, for example:" \
+      "  sudo git -C $SOURCE_DIR fetch --depth 1 origin <branch> && sudo git -C $SOURCE_DIR reset --hard FETCH_HEAD" \
+      "  sudo $SOURCE_DIR/install.sh --update --binary $OPT_BINARY"
+  fi
   return 0
 }
 
@@ -864,6 +911,27 @@ resolve_ref() {
         "or name a release: --ref v0.5.0"
     fi
   fi
+  stay_native "$had"
+}
+
+# An update or a setup does not take a native install back to Docker by
+# itself, while the release it follows (the newest, until one runs natively)
+# is one that ran in Docker: only --ref goes there. The server here stays, and
+# so does its source.
+stay_native() {
+  local had=$1
+  if [ -n "$OPT_REF" ] || [ "$SOURCE" = local ] || [ "$KEEP_SOURCE" = 1 ] || [ "$DOCKER_ERA" = 1 ] \
+      || [ ! -L "$SRC_ROOT/current" ] || ! docker_release "$RESOLVED"; then
+    return 0
+  fi
+  note "$RESOLVED runs Jetlink in Docker, so the server installed here stays. To go back to it:"
+  note "  curl -fsSL $RAW_URL/$RESOLVED/install.sh | bash -s -- --update --ref $RESOLVED"
+  RESOLVED="$had" KEEP_SOURCE=1 REUSE_SERVER=1
+}
+
+# a release from before the native server
+docker_release() {
+  [[ $1 =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && version_ge "${DOCKER_LAST#v}" "${1#v}"
 }
 
 # The newest release's tag, or nothing: GitHub's latest release, never a draft
@@ -889,7 +957,7 @@ latest_release() {
 # installer can put back (the switch itself is decided on its source).
 ASSET_URL='' GOING_BACK=0 REUSE_SERVER=0
 choose_server() {
-  if [ -n "$OPT_BINARY" ]; then return 0; fi
+  if [ -n "$OPT_BINARY" ] || [ "$REUSE_SERVER" = 1 ]; then return 0; fi
   if [ "$SOURCE" = local ]; then
     if [ "$DOCKER_ERA" = 0 ] && [ -L "$SRC_ROOT/current" ]; then
       REUSE_SERVER=1
@@ -903,9 +971,7 @@ choose_server() {
     main) ASSET_URL="$RELEASES_URL/edge/jetlink-server-edge-$FLAVOR.tar.gz" ;;
     v[0-9]*)
       ASSET_URL="$RELEASES_URL/$RESOLVED/jetlink-server-${RESOLVED#v}-$FLAVOR.tar.gz"
-      if [[ $RESOLVED =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && version_ge "${DOCKER_LAST#v}" "${RESOLVED#v}"; then
-        GOING_BACK=1
-      fi ;;
+      if docker_release "$RESOLVED"; then GOING_BACK=1; fi ;;
     *) no_server ;;
   esac
 }
@@ -969,17 +1035,24 @@ ENV_PREV="$ETC_DIR/server.env.prev"
 CONF_PREV="$ETC_DIR/install.conf.prev"
 
 backup_install() {
-  if [ -f "$ENV_FILE" ]; then as_root cp -p "$ENV_FILE" "$ENV_PREV"; fi
+  local held
+  held="$(sed -n 's/^JETLINK_SLEEP_AFTER_HELD=//p' "$ENV_FILE" 2>/dev/null | tail -n 1 || true)"
+  if [ -n "$held" ]; then
+    # a run stopped while it held the server awake: its sleep is the setting
+    { grep -Ev '^JETLINK_SLEEP_AFTER(_HELD)?=' "$ENV_FILE"; echo "JETLINK_SLEEP_AFTER=$held"; } | root_write "$ENV_PREV"
+  elif [ -f "$ENV_FILE" ]; then
+    as_root cp -p "$ENV_FILE" "$ENV_PREV"
+  fi
   if [ -f "$CONF" ]; then as_root cp -p "$CONF" "$CONF_PREV"; fi
   [ "$DOCKER_ERA" = 1 ] || return 0
   # everything the move replaces, and which of the units were enabled
   as_root rm -rf "$DOCKER_ERA_DIR"
   as_root install -d -m 755 "$DOCKER_ERA_DIR/systemd"
   local f u enabled=''
-  for f in "$UNIT_DIR"/jetlink-*; do
+  for u in $DOCKER_ERA_UNITS; do
+    f="$UNIT_DIR/$u"
     [ -e "$f" ] || continue
     as_root cp -a "$f" "$DOCKER_ERA_DIR/systemd/"
-    u="$(basename "$f")"
     case "$u" in
       *.service|*.path)
         if [ "$(as_root systemctl is-enabled "$u" 2>/dev/null || true)" = enabled ]; then
@@ -989,9 +1062,11 @@ backup_install() {
   done
   printf '%s' "$enabled" | root_write "$DOCKER_ERA_DIR/enabled"
   if [ -d "$LIB_DIR" ]; then as_root cp -a "$LIB_DIR" "$DOCKER_ERA_DIR/lib"; fi
-  for f in "$BIN" "$CONF" "$ENV_FILE"; do
+  for f in "$BIN" "$CONF"; do
     if [ -f "$f" ]; then as_root cp -p "$f" "$DOCKER_ERA_DIR/"; fi
   done
+  # the settings as they were, not as a held sleep left them
+  if [ -f "$ENV_FILE" ]; then as_root cp -p "$ENV_PREV" "$DOCKER_ERA_DIR/$(basename "$ENV_FILE")"; fi
   good "The Docker setup is saved in $DOCKER_ERA_DIR"
 }
 
@@ -999,11 +1074,14 @@ backup_install() {
 # moment the comma lets go. A native one does not while its awake lock is held
 # (jetlink caffeinate), so this run holds it until it exits; one from before
 # the lock stops now instead of at the switch. The Docker era's does not know
-# the lock: it restarts without sleeping, and a failure puts its server.env back.
+# the lock: it restarts without sleeping, and a failure or an interruption puts
+# its server.env back. The sleep it had stays in server.env beside the 0, for
+# the next run, should this one be killed before it can put it back.
 hold_sleep() {
   local after
   [ -f "$UNIT_DIR/$UNIT.service" ] && [ -f "$ENV_FILE" ] || return 0
-  after="$(sed -n 's/^JETLINK_SLEEP_AFTER=//p' "$ENV_FILE" | tail -n 1)"
+  # from the copy backup_install made, which a held sleep does not change
+  after="$(sed -n 's/^JETLINK_SLEEP_AFTER=//p' "$ENV_PREV" 2>/dev/null | tail -n 1 || true)"
   [ "${after%.*}" -gt 0 ] 2>/dev/null || return 0
   as_root systemctl is-active --quiet "$UNIT" || return 0
   if [ "$DOCKER_ERA" = 0 ]; then
@@ -1014,8 +1092,9 @@ hold_sleep() {
     fi
     return 0
   fi
-  { grep -v '^JETLINK_SLEEP_AFTER=' "$ENV_PREV"; echo 'JETLINK_SLEEP_AFTER=0'; } | root_write "$ENV_FILE"
   SLEEP_HELD=1
+  { grep -v '^JETLINK_SLEEP_AFTER=' "$ENV_PREV"; echo 'JETLINK_SLEEP_AFTER=0'; echo "JETLINK_SLEEP_AFTER_HELD=$after"; } \
+    | root_write "$ENV_FILE"
   step "Keeping this computer awake for the update" as_root systemctl restart "$UNIT"
 }
 
@@ -1091,6 +1170,23 @@ restore_docker_era() {
       esac
     done <"$DOCKER_ERA_DIR/enabled"
   } >>"$LOG" 2>&1 || true
+}
+
+# A jetlink-* unit the installer did not make, set up by hand on a bench,
+# stays as it is, and is not saved or started again with the Docker era's.
+# One that runs may hold the comma's USB interface the server needs.
+others_units() {
+  local f u
+  for f in "$UNIT_DIR"/jetlink-*.service; do
+    [ -e "$f" ] || continue
+    u="$(basename "$f")"
+    case " $DOCKER_ERA_UNITS " in *" $u "*) continue ;; esac
+    if as_root systemctl is-active --quiet "$u" || [ "$(as_root systemctl is-enabled "$u" 2>/dev/null || true)" = enabled ]; then
+      note "$u is not the installer's, and stays as it is. If it serves the comma too, stop it:"
+      note "  sudo systemctl disable --now $u"
+    fi
+  done
+  return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -1211,21 +1307,34 @@ trt_plugins() {
 
 # TensorRT goes on / (a PC's under /opt/jetlink). When the Docker era's images
 # are what fills it they go first, which stops the old server now rather than
-# at the switch; going back to it downloads them again.
+# at the switch; going back to it downloads them again. Images Docker keeps on
+# another disk would free nothing there, so they stay.
 make_room_for_trt() {
-  local where=/ free
+  local where=/ free docker_root
   [ "$JETSON" = 1 ] || where=$TRT_ROOT
   free="$(free_gb "$where")"
   [ "$free" -ge "$TRT_GB" ] && return 0
   if [ "$DOCKER_ERA" = 1 ] && [ -n "$(docker_images)" ]; then
-    note "$free GB free for TensorRT, which needs $TRT_GB GB: deleting Jetlink's Docker images first."
-    stop_running_server
-    remove_docker_images
-    free="$(free_gb "$where")"
-    [ "$free" -ge "$TRT_GB" ] && return 0
+    docker_root="$(as_root docker info -f '{{.DockerRootDir}}' 2>>"$LOG" || true)"
+    if [ -n "$docker_root" ] && [ "$(mount_of "$docker_root")" = "$(mount_of "$where")" ]; then
+      note "$free GB free for TensorRT, which needs $TRT_GB GB: deleting Jetlink's Docker images first."
+      stop_running_server
+      remove_docker_images
+      free="$(free_gb "$where")"
+      [ "$free" -ge "$TRT_GB" ] && return 0
+    else
+      note "Jetlink's Docker images are not on the disk TensorRT goes on (${docker_root:-Docker did not say where}), so they stay."
+    fi
   fi
   die "Not enough free space for TensorRT: $free GB on $where, and it needs $TRT_GB GB." \
     "Free some space and run the installer again."
+}
+
+# the mount point of the filesystem that holds $1, or will once it is made
+mount_of() {
+  local where=$1
+  while [ ! -d "$where" ]; do where="$(dirname "$where")"; done
+  { df -P "$where" 2>/dev/null || true; } | awk 'NR == 2 {print $NF}'
 }
 
 # every image the Docker-era installers pulled or built
@@ -1324,6 +1433,14 @@ unpack_server() {
   if [ -z "$top" ] || [ ! -x "$top/bin/jetlink-server" ] || [ ! -f "$top/$SHARE/systemd/$UNIT.service" ]; then
     as_root rm -rf "$stage"
     die "$(basename "$tarball") has no bin/jetlink-server and $SHARE/systemd/$UNIT.service in it."
+  fi
+  # a tree from before the native server ships a unit that runs Docker, which
+  # systemd would start and fail with every 2 seconds
+  if ! grep -q "^ExecStart=$SRC_ROOT/current/bin/jetlink-server" "$top/$SHARE/systemd/$UNIT.service"; then
+    as_root rm -rf "$stage"
+    die "The unit in $(basename "$tarball") does not start $SRC_ROOT/current/bin/jetlink-server." \
+      "It was built from an older tree. Build the tarball from the current one:" \
+      "  scripts/build-linux.sh $FLAVOR"
   fi
   ver="$(tr -d '[:space:]' <"$top/VERSION" 2>/dev/null || true)"
   if [ -z "$ver" ]; then
@@ -1466,8 +1583,9 @@ install_files() {
   if [ "$JETSON" = 1 ]; then
     # jetson_clocks pins the clocks and turns DVFS off, so the GPU sits at the
     # power mode's ceiling instead of ramping between frames. A reboot undoes
-    # it, so it runs before every start.
-    printf '# Jetlink: the GPU at full clock while the server runs\n[Service]\nExecStartPre=-/usr/bin/jetson_clocks\n' \
+    # it, so it runs before every start, and after nvpmodel, whose mode sets
+    # the ceiling and would undo it too.
+    printf '# Jetlink: the GPU at full clock while the server runs\n[Unit]\nAfter=nvpmodel.service\n[Service]\nExecStartPre=-/usr/bin/jetson_clocks\n' \
       | root_write "$CLOCKS_DROPIN"
   else
     as_root rm -f "$CLOCKS_DROPIN"
@@ -1572,27 +1690,89 @@ start_server() {
   since="$(date '+%Y-%m-%d %H:%M:%S')"
   as_root systemctl restart "$UNIT"
   step "Starting the Jetlink server" wait_ready "$since"
+  if [[ $(server_journal "$since") == *"$PRELOAD_LINE"* ]]; then
+    step "Loading the model it ran last" wait_engine "$since"
+    if [ -z "$(engine_line "$since")" ]; then
+      note "It is still preparing that model, and goes on in the background: jetlink logs"
+    fi
+  fi
+  # only now, with the new server up and staying up: until then the old one,
+  # its settings and its images are the way back
   SERVER_STOPPED=0 CHANGED=0 SLEEP_HELD=0
   keep_previous
-  # only now: until the native server was ready they were the way back
   if [ "$DOCKER_ERA" = 1 ]; then remove_docker_images; fi
 }
 
-# Up means the server chose its backend and is waiting for the comma (or
-# already has it); systemd's third restart of it means a crash loop. The
-# journal is followed, so either shows the moment it is written. The follower
-# ends at its next line or at the timeout.
+# The server says the first once it serves, whatever the comma is doing; the
+# others are what builds before that line said, for a --binary of one.
+READY_RE='jetlink-server is serving|waiting for a jetlink gadget|client connected|nothing on the comma is serving it yet'
+# systemd's line when it starts a server that exited again
+RESTART_RE='restart counter is at [0-9]'
+# said before the server serves when it loads the model it ran last
+PRELOAD_LINE='preloading the engine loaded last'
+
+server_journal() {
+  as_root journalctl -u "$UNIT" --since "$1" --no-pager -o cat 2>/dev/null || true
+}
+
+# Up means the server said it serves and then stayed up; a restart means it
+# crashed. The journal is followed, so either shows the moment it is written.
+# The follower ends at its next line or at the timeout.
 wait_ready() {
   local since=$1 line
-  line="$(grep -m1 -E 'waiting for a jetlink gadget|client connected|restart counter is at 3\.' \
-    < <(as_root timeout 180 journalctl -f -u "$UNIT" --since "$since" -o cat 2>/dev/null) || true)"
+  line="$(grep -m1 -E "$READY_RE|$RESTART_RE" \
+    < <(as_root timeout "$READY_S" journalctl -f -u "$UNIT" --since "$since" -o cat 2>/dev/null) || true)"
   case "$line" in
-    *restart*|'')
-      as_root journalctl -u "$UNIT" --since "$since" --no-pager -o cat 2>/dev/null | tail -n 30 || true
-      if [ -n "$line" ]; then echo "the server keeps restarting"; else echo "the server did not report ready within 3 minutes"; fi
+    *"restart counter"*|'')
+      server_journal "$since" | tail -n 30
+      if [ -n "$line" ]; then echo "the server crashed, and systemd started it again"; else echo "the server did not report ready within 3 minutes"; fi
       return 1 ;;
   esac
   echo "$line"
+  # one loading a model is watched until that is done, by wait_engine
+  [[ $(server_journal "$since") == *"$PRELOAD_LINE"* ]] && return 0
+  stays_up "$since"
+}
+
+# The model the server ran last, loaded, or its preparation failed (the
+# server serves without it then, and the comma sends it again); a restart
+# means loading it crashed the server. After PRELOAD_S the server is left to it.
+wait_engine() {
+  local since=$1 line deadline=$((SECONDS + PRELOAD_S))
+  while :; do
+    line="$(engine_line "$since")"
+    case "$line" in
+      *"restart counter"*)
+        server_journal "$since" | tail -n 30
+        echo "loading the model crashed the server, and systemd started it again"
+        return 1 ;;
+      ?*) echo "$line"; break ;;
+    esac
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      echo "still preparing the model after $(elapsed "$PRELOAD_S"); the server serves meanwhile"
+      break
+    fi
+    sleep "$POLL_S"
+  done
+  stays_up "$since"
+}
+
+engine_line() {
+  server_journal "$1" | grep -m1 -E "engine ready|engine preparation failed|$RESTART_RE" || true
+}
+
+# Still running a moment later and never restarted: a server can crash just
+# after it said it serves, when the comma is first seen or the model loads.
+stays_up() {
+  local since=$1 restarts
+  sleep "$SETTLE_S"
+  restarts="$(as_root systemctl show -p NRestarts --value "$UNIT" 2>/dev/null || true)"
+  if as_root systemctl is-active --quiet "$UNIT" && [ "${restarts:-0}" = 0 ]; then
+    return 0
+  fi
+  server_journal "$since" | tail -n 30
+  echo "the server did not stay up: systemd started it again ${restarts:-?} times"
+  return 1
 }
 
 finish() {
@@ -1740,7 +1920,12 @@ main() {
   ARGS=("$@")
   parse_args "$@"
   setup_colors
+  # the output as it is here, for on_signal: a step sends its own to the log
+  exec 4>&1 5>&2
   trap 'on_error $LINENO' ERR
+  trap 'on_signal INT 130' INT
+  trap 'on_signal TERM 143' TERM
+  trap 'on_signal HUP 129' HUP
   : >"$LOG"
 
   printf '\n%sJetlink installer%s\n' "$B" "$N"
@@ -1795,6 +1980,7 @@ main() {
   install_base_packages
   prepare_source
   backup_install
+  others_units
   hold_sleep
   get_server
   ensure_runtime

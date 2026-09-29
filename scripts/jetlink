@@ -14,6 +14,8 @@ UNIT_FILE=/etc/systemd/system/$UNIT.service
 # makes the file, readable by all, when it starts
 AWAKE_LOCK="${JETLINK_TEST_AWAKE_LOCK:-/run/jetlink-awake.lock}"
 INSTALLER_URL_BASE="https://raw.githubusercontent.com/zoompilot/jetlink"
+# the last release that ran the server in Docker
+DOCKER_LAST=v0.6.0
 
 if [ -t 1 ]; then
   B=$'\e[1m' D=$'\e[2m' G=$'\e[32m' Y=$'\e[33m' R=$'\e[31m' N=$'\e[0m'
@@ -29,6 +31,7 @@ ${B}jetlink${N}: manage the Jetlink server on this computer
   ${B}jetlink logs${N}        follow the server's log (Ctrl-C to stop)
   ${B}jetlink restart${N}     restart the server
   ${B}jetlink stop${N}        stop it until the next restart or ${B}jetlink start${N}
+  ${B}jetlink run${N} ...     run it in this terminal instead, with any flags added (for a bench)
   ${B}jetlink update${N}      update Jetlink, keeping your settings
   ${B}jetlink setup${N}       answer the setup questions again
   ${B}jetlink models${N} ...  list, download or prepare models (${B}jetlink models --help${N})
@@ -220,16 +223,54 @@ latest_release() {
     | sort -t. -k1.2,1n -k2,2n -k3,3n | tail -n 1
 }
 
+# a >= b, for version numbers
+version_ge() {
+  [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" = "$1" ]
+}
+
+# Whether ARGS has the option, as --opt VALUE or --opt=VALUE.
+has_option() {
+  local opt=$1 arg
+  shift
+  for arg in "$@"; do
+    case "$arg" in "$opt"|"$opt"=*) return 0 ;; esac
+  done
+  return 1
+}
+
+# An update of a native install goes neither back to Docker nor to a release
+# older than the server it has by itself: until a release runs natively, the
+# newest one is a Docker one. Only --ref goes there.
+stay_native() {
+  local ref=$1 have="${JETLINK_SERVER_VERSION:-}"
+  [ -L /opt/jetlink/current ] && ! grep -qs docker "$UNIT_FILE" || return 0
+  [[ $ref =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 0
+  if version_ge "${DOCKER_LAST#v}" "${ref#v}"; then
+    echo "Jetlink here runs natively${have:+ (server $have)}; $ref, the release this install follows,"
+    echo "runs the server in Docker. Nothing changed."
+    echo "To go back to $ref and Docker:"
+    echo "  curl -fsSL $INSTALLER_URL_BASE/$ref/install.sh | bash -s -- --update --ref $ref"
+    exit 0
+  fi
+  if [ -n "$have" ] && ! version_ge "${ref#v}" "${have%%-*}"; then
+    echo "$ref, the release this install follows, is older than the server here ($have). Nothing changed."
+    echo "To install it anyway: jetlink update --ref $ref"
+    exit 0
+  fi
+}
+
 # update, setup and uninstall are the installer's: it is the one place that
 # knows what it changed on this computer. An update runs the installer of the
-# version it moves to.
+# version it moves to; one with --binary keeps the source it has, as the
+# installer does.
 run_installer() {
   load
   local src="${JETLINK_SOURCE_DIR:-}" ref="${JETLINK_REF:-main}"
   if [ "${JETLINK_SOURCE:-git}" = git ] && [ -d "$src/.git" ]; then
-    if [ "$1" = --update ]; then
+    if [ "$1" = --update ] && ! has_option --binary "$@"; then
       # with no answer the installer looks again, and says what it found
       if [ "$ref" = latest ]; then ref="$(latest_release "$src")"; fi
+      has_option --ref "$@" || stay_native "$ref"
       if [ -n "$ref" ]; then
         echo "Getting the newest Jetlink ($ref)..."
         git -C "$src" fetch --depth 1 origin "$ref" >/dev/null 2>&1 \

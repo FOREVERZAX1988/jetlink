@@ -90,10 +90,15 @@ case "$name" in
     done ;;
 
   df)
-    # every filesystem is /: FAKE_ROOT_FREE_GB, plus what deleted images freed
+    # every filesystem is / but FAKE_OTHER_FS, a disk of its own: each has
+    # FAKE_ROOT_FREE_GB free, plus what deleted images freed
     free=$((${FAKE_ROOT_FREE_GB:-100} + $(cat "$state/freed-gb" 2>/dev/null || echo 0)))
-    printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/fake 999999999 0 %s 1%% /\n' \
-      $((free * 1048576)) ;;
+    dev=/dev/fake mnt=/ path="${*: -1}"
+    if [ -n "${FAKE_OTHER_FS:-}" ] && { [ "$path" = "$FAKE_OTHER_FS" ] || [[ $path == "$FAKE_OTHER_FS"/* ]]; }; then
+      dev=/dev/other mnt=$FAKE_OTHER_FS
+    fi
+    printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\n%s 999999999 0 %s 1%% %s\n' \
+      "$dev" $((free * 1048576)) "$mnt" ;;
 
   systemctl)
     case "${1:-}" in
@@ -108,6 +113,11 @@ case "$name" in
           # which server came up, and whether it may sleep
           kind=native
           grep -qs run-server /etc/systemd/system/jetlink-server.service && kind=docker
+          # a native one that crashes once it serves, or loading the model
+          rm -f "$state/crashing"
+          if [ "$kind" = native ] && { [ "${FAKE_SERVER_CRASHLOOP:-0}" = 1 ] || [ "${FAKE_PRELOAD:-}" = crash ]; }; then
+            touch "$state/crashing"
+          fi
           printf 'jetlink-server started: %s, sleep %s\n' "$kind" \
             "$(sed -n 's/^JETLINK_SLEEP_AFTER=//p' /etc/jetlink/server.env 2>/dev/null | tail -n 1)" \
             >>"${FAKE_LOG:-/tmp/fake.log}"
@@ -118,6 +128,11 @@ case "$name" in
         # a unit with no [Install] section, like the poweroff flag's service
         elif [ -f "/etc/systemd/system/$u" ] && ! grep -q '^\[Install\]' "/etc/systemd/system/$u"; then echo static
         else echo enabled; fi ;;
+      show)
+        # -p NRestarts --value UNIT: systemd's restarts of it since it was started
+        if [[ " $* " == *" NRestarts "* ]]; then
+          if [ "${*: -1}" = jetlink-server ] && [ -f "$state/crashing" ]; then echo 2; else echo 0; fi
+        fi ;;
       list-unit-files)
         u=systemd-networkd-wait-online.service
         [ "$u" = "${*: -1}" ] && echo "$u enabled enabled" ;;
@@ -133,8 +148,27 @@ case "$name" in
         echo "jetlink-server.service: Scheduled restart job, restart counter is at $n."
       done
     else
+      plan=0123456789abcdef.trt10.16.2.10-Orin-sm87.plan
       echo "INFO io.zoompilot.jetlink.main: backend trt 10.16.2.10 on Orin-sm87, cache /mnt/data/jetlink"
-      echo "INFO io.zoompilot.jetlink.server: waiting for a jetlink gadget at 1209:0001"
+      # the model it ran last, which it starts loading before it serves;
+      # FAKE_PRELOAD says how that goes: ready, failed, crash, or slow
+      [ -z "${FAKE_PRELOAD:-}" ] || echo "INFO io.zoompilot.jetlink.engine: preloading the engine loaded last: $plan"
+      if [ "${FAKE_SERVER_OLD:-0}" = 1 ]; then
+        # a build from before the serving line, a comma on the bus that
+        # nothing on it serves yet
+        echo "WARNING io.zoompilot.jetlink.server: the comma's gadget is on the bus, but nothing on the comma is serving it yet"
+      else
+        echo "INFO io.zoompilot.jetlink.main: jetlink-server is serving"
+        echo "WARNING io.zoompilot.jetlink.server: waiting for a jetlink gadget at 1209:0001"
+      fi
+      case "${FAKE_PRELOAD:-}" in
+        ready) echo "INFO io.zoompilot.jetlink.engine: engine ready: $plan" ;;
+        failed) echo "ERROR io.zoompilot.jetlink.engine: engine preparation failed: failed(\"artifact invalid and the model is not on disk\")" ;;
+      esac
+      if [ -f "$state/crashing" ]; then
+        echo "jetlink-server.service: Main process exited, code=dumped, status=11/SEGV"
+        echo "jetlink-server.service: Scheduled restart job, restart counter is at 1."
+      fi
     fi ;;
 
   jetlink-server)
@@ -156,9 +190,12 @@ case "$name" in
   docker)
     case "${1:-}" in
       --version) echo "Docker version 29.1.0, build fake" ;;
-      info) if [ -f "$state/nvidia-runtime" ]; then
-              echo '{"nvidia":{"path":"nvidia-container-runtime"},"runc":{"path":"runc"}}'
-            else echo '{"runc":{"path":"runc"}}'; fi ;;
+      info)
+        if [[ " $* " == *DockerRootDir* ]]; then
+          echo "${FAKE_DOCKER_ROOT:-/var/lib/docker}"
+        elif [ -f "$state/nvidia-runtime" ]; then
+          echo '{"nvidia":{"path":"nvidia-container-runtime"},"runc":{"path":"runc"}}'
+        else echo '{"runc":{"path":"runc"}}'; fi ;;
       manifest) [ "${FAKE_PUBLISHED:-0}" = 1 ] || { echo "no such manifest" >&2; exit 1; } ;;
       pull) echo "$2" >>"$state/images" ;;
       build)
@@ -231,6 +268,12 @@ case "$name" in
         [ -f "$file" ] || { echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; }
         case "$file" in
           *.tar.gz)
+            if [ "${FAKE_DOWNLOAD_HANG:-0}" = 1 ]; then
+              # until the scenario's signal cuts it off; the sleep is a backstop
+              touch "$state/download-hanging"
+              sleep 30
+              exit 18
+            fi
             left="$(cat "$state/download-fails" 2>/dev/null || echo "${FAKE_DOWNLOAD_FAILS:-0}")"
             if [ "$left" -gt 0 ]; then
               echo $((left - 1)) >"$state/download-fails"

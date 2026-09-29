@@ -28,6 +28,8 @@
   /// SIGTERM, then exits 0.
   struct Serve: ParsableCommand {
     static let configuration = CommandConfiguration(abstract: "Serve the comma (the default).")
+    /// Said once, when the server has started; install.sh matches it as it is.
+    static let servingLine = "jetlink-server is serving"
 
     @OptionGroup var chosen: BackendArguments
     @Flag(help: "Be the USB host for the comma's gadget. No TCP listener then, unless --listen too.")
@@ -99,6 +101,10 @@
         controller = statusPort > 0 ? ServerController(server: server, registry: Registry(layout: server.cache.layout)) : nil
         log.info("backend \(backend.name) \(backend.runtimeVersion) on \(backend.deviceTag()), cache \(root.path)")
         try server.start()
+        // The installer waits for this line. It is said whatever the comma is
+        // doing: a comma on the bus that nothing on it serves yet gets no
+        // line of its own that says the server is up.
+        log.info(Serve.servingLine)
       } catch {
         log.error("cannot serve: \(error)")
         throw ExitCode.failure
