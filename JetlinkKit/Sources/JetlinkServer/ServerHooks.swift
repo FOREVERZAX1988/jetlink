@@ -19,10 +19,9 @@ public enum GadgetIdleEvent: Sendable, Equatable {
 /// gadget. Every hook defaults to what the apps do today, so they pass none;
 /// the Linux daemon fills them in.
 public struct ServerHooks: Sendable {
-  /// The telemetry piggybacked on a frame that asks for it (WANT_STATE), in
-  /// the hello and in STATE_RESP. Called on the session thread right after a
-  /// reply is due, so it returns a cached reading and never blocks; `{}` when
-  /// the host has no sensors, never zeros.
+  /// The host's sensors, for a frame that asks for them (WANT_STATE), the
+  /// hello and STATE_RESP: `{}` when it has none, never zeros. The server
+  /// reads it on a thread of its own (`TelemetrySampler`), so it may block.
   public var telemetry: @Sendable () -> [String: Any]
   /// The device's thermal state for the benchmark's reports: "nominal",
   /// "fair", "serious" or "critical". The platform's own unless the host

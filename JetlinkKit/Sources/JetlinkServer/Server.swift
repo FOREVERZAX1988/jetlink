@@ -267,10 +267,11 @@ public final class Server: @unchecked Sendable {
     session?.interrupt()
   }
 
-  /// `stop()` and release the engine: the process is ending.
+  /// `stop()`, release the engine and close the gadget: the process is ending.
   public func shutdown() {
     stop()
     host.close()
+    gadget?.close()
   }
 
   // MARK: connections
@@ -295,9 +296,14 @@ public final class Server: @unchecked Sendable {
       previous.done.wait()
     }
     let session = Session(transport: transport, host: host)
-    session.onLink = { [weak self] event in
-      self?.log.info("client connected from \(event.peer ?? "?") over \(event.linkMedium?.title ?? "an unknown link")")
-      self?.setLink(event)
+    session.onLink = { [weak self] event, first in
+      guard let self else { return }
+      log.info("client connected from \(event.peer ?? "?") over \(event.linkMedium?.title ?? "an unknown link")")
+      setLink(event)
+      if first {
+        _ = hooks.gadgetIdle?(.connected)
+        gadget?.sessionStarted()
+      }
     }
     let done = Latch()
     lock.lock()
@@ -327,6 +333,7 @@ public final class Server: @unchecked Sendable {
     // not disconnect either: the USB loop says so once, and retries quietly.
     guard session.announced else { return }
     _ = hooks.gadgetIdle?(.disconnected)
+    gadget?.sessionEnded()
     log.info("client disconnected: \(reason)")
     if isCurrent && !isStopped {
       setLink(LinkEvent(state: .disconnected, detail: reason, peer: nil))

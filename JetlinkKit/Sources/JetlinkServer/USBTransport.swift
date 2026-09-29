@@ -20,12 +20,25 @@ protocol BulkPipes: AnyObject, Sendable {
 }
 
 /// Where the server finds the comma's gadget: IOKit on a Mac, a descriptor
-/// the Android app hands over (UsbfsGadget), a fake in the tests.
+/// the Android app hands over (UsbfsGadget), sysfs on Linux, a fake in the
+/// tests.
 public protocol GadgetSource: Sendable {
   /// Is the gadget on the bus? Cheap enough to poll twice a second.
   func present() -> Bool
   /// Opens the link interface's bulk pair.
   func open() throws -> any MessageLink
+  /// A comma connected, over any link, and that session ended: what the
+  /// server says as `.connected` and `.disconnected`, on the session's thread.
+  func sessionStarted()
+  func sessionEnded()
+  /// The server is shutting down.
+  func close()
+}
+
+extension GadgetSource {
+  public func sessionStarted() {}
+  public func sessionEnded() {}
+  public func close() {}
 }
 
 /// Framing over USB bulk transfers, the host's end: the Swift form of
