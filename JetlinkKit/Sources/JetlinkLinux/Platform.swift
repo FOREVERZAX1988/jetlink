@@ -1,7 +1,6 @@
 #if os(Linux)
   import Foundation
   import Glibc
-  import JetlinkServer
 
   /// Where this host's kernel files are: `/` on a real host, a captured or
   /// made-up tree in the tests. Every path the Linux host reads or writes
@@ -184,13 +183,5 @@
     public static func canSuspend(_ root: HostRoot = .system) -> Bool {
       root.exists("/sys/power/state")
     }
-  }
-
-  /// Where the Linux host's own lines go: the server's log, or a test's list.
-  typealias LinuxLog = @Sendable (Log.Level, String) -> Void
-
-  func serverLog(_ category: String) -> LinuxLog {
-    let log = ServerLog(category: category)
-    return { level, message in log.write(level, message) }
   }
 #endif

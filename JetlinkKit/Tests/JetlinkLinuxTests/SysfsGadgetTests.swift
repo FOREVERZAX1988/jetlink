@@ -35,10 +35,10 @@
   /// usbdevfs where the node is a file holding descriptors: opens and reads
   /// are real, the ioctls are the test's.
   final class FakeNode: UsbfsNode, @unchecked Sendable {
-    let calls = Dial<[String]>([])
-    let bound = Dial<String?>(nil)
-    let claimError = Dial<Int32>(0)
-    let descriptorsOpen = Dial<Set<Int32>>([])
+    let calls = Locked<[String]>([])
+    let bound = Locked<String?>(nil)
+    let claimError = Locked<Int32>(0)
+    let descriptorsOpen = Locked<Set<Int32>>([])
 
     func open(_ path: String) throws(KernelError) -> Int32 {
       let fd = try DevUsbfs().open(path)
@@ -79,10 +79,10 @@
   /// The server's end of the claim: what it was handed, and a device that
   /// goes when told, as ENODEV from a reap makes `UsbfsGadget`'s go.
   final class FakeTarget: UsbfsTarget, @unchecked Sendable {
-    let attached = Dial<(fd: Int32, input: UInt8, output: UInt8)?>(nil)
-    let events = Dial<[String]>([])
-    let gone = Dial(false)
-    let attachError = Dial<Bool>(false)
+    let attached = Locked<(fd: Int32, input: UInt8, output: UInt8)?>(nil)
+    let events = Locked<[String]>([])
+    let gone = Locked(false)
+    let attachError = Locked<Bool>(false)
 
     func attach(fd: Int32, inEndpoint: UInt8, outEndpoint: UInt8) throws {
       if attachError.value { throw LinkError.closed("could not create the USB wake event") }
@@ -125,9 +125,9 @@
     var environment: [String: String] = [:]
     /// Whether a permit write reaches the device: not while the bus is
     /// suspended, when the kernel still reports success.
-    let lpmTakes = Dial(true)
+    let lpmTakes = Locked(true)
     /// What was written to the comma's usb3_lpm_permit, in order.
-    let permits = Dial<[String]>([])
+    let permits = Locked<[String]>([])
     lazy var gadget = SysfsGadget(
       root: tree.root, node: node, target: target, environment: environment,
       write: { [tree, lpmTakes, permits] path, text throws(KernelError) in
@@ -191,8 +191,14 @@
       gadget.power.sync {}
     }
 
-    func hear(_ event: GadgetIdleEvent) {
-      gadget.hear(event)
+    /// A session over any link, as the server says it.
+    func started() {
+      gadget.sessionStarted()
+      settle()
+    }
+
+    func ended() {
+      gadget.sessionEnded()
       settle()
     }
 
@@ -356,25 +362,24 @@
       let bus = Bus()
       try bus.claimed()
       #expect(bus.permits.value.isEmpty)
-      bus.hear(.connected)
+      bus.started()
       #expect(bus.permits.value == ["0"] && bus.permit == "0")
       #expect(bus.lpm("u1") == "disabled\n" && bus.lpm("u2") == "disabled\n")
       #expect(bus.lines.count("usb 3 link power management off for the comma's session") == 1)
       // The comma's per-run reopens change nothing.
       _ = try bus.gadget.open()
-      bus.hear(.present)
       #expect(bus.permits.value == ["0"])
-      bus.hear(.disconnected)
+      bus.ended()
       #expect(bus.permits.value == ["0", "u1_u2"] && bus.permit == "u1_u2")
       #expect(bus.lpm("u1") == "enabled\n" && bus.lpm("u2") == "enabled\n")
       #expect(bus.lines.count("usb 3 link power management back to stock for the comma's link") == 1)
       // A second end says nothing: there is nothing to put back.
-      bus.hear(.disconnected)
+      bus.ended()
       #expect(bus.permits.value == ["0", "u1_u2"])
-      bus.hear(.connected)
+      bus.started()
       bus.gadget.close()
       #expect(bus.permit == "u1_u2" && bus.lpm("u1") == "enabled\n")
-      bus.hear(.connected)
+      bus.started()
       #expect(bus.permits.value == ["0", "u1_u2", "0", "u1_u2"])
     }
 
@@ -382,7 +387,7 @@
     func replugged() throws {
       let bus = Bus()
       try bus.claimed()
-      bus.hear(.connected)
+      bus.started()
       bus.unplug()
       #expect(!bus.gadget.present())
       // It comes back with U1/U2 on, as after a write made while it was away.
@@ -394,13 +399,13 @@
       #expect(bus.lpm("u1") == "disabled\n" && bus.lpm("u2") == "disabled\n")
       // Written to the port itself: the comma's `port` link left with it.
       bus.unplug(device: 8)
-      bus.hear(.disconnected)
+      bus.ended()
       #expect(bus.permit == "u1_u2")
       #expect(bus.lines.count("back to stock for the comma's link") == 1)
       bus.plug(device: 9, lpm: true)
       #expect(bus.gadget.present())
       _ = try bus.gadget.open()
-      bus.hear(.connected)
+      bus.started()
       #expect(bus.permits.value == ["0", "0", "u1_u2", "0"])
       #expect(bus.lpm("u1") == "disabled\n")
     }
@@ -410,7 +415,7 @@
       let bus = Bus()
       try bus.claimed()
       bus.lpmTakes.value = false
-      bus.hear(.connected)
+      bus.started()
       #expect(bus.lines.has(.warning, "is still on for the comma's session after writing 0"))
       #expect(bus.lines.has(.warning, "u1 enabled, u2 enabled"))
       #expect(bus.lines.count("off for the comma's session") == 0)
@@ -435,22 +440,22 @@
     func skipped() throws {
       let usb2 = Bus()
       try usb2.claimed(speed: "480")
-      usb2.hear(.connected)
-      usb2.hear(.disconnected)
+      usb2.started()
+      usb2.ended()
       #expect(usb2.permits.value.isEmpty)
 
       let bare = Bus()
       try bare.claimed(lpm: false)
-      bare.hear(.connected)
-      bare.hear(.disconnected)
+      bare.started()
+      bare.ended()
       bare.gadget.close()
       #expect(bare.permits.value.isEmpty)
       #expect(bare.lines.count("link power management") == 0)
 
       // A comma over TCP, with no gadget on the bus.
       let tcp = Bus()
-      tcp.hear(.connected)
-      tcp.hear(.disconnected)
+      tcp.started()
+      tcp.ended()
       #expect(tcp.permits.value.isEmpty)
     }
 
@@ -460,11 +465,11 @@
       bus.environment = ["JETLINK_USB_LPM": "1"]
       bus.tree.write(Bus.port, "0\n")
       try bus.claimed()
-      bus.hear(.connected)
+      bus.started()
       #expect(bus.permits.value == ["u1_u2"])
       #expect(bus.lpm("u1") == "enabled\n" && bus.lpm("u2") == "enabled\n")
       #expect(bus.lines.has(.info, "usb 3 link power management left on for the comma's session (JETLINK_USB_LPM=1)"))
-      bus.hear(.disconnected)
+      bus.ended()
       bus.gadget.close()
       #expect(bus.permits.value == ["u1_u2"])
     }

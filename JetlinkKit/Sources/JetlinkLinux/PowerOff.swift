@@ -1,6 +1,7 @@
 #if os(Linux)
   import Foundation
   import Glibc
+  import JetlinkServer
 
   /// Powering the box off on the comma's say-so (D9). hardwared shuts the
   /// comma down below 11.8 V or after 30 hours parked, and a Jetson on an
@@ -12,36 +13,36 @@
     /// Python server did, so the comma sees what it always saw; once the
     /// reply is written the box syncs, then powers off when `enabled`.
     public static func hook(enabled: Bool) -> @Sendable (String) -> (@Sendable () -> Void)? {
-      hook(enabled: enabled, powerOff: systemctlPowerOff, log: serverLog("power"))
+      hook(enabled: enabled, powerOff: systemctlPowerOff, log: ServerLog(category: "power"))
     }
 
-    static func hook(enabled: Bool, powerOff: @escaping @Sendable (@escaping LinuxLog) -> Void, log: @escaping LinuxLog)
+    static func hook(enabled: Bool, powerOff: @escaping @Sendable (ServerLog) -> Void, log: ServerLog)
       -> @Sendable (String) -> (@Sendable () -> Void)?
     {
       { _ in
         {
           sync()
           if enabled {
-            log(.warning, "powering off")
+            log.warning("powering off")
             powerOff(log)
           } else {
-            log(.warning, "staying up: this server runs without --poweroff")
+            log.warning("staying up: this server runs without --poweroff")
           }
         }
       }
     }
 
-    static func systemctlPowerOff(_ log: @escaping LinuxLog) {
+    static func systemctlPowerOff(_ log: ServerLog) {
       do {
         let pid = try spawn("systemctl", ["poweroff"])
         // Reaped off the session thread: systemd may stop this process
         // before systemctl returns.
         Thread.detachNewThread {
           let status = exitStatus(of: pid)
-          if status != 0 { log(.error, "systemctl poweroff exited with status \(status)") }
+          if status != 0 { log.error("systemctl poweroff exited with status \(status)") }
         }
       } catch {
-        log(.error, "cannot run systemctl poweroff: \(error)")
+        log.error("cannot run systemctl poweroff: \(error)")
       }
     }
 

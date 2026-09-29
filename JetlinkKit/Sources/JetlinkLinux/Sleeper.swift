@@ -38,7 +38,7 @@
     /// Every write to sysfs: `mem` to /sys/power/state returns once the box
     /// is back. A test's stand-in for the kernel.
     let write: @Sendable (String, String) throws(KernelError) -> Void
-    let log: LinuxLog
+    let log: ServerLog
 
     private let lock = NSLock()
     private(set) var enabled = true
@@ -49,7 +49,7 @@
 
     init(
       after: TimeInterval, root: HostRoot, lockPath: String, monotonic: @escaping @Sendable () -> TimeInterval = { Sleeper.now(CLOCK_MONOTONIC) },
-      write: @escaping @Sendable (String, String) throws(KernelError) -> Void = Sysfs.write, log: @escaping LinuxLog = serverLog("sleep")
+      write: @escaping @Sendable (String, String) throws(KernelError) -> Void = Sysfs.write, log: ServerLog = ServerLog(category: "sleep")
     ) {
       self.after = after
       self.root = root
@@ -98,12 +98,12 @@
         return held
       }
       if holding {
-        if !wasHeld { log(.info, "held awake by jetlink caffeinate") }
+        if !wasHeld { log.info("held awake by jetlink caffeinate") }
         return false
       }
       if wasHeld {
         // The count starts again from the release, not from the comma.
-        log(.info, "no longer held awake; suspending after \(Int(after)) s more without a gadget")
+        log.info("no longer held awake; suspending after \(Int(after)) s more without a gadget")
         touch()
         return false
       }
@@ -156,7 +156,7 @@
       let successes = Sysfs.readInt("\(power)/suspend_stats/success") ?? -1
       // CLOCK_BOOTTIME keeps counting while asleep
       let start = Sleeper.now(CLOCK_BOOTTIME)
-      log(.info, "no gadget for \(Int(after)) s, suspending")
+      log.info("no gadget for \(Int(after)) s, suspending")
       armHubWakeup()
       let armed = armBackstop()
       do throws(KernelError) {
@@ -165,12 +165,12 @@
         disarmBackstop(armed)
         if [EACCES, EPERM, EROFS, ENOENT].contains(error.errno) {
           // Configuration, not weather: nothing will change by the next try.
-          log(.error, "cannot write \(power)/state (\(error)); sleep disabled")
+          log.error("cannot write \(power)/state (\(error)); sleep disabled")
           lock.withLock { enabled = false }
         } else {
           // EBUSY is the freezer giving up, EINVAL a mode the platform
           // refused: both are worth another try later.
-          log(.warning, "suspend failed: \(error) (\(failure()))")
+          log.warning("suspend failed: \(error) (\(failure()))")
         }
         return false
       }
@@ -179,10 +179,10 @@
       if successes >= 0 && (Sysfs.readInt("\(power)/suspend_stats/success") ?? -1) <= successes {
         // A clean return with the counter unmoved: a wake edge landed during
         // the freeze and the box never left.
-        log(.warning, "suspend returned after \(String(format: "%.1f", asleep)) s without sleeping (\(failure()))")
+        log.warning("suspend returned after \(String(format: "%.1f", asleep)) s without sleeping (\(failure()))")
         return false
       }
-      log(.info, "resumed after \(Int(asleep.rounded())) s asleep")
+      log.info("resumed after \(Int(asleep.rounded())) s asleep")
       return true
     }
 
@@ -194,13 +194,13 @@
       guard let modes = Sysfs.read(path), !modes.isEmpty else { return true }
       if modes.contains("[deep]") { return true }
       guard modes.split(separator: " ").contains("deep") else {
-        log(.error, "deep suspend is not available (mem_sleep: \(modes)), not sleeping")
+        log.error("deep suspend is not available (mem_sleep: \(modes)), not sleeping")
         return false
       }
       do {
         try write(path, "deep")
       } catch {
-        log(.error, "could not select deep suspend: \(error)")
+        log.error("could not select deep suspend: \(error)")
         return false
       }
       return true
@@ -228,8 +228,7 @@
         }
       }
       if !disarmed.isEmpty {
-        log(
-          .error,
+        log.error(
           "hub(s) \(disarmed.joined(separator: ", ")) could not be armed for remote wakeup: the comma presenting its gadget may not wake this box"
         )
       }
@@ -252,7 +251,7 @@
         return true
       } catch {
         // The USB edge is still the wake source; this was only the backstop.
-        log(.warning, "could not arm the \(backstop) s wake backstop: \(error)")
+        log.warning("could not arm the \(backstop) s wake backstop: \(error)")
         return false
       }
     }

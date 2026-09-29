@@ -11,14 +11,14 @@
   /// count rises), or fails with the errno the test chooses.
   final class Kernel: @unchecked Sendable {
     let tree = Tree.jetsonCopy()
-    let monotonic = Dial(1000.0)
+    let monotonic = Locked(1000.0)
     let lines = Lines()
     /// Each write, as (path under the tree, text).
-    let writes = Dial<[(String, String)]>([])
+    let writes = Locked<[(String, String)]>([])
     /// errno for a write to a path ending so.
-    let failing = Dial<[String: Int32]>([:])
+    let failing = Locked<[String: Int32]>([:])
     /// Whether a suspend sleeps, or returns at once without sleeping.
-    let sleeps = Dial(true)
+    let sleeps = Locked(true)
 
     /// Made at once, so the idle count starts with the kernel.
     private(set) var sleeper: Sleeper!

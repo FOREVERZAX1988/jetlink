@@ -33,21 +33,6 @@
       #expect(lines.has(.warning, "needs /sys/power/state"))
       #expect(self.hooks(Tree.jetsonCopy(), sleepAfter: 0).sleepAfter == 0)
     }
-
-    @Test("The gadget hears the sessions through the hooks, with no sleeper too")
-    func gadgetHears() throws {
-      let bus = Bus()
-      try bus.claimed()
-      let hooks = LinuxHost.hooks(sleepAfter: 0, poweroff: false, telemetry: nil, gadget: bus.gadget, root: bus.tree.root, log: Lines().log)
-      #expect(hooks.sleepAfter == 0)
-      #expect(hooks.gadgetIdle?(.connected) == false)
-      bus.settle()
-      #expect(bus.permit == "0")
-      #expect(hooks.gadgetIdle?(.absent) == false)
-      _ = hooks.gadgetIdle?(.disconnected)
-      bus.settle()
-      #expect(bus.permit == "u1_u2")
-    }
   }
 
   @Suite("Platform")

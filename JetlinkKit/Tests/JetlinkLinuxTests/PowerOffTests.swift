@@ -1,6 +1,7 @@
 #if os(Linux)
   import Foundation
   import Glibc
+  import JetlinkServer
   import Testing
 
   @testable import JetlinkLinux
@@ -8,7 +9,7 @@
   @Suite("Power off")
   struct PowerOffTests {
     func run(enabled: Bool) -> (calls: Int, lines: Lines) {
-      let calls = Dial(0)
+      let calls = Locked(0)
       let lines = Lines()
       let hook = PowerOff.hook(enabled: enabled, powerOff: { _ in calls.value += 1 }, log: lines.log)
       // Always accepted: the reply says ok and "powering off" either way.

@@ -1,12 +1,13 @@
 import Foundation
 import JetlinkServer
+import JetlinkTestSupport
 import Testing
 
 /// The sampler on a clock the test moves, over a source that counts its reads.
 @Suite("Telemetry sampler")
 struct TelemetrySamplerTests {
   final class Source: @unchecked Sendable {
-    let reads = Dial(0)
+    let reads = Locked(0)
     let gate = DispatchSemaphore(value: 0)
     let gated: Bool
 
@@ -21,7 +22,7 @@ struct TelemetrySamplerTests {
     }
   }
 
-  let clock = Dial(100.0)
+  let clock = Locked(100.0)
 
   func sampler(_ source: Source) -> TelemetrySampler {
     let clock = clock

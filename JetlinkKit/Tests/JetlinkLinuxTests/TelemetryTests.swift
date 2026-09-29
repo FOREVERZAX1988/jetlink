@@ -1,5 +1,6 @@
 #if os(Linux)
   import Foundation
+  import JetlinkServer
   import Testing
 
   @testable import JetlinkLinux
@@ -236,7 +237,7 @@
 
     @Test("A Tegra takes its sysfs and never asks NVML; a PC asks NVML for --device's GPU")
     func picks() {
-      let asked = Dial<[Int]>([])
+      let asked = Locked<[Int]>([])
       let fake: (Int) -> Result<NvmlTelemetry, NvmlUnavailable> = { index in
         asked.value.append(index)
         return self.open(index)

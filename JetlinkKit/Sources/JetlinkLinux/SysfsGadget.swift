@@ -66,7 +66,7 @@
     /// JETLINK_USB_LPM=1: USB 3 link power management stays on.
     private let keepLPM: Bool
     private let write: @Sendable (String, String) throws(KernelError) -> Void
-    private let log: LinuxLog
+    private let log: ServerLog
     private let lock = NSLock()
     private var claimed: Claimed?
     private var seen: Found?
@@ -88,7 +88,7 @@
 
     init(
       root: HostRoot, node: any UsbfsNode, target: any UsbfsTarget, environment: [String: String] = ProcessInfo.processInfo.environment,
-      write: @escaping @Sendable (String, String) throws(KernelError) -> Void = Sysfs.write, log: @escaping LinuxLog = serverLog("usb")
+      write: @escaping @Sendable (String, String) throws(KernelError) -> Void = Sysfs.write, log: ServerLog = ServerLog(category: "usb")
     ) {
       self.root = root
       self.node = node
@@ -130,7 +130,7 @@
             throw LinkError.closed("interface \(picked.interface) of \(path) is claimed by another program")
           }
           try node.disconnect(fd, interface: picked.interface)
-          log(.info, "detached the \(driver) driver from the comma's interface \(picked.interface)")
+          log.info("detached the \(driver) driver from the comma's interface \(picked.interface)")
         }
         try node.claim(fd, interface: picked.interface)
         do {
@@ -140,8 +140,7 @@
           throw error
         }
         let endpoints = String(format: "bulk in %02x out %02x", picked.inEndpoint, picked.outEndpoint)
-        log(
-          .info,
+        log.info(
           "claimed the comma's gadget at \(found.name) (\(path), \(found.speed.map { "\($0) Mb/s" } ?? "unknown speed")): interface \(picked.interface), \(endpoints)"
         )
         let files = linkPowerFiles(found)
@@ -172,22 +171,19 @@
     /// each write. Nothing to do on a USB 2 link, or for a device the kernel
     /// runs without LPM (no such files).
     ///
-    /// Heard through `ServerHooks.gadgetIdle`, which reports any link: a comma
+    /// The server says when a session starts and ends over any link: a comma
     /// served over TCP while this gadget is claimed turns it off too.
-    public func hear(_ event: GadgetIdleEvent) {
-      switch event {
-      case .connected:
-        power.async { [self] in
-          serving = true
-          if let linkPower { linkPowerOff(linkPower) }
-        }
-      case .disconnected:
-        power.async { [self] in
-          serving = false
-          linkPowerStock()
-        }
-      case .present, .absent:
-        break
+    public func sessionStarted() {
+      power.async { [self] in
+        serving = true
+        if let linkPower { linkPowerOff(linkPower) }
+      }
+    }
+
+    public func sessionEnded() {
+      power.async { [self] in
+        serving = false
+        linkPowerStock()
       }
     }
 
@@ -218,21 +214,21 @@
       if keepLPM {
         // A port an earlier session left off would stay so until a reboot.
         try? write(files.permit, "u1_u2")
-        log(.info, "usb 3 link power management left on for the comma's session (JETLINK_USB_LPM=1)")
+        log.info("usb 3 link power management left on for the comma's session (JETLINK_USB_LPM=1)")
         return
       }
       do throws(KernelError) {
         try write(files.permit, "0")
       } catch {
-        log(.warning, "could not turn usb 3 link power management off for the comma's session: \(error)")
+        log.warning("could not turn usb 3 link power management off for the comma's session: \(error)")
         return
       }
       lpmOff = files
       let read = files.states.map { Sysfs.read($0) ?? "unreadable" }
       if read.allSatisfy({ $0 == "disabled" }) {
-        log(.info, "usb 3 link power management off for the comma's session")
+        log.info("usb 3 link power management off for the comma's session")
       } else {
-        log(.warning, "usb 3 link power management is still on for the comma's session after writing 0 to \(files.permit): u1 \(read[0]), u2 \(read[1])")
+        log.warning("usb 3 link power management is still on for the comma's session after writing 0 to \(files.permit): u1 \(read[0]), u2 \(read[1])")
       }
     }
 
@@ -244,15 +240,15 @@
       do throws(KernelError) {
         try write(off.permit, "u1_u2")
       } catch {
-        log(.warning, "could not put usb 3 link power management back to stock for the comma's link: \(error)")
+        log.warning("could not put usb 3 link power management back to stock for the comma's link: \(error)")
         return
       }
       // A comma that left the bus took its state files with it.
       let read = off.states.map { Sysfs.read($0) }
       if read.contains(where: { $0 != nil && $0 != "enabled" }) {
-        log(.warning, "usb 3 link power management back to stock for the comma's link, but u1 \(read[0] ?? "gone"), u2 \(read[1] ?? "gone")\(why)")
+        log.warning("usb 3 link power management back to stock for the comma's link, but u1 \(read[0] ?? "gone"), u2 \(read[1] ?? "gone")\(why)")
       } else {
-        log(.info, "usb 3 link power management back to stock for the comma's link\(why)")
+        log.info("usb 3 link power management back to stock for the comma's link\(why)")
       }
     }
 
@@ -277,7 +273,7 @@
       node.release(claimed.fd, interface: claimed.interface)
       node.close(claimed.fd)
       power.async { [self] in linkPower = nil }
-      log(.info, "released the comma's gadget at \(claimed.found.name): \(reason)")
+      log.info("released the comma's gadget at \(claimed.found.name): \(reason)")
     }
   }
 

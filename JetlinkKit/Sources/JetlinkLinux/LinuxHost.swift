@@ -7,20 +7,17 @@
   public enum LinuxHost {
     /// The server's hooks on this machine: `telemetry`'s readings, the
     /// sleeper, the poweroff. `sleepAfter` is what was asked for; the hooks
-    /// say what the host will do: 0 when it cannot suspend. `gadget` hears
-    /// when sessions start and end, for the link's power management.
-    public static func hooks(sleepAfter: Double, poweroff: Bool, telemetry: GPUTelemetry?, gadget: SysfsGadget? = nil) -> ServerHooks {
-      hooks(sleepAfter: sleepAfter, poweroff: poweroff, telemetry: telemetry, gadget: gadget, root: .system)
+    /// say what the host will do: 0 when it cannot suspend.
+    public static func hooks(sleepAfter: Double, poweroff: Bool, telemetry: GPUTelemetry?) -> ServerHooks {
+      hooks(sleepAfter: sleepAfter, poweroff: poweroff, telemetry: telemetry, root: .system)
     }
 
     static func hooks(
-      sleepAfter: Double, poweroff: Bool, telemetry: GPUTelemetry?, gadget: SysfsGadget? = nil, root: HostRoot,
-      log: @escaping LinuxLog = serverLog("linux")
+      sleepAfter: Double, poweroff: Bool, telemetry: GPUTelemetry?, root: HostRoot, log: ServerLog = ServerLog(category: "linux")
     ) -> ServerHooks {
       var hooks = ServerHooks()
       if let telemetry {
-        let sampler = TelemetrySampler(source: telemetry.read)
-        hooks.telemetry = { sampler.read() }
+        hooks.telemetry = telemetry.read
       }
 
       // Made whether or not this server sleeps, so `jetlink caffeinate`
@@ -32,24 +29,17 @@
       } catch {
         lockError = error
       }
-      var sleeper: Sleeper?
       if sleepAfter > 0 {
         if Platform.canSuspend(root) {
-          sleeper = Sleeper(after: sleepAfter, root: root, lockPath: lockPath)
+          let sleeper = Sleeper(after: sleepAfter, root: root, lockPath: lockPath)
+          hooks.gadgetIdle = { sleeper.handle($0) }
           hooks.sleepAfter = sleepAfter
-          log(.info, "will suspend after \(Int(sleepAfter)) s without a gadget")
-          if let lockError { log(.warning, "jetlink caffeinate cannot hold this box awake: \(lockError)") }
+          log.info("will suspend after \(Int(sleepAfter)) s without a gadget")
+          if let lockError { log.warning("jetlink caffeinate cannot hold this box awake: \(lockError)") }
         } else {
-          log(.warning, "--sleep-after needs /sys/power/state, which this host has not got: not suspending")
+          log.warning("--sleep-after needs /sys/power/state, which this host has not got: not suspending")
         }
       }
-      if sleeper != nil || gadget != nil {
-        hooks.gadgetIdle = { [sleeper] event in
-          gadget?.hear(event)
-          return sleeper?.handle(event) ?? false
-        }
-      }
-
       hooks.shutdown = PowerOff.hook(enabled: poweroff)
       return hooks
     }
@@ -58,23 +48,23 @@
     /// driver has it, else none, which the comma is told as `{}` rather than
     /// zeros.
     public static func telemetry(gpu: Int) -> GPUTelemetry? {
-      telemetry(tegra: Platform.isTegra(), root: .system, gpu: gpu, nvml: NvmlTelemetry.open, log: serverLog("linux"))
+      telemetry(tegra: Platform.isTegra(), root: .system, gpu: gpu, nvml: NvmlTelemetry.open, log: ServerLog(category: "linux"))
     }
 
     static func telemetry(
-      tegra: Bool, root: HostRoot, gpu: Int, nvml: (Int) -> Result<NvmlTelemetry, NvmlUnavailable>, log: LinuxLog
+      tegra: Bool, root: HostRoot, gpu: Int, nvml: (Int) -> Result<NvmlTelemetry, NvmlUnavailable>, log: ServerLog
     ) -> GPUTelemetry? {
       if tegra {
         let telemetry = TegraTelemetry(root: root)
-        log(.info, "telemetry from Tegra sysfs")
+        log.info("telemetry from Tegra sysfs")
         return GPUTelemetry(read: { telemetry.read() }, name: nil, tegra: true)
       }
       switch nvml(gpu) {
       case .success(let telemetry):
-        log(.info, "telemetry from NVML on GPU \(gpu) (\(telemetry.name ?? "unnamed"))")
+        log.info("telemetry from NVML on GPU \(gpu) (\(telemetry.name ?? "unnamed"))")
         return GPUTelemetry(read: { telemetry.read() }, name: telemetry.name, tegra: false)
       case .failure(let why):
-        log(.info, "no telemetry on this host: \(why)")
+        log.info("no telemetry on this host: \(why)")
         return nil
       }
     }
