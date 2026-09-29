@@ -6,14 +6,14 @@ repository root.
 
 ## Layout
 
-The app is a Kotlin shell over the same Swift server the iPhone and Mac apps
-run. `JetlinkKit` builds for Android with the Swift SDK for Android, into one
+The app is a Kotlin shell over the same Swift server every platform runs.
+`JetlinkKit` builds for Android with the Swift SDK for Android, into one
 native library, `libjetlink.so`:
 
 | Part | What it is |
 | --- | --- |
-| `JetlinkKit` | The server, the model registry and the ONNX preparation, shared with the Apple apps |
-| `JetlinkORT/QNNBackend.swift` | onnxruntime's QNN provider: the NPU and GPU of a Snapdragon |
+| `JetlinkKit` | The server, the model registry and the ONNX preparation, shared with every platform |
+| `JetlinkORT/OrtBackend.swift` | onnxruntime's profiles; `htp`, `htp-whole` and `gpu` use its QNN provider on a Snapdragon's NPU and GPU |
 | `JetlinkServer/UsbfsPipes.swift`, `CUsbfs` | The comma's bulk pair through usbdevfs, on the descriptor the app opened |
 | `JetlinkKit/AppSnapshot.swift` | The app's state as the screens draw it, from the server's events |
 | `JetlinkAndroid` | The JNI functions `io.zoompilot.jetlink.server.Native` calls |
@@ -84,10 +84,10 @@ their fixtures pushed beside them:
 android/scripts/swift-test-device.sh path/to/onnxruntime-android-qnn-1.29.0.aar
 ```
 
-On the emulator all four pass (145 tests), the whole server included, on
-onnxruntime's CPU provider. Its Android build runs an fp16 graph's MatMul in
-fp16, so the fp16 golden model lands within a few percent of Python's rather
-than bit for bit, and is held to `verify_parity`'s correlation there instead.
+On the emulator they pass, the whole server included, on onnxruntime's CPU
+provider. Its Android build runs an fp16 graph's MatMul in fp16, so the fp16
+golden model lands within a few percent of the golden frames rather than bit
+for bit, and is held to `verify_parity`'s correlation there instead.
 
 ## The emulator
 

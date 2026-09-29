@@ -1,55 +1,61 @@
 # Backends and performance
 
-A backend prepares and runs the model. Defaults: TensorRT on NVIDIA, ONNX
-Runtime with CoreML on Apple silicon. Install: [platform setup](platforms.md).
-Mac detail: [performance reference](mac-performance.md).
-
-The table below is the Python server's, which runs on Jetsons, Linux PCs and
-from a checkout on a Mac. The Mac app runs the Swift server instead (the one
-the iPhone app runs): ONNX Runtime with CoreML only, in the `ane` and `coreml`
-layouts described below, and no tinygrad.
+A backend prepares and runs the model. Every platform runs the same Swift
+server: TensorRT on a Jetson or NVIDIA PC, ONNX Runtime everywhere else. Setup:
+[platform setup](platforms.md). Mac detail:
+[performance reference](mac-performance.md).
 
 ## Runtime comparison
 
-| Backend | Devices | Prepared files | Requirements |
+| Backend | Where | Prepared files | Runtime |
 | --- | --- | --- | --- |
-| `trt` | NVIDIA CUDA | `.plan` | TensorRT 10.3 on JetPack 6, 10.16 on JetPack 7.2, or 11.x from PyPI on a PC |
-| `ort` | CoreML, CUDA, CPU | `.ortcache/` | ONNX Runtime 1.22+ |
-| `ort` (Android, Swift server) | QNN: Hexagon NPU, Adreno GPU; CPU | `.ortcache/` | onnxruntime-android-qnn 1.29.0 |
+| `trt` | Jetson, NVIDIA PC | `.plan` | TensorRT 10 on a Jetson (10.16 on JetPack 7.2, 10.3 on 6.2), 11.3 on a PC; the host's own libraries, loaded at run time |
+| `ort` | Mac, iPhone and iPad (CoreML); Android (QNN); Linux without a GPU (CPU) | `.ortcache/` | ONNX Runtime 1.29.0 |
 
-- `--backend auto`: TensorRT if available, else ONNX Runtime (CoreML on macOS,
-  CUDA or CPU elsewhere).
-- Prepared files are cached per runtime version and device.
+- `--backend auto`: TensorRT if it loads, else ONNX Runtime. The installed
+  service asks for `trt`, so a Jetson or PC without TensorRT fails loudly
+  instead of serving from the CPU.
+- Prepared files are cached per runtime version and device. A TensorRT plan
+  that no longer loads (after a TensorRT update) is prepared again, once.
 
-On a Mac, `--device` picks the CoreML layout:
+`--device` picks the ONNX Runtime profile (`OrtProfile`), where it runs the
+model. On a Mac:
 
 | `--device` | Layout |
 | --- | --- |
-| `ane` (default on Apple silicon) | vision trunk on the Neural Engine, the rest on the GPU |
+| `ane` (default) | vision trunk on the Neural Engine, the rest on the GPU |
 | `coreml` | everything on the GPU |
-| `ane-whole` | one CoreML program, every compute unit allowed, prepared as the iPhone does (policy LayerNormalization inputs scaled by 1/8 so their fp16 squares do not overflow; heads after the trunk in fp32). For comparing against the default, not daily use; see [how the default runs](mac-performance.md#how-the-default-runs). |
+| `ane-whole` | one CoreML program, every compute unit allowed (policy LayerNormalization inputs scaled by 1/8 so their fp16 squares do not overflow; heads after the trunk in fp32). For comparing against the default, not daily use; see [how the default runs](mac-performance.md#how-the-default-runs). |
+| `cpu` | ONNX Runtime's CPU provider, for tests |
 
-The Android app's Swift server has its own devices (Settings > Processor), on
-the same preparation as CoreML's:
+The iPhone app's **Processor** offers `ane` (**Neural Engine + GPU**, the
+default: 14 ms a frame on an iPhone 18 Pro) and `coreml` (**GPU**); `cpu` in
+the Simulator.
+
+The Android app's **Processor**, on the same preparation:
 
 | Device | Layout |
 | --- | --- |
 | `htp` (NPU + GPU, default) | vision trunk on the NPU in fp16, the rest on the GPU, as `ane` splits it; the NPU part compiled once into onnxruntime's EP context |
-| `htp-whole` (NPU) | the whole graph on the NPU, prepared as `ane-whole`; the NPU computes in fp16 throughout, heads included |
+| `htp-whole` (NPU) | the whole graph on the NPU, prepared as `ane-whole`; fp16 throughout, heads included |
 | `gpu` | everything on the Adreno GPU |
 | `cpu` | onnxruntime's CPU provider, for the emulator |
 
-None of these has run on a Snapdragon yet.
+None of the Android layouts has run on a Snapdragon yet.
 
 ## Platform matrix
 
-| Platform | Backend | USB | Telemetry | Sleep support |
+| Platform | Backend | USB | Telemetry | Sleep |
 | --- | --- | --- | --- | --- |
-| Jetson Orin | TensorRT | USB-A host with libusb | Tegra sensors | Suspend and poweroff |
-| Linux with NVIDIA GPU | TensorRT; ONNX Runtime as an alternative | libusb with `scripts/99-jetlink-host.rules` | NVML | `--sleep-after` requires `/sys/power`; USB wake depends on hardware |
-| Windows with NVIDIA GPU | TensorRT in WSL2 | Requires `usbipd-win` | NVML | None |
-| macOS with Apple silicon | ONNX Runtime with CoreML on the Neural Engine and GPU | USB 3 USB-C cable, or USB-A to USB-C with a USB-C adapter; the app uses macOS's USB framework, the Python server libusb | Not available | The app, or `scripts/run-mac.sh`, prevents idle sleep on AC power |
-| Android with Snapdragon | ONNX Runtime with QNN on the NPU and GPU (the app's Swift server) | USB host through a hub; usbdevfs on the app's descriptor | Not available | A foreground service keeps it serving |
+| Jetson Orin | TensorRT | USB-A host through usbfs | Tegra sensors | Suspend, USB wake and poweroff |
+| Linux with NVIDIA GPU (untested) | TensorRT 11.3 | usbfs; `scripts/99-jetlink-host.rules` without root | NVML | `--sleep-after` needs `/sys/power`; USB wake depends on hardware |
+| Windows with NVIDIA GPU (untested) | TensorRT 11.3 in WSL2 | `usbipd-win` | NVML | None |
+| macOS with Apple silicon | ONNX Runtime with CoreML on the Neural Engine and GPU | IOKit; a USB 3 USB-C cable, or USB-A to USB-C with a USB-C adapter | Not available | The app prevents idle sleep on power |
+| iPhone and iPad | ONNX Runtime with CoreML | TCP over the comma's USB network interface | Not available | Keep the app on screen |
+| Android with Snapdragon | ONNX Runtime with QNN on the NPU and GPU | USB host through a hub; usbfs on the app's descriptor | Not available | A foreground service keeps it serving |
+
+On Linux the server turns off USB 3 link power management on the comma's port:
+[custom USB integrations](installation-reference.md#custom-usb-integrations).
 
 Timing and power: [performance and operating limits](status.md).
 
@@ -60,11 +66,10 @@ Timing and power: [performance and operating limits](status.md).
 
 ## Mac, measured
 
-16 GB M1 Pro, paced 20 Hz: the default Neural Engine/GPU backend about 31 ms a
-frame (about 30 ms in the app's Swift server), GPU-only 41 to 44 ms. Bench
-numbers only: some CoreML runs still had single frames over the deadline, so
-averages do not establish driving reliability. [Full measurements and test
-conditions](mac-performance.md).
+16 GB M1 Pro, paced 20 Hz: the default Neural Engine/GPU split about 30 ms a
+frame, GPU-only 41 to 44 ms. Bench numbers only: some CoreML runs still had
+single frames over the deadline, so averages do not establish driving
+reliability. [Full measurements and test conditions](mac-performance.md).
 
 | If you need to... | Read |
 | --- | --- |
@@ -74,13 +79,6 @@ conditions](mac-performance.md).
 | Investigate intermittent GPU latency | [GPU keep-alive](mac-performance.md#keeping-the-mac-gpu-responsive-between-frames) |
 | Understand CoreML engine preparation | [Model preparation](mac-performance.md#model-preparation) |
 
-## Runtime implementation and dependencies
-
-- ONNX Runtime sessions run in a worker process, so preparation does not block
-  connections, progress updates, or pings; frame inputs and outputs use shared
-  memory.
-- ONNX Runtime telemetry is disabled to avoid a macOS shutdown crash.
-
 ## Hardware limitations
 
 - Native Windows is unsupported; use WSL2 ([Windows setup](platforms.md#windows-nvidia-gpu)).
@@ -88,4 +86,3 @@ conditions](mac-performance.md).
   holds its port as the device, so the Mac is the USB host.
 - Keep laptops powered and awake. Sustained GPU use can throttle thermally;
   check frame times.
-- NVIDIA GPU telemetry through NVML: `pip install "jetlink[nvml]"`.

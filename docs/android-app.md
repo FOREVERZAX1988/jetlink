@@ -148,7 +148,7 @@ A hot phone slows down and frames miss 50 ms.
 | Link | USB 3 or USB 2 while connected (Wi-Fi for a bench tool) |
 | Port | The TCP port for `verify_parity.py` from a Mac, 5599 by default |
 | Wi-Fi | The phone's Wi-Fi address and port, for a Mac's bench tools |
-| Processor | **NPU + GPU** (default): the vision model on the NPU, the rest on the GPU, as a Mac splits it. **NPU**: the whole model on the NPU, as the iPhone runs it. **GPU**: when something else keeps the NPU busy. **CPU**: for the emulator. Changing it prepares the model again |
+| Processor | **NPU + GPU** (default): the vision model on the NPU, the rest on the GPU, as a Mac splits it. **NPU**: the whole model on the NPU. **GPU**: when something else keeps the NPU busy. **CPU**: for the emulator. Changing it prepares the model again |
 | Keep NPU Awake | On by default. Holds the NPU at full speed between frames. Uses some power |
 | Keep CPU Awake | With the NPU: holds the CPU's clocks up between frames, through Android's performance hints, or a busy core on a phone without them. Uses some power |
 | Keep Screen On | On by default |

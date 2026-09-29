@@ -97,9 +97,9 @@ From an earlier app build.
 | Keep the Mac awake while serving | Prevents idle sleep on power. On battery, keep the lid open. |
 | Cache folder | Models and prepared engines (a CoreML engine is about 2 GB). Takes effect on server restart. |
 
-The cache folder defaults to `~/Library/Application Support/Jetlink/cache`. If
-you used `scripts/run-mac.sh` before, point it at the checkout's
-`models_cache/` with **Choose…** to skip downloading and preparing again.
+The cache folder defaults to `~/Library/Application Support/Jetlink/cache`. To
+reuse what a terminal server downloaded and prepared, point it at that folder
+with **Choose…**.
 
 **Server**
 
@@ -113,14 +113,11 @@ Click **Restart Server** to apply.
 
 ### The server
 
-The iPhone app's Swift server, built in: no Python to install or start. It opens
-the comma's USB link through macOS's USB framework, or listens on the TCP port
-for a bench client.
+The Swift server every platform runs, built in. It opens the comma's USB link
+through macOS's USB framework, or listens on the TCP port for a bench client.
 
 - **Benchmark** (Command-3) runs the loaded model at the comma's pace on the Mac
   alone, with the iPhone app's verdict, while no comma is connected.
-
-[Python vs Swift measurements](mac-performance.md#the-python-server-and-the-swift-server).
 
 ## Backends
 
@@ -129,14 +126,13 @@ for a bench client.
   on the GPU** (about a third slower on an M1 Pro).
 - If you picked **CoreML on the GPU** before, select **Automatic** to switch back.
 
-A tinygrad choice from an earlier version reads as Automatic.
 [Backend measurements](backends.md#mac-measured).
 
 ## Troubleshooting
 
 | Problem | What to do |
 | --- | --- |
-| The server failed to start | Open **Logs**: the last lines say why. Usually another server holds the USB device (a `scripts/run-mac.sh` server, say), or the cache folder is not writable. |
+| The server failed to start | Open **Logs**: the last lines say why. Usually another server holds the USB device (a `jetlink-server` in a terminal, say), or the cache folder is not writable. |
 | Stays on Waiting for comma | Use a USB 3 data cable, or a USB-A to USB-C cable with a USB-C adapter. Check **Accelerator Link** is **USB** under Settings > Models on the comma. |
 | Use Model takes a long time | Expect about 20 seconds to prepare and up to 10 to load. If it takes minutes, right-click the model in **Models**, choose **Delete Prepared Engines…**, and use it again. Close large apps to free memory. |
 | The comma says **Big Model Lost** | Check the cable. Turn on **Keep the Mac awake while serving** and keep the Mac on power. |
@@ -167,5 +163,5 @@ Login Items**.
 ## For developers
 
 - Building, signing and notarizing: [Mac developer guide](../macos/README.md).
-- The Python server still runs on a Mac from a checkout, with `scripts/run-mac.sh`.
+- The same server as a command: [from a terminal](platforms.md#from-a-terminal).
 - Scripting: [model CLI](model-cli.md), [control protocol](control-protocol.md).

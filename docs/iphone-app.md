@@ -1,8 +1,10 @@
 # Jetlink for iPhone and iPad
 
-**Experimental, and not yet run on a phone.** Runs the Jetlink server in an iOS
-app, connected to the comma by one USB cable. You build it from source. Run the
-[Benchmark](#benchmark) before you drive to see if your phone keeps up.
+**Experimental.** The model has run on an iPhone; the link to the comma has
+only been tested with a Mac standing in for the phone. Runs the Jetlink server
+in an iOS app, connected to the comma by one USB cable. You build it from
+source. Run the [Benchmark](#benchmark) before you drive to see if your phone
+keeps up.
 
 On an iPad with USB-C, read iPad wherever this page says iPhone or phone.
 
@@ -173,7 +175,7 @@ A hot phone slows down and frames miss 50 ms.
 | Link | USB 3 or USB 2 while connected (Wi-Fi for a bench tool), Connecting while it dials the comma |
 | Port | The TCP port for `verify_parity.py` from a Mac, 5599 by default |
 | Wi-Fi | The phone's Wi-Fi address and port, for a Mac's bench tools |
-| Processor | **Neural Engine** (default). **Neural Engine + GPU**: the Mac's layout. **GPU**: when another app keeps the Neural Engine busy. Changing it prepares the model again |
+| Processor | **Neural Engine + GPU** (default): the vision layers on the Neural Engine, the rest on the GPU, as a Mac runs it (14 ms a frame on an iPhone 18 Pro). **GPU**: when another app keeps the Neural Engine busy. **CPU**: the Simulator only. Changing it prepares the model again |
 | Keep CPU Awake | On by default. Keeps a CPU core busy between frames so the next frame starts sooner. Uses some power |
 | Keep GPU Awake | Keeps the GPU from slowing down between frames. Uses some power |
 | Keep Screen On | On by default. Off, auto-lock suspends Jetlink |

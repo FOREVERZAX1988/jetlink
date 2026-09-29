@@ -6,8 +6,8 @@ repository root.
 
 ## Layout
 
-The app is a thin shell over the `JetlinkKit` Swift package, which the Mac app
-shares:
+The app is a thin shell over the `JetlinkKit` Swift package, which every
+platform shares:
 
 | Module | What it is |
 | --- | --- |
@@ -16,7 +16,7 @@ shares:
 | `JetlinkONNX` | Reading and preparing a model's ONNX for CoreML, without the onnx package |
 | `JetlinkRegistry` | sunnypilot's model catalog, LFS downloads, imports, the cache layout |
 | `JetlinkServer` | The server: wire protocol, TCP, session, queues, control |
-| `JetlinkORT` | onnxruntime's CoreML provider, which runs the model |
+| `JetlinkORT` | onnxruntime and its profiles (`OrtBackend`, `OrtProfile`): CoreML here |
 
 `ios/Jetlink` holds only what is the phone's own: the dashboard, the Models and
 Settings screens, the server's lifecycle in the app, and the phone's health.
@@ -50,18 +50,15 @@ The server is tested on the Mac, where it is the same code:
 cd JetlinkKit && swift test
 ```
 
-The suites check the wire bytes against `jetlink/protocol.py`, the preparation
-byte for byte against the Python server's, and whole-server runs on
-onnxruntime's CPU provider against golden frames from the Python server's own
-queues. `Scripts/make_server_fixtures.py` and `Scripts/make_onnx_fixtures.py`
-regenerate the goldens, and `Scripts/check_onnx_prep.py` compares a real
-model's preparation with Python's.
+The suites check the wire bytes against `jetlink/protocol.py` and run the whole
+server on onnxruntime's CPU provider against golden frames
+([conformance](../docs/conformance.md)).
 
-To run the Swift server against `scripts/bench_link.py` or `verify_parity.py`
-with CoreML, use `jetlink-serve`:
+To run the Swift server with CoreML against `scripts/bench_link.py` or
+`verify_parity.py`, use `jetlink-server`, which listens on TCP port 5599:
 
 ```
-cd JetlinkKit && swift build -c release --product jetlink-serve
-.build/release/jetlink-serve --cache /tmp/jetlink-cache --port 5599
+swift build -c release --package-path JetlinkKit --product jetlink-server
+JetlinkKit/.build/release/jetlink-server --cache /tmp/jetlink-cache
 python3 scripts/bench_link.py --host 127.0.0.1 --onnx big_driving_supercombo.onnx --rate 20
 ```
