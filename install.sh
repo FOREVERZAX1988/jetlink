@@ -1251,8 +1251,8 @@ get_server() {
     fi
     step "Downloading the Jetlink server ($RESOLVED)" download "$ASSET_URL" "$tmp/$name"
   fi
-  if [ -f "$tmp/$name.sha256" ] \
-      && [ "$(awk '{print $1; exit}' "$tmp/$name.sha256")" != "$(sha256sum "$tmp/$name" | awk '{print $1}')" ]; then
+  # the .sha256 names the tarball beside it, as build-linux.sh and CI write it
+  if [ -f "$tmp/$name.sha256" ] && ! (cd "$tmp" && sha256sum -c --status "$name.sha256"); then
     die "The Jetlink server download is damaged: its checksum does not match." "Run the installer again."
   fi
   unpack_server "$tmp/$name"
