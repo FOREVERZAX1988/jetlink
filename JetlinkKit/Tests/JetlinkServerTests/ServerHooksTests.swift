@@ -89,8 +89,11 @@ struct ServerHooksTests {
       (object as? [String: Any])?.compactMapValues { ($0 as? NSNumber)?.doubleValue }
     }
     try serve(hooks: hooks) { server, client in
-      // The server samples the host's sensors on a thread of its own.
-      #expect(eventually { !server.host.telemetry.read().isEmpty })
+      // The server samples the host's sensors on a thread of its own, when
+      // asked, and a sample more than a second old is none: each check waits
+      // for a fresh one, since a slow emulator can take longer between asks.
+      func fresh() -> Bool { eventually(timeout: 10) { !server.host.telemetry.read().isEmpty } }
+      #expect(fresh())
       #expect(readings(try client.hello()["telemetry"]) == ["temp_c": 51.5, "power_w": 12.25])
       try client.send(.stateReq)
       let state = try client.recv(.stateResp).json
@@ -99,6 +102,7 @@ struct ServerHooksTests {
       let plain = try frame(client, golden)
       let spec = try ModelSpec.from(golden.spec)
       #expect(plain.payload.count == spec.inferRespBytes)
+      #expect(fresh())
       let asked = try frame(client, golden, flags: .wantState)
       #expect(asked.status == Wire.Status.ok.rawValue)
       try #require(asked.payload.count > spec.inferRespBytes)
