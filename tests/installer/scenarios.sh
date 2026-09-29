@@ -858,6 +858,22 @@ expect_rc 0
 expect_out "Keep the Jetlink server that is installed"
 expect_link /opt/jetlink/current /opt/jetlink/0.10.0
 
+scenario "a tarball from a tree before the native server is refused"
+reset_box; jetson 39 2.1
+old=/tmp/dev/old-unit
+rm -rf "$old" && mkdir -p "$old/bin" "$old/share/jetlink/systemd"
+ln -s "$SRC/tests/installer/fake.sh" "$old/bin/jetlink-server"
+echo 0.6.9 >"$old/VERSION"
+printf '[Service]\nExecStart=/usr/local/lib/jetlink/run-server\n' >"$old/share/jetlink/systemd/jetlink-server.service"
+tar -czf /tmp/dev/jetlink-server-0.6.9-linux-aarch64.tar.gz -C "$old" .
+run_installer checkout '' --yes --binary /tmp/dev/jetlink-server-0.6.9-linux-aarch64.tar.gz
+expect_rc 1
+expect_out "does not start /opt/jetlink/current/bin/jetlink-server"
+expect_out "scripts/build-linux.sh linux-aarch64"
+expect_no_file /opt/jetlink/0.6.9
+check "a stage was left" test -z "$(find /opt/jetlink -maxdepth 1 -name '.new-*' 2>/dev/null)"
+expect_no_file "$UNITS/jetlink-server.service"
+
 scenario "--binary over a release install leaves its source where it is"
 reset_box; jetson 39 2.1
 run_installer curl '' --yes

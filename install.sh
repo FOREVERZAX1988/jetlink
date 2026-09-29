@@ -1367,6 +1367,14 @@ unpack_server() {
     as_root rm -rf "$stage"
     die "$(basename "$tarball") has no bin/jetlink-server and $SHARE/systemd/$UNIT.service in it."
   fi
+  # a tree from before the native server ships a unit that runs Docker, which
+  # systemd would start and fail with every 2 seconds
+  if ! grep -q "^ExecStart=$SRC_ROOT/current/bin/jetlink-server" "$top/$SHARE/systemd/$UNIT.service"; then
+    as_root rm -rf "$stage"
+    die "The unit in $(basename "$tarball") does not start $SRC_ROOT/current/bin/jetlink-server." \
+      "It was built from an older tree. Build the tarball from the current one:" \
+      "  scripts/build-linux.sh $FLAVOR"
+  fi
   ver="$(tr -d '[:space:]' <"$top/VERSION" 2>/dev/null || true)"
   if [ -z "$ver" ]; then
     ver="$(basename "$tarball" | sed -n 's/^jetlink-server-\(.*\)-linux-[a-z0-9_]*\.tar\.gz$/\1/p')"
