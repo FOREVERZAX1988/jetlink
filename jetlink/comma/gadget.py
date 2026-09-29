@@ -159,14 +159,16 @@ def _link_record() -> list[str]:
     return []
 
 
-def link_kind() -> str:
+def link_kind(mode: str | None = None) -> str:
   """The gadget the owner built and published: 'cable' for iOS (the phone's
   network interface on the gadget) or 'usb'. The setting stands in only until
-  the owner has said: it may have moved and be waiting for the car to park."""
+  the owner has said: it may have moved and be waiting for the car to park.
+  `mode` is the setting when the caller has read it; without it, it is read
+  here."""
   record = _link_record()
   if record[:1] in (['cable'], ['usb']):
     return record[0]
-  return 'cable' if ios() else 'usb'
+  return 'cable' if (ios() if mode is None else mode == 'ios') else 'usb'
 
 
 def link_peer() -> str | None:

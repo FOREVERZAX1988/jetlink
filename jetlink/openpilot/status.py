@@ -127,12 +127,13 @@ class Presence:
     return now - self._last_configured < PRESENCE_HOLD
 
 
-def link_transport() -> str:
+def link_transport(mode: str | None = None) -> str:
   """What carries the link, for the panels: the gadget the owner built, a
   Jetson, a Linux PC or a Mac on the vendor interface or an iPhone dialed in
-  over the network interface. Never raises: the panels read it on their tick."""
+  over the network interface; `mode` stands in until the owner has said.
+  Never raises: the panels read it on their tick."""
   try:
-    if gadget.link_kind() == 'cable':
+    if gadget.link_kind(mode) == 'cable':
       peer = gadget.link_peer()
       return f"iOS over USB ({peer})" if peer else "iOS over USB"
   except Exception:
@@ -173,16 +174,11 @@ def _built_for_the_pick(parts) -> bool:
           and parts.spec.engine_ready_for(spec.sha256))
 
 
-def ready(parts) -> bool:
-  """Can the large model run right now? Params only, what the UI calls
-  'compiled': the provisioning has already recorded the answer."""
-  return parts.enabled() and unavailable(parts) is None and _built_for_the_pick(parts)
-
-
-def unavailable_reason(parts) -> str | None:
-  """For someone who asked for the link only: with it off, a device that
-  cannot present the gadget simply does not offer the feature."""
-  return unavailable(parts) if parts.enabled() else None
+def reason(parts, mode: str) -> str | None:
+  """Why the link cannot run, for someone who asked for it only: with it off,
+  a device that cannot present the gadget simply does not offer the feature.
+  Files only: hardwared asks twice a second on every device."""
+  return unavailable(parts) if parts.enabled(mode) else None
 
 
 # -- the snapshot ----------------------------------------------------------------
@@ -239,14 +235,15 @@ class Status(NamedTuple):
     return 'failed'
 
 
-def read(parts) -> Status:
-  """ready() and unavailable_reason() as one pass: each file is read once."""
-  enabled = parts.enabled()
+def read(parts, mode: str) -> Status:
+  """Everything at once, over the link setting the caller read: each file is
+  read once."""
+  enabled = parts.enabled(mode)
   reason = unavailable(parts) if enabled else None
   return Status(
     enabled=enabled,
-    mode=parts.settings.mode(),
-    transport=link_transport(),
+    mode=mode,
+    transport=link_transport(mode),
     present=parts.presence.present(),
     port=usb_port(),
     ready=enabled and reason is None and _built_for_the_pick(parts),
@@ -257,8 +254,13 @@ def read(parts) -> Status:
   )
 
 
-# what a reader gets when the snapshot itself failed: nothing to show, and the
-# reason where the offroad alert puts it
-def failed(error: str) -> Status:
-  return Status(enabled=False, mode='off', transport='USB', present=False, port=None, ready=False,
-                reason=f"jetlink status failed: {error}", progress=None, model=None, default_model=None)
+def failed(error: str, mode: str) -> Status:
+  """What a reader gets when the snapshot itself failed: nothing to show, the
+  setting as it is, and, for someone who asked for the link, the failure where
+  the offroad alert puts it. A device with the link off is never nagged."""
+  return Status(enabled=False, mode=mode, transport='USB', present=False, port=None, ready=False,
+                reason=failure(error, mode), progress=None, model=None, default_model=None)
+
+
+def failure(error: str, mode: str) -> str | None:
+  return f"jetlink status failed: {error}" if mode != 'off' else None

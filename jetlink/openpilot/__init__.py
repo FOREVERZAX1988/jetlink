@@ -59,28 +59,70 @@ class Jetlink:
     self._log = parts.log
     # prepare() said yes in this process, so attach() may join modeld
     self._prepared = False
-    self._status_error: str | None = None
+    # what -> the last failure logged reading it; cleared by a read that works
+    self._failures: dict[str, str] = {}
+
+  def _failed(self, what: str, e: Exception) -> str:
+    """Log a reader's failure once per distinct error: the readers are asked
+    several times a second, from threads that have nothing to do with jetlink."""
+    error = f"{type(e).__name__}: {e}"
+    if self._failures.get(what) != error:
+      self._failures[what] = error
+      self._log.exception("jetlink: could not read %s", what)
+    return error
+
+  def _worked(self, what: str) -> None:
+    self._failures.pop(what, None)
+
+  def _mode(self) -> str:
+    """The link setting, or 'off' when it cannot be read."""
+    try:
+      mode = self._parts.settings.mode()
+    except Exception as e:
+      self._failed('the link setting', e)
+      return 'off'
+    self._worked('the link setting')
+    return mode
 
   def enabled(self) -> bool:
     """Has the user turned the link on, with no chestnut fitted? Configuration
     only, never link state or readiness. A chestnut runs the big model natively
     and the link stays off beside it, so jetlinkd never takes the USB
-    controller from it. manager's should_run for jetlinkd."""
-    return self._parts.enabled()
+    controller from it. manager's should_run for jetlinkd, on every device, so
+    it never raises: a failure is False."""
+    mode = self._mode()
+    try:
+      on = self._parts.enabled(mode)
+    except Exception as e:
+      self._failed('whether the link is on', e)
+      return False
+    self._worked('whether the link is on')
+    return on
 
   def status(self) -> Status:
-    """One snapshot for the UI, hardwared and the panels. Never raises: they
-    read it on their own threads, which have nothing to do with jetlink."""
+    """One snapshot for the UI and the panels. Never raises: they read it on
+    their own threads, which have nothing to do with jetlink."""
     from jetlink.openpilot import status
+    mode = self._mode()
     try:
-      return status.read(self._parts)
+      snapshot = status.read(self._parts, mode)
     except Exception as e:
-      error = f"{type(e).__name__}: {e}"
-      if error != self._status_error:
-        # once per distinct failure: the UI asks five times a second
-        self._status_error = error
-        self._log.exception("jetlink: could not read the status")
-      return status.failed(error)
+      return status.failed(self._failed('the status', e), mode)
+    self._worked('the status')
+    return snapshot
+
+  def reason(self) -> str | None:
+    """Why the link the user asked for cannot run: hardwared's offroad alert.
+    None with the link off. The files the gadget and the build leave, nothing
+    else: hardwared asks twice a second on every device. Never raises."""
+    from jetlink.openpilot import status
+    mode = self._mode()
+    try:
+      why = status.reason(self._parts, mode)
+    except Exception as e:
+      return status.failure(self._failed('why the link cannot run', e), mode)
+    self._worked('why the link cannot run')
+    return why
 
   def prepare(self) -> bool:
     """Will the link join this modeld? modeld only, before it goes realtime:
@@ -158,7 +200,11 @@ class Jetlink:
     Skipped when no Jetson is known to be there (dormant counts as there). A run
     busy in a long provision will not see the request; the timeout covers that.
     """
-    if self._parts.settings.mode() == 'off' or not self._parts.presence.present():
+    from jetlink.openpilot.status import Presence
+    # a presence of its own: one this process's readers keep refreshed would
+    # count a Jetson seen seconds before the power-off, and the run would wait
+    # 20 s for a host that has gone
+    if self._parts.settings.mode() == 'off' or not Presence().present():
       return
     self._log.warning("jetlink: asking the jetson to power off: %s", reason)
     if not gadget.request_shutdown(reason):

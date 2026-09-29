@@ -82,12 +82,11 @@ class SelectionTest(OpenpilotTest):
     self.assertIsNone(s.reason)
     self.assertTrue(s.enabled)
     self.assertEqual(s.active_model, 'm')
-    self.assertEqual((status.ready(self.parts), status.unavailable_reason(self.parts)), (True, None))
+    self.assertIsNone(self.jl.reason())
 
   def test_an_old_engine_is_not_the_new_selection(self):
     self.configure(model='m', spec_sha='b' * 64, ready=True)
     self.assertFalse(self.jl.status().ready)
-    self.assertFalse(status.ready(self.parts))
 
   def test_a_spec_whose_engine_is_not_built_is_not_ready(self):
     self.configure(model='m', spec_sha='a' * 64, ready=False)
@@ -124,6 +123,16 @@ class SelectionTest(OpenpilotTest):
         self.jl.enabled()
       self.assertEqual(walk.call_count, 2)
 
+  def test_enabled_never_raises(self):
+    # manager asks it on every device; an exception would take manager down
+    self.configure(model='m')
+    with mock.patch.object(self.op, 'chestnut_present', side_effect=RuntimeError('usb walk failed')):
+      self.parts._chestnut = None
+      for _ in range(3):
+        self.assertFalse(self.jl.enabled())
+    self.assertEqual(self.op.log.lines('exception'), ['jetlink: could not read whether the link is on'])
+    self.assertTrue(self.jl.enabled())
+
   def test_the_setting_follows_the_store_the_adapter_names(self):
     # a bench shell under its own OPENPILOT_PREFIX, as Params follows it
     self.configure(model='m')
@@ -132,6 +141,36 @@ class SelectionTest(OpenpilotTest):
     elsewhere.mkdir(parents=True)
     self.op.params_dir = elsewhere
     self.assertFalse(self.jl.enabled())
+
+
+class TestReason(OpenpilotTest):
+  """hardwared's offroad alert, twice a second on every device: the gadget's
+  and the build's files, and nothing that parses the catalog."""
+
+  def test_the_link_off_is_no_reason_and_reads_no_model(self):
+    with mock.patch.object(gadget, 'gadget_error', return_value='no gadget'):
+      self.assertIsNone(self.jl.reason())
+    self.assertNotIn('models', vars(self.parts))
+    self.assertNotIn('spec', vars(self.parts))
+
+  def test_the_link_on_says_why(self):
+    self.op.set_mode('usb')
+    with mock.patch.object(gadget, 'gadget_error', return_value='no gadget'):
+      self.assertEqual(self.jl.reason(), 'no gadget')
+    self.assertEqual(self.jl.reason(), status.NO_WARP)
+    self.assertNotIn('models', vars(self.parts))
+
+  def test_beside_a_chestnut_there_is_nothing_to_say(self):
+    self.op.set_mode('usb')
+    self.op.chestnut = True
+    self.assertIsNone(self.jl.reason())
+
+  def test_a_failure_is_the_reason_only_for_someone_who_asked_for_the_link(self):
+    with mock.patch.object(gadget, 'gadget_error', side_effect=RuntimeError('boom')):
+      self.op.set_mode('usb')
+      self.assertEqual(self.jl.reason(), 'jetlink status failed: RuntimeError: boom')
+      self.op.set_mode('off')
+      self.assertIsNone(self.jl.reason())
 
 
 class TestPresence(OpenpilotTest):
@@ -327,20 +366,50 @@ class TestTheSnapshot(OpenpilotTest):
 
   def test_it_reads_each_file_once(self):
     self.op.set_mode('usb')
+    settings = self.parts.settings
     with mock.patch.object(self.parts.warps, 'built', return_value=True), \
+         mock.patch.object(settings, 'mode', wraps=settings.mode) as mode, \
+         mock.patch.object(gadget, 'link_kind', wraps=gadget.link_kind) as kind, \
          mock.patch.object(gadget, 'gadget_error', return_value=None) as error, \
          mock.patch.object(self.parts.spec, 'load', return_value=None) as load:
       self.jl.status()
-    self.assertEqual((error.call_count, load.call_count), (1, 1))
+    self.assertEqual((mode.call_count, error.call_count, load.call_count), (1, 1, 1))
+    # the transport's fallback is the setting already read, not a second read by gadget's rule
+    kind.assert_called_once_with('usb')
 
-  def test_a_failure_is_a_snapshot_that_says_so(self):
+  def test_a_failure_with_the_link_on_says_so(self):
+    self.op.set_mode('usb')
     with mock.patch.object(status, 'link_transport', side_effect=RuntimeError('boom')):
       for _ in range(3):
         s = self.jl.status()
-    self.assertFalse(s.enabled)
+    self.assertEqual((s.enabled, s.mode), (False, 'usb'))
     self.assertEqual(s.reason, 'jetlink status failed: RuntimeError: boom')
     # once, not five times a second
-    self.assertEqual(len(self.op.log.lines('exception')), 1)
+    self.assertEqual(self.op.log.lines('exception'), ['jetlink: could not read the status'])
+
+  def test_a_failure_with_the_link_off_nags_nobody(self):
+    # the snapshot reads more than the fork's hardwared ever did: a bad
+    # catalog must not raise an alert on a device that never turned the link on
+    with mock.patch.object(self.parts.models, 'selected_model_name', side_effect=ValueError('bad pointers')):
+      s = self.jl.status()
+    self.assertEqual((s.enabled, s.mode, s.reason), (False, 'off', None))
+
+  def test_a_failure_that_clears_and_comes_back_is_logged_again(self):
+    self.op.set_mode('usb')
+    boom = mock.patch.object(status, 'link_transport', side_effect=RuntimeError('boom'))
+    with boom:
+      self.jl.status()
+    self.assertTrue(self.jl.status().enabled)
+    with boom:
+      self.jl.status()
+    self.assertEqual(len(self.op.log.lines('exception')), 2)
+
+  def test_a_setting_that_cannot_be_read_is_off(self):
+    with mock.patch.object(self.op, 'owner', side_effect=RuntimeError('adapter bug')):
+      s = self.jl.status()
+      self.assertFalse(self.jl.enabled())
+    self.assertEqual((s.mode, s.enabled, s.reason), ('off', False, None))
+    self.assertEqual(self.op.log.lines('exception'), ['jetlink: could not read the link setting'])
 
   def test_names_come_from_the_models(self):
     self.op.set_mode('usb')

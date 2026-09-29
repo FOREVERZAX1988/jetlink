@@ -118,6 +118,16 @@ class TestLinkKind(unittest.TestCase):
     gadget.clear_link()
     self.assertEqual(gadget.link_kind(), 'usb', 'no owner yet: the setting')
 
+  def test_a_caller_that_read_the_setting_hands_it_over(self):
+    # jetlink.openpilot reads the setting once, off the directory the fork's
+    # adapter names, and passes it; nothing is read by this module's rule
+    self.assertEqual(gadget.link_kind('ios'), 'cable')
+    self.assertEqual(gadget.link_kind('usb'), 'usb')
+    self.assertEqual(gadget.link_kind('off'), 'usb')
+    gadget.ios.assert_not_called()
+    gadget.note_link('usb')
+    self.assertEqual(gadget.link_kind('ios'), 'usb', "the owner's record still decides")
+
   def test_a_dial_is_recorded_with_the_phone_and_cleared(self):
     gadget.note_link('cable', '192.168.60.3')
     self.assertEqual(gadget.link_peer(), '192.168.60.3')

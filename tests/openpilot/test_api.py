@@ -24,7 +24,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 import jetlink.openpilot as jo
-from jetlink.openpilot import interface
+from jetlink.openpilot import interface, status
 from jetlink.comma import gadget
 from jetlink.openpilot import joining
 from jetlink.spec import ModelSpec
@@ -36,6 +36,7 @@ from tests.openpilot.fakes import OpenpilotTest
 JETLINK = {
   'enabled': '()',
   'status': '()',
+  'reason': '()',
   'prepare': '()',
   'attach': '(small, cam_w, cam_h)',
   'shutdown': "(reason='', timeout=25.0)",
@@ -301,7 +302,7 @@ class ShuttingTheJetsonDown(OpenpilotTest):
 
   def shutdown(self, mode='usb', present=True, requested=True, taken=True):
     self.op.set_mode(mode)
-    with mock.patch.object(self.parts.presence, 'present', return_value=present), \
+    with mock.patch.object(status.Presence, 'present', return_value=present), \
          mock.patch.object(gadget, 'request_shutdown', return_value=requested) as request, \
          mock.patch.object(self.jl, '_await_shutdown', return_value=taken) as wait:
       self.jl._request_shutdown('car battery', 3.0)
@@ -327,6 +328,19 @@ class ShuttingTheJetsonDown(OpenpilotTest):
     request, wait = self.shutdown(requested=False)
     request.assert_called_once_with('car battery')
     wait.assert_not_called()
+
+  def test_a_jetson_that_just_left_is_not_waited_for(self):
+    # hardwared's own readers keep this process's presence fresh; a host seen
+    # moments before the power-off would have the run wait 20 s for nobody
+    self.op.set_mode('usb')
+    with mock.patch.object(gadget, 'host_attached', return_value=True):
+      self.assertTrue(self.parts.presence.present())
+    with mock.patch.object(gadget, 'host_attached', return_value=False), \
+         mock.patch.object(gadget, 'dormant', return_value=False), \
+         mock.patch.object(gadget, 'request_shutdown') as request:
+      self.assertTrue(self.parts.presence.present(), 'the hold this test is about')
+      self.jl._request_shutdown('car battery', 3.0)
+    request.assert_not_called()
 
   def test_nobody_taking_it_is_logged(self):
     self.shutdown(taken=False)

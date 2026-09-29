@@ -85,6 +85,8 @@ class Parts:
       self._chestnut = (now, bool(self.op.chestnut_present()))
     return self._chestnut[1]
 
-  def enabled(self) -> bool:
-    """The link setting is on and no chestnut is fitted."""
-    return self.settings.mode() != 'off' and not self.chestnut_fitted()
+  def enabled(self, mode: str | None = None) -> bool:
+    """The link setting is on and no chestnut is fitted; `mode` is the setting
+    when the caller has read it already."""
+    mode = self.settings.mode() if mode is None else mode
+    return mode != 'off' and not self.chestnut_fitted()
