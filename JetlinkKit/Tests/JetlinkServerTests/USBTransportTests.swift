@@ -123,6 +123,35 @@ final class FakeGadget: GadgetSource, @unchecked Sendable {
   }
 }
 
+/// The comma's gadget as the kernel shows one that left and came back: its
+/// URBs die before its sysfs entry goes, so it stays present and the next
+/// opens claim the stale device and fail. `script` is one comma end per open,
+/// nil for an open that fails; an unserved end once it runs out.
+final class StaleGadget: GadgetSource, @unchecked Sendable {
+  private let lock = NSLock()
+  private var script: [FakeUsbfs?]
+  private var tries: [(at: TimeInterval, opened: Bool)] = []
+
+  init(_ script: [FakeUsbfs?]) {
+    self.script = script
+  }
+
+  /// Every open, when it came and whether it opened.
+  var attempts: [(at: TimeInterval, opened: Bool)] { lock.withLock { tries } }
+
+  func present() -> Bool { true }
+
+  func open() throws -> any MessageLink {
+    let end: FakeUsbfs? = lock.withLock {
+      let next = script.isEmpty ? FakeUsbfs.unserved() : script.removeFirst()
+      tries.append((ProcessInfo.processInfo.systemUptime, next != nil))
+      return next
+    }
+    guard let end else { throw LinkError.closed("claiming the gadget: ENODEV: the device is gone") }
+    return USBTransport(pipes: UsbfsPipes(device: UsbfsDevice(kernel: end), inEndpoint: 0x81, outEndpoint: 0x01), medium: .usb3)
+  }
+}
+
 /// The comma's gadget on a fake usbfs descriptor: every open is a session's
 /// pipes, and their read ring, on the one device.
 final class UsbfsFakeGadget: GadgetSource, @unchecked Sendable {
@@ -225,6 +254,27 @@ struct ServerUSBTests {
     }
     #expect(links.all.filter { $0.state == .connected }.count == 1)
     #expect(links.all.contains { $0.state == .disconnected })
+  }
+
+  @Test("A comma that left and came back is opened again a poll after a stale open fails, not the quiet retry later")
+  func rejoinsAfterAStaleOpen() throws {
+    let cache = try TemporaryDirectory()
+    let before = FakeUsbfs()
+    let after = FakeUsbfs()
+    let gadget = StaleGadget([before, nil, nil, after])
+    let server = try makeServer(cache, gadget: gadget)
+    try server.start()
+    defer { server.shutdown() }
+    _ = try GadgetClient(before).hello(name: "modeld")
+    before.unplug()
+    _ = try GadgetClient(after).hello(name: "modeld")
+    let tries = gadget.attempts
+    try #require(tries.count >= 4)
+    #expect(tries.prefix(4).map { $0.opened } == [true, false, false, true])
+    for failed in 1...2 {
+      let gap = tries[failed + 1].at - tries[failed].at
+      #expect(gap < Server.usbQuietRetry * 0.75, "the open after failure \(failed) came \(gap) s later")
+    }
   }
 
   @Test("The golden frames through usbfs and its read ring, as a Jetson or a phone serves them", arguments: ["tiny_queued", "tiny_stateful"])

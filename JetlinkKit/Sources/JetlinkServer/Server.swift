@@ -461,8 +461,13 @@ public final class Server: @unchecked Sendable {
       do {
         transport = try gadget.open()
       } catch {
+        // Retried as an unserved gadget is: after a handover, a bounce or a
+        // glitch the device's URBs die before its sysfs entry goes, so the
+        // first opens claim the stale device and fail, and the comma is back
+        // a poll later, not two seconds.
+        quiet += 1
         waiting.say("could not open the gadget: \(String(describing: error))")
-        Thread.sleep(forTimeInterval: Server.usbQuietRetry)
+        Thread.sleep(forTimeInterval: quiet <= Server.usbQuickRetries ? Server.usbPoll : Server.usbQuietRetry)
         continue
       }
       let (done, session) = takeover(transport)
