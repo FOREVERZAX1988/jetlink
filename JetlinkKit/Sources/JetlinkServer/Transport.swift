@@ -340,7 +340,7 @@ public final class TCPListener: @unchecked Sendable {
     let length = socklen_t(Int32(address.ss_family) == AF_INET6 ? MemoryLayout<sockaddr_in6>.size : MemoryLayout<sockaddr_in>.size)
     _ = withUnsafePointer(to: &address) {
       $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-        getnameinfo($0, length, &host, socklen_t(host.count), &service, socklen_t(service.count), NI_NUMERICHOST | NI_NUMERICSERV)
+        getnameinfo($0, length, &host, .init(host.count), &service, .init(service.count), NI_NUMERICHOST | NI_NUMERICSERV)
       }
     }
     return (String(cString: host), UInt16(String(cString: service)) ?? 0)

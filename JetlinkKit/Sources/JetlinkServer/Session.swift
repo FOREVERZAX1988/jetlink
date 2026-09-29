@@ -216,9 +216,6 @@ final class Session: @unchecked Sendable {
     for (key, value) in host.backend.describe() {
       response[key] = value
     }
-    for (key, value) in host.backend.helloFields {
-      response[key] = value
-    }
     try sendJSON(.helloResp, seq: message.seq, response)
   }
 
@@ -406,7 +403,7 @@ final class Session: @unchecked Sendable {
       outputCapacity = count
       outputBuffer = .allocate(capacity: count)
     }
-    if status == .ok, let type = layout.outputType, let out = loaded.engine.output(ModelConstants.drivingOutput) {
+    if status == .ok, let type = layout.outputType, let out = layout.output {
       // float32 on the wire whatever the graph says; openpilot drops to the
       // small model on a non-finite output either way, so say so here.
       switch type {
@@ -420,11 +417,11 @@ final class Session: @unchecked Sendable {
       if status == .ok && !Convert.allFinite(outputBuffer, count: count) {
         status = .notFinite
       }
+      if status == .ok {
+        loaded.staging.keep(outputs: out, type: type)
+      }
     } else if status == .ok {
       status = .inferFailed
-    }
-    if status == .ok {
-      loaded.staging.keep(outputs: outputBuffer)
     }
 
     let replied = status == .ok || status == .notFinite

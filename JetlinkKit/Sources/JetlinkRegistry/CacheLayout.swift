@@ -99,11 +99,10 @@ public struct LastLoaded: Sendable, Equatable {
   }
 }
 
-/// What a backend's artifact is on disk.
+/// Whether a backend's artifact is a file or a directory: nothing in the
+/// cache asks any more. Until TensorRT's backend stops naming it.
 public enum ArtifactKind: Sendable {
-  /// One file: a TensorRT plan.
   case file
-  /// A directory: onnxruntime's prepared model and compiled caches.
   case directory
 }
 
@@ -119,15 +118,13 @@ public struct EngineCache: Sendable {
   public let suffix: String
   /// The backend's name, recorded in last-loaded.json for the log.
   public let backend: String
-  public let kind: ArtifactKind
 
   /// Makes engines/ and models/, as opening a Python EngineCache does.
-  public init(layout: CacheLayout, tag: String, suffix: String, backend: String, kind: ArtifactKind = .file) {
+  public init(layout: CacheLayout, tag: String, suffix: String, backend: String) {
     self.layout = layout
     self.tag = tag
     self.suffix = suffix
     self.backend = backend
-    self.kind = kind
     try? Files.makeDirectory(layout.engines)
     try? Files.makeDirectory(layout.models)
   }
@@ -139,9 +136,7 @@ public struct EngineCache: Sendable {
 
   public func entry(_ sha256: String) throws(RegistryError) -> CacheEntry {
     let key = try key(sha256)
-    let hint: URL.DirectoryHint = kind == .directory ? .isDirectory : .notDirectory
-    return CacheEntry(
-      path: layout.engines.appending(path: key + suffix, directoryHint: hint), metaPath: layout.engines.appending(path: key + ".json"))
+    return CacheEntry(path: layout.engines.appending(path: key + suffix), metaPath: layout.engines.appending(path: key + ".json"))
   }
 
   /// Model identities with an artifact this backend can load: a sidecar with
@@ -194,8 +189,7 @@ public struct EngineCache: Sendable {
 }
 
 public struct CacheEntry: Sendable, Equatable {
-  /// The artifact: a file for TensorRT and tinygrad, a directory for
-  /// onnxruntime (`ArtifactKind`).
+  /// The artifact: a file for TensorRT, a directory for onnxruntime.
   public let path: URL
   public let metaPath: URL
 

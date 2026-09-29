@@ -339,7 +339,7 @@ struct StagingCase {
     defer { output.deallocate() }
     UnsafeMutableRawPointer(output).copyMemory(from: request + spec.warpedBytes + spec.packedBytes, byteCount: spec.outputCount * 4)
     if Convert.allFinite(output, count: spec.outputCount) {
-      staging.keep(outputs: output)
+      staging.keep(outputs: output, type: .float)
     }
   }
 

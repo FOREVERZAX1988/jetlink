@@ -41,23 +41,19 @@ package enum Artifact {
     ]
   }
 
-  /// Builds `artifact`. `body` fills `staged`, a directory made for it or a
-  /// file it writes, in a `tmp*` directory beside the artifact where the
-  /// cache's sweep finds it if the build is killed, and returns the sidecar.
-  /// The staged artifact then replaces any old one, the sidecar goes beside it
-  /// with `metaExtra` on top, and the build reports done. The staging goes
-  /// either way.
+  /// Builds `artifact`. `body` makes `staged`, the file or directory, in a
+  /// `tmp*` directory beside the artifact where the cache's sweep finds it if
+  /// the build is killed, and returns the sidecar. The staged artifact then
+  /// replaces any old one, the sidecar goes beside it with `metaExtra` on
+  /// top, and the build reports done. The staging goes either way.
   package static func build(
-    _ artifact: URL, kind: ArtifactKind, metaExtra: [String: Any], report: ProgressFn, _ body: (_ staged: URL) throws -> [String: Any]
+    _ artifact: URL, metaExtra: [String: Any], report: ProgressFn, _ body: (_ staged: URL) throws -> [String: Any]
   ) throws {
     let fm = FileManager.default
     let temp = artifact.deletingLastPathComponent().appending(path: "tmp\(UUID().uuidString.prefix(8))", directoryHint: .isDirectory)
     try fm.createDirectory(at: temp, withIntermediateDirectories: true)
     defer { try? fm.removeItem(at: temp) }
-    let staged = temp.appending(path: "artifact", directoryHint: kind == .directory ? .isDirectory : .notDirectory)
-    if kind == .directory {
-      try fm.createDirectory(at: staged, withIntermediateDirectories: true)
-    }
+    let staged = temp.appending(path: "artifact")
     var meta = try body(staged)
     if fm.fileExists(atPath: artifact.path) {
       try fm.removeItem(at: artifact)
@@ -66,6 +62,13 @@ package enum Artifact {
     for (key, value) in metaExtra { meta[key] = value }
     try writeSidecar(artifact, meta)
     report("build", 1, "done in \(meta["build_seconds"] ?? 0)s")
+  }
+
+  /// Until TensorRT's backend stops passing a kind.
+  package static func build(
+    _ artifact: URL, kind: ArtifactKind, metaExtra: [String: Any], report: ProgressFn, _ body: (_ staged: URL) throws -> [String: Any]
+  ) throws {
+    try build(artifact, metaExtra: metaExtra, report: report, body)
   }
 
   /// Loads with progress paced by the last load's time, then records this
@@ -92,11 +95,6 @@ package enum Artifact {
       try? writeSidecar(artifact, updated)
     }
     return (engine, seconds)
-  }
-
-  /// A file's bytes, or every regular file's under a directory.
-  package static func bytes(_ url: URL) -> Int64 {
-    Files.size(of: url)
   }
 }
 

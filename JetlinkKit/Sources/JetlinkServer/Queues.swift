@@ -79,6 +79,11 @@ final class RingQueue {
     head = (head + 1) % rows
   }
 
+  func push(f16 source: UnsafePointer<UInt16>) {
+    (buffer + head * rowCount).update(from: source, count: rowCount)
+    head = (head + 1) % rows
+  }
+
   func row(_ logical: Int) -> UnsafePointer<UInt16> {
     UnsafePointer(buffer + ((head + logical) % rows) * rowCount)
   }
@@ -111,10 +116,10 @@ protocol FrameStaging: AnyObject {
   /// Writes one frame's inputs into the engine's buffers. `packed` is read
   /// where the request put it, aligned or not.
   func stage(warped: UnsafeRawPointer, packed: UnsafeRawPointer) throws
-  /// The frame's driving output, float32 and all finite, which the next
-  /// frame feeds back. Never after NOT_FINITE or a failed run: modeld fed
-  /// back only what reached it, and those raise on the comma first.
-  func keep(outputs: UnsafePointer<Float>)
+  /// The frame's driving output as the engine wrote it, all finite, which
+  /// the next frame feeds back. Never after NOT_FINITE or a failed run:
+  /// modeld fed back only what reached it, and those raise on the comma first.
+  func keep(outputs: UnsafeRawPointer, type: ElementType)
 }
 
 /// A model's INFER_REQ and reply as the session handles them, from the spec
@@ -124,9 +129,11 @@ struct FrameLayout {
   /// INFER_REQ's payload: the request head, the warped frame, the packed floats.
   let requestBytes: Int
   let warpedBytes: Int
-  /// The driving output, float32 on the wire whatever the engine gives.
+  /// The driving output, float32 on the wire whatever the engine gives, and
+  /// where the engine writes it, which stays put from load to close.
   let outputCount: Int
   let outputType: ElementType?
+  let output: UnsafeRawPointer?
   /// The part of it the reply leaves out unless asked, when the model has one.
   let hidden: Range<Int>?
 
@@ -135,6 +142,7 @@ struct FrameLayout {
     warpedBytes = spec.warpedBytes
     outputCount = spec.outputCount
     outputType = engine.outputs[ModelConstants.drivingOutput]?.type
+    output = engine.output(ModelConstants.drivingOutput)
     hidden = spec.hiddenRange
   }
 }
@@ -200,10 +208,10 @@ final class PolicyQueues: FrameStaging {
   private let desireOffset: Int
   /// Where hidden_state sits in the driving output.
   private let hidden: Range<Int>
-  /// The last good frame's hidden state, float32 as the comma held it: the
-  /// values the reply carried and the comma sent back, cast into the feature
-  /// queue at the same point.
-  private let prevFeat: UnsafeMutablePointer<Float>
+  /// The last good frame's hidden state, in the feature queue's float16:
+  /// exact whether the engine gave float16 or float32, as the comma's float32
+  /// copy of a float16 output was.
+  private let prevFeat: UnsafeMutablePointer<UInt16>
 
   init(spec: ModelSpec, engine: any Engine) throws {
     self.engine = engine
@@ -243,8 +251,12 @@ final class PolicyQueues: FrameStaging {
     prevFeat.update(repeating: 0, count: hidden.count)
   }
 
-  func keep(outputs: UnsafePointer<Float>) {
-    prevFeat.update(from: outputs + hidden.lowerBound, count: hidden.count)
+  func keep(outputs: UnsafeRawPointer, type: ElementType) {
+    let source = outputs + hidden.lowerBound * type.size
+    switch type {
+    case .float16: prevFeat.update(from: source.assumingMemoryBound(to: UInt16.self), count: hidden.count)
+    default: Stage.store(f32: source, count: hidden.count, into: prevFeat, as: .float16)
+    }
   }
 
   func stage(warped: UnsafeRawPointer, packed: UnsafeRawPointer) throws {
@@ -256,7 +268,7 @@ final class PolicyQueues: FrameStaging {
     imgQueue.push(u8: warped)
     bigImgQueue.push(u8: warped + cameraBytes)
     desireQueue.push(f32: packed + desireOffset)
-    featQueue.push(f32: UnsafeRawPointer(prevFeat))
+    featQueue.push(f16: prevFeat)
 
     for gather in gathers {
       gather.queue.gather(step: frameSkip, into: gather.target.pointer, as: gather.target.type)
@@ -328,7 +340,7 @@ final class StateLoop: FrameStaging {
   func newClient() {}
 
   /// Nothing: the graph keeps its hidden state itself.
-  func keep(outputs: UnsafePointer<Float>) {}
+  func keep(outputs: UnsafeRawPointer, type: ElementType) {}
 
   func stage(warped: UnsafeRawPointer, packed: UnsafeRawPointer) throws {
     assert(frame.isCurrent(in: engine) && scalars.allSatisfy { $0.target.isCurrent(in: engine) })

@@ -52,10 +52,7 @@
   }
 
   func json(_ object: Any) -> String {
-    guard JSONSerialization.isValidJSONObject(object),
-      let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes])
-    else { return "{}" }
-    return String(decoding: data, as: UTF8.self)
+    ControlJSON.data(object).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
   }
 
   func parse(_ text: String) -> [String: Any] {
@@ -183,7 +180,8 @@
         cacheRoot: URL(fileURLWithPath: cache, isDirectory: true),
         preload: (config["preload"] as? Bool) ?? true,
         listen: (config["listen"] as? Bool) ?? true,
-        usb: (config["usb"] as? Bool) ?? true)
+        usb: (config["usb"] as? Bool) ?? true,
+        keepPlans: 2)
       let backend = OrtBackend(
         profile: profile, preparer: ONNXPreparer(), keepAlive: (config["keep_alive"] as? Bool) ?? true,
         keepCPUWarm: (config["keep_cpu_warm"] as? Bool) ?? false, chip: config["chip"] as? String ?? "")
@@ -235,13 +233,7 @@
       } catch {
         return ["ok": false, "error": String(describing: error)]
       }
-      nonisolated(unsafe) var reply: ReplyEvent?
-      let done = DispatchSemaphore(value: 0)
-      Task.detached {
-        reply = await server.handle(command)
-        done.signal()
-      }
-      done.wait()
+      let reply = try? blocking { await server.handle(command) }
       return reply.map { ControlEvent.reply($0).payload() } ?? NSNull()
     }
   }

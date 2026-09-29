@@ -1,22 +1,19 @@
 import Foundation
-import JetlinkRegistry
 import JetlinkServer
 
 /// A backend that is only its names: all a cache, a server and its
-/// controller ask of one before any model. TensorRT's plan files, or
-/// onnxruntime's directories.
+/// controller ask of one before any model. TensorRT's, whose plans are
+/// files, or onnxruntime's, whose artifacts are directories.
 public final class NamingBackend: EngineBackend {
   public let name: String
   public let suffix: String
-  public let artifactKind: ArtifactKind
   public let runtimeVersion: String
 
-  public init(kind: ArtifactKind = .directory) {
-    artifactKind = kind
-    (name, suffix, runtimeVersion) = kind == .file ? ("trt", ".plan", "10.3.0") : ("ort", ".ortcache", "1.29.0")
+  public init(trt: Bool = false) {
+    (name, suffix, runtimeVersion) = trt ? ("trt", ".plan", "10.3.0") : ("ort", ".ortcache", "1.29.0")
   }
 
-  public func deviceTag() -> String { artifactKind == .file ? "Orin-sm87" : "cpu" }
+  public func deviceTag() -> String { name == "trt" ? "Orin-sm87" : "cpu" }
 
   public func deriveSpec(model: URL, sha256: String, nbytes: Int64, frameSkip: Int) throws -> ModelSpec {
     throw TestError("names only")

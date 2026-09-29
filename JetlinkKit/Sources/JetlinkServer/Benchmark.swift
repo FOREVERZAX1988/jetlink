@@ -35,7 +35,7 @@ public final class BenchmarkRun: @unchecked Sendable {
 extension BenchmarkStats {
   /// Percentiles by nearest rank over the sorted values, as the Python
   /// bench prints them.
-  static func of(_ ms: [Double]) -> BenchmarkStats {
+  package static func of(_ ms: [Double]) -> BenchmarkStats {
     guard !ms.isEmpty else { return .empty }
     let sorted = ms.sorted()
     func percentile(_ q: Double) -> Double { sorted[Int((q * Double(sorted.count - 1)).rounded())] }
@@ -99,9 +99,9 @@ extension EngineHost {
   /// Refuses while a comma is connected; a comma that connects meanwhile is
   /// told the engine is not ready until the run ends, rather than have its
   /// frames mixed into the benchmark's history. Blocks; call it off the
-  /// main thread. `logsReport` false leaves the report out of the log, for
-  /// a caller that prints it itself.
-  public func benchmark(seconds: Double, run: BenchmarkRun, logsReport: Bool = true) throws -> BenchmarkReport {
+  /// main thread. The report is the caller's to show; `logsReport` is
+  /// ignored, until the command line stops passing it.
+  public func benchmark(seconds: Double, run: BenchmarkRun, logsReport: Bool = false) throws -> BenchmarkReport {
     lock.lock()
     guard let l = loaded else {
       lock.unlock()
@@ -130,9 +130,6 @@ extension EngineHost {
           BenchmarkEvent(
             state: report.cancelled ? "cancelled" : "done", elapsed: report.seconds, total: seconds, frames: report.frames, frame: report.frame,
             report: report, detail: "")))
-      if logsReport {
-        log.info("benchmark done:\n\(report.text)")
-      }
       return report
     } catch {
       emit(.benchmark(BenchmarkEvent(state: "failed", elapsed: 0, total: seconds, frames: 0, frame: nil, report: nil, detail: "\(error)")))
@@ -199,7 +196,7 @@ extension EngineHost {
         throw error
       }
       let readStarted = DispatchTime.now().uptimeNanoseconds
-      let out = l.engine.output(ModelConstants.drivingOutput)!
+      let out = l.staging.layout.output!
       output.withUnsafeMutableBytes { o in
         if io.type == .float16 {
           Convert.f16ToF32(out, o.baseAddress!, count: spec.outputCount)
@@ -213,7 +210,7 @@ extension EngineHost {
       let accel = l.engine.lastGpuUs
       if finite {
         // the hidden state back into the queues, as a frame from the comma does
-        output.withUnsafeBufferPointer { l.staging.keep(outputs: $0.baseAddress!) }
+        l.staging.keep(outputs: out, type: io.type)
       }
       lock.unlock()
 

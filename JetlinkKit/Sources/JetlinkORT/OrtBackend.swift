@@ -1,6 +1,7 @@
 import Foundation
 import JetlinkKit
 import JetlinkONNX
+import JetlinkRegistry
 import JetlinkServer
 
 #if canImport(Metal)
@@ -128,8 +129,8 @@ public final class OrtBackend: EngineBackend {
   static let expectedCompileSeconds = 180.0
 
   public let name = "ort"
+  /// A directory: the prepared model and the compiled caches.
   public let suffix = ".ortcache"
-  public let artifactKind = ArtifactKind.directory
   public let profile: OrtProfile
   /// Keep the GPU clocked up between frames (Metal), or the NPU in burst
   /// mode rather than sustained (QNN).
@@ -236,7 +237,8 @@ public final class OrtBackend: EngineBackend {
   public func build(model: URL, artifact: URL, report: @escaping ProgressFn, metaExtra: [String: Any]) throws {
     let started = Date()
     let expect = Artifact.sidecar(artifact)
-    try Artifact.build(artifact, kind: artifactKind, metaExtra: metaExtra, report: report) { staged in
+    try Artifact.build(artifact, metaExtra: metaExtra, report: report) { staged in
+      try FileManager.default.createDirectory(at: staged, withIntermediateDirectories: true)
       report("patch", 0, profile.usesCoreML ? "preparing the model for CoreML" : "preparing the model")
       let prepared = try preparer.prepare(model: model, into: staged, layout: profile.layout) {
         CoreMLPreparation.cacheKey(stem: artifact.deletingPathExtension().lastPathComponent, part: $0)
@@ -283,7 +285,7 @@ public final class OrtBackend: EngineBackend {
       }
       var meta = OrtArtifact.meta(self, manifest: manifest, providers: providers, model: model, started: started)
       meta["compile_seconds"] = pythonRound(compileSeconds, 1)
-      meta["artifact_bytes"] = Artifact.bytes(staged)
+      meta["artifact_bytes"] = Files.size(of: staged)
       return meta
     }
   }
@@ -444,7 +446,7 @@ final class CoreMLProgress: @unchecked Sendable {
         walker.skipDescendants()
       }
       for url in converted {
-        freed += Artifact.bytes(url)
+        freed += Files.size(of: url)
         try? fm.removeItem(at: url)
       }
     }
