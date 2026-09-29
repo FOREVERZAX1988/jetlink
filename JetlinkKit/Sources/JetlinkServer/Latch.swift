@@ -21,3 +21,25 @@ final class Latch: @unchecked Sendable {
     condition.unlock()
   }
 }
+
+/// A value behind a lock that escaping closures can share, which Mutex,
+/// being noncopyable, cannot be.
+package final class Locked<Value>: @unchecked Sendable {
+  private let lock = NSLock()
+  private var stored: Value
+
+  package init(_ value: Value) {
+    stored = value
+  }
+
+  package func withLock<R>(_ body: (inout Value) throws -> R) rethrows -> R {
+    lock.lock()
+    defer { lock.unlock() }
+    return try body(&stored)
+  }
+
+  package var value: Value {
+    get { withLock { $0 } }
+    set { withLock { $0 = newValue } }
+  }
+}

@@ -1,6 +1,7 @@
 #if os(macOS) || os(Linux)
   import Foundation
   import JetlinkRegistry
+  import JetlinkServer
   import JetlinkTestSupport
   import Testing
 

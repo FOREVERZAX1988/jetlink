@@ -209,21 +209,4 @@
     done.wait()
     return try result.withLock { $0! }.get()
   }
-
-  /// A value behind a lock that escaping closures can share, which Mutex,
-  /// being noncopyable, cannot be.
-  final class Locked<Value>: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value: Value
-
-    init(_ value: Value) {
-      self.value = value
-    }
-
-    func withLock<R>(_ body: (inout Value) throws -> R) rethrows -> R {
-      lock.lock()
-      defer { lock.unlock() }
-      return try body(&value)
-    }
-  }
 #endif
