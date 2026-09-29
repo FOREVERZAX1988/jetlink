@@ -170,6 +170,7 @@ struct ServerHooksTests {
       return false
     })
     try serve(hooks: hooks, gadget: gadget) { _, client in
+      _ = try client.hello()
       try client.send(.ping)
       _ = try client.recv(.pong)
       #expect(events.wait { $0.contains(.connected) })

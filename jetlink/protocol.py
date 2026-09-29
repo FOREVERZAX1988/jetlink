@@ -72,7 +72,7 @@ class Msg(IntEnum):
   STATE_REQ = 12       # telemetry
   STATE_RESP = 13      # json
   ERROR = 14           # json: {error, detail}
-  PING = 15
+  PING = 15            # on a connection with no hello and no ENGINE_REQ: ERROR no_hello
   PONG = 16
   SHUTDOWN_REQ = 17    # json: {reason} -> power the Jetson off for good; see JetlinkClient.shutdown
   SHUTDOWN_RESP = 18   # json: {ok, detail}

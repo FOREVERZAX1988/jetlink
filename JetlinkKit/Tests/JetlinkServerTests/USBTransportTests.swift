@@ -240,4 +240,34 @@ struct ServerUSBTests {
     #expect(eventually { server.framesServed == count })
     #expect(gadget.kernel.discards == 0, "the ring left the grid")
   }
+
+  /// The comma's keep-alive between its join and the swap is a ping, over
+  /// endpoints that outlive a server restart. Its next ping reaches a session
+  /// with no hello and no model request, and must fail there, not at the swap.
+  @Test("A comma still pinging a server that restarted under it is told to say hello again, and rejoins")
+  func restartedServerRefusesThePing() throws {
+    let golden = try Golden("tiny_stateful")
+    let cache = try TemporaryDirectory()
+    let gadget = UsbfsFakeGadget()
+    let client = GadgetClient(gadget.kernel)
+    let before = try makeServer(cache, gadget: gadget)
+    try before.start()
+    _ = try client.hello(name: "modeld")
+    _ = try client.ensureEngine(model: golden.model, sha256: golden.sha256)
+    try client.send(.ping)
+    _ = try client.recv(.pong)
+    before.shutdown()
+
+    let after = try makeServer(cache, gadget: gadget)
+    try after.start()
+    defer { after.shutdown() }
+    let ping = try client.send(.ping)
+    let refused = try client.recv()
+    #expect(refused.type == Wire.Msg.error.rawValue && refused.seq == ping, "\(refused.type)")
+    #expect(refused.json["error"] as? String == "no_hello")
+    _ = try client.hello(name: "modeld")
+    _ = try client.ensureEngine(model: golden.model, sha256: golden.sha256)
+    try client.send(.ping)
+    _ = try client.recv(.pong)
+  }
 }

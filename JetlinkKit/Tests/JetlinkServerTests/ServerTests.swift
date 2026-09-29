@@ -42,8 +42,8 @@ struct ServerTests {
     let links = Recorded<LinkEvent>()
     try serve { server, client in
       server.host.subscribe { if case .link(let link) = $0 { links.append(link) } }
-      try client.send(.ping)
-      _ = try client.recv(.pong)
+      try client.send(.stateReq)
+      _ = try client.recv(.stateResp)
       #expect(server.currentLink.linkMedium == .tcp)
       _ = try client.hello(name: "modeld", link: ["kind": "cable", "usb_speed": "high-speed"])
       #expect(server.currentLink.linkMedium == .usb2)
@@ -70,6 +70,7 @@ struct ServerTests {
   @Test("A replayed request is dropped, and pings are answered")
   func dropsReplays() throws {
     try serve { _, client in
+      _ = try client.hello()
       let seq = try client.send(.ping)
       #expect(try client.recv().type == Wire.Msg.pong.rawValue)
       try client.send(.ping, seq: seq)  // a replay: no answer
@@ -77,6 +78,20 @@ struct ServerTests {
       let reply = try client.recv()
       #expect(reply.type == Wire.Msg.pong.rawValue)
       #expect(reply.seq == next)
+    }
+  }
+
+  @Test("A ping before a hello is an error, and answered once the client says hello")
+  func pingNeedsHello() throws {
+    try serve { _, client in
+      let early = try client.send(.ping)
+      let refused = try client.recv()
+      #expect(refused.type == Wire.Msg.error.rawValue && refused.seq == early)
+      #expect(refused.json["error"] as? String == "no_hello")
+      _ = try client.hello()
+      let next = try client.send(.ping)
+      let reply = try client.recv()
+      #expect(reply.type == Wire.Msg.pong.rawValue && reply.seq == next)
     }
   }
 
@@ -109,10 +124,12 @@ struct ServerTests {
   @Test("A new connection takes over from the one being served")
   func newConnectionTakesOver() throws {
     try serve { server, first in
+      _ = try first.hello()
       try first.send(.ping)
       #expect(try first.recv().type == Wire.Msg.pong.rawValue)
       let second = try TestClient(port: server.port!)
       defer { second.close() }
+      _ = try second.hello()
       try second.send(.ping)
       #expect(try second.recv().type == Wire.Msg.pong.rawValue)
       #expect(throws: LinkError.self) { try first.recv() }
@@ -246,6 +263,7 @@ struct ServerLifecycleTests {
     guard let port = server.port else { throw TestError("the server did not listen again after \(first) went away") }
     let client = try TestClient(port: port)
     defer { client.close(); server.shutdown() }
+    _ = try client.hello()
     try client.send(.ping)
     #expect(try client.recv().type == Wire.Msg.pong.rawValue)
   }
@@ -261,15 +279,18 @@ struct ServerLifecycleTests {
     for round in 0..<2 {
       guard let transport = comma.accept() else { throw TestError("no dial in round \(round)") }
       transport.setReceiveTimeout(10)
-      try transport.send(.ping, seq: UInt32(round + 1))
+      try transport.sendJSON(.helloReq, seq: 1, ["client": ["name": "comma"]])
+      #expect(try transport.recv().msgType == Wire.Msg.helloResp.rawValue)
+      try transport.send(.ping, seq: UInt32(round + 2))
       let reply = try transport.recv()
       #expect(reply.msgType == Wire.Msg.pong.rawValue)
-      #expect(reply.seq == UInt32(round + 1))
+      #expect(reply.seq == UInt32(round + 2))
       transport.close()
     }
     // A listener keeps accepting beside the dialing.
     let client = try TestClient(port: server.port!)
     defer { client.close() }
+    _ = try client.hello()
     try client.send(.ping)
     #expect(try client.recv().type == Wire.Msg.pong.rawValue)
     server.setDial(nil)
@@ -292,7 +313,9 @@ struct ServerLifecycleTests {
     defer { comma.close() }
     guard let transport = comma.accept() else { throw TestError("never dialed") }
     transport.setReceiveTimeout(10)
-    try transport.send(.ping, seq: 1)
+    try transport.sendJSON(.helloReq, seq: 1, ["client": ["name": "comma"]])
+    #expect(try transport.recv().msgType == Wire.Msg.helloResp.rawValue)
+    try transport.send(.ping, seq: 2)
     #expect(try transport.recv().msgType == Wire.Msg.pong.rawValue)
     transport.close()
   }
