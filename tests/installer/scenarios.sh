@@ -79,7 +79,7 @@ reset_box() {
   unset FAKE_ARCH FAKE_SMI FAKE_PUBLISHED FAKE_PM_REBOOT FAKE_SERVER_BROKEN FAKE_GPU_BROKEN \
     FAKE_TRT10 FAKE_NO_CURL FAKE_ROOT_FREE_GB FAKE_IMAGE_GB FAKE_DOWNLOAD_FAILS FAKE_BAD_SUM FAKE_NO_PLUGIN \
     FAKE_DOCKER_STUCK FAKE_BAD_WHEEL FAKE_SERVER_CRASHLOOP FAKE_PRELOAD FAKE_SERVER_OLD FAKE_DOWNLOAD_HANG \
-    JETLINK_TEST_PRELOAD_S
+    FAKE_DOCKER_ROOT FAKE_OTHER_FS JETLINK_TEST_PRELOAD_S
   export JETLINK_REPO_URL=file:///tmp/repo FAKE_LATEST=v0.10.0 JETLINK_TEST_SYSTEMD_RUN=/tmp
 }
 
@@ -1084,6 +1084,18 @@ expect_out "jetlink update --ref v0.6.0"
 expect_not_ran "$(apt_install "libnvinfer10")"
 expect_in "$UNITS/jetlink-server.service" "run-server"
 expect_in /etc/jetlink/server.env "JETLINK_IMAGE="
+expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=120"
+
+scenario "Docker's images on another disk are not deleted for room on /"
+reset_box; jetson 39 2.1; with_docker
+old_install v0.5.0
+FAKE_ROOT_FREE_GB=2 FAKE_IMAGE_GB=8 FAKE_DOCKER_ROOT=/mnt/data/docker FAKE_OTHER_FS=/mnt/data cli update
+expect_rc 1
+expect_out "Jetlink's Docker images are not on the disk TensorRT goes on (/mnt/data/docker), so they stay."
+expect_out "Not enough free space for TensorRT: 2 GB on /, and it needs 6 GB."
+expect_not_ran "docker rmi"
+expect_not_ran "systemctl stop jetlink-server"
+expect_in "$UNITS/jetlink-server.service" "run-server"
 expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=120"
 
 scenario "a v0.6.0 PC install moves out of Docker"

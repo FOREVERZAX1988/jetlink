@@ -90,10 +90,15 @@ case "$name" in
     done ;;
 
   df)
-    # every filesystem is /: FAKE_ROOT_FREE_GB, plus what deleted images freed
+    # every filesystem is / but FAKE_OTHER_FS, a disk of its own: each has
+    # FAKE_ROOT_FREE_GB free, plus what deleted images freed
     free=$((${FAKE_ROOT_FREE_GB:-100} + $(cat "$state/freed-gb" 2>/dev/null || echo 0)))
-    printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/fake 999999999 0 %s 1%% /\n' \
-      $((free * 1048576)) ;;
+    dev=/dev/fake mnt=/ path="${*: -1}"
+    if [ -n "${FAKE_OTHER_FS:-}" ] && { [ "$path" = "$FAKE_OTHER_FS" ] || [[ $path == "$FAKE_OTHER_FS"/* ]]; }; then
+      dev=/dev/other mnt=$FAKE_OTHER_FS
+    fi
+    printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\n%s 999999999 0 %s 1%% %s\n' \
+      "$dev" $((free * 1048576)) "$mnt" ;;
 
   systemctl)
     case "${1:-}" in
@@ -185,9 +190,12 @@ case "$name" in
   docker)
     case "${1:-}" in
       --version) echo "Docker version 29.1.0, build fake" ;;
-      info) if [ -f "$state/nvidia-runtime" ]; then
-              echo '{"nvidia":{"path":"nvidia-container-runtime"},"runc":{"path":"runc"}}'
-            else echo '{"runc":{"path":"runc"}}'; fi ;;
+      info)
+        if [[ " $* " == *DockerRootDir* ]]; then
+          echo "${FAKE_DOCKER_ROOT:-/var/lib/docker}"
+        elif [ -f "$state/nvidia-runtime" ]; then
+          echo '{"nvidia":{"path":"nvidia-container-runtime"},"runc":{"path":"runc"}}'
+        else echo '{"runc":{"path":"runc"}}'; fi ;;
       manifest) [ "${FAKE_PUBLISHED:-0}" = 1 ] || { echo "no such manifest" >&2; exit 1; } ;;
       pull) echo "$2" >>"$state/images" ;;
       build)

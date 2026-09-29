@@ -1307,21 +1307,34 @@ trt_plugins() {
 
 # TensorRT goes on / (a PC's under /opt/jetlink). When the Docker era's images
 # are what fills it they go first, which stops the old server now rather than
-# at the switch; going back to it downloads them again.
+# at the switch; going back to it downloads them again. Images Docker keeps on
+# another disk would free nothing there, so they stay.
 make_room_for_trt() {
-  local where=/ free
+  local where=/ free docker_root
   [ "$JETSON" = 1 ] || where=$TRT_ROOT
   free="$(free_gb "$where")"
   [ "$free" -ge "$TRT_GB" ] && return 0
   if [ "$DOCKER_ERA" = 1 ] && [ -n "$(docker_images)" ]; then
-    note "$free GB free for TensorRT, which needs $TRT_GB GB: deleting Jetlink's Docker images first."
-    stop_running_server
-    remove_docker_images
-    free="$(free_gb "$where")"
-    [ "$free" -ge "$TRT_GB" ] && return 0
+    docker_root="$(as_root docker info -f '{{.DockerRootDir}}' 2>>"$LOG" || true)"
+    if [ -n "$docker_root" ] && [ "$(mount_of "$docker_root")" = "$(mount_of "$where")" ]; then
+      note "$free GB free for TensorRT, which needs $TRT_GB GB: deleting Jetlink's Docker images first."
+      stop_running_server
+      remove_docker_images
+      free="$(free_gb "$where")"
+      [ "$free" -ge "$TRT_GB" ] && return 0
+    else
+      note "Jetlink's Docker images are not on the disk TensorRT goes on (${docker_root:-Docker did not say where}), so they stay."
+    fi
   fi
   die "Not enough free space for TensorRT: $free GB on $where, and it needs $TRT_GB GB." \
     "Free some space and run the installer again."
+}
+
+# the mount point of the filesystem that holds $1, or will once it is made
+mount_of() {
+  local where=$1
+  while [ ! -d "$where" ]; do where="$(dirname "$where")"; done
+  { df -P "$where" 2>/dev/null || true; } | awk 'NR == 2 {print $NF}'
 }
 
 # every image the Docker-era installers pulled or built
