@@ -1,7 +1,9 @@
-# Everything a v* tag produces: the macOS app, the Python distributions, the
-# Jetson image, and the GitHub release that carries them.
+# Everything a v* tag produces: the macOS app, the Linux server for Jetsons
+# and PCs, and the GitHub release that carries them.
+# A push to main builds the Linux server too and puts it on the edge
+# prerelease under fixed names, which is what `install.sh --ref main` installs.
 #
-# Signing and notarizing need six secrets (docs/releasing.md lists them). With
+# Signing and notarizing need six secrets (docs/publishing.md lists them). With
 # none of them the build still runs and produces an ad hoc signed zip labelled
 # unsigned, so a fork can cut its own release.
 name: Release
@@ -9,15 +11,23 @@ name: Release
 on:
   push:
     tags: ["v*"]
+    branches: [main]
+
+concurrency:
+  group: release-${{ github.ref }}
+  # a newer push to main replaces an edge build still running; a tag finishes
+  cancel-in-progress: ${{ github.ref_type == 'branch' }}
 
 permissions:
   contents: write
-  packages: write
   id-token: write
 
 jobs:
   check:
     name: Check the tag
+    # everything but the Linux server hangs off this, so a push to main builds
+    # only that
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     steps:
       - name: Check out the repository
@@ -25,31 +35,6 @@ jobs:
 
       - name: Check the tag matches the package version
         run: macos/scripts/check-version.sh "${GITHUB_REF_NAME}"
-
-  python-dist:
-    name: Python sdist and wheel
-    needs: check
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Check out the repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install build
-        run: pip install build
-
-      - name: Build the distributions
-        run: python -m build
-
-      - name: Upload the distributions
-        uses: actions/upload-artifact@v4
-        with:
-          name: python-dist
-          path: dist/*
 
   macos-app:
     name: macOS app
@@ -163,235 +148,130 @@ jobs:
             macos/build/Jetlink-*.zip
             macos/build/SHA256SUMS
 
-  docker-jetpack6:
-    name: JetPack 6 image
-    needs: check
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 60
-    continue-on-error: true
-    outputs:
-      # A job with continue-on-error reports success whatever happened, so the
-      # release job cannot read needs.docker-jetpack6.result. This output is
-      # set by a step that only runs when the push succeeded.
-      pushed: ${{ steps.pushed.outputs.pushed }}
-    steps:
-      - name: Check out the repository
-        uses: actions/checkout@v4
-
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Work out the tags
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/zoompilot/jetlink
-          flavor: |
-            latest=false
-            suffix=-jetpack6
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=match,pattern=v(.*),group=1
-            type=match,pattern=v(.*),group=1,suffix=-jetson
-          # Four notes on this block.
-          #
-          # The semver patterns parse a semver tag, and a PEP 440 prerelease is
-          # not one: v0.3.0a1 has no hyphen before its suffix, so both were
-          # skipped, the tag list came out empty and buildx stopped with "tag is
-          # needed when pushing to registry". The match pattern is a plain regex
-          # over the ref, so it names every tag this repo cuts.
-          #
-          # latest=false because the default, latest=auto, moves :latest to
-          # whatever was tagged last. It skips a semver prerelease, but the match
-          # pattern above is not semver, so an alpha took :latest and a plain
-          # `docker pull` handed out a prerelease.
-          #
-          # The suffix is what makes two images out of one name. arm64 alone
-          # does not mean Jetson on JetPack 6: this image wants the L4T r36
-          # stack and the nvidia container runtime, and an ordinary arm64
-          # server pulling it would get something that cannot run.
-          #
-          # -jetson is what this image was called before JetPack 7.2 needed a
-          # second one; the alias keeps older instructions working.
-
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: docker/Dockerfile.jetpack6
-          platforms: linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=jetson
-          cache-to: type=gha,mode=max,scope=jetson
-        # On a native arm64 runner rather than QEMU on amd64, which took 13
-        # minutes for an image where nothing compiles. A failure here does not
-        # block the macOS release; the notes say the image is missing.
-
-      - name: Record that the image was pushed
-        id: pushed
-        run: echo "pushed=true" >> "$GITHUB_OUTPUT"
-
-  docker-cuda-build:
-    name: CUDA image (${{ matrix.arch }})
-    needs: check
+  linux-server:
+    name: Linux server (${{ matrix.flavor }})
+    # a fork's main has no edge prerelease to fill
+    if: github.ref_type == 'tag' || github.repository == 'zoompilot/jetlink'
     strategy:
       fail-fast: false
       matrix:
         include:
-          - arch: amd64
-            runner: ubuntu-24.04
-          - arch: arm64
-            runner: ubuntu-24.04-arm
+          # the Jetson build (TensorRT 10) and the PC build (TensorRT 11.3),
+          # each on a native runner; 22.04's glibc runs on 22.04 and 24.04
+          - flavor: linux-aarch64
+            runner: ubuntu-22.04-arm
+          - flavor: linux-x86_64
+            runner: ubuntu-22.04
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
-    continue-on-error: true
+    env:
+      FLAVOR: ${{ matrix.flavor }}
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
 
-      - name: Make room for the image
+      # NVIDIA's pinned header debs and onnxruntime's tarball
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/jetlink-build
+          key: jetlink-server-build-${{ matrix.flavor }}-${{ hashFiles('scripts/build-linux.sh') }}
+
+      - name: Build the server
+        run: scripts/build-linux.sh "$FLAVOR"
+        # The one way the server is built, here, in a container on a Mac or on
+        # a Jetson: dist/jetlink-server-<version>-<flavor>.tar.gz and its
+        # .sha256. On a tag v<__version__> the version is the release's.
+
+      - name: Check the tarball
         run: |
-          # TensorRT's libraries are 4 GB on their own and the runner starts
-          # with about 25 GB free, which the build has run close to. These are
-          # not used by anything here.
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-          df -h /
-
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push by digest
-        id: push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: docker/Dockerfile
-          platforms: linux/${{ matrix.arch }}
-          outputs: type=image,name=ghcr.io/zoompilot/jetlink,push-by-digest=true,name-canonical=true,push=true
-          cache-from: type=gha,scope=cuda-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=cuda-${{ matrix.arch }}
-        # One architecture per native runner; docker-cuda joins the two
-        # digests under the release's tags.
-
-      - name: Record the digest
-        env:
-          DIGEST: ${{ steps.push.outputs.digest }}
-        run: |
-          mkdir -p "$RUNNER_TEMP/digests"
-          touch "$RUNNER_TEMP/digests/${DIGEST#sha256:}"
-
-      - name: Upload the digest
-        uses: actions/upload-artifact@v4
-        with:
-          name: digest-cuda-${{ matrix.arch }}
-          path: ${{ runner.temp }}/digests/*
-          if-no-files-found: error
-          retention-days: 1
-
-  docker-cuda:
-    name: CUDA image
-    needs: docker-cuda-build
-    runs-on: ubuntu-24.04
-    continue-on-error: true
-    outputs:
-      pushed: ${{ steps.pushed.outputs.pushed }}
-    steps:
-      - name: Download the digests
-        uses: actions/download-artifact@v4
-        with:
-          path: ${{ runner.temp }}/digests
-          pattern: digest-cuda-*
-          merge-multiple: true
-
-      - name: Check both architectures built
-        working-directory: ${{ runner.temp }}/digests
-        run: |
-          # an image for one architecture under a tag that promises both would
-          # hand the other a manifest it cannot run
-          count=$(find . -type f | wc -l)
-          if [ "$count" -ne 2 ]; then
-            echo "error: $count of 2 architectures built" >&2
+          set -euo pipefail
+          # what install.sh checks, then the binary, which runs on this
+          # runner: it is the flavor's processor
+          (cd dist && sha256sum -c jetlink-server-*-"$FLAVOR".tar.gz.sha256)
+          tar -xzf dist/jetlink-server-*-"$FLAVOR".tar.gz -C "$RUNNER_TEMP"
+          cd "$RUNNER_TEMP"/jetlink-server-*-"$FLAVOR"
+          [ -f bin/JetlinkKit_JetlinkStatusPage.resources/Resources/index.html ]
+          [ "$(bin/jetlink-server --version)" = "$(cat VERSION)" ]
+          bin/jetlink-server serve --help >/dev/null
+          # no GPU here, so TensorRT has to say it cannot run
+          if bin/jetlink-server backends --backend trt; then
+            echo "error: backends --backend trt passed on a runner without a GPU" >&2
             exit 1
           fi
 
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
+      - name: Upload the tarball
+        uses: actions/upload-artifact@v4
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          name: linux-server-${{ matrix.flavor }}
+          path: dist/jetlink-server-*
+          if-no-files-found: error
 
-      - name: Work out the tags
-        id: meta
-        uses: docker/metadata-action@v5
+  edge:
+    name: Edge prerelease
+    needs: linux-server
+    if: github.ref == 'refs/heads/main' && github.repository == 'zoompilot/jetlink'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download the Linux server
+        uses: actions/download-artifact@v4
         with:
-          images: ghcr.io/zoompilot/jetlink
-          flavor: |
-            latest=false
-            suffix=-cuda
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=match,pattern=v(.*),group=1
+          pattern: linux-server-*
+          path: dist
+          merge-multiple: true
 
-      - name: Tag both architectures
-        working-directory: ${{ runner.temp }}/digests
+      - name: Refresh the edge prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        working-directory: dist
         run: |
-          # shellcheck disable=SC2046
-          docker buildx imagetools create \
-            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-            $(printf 'ghcr.io/zoompilot/jetlink@sha256:%s ' *)
-          docker buildx imagetools inspect "$(jq -r '.tags[0]' <<< "$DOCKER_METADATA_OUTPUT_JSON")"
-
-      - name: Record that the image was pushed
-        id: pushed
-        run: echo "pushed=true" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          # Fixed names: the installer finds main's build without knowing its
+          # version.
+          for arch in aarch64 x86_64; do
+            found=(jetlink-server-*-linux-"$arch".tar.gz)
+            if [ "${#found[@]}" != 1 ] || [ ! -f "${found[0]}" ]; then
+              echo "error: wanted one linux-$arch tarball, found: ${found[*]}" >&2
+              exit 1
+            fi
+            name="jetlink-server-edge-linux-$arch.tar.gz"
+            mv "${found[0]}" "$name"
+            sha256sum "$name" > "$name.sha256"
+          done
+          NOTES="Builds of main at ${GITHUB_SHA::7}, for testing. install.sh --ref main installs them."
+          if gh release view edge >/dev/null 2>&1; then
+            # the tag follows main
+            gh api --method PATCH "repos/$GH_REPO/git/refs/tags/edge" -f sha="$GITHUB_SHA" -F force=true >/dev/null
+            gh release edit edge --prerelease --notes "$NOTES"
+          else
+            gh release create edge --prerelease --title "Edge" --notes "$NOTES" --target "$GITHUB_SHA"
+          fi
+          gh release upload edge --clobber jetlink-server-edge-linux-*
 
   release:
     name: GitHub release
-    needs: [python-dist, macos-app, docker-jetpack6, docker-cuda]
-    if: always() && needs.python-dist.result == 'success' && needs.macos-app.result == 'success'
+    # The server is required: install.sh takes the newest release, so one
+    # without it would stop every Linux install and update.
+    needs: [macos-app, linux-server]
     runs-on: ubuntu-24.04
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
 
-      # Named one by one, not the whole run. docker/build-push-action uploads a
-      # .dockerbuild build record beside them, and the step below releases every
-      # file it finds, so downloading everything would attach buildx's internal
-      # trace to the release and fail the job when that one artifact will not
-      # come down.
+      # Named, not the whole run: the step below releases every file it
+      # finds, so only what belongs on the release comes down.
       - name: Download the macOS app
         uses: actions/download-artifact@v4
         with:
           name: macos-app
           path: artifacts/macos-app
 
-      - name: Download the Python distributions
+      - name: Download the Linux server
         uses: actions/download-artifact@v4
         with:
-          name: python-dist
-          path: artifacts/python-dist
+          pattern: linux-server-*
+          path: artifacts/linux-server
+          merge-multiple: true
 
       - name: List what is being released
         run: find artifacts -type f -exec ls -lh {} +
@@ -399,8 +279,6 @@ jobs:
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
-          JETPACK6_PUSHED: ${{ needs.docker-jetpack6.outputs.pushed }}
-          CUDA_PUSHED: ${{ needs.docker-cuda.outputs.pushed }}
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
@@ -425,10 +303,8 @@ jobs:
             ARGS=(--generate-notes --title "Jetlink $GITHUB_REF_NAME")
           fi
           # Both spellings of a prerelease: a hyphenated semver tag, and the
-          # PEP 440 suffixes, which carry no hyphen. jetlink.__version__ has to
-          # hold the version verbatim (check-version.sh), so an alpha tagged the
-          # semver way would be built into a wheel named the PEP 440 way; the
-          # tags here are PEP 440 and this has to recognise them.
+          # PEP 440 suffixes jetlink.__version__ carries (check-version.sh),
+          # which have no hyphen.
           case "$GITHUB_REF_NAME" in
             *-*|*a[0-9]*|*b[0-9]*|*rc[0-9]*) ARGS+=(--prerelease) ;;
           esac
@@ -441,8 +317,7 @@ jobs:
           # shellcheck disable=SC2016
           {
             printf '%s\n\n' "$NOTES"
-            # The DMG when signed, else the zip; either way the first asset
-            # on the page, since "-macOS" sorts ahead of the wheel's "-py3".
+            # The DMG when signed, else the zip.
             MAC="$(find artifacts/macos-app -name 'Jetlink-*-macOS.dmg' | head -1)"
             [ -n "$MAC" ] || MAC="$(find artifacts/macos-app -name 'Jetlink-*-macOS.zip' | head -1)"
             MAC="$(basename "$MAC")"
@@ -450,17 +325,7 @@ jobs:
             printf 'Mac (Apple silicon): [%s](https://github.com/%s/releases/download/%s/%s)\n\n' "$MAC" "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" "$MAC"
             printf 'Jetson or Linux PC:\n\n'
             printf '```bash\ncurl -fsSL https://raw.githubusercontent.com/zoompilot/jetlink/main/install.sh | bash\n```\n\n'
-            printf 'Images:\n\n'
-            if [ "${CUDA_PUSHED:-}" = "true" ]; then
-              printf -- '- `ghcr.io/zoompilot/jetlink:%s-cuda`: NVIDIA PCs (amd64, driver 580+) and JetPack 7.2 (arm64)\n' "$VERSION"
-            else
-              printf -- '- `%s-cuda` failed to build. The installer builds it locally (`--build`).\n' "$VERSION"
-            fi
-            if [ "${JETPACK6_PUSHED:-}" = "true" ]; then
-              printf -- '- `ghcr.io/zoompilot/jetlink:%s-jetpack6`: JetPack 6 (also `-jetson`)\n\n' "$VERSION"
-            else
-              printf -- '- `%s-jetpack6` failed to build. The installer builds it locally (`--build`).\n\n' "$VERSION"
-            fi
+            printf 'It picks the server build: `jetlink-server-%s-linux-aarch64` for a Jetson, `-linux-x86_64` for a PC.\n\n' "$VERSION"
             if [ "${MAC%.zip}" != "$MAC" ]; then
               printf '## Mac app is unsigned\n\n'
               printf 'macOS blocks the first open. Right-click Jetlink in Applications > **Open**, or **System Settings > Privacy & Security > Open Anyway**. Or:\n\n'
