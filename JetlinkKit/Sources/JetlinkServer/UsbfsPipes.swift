@@ -54,7 +54,7 @@ final class UsbfsPipes: BulkPipes, ReadRingPipe, @unchecked Sendable {
   /// What the ring holds or has next, up to `count` bytes. A timeout leaves
   /// the ring posted, so what arrives later is kept for the next read.
   func read(into buffer: UnsafeMutableRawPointer, count: Int, timeout: TimeInterval) throws -> Int {
-    let deadline = timeout > 0 ? Date().addingTimeInterval(timeout) : nil
+    let deadline = timeout > 0 ? MonotonicDeadline(in: timeout) : nil
     return try device.use(owner: owner) {
       try ring.read(into: buffer, count: count, deadline: deadline)
     }
@@ -99,7 +99,7 @@ final class UsbfsPipes: BulkPipes, ReadRingPipe, @unchecked Sendable {
     try device.submit(slots[slot], count: size)
   }
 
-  func awaitCompletion(until deadline: Date?) throws {
+  func awaitCompletion(until deadline: MonotonicDeadline?) throws {
     try device.awaitCompletion(owner: owner, until: deadline)
   }
 
@@ -283,13 +283,13 @@ final class UsbfsDevice: @unchecked Sendable {
     try use(owner: urb.owner) {
       urb.buffer = buffer
       try submit(urb, count: count)
-      let deadline = timeout.map { Date().addingTimeInterval($0) }
+      let deadline = timeout.map { MonotonicDeadline(in: $0) }
       while urb.inFlight {
         if gone {
           // Never reaped now: its pipes free it once no thread polls.
           throw LinkError.closed(UsbfsDevice.goneMessage)
         }
-        if !urb.discarded && (cancelled.contains(urb.owner) || deadline.map { Date() >= $0 } == true) {
+        if !urb.discarded && (cancelled.contains(urb.owner) || deadline?.passed() == true) {
           discard(urb)
         }
         waitOnce(until: urb.discarded ? nil : deadline, cap: urb.discarded ? UsbfsDevice.discardPoll : nil)
@@ -343,25 +343,26 @@ final class UsbfsDevice: @unchecked Sendable {
   }
 
   /// Under the lock: waits once for a completion, until `deadline` (nil: none).
-  func awaitCompletion(owner: ObjectIdentifier, until deadline: Date?) throws {
+  func awaitCompletion(owner: ObjectIdentifier, until deadline: MonotonicDeadline?) throws {
     try check(owner)
     waitOnce(until: deadline, cap: nil)
   }
 
   /// Under the lock. Polls the descriptor and reaps for everyone if no other
   /// thread is, else waits for that one's broadcast. Never polls once the
-  /// device is gone: the host may already have closed the descriptor.
-  private func waitOnce(until deadline: Date?, cap: TimeInterval?) {
+  /// device is gone: the host may already have closed the descriptor. May
+  /// return early; every caller checks its deadline again.
+  private func waitOnce(until deadline: MonotonicDeadline?, cap: TimeInterval?) {
     var until = deadline
     if let cap {
-      let capped = Date().addingTimeInterval(cap)
+      let capped = MonotonicDeadline(in: cap)
       if until.map({ capped < $0 }) ?? true {
         until = capped
       }
     }
     if polling || gone {
       if let until {
-        _ = condition.wait(until: until)
+        _ = condition.wait(until: until.wallClock())
       } else {
         condition.wait()
       }
@@ -369,7 +370,7 @@ final class UsbfsDevice: @unchecked Sendable {
     }
     polling = true
     condition.unlock()
-    let alive = kernel.wait(timeout: until.map { max(0, $0.timeIntervalSinceNow) })
+    let alive = kernel.wait(timeout: until.map { $0.remaining() })
     condition.lock()
     polling = false
     if !gone {
@@ -437,12 +438,12 @@ final class UsbfsDevice: @unchecked Sendable {
       condition.broadcast()
     }
     discard(urbs)
-    let deadline = Date().addingTimeInterval(timeout)
+    let deadline = MonotonicDeadline(in: timeout)
     while urbs.contains(where: { $0.inFlight }) {
       if gone && !polling {
         break
       }
-      if Date() >= deadline {
+      if deadline.passed() {
         return false
       }
       waitOnce(until: deadline, cap: UsbfsDevice.discardPoll)
@@ -462,11 +463,12 @@ final class UsbfsDevice: @unchecked Sendable {
     gone = true
     kernel.wake()
     condition.broadcast()
-    let deadline = Date().addingTimeInterval(timeout)
+    let deadline = MonotonicDeadline(in: timeout)
     while active > 0 {
-      if !condition.wait(until: deadline) {
-        return active == 0
+      if deadline.passed() {
+        return false
       }
+      _ = condition.wait(until: deadline.wallClock())
     }
     return true
   }

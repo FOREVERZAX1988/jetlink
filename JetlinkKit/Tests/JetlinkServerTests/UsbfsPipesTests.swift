@@ -521,3 +521,29 @@ struct UsbfsPipesTests {
     #expect(kernel.submits > 100 * 29)
   }
 }
+
+/// The USB waits' deadlines, on a clock the tests set.
+@Suite("Monotonic deadlines")
+struct MonotonicDeadlineTests {
+  @Test("Time left is read off the monotonic clock, and never goes below zero")
+  func remaining() {
+    let deadline = MonotonicDeadline(in: 2, now: 100)
+    #expect(deadline.remaining(now: 100.5) == 1.5)
+    #expect(!deadline.passed(now: 101.999))
+    #expect(deadline.passed(now: 102) && deadline.remaining(now: 102) == 0)
+    #expect(deadline.remaining(now: 250) == 0)
+    #expect(MonotonicDeadline(in: 0.05, now: 100) < deadline)
+  }
+
+  @Test("A wall-clock step moves where a wait ends, not when: the wait is for the time left")
+  func wallClockSteps() {
+    let deadline = MonotonicDeadline(in: 2, now: 100)
+    let before = Date(timeIntervalSince1970: 1_000_000)
+    #expect(deadline.wallClock(now: 100.5, date: before) == before.addingTimeInterval(1.5))
+    // timesyncd stepped the clock an hour forward half a second in: the wait
+    // still has 1.5 s to go, not none
+    let stepped = before.addingTimeInterval(3600.5)
+    #expect(deadline.wallClock(now: 100.5, date: stepped) == stepped.addingTimeInterval(1.5))
+    #expect(!deadline.passed(now: 100.5))
+  }
+}

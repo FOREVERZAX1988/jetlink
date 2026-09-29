@@ -191,7 +191,7 @@
     /// What the ring holds or has next, up to `count` bytes. A timeout leaves
     /// the ring queued, so what arrives later is kept for the next read.
     func read(into buffer: UnsafeMutableRawPointer, count: Int, timeout: TimeInterval) throws -> Int {
-      let deadline = timeout > 0 ? Date().addingTimeInterval(timeout) : nil
+      let deadline = timeout > 0 ? MonotonicDeadline(in: timeout) : nil
       ringLock.lock()
       defer { ringLock.unlock() }
       try checkRunning()
@@ -209,10 +209,10 @@
       }
     }
 
-    func awaitCompletion(until deadline: Date?) throws {
+    func awaitCompletion(until deadline: MonotonicDeadline?) throws {
       try checkRunning()
       if let deadline {
-        _ = ringLock.wait(until: deadline)
+        _ = ringLock.wait(until: deadline.wallClock())
       } else {
         ringLock.wait()
       }
