@@ -5,25 +5,6 @@
 // for, and a file for one platform compiles to nothing on the others, so every
 // target builds everywhere and every test suite runs wherever it builds.
 //
-//   JetlinkKit       the control protocol's types and the stores the apps' views read
-//   JetlinkUI        SwiftUI pieces the Mac and iPhone apps draw with (Apple only)
-//   JetlinkONNX      reading and preparing a driving model's ONNX, without the onnx package
-//   JetlinkRegistry  sunnypilot's model catalog, LFS downloads, and the cache layout
-//   JetlinkServer    the jetlink server in Swift: the wire protocol, the session, the
-//                    queues, the engine host and cache, and the comma's gadget over
-//                    IOKit (macOS) or usbfs (Linux, Android). The host passes in the
-//                    backend that runs the model, and the gadget.
-//   JetlinkORT       onnxruntime's backends: CoreML on Apple, QNN on Android, and the
-//                    CPU provider under either
-//   CTrt             TensorRT and CUDA as plain C calls (jl_trt.h), opened at run time
-//   JetlinkTRT       the TensorRT backend
-//   JetlinkLinux     a Jetson's or a Linux PC's side of the server: the comma's gadget
-//                    through sysfs, telemetry, sleep and power (Linux only)
-//   JetlinkStatusPage  the read-only status page the daemon serves
-//   JetlinkAndroid   the JNI library the Android app loads, libjetlink.so (Android only)
-//   jetlink-server   the server as a command and a daemon, on Linux and macOS
-//   jetlink-onnx     the preparation on its own, for checking it against Python
-//
 // onnxruntime is linked in on Apple platforms and opened at run time elsewhere
 // (JL_ORT_DLOPEN): the app's copy from the AAR on Android, the official
 // tarball's on Linux. Building for either needs onnxruntime's C headers, with

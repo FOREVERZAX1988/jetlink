@@ -5,22 +5,6 @@ import Testing
 
 @Suite("Staging")
 struct StagingTests {
-  /// The session stages straight out of the receive buffer, where nothing
-  /// promises the packed floats their alignment: staged one byte off it,
-  /// every frame must still be what Python's queues feed.
-  @Test("A frame is staged from wherever the request put it", arguments: [1, 4])
-  func unaligned(frameSkip: Int) throws {
-    let fixture = try StagingCase(frameSkip: frameSkip)
-    let engine = StagingEngine(fixture.inputs)
-    let staging = try PolicyQueues(spec: fixture.spec, engine: engine)
-    let request = UnsafeMutableRawPointer.allocate(byteCount: fixture.frameBytes + 1, alignment: 16) + 1
-    defer { (request - 1).deallocate() }
-    for frame in 0..<fixture.count {
-      try fixture.stage(frame, into: staging, request: request)
-      fixture.check(frame, engine, "one byte off")
-    }
-  }
-
   /// A queued graph cannot run without the hidden state to feed back.
   @Test("A queued graph with no hidden_state of the feature size is refused at load")
   func needsHiddenState() throws {
@@ -40,14 +24,9 @@ struct StagingTests {
   /// float16 bits. Each column below is one such group, pushed oldest first.
   @Test("Desire is sampled as numpy's max takes it, NaN and signed zeros included", arguments: [ElementType.float16, .float])
   func desireMax(type: ElementType) throws {
-    let manifest = try Conformance.json("staging.json")
-    let entry = try #require((manifest["cases"] as! [[String: Any]]).first { int($0["frame_skip"]) == 4 })
-    let spec = try ModelSpec.from(Conformance.json(entry["spec"] as! String))
-    let inputs = (entry["inputs"] as! [[String: Any]]).map { input -> TensorSpec in
-      let name = input["name"] as! String
-      return TensorSpec(name: name, type: name == "desire_pulse" ? type : .float16, shape: (input["shape"] as! [NSNumber]).map(\.intValue))
-    }
-    let engine = StagingEngine(inputs)
+    let fixture = try StagingCase(frameSkip: 4) { $0 == "desire_pulse" ? type : .float16 }
+    let spec = fixture.spec
+    let engine = StagingEngine(fixture.inputs)
     let staging = try PolicyQueues(spec: spec, engine: engine)
     let nan = Float(bitPattern: 0x7FC0_0000)
     // column: the four frames' values, and the float16 numpy's max gives

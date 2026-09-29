@@ -23,12 +23,12 @@ import Testing
     let parts: [String: Int64]?
   }
 
-  static let python: [String: PythonResult] = {
-    guard let data = try? Data(contentsOf: Fixtures.url("python.json")),
-      let results = try? JSONDecoder().decode([String: PythonResult].self, from: data)
-    else { return [:] }
-    return results
-  }()
+  static let python = results("python.json")
+
+  /// A results file Python wrote, by case.
+  static func results(_ name: String) -> [String: PythonResult] {
+    (try? JSONDecoder().decode([String: PythonResult].self, from: Data(contentsOf: Fixtures.url(name)))) ?? [:]
+  }
 
   /// "<fixture>.<layout>" for every case Python ran.
   static let cases: [String] = python.keys.sorted()

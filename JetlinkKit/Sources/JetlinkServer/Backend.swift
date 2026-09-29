@@ -25,14 +25,10 @@ public struct ArtifactInvalid: Error, CustomStringConvertible {
 /// (an illegal address, a failed launch): the context is broken, and every
 /// later frame and every rejoin would fail with the engine still "loaded".
 /// The session answers the frame INFER_FAILED, then calls
-/// `ServerHooks.fatal`. A type whose codes are only sometimes fatal
-/// conforms and says which through `isFatal`.
+/// `ServerHooks.fatal`. A type whose codes are only sometimes fatal says
+/// which through `isFatal`.
 public protocol FatalEngineError: Error {
   var isFatal: Bool { get }
-}
-
-extension FatalEngineError {
-  public var isFatal: Bool { true }
 }
 
 /// A loaded model, ready to run a frame at a time: a backend's engine

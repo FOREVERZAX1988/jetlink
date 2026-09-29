@@ -358,7 +358,9 @@ struct StagingCase {
 struct StagingConformanceTests {
   /// The hidden state each frame returned is fed into the next, as modeld
   /// fed it back through prev_feat: the generator checks Python's queues
-  /// against protocol 2's staging, and this the Swift against Python's.
+  /// against protocol 2's staging, and this the Swift against Python's. The
+  /// frame sits one byte off alignment, as nothing in the receive buffer
+  /// promises the packed floats theirs.
   @Test("Each frame stages the tensors Python's queues feed", arguments: [1, 2, 4])
   func staging(frameSkip: Int) throws {
     let fixture = try StagingCase(frameSkip: frameSkip)
@@ -367,11 +369,11 @@ struct StagingConformanceTests {
     #expect(fixture.staged.count == fixture.count * fixture.stagedBytes)
     let engine = StagingEngine(fixture.inputs)
     let staging = try PolicyQueues(spec: fixture.spec, engine: engine)
-    let request = UnsafeMutableRawPointer.allocate(byteCount: fixture.frameBytes, alignment: 16)
-    defer { request.deallocate() }
+    let request = UnsafeMutableRawPointer.allocate(byteCount: fixture.frameBytes + 1, alignment: 16) + 1
+    defer { (request - 1).deallocate() }
     for frame in 0..<fixture.count {
       try fixture.stage(frame, into: staging, request: request)
-      fixture.check(frame, engine, "at frame_skip \(frameSkip)")
+      fixture.check(frame, engine, "at frame_skip \(frameSkip), one byte off")
     }
   }
 }

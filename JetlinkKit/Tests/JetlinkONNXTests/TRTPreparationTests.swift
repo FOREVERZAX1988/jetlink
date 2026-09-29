@@ -9,12 +9,7 @@ import Testing
 /// each graph, and `<graph>.trt.model.expected.onnx` the file it wrote, made
 /// once before the Python server went. The files must match byte for byte.
 @Suite struct TRTPreparationTests {
-  static let python: [String: PreparationTests.PythonResult] = {
-    guard let data = try? Data(contentsOf: Fixtures.url("trt.json")),
-      let results = try? JSONDecoder().decode([String: PreparationTests.PythonResult].self, from: data)
-    else { return [:] }
-    return results
-  }()
+  static let python = PreparationTests.results("trt.json")
 
   static let cases: [String] = python.keys.map { String($0.split(separator: ".")[0]) }.sorted()
 
