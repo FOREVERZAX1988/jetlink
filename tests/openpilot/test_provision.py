@@ -23,6 +23,7 @@ from unittest import mock
 from jetlink.client import EngineMissing
 from jetlink.comma import gadget, lending
 from jetlink.openpilot import link, provision
+from tests.openpilot import fakes
 from tests.openpilot.fakes import OpenpilotTest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -446,6 +447,31 @@ class TestTheEntryPoint(unittest.TestCase):
     run = subprocess.run([sys.executable, '-m', 'jetlink.openpilot.provision', '--adapter', 'tests.openpilot.fakes'],
                          cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
     self.assertEqual(run.returncode, 0, run.stderr)
+
+  def test_a_round_with_work_and_no_owner_leaves_it_for_the_next_run(self):
+    # the whole run in its own process: bound to the adapter, the link on,
+    # a warp built, no spec yet, and no owner to lend the link. The fake
+    # adapter points the comma layer's files under its root there
+    root = Path(tempfile.mkdtemp())
+    (root / 'params' / 'd').mkdir(parents=True)
+    (root / 'params' / 'd' / 'JetlinkLink').write_bytes(b'1')
+    warp = fakes.FakeOpenpilot(root).warp_path(*fakes.TICI)
+    warp.parent.mkdir(parents=True)
+    warp.write_bytes(b'built')
+    env = {**os.environ, 'JETLINK_FAKE_ROOT': str(root), 'JETLINK_FAKE_ISOLATE': '1', 'PYTHONPATH': str(ROOT)}
+    run = subprocess.run([sys.executable, '-m', 'jetlink.openpilot.provision', '--adapter', 'tests.openpilot.fakes'],
+                         cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
+    self.assertEqual(run.returncode, 0, run.stderr)
+    self.assertEqual(json.loads((root / 'dev' / 'state').read_text()), {'sleep_after': 1.0, 'unfinished': True})
+
+  def test_a_borrower_asks_the_socket_as_it_is_when_it_asks(self):
+    # a default bound when lending was imported would ask the real owner
+    here = Path(tempfile.mkdtemp()) / 'lend.sock'
+    with mock.patch.object(lending, 'SOCKET', here), \
+         mock.patch.object(lending.socket.socket, 'connect', side_effect=OSError('nobody')) as connect:
+      self.assertIsNone(lending.borrow('provision', timeout=0.1))
+      self.assertEqual(lending.Lender(lambda: True, lambda: True).path, here)
+    self.assertEqual(connect.call_args.args[-1], str(here))
 
   def test_the_adapter_is_required(self):
     with self.assertRaises(SystemExit):

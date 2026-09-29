@@ -186,7 +186,7 @@ class Loan:
       _close(self.sock)
 
 
-def borrow(name: str = 'modeld', timeout: float = BORROW_TIMEOUT, path: Path = SOCKET) -> Loan | None:
+def borrow(name: str = 'modeld', timeout: float = BORROW_TIMEOUT, path: Path | None = None) -> Loan | None:
   """Ask the owner for the endpoints, or None if there is nobody to ask.
 
   None while the link was only just turned on, or with an owner that died or
@@ -194,12 +194,14 @@ def borrow(name: str = 'modeld', timeout: float = BORROW_TIMEOUT, path: Path = S
   without a loan: only the owner ever holds ep0, so the caller asks again
   later rather than opening the gadget itself.
 
-  Over the cable the answer carries the phone's socket.
+  Over the cable the answer carries the phone's socket. `path` defaults to
+  SOCKET as it is when called, so a test that points SOCKET elsewhere is
+  never lent the real owner's link.
   """
   try:
     conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     conn.settimeout(POLL)
-    conn.connect(str(path))
+    conn.connect(str(SOCKET if path is None else path))
   except OSError:
     return None   # no owner listening
   loan = Loan(conn, bytearray(), '', '', name=name)
@@ -409,7 +411,7 @@ class Lender:
   """
 
   def __init__(self, lendable: Callable[[], bool], bounce: Callable[[], bool],
-               path: Path = SOCKET, holding: Callable[[], bool] | None = None,
+               path: Path | None = None, holding: Callable[[], bool] | None = None,
                cable: CableListener | None = None):
     self._lendable = lendable
     self._bounce = bounce
@@ -418,7 +420,8 @@ class Lender:
     self._cable_lent = False
     # what this borrower was last told it has, so each change is logged once
     self._told = ''
-    self.path = path
+    # as it is when made, for the same reason as borrow's
+    self.path = SOCKET if path is None else path
     self.borrower = ''
     self._sock: socket.socket | None = None
     self._thread: threading.Thread | None = None

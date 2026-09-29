@@ -206,7 +206,12 @@ def _root() -> Path:
 
 
 def adapter() -> FakeOpenpilot:
-  return FakeOpenpilot(_root())
+  root = _root()
+  if os.environ.get('JETLINK_FAKE_ISOLATE'):
+    # an entry point run as its own process by a test: nothing of the
+    # machine's own in reach for the life of it
+    redirect(root)
+  return FakeOpenpilot(root)
 
 
 def owner_config() -> OwnerConfig:
@@ -220,34 +225,34 @@ GADGET_FILES = ('LINK', 'NET_STATUS', 'GADGET_STATUS', 'LENDER_STATUS', 'DORMANT
                 'CC_ORIENTATION')
 
 
-def isolate(test: unittest.TestCase, root: Path) -> None:
+def redirect(root: Path) -> list:
   """Point everything jetlink could read or write outside the fake under
-  `root`, for the length of `test`: openpilot's params store by gadget's own
-  rule (PARAMS_ROOT and the prefix, so it lands on FakeOpenpilot's store_dir),
-  and the comma layer's device files. conftest.py fails a test that still
-  reaches the real ones."""
+  `root`: openpilot's params store by gadget's own rule (PARAMS_ROOT and the
+  prefix, so it lands on FakeOpenpilot's store_dir), and the comma layer's
+  device files. The patchers, started; whoever called stops them."""
   from jetlink.comma import gadget, lending, port
   from jetlink.transport import base
-
-  def patch(target, name, value):
-    p = mock.patch.object(target, name, value)
-    p.start()
-    test.addCleanup(p.stop)
-
-  env = mock.patch.dict(os.environ, {'PARAMS_ROOT': str(root / 'params'), 'OPENPILOT_PREFIX': 'd'})
-  env.start()
-  test.addCleanup(env.stop)
   dev = root / 'dev'
   dev.mkdir(parents=True, exist_ok=True)
-  for name in GADGET_FILES:
-    patch(gadget, name, dev / name.lower())
-  patch(gadget, 'GADGET_PATH', root / 'configfs' / 'jetlink')
-  patch(gadget, 'FFS_MOUNT', root / 'ffs-jetlink')
-  patch(gadget, 'UDC_PATH', root / 'udc')
-  patch(base, 'UDC_SYSFS', str(root / 'udc'))
-  patch(lending, 'SOCKET', dev / 'jetlink-lend.sock')
-  patch(port, 'POWER_ROLE', root / 'current_pr')
-  patch(port, 'USB_DEVICES', root / 'usb-devices')
+  patchers = [mock.patch.dict(os.environ, {'PARAMS_ROOT': str(root / 'params'), 'OPENPILOT_PREFIX': 'd'})]
+  patchers += [mock.patch.object(gadget, name, dev / name.lower()) for name in GADGET_FILES]
+  patchers += [mock.patch.object(gadget, 'GADGET_PATH', root / 'configfs' / 'jetlink'),
+               mock.patch.object(gadget, 'FFS_MOUNT', root / 'ffs-jetlink'),
+               mock.patch.object(gadget, 'UDC_PATH', root / 'udc'),
+               mock.patch.object(base, 'UDC_SYSFS', str(root / 'udc')),
+               mock.patch.object(lending, 'SOCKET', dev / 'jetlink-lend.sock'),
+               mock.patch.object(port, 'POWER_ROLE', root / 'current_pr'),
+               mock.patch.object(port, 'USB_DEVICES', root / 'usb-devices')]
+  for p in patchers:
+    p.start()
+  return patchers
+
+
+def isolate(test: unittest.TestCase, root: Path) -> None:
+  """redirect() for the length of `test`. conftest.py fails a test that still
+  reaches the machine's own files."""
+  for p in redirect(root):
+    test.addCleanup(p.stop)
 
 
 class OpenpilotTest(unittest.TestCase):
