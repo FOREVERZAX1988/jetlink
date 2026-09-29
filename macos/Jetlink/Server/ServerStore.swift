@@ -43,9 +43,6 @@ final class ServerStore: ServerControlling {
   let state = ServerViewState()
   var link: LinkEvent { state.link }
   var engine: EngineEvent { state.engine }
-  var statsHistory: [StatsSample] { state.statsHistory }
-  var stats: StatsEvent? { state.stats }
-  var benchmark: BenchmarkEvent? { state.benchmark }
   private(set) var startedAt: Date?
   var lastFailure: String?
 

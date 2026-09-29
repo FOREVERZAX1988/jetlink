@@ -80,7 +80,7 @@ struct BenchmarkView: View {
 
   // MARK: state
 
-  private var event: BenchmarkEvent? { server.benchmark }
+  private var event: BenchmarkEvent? { server.state.benchmark }
   private var running: Bool { event.map { !$0.isFinished } ?? false }
   private var report: BenchmarkReport? { event?.report }
   private var sha256: String? { server.engine.state == .ready ? server.engine.sha256 : nil }

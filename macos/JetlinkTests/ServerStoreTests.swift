@@ -69,7 +69,7 @@ struct ServerStoreTests {
     let stats = BenchmarkStats(mean: 30, p50: 30, p90: 31, p99: 33, max: 36)
     let event = BenchmarkEvent(state: "running", elapsed: 10, total: 60, frames: 200, frame: stats, report: nil, detail: "")
     store.apply(.benchmark(event))
-    #expect(store.benchmark == event)
+    #expect(store.state.benchmark == event)
   }
 
   @MainActor @Test func aStoreStartsServesAndStops() async throws {

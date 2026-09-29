@@ -48,7 +48,7 @@ final class AppModel {
     state.engine = server.engine
     state.modelName = modelName(server.engine.sha256)
     state.recent = server.recent
-    state.history = server.statsHistory
+    state.history = server.state.statsHistory
     state.cableAddress = network.cable?.address
     state.linkMedium = server.linkMedium
     state.health = device.health

@@ -144,8 +144,8 @@ struct SettingsScreen: View {
   private var about: some View {
     Section("About") {
       LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")
-      LabeledContent("Runtime", value: "onnxruntime \(app.server.info?.runtimeVersion ?? OrtRuntime.version)")
-      if let device = app.server.info?.device {
+      LabeledContent("Runtime", value: "onnxruntime \(app.server.state.server?.runtimeVersion ?? OrtRuntime.version)")
+      if let device = app.server.state.server?.device {
         LabeledContent("Chip", value: SettingsScreen.chip(device))
       }
       LabeledContent("Server", value: serverText)

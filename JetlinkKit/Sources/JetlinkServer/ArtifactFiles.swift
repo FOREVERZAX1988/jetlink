@@ -72,14 +72,7 @@ package enum Artifact {
     let started = Date()
     let took = (meta["load_seconds"] as? NSNumber)?.doubleValue ?? 0
     report("load", 0, "loading \(what)")
-    let tick: @Sendable (TimeInterval) -> Void = { elapsed in
-      if took > 0 {
-        report("load", min(0.95, elapsed / took), "loading \(what), \(Int(elapsed)) s of about \(Int(took.rounded())) s")
-      } else {
-        report("load", 0, "loading \(what), \(Int(elapsed)) s elapsed")
-      }
-    }
-    let engine = try Ticker.during(interval: 1, tick, body)
+    let engine = try Ticker.during(interval: 1, Ticker.paced("load", "loading \(what)", took: took, report: report), body)
     let seconds = Date().timeIntervalSince(started)
     report("load", 1, "loaded in \(Int(seconds.rounded())) s")
     if !meta.isEmpty {
@@ -127,6 +120,18 @@ package func formatBytes(_ n: Int64) -> String {
 }
 
 extension Ticker {
+  /// Ticks for `stage` paced by how long it took last time, "what, 12 s of
+  /// about 40 s", or without a last time "what, 12 s elapsed".
+  package static func paced(_ stage: String, _ what: String, took: TimeInterval, report: @escaping ProgressFn) -> @Sendable (TimeInterval) -> Void {
+    { elapsed in
+      if took > 0 {
+        report(stage, min(0.95, elapsed / took), "\(what), \(Int(elapsed)) s of about \(Int(took.rounded())) s")
+      } else {
+        report(stage, 0, "\(what), \(Int(elapsed)) s elapsed")
+      }
+    }
+  }
+
   /// Runs `body` while ticking every `interval`, and stops the ticks however
   /// it ends.
   package static func during<T>(interval: TimeInterval, _ tick: @escaping @Sendable (TimeInterval) -> Void, _ body: () throws -> T) rethrows -> T {

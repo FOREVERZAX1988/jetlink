@@ -81,10 +81,6 @@ struct OrtBackendTests {
     #expect(backend.deviceTag() == "htp-SM8650")
     #expect(backend.tag() == "ort\(sanitize(OrtRuntime.version)).htp-SM8650")
     #expect(OrtBackend(profile: .htp, preparer: ONNXPreparer(), chip: "").deviceTag() == "htp-unknown")
-    #if canImport(Metal)
-      #expect(OrtBackend(profile: .cpu, preparer: ONNXPreparer()).deviceTag() == sanitize("cpu-\(OrtBackend.chipName())"))
-    #else
-      #expect(OrtBackend(profile: .cpu, preparer: ONNXPreparer()).deviceTag() == "cpu-cpu")
-    #endif
+    #expect(OrtBackend(profile: .cpu, preparer: ONNXPreparer()).deviceTag() == sanitize("cpu-\(OrtBackend.defaultChip())"))
   }
 }

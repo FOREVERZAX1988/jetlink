@@ -34,7 +34,7 @@ struct RootView: View {
       StatusAccessory(state: app.status)
         .onTapGesture { tab = .status }
     }
-    .onChange(of: app.server.shutdownRequests) { _, count in
+    .onChange(of: app.server.state.shutdownRequests) { _, count in
       shutdownAlert = count > 0
     }
     .alert("Comma Asked to Shut Down", isPresented: $shutdownAlert) {
