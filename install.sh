@@ -876,6 +876,14 @@ check_binary() {
         || die "$(basename "$OPT_BINARY") is for another kind of computer; this one needs a $FLAVOR build." ;;
   esac
   if [ "$SOURCE" = local ] || [ -f "$SOURCE_DIR/install.sh" ]; then KEEP_SOURCE=1; fi
+  # the jetlink command comes from that source too, and a release's from
+  # before the native server drives the Docker one
+  if [ "$KEEP_SOURCE" = 1 ] && [ -f "$SOURCE_DIR/scripts/jetlink-run-server" ]; then
+    die "$SOURCE_DIR holds Jetlink from before the native server, and --binary installs its scripts." \
+      "Move it to the tree the server was built from first, for example:" \
+      "  sudo git -C $SOURCE_DIR fetch --depth 1 origin <branch> && sudo git -C $SOURCE_DIR reset --hard FETCH_HEAD" \
+      "  sudo $SOURCE_DIR/install.sh --update --binary $OPT_BINARY"
+  fi
   return 0
 }
 

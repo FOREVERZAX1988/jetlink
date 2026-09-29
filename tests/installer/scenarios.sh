@@ -1272,6 +1272,44 @@ expect_not_in /etc/jetlink/server.env "JETLINK_IMAGE"
 expect_in /etc/jetlink/install.conf "JETLINK_REF=latest"
 expect_in "$UNITS/jetlink-server.service" "/opt/jetlink/current/bin/jetlink-server"
 
+scenario "the bench's round trip: the v0.6.0 curl line goes back, a --binary from the clone comes forward"
+reset_box; jetson 39 2.1; with_docker
+old_install v0.6.0
+cli update
+expect_rc 0
+expect_link /opt/jetlink/current /opt/jetlink/0.10.0
+# back, with that release's own installer
+FAKE_LATEST=v0.6.0 FAKE_PUBLISHED=1 bash -s -- --update --ref v0.6.0 </releases/v0.6.0/install.sh >"$OUT" 2>&1; RC=$?
+expect_rc 0
+expect_in "$UNITS/jetlink-server.service" "run-server"
+expect_file /opt/jetlink/src/scripts/jetlink-run-server
+# forward: a --binary with the clone still on v0.6.0 would install its Docker jetlink command
+: >"$FAKE_LOG"
+FAKE_LATEST=v0.6.0 run_installer curl '' --update --binary /tmp/dev/jetlink-server-0.12.0-dev-linux-aarch64.tar.gz
+expect_rc 1
+expect_out "/opt/jetlink/src holds Jetlink from before the native server"
+expect_in "$UNITS/jetlink-server.service" "run-server"
+# with the clone moved to the tree the server was built from
+git -C /opt/jetlink/src fetch -q --depth 1 origin v0.10.0 && git -C /opt/jetlink/src reset -q --hard FETCH_HEAD
+: >"$FAKE_LOG"
+FAKE_LATEST=v0.6.0 bash /opt/jetlink/src/install.sh --update --binary /tmp/dev/jetlink-server-0.12.0-dev-linux-aarch64.tar.gz >"$OUT" 2>&1; RC=$?
+expect_rc 0
+expect_out "Move Jetlink out of Docker"
+expect_link /opt/jetlink/current /opt/jetlink/0.12.0-dev
+expect_link /opt/jetlink/previous /opt/jetlink/0.10.0
+expect_in "$UNITS/jetlink-server.service" "/opt/jetlink/current/bin/jetlink-server"
+expect_in /usr/local/bin/jetlink "SERVER=/opt/jetlink/current/bin/jetlink-server"
+expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=120"
+expect_ran "jetlink-server started: native, sleep 120"
+# the release it went back to stays pinned, and an update does not follow it into Docker
+expect_in /etc/jetlink/install.conf "JETLINK_REF=v0.6.0"
+: >"$FAKE_LOG"
+FAKE_LATEST=v0.6.0 cli update
+expect_rc 0
+expect_out "runs the server in Docker. Nothing changed."
+expect_not_ran "systemctl"
+expect_link /opt/jetlink/current /opt/jetlink/0.12.0-dev
+
 scenario "uninstall after a move removes the Docker leftovers too"
 echo "jetlink:local-cuda" >>"$FAKE_STATE/images"
 mkdir -p /mnt/data/jetlink/engines && echo plan >/mnt/data/jetlink/engines/abc.plan
