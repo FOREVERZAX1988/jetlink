@@ -5,56 +5,26 @@ import JetlinkTestSupport
 @testable import JetlinkServer
 @testable import JetlinkTRT
 
-/// A fresh directory, removed when the test is done with it.
-final class TemporaryDirectory {
-  let url: URL
+/// The fake plan's lines for the server tests' tiny stateful model
+/// (`TinyModel.stateful`), as the TensorRT build of its patched ONNX declares
+/// them: the image fp16, each next_state_ fed from its state_.
+let tinyPlanLines = """
+  input new_img float16 2 6 8 16
+  input desire float32 8
+  input traffic_convention float32 1 2
+  input action_t float32 1 2
+  input state_img_q float16 2 5 6 8 16
+  input state_desire_q float16 6 1 8
+  input state_feat_q float16 4 1 16
+  output outputs float32 1 64
+  output next_state_img_q float16 2 5 6 8 16 from state_img_q
+  output next_state_desire_q float16 6 1 8 from state_desire_q
+  output next_state_feat_q float16 4 1 16 from state_feat_q
 
-  init() throws {
-    url = FileManager.default.temporaryDirectory.appending(path: "jetlink-trt-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
-    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-  }
+  """
 
-  deinit {
-    try? FileManager.default.removeItem(at: url)
-  }
-
-  func file(_ name: String, _ text: String) throws -> URL {
-    let url = url.appending(path: name)
-    try Data(text.utf8).write(to: url)
-    return url
-  }
-}
-
-/// The server tests' tiny stateful model and its spec, read in place.
-enum Tiny {
-  static let fixtures = SourceTree.root().appending(path: "JetlinkKit/Tests/JetlinkServerTests/Fixtures", directoryHint: .isDirectory)
-  static let model = fixtures.appending(path: "tiny_stateful.onnx")
-
-  static func spec() throws -> ModelSpec {
-    let data = try Data(contentsOf: fixtures.appending(path: "tiny_stateful.spec.json"))
-    return try ModelSpec.from(JSONSerialization.jsonObject(with: data) as! [String: Any])
-  }
-
-  /// The fake plan's lines for the tiny stateful model's inputs and
-  /// outputs, as the TensorRT build of its patched ONNX declares them: the
-  /// image fp16, each next_state_ fed from its state_ (`next` sets the
-  /// next_state_ outputs' type, float32 to make the engine decline the loop).
-  static func planLines(next: String = "float16") -> String {
-    """
-    input new_img float16 2 6 8 16
-    input desire float32 8
-    input traffic_convention float32 1 2
-    input action_t float32 1 2
-    input state_img_q float16 2 5 6 8 16
-    input state_desire_q float16 6 1 8
-    input state_feat_q float16 4 1 16
-    output outputs float32 1 64
-    output next_state_img_q \(next) 2 5 6 8 16 from state_img_q
-    output next_state_desire_q \(next) 6 1 8 from state_desire_q
-    output next_state_feat_q \(next) 4 1 16 from state_feat_q
-
-    """
-  }
+func tinySpec() throws -> ModelSpec {
+  try ModelSpec.from(TinyModel.spec(TinyModel.stateful))
 }
 
 #if JL_TRT_FAKE

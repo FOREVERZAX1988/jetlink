@@ -1,6 +1,7 @@
 #if JL_TRT_FAKE
   import CTrt
   import Foundation
+  import JetlinkTestSupport
   import Testing
 
   @testable import JetlinkServer
@@ -227,11 +228,11 @@
   /// A stateful graph's queues go round on the device.
   @Suite("TensorRT state loop")
   struct TrtStateLoopTests {
-    func serve(next: String, frames: Int, resetAt: Int) throws -> (outputs: [[Float]], work: [UInt64]) {
+    func serve(frames: Int, resetAt: Int) throws -> (outputs: [[Float]], work: [UInt64]) {
       let tmp = try TemporaryDirectory()
       let trt = try fakeTensorRT()
-      let spec = try Tiny.spec()
-      let plan = try tmp.file("tiny.plan", fakePlan(Tiny.planLines(next: next)))
+      let spec = try tinySpec()
+      let plan = try tmp.file("tiny.plan", fakePlan(tinyPlanLines))
       let engine = try TrtEngine(plan: plan, trt: trt)
       defer { engine.close() }
       try checkShapes(engine, spec: spec)
@@ -257,7 +258,7 @@
 
     @Test("The device loop advances the queues a frame at a time, and starts over at a reset")
     func deviceLoop() throws {
-      let device = try serve(next: "float16", frames: 6, resetAt: 4)
+      let device = try serve(frames: 6, resetAt: 4)
       // the three queues each advance by one a frame, and start over at the reset
       let first = device.outputs[0]
       for (frame, since) in [(1, 1), (3, 3), (4, 0), (5, 1)] {
