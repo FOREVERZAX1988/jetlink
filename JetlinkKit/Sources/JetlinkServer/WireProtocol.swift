@@ -11,17 +11,10 @@ import JetlinkKit
 public enum Wire {
   public static let magic = Pinned.magic  // b'JLNK'
   /// The one version this server speaks: the comma package and the server
-  /// are updated together. 3 keeps the hidden state here, so INFER_REQ has no
-  /// prev_feat and INFER_RESP no hidden_state slice.
+  /// are updated together, and a header of any other is a broken stream. 3
+  /// keeps the hidden state here, so INFER_REQ has no prev_feat and INFER_RESP
+  /// no hidden_state slice.
   public static let version = Pinned.protocolVersion
-  /// The header version of the envelope: the messages any two versions must
-  /// still exchange. A server of version 2 latches any other as a desync, so
-  /// a newer comma's hello would hang there instead of failing.
-  public static let envelopeVersion = Pinned.envelopeVersion
-  /// The hello, where a mismatch is found and named; the shutdown, which the
-  /// comma sends with no hello when its battery runs low; and the ERROR either
-  /// may get back. Their bodies are JSON and read the same in every version.
-  public static let envelope = Set(Pinned.envelopeMessages)
   public static let headerSize = Pinned.headerSize
   /// A bulk transfer ends on a short packet, so a message that is an exact
   /// multiple of the packet size gets a pad byte and Flag.padded. TCP keeps
@@ -96,34 +89,14 @@ public enum Wire {
     public var flags: UInt32
     public var length: UInt32
     public var reserved: UInt64 = 0
-    /// What the message is sent with, or was received with.
-    public var version: UInt16
 
-    public init(msgType: UInt16, seq: UInt32, flags: UInt32, length: UInt32, reserved: UInt64 = 0, version: UInt16? = nil) {
+    public init(msgType: UInt16, seq: UInt32, flags: UInt32, length: UInt32, reserved: UInt64 = 0) {
       self.msgType = msgType
       self.seq = seq
       self.flags = flags
       self.length = length
       self.reserved = reserved
-      self.version = version ?? Wire.headerVersion(msgType)
     }
-  }
-
-  /// The version a message of this type is sent with.
-  public static func headerVersion(_ msgType: UInt16) -> UInt16 {
-    envelope.contains(msgType) ? envelopeVersion : version
-  }
-
-  /// Did a peer on this protocol send this message? Only envelope messages
-  /// may carry the envelope's version.
-  public static func sameProtocol(version received: UInt16, msgType: UInt16) -> Bool {
-    received == version || (received == envelopeVersion && envelope.contains(msgType))
-  }
-
-  /// What this server says of a mismatch, naming the side to update.
-  public static func updateHint(comma: Int) -> String {
-    let side = comma < Int(version) ? "update the comma's jetlink package" : "update jetlink on this server"
-    return "this server runs jetlink protocol \(version) and the comma \(comma): \(side)"
   }
 
   public enum ProtocolError: Error, CustomStringConvertible {
@@ -146,7 +119,7 @@ public enum Wire {
   /// '<IHHIIIQ4x': magic, version, msg_type, seq, flags, length, reserved, 4 pad.
   public static func packHeader(_ header: Header, into out: UnsafeMutableRawPointer) {
     out.storeBytes(of: magic.littleEndian, toByteOffset: 0, as: UInt32.self)
-    out.storeBytes(of: header.version.littleEndian, toByteOffset: 4, as: UInt16.self)
+    out.storeBytes(of: version.littleEndian, toByteOffset: 4, as: UInt16.self)
     out.storeBytes(of: header.msgType.littleEndian, toByteOffset: 6, as: UInt16.self)
     out.storeBytes(of: header.seq.littleEndian, toByteOffset: 8, as: UInt32.self)
     out.storeBytes(of: header.flags.littleEndian, toByteOffset: 12, as: UInt32.self)
@@ -155,21 +128,17 @@ public enum Wire {
     out.storeBytes(of: UInt32(0), toByteOffset: 28, as: UInt32.self)
   }
 
-  /// The header's fields. A version-2 header is taken on any message: the
-  /// two frame alike, so the message is read whole, the stream stays in
-  /// sync, and the session refuses it by name. Any other version is a desync.
   public static func unpackHeader(_ buffer: UnsafeRawPointer) throws -> Header {
     let magicRead = UInt32(littleEndian: buffer.loadUnaligned(fromByteOffset: 0, as: UInt32.self))
     guard magicRead == magic else { throw ProtocolError.badMagic(magicRead) }
     let versionRead = UInt16(littleEndian: buffer.loadUnaligned(fromByteOffset: 4, as: UInt16.self))
-    guard versionRead == version || versionRead == envelopeVersion else { throw ProtocolError.badVersion(versionRead) }
+    guard versionRead == version else { throw ProtocolError.badVersion(versionRead) }
     return Header(
       msgType: UInt16(littleEndian: buffer.loadUnaligned(fromByteOffset: 6, as: UInt16.self)),
       seq: UInt32(littleEndian: buffer.loadUnaligned(fromByteOffset: 8, as: UInt32.self)),
       flags: UInt32(littleEndian: buffer.loadUnaligned(fromByteOffset: 12, as: UInt32.self)),
       length: UInt32(littleEndian: buffer.loadUnaligned(fromByteOffset: 16, as: UInt32.self)),
-      reserved: UInt64(littleEndian: buffer.loadUnaligned(fromByteOffset: 20, as: UInt64.self)),
-      version: versionRead)
+      reserved: UInt64(littleEndian: buffer.loadUnaligned(fromByteOffset: 20, as: UInt64.self)))
   }
 
   public static func packInferResp(frameID: UInt32, status: Status, gpuUs: UInt32, queueUs: UInt32, totalUs: UInt32, into out: UnsafeMutableRawPointer) {

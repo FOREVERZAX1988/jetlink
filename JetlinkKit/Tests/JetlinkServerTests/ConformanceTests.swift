@@ -84,8 +84,6 @@ struct PinnedConstantTests {
   func wire() {
     #expect(Wire.magic == Pinned.magic)
     #expect(Wire.version == Pinned.protocolVersion)
-    #expect(Wire.envelopeVersion == Pinned.envelopeVersion)
-    #expect(Wire.envelope == Set(Pinned.envelopeMessages))
     #expect(Wire.headerSize == Pinned.headerSize)
     #expect(Wire.packetMultiple == Pinned.packetMultiple)
     #expect(Wire.gadgetTxAlign == Pinned.gadgetTxAlign)

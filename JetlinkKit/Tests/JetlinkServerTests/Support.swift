@@ -126,7 +126,7 @@ extension CommaClient {
 
   /// The hello a comma on this protocol sends.
   func hello(name: String = "test", link: [String: Any]? = nil) throws -> [String: Any] {
-    var client: [String: Any] = ["name": name, "nonce": 1, "protocol": Int(Wire.version)]
+    var client: [String: Any] = ["name": name, "nonce": 1]
     if let link { client["link"] = link }
     try send(.helloReq, JSONSerialization.data(withJSONObject: ["client": client]))
     return try recv(.helloResp).json
