@@ -11,7 +11,7 @@ public enum Pinned {
   /// jetlink.protocol.MAGIC
   public static let magic: UInt32 = 0x4B4E_4C4A
   /// jetlink.protocol.VERSION
-  public static let protocolVersion: UInt16 = 2
+  public static let protocolVersion: UInt16 = 3
   /// jetlink.protocol.HEADER_SIZE
   public static let headerSize: Int = 32
   /// jetlink.protocol.PACKET_MULTIPLE
@@ -49,6 +49,7 @@ public enum Pinned {
   public static let flags: [(name: String, value: UInt32)] = [
     ("RESET_QUEUES", 1),
     ("WANT_STATE", 2),
+    ("WANT_HIDDEN", 4),
     ("PADDED", 128),
   ]
   /// jetlink.protocol.Status

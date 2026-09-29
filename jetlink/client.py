@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import secrets
 import sys
 import time
@@ -49,6 +50,11 @@ FRAME_TIMEOUT = 3.0
 
 StopFn = Callable[[], bool]
 
+# openpilot logs the whole output vector as modelV2.rawPredictions when this is
+# set, from what infer_end returns. The server keeps the hidden state, so ask for
+# it on those runs, or the log would carry zeros where it goes.
+RAW_PRED_ENV = 'SEND_RAW_PRED'
+
 
 class EngineMissing(LinkError):
   """The server has no engine and this caller has no ONNX to upload.
@@ -65,9 +71,11 @@ def _default_name() -> str:
 
 class JetlinkClient:
   def __init__(self, transport: Transport, deadline: float = FRAME_TIMEOUT,
-               name: str | None = None):
+               name: str | None = None, want_hidden: bool | None = None):
     self.t = transport
     self.deadline = deadline
+    # Flag.WANT_HIDDEN on every frame; see RAW_PRED_ENV
+    self.want_hidden = bool(os.environ.get(RAW_PRED_ENV)) if want_hidden is None else want_hidden
     # Who the server logs this connection as. The nonce is per client object,
     # so two processes taking turns on one gadget, or one process reopening
     # the link, are separable in a journal whose clock is wrong anyway.
@@ -83,6 +91,7 @@ class JetlinkClient:
     self.last_state: dict | None = None  # most recent piggybacked telemetry
     self._infer_started = 0.0
     self._infer_frame_id: int | None = None
+    self._infer_flags = 0
 
   # -- construction ---------------------------------------------------------
 
@@ -309,10 +318,12 @@ class JetlinkClient:
     warped = _as_bytes(warped, self.spec.warped_nbytes, 'warped')
     packed = _as_bytes(packed, self.spec.packed_nbytes, 'packed')
     seq = self._next_seq()
-    flags = (P.Flag.RESET_QUEUES if reset else 0) | (P.Flag.WANT_STATE if want_state else 0)
+    flags = ((P.Flag.RESET_QUEUES if reset else 0) | (P.Flag.WANT_STATE if want_state else 0)
+             | (P.Flag.WANT_HIDDEN if self.want_hidden else 0))
     try:
       self._infer_started = time.monotonic()
       self._infer_frame_id = frame_id
+      self._infer_flags = flags
       self.t.send(P.Msg.INFER_REQ, seq, (P.pack_infer_req(frame_id, flags), warped, packed),
                   timeout=self.deadline if deadline is None else deadline)
     except LinkError:
@@ -349,12 +360,19 @@ class JetlinkClient:
     if fid != self._infer_frame_id:
       self.dead = True
       raise LinkError(f'inference response frame {fid}, expected {self._infer_frame_id}')
-    end = P.INFER_RESP_SIZE + self.spec.output_nbytes
+    whole = bool(self._infer_flags & P.Flag.WANT_HIDDEN)
+    n = self.spec.output_nelem if whole else self.spec.reply_nelem
+    end = P.INFER_RESP_SIZE + n * 4
     if msg.payload.nbytes < end:
       self.dead = True
       raise LinkError('inference response is missing model outputs')
-    if msg.payload.nbytes > end:  # piggybacked telemetry
-      try:
+    if msg.payload.nbytes > end:
+      if not self._infer_flags & P.Flag.WANT_STATE:
+        # outputs laid out some other way, hidden_state left in by a server
+        # that says protocol 3: every float after it would be misread
+        self.dead = True
+        raise LinkError(f'inference response is {msg.payload.nbytes} bytes, expected {end}')
+      try:   # piggybacked telemetry
         self.last_state = json.loads(bytes(msg.payload[end:]))
       except ValueError:
         pass
@@ -364,13 +382,14 @@ class JetlinkClient:
                   'server gpu %.1f queue %.1f total %.1f ms', fid,
                   receive['prepare'] * 1e3, receive['read_wait'] * 1e3, receive['handoff'] * 1e3,
                   gpu_us / 1e3, queue_us / 1e3, total_us / 1e3)
-    # copy: the payload is a view into the transport's reusable receive buffer.
-    return np.frombuffer(msg.payload, np.float32, self.spec.output_nelem, P.INFER_RESP_SIZE).copy()
+    return _whole_output(self.spec, np.frombuffer(msg.payload, np.float32, n, P.INFER_RESP_SIZE), whole)
 
   def infer(self, warped: np.ndarray, packed: np.ndarray, frame_id: int = 0,
             reset: bool = False, deadline: float | None = None,
             want_state: bool = False) -> np.ndarray:
-    """One frame. Returns the model output as float32, shaped (n,).
+    """One frame. Returns the model output as float32, shaped (n,), laid out
+    as the spec's output_slices say; hidden_state reads as zeros unless
+    `want_hidden`, since it stays on the server.
 
     `warped` is (2, 6, H, W) uint8 off openpilot's warp, `packed` the float32
     packed_npy_inputs. Either may be any buffer, so a tinygrad Tensor.data()
@@ -399,6 +418,24 @@ class JetlinkClient:
     # open a new one rather than reuse a closed socket or endpoint file
     self.dead = True
     self.t.close()
+
+
+def _whole_output(spec: ModelSpec, reply: np.ndarray, whole: bool) -> np.ndarray:
+  """The output vector, from a reply that may leave hidden_state out.
+
+  Always a new array: `reply` views the transport's reusable receive buffer.
+  The full length keeps the spec's output_slices valid, so the caller slices
+  as it did when the whole vector crossed the link.
+  """
+  hidden = spec.hidden_range
+  if whole or hidden is None:
+    return reply.copy()
+  start, stop = hidden
+  out = np.empty(spec.output_nelem, np.float32)
+  out[:start] = reply[:start]
+  out[start:stop] = 0
+  out[stop:] = reply[start:]
+  return out
 
 
 def _as_bytes(buf, expect: int, name: str) -> memoryview:

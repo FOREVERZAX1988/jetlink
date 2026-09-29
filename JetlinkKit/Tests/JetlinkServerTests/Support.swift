@@ -22,14 +22,9 @@ enum Fixture {
   }
 }
 
-/// onnxruntime's CPU provider, which every platform's tests run the model on:
-/// under the CoreML backend on Apple platforms, under QNN's elsewhere.
+/// onnxruntime's CPU provider, which every platform's tests run the model on.
 func cpuBackend() -> any EngineBackend {
-  #if canImport(Metal)
-    CoreMLBackend(device: .cpu, preparer: ONNXPreparer(), keepAlive: false)
-  #else
-    QNNBackend(device: .cpu, preparer: ONNXPreparer(), keepAlive: false)
-  #endif
+  OrtBackend(profile: .cpu, preparer: ONNXPreparer(), keepAlive: false)
 }
 
 /// Whether `condition` holds within `timeout`. The session counts a frame
@@ -129,25 +124,40 @@ extension CommaClient {
     return state
   }
 
+  /// The hello a comma on this protocol sends.
+  func hello(name: String = "test", link: [String: Any]? = nil) throws -> [String: Any] {
+    var client: [String: Any] = ["name": name, "nonce": 1]
+    if let link { client["link"] = link }
+    try send(.helloReq, JSONSerialization.data(withJSONObject: ["client": client]))
+    return try recv(.helloResp).json
+  }
+
   /// Hello, the model, then Python's golden frames, each reply checked against
-  /// Python's output: bit for bit on Apple, by correlation elsewhere. Returns
-  /// the hello and the frames sent.
+  /// Python's output: bit for bit on Apple, by correlation elsewhere. Every
+  /// other frame asks for the whole vector (WANT_HIDDEN); the rest get it less
+  /// hidden_state. Returns the hello and the frames sent.
   @discardableResult
   func replay(_ golden: Golden) throws -> (hello: [String: Any], frames: Int) {
-    try send(.helloReq, JSONSerialization.data(withJSONObject: ["client": ["name": "test", "nonce": 1]]))
-    let hello = try recv(.helloResp).json
+    let hello = try hello()
     let ready = try ensureEngine(model: golden.model, sha256: golden.sha256)
     let spec = try ModelSpec.from(ready["spec"] as! [String: Any])
-    let frameBytes = spec.warpedBytes + spec.packedBytes
+    let frameBytes = golden.frameBytes(spec)
     let count = golden.frames.count / frameBytes
     for i in 0..<count {
+      let whole = i % 2 == 1
       var request = withUnsafeBytes(of: UInt32(i).littleEndian) { Data($0) }
-      request.append(contentsOf: withUnsafeBytes(of: UInt32(0).littleEndian) { Data($0) })
-      request.append(golden.frames[(i * frameBytes)..<((i + 1) * frameBytes)])
+      request.append(contentsOf: withUnsafeBytes(of: (whole ? Wire.Flag.wantHidden.rawValue : 0).littleEndian) { Data($0) })
+      // the image and the scalars: a queued graph's recorded prev_feat is
+      // not sent, the server feeds back its own
+      let start = i * frameBytes
+      request.append(golden.frames[start..<(start + spec.warpedBytes + spec.packedBytes)])
       try send(.inferReq, request)
       let reply = try recv(.inferResp)
       #expect(reply.status == Wire.Status.ok.rawValue)
-      let expected = Data(golden.expected[(i * spec.outputBytes)..<((i + 1) * spec.outputBytes)])
+      var expected = Data(golden.served[(i * spec.outputBytes)..<((i + 1) * spec.outputBytes)])
+      if !whole, let hidden = spec.hiddenRange {
+        expected.removeSubrange((hidden.lowerBound * 4)..<(hidden.upperBound * 4))
+      }
       let got = Data(reply.payload[Wire.inferRespSize...])
       #if os(Android) || os(Linux)
         // onnxruntime's Android and Linux builds run an fp16 graph's MatMul
@@ -242,8 +252,15 @@ struct Golden {
   let model: URL
   let sha256: String
   let spec: [String: Any]
+  /// Per frame: warped, then the floats protocol 2 sent; for a queued graph
+  /// the scalars and then a prev_feat.
   let frames: Data
+  /// The outputs Python computed for those frames, prev_feat included.
   let expected: Data
+  /// What a comma is served for the same images and scalars, with the
+  /// server feeding back its own hidden state: `expected` for a stateful
+  /// graph, whose hidden state never left it.
+  let served: Data
 
   init(_ name: String) throws {
     self.name = name
@@ -252,5 +269,12 @@ struct Golden {
     sha256 = spec["sha256"] as! String
     frames = try Fixture.data("\(name).frames.bin")
     expected = try Fixture.data("\(name).expected.bin")
+    let fed = Fixture.url("\(name).fed.expected.bin")
+    served = FileManager.default.fileExists(atPath: fed.path) ? try Data(contentsOf: fed) : expected
+  }
+
+  /// One recorded frame's bytes.
+  func frameBytes(_ spec: ModelSpec) -> Int {
+    spec.warpedBytes + (spec.packedCount + spec.prevFeatCount) * 4
   }
 }

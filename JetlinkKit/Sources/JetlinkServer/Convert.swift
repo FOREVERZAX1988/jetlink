@@ -2,23 +2,74 @@
   import Accelerate
 #endif
 
-/// The frame path's bulk conversions, through Accelerate's vImage.
+/// The frame path's bulk conversions, and its finite check.
 ///
 /// A frame converts about 800,000 camera bytes to float16 and 35,000 floats
 /// each way. As element loops these cost 0.2 ms in an optimized build and
 /// over 40 ms in an unoptimized one: an iPhone 17 Pro running the app as
 /// Xcode's Run builds it, Debug, measured 65 ms a frame around a 21 ms model.
-/// vImage is vectorized whatever the build, and ConvertTests holds each of
-/// these to the element loop bit for bit, NaN, overflow and subnormals
-/// included, so the golden server tests keep matching the Python queues.
+/// So on Apple platforms vImage does them, vectorized whatever the build.
+/// Elsewhere (a Jetson, an Android phone, a Linux PC) they are loops a
+/// release build vectorizes: bytes through a float32 multiply that lands the
+/// float16's bits in place, floats through arm64's own half-precision
+/// conversions, or on x86_64, whose baseline has no F16C, through the same
+/// rounding in integer arithmetic. ConvertTests holds each of them to the
+/// Float16 element loop bit for bit, NaN, overflow and subnormals included,
+/// so the staged tensors keep matching the Python queues: numpy's casts,
+/// round to nearest even.
 ///
-/// Where there is no Accelerate (the Linux build the conformance suite runs
-/// on), the element loops themselves stand in: they are the reference.
+/// They are element loops rather than SIMD vectors because Swift's SIMD
+/// types convert, shift and select lane by lane: written with them, these
+/// measured 2 to 100 times slower than what the vectorizer makes of the loops.
 enum Convert {
-  /// uint8 to float16 bit patterns: 0...255 are all exact in float16.
-  private static let u8ToF16Bits: [UInt16] = (0..<256).map { Float16(Float($0)).bitPattern }
+  /// uint8 to float16: 0...255 are all exact in float16.
+  static func u8ToF16(_ source: UnsafeRawPointer, _ destination: UnsafeMutableRawPointer, count: Int) {
+    #if canImport(Accelerate)
+      VImageHalf.u8ToF16(source, destination, count: count)
+    #else
+      IntegerHalf.u8ToF16(source, destination, count: count)
+    #endif
+  }
 
-  #if canImport(Accelerate)
+  /// Round to nearest even, as numpy's float32 to float16 cast. The source
+  /// need not be aligned.
+  static func f32ToF16(_ source: UnsafeRawPointer, _ destination: UnsafeMutableRawPointer, count: Int) {
+    #if canImport(Accelerate)
+      VImageHalf.f32ToF16(source, destination, count: count)
+    #elseif arch(arm64)
+      NativeHalf.f32ToF16(source, destination, count: count)
+    #else
+      IntegerHalf.f32ToF16(source, destination, count: count)
+    #endif
+  }
+
+  static func f16ToF32(_ source: UnsafeRawPointer, _ destination: UnsafeMutableRawPointer, count: Int) {
+    #if canImport(Accelerate)
+      VImageHalf.f16ToF32(source, destination, count: count)
+    #elseif arch(arm64)
+      NativeHalf.f16ToF32(source, destination, count: count)
+    #else
+      IntegerHalf.f16ToF32(source, destination, count: count)
+    #endif
+  }
+
+  /// No NaN and no infinity among `count` float32s. A float is not finite
+  /// when its exponent bits are all set, and one more in the exponent then
+  /// carries into the sign bit: or-ing those sums keeps the loop free of
+  /// branches, so it vectorizes, where `isFinite` with an early exit does not.
+  static func allFinite(_ source: UnsafeRawPointer, count: Int) -> Bool {
+    var carries: UInt32 = 0
+    for i in 0..<count {
+      carries |= (source.loadUnaligned(fromByteOffset: i &* 4, as: UInt32.self) & 0x7F80_0000) &+ 0x0080_0000
+    }
+    return carries & 0x8000_0000 == 0
+  }
+}
+
+#if canImport(Accelerate)
+  enum VImageHalf {
+    private static let u8ToF16Bits: [UInt16] = (0..<256).map { Float16(Float($0)).bitPattern }
+
     private static func buffer(_ pointer: UnsafeRawPointer, _ count: Int, _ size: Int) -> vImage_Buffer {
       vImage_Buffer(data: UnsafeMutableRawPointer(mutating: pointer), height: 1, width: vImagePixelCount(count), rowBytes: count * size)
     }
@@ -32,8 +83,6 @@ enum Convert {
       }
     }
 
-    /// Round to nearest even, as numpy's float32 to float16 cast. The source
-    /// need not be aligned.
     static func f32ToF16(_ source: UnsafeRawPointer, _ destination: UnsafeMutableRawPointer, count: Int) {
       guard count > 0 else { return }
       var src = buffer(source, count, 4)
@@ -47,22 +96,82 @@ enum Convert {
       var dst = buffer(destination, count, 4)
       _ = vImageConvert_Planar16FtoPlanarF(&src, &dst, vImage_Flags(kvImageDoNotTile))
     }
-  #else
-    static func u8ToF16(_ source: UnsafeRawPointer, _ destination: UnsafeMutableRawPointer, count: Int) {
-      let out = destination.assumingMemoryBound(to: UInt16.self)
-      u8ToF16Bits.withUnsafeBufferPointer { table in
-        for i in 0..<count { out[i] = table[Int(source.load(fromByteOffset: i, as: UInt8.self))] }
-      }
-    }
+  }
+#endif
 
-    static func f32ToF16(_ source: UnsafeRawPointer, _ destination: UnsafeMutableRawPointer, count: Int) {
-      let out = destination.assumingMemoryBound(to: UInt16.self)
-      for i in 0..<count { out[i] = Float16(source.loadUnaligned(fromByteOffset: i * 4, as: Float.self)).bitPattern }
-    }
+/// Float16's own conversions as element loops, which a release build turns
+/// into arm64's vector conversions (FCVTN, FCVTL): the element loop's bits,
+/// several lanes at a time. On x86_64 each element would be a call.
+enum NativeHalf {
+  static func f32ToF16(_ source: UnsafeRawPointer, _ destination: UnsafeMutableRawPointer, count: Int) {
+    let out = destination.assumingMemoryBound(to: UInt16.self)
+    for i in 0..<count { out[i] = Float16(source.loadUnaligned(fromByteOffset: i &* 4, as: Float.self)).bitPattern }
+  }
 
-    static func f16ToF32(_ source: UnsafeRawPointer, _ destination: UnsafeMutableRawPointer, count: Int) {
-      let out = destination.assumingMemoryBound(to: Float.self)
-      for i in 0..<count { out[i] = Float(Float16(bitPattern: source.loadUnaligned(fromByteOffset: i * 2, as: UInt16.self))) }
+  static func f16ToF32(_ source: UnsafeRawPointer, _ destination: UnsafeMutableRawPointer, count: Int) {
+    let out = destination.assumingMemoryBound(to: Float.self)
+    for i in 0..<count { out[i] = Float(Float16(bitPattern: source.loadUnaligned(fromByteOffset: i &* 2, as: UInt16.self))) }
+  }
+}
+
+/// The conversions in integer arithmetic, which vectorize on any CPU. Bytes
+/// go this way everywhere, needing no half-precision instruction at all.
+/// Floats go this way on x86_64, whose baseline has no F16C, so Float16
+/// there converts through a library call per element. Every case is computed
+/// and the result selected without a branch, so the loops vectorize. A NaN
+/// keeps its sign and the top of its payload and comes out quiet, as arm64,
+/// F16C and vImage convert it.
+enum IntegerHalf {
+  static func u8ToF16(_ source: UnsafeRawPointer, _ destination: UnsafeMutableRawPointer, count: Int) {
+    let src = source.assumingMemoryBound(to: UInt8.self)
+    let out = destination.assumingMemoryBound(to: UInt16.self)
+    for i in 0..<count {
+      // Exact in float32, and scaling by 2^-112 moves float32's exponent
+      // bias to float16's, so the top bits are the float16. Zero stays zero.
+      out[i] = UInt16(truncatingIfNeeded: (Float(src[i]) * 0x1p-112).bitPattern &>> 13)
     }
-  #endif
+  }
+
+  static func f32ToF16(_ source: UnsafeRawPointer, _ destination: UnsafeMutableRawPointer, count: Int) {
+    let out = destination.assumingMemoryBound(to: UInt16.self)
+    for i in 0..<count { out[i] = half(source.loadUnaligned(fromByteOffset: i &* 4, as: UInt32.self)) }
+  }
+
+  static func f16ToF32(_ source: UnsafeRawPointer, _ destination: UnsafeMutableRawPointer, count: Int) {
+    let out = destination.assumingMemoryBound(to: UInt32.self)
+    for i in 0..<count { out[i] = single(source.loadUnaligned(fromByteOffset: i &* 2, as: UInt16.self)) }
+  }
+
+  /// float32 bits to float16 bits, round to nearest even.
+  @inline(__always)
+  static func half(_ x: UInt32) -> UInt16 {
+    let a = x & 0x7FFF_FFFF
+    // Normal: rebias the exponent by -112 and round off the 13 dropped bits,
+    // ties to even; a carry out of the fraction moves to the next exponent,
+    // and past 65504 to infinity.
+    let normal = (a &+ 0xC800_0FFF &+ ((a &>> 13) & 1)) &>> 13
+    // Below 2^-14, a subnormal: adding 0.5, whose ulp is float16's least
+    // subnormal, has the FPU round the fraction into place. A float32
+    // subnormal rounds to zero here even where the FPU flushes it.
+    let subnormal = (Float(bitPattern: a) + 0.5).bitPattern &- 0x3F00_0000
+    let nan = 0x7E00 | ((a &>> 13) & 0x3FF)
+    var h = a < 0x3880_0000 ? subnormal : normal
+    h = a >= 0x4780_0000 ? 0x7C00 : h
+    h = a > 0x7F80_0000 ? nan : h
+    return UInt16(truncatingIfNeeded: h | ((x &>> 16) & 0x8000))
+  }
+
+  /// float16 bits to float32 bits, exact.
+  @inline(__always)
+  static func single(_ h: UInt16) -> UInt32 {
+    let a = UInt32(h & 0x7FFF)
+    let normal = (a &<< 13) &+ 0x3800_0000
+    // A subnormal is its fraction times 2^-24: through an integer, so no
+    // float32 subnormal is ever an operand.
+    let subnormal = (Float(a) * 0x1p-24).bitPattern
+    let special = 0x7F80_0000 | ((a & 0x3FF) &<< 13) | (a > 0x7C00 ? 0x40_0000 : 0)
+    var x = a < 0x400 ? subnormal : normal
+    x = a >= 0x7C00 ? special : x
+    return x | (UInt32(h & 0x8000) &<< 16)
+  }
 }

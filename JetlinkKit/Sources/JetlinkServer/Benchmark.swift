@@ -99,8 +99,9 @@ extension EngineHost {
   /// Refuses while a comma is connected; a comma that connects meanwhile is
   /// told the engine is not ready until the run ends, rather than have its
   /// frames mixed into the benchmark's history. Blocks; call it off the
-  /// main thread.
-  public func benchmark(seconds: Double, run: BenchmarkRun) throws -> BenchmarkReport {
+  /// main thread. `logsReport` false leaves the report out of the log, for
+  /// a caller that prints it itself.
+  public func benchmark(seconds: Double, run: BenchmarkRun, logsReport: Bool = true) throws -> BenchmarkReport {
     lock.lock()
     guard let l = loaded else {
       lock.unlock()
@@ -129,7 +130,9 @@ extension EngineHost {
           BenchmarkEvent(
             state: report.cancelled ? "cancelled" : "done", elapsed: report.seconds, total: seconds, frames: report.frames, frame: report.frame,
             report: report, detail: "")))
-      log.info("benchmark done:\n\(report.text)")
+      if logsReport {
+        log.info("benchmark done:\n\(report.text)")
+      }
       return report
     } catch {
       emit(.benchmark(BenchmarkEvent(state: "failed", elapsed: 0, total: seconds, frames: 0, frame: nil, report: nil, detail: "\(error)")))
@@ -144,16 +147,8 @@ extension EngineHost {
 
     var generator = SystemRandomNumberGenerator()
     let warped = (0..<spec.warpedBytes).map { _ in UInt8.random(in: 0...255, using: &generator) }
-    var packed = [Float](repeating: 0, count: spec.packedCount)
+    let packed = [Float](repeating: 0, count: spec.packedCount)
     var output = [Float](repeating: 0, count: spec.outputCount)
-    // prev_feat is the last of the packed inputs, as modeld feeds it; a
-    // stateful graph keeps its own history and has neither.
-    let hidden = spec.outputSlices.first { $0.name == "hidden_state" }?.range
-    let prevFeat = spec.packedLayout.first { $0.name == "prev_feat" }?.range
-    let feedback: (Range<Int>, Range<Int>)? = {
-      guard let hidden, let prevFeat, hidden.count == prevFeat.count, hidden.upperBound <= spec.outputCount else { return nil }
-      return (hidden, prevFeat)
-    }()
     guard let io = l.engine.outputs[ModelConstants.drivingOutput], io.type == .float || io.type == .float16 else {
       throw HostError.failed("the engine's driving output is not float")
     }
@@ -212,12 +207,13 @@ extension EngineHost {
           o.baseAddress!.copyMemory(from: out, byteCount: spec.outputCount * 4)
         }
       }
-      let finite = !output.contains { !$0.isFinite }
+      let finite = output.withUnsafeBytes { Convert.allFinite($0.baseAddress!, count: spec.outputCount) }
       let outputUs = microseconds(since: readStarted)
       let totalUs = microseconds(since: started)
       let accel = l.engine.lastGpuUs
-      if finite, let (from, to) = feedback {
-        for k in 0..<from.count { packed[to.lowerBound + k] = output[from.lowerBound + k] }
+      if finite {
+        // the hidden state back into the queues, as a frame from the comma does
+        output.withUnsafeBufferPointer { l.staging.keep(outputs: $0.baseAddress!) }
       }
       lock.unlock()
 

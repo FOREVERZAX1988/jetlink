@@ -10,7 +10,10 @@ import JetlinkKit
 /// checked against it in ConformanceTests.
 public enum Wire {
   public static let magic = Pinned.magic  // b'JLNK'
-  /// Bumped so a new client cannot silently pair with a legacy server.
+  /// The one version this server speaks: the comma package and the server
+  /// are updated together, and a header of any other is a broken stream. 3
+  /// keeps the hidden state here, so INFER_REQ has no prev_feat and INFER_RESP
+  /// no hidden_state slice.
   public static let version = Pinned.protocolVersion
   public static let headerSize = Pinned.headerSize
   /// A bulk transfer ends on a short packet, so a message that is an exact
@@ -29,7 +32,7 @@ public enum Wire {
     (headerSize + length) % packetMultiple == 0
   }
   /// Stops a corrupt length field making the receive buffer allocate
-  /// gigabytes. A frame is about 460 KB.
+  /// gigabytes. A big model's request is 393 KB.
   public static let maxMessage = Pinned.maxMessage
   public static let defaultPort = Pinned.defaultPort
 
@@ -59,6 +62,9 @@ public enum Wire {
     public static let resetQueues = Flag(rawValue: 1 << 0)
     /// On INFER_REQ: append telemetry json to the response.
     public static let wantState = Flag(rawValue: 1 << 1)
+    /// On INFER_REQ: keep hidden_state in the response, for a comma logging
+    /// the whole output vector.
+    public static let wantHidden = Flag(rawValue: 1 << 2)
     /// One pad byte follows the payload; see packetMultiple.
     public static let padded = Flag(rawValue: 1 << 7)
   }

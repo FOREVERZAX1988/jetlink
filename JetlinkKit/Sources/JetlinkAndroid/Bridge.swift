@@ -150,7 +150,6 @@
     let logs = LogRing(capacity: 5000)
     /// The comma's descriptor, from the app's USB permission flow.
     let gadget = UsbfsGadget()
-    private let encoder = ControlJSONEncoder()
     private let lock = NSLock()
     private var embedded: EmbeddedServer?
     private var stream: LogStream?
@@ -175,8 +174,8 @@
       guard let cache = config["cache"] as? String, !cache.isEmpty else {
         throw HostFailure("no cache directory")
       }
-      let deviceName = config["device"] as? String ?? QNNBackend.Device.htp.rawValue
-      guard let device = QNNBackend.Device(rawValue: deviceName) else {
+      let deviceName = config["device"] as? String ?? OrtProfile.htp.rawValue
+      guard let profile = OrtProfile(rawValue: deviceName), OrtProfile.available.contains(profile) else {
         throw HostFailure("unknown device \(deviceName)")
       }
       let configuration = Server.Configuration(
@@ -185,8 +184,8 @@
         preload: (config["preload"] as? Bool) ?? true,
         listen: (config["listen"] as? Bool) ?? true,
         usb: (config["usb"] as? Bool) ?? true)
-      let backend = QNNBackend(
-        device: device, preparer: ONNXPreparer(), keepAlive: (config["keep_alive"] as? Bool) ?? true,
+      let backend = OrtBackend(
+        profile: profile, preparer: ONNXPreparer(), keepAlive: (config["keep_alive"] as? Bool) ?? true,
         keepCPUWarm: (config["keep_cpu_warm"] as? Bool) ?? false, chip: config["chip"] as? String ?? "")
 
       let logs = self.logs
@@ -256,7 +255,7 @@
         done.signal()
       }
       done.wait()
-      return encoder.object(reply)
+      return reply.map { ControlEvent.reply($0).payload() } ?? NSNull()
     }
   }
 

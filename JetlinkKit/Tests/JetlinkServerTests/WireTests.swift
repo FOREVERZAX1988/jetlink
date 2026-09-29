@@ -27,7 +27,7 @@ struct WireTests {
       Wire.packHeader(
         Wire.Header(msgType: Wire.Msg.inferReq.rawValue, seq: 7, flags: (Wire.Flag.wantState.union(.padded)).rawValue, length: 1234), into: $0.baseAddress!)
     }
-    #expect(hexString(bytes) == "4a4c4e4b020008000700000082000000d2040000000000000000000000000000")
+    #expect(hexString(bytes) == "4a4c4e4b030008000700000082000000d2040000000000000000000000000000")
     let header = try bytes.withUnsafeBytes { try Wire.unpackHeader($0.baseAddress!) }
     #expect(header.msgType == Wire.Msg.inferReq.rawValue)
     #expect(header.seq == 7)
@@ -41,12 +41,14 @@ struct WireTests {
       hexString(Wire.inferResp(frameID: 42, status: .notFinite, gpuUs: 28000, queueUs: 130, totalUs: 29000)) == "2a00000004000000606d00008200000048710000")
   }
 
-  @Test("A header from another peer is refused, not misread")
+  @Test("A header from another peer or another version is refused, not misread")
   func refusesStrangers() {
     var bytes = [UInt8](repeating: 0, count: Wire.headerSize)
     #expect(throws: Wire.ProtocolError.self) { try bytes.withUnsafeBytes { try Wire.unpackHeader($0.baseAddress!) } }
     bytes.withUnsafeMutableBytes { Wire.packHeader(Wire.Header(msgType: 1, seq: 1, flags: 0, length: 0), into: $0.baseAddress!) }
-    bytes[4] = 1  // version 1
-    #expect(throws: Wire.ProtocolError.self) { try bytes.withUnsafeBytes { try Wire.unpackHeader($0.baseAddress!) } }
+    for version: UInt8 in [1, 2, 4] {
+      bytes[4] = version
+      #expect(throws: Wire.ProtocolError.self) { try bytes.withUnsafeBytes { try Wire.unpackHeader($0.baseAddress!) } }
+    }
   }
 }

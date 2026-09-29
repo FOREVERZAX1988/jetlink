@@ -6,7 +6,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-/** Where the model runs, as the server's QNNBackend.Device names it. */
+/** Where the model runs, as the server's OrtProfile names it. */
 enum class Processor(val id: String, val title: String) {
     /** The vision trunk on the NPU, the rest on the GPU: the Mac's split. */
     NpuGpu("htp", "NPU + GPU"),

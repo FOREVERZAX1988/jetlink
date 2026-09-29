@@ -18,12 +18,12 @@ writes exactly those files.
 | --- | --- | --- |
 | Constants: the wire's magic, version, sizes, message, flag and status numbers; USB ids and packet sizes; model constants; control protocol version; `PREPARE_VERSION`; the onnxruntime release the Apple builds link | `make_pins.py` writes `JetlinkKit/Sources/JetlinkKit/Pinned.swift` | the Swift code uses `Pinned`; `ConformanceTests` checks every Swift constant against it |
 | Wire bytes: headers and INFER bodies; the byte streams of TCP, a USB host and the gadget's 16 KB bursts; the reads a USB host posts | `make_conformance_fixtures.py wire` | `JetlinkServerTests/ConformanceTests.swift` |
-| Tensors the queues stage each frame at frame_skip 1, 2 and 4, a reset included | `make_conformance_fixtures.py staging` | the same file |
+| Tensors the queues stage each frame at frame_skip 1, 2 and 4, each frame's hidden state fed into the next, with a reset, a hello and a non-finite frame; the generator also checks them against protocol 2's staging | `make_conformance_fixtures.py staging` | the same file |
 | The `stats` event from fixed samples | `make_conformance_fixtures.py stats` | the same file |
 | Every control-channel event a real `ControlServer` writes over a real registry and cache | `make_conformance_fixtures.py control` | `JetlinkKitTests/PythonControlEventsTests.swift` |
 | LFS pointers, model identities, catalog parsing and merging, one cache directory's catalog and inventory payloads | `make_conformance_fixtures.py registry` | `JetlinkRegistryTests/ConformanceTests.swift` |
 | ONNX preparation for the split, whole and ane-whole layouts, byte for byte, on graphs that take every branch | `make_onnx_fixtures.py` | `JetlinkONNXTests/PreparationTests.swift` |
-| Whole-server runs: driving output of the tiny queued and stateful graphs, bit for bit, over TCP and USB | `make_server_fixtures.py` | `JetlinkServerTests/ServerTests.swift` and `USBTransportTests.swift` |
+| Whole-server runs: driving output of the tiny queued and stateful graphs, bit for bit, over TCP and USB; protocol 2's outputs again through the server's feedback path | `make_server_fixtures.py` | `JetlinkServerTests/ServerTests.swift`, `USBTransportTests.swift` and `ProtocolTests.swift` |
 
 The Android app draws what the Swift server hands it as JSON, so there the
 Swift is the source: `JetlinkKitTests/AppSnapshotTests.swift` checks the

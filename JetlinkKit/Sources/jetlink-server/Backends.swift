@@ -31,16 +31,16 @@
 
     /// The options, with "auto" read as each backend's default device, as
     /// the Python server's --device took it.
-    func options(keepAlive: Bool = true, keepCPUWarm: Bool = true) -> BackendOptions {
-      BackendOptions(device: device == "auto" ? nil : device, keepAlive: keepAlive, keepCPUWarm: keepCPUWarm)
+    func options(keepAlive: Bool = true, keepCPUWarm: Bool = true, gpuTiming: Bool = false) -> BackendOptions {
+      BackendOptions(device: device == "auto" ? nil : device, keepAlive: keepAlive, keepCPUWarm: keepCPUWarm, gpuTiming: gpuTiming)
     }
 
     /// The backend asked for; with none, logs why and exits 1. `auto` logs
     /// why it passed over each one it did not take.
-    func pick(keepAlive: Bool = true, keepCPUWarm: Bool = true) throws -> any EngineBackend {
+    func pick(keepAlive: Bool = true, keepCPUWarm: Bool = true, gpuTiming: Bool = false) throws -> any EngineBackend {
       let log = ServerLog(category: "main")
       do {
-        return try options(keepAlive: keepAlive, keepCPUWarm: keepCPUWarm).pick(backend) { name, why in
+        return try options(keepAlive: keepAlive, keepCPUWarm: keepCPUWarm, gpuTiming: gpuTiming).pick(backend) { name, why in
           log.info("not using \(name.rawValue): \(why)")
         }
       } catch {
@@ -57,6 +57,9 @@
     var device: String?
     var keepAlive = true
     var keepCPUWarm = true
+    /// TensorRT times every launch with CUDA events, as
+    /// JETLINK_TRT_GPU_TIMING=1 has it do anywhere.
+    var gpuTiming = false
 
     /// TensorRT, if it loads here and the GPU answers. A build without
     /// TensorRT's headers has the fake shim, which never loads.
@@ -68,7 +71,7 @@
           index = parsed
         }
         do {
-          return try TrtBackend(device: index)
+          return gpuTiming ? TrtBackend(trt: try TensorRT(device: index), gpuTiming: true) : try TrtBackend(device: index)
         } catch {
           throw BackendUnusable(String(describing: error))
         }
@@ -80,22 +83,19 @@
     /// onnxruntime: CoreML on a Mac, its CPU provider on Linux, where the
     /// library is opened at run time and may be missing.
     func ort() throws -> any EngineBackend {
-      #if canImport(Metal)
-        let name = device ?? CoreMLBackend.Device.ane.rawValue
-        guard let unit = CoreMLBackend.Device(rawValue: name) else {
-          throw BackendUnusable("onnxruntime has no device \(name) here: ane, ane-whole, coreml or cpu")
-        }
-        return CoreMLBackend(device: unit, preparer: ONNXPreparer(), keepAlive: keepAlive, keepCPUWarm: keepCPUWarm)
-      #else
-        let name = device ?? QNNBackend.Device.cpu.rawValue
-        guard name == QNNBackend.Device.cpu.rawValue else { throw BackendUnusable("onnxruntime runs on the CPU here, not \(name)") }
+      let available = OrtProfile.available
+      let name = device ?? available[0].rawValue
+      guard let profile = OrtProfile(rawValue: name), available.contains(profile) else {
+        throw BackendUnusable("onnxruntime has no device \(name) here: \(available.map(\.rawValue).joined(separator: ", "))")
+      }
+      #if !canImport(Metal)
         do {
           try OrtRuntime.load()
         } catch {
           throw BackendUnusable(String(describing: error))
         }
-        return QNNBackend(device: .cpu, preparer: ONNXPreparer(), keepAlive: keepAlive, keepCPUWarm: keepCPUWarm)
       #endif
+      return OrtBackend(profile: profile, preparer: ONNXPreparer(), keepAlive: keepAlive, keepCPUWarm: keepCPUWarm)
     }
 
     /// Each backend in the order `auto` tries them, made or refused.

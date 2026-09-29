@@ -12,8 +12,8 @@ from dataclasses import dataclass
 
 from jetlink import protocol as P
 
-# Stops a corrupt length field making RxBuffer allocate gigabytes. A frame is
-# ~460 KB.
+# Stops a corrupt length field making RxBuffer allocate gigabytes. A big
+# model's request is 393 KB.
 MAX_MESSAGE = 16 << 20
 _PAD = bytes(P.GADGET_TX_ALIGN)
 

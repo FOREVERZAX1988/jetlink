@@ -268,6 +268,8 @@ public final class TCPListener: @unchecked Sendable {
       Sys.close(fd)
       throw LinkError.closed("could not listen on \(host):\(port): \(reason)")
     }
+    // `accept` runs under the lock, so it must never wait there.
+    _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
     var actual = sockaddr_in()
     var length = socklen_t(MemoryLayout<sockaddr_in>.size)
     _ = withUnsafeMutablePointer(to: &actual) {
@@ -296,13 +298,26 @@ public final class TCPListener: @unchecked Sendable {
       if poller.revents & Int16(POLLERR | POLLHUP | POLLNVAL) != 0 { return nil }
       var address = sockaddr_in()
       var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+      // Under the lock, and only while open: a `close` during the poll frees
+      // the descriptor, and the next listener can get its number, whose
+      // clients this one would otherwise take.
+      lock.lock()
+      if closed {
+        lock.unlock()
+        return nil
+      }
       let client = withUnsafeMutablePointer(to: &address) {
         $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Sys.accept(fd, $0, &length) }
       }
+      let failure = errno
+      lock.unlock()
       if client < 0 {
-        if errno == EINTR || errno == ECONNABORTED || errno == EAGAIN { continue }
+        if failure == EINTR || failure == ECONNABORTED || failure == EAGAIN || failure == EWOULDBLOCK { continue }
         return nil
       }
+      // BSD hands the listener's O_NONBLOCK on to what it accepts; the
+      // transport blocks.
+      _ = fcntl(client, F_SETFL, fcntl(client, F_GETFL) & ~O_NONBLOCK)
       var text = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
       inet_ntop(AF_INET, &address.sin_addr, &text, socklen_t(INET_ADDRSTRLEN))
       let peer = "\(String(decoding: text.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)):\(UInt16(bigEndian: address.sin_port))"

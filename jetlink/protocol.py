@@ -19,9 +19,13 @@ import struct
 from enum import IntEnum
 
 MAGIC = 0x4B4E4C4A  # b'JLNK'
-# Bumped so a new client cannot silently pair with a legacy server. Tensors are
-# unchanged, so existing plans still load.
-VERSION = 2
+# The comma package and the server are updated together, so each speaks exactly
+# one version, and a header of any other is a broken stream. 3 keeps the hidden
+# state on the server: INFER_REQ has no prev_feat and INFER_RESP no
+# hidden_state slice, which takes the big models' reply from 72 KB (five 16 KB
+# reads on the comma) to 8 KB (one). Tensors are unchanged, so existing plans
+# still load.
+VERSION = 3
 
 # A bulk transfer ends on a short packet, so a message that is an exact multiple
 # of the packet size never terminates the peer's read and arrives a frame late;
@@ -63,7 +67,7 @@ class Msg(IntEnum):
   UPLOAD_DONE = 6      # json: {sha256}
   PROGRESS = 7         # json: {stage, frac, msg} - unsolicited, server -> client
   INFER_REQ = 8        # InferHeader + warped(u8) + packed(f32)
-  INFER_RESP = 9       # InferRespHeader + outputs(f32)
+  INFER_RESP = 9       # InferRespHeader + outputs(f32) but hidden_state, which stays on the server
   # 10, 11 were RESET_REQ/RESP; queues are cleared with Flag.RESET_QUEUES
   STATE_REQ = 12       # telemetry
   STATE_RESP = 13      # json
@@ -79,6 +83,9 @@ class Flag(IntEnum):
   WANT_STATE = 1 << 1     # on INFER_REQ: append telemetry json to the response.
                           # Piggybacked because at 20 Hz a separate exchange
                           # would race a frame.
+  WANT_HIDDEN = 1 << 2    # on INFER_REQ: keep hidden_state in the response, for
+                          # a caller logging the whole output vector. 64 KB more
+                          # on the big models; nothing else needs it.
   PADDED = 1 << 7         # one pad byte follows the payload; see PACKET_MULTIPLE
 
 

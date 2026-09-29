@@ -2,10 +2,557 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>jetlink</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0c0e11">
+<link rel="icon" href="data:,">
+<title>Jetlink</title>
+<style>
+:root {
+  --bg: #0c0e11; --card: #15181d; --raise: #1d2127; --line: #262b33;
+  --text: #e9ebee; --dim: #9ba3ad; --faint: #5f6772;
+  --good: #32d25a; --warn: #ff9f0a; --bad: #ff453a; --info: #3d9bff; --meter: #3987e5;
+  --s-queue: #d95926; --s-gpu: #3987e5; --s-other: #199e70; --s-send: #c98500;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text); }
+body {
+  font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-variant-numeric: tabular-nums; -webkit-text-size-adjust: 100%;
+  padding: 0 max(16px, env(safe-area-inset-right)) 32px max(16px, env(safe-area-inset-left));
+}
+header, main, footer { max-width: 960px; margin: 0 auto; }
+header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: max(14px, env(safe-area-inset-top)) 0 14px; }
+.brand { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.brand b { font-size: 20px; letter-spacing: -0.01em; }
+.brand span { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live { display: flex; align-items: center; gap: 7px; color: var(--dim); font-size: 13px; flex: none; }
+.live i { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
+.live.on i { background: var(--good); } .live.lost i { background: var(--warn); }
+main { display: grid; gap: 14px; grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 780px) { main { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .wide { grid-column: 1 / -1; } }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; min-width: 0; }
+h2 { margin: 0 0 10px; font-size: 13px; font-weight: 600; color: var(--dim); text-transform: uppercase; letter-spacing: 0.06em; display: flex; justify-content: space-between; gap: 12px; }
+h2 small { min-width: 0; text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; padding: 9px 0; border-top: 1px solid var(--line); }
+.row:first-of-type { border-top: 0; padding-top: 2px; }
+.k { color: var(--dim); flex: none; }
+.k b { display: block; color: var(--text); font-weight: 400; }
+.v { text-align: right; min-width: 0; display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+.sub { color: var(--dim); font-size: 13px; overflow-wrap: anywhere; }
+.sub.warn { color: var(--warn); } .sub.bad { color: var(--bad); }
+.mono { font-family: var(--mono); font-size: 12.5px; }
+.badge { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 99px; font-size: 13px; font-weight: 600; white-space: nowrap;
+  --tone: var(--dim); color: var(--tone); background: color-mix(in srgb, var(--tone) 16%, transparent); }
+.badge::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--tone); }
+.t-good { --tone: var(--good); } .t-warn { --tone: var(--warn); } .t-bad { --tone: var(--bad); } .t-info { --tone: var(--info); }
+.progress { width: min(240px, 60vw); height: 5px; border-radius: 3px; background: var(--raise); overflow: hidden; }
+.progress i { display: block; height: 100%; width: 0; background: var(--info); transition: width .25s; }
+.empty { color: var(--faint); font-size: 14px; padding: 4px 0; }
+[hidden] { display: none !important; }
+
+.headline { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 8px 12px; margin-bottom: 14px; }
+.headline b { display: block; font-size: 24px; letter-spacing: -0.01em; white-space: nowrap; }
+.headline .right { margin-left: auto; text-align: right; font-size: 13px; }
+.stagebar { position: relative; height: 52px; margin: 0 2px; }
+.stagebar div { position: absolute; }
+.stagebar .track, .stagebar .seg { top: 16px; height: 16px; }
+.stagebar .track { left: 0; background: var(--raise); border-radius: 4px; }
+.stagebar .mark { top: 12px; height: 24px; width: 1px; background: rgba(233, 235, 238, .5); }
+.stagebar .mark.p99 { width: 2px; background: var(--text); }
+.stagebar .lbl, .stagebar .tick { font-size: 11px; transform: translateX(-50%); white-space: nowrap; }
+.stagebar .lbl { top: -1px; color: var(--dim); }
+.stagebar .tick { top: 36px; color: var(--faint); }
+.stagebar .tick.budget { color: var(--text); font-weight: 600; }
+.legend, .facts { display: flex; flex-wrap: wrap; font-size: 13px; color: var(--dim); }
+.legend { gap: 6px 16px; margin: 4px 0 14px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 10px; height: 10px; border-radius: 2px; }
+.legend b, .facts b { color: var(--text); font-weight: 500; }
+.facts { gap: 4px 18px; margin-top: 10px; }
+.facts b.bad { color: var(--bad); }
+canvas { display: block; width: 100%; height: 150px; }
+
+.meter { margin: 8px 0 12px; }
+.meter .top { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; margin-bottom: 5px; }
+.meter .top span:first-child { color: var(--dim); }
+.bar { height: 6px; border-radius: 3px; background: var(--raise); overflow: hidden; }
+.bar i { display: block; height: 100%; width: 0; background: var(--meter); transition: width .4s; }
+.bar i.warn { background: var(--warn); } .bar i.bad { background: var(--bad); }
+.label { color: var(--dim); font-size: 13px; margin-top: 4px; }
+.cores { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px 12px; margin: 6px 0 14px; }
+.core { font-size: 12px; }
+.core .top { display: flex; justify-content: space-between; color: var(--dim); margin-bottom: 4px; }
+.core .top b { color: var(--text); font-weight: 500; }
+.core.off { opacity: .45; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 12px; }
+.chip { background: var(--raise); border-radius: 8px; padding: 4px 9px; font-size: 13px; }
+.chip span { color: var(--dim); margin-right: 5px; }
+.chip b { font-weight: 500; }
+.chip.warn b { color: var(--warn); } .chip.bad b { color: var(--bad); }
+
+details summary { cursor: pointer; list-style: none; display: flex; justify-content: space-between; align-items: center; }
+details summary::-webkit-details-marker { display: none; }
+details summary h2 { margin: 0; }
+details summary::after { content: "Show"; color: var(--info); font-size: 13px; }
+details[open] summary::after { content: "Hide"; }
+.tools { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; color: var(--faint); font-size: 12px; }
+button { background: var(--raise); color: var(--text); border: 1px solid var(--line); border-radius: 8px; font: inherit; font-size: 13px; padding: 5px 12px; cursor: pointer; }
+pre { margin: 12px 0 0; max-height: 60vh; overflow: auto; font: 11.5px/1.45 var(--mono); color: #c9ced5; white-space: pre-wrap; overflow-wrap: anywhere; }
+footer { margin-top: 18px; color: var(--faint); font-size: 12px; text-align: center; }
+</style>
 </head>
 <body>
-<p>jetlink</p>
+<header>
+  <div class="brand"><b>Jetlink</b><span id="host"></span></div>
+  <div class="live" id="live"><i></i><span>Connecting</span></div>
+</header>
+
+<main>
+  <section class="card">
+    <h2>Status <small id="version"></small></h2>
+    <div class="row"><span class="k">Server</span><span class="v"><span class="badge" id="server-b">Connecting</span><span class="sub" id="server-s"></span></span></div>
+    <div class="row"><span class="k">Comma</span><span class="v"><span class="badge" id="link-b" hidden></span><span class="sub" id="link-s"></span></span></div>
+    <div class="row"><span class="k">Model</span><span class="v">
+      <span id="model-n">–</span><span class="sub mono" id="model-sha"></span>
+      <span class="badge" id="engine-b" hidden></span>
+      <span class="progress" id="engine-p" hidden><i></i></span>
+      <span class="sub" id="engine-s"></span>
+    </span></div>
+  </section>
+
+  <section class="card">
+    <h2>Models <small id="models-disk"></small></h2>
+    <div id="models"><div class="empty">–</div></div>
+  </section>
+
+  <section class="card wide" id="budget" hidden>
+    <h2>Frame budget <small>50 ms a frame at 20 Hz</small></h2>
+    <div class="headline">
+      <div><b id="headroom"></b><span class="sub" id="room"></span></div>
+      <div class="right"><div id="avg"></div><div class="sub" id="p99max"></div></div>
+    </div>
+    <div class="stagebar" id="stagebar"></div>
+    <div class="legend" id="legend"></div>
+    <canvas id="chart" aria-label="Frame time over the last two minutes"></canvas>
+    <div class="facts">
+      <span>Frames <b id="frames">0</b></span><span>Rate <b id="fps">0</b> per second</span>
+      <span>Slow <b id="slow">0</b> <span class="sub">over 60 ms in the last second</span></span>
+    </div>
+  </section>
+
+  <section class="card wide" id="hw" hidden>
+    <h2>Hardware</h2>
+    <div class="sub" id="hw-sub"></div>
+    <div id="gpu"></div>
+    <div class="label">CPU <span id="cpu-sum"></span></div>
+    <div class="cores" id="cores"></div>
+    <div id="mem"></div>
+    <div class="label" id="temps-l">Temperatures</div>
+    <div class="chips" id="temps"></div>
+    <div class="label" id="power-l">Power</div>
+    <div class="chips" id="power"></div>
+    <div id="disk"></div>
+    <div class="facts" id="sys"></div>
+  </section>
+
+  <details class="card wide" id="logs">
+    <summary><h2>Server log</h2></summary>
+    <div class="tools"><span id="log-at"></span><button id="log-r" type="button">Refresh</button></div>
+    <pre id="log"></pre>
+  </details>
+</main>
+<footer>Read-only. Nothing here changes the server.</footer>
+
+<script>
+'use strict';
+const BUDGET = 50, TIGHT = 10, WINDOW = 120, STALE = 5;
+const STAGES = [['queue', 'Input'], ['gpu', 'Model'], ['other', 'Other'], ['send', 'Send']];
+const STEP = { upload: 'Receiving the model', patch: 'Preparing the model', parse: 'Reading the model',
+  build: 'Building the engine', save: 'Saving', load: 'Loading' };
+const MEDIUM = { usb3: 'USB 3', usb2: 'USB 2', usb1: 'USB 1', usb: 'USB', tcp: 'TCP' };
+const RUNTIME = { trt: 'TensorRT', ort: 'onnxruntime' };
+const ZONE = { cpu: 'CPU', gpu: 'GPU', tj: 'Tj', soc0: 'SoC 0', soc1: 'SoC 1', soc2: 'SoC 2' };
+const RAIL = { VDD_IN: 'Board', VDD_CPU_GPU_CV: 'CPU+GPU+CV', VDD_SOC: 'SoC' };
+
+const $ = id => document.getElementById(id);
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+const ms = v => (v == null ? '–' : v.toFixed(1) + ' ms');
+const gb = b => (b / 1e9).toFixed(b >= 1e11 ? 0 : 1);
+const S = { history: [], statsAt: 0, down: false };
+
+function badge(el, text, tone) {
+  el.textContent = text;
+  el.className = 'badge' + (tone ? ' t-' + tone : '');
+}
+function sub(el, text, tone) {
+  el.textContent = text || '';
+  el.className = 'sub' + (tone ? ' ' + tone : '');
+}
+
+// Many events can land at once (a page opening mid-drive gets two minutes of
+// stats); each panel draws once per animation frame at most.
+const dirty = new Set();
+function mark(...panels) {
+  if (!dirty.size) requestAnimationFrame(() => {
+    const now = [...dirty];
+    dirty.clear();
+    for (const p of now) DRAW[p]();
+  });
+  panels.forEach(p => dirty.add(p));
+}
+
+// -- status ------------------------------------------------------------------
+
+function nameFor(sha) {
+  const m = S.inventory && S.inventory.models.find(x => x.sha256 === sha);
+  return m && m.name;
+}
+
+function drawStatus() {
+  const srv = S.server;
+  $('version').textContent = S.hello ? 'Jetlink ' + S.hello.version : '';
+  if (S.down) badge($('server-b'), srv ? 'Not answering' : 'Connecting', srv ? 'bad' : '');
+  else if (!srv) badge($('server-b'), 'Connecting', '');
+  else if (srv.state === 'stopping') badge($('server-b'), 'Stopping', 'warn');
+  else badge($('server-b'), 'Serving', 'good');
+  if (S.down && srv) sub($('server-s'), 'This page reconnects when the server is back.');
+  else if (srv && srv.backend) {
+    const version = (srv.runtime_version || '').split('+')[0];
+    sub($('server-s'), [RUNTIME[srv.backend] || srv.backend, version].filter(Boolean).join(' ') + (srv.device ? ' · ' + srv.device.replace(/_/g, ' ') : ''));
+  } else sub($('server-s'), '');
+
+  const link = S.link;
+  $('link-b').hidden = !link;
+  if (!link) sub($('link-s'), '–');
+  else if (link.state === 'connected') {
+    const m = link.medium || (link.peer === 'usb' ? 'usb' : 'tcp');
+    const slow = m === 'usb2' || m === 'usb1';
+    badge($('link-b'), 'Connected over ' + (MEDIUM[m] || m), slow ? 'warn' : 'good');
+    sub($('link-s'), slow ? MEDIUM[m] + ' costs about 10 ms a frame more than USB 3. Use a USB 3 cable and port.'
+      : m === 'tcp' && link.peer ? 'From ' + link.peer : '', slow ? 'warn' : '');
+  } else if (link.state === 'disconnected') {
+    badge($('link-b'), 'Disconnected', 'warn');
+    sub($('link-s'), link.detail);
+  } else {
+    badge($('link-b'), 'Waiting for the comma', '');
+    sub($('link-s'), 'Until it connects, the comma drives on its small model.');
+  }
+
+  const e = S.engine, b = $('engine-b'), p = $('engine-p');
+  if (!e) {
+    $('model-n').textContent = '–';
+    $('model-sha').textContent = '';
+    b.hidden = p.hidden = true;
+    sub($('engine-s'), '');
+    return;
+  }
+  // The comma knows its models' names; the server may only have the file.
+  const name = e.sha256 && nameFor(e.sha256);
+  $('model-n').textContent = !e.sha256 ? 'None' : name || e.sha256.slice(0, 16);
+  $('model-n').className = e.sha256 && !name ? 'mono' : '';
+  $('model-sha').textContent = name ? e.sha256.slice(0, 16) : '';
+  b.hidden = false;
+  const busy = e.state === 'building' || e.state === 'loading';
+  p.hidden = !busy;
+  if (e.state === 'ready') { badge(b, 'In use', 'good'); sub($('engine-s'), ''); }
+  else if (busy) {
+    badge(b, (e.state === 'loading' ? 'Loading ' : 'Preparing ') + Math.round(e.frac * 100) + '%', 'info');
+    p.firstChild.style.width = (e.frac * 100).toFixed(1) + '%';
+    sub($('engine-s'), [STEP[e.stage] || e.stage, e.msg].filter(Boolean).join(': '));
+  } else if (e.state === 'failed') { badge(b, 'Failed', 'bad'); sub($('engine-s'), e.detail, 'bad'); }
+  else { badge(b, 'Not in use', ''); sub($('engine-s'), 'The comma sends its model when it connects.'); }
+}
+
+function drawModels() {
+  const inv = S.inventory, list = $('models');
+  if (!inv) { list.innerHTML = '<div class="empty">–</div>'; $('models-disk').textContent = ''; return; }
+  $('models-disk').textContent = inv.disk && inv.disk.free_bytes != null ? gb(inv.disk.free_bytes) + ' GB free' : '';
+  const shas = [...new Set([...inv.models.map(m => m.sha256), ...inv.artifacts.map(a => a.sha256)])];
+  if (!shas.length) { list.innerHTML = '<div class="empty">Nothing on disk yet. The comma sends its model when it connects.</div>'; return; }
+  list.innerHTML = shas.map(sha => {
+    const model = inv.models.find(m => m.sha256 === sha);
+    const arts = inv.artifacts.filter(a => a.sha256 === sha);
+    const current = arts.find(a => a.current);
+    const bytes = (model ? model.bytes : 0) + arts.reduce((n, a) => n + a.bytes, 0);
+    const name = model && model.name;
+    const [tag, tone] = inv.loaded === sha ? ['In use', 'good'] : current ? ['Prepared', ''] : [arts.length ? 'Other runtime' : 'Not prepared', ''];
+    const built = current && current.build_seconds ? ' · built in ' + Math.round(current.build_seconds) + ' s' : '';
+    return `<div class="row"><span class="k"><b class="${name ? '' : 'mono'}">${esc(name || sha.slice(0, 16))}</b>` +
+      `<span class="sub mono">${name ? esc(sha.slice(0, 16)) : ''}</span></span>` +
+      `<span class="v"><span class="badge${tone ? ' t-' + tone : ''}">${tag}</span><span class="sub">${gb(bytes)} GB${built}</span></span></div>`;
+  }).join('');
+}
+
+// -- frame budget --------------------------------------------------------------
+
+function addStats(s) {
+  const h = S.history;
+  if (h.length && s.t <= h[h.length - 1].t) return;
+  h.push(s);
+  while (h.length && s.t - h[0].t > WINDOW) h.shift();
+}
+
+// Fresh while stats keep coming. The hardware sample, a second old at most,
+// tells a page that just opened whether the last stats it was given are old.
+function statsFresh() {
+  const s = S.stats;
+  return s && Date.now() - S.statsAt < STALE * 1000 && !(S.hw && S.hw.t - s.t > STALE);
+}
+
+function drawBudget() {
+  const s = S.stats;
+  const show = !S.down && S.link && S.link.state === 'connected' && statsFresh();
+  $('budget').hidden = !show;
+  if (!show || document.hidden) return;
+  const sv = s.served_ms, room = BUDGET - sv.p99;
+  $('headroom').textContent = room >= 0 ? room.toFixed(1) + ' ms headroom' : (-room).toFixed(1) + ' ms over';
+  const [label, tone] = room < 0 ? ['Over budget', 'bad'] : room < TIGHT ? ['Tight', 'warn'] : ['Good', 'good'];
+  $('room').innerHTML = `<span class="badge t-${tone}">${label}</span> P99 of ${BUDGET} ms`;
+  $('avg').textContent = 'Avg ' + ms(sv.mean);
+  $('p99max').textContent = 'P99 ' + sv.p99.toFixed(1) + ' · Max ' + ms(sv.max);
+  $('frames').textContent = s.frames.toLocaleString();
+  $('fps').textContent = s.fps.toFixed(1);
+  $('slow').textContent = s.slow;
+  $('slow').className = s.slow > 0 ? 'bad' : '';
+  drawStages(s);
+  drawChart();
+}
+
+function drawStages(s) {
+  const top = Math.max(BUDGET * 1.1, s.served_ms.p99 * 1.08, s.served_ms.mean * 1.08);
+  const x = v => (v / top * 100).toFixed(2) + '%';
+  const parts = [`<div class="track" style="width:${x(BUDGET)}"></div>`];
+  let at = 0;
+  for (const [k] of STAGES) {
+    const v = s.stages_ms[k] || 0;
+    if (v <= 0) continue;
+    parts.push(`<div class="seg" style="left:${x(at)};width:calc(${x(v)} - 2px);min-width:2px;background:var(--s-${k})"></div>`);
+    at += v;
+  }
+  const p99 = x(s.served_ms.p99);
+  parts.push(`<div class="mark" style="left:${x(BUDGET)}"></div><div class="mark p99" style="left:${p99}"></div><div class="lbl" style="left:${p99}">P99</div>`);
+  for (let v = 0; v <= top; v += 10) parts.push(`<div class="tick${v === BUDGET ? ' budget' : ''}" style="left:${x(v)}">${v === BUDGET ? v + ' ms' : v}</div>`);
+  $('stagebar').innerHTML = parts.join('');
+  $('legend').innerHTML = STAGES.map(([k, name]) => `<span><i style="background:var(--s-${k})"></i>${name} <b>${ms(s.stages_ms[k] || 0)}</b></span>`).join('');
+}
+
+function drawChart() {
+  const c = $('chart'), h = S.history;
+  const dpr = window.devicePixelRatio || 1, w = c.clientWidth, ht = c.clientHeight;
+  if (!w) return;
+  if (c.width !== Math.round(w * dpr) || c.height !== Math.round(ht * dpr)) { c.width = Math.round(w * dpr); c.height = Math.round(ht * dpr); }
+  const g = c.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, ht);
+  const L = 26, R = 6, T = 14, B = 18, pw = w - L - R, ph = ht - T - B;
+  const peak = h.reduce((m, s) => Math.max(m, s.served_ms.p99), 0);
+  const yMax = Math.max(BUDGET * 1.2, Math.ceil(peak * 1.1 / 10) * 10);
+  const now = h.length ? h[h.length - 1].t : 0;
+  const X = t => L + pw * (1 - (now - t) / WINDOW);
+  const Y = v => T + ph * (1 - Math.min(v, yMax) / yMax);
+  const line = y => { g.beginPath(); g.moveTo(L, Math.round(y) + .5); g.lineTo(L + pw, Math.round(y) + .5); g.stroke(); };
+  g.font = '11px system-ui, sans-serif';
+  g.lineWidth = 1;
+  g.fillStyle = css('--faint');
+  g.strokeStyle = css('--line');
+  g.textAlign = 'right';
+  g.textBaseline = 'middle';
+  for (let v = 0; v <= yMax; v += 10) {
+    line(Y(v));
+    if (v % 20 === 0) g.fillText(v, L - 5, Y(v));
+  }
+  g.textBaseline = 'top';
+  for (let a = WINDOW; a >= 0; a -= 30) {
+    g.textAlign = a === WINDOW ? 'left' : a === 0 ? 'right' : 'center';
+    g.fillText(a === 0 ? 'now' : a === WINDOW ? '2 min' : a + ' s', L + pw * (1 - a / WINDOW), T + ph + 5);
+  }
+  if (h.length > 1) {
+    // the band from mean to p99, then the mean over it
+    g.beginPath();
+    h.forEach((s, i) => (i ? g.lineTo : g.moveTo).call(g, X(s.t), Y(s.served_ms.p99)));
+    for (let i = h.length - 1; i >= 0; i--) g.lineTo(X(h[i].t), Y(h[i].served_ms.mean));
+    g.closePath();
+    g.fillStyle = 'rgba(233,235,238,.13)';
+    g.fill();
+    g.beginPath();
+    h.forEach((s, i) => (i ? g.lineTo : g.moveTo).call(g, X(s.t), Y(s.served_ms.mean)));
+    g.strokeStyle = css('--text');
+    g.lineWidth = 2;
+    g.lineJoin = g.lineCap = 'round';
+    g.stroke();
+  }
+  g.strokeStyle = css('--bad');
+  g.lineWidth = 1;
+  g.globalAlpha = .8;
+  line(Y(BUDGET));
+  g.globalAlpha = 1;
+  g.fillStyle = css('--dim');
+  g.textAlign = 'left';
+  g.textBaseline = 'bottom';
+  g.fillText(BUDGET + ' ms budget', L + 4, Y(BUDGET) - 2);
+  g.fillStyle = css('--bad');
+  for (const s of h) if (s.served_ms.max > BUDGET) { g.beginPath(); g.arc(X(s.t), Y(s.served_ms.max), 3.5, 0, 7); g.fill(); }
+}
+
+// -- hardware ------------------------------------------------------------------
+
+function meter(label, value, frac, tone) {
+  const pct = Math.max(0, Math.min(1, frac || 0)) * 100;
+  return `<div class="meter"><div class="top"><span>${esc(label)}</span><span>${esc(value)}</span></div>` +
+    `<div class="bar"><i class="${tone || ''}" style="width:${pct.toFixed(1)}%"></i></div></div>`;
+}
+function chip(name, value, tone) {
+  return `<span class="chip ${tone || ''}"><span>${esc(name)}</span><b>${esc(value)}</b></span>`;
+}
+function duration(s) {
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  return d ? `${d} d ${h} h` : h ? `${h} h ${m} min` : `${m} min`;
+}
+
+function drawHost() {
+  const h = S.host || {};
+  $('host').textContent = h.hostname || '';
+  document.title = h.hostname ? 'Jetlink · ' + h.hostname : 'Jetlink';
+}
+
+function drawHw() {
+  const hw = S.hw, host = S.host || {};
+  $('hw').hidden = !hw;
+  if (!hw || document.hidden) return;
+  $('hw-sub').textContent = [host.board, host.os, hw.mode].filter(Boolean).join(' · ');
+
+  const gpu = hw.gpu;
+  $('gpu').innerHTML = gpu ? meter(host.gpu ? 'GPU (' + host.gpu + ')' : 'GPU',
+    [gpu.load != null ? gpu.load + '%' : null, gpu.mhz ? gpu.mhz + ' MHz' : null].filter(Boolean).join(' · ') || '–', (gpu.load || 0) / 100) : '';
+
+  const cpu = hw.cpu || [], cores = $('cores');
+  if (cores.children.length !== cpu.length) {
+    cores.innerHTML = cpu.map((_, i) => `<div class="core"><div class="top"><span>${i}</span><b></b></div><div class="bar"><i></i></div><div class="sub"></div></div>`).join('');
+  }
+  let sum = 0, on = 0;
+  cpu.forEach((c, i) => {
+    const el = cores.children[i];
+    el.classList.toggle('off', !c.online);
+    el.querySelector('b').textContent = !c.online ? 'off' : c.load == null ? '–' : Math.round(c.load) + '%';
+    el.querySelector('i').style.width = (c.online ? c.load || 0 : 0) + '%';
+    el.querySelector('.sub').textContent = c.online && c.mhz ? c.mhz + ' MHz' : '';
+    if (c.online && c.load != null) { sum += c.load; on++; }
+  });
+  $('cpu-sum').textContent = on ? '· ' + Math.round(sum / on) + '% average' : '';
+
+  const m = hw.mem;
+  let mem = '';
+  if (m && m.total) {
+    const used = m.used / m.total;
+    mem = meter('Memory' + (host.jetson ? ' (shared with the GPU)' : ''), gb(m.used) + ' / ' + gb(m.total) + ' GB', used, used > 0.92 ? 'bad' : used > 0.8 ? 'warn' : '');
+    if (m.swap_total) mem += meter('Swap', gb(m.swap_used) + ' / ' + gb(m.swap_total) + ' GB', m.swap_used / m.swap_total);
+  }
+  $('mem').innerHTML = mem;
+
+  const temps = (hw.temps || []).map(t => {
+    const key = t.name.replace(/[-_]thermal$/, '');
+    return chip(ZONE[key] || key, t.c.toFixed(1) + '°', t.c >= 95 ? 'bad' : t.c >= 85 ? 'warn' : '');
+  });
+  if (gpu && gpu.temp) temps.push(chip('GPU', gpu.temp + '°', gpu.temp >= 90 ? 'bad' : gpu.temp >= 83 ? 'warn' : ''));
+  $('temps').innerHTML = temps.join('');
+  $('temps-l').hidden = !temps.length;
+
+  const power = [];
+  if (hw.power) for (const r of hw.power.rails) power.push(chip(RAIL[r.name] || r.name, r.w.toFixed(1) + ' W'));
+  if (gpu && gpu.power_w) power.push(chip('GPU', gpu.power_w + (gpu.power_limit_w ? ' / ' + gpu.power_limit_w : '') + ' W'));
+  const fan = hw.fan;
+  if (fan) power.push(chip('Fan', [fan.rpm != null ? fan.rpm + ' rpm' : null, fan.pct != null ? fan.pct + '%' : null].filter(Boolean).join(' · ')));
+  else if (gpu && gpu.fan_pct != null) power.push(chip('Fan', gpu.fan_pct + '%'));
+  $('power').innerHTML = power.join('');
+  $('power-l').hidden = !power.length;
+
+  const d = hw.disk;
+  $('disk').innerHTML = d && d.total ? meter('Models folder', gb(d.total - d.used) + ' GB free of ' + gb(d.total) + ' GB', d.used / d.total, d.used / d.total > 0.95 ? 'bad' : '') : '';
+  const sys = [];
+  if (hw.uptime != null) sys.push(`<span>Up <b>${duration(hw.uptime)}</b></span>`);
+  if (hw.load) sys.push(`<span>Load <b>${hw.load.map(v => v.toFixed(2)).join(' ')}</b></span>`);
+  if (host.kernel) sys.push(`<span>Kernel <b>${esc(host.kernel)}</b></span>`);
+  $('sys').innerHTML = sys.join('');
+}
+
+const DRAW = { status: drawStatus, models: drawModels, budget: drawBudget, host: drawHost, hw: drawHw };
+
+// -- the event stream ------------------------------------------------------------
+
+function handle(m) {
+  switch (m.event) {
+    case 'host': S.host = m; mark('host', 'hw'); break;
+    case 'hello': S.hello = m; mark('status'); break;
+    case 'server': S.server = m; mark('status'); break;
+    case 'link': S.link = m; mark('status', 'budget'); break;
+    case 'engine': S.engine = m; mark('status'); break;
+    case 'inventory': S.inventory = m; mark('status', 'models'); break;
+    case 'stats': addStats(m); S.stats = m; S.statsAt = Date.now(); mark('budget'); break;
+    case 'hw': S.hw = m; mark('hw', 'budget'); break;
+  }
+}
+
+let source = null, backoff = 1000, retry = 0;
+
+function setLive() {
+  const el = $('live'), open = source && source.readyState === 1;
+  el.className = 'live ' + (open ? 'on' : S.down ? 'lost' : '');
+  el.lastChild.textContent = open ? 'Live' : S.down ? 'Reconnecting' : 'Connecting';
+}
+
+// EventSource gives up for good on a refusal (a server stopping, too many
+// pages open), so every failure closes it and the page tries again itself,
+// waiting longer each time up to half a minute.
+function connect() {
+  clearTimeout(retry);
+  if (source) source.close();
+  source = new EventSource('events');
+  source.onopen = () => { backoff = 1000; setLive(); };
+  source.onmessage = e => {
+    if (S.down) { S.down = false; mark('status', 'budget'); setLive(); }
+    let m;
+    try { m = JSON.parse(e.data); } catch (_) { return; }
+    handle(m);
+  };
+  source.onerror = () => {
+    source.close();
+    S.down = true;
+    setLive();
+    mark('status', 'budget');
+    retry = setTimeout(connect, backoff);
+    backoff = Math.min(backoff * 2, 30000);
+  };
+  setLive();
+}
+
+// Frames stopping without the link dropping still hides the budget.
+setInterval(() => { if (!$('budget').hidden && !statsFresh()) mark('budget'); }, 1000);
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  if (S.down) { backoff = 1000; connect(); }
+  mark('budget', 'hw');
+});
+window.addEventListener('resize', () => { if (!$('budget').hidden) drawChart(); });
+
+async function loadLog() {
+  $('log-at').textContent = 'Loading…';
+  try {
+    const r = await fetch('logs', { cache: 'no-store' });
+    const pre = $('log');
+    pre.textContent = (await r.text()) || 'Nothing logged yet.';
+    pre.scrollTop = pre.scrollHeight;
+    $('log-at').textContent = 'Read at ' + new Date().toLocaleTimeString();
+  } catch (err) {
+    $('log-at').textContent = 'Could not read the log: ' + err.message;
+  }
+}
+$('logs').addEventListener('toggle', e => { if (e.target.open) loadLog(); });
+$('log-r').addEventListener('click', loadLog);
+drawStatus();
+connect();
+</script>
 </body>
 </html>

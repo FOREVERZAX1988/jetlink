@@ -4,8 +4,9 @@ import Foundation
 // Client to server: {"id": <int>, "cmd": "<name>", ...arguments}
 // Server to client: {"event": "<name>", "t": <float seconds>, ...}
 //
-// The Mac app hears these from the Python server over a socket. The iPhone
-// app runs the server in process and hears the same values without the JSON.
+// No socket carries it: the apps and the status page read ServerController in
+// process and get these values. The JSON is what the status page streams to a
+// browser and what the Android app gets across JNI.
 
 public enum EngineState: String, Codable, Sendable {
   case none, building, loading, ready, failed
@@ -131,8 +132,9 @@ public enum LinkMedium: String, Codable, Sendable, CaseIterable {
     }
   }
 
-  /// A frame is about 460 KB: around 1 ms on USB 3, around 11 ms on USB 2,
-  /// enough to cost frames and bring the comma near its soft disable.
+  /// A big model's request is 409,600 bytes on the wire: around 1 ms on USB
+  /// 3, around 10 ms on USB 2, enough to cost frames and bring the comma near
+  /// its soft disable.
   public var isSlow: Bool { self == .usb2 || self == .usb1 }
 
   /// What to do about a slow link, in a sentence; nil when it is fast enough.
@@ -722,7 +724,8 @@ extension ControlEvent {
     }
   }
 
-  private static func object(_ value: some Encodable) -> [String: Any] {
+  /// A value of the protocol as its JSON object, nulls included.
+  static func object(_ value: some Encodable) -> [String: Any] {
     let encoder = JSONEncoder()
     encoder.keyEncodingStrategy = .convertToSnakeCase
     guard let data = try? encoder.encode(value), let object = try? JSONSerialization.jsonObject(with: data) else { return [:] }

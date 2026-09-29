@@ -40,8 +40,8 @@ settings):
 
 ### Bus speed
 
-Latency needs USB 3 (SuperSpeed). A frame is about 460 KB: about 1 ms on USB 3,
-11 ms on USB 2 (hence USB 3 on every hop: cable, adapter, any hub).
+Latency needs USB 3 (SuperSpeed). A frame is about 400 KB: about 1 ms on USB 3,
+10 ms on USB 2 (hence USB 3 on every hop: cable, adapter, any hub).
 
 Negotiated speed on the comma: `/sys/class/udc/*/current_speed`
 (`super-speed` is USB 3, `high-speed` USB 2), also printed with the built

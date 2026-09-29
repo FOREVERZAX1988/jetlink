@@ -26,6 +26,7 @@ from jetlink.spec import ModelSpec
 from jetlink.transport.base import LinkError
 from jetlink.transport.tcp import TcpTransport
 from tests.fake_backend import FakeBackend, FakeEngine
+from tests.test_session import PYTHON_SERVER_V2
 
 SHAPES = {
   'img': (1, 12, 128, 256), 'big_img': (1, 12, 128, 256),
@@ -148,6 +149,7 @@ def _sha_of(spec, onnx, monkeypatch):
   monkeypatch.setattr(session_module, 'sha256_file', lambda path: (spec.sha256, Path(path).stat().st_size))
 
 
+@pytest.mark.skip(reason=PYTHON_SERVER_V2)
 def test_upload_build_load_and_run_through_the_seam(linked, monkeypatch):
   client, host, backend, spec, onnx = linked
   _sha_of(spec, onnx, monkeypatch)
