@@ -1,5 +1,6 @@
 import Foundation
 import JetlinkKit
+import JetlinkRegistry
 
 #if canImport(Darwin)
   import Darwin
@@ -66,10 +67,13 @@ public final class Server: @unchecked Sendable {
     /// Be the USB host: open the comma's gadget whenever it is on the bus.
     /// Needs the gadget the host passes to `init`.
     public var usb: Bool
+    /// Built engines kept: one per registry entry on a Mac or a Jetson, where
+    /// a rebuild costs minutes and 1 to 2 GB; a phone's disk holds two.
+    public var keepPlans: Int
 
     public init(
       host: String = "0.0.0.0", port: UInt16 = Wire.defaultPort, cacheRoot: URL, preload: Bool = true, dial: DialTarget? = nil,
-      listen: Bool = true, usb: Bool = false
+      listen: Bool = true, usb: Bool = false, keepPlans: Int = CacheLayout.keepArtifacts
     ) {
       self.host = host
       self.port = port
@@ -78,6 +82,7 @@ public final class Server: @unchecked Sendable {
       self.dial = dial
       self.listen = listen
       self.usb = usb
+      self.keepPlans = keepPlans
     }
   }
 
@@ -129,7 +134,7 @@ public final class Server: @unchecked Sendable {
     self.dial = configuration.dial
     self.backend = backend
     self.gadget = gadget
-    cache = try ServerCache(root: configuration.cacheRoot, backend: backend)
+    cache = try ServerCache(root: configuration.cacheRoot, backend: backend, keep: configuration.keepPlans)
     host = EngineHost(cache: cache, hooks: hooks)
     // A write to a socket the comma closed must be an error, not a signal
     // that kills the app.

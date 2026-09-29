@@ -8,9 +8,10 @@ import Testing
 struct ServerCacheTests {
   let sha = String(repeating: "c", count: 64)
 
-  /// One artifact of `kind` and its sidecar, stamped at `mtime`.
-  func artifact(_ url: URL, kind: ArtifactKind, mtime: TimeInterval) throws {
-    if kind == .directory {
+  /// One artifact, a plan file or an onnxruntime directory, and its sidecar,
+  /// stamped at `mtime`.
+  func artifact(_ url: URL, trt: Bool, mtime: TimeInterval) throws {
+    if !trt {
       try FileManager.default.createDirectory(at: url.appending(path: "coreml-model"), withIntermediateDirectories: true)
     } else {
       try Data("plan".utf8).write(to: url)
@@ -19,16 +20,14 @@ struct ServerCacheTests {
     try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: mtime)], ofItemAtPath: url.path)
   }
 
-  @Test("The artifact is a file or a directory as the backend says, named as before")
+  @Test("The artifact and its sidecar are named as before")
   func naming() throws {
     let tmp = try TemporaryDirectory()
-    let plans = try ServerCache(root: tmp.url, backend: NamingBackend(kind: .file))
+    let plans = try ServerCache(root: tmp.url, backend: NamingBackend(trt: true))
     let plan = try plans.entry(sha)
     #expect(plan.path.lastPathComponent == "cccccccccccccccc.trt10.3.0.Orin-sm87.plan")
-    #expect(!plan.path.hasDirectoryPath)
     #expect(plan.metaPath.lastPathComponent == "cccccccccccccccc.trt10.3.0.Orin-sm87.json")
-    let ort = try ServerCache(root: tmp.url, backend: NamingBackend(kind: .directory)).entry(sha)
-    #expect(ort.path.hasDirectoryPath)
+    let ort = try ServerCache(root: tmp.url, backend: NamingBackend()).entry(sha)
     #expect(Artifact.sidecarURL(ort.path) == ort.metaPath)
     #expect(Artifact.sidecarURL(plan.path) == plan.metaPath)
     #expect(try plans.modelPath(sha).lastPathComponent == "cccccccccccccccc.onnx")
@@ -38,18 +37,18 @@ struct ServerCacheTests {
   /// A Jetson boots at 1970 without NTP, so the plan it just built can be the
   /// oldest file on disk. A plan is one file, and its entry must still match
   /// the listing prune walks.
-  @Test("The artifact just built survives pruning though its mtime is the oldest", arguments: [ArtifactKind.file, .directory])
-  func pruneProtects(kind: ArtifactKind) throws {
+  @Test("The artifact just built survives pruning though its mtime is the oldest", arguments: [true, false])
+  func pruneProtects(trt: Bool) throws {
     let tmp = try TemporaryDirectory()
-    let backend = NamingBackend(kind: kind)
-    let cache = try ServerCache(root: tmp.url, backend: backend)
+    let backend = NamingBackend(trt: trt)
+    let cache = try ServerCache(root: tmp.url, backend: backend, keep: 2)
     for i in 0..<3 {
-      try artifact(cache.layout.engines.appending(path: "old\(i)\(backend.suffix)"), kind: kind, mtime: 2_000_000 + Double(i))
+      try artifact(cache.layout.engines.appending(path: "old\(i)\(backend.suffix)"), trt: trt, mtime: 2_000_000 + Double(i))
     }
     let fresh = try cache.entry(sha)
-    try artifact(fresh.path, kind: kind, mtime: 1)
+    try artifact(fresh.path, trt: trt, mtime: 1)
 
-    cache.prune(keep: 2, protect: fresh.path)
+    cache.prune(protect: fresh.path)
 
     #expect(fresh.exists)
     let left = try FileManager.default.contentsOfDirectory(atPath: cache.layout.engines.path).filter { $0.hasSuffix(backend.suffix) }
@@ -59,7 +58,7 @@ struct ServerCacheTests {
   @Test("sweepTemp drops build directories older than six hours, and only those")
   func sweep() throws {
     let tmp = try TemporaryDirectory()
-    let cache = try ServerCache(root: tmp.url, backend: NamingBackend(kind: .file))
+    let cache = try ServerCache(root: tmp.url, backend: NamingBackend(trt: true))
     let stale = cache.layout.engines.appending(path: "tmpstale")
     let fresh = cache.layout.engines.appending(path: "tmpfresh")
     for directory in [stale, fresh] {
@@ -77,10 +76,10 @@ struct ArtifactTests {
   @Test("A file artifact is staged beside the cache, moved into place, and described")
   func buildsAFile() throws {
     let tmp = try TemporaryDirectory()
-    let backend = NamingBackend(kind: .file)
+    let backend = NamingBackend(trt: true)
     let plan = tmp.url.appending(path: "engines/m.trt10.3.0.Orin-sm87.plan")
     let reports = Recorded<String>()
-    try Artifact.build(plan, kind: .file, metaExtra: ["spec": ["sha256": "x"]], report: { reports.append("\($0) \($1) \($2)") }) { staged in
+    try Artifact.build(plan, metaExtra: ["spec": ["sha256": "x"]], report: { reports.append("\($0) \($1) \($2)") }) { staged in
       #expect(staged.deletingLastPathComponent().lastPathComponent.hasPrefix("tmp"))
       #expect(!FileManager.default.fileExists(atPath: staged.path))
       try Data("plan".utf8).write(to: staged)
@@ -104,8 +103,8 @@ struct ArtifactTests {
     let artifact = tmp.url.appending(path: "m.ort1.ortcache", directoryHint: .isDirectory)
     try FileManager.default.createDirectory(at: artifact, withIntermediateDirectories: true)
     #expect(throws: HostError.self) {
-      try Artifact.build(artifact, kind: .directory, metaExtra: [:], report: { _, _, _ in }) { staged in
-        #expect(FileManager.default.fileExists(atPath: staged.path))
+      try Artifact.build(artifact, metaExtra: [:], report: { _, _, _ in }) { staged in
+        try FileManager.default.createDirectory(at: staged, withIntermediateDirectories: true)
         throw HostError.failed("no")
       }
     }

@@ -111,7 +111,7 @@ final class PhoneServer: ServerControlling {
     do {
       let root = try PhoneServer.prepareCacheDirectory()
       let embedded = try EmbeddedServer(
-        configuration: Server.Configuration(port: settings.port, cacheRoot: root),
+        configuration: Server.Configuration(port: settings.port, cacheRoot: root, keepPlans: 2),
         backend: OrtBackend(
           profile: settings.device, preparer: ONNXPreparer(), keepAlive: settings.keepGPUAwake, keepCPUWarm: settings.keepCPUWarm))
       self.embedded = embedded

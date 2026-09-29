@@ -62,7 +62,6 @@ final class FlakyBackend: EngineBackend, @unchecked Sendable {
 
   var name: String { inner.name }
   var suffix: String { inner.suffix }
-  var artifactKind: ArtifactKind { inner.artifactKind }
   var runtimeVersion: String { inner.runtimeVersion }
   func deviceTag() -> String { inner.deviceTag() }
 

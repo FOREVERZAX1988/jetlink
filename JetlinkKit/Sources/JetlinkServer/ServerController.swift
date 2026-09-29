@@ -589,7 +589,7 @@ public final class ServerController: @unchecked Sendable {
     if FileManager.default.fileExists(atPath: modelPath.path) {
       return Files.size(of: modelPath)
     }
-    if let spec = (try? server.cache.entry(sha256).meta())?["spec"] as? [String: Any],
+    if let spec = Artifact.sidecar(try server.cache.entry(sha256).path)["spec"] as? [String: Any],
       let bytes = (spec["nbytes"] as? NSNumber)?.int64Value, bytes > 0
     {
       return bytes

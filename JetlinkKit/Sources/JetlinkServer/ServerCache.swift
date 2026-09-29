@@ -9,26 +9,20 @@ import JetlinkRegistry
 ///     <root>/engines/<sha16>.<tag>.json       its sidecar: build facts and the model spec
 ///     <root>/models/<sha16>.onnx              the model as uploaded or downloaded
 public final class ServerCache: Sendable {
-  /// One per registry entry on a Mac or a Jetson: a rebuild costs minutes
-  /// and 1 to 2 GB. A phone's disk holds two.
-  #if os(iOS) || os(Android)
-    public static let keepPlans = 2
-  #else
-    public static let keepPlans = CacheLayout.keepArtifacts
-  #endif
-
   public let layout: CacheLayout
   public let backend: any EngineBackend
+  /// The artifacts kept (`Server.Configuration.keepPlans`).
+  public let keep: Int
   private let store: EngineCache
 
-  public init(root: URL, backend: any EngineBackend) throws {
+  public init(root: URL, backend: any EngineBackend, keep: Int = CacheLayout.keepArtifacts) throws {
     layout = CacheLayout(root: root)
     self.backend = backend
+    self.keep = keep
     for directory in [layout.engines, layout.models] {
       try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }
-    store = EngineCache(
-      layout: layout, tag: backend.tag(), suffix: backend.suffix, backend: backend.name, kind: backend.artifactKind)
+    store = EngineCache(layout: layout, tag: backend.tag(), suffix: backend.suffix, backend: backend.name)
   }
 
   /// The identity arrives from a peer and becomes a path, so anything but a
@@ -60,8 +54,8 @@ public final class ServerCache: Sendable {
     store.rememberLoaded(sha256: sha256, frameSkip: frameSkip)
   }
 
-  public func lastLoaded() -> (sha256: String, frameSkip: Int)? {
-    layout.lastLoaded().map { ($0.sha256, $0.frameSkip) }
+  public func lastLoaded() -> LastLoaded? {
+    layout.lastLoaded()
   }
 
   public func forgetLastLoaded() {
@@ -70,27 +64,12 @@ public final class ServerCache: Sendable {
 
   /// Keep the newest few artifacts of this backend's kind. `protect` is never
   /// pruned whatever its mtime says.
-  public func prune(keep: Int = ServerCache.keepPlans, protect: URL? = nil) {
+  public func prune(protect: URL? = nil) {
     store.prune(keep: keep, protect: protect)
   }
 
   /// Build directories a killed build left behind.
   public func sweepTemp(maxAge: TimeInterval = 6 * 3600) {
     store.sweepTemp(maxAge: maxAge)
-  }
-}
-
-extension CacheEntry {
-  /// The sidecar. Throws when it is missing or unreadable.
-  func meta() throws -> [String: Any] {
-    let data = try Data(contentsOf: metaPath)
-    guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-      throw CocoaError(.fileReadCorruptFile)
-    }
-    return object
-  }
-
-  func writeMeta(_ meta: [String: Any]) throws {
-    try Artifact.write(meta, to: metaPath)
   }
 }

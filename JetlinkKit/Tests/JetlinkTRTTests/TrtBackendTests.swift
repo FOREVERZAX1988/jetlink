@@ -263,7 +263,7 @@ final class Recorder: @unchecked Sendable {
       #expect(ready(host))
       #expect(host.snapshot().state == .ready, "\(host.snapshot().detail)")
       let plans = try FileManager.default.contentsOfDirectory(atPath: engines.path).filter { $0.hasSuffix(".plan") }
-      #expect(plans.count == ServerCache.keepPlans)
+      #expect(plans.count == cache.keep)
       #expect(plans.contains(cache.entry(request).path.lastPathComponent))
       #expect(!plans.contains { $0.hasPrefix("0000000000000000") })
 

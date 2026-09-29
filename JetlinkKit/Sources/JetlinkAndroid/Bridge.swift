@@ -180,7 +180,8 @@
         cacheRoot: URL(fileURLWithPath: cache, isDirectory: true),
         preload: (config["preload"] as? Bool) ?? true,
         listen: (config["listen"] as? Bool) ?? true,
-        usb: (config["usb"] as? Bool) ?? true)
+        usb: (config["usb"] as? Bool) ?? true,
+        keepPlans: 2)
       let backend = OrtBackend(
         profile: profile, preparer: ONNXPreparer(), keepAlive: (config["keep_alive"] as? Bool) ?? true,
         keepCPUWarm: (config["keep_cpu_warm"] as? Bool) ?? false, chip: config["chip"] as? String ?? "")
