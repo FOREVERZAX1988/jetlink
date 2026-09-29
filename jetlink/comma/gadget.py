@@ -160,6 +160,46 @@ SHUTDOWN_REQUEST = Path("/dev/shm/jetlink-shutdown")
 # when the gadget goes, and whether the run left anything undone. The owner
 # never speaks the protocol, so it cannot learn either for itself
 STATE = Path("/dev/shm/jetlink-owner-state")
+# the owner's status record: everything the readers used to take from the
+# files above one by one, rewritten whole every step, which makes it the
+# owner's heartbeat too. A clean stop removes it
+STATUS = Path("/dev/shm/jetlink/status.json")
+# how old that record may be before a reader takes its owner for gone: six of
+# its 0.5 s steps. A wait inside a step renews it (Owner.beat)
+HEARTBEAT_TIMEOUT = 3.0
+# how long a host that stopped reading configured still counts as there. The
+# owner holds the gadget for as long as the link is enabled, so presence no
+# longer blinks at every handover; what is left to bridge is a USB3 link
+# recovery passing through "addressed", and a bounce made on purpose when a
+# host will not enumerate (wait_for_host)
+PRESENCE_HOLD = 5.0
+
+
+def write_record(path: Path, record: dict) -> None:
+  """Replace a JSON record whole: a reader gets the old one or the new one,
+  never half of either. Raises OSError; the writer says so, once."""
+  path.parent.mkdir(parents=True, exist_ok=True)
+  tmp = path.with_name(f".{path.name}.{os.getpid()}")
+  tmp.write_text(json.dumps(record))
+  os.replace(tmp, path)
+
+
+def owner_status() -> dict | None:
+  """The owner's status record, or None without one: no owner has run since
+  boot, the last one stopped cleanly, or it is one too old to write it."""
+  try:
+    record = json.loads(_read(STATUS))
+  except ValueError:
+    return None
+  return record if isinstance(record, dict) else None
+
+
+def owner_alive(record: dict) -> bool:
+  """Was this record written within HEARTBEAT_TIMEOUT? time.monotonic is the
+  system's CLOCK_MONOTONIC, the same in every process on the device, and
+  unlike the wall clock it does not jump when the comma sets its time."""
+  at = record.get('at')
+  return isinstance(at, (int, float)) and time.monotonic() - at < HEARTBEAT_TIMEOUT
 
 
 def owner_state() -> dict:

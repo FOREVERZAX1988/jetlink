@@ -30,6 +30,11 @@ names the worker and hands over the settings: jetlink.openpilot.owner makes
 and runs the Owner from what the fork's adapter says (OwnerConfig), so nothing
 here knows an openpilot module or a param name.
 
+What it knows, it writes down whole every step in its status record
+(gadget.STATUS): the gadget, the host, presence with its hold, the errors. The
+UI and hardwared read that one file rather than the gadget's own files one by
+one, and its timestamp is the heartbeat that tells them the owner is gone.
+
 manager stops this on shutdown with SIGINT and SIGKILLs it 5 s later, so every
 long wait polls `stop`: a FunctionFS owner killed mid-transfer leaves the
 gadget in a state only a reboot clears.
@@ -129,6 +134,13 @@ class Owner:
     self.worker: subprocess.Popen | None = None
     self.seen: dict[str, int] = {}      # watched param -> mtime when last looked
     self.had_host = False
+    # the status record every other process reads (gadget.STATUS): the setting
+    # the last step acted on, when a host last had us configured (presence's
+    # hold), when the record was last written, and a failure writing it, said once
+    self.mode: str | None = None
+    self.last_configured = 0.0
+    self.published = 0.0
+    self.status_error: str | None = None
     self.port = port.Port(chestnut_ids)
     self.cable = lending.CableListener()
     self.lender = lending.Lender(self.lendable, self.bounce_gadget, holding=self.holding, cable=self.cable)
@@ -256,8 +268,7 @@ class Owner:
     gadget.log.warning("jetlink: putting the endpoints down, keeping the gadget bound")
     if not self.transport.release_endpoints():
       return
-    gadget.wait_for_host(SETTLE_TIMEOUT, bounce=self.bounce_gadget,
-                         should_stop=lambda: self.stop)
+    gadget.wait_for_host(SETTLE_TIMEOUT, bounce=self.bounce_gadget, should_stop=self.waiting)
 
   def hold(self, ios: bool) -> None:
     """Everything this process does once the car is moving, or once somebody
@@ -347,12 +358,82 @@ class Owner:
     if self.worker is None:
       return
     self.worker.terminate()
-    try:
-      self.worker.wait(WORKER_GRACE)
-    except subprocess.TimeoutExpired:
-      self.worker.kill()
+    deadline = time.monotonic() + WORKER_GRACE
+    while True:
+      try:
+        self.worker.wait(POLL)
+        break
+      except subprocess.TimeoutExpired:
+        if time.monotonic() >= deadline:
+          self.worker.kill()
+          break
+        self.beat()   # a run inside a hello can take the whole grace
     self.worker = None
     self.shutting_down = False
+
+  # -- the status record ------------------------------------------------------
+
+  def status_record(self) -> dict:
+    """What every other process reads instead of the gadget's files one by one
+    (jetlink.openpilot.status), presence and its hold worked out once, here."""
+    now = time.monotonic()
+    state = gadget.udc_state()
+    configured = state == 'configured'
+    if configured:
+      self.last_configured = now
+    if self.dormant:
+      # no enumeration during suspend; the CC line still tells a sleeping host from an unplugged one
+      present = gadget.port_has_host()
+    else:
+      present = configured or now - self.last_configured < gadget.PRESENCE_HOLD
+    return {
+      'pid': os.getpid(),
+      'at': now,
+      'mode': self.mode,
+      'link': None if self.built_ios is None else ('cable' if self.built_ios else 'usb'),
+      'peer': self._peer,
+      # root's jetlink-gadget and the lender's error, as gadget_error() puts them together
+      'error': gadget.gadget_error(),
+      'net': gadget.net_status(),
+      'dormant': self.dormant,
+      'udc': state,
+      'speed': gadget.usb_speed() if configured else None,
+      'present': present,
+      'worker': self.worker is not None and self.worker.poll() is None,
+    }
+
+  def publish_status(self) -> None:
+    """Rewrite the status record, which is the heartbeat as well. Never
+    raises; a failure is logged once, until a write works again."""
+    try:
+      gadget.write_record(gadget.STATUS, self.status_record())
+    except Exception as e:
+      error = f"{type(e).__name__}: {e}"
+      if error != self.status_error:
+        self.status_error = error
+        gadget.log.error("jetlink: could not write the status record (%s); readers read the gadget's files", error)
+      return
+    self.status_error = None
+    self.published = time.monotonic()
+
+  def beat(self) -> None:
+    """Renew the record from inside a wait that can outlast the readers'
+    HEARTBEAT_TIMEOUT, at most once a POLL."""
+    if time.monotonic() - self.published >= POLL:
+      self.publish_status()
+
+  def waiting(self) -> bool:
+    """should_stop for a wait inside a step: keeps the heartbeat going."""
+    self.beat()
+    return self.stop
+
+  def forget_status(self) -> None:
+    """A clean stop leaves no record, so only an owner that died leaves a
+    heartbeat behind to go stale; the readers go back to the files."""
+    try:
+      gadget.STATUS.unlink(missing_ok=True)
+    except OSError:
+      pass
 
   # -- the loop -------------------------------------------------------------
 
@@ -361,7 +442,7 @@ class Owner:
 
   def step(self) -> None:
     # each read is a file; take them once and pass them down
-    mode = self.settings.mode()
+    mode = self.mode = self.settings.mode()
     if mode == 'off':
       if self.transport is not None:
         gadget.log.warning("jetlink: disabled, releasing the link")
@@ -543,6 +624,8 @@ class Owner:
 
   def run(self) -> None:
     gadget.clear_link()   # ours to write, and a record from a previous owner is stale
+    # the heartbeat from the start: the first step builds the gadget
+    self.publish_status()
     try:
       while not self.stop:
         started = time.monotonic()
@@ -553,6 +636,7 @@ class Owner:
           gadget.log.exception("jetlink: unhandled error")
           self.close_link()
           self.next_attempt = time.monotonic() + RECONNECT_BACKOFF
+        self.publish_status()
         time.sleep(max(0.0, POLL - (time.monotonic() - started)))
     finally:
       # first, inside manager's 5 s: it stops this when a chestnut turns up,
@@ -566,5 +650,6 @@ class Owner:
       self.stop_worker()
       self.close_link()
       gadget.set_dormant(False)
+      self.forget_status()
     gadget.log.warning("jetlink: stopped")
 

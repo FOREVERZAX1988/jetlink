@@ -14,6 +14,7 @@ import logging
 import os
 import select
 import socket
+import subprocess
 import sys
 import tempfile
 import time
@@ -40,6 +41,8 @@ class OwnerTest(unittest.TestCase):
                         ('STATE', self.tmp / 'state'),
                         ('GADGET_STATUS', self.tmp / 'gadget-status'),
                         ('LENDER_STATUS', self.tmp / 'lender-status'),
+                        ('STATUS', self.tmp / 'run' / 'status.json'),
+                        ('CC_ORIENTATION', self.tmp / 'cc'),
                         ('link_configured', mock.Mock(return_value=True)),
                         ('host_attached', mock.Mock(return_value=True)),
                         ('udc_state', mock.Mock(return_value='configured')),
@@ -872,6 +875,136 @@ class TestTheLoop(OwnerTest):
     self.run_steps(o, step)
     self.assertEqual(seen, [None])
     self.assertFalse(gadget.LINK.exists())
+
+
+class TestTheStatusRecord(OwnerTest):
+  """What the owner writes down for the UI and hardwared every step, whole,
+  which is its heartbeat too (jetlink.openpilot.status reads it)."""
+
+  def record(self, o) -> dict:
+    o.publish_status()
+    return gadget.owner_status()
+
+  def test_it_is_written_before_the_first_step(self):
+    # the first step builds the gadget, which can take a while
+    o = self.owner()
+    seen = []
+
+    def step():
+      seen.append(gadget.owner_status())
+      o.stop = True
+    with mock.patch.object(owner, 'POLL', 0.0), mock.patch.object(o, 'step', side_effect=step):
+      o.run()
+    self.assertEqual(seen[0]['pid'], os.getpid())
+    self.assertTrue(gadget.owner_alive(seen[0]))
+
+  def test_it_holds_what_the_readers_need(self):
+    o = self.owner()
+    o.step()
+    r = self.record(o)
+    self.assertEqual({k: r[k] for k in ('mode', 'link', 'peer', 'error', 'dormant', 'udc', 'speed', 'present', 'worker')},
+                     {'mode': 'usb', 'link': 'usb', 'peer': None, 'error': None, 'dormant': False, 'udc': 'configured',
+                      'speed': 'super-speed', 'present': True, 'worker': False})
+    # a whole record replaced, never a half written one beside it
+    self.assertEqual(os.listdir(gadget.STATUS.parent), ['status.json'])
+
+  def test_a_step_is_followed_by_a_record(self):
+    o = self.owner()
+    stamps = []
+
+    def step():
+      stamps.append(o.published)
+      if len(stamps) == 2:
+        o.stop = True
+    with mock.patch.object(owner, 'POLL', 0.0), mock.patch.object(o, 'step', side_effect=step):
+      o.run()
+    self.assertLess(stamps[0], stamps[1], 'no record between the two steps')
+
+  def test_a_clean_stop_leaves_none(self):
+    # only an owner that died leaves a heartbeat behind to go stale
+    o = self.owner()
+    self.record(o)
+    o.stop = True
+    o.run()
+    self.assertIsNone(gadget.owner_status())
+    self.assertFalse(gadget.STATUS.exists())
+
+  def test_presence_and_its_hold_are_worked_out_here(self):
+    o = self.owner()
+    self.assertTrue(self.record(o)['present'])
+    gadget.udc_state.return_value = 'addressed'   # a USB3 link recovery passes through it
+    self.assertTrue(self.record(o)['present'])
+    self.assertIsNone(self.record(o)['speed'])
+    o.last_configured -= gadget.PRESENCE_HOLD
+    self.assertFalse(self.record(o)['present'])
+
+  def test_a_sleeping_host_is_present_while_the_cable_says_so(self):
+    o = self.owner(presented=False)
+    o.dormant = True
+    gadget.udc_state.return_value = None
+    gadget.CC_ORIENTATION.write_text('1')
+    r = self.record(o)
+    self.assertEqual((r['present'], r['dormant']), (True, True))
+    gadget.CC_ORIENTATION.write_text('0')
+    self.assertFalse(self.record(o)['present'])
+
+  def test_the_gadgets_files_are_folded_in(self):
+    o = self.owner()
+    o.built_ios, o._peer = True, '192.168.60.3'
+    gadget.GADGET_STATUS.write_text('error: no configfs here\n')
+    o.worker = mock.Mock(**{'poll.return_value': None})
+    r = self.record(o)
+    self.assertEqual((r['error'], r['net'], r['link'], r['peer'], r['worker']),
+                     ('no configfs here', 'ok 192.168.60.1', 'cable', '192.168.60.3', True))
+    gadget.GADGET_STATUS.unlink()
+    gadget.note_lender_error('address in use')
+    self.assertEqual(self.record(o)['error'], 'the lender could not listen: address in use')
+
+  def test_a_wait_inside_a_step_keeps_the_heartbeat(self):
+    o = self.owner()
+    o.published = time.monotonic() - owner.POLL
+    with mock.patch.object(o, 'publish_status') as publish:
+      self.assertFalse(o.waiting())
+      o.stop = True
+      o.published = time.monotonic()
+      self.assertTrue(o.waiting())
+    publish.assert_called_once()   # at most once a POLL
+
+  def test_settling_waits_with_the_heartbeat(self):
+    o = self.owner(lendable=False)
+    o.transport.release_endpoints.return_value = True
+    o.settle()
+    self.assertEqual(gadget.wait_for_host.call_args.kwargs['should_stop'], o.waiting)
+
+  def test_stopping_a_slow_run_keeps_the_heartbeat(self):
+    o = self.owner()
+    worker = o.worker = mock.Mock()
+    worker.wait.side_effect = [subprocess.TimeoutExpired('run', owner.POLL)] * 2 + [0]
+    with mock.patch.object(o, 'beat') as beat:
+      o.stop_worker()
+    self.assertEqual(beat.call_count, 2)
+    worker.kill.assert_not_called()
+    self.assertIsNone(o.worker)
+
+  def test_a_run_that_outlasts_the_grace_is_killed(self):
+    o = self.owner()
+    worker = o.worker = mock.Mock()
+    worker.wait.side_effect = subprocess.TimeoutExpired('run', owner.POLL)
+    with mock.patch.object(owner, 'WORKER_GRACE', 0.0):
+      o.stop_worker()
+    worker.kill.assert_called_once()
+
+  def test_a_record_that_cannot_be_written_is_said_once(self):
+    o = self.owner()
+    with mock.patch.object(gadget, 'write_record', side_effect=OSError(28, 'No space left on device')), \
+         mock.patch.object(gadget, 'log') as log:
+      for _ in range(3):
+        o.publish_status()
+    self.assertEqual(log.error.call_count, 1)
+    self.assertEqual(o.published, 0.0)
+    o.publish_status()
+    self.assertIsNone(o.status_error)
+    self.assertGreater(o.published, 0.0)
 
 
 class TestSetup(OwnerTest):

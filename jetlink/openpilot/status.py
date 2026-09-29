@@ -88,15 +88,28 @@ class Progress:
 
 
 # -- what is on the other end -------------------------------------------------
+# The owner (jetlink.comma.owner) writes all of this into its status record
+# every step, presence and its hold included, so every reader agrees with it
+# and with each other. Without a live record (no owner since boot, one that
+# stopped cleanly, or one too old to write it) each reader reads the gadget's
+# files itself, as below.
 
-# jetlinkd, the owner, holds the gadget for as long as the link is enabled, so
-# presence no longer blinks at every handover. What is left to bridge is a USB3
-# link recovery passing through "addressed", and a bounce made on purpose when
-# a host will not enumerate (gadget.wait_for_host)
-PRESENCE_HOLD = 5.0
+# the offroad alert for a link that is on while nobody holds the gadget: the
+# owner's heartbeat stopped. manager starts it again, and its crash-loop
+# backoff says so in its record's error while it waits
+STOPPED = "accelerator service stopped"
+
+
+def owner_record() -> tuple[dict | None, dict | None]:
+  """The owner's status record, and the same record if it is live, else None."""
+  record = gadget.owner_status()
+  return record, (record if record is not None and gadget.owner_alive(record) else None)
 
 
 class Presence:
+  """Presence as a reader works it out from the files, for when the owner's
+  record is not there to say."""
+
   def __init__(self):
     self._last_configured = 0.0
 
@@ -110,16 +123,20 @@ class Presence:
     if gadget.host_attached():
       self._last_configured = now
       return True
-    return now - self._last_configured < PRESENCE_HOLD
+    return now - self._last_configured < gadget.PRESENCE_HOLD
 
 
-def link_transport(mode: str | None = None) -> str:
+def link_transport(mode: str | None = None, live: dict | None = None) -> str:
   """What carries the link, for the panels: a host on the vendor interface,
-  or an iPhone dialed in over the network one; `mode` stands in until the
-  owner has said. Never raises."""
+  or an iPhone dialed in over the network one. `live` is the owner's record;
+  without it, `mode` stands in until the owner has said. Never raises."""
   try:
-    if gadget.link_kind(mode) == 'cable':
-      peer = gadget.link_peer()
+    if live is not None and live.get('link') in ('usb', 'cable'):
+      kind, peer = live['link'], live.get('peer')
+    else:
+      kind = gadget.link_kind(mode)
+      peer = gadget.link_peer() if kind == 'cable' else None
+    if kind == 'cable':
       return f"iOS over USB ({peer})" if peer else "iOS over USB"
   except Exception:
     pass
@@ -142,11 +159,18 @@ def usb_port() -> str | None:
 NO_WARP = "no warp built for this camera"
 
 
-def unavailable(parts) -> str | None:
-  """Why an enabled link cannot run the large model, or None: files only."""
-  error = gadget.gadget_error()
-  if error is not None:
-    return error
+def unavailable(parts, record: dict | None) -> str | None:
+  """Why an enabled link cannot run the large model, or None: files only.
+  `record` is the owner's status record: its error when it is live, STOPPED
+  when its heartbeat is not, and the gadget's own files without one."""
+  if record is None:
+    error = gadget.gadget_error()
+  elif not gadget.owner_alive(record):
+    return STOPPED
+  else:
+    error = record.get('error')
+  if error:
+    return str(error)
   return None if parts.warps.built() else NO_WARP
 
 
@@ -160,7 +184,7 @@ def _built_for_the_pick(parts) -> bool:
 def reason(parts, mode: str) -> str | None:
   """Why the link cannot run, for someone who asked for it only: with it off,
   a device that cannot present the gadget simply does not offer the feature."""
-  return unavailable(parts) if parts.enabled(mode) else None
+  return unavailable(parts, gadget.owner_status()) if parts.enabled(mode) else None
 
 
 # -- the snapshot ----------------------------------------------------------------
@@ -219,13 +243,14 @@ class Status(NamedTuple):
 
 def read(parts, mode: str) -> Status:
   """Everything at once, over the link setting the caller read: each file once."""
+  record, live = owner_record()
   enabled = parts.enabled(mode)
-  reason = unavailable(parts) if enabled else None
+  reason = unavailable(parts, record) if enabled else None
   return Status(
     enabled=enabled,
     mode=mode,
-    transport=link_transport(mode),
-    present=parts.presence.present(),
+    transport=link_transport(mode, live),
+    present=bool(live.get('present')) if live is not None else parts.presence.present(),
     port=usb_port(),
     ready=enabled and reason is None and _built_for_the_pick(parts),
     reason=reason,

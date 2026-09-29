@@ -9,6 +9,7 @@ is on the other end, the progress the panels show, and which icon that is.
 Every answer follows from the setting, the pick, the spec record, the gadget's
 files and whether the build made a warp for this camera; no link IO.
 """
+import time
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -206,7 +207,7 @@ class TestPresence(OpenpilotTest):
       assert self.parts.presence.present()
     with mock.patch.object(gadget, 'host_attached', return_value=False):
       assert self.parts.presence.present()
-      with mock.patch.object(status.time, 'monotonic', return_value=status.time.monotonic() + status.PRESENCE_HOLD):
+      with mock.patch.object(status.time, 'monotonic', return_value=status.time.monotonic() + gadget.PRESENCE_HOLD):
         assert not self.parts.presence.present()
 
   def test_the_port_is_the_cc_pin(self):
@@ -216,6 +217,97 @@ class TestPresence(OpenpilotTest):
     for raw in ('1', '2'):
       self.cc.write_text(raw)
       self.assertEqual(status.usb_port(), 'host')
+
+
+class TestTheOwnersRecord(OpenpilotTest):
+  """With a live owner the readers take its record, and read none of the
+  gadget's files: the UI and hardwared then agree with it, and with each
+  other. Its heartbeat going stale is the offroad alert."""
+
+  def setUp(self):
+    super().setUp()
+    self.op.set_mode('usb')
+    self.patch(self.parts.warps, 'built', return_value=True)
+
+  def record(self, age: float = 0.0, **fields) -> None:
+    gadget.write_record(gadget.STATUS, {'pid': 1, 'at': time.monotonic() - age, 'mode': 'usb', 'link': 'usb',
+                                        'peer': None, 'error': None, 'net': None, 'dormant': False, 'udc': 'configured',
+                                        'speed': 'super-speed', 'present': True, 'worker': False, **fields})
+
+  def files_left_alone(self) -> None:
+    for name in ('gadget_error', 'host_attached', 'dormant', 'link_kind', 'link_peer'):
+      self.patch(gadget, name, side_effect=AssertionError(f'{name}() read with a live record'))
+
+  def test_a_live_record_is_the_answer(self):
+    self.record(link='cable', peer='192.168.60.3')
+    self.files_left_alone()
+    s = self.jl.status()
+    self.assertEqual((s.present, s.transport, s.reason), (True, 'iOS over USB (192.168.60.3)', None))
+    self.assertIsNone(self.jl.reason())
+    self.record(present=False, link='usb')
+    s = self.jl.status()
+    self.assertEqual((s.present, s.transport), (False, 'USB'))
+
+  def test_its_error_is_the_reason(self):
+    self.record(error='the lender could not listen: address in use')
+    self.files_left_alone()
+    self.assertEqual(self.jl.reason(), 'the lender could not listen: address in use')
+    self.assertEqual(self.jl.status().reason, 'the lender could not listen: address in use')
+
+  def test_a_heartbeat_older_than_the_timeout_is_a_stopped_service(self):
+    self.record(age=gadget.HEARTBEAT_TIMEOUT - 1.0)
+    self.assertIsNone(self.jl.reason())
+    self.record(age=gadget.HEARTBEAT_TIMEOUT + 0.1)
+    self.assertEqual(self.jl.reason(), status.STOPPED)
+    s = self.jl.status()
+    self.assertEqual(s.reason, status.STOPPED)
+    self.assertFalse(s.ready)
+    self.record()   # manager started it again
+    self.assertIsNone(self.jl.reason())
+
+  def test_a_stopped_service_nags_only_someone_who_turned_the_link_on(self):
+    self.record(age=60.0)
+    self.op.set_mode('off')
+    self.assertIsNone(self.jl.reason())
+    self.assertIsNone(self.jl.status().reason)
+    self.op.chestnut = True
+    self.parts._chestnut = None
+    self.op.set_mode('usb')
+    self.assertIsNone(self.jl.reason())
+
+  def test_with_a_stale_record_the_rest_is_read_from_the_files(self):
+    self.record(age=60.0, present=True, link='cable', peer='192.168.60.3')
+    with mock.patch.object(gadget, 'host_attached', return_value=False), \
+         mock.patch.object(gadget, 'dormant', return_value=False):
+      s = self.jl.status()
+    self.assertEqual((s.present, s.transport, s.reason), (False, 'USB', status.STOPPED))
+
+  def test_without_one_it_is_the_files_as_before(self):
+    # an owner too old to write it, or none since boot
+    with mock.patch.object(gadget, 'gadget_error', return_value='no gadget'):
+      self.assertEqual(self.jl.reason(), 'no gadget')
+    self.assertIsNone(self.jl.reason())
+
+  def test_a_record_that_is_not_one_is_none(self):
+    gadget.STATUS.parent.mkdir(parents=True, exist_ok=True)
+    for text in ('', 'not json', '[1, 2]'):
+      gadget.STATUS.write_text(text)
+      self.assertIsNone(gadget.owner_status(), text)
+    self.assertFalse(gadget.owner_alive({'at': 'yesterday'}))
+    self.assertFalse(gadget.owner_alive({}))
+
+  def test_what_an_owner_writes_is_what_the_readers_read(self):
+    from jetlink.comma.owner import Owner
+    o = Owner((), settings=self.parts.settings, chestnut_ids=())
+    self.addCleanup(o.cable.close)
+    o.mode, o.built_ios, o._peer = 'ios', True, '192.168.60.3'
+    self.op.set_mode('ios')
+    with mock.patch.object(gadget, 'udc_state', return_value='configured'), \
+         mock.patch.object(gadget, 'usb_speed', return_value='high-speed'):
+      o.publish_status()
+    self.files_left_alone()
+    s = self.jl.status()
+    self.assertEqual((s.present, s.transport, s.reason), (True, 'iOS over USB (192.168.60.3)', None))
 
 
 class TestTransport(OpenpilotTest):
