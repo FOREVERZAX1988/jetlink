@@ -179,9 +179,13 @@
   /// returns.
   func stopOnSignals(_ stop: @escaping @Sendable (String) -> Void) -> Never {
     let sources = stopSignals.map { number, name in
-      // Handled by the source alone; a shell that starts this in the
-      // background hands it SIGINT ignored, which the source still hears.
-      signal(number, SIG_IGN)
+      #if os(macOS)
+        // Handled by the source alone; a shell that starts this in the
+        // background hands it SIGINT ignored, which the source still hears.
+        signal(number, SIG_IGN)
+      #endif
+      // Not on Linux, where the signals are held: ignoring one drops it if
+      // it is already pending, a SIGTERM that came during start-up.
       let source = DispatchSource.makeSignalSource(signal: number, queue: .main)
       source.setEventHandler {
         stop(name)
