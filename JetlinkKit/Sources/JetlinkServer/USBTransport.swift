@@ -4,7 +4,7 @@ import JetlinkKit
 /// The two bulk endpoints of the comma's vendor interface: IOUSBHost on a Mac,
 /// usbfs on Linux and Android, a fake in the tests. Both calls block.
 protocol BulkPipes: AnyObject, Sendable {
-  /// Reads up to `count` bytes, a whole number of packets, into `buffer`, and
+  /// Reads up to `count` bytes of the stream into `buffer` (`ReadRing`), and
   /// returns how many arrived. A timeout is not an error: whatever did arrive
   /// is returned, or kept for the next read, because dropping it desyncs the
   /// stream. A `timeout` of 0 waits until data comes or the link goes. Throws
@@ -20,28 +20,34 @@ protocol BulkPipes: AnyObject, Sendable {
 }
 
 /// Where the server finds the comma's gadget: IOKit on a Mac, a descriptor
-/// the Android app hands over (UsbfsGadget), a fake in the tests.
+/// the Android app hands over (UsbfsGadget), sysfs on Linux, a fake in the
+/// tests.
 public protocol GadgetSource: Sendable {
   /// Is the gadget on the bus? Cheap enough to poll twice a second.
   func present() -> Bool
   /// Opens the link interface's bulk pair.
   func open() throws -> any MessageLink
+  /// A comma connected, over any link, and that session ended: what the
+  /// server says as `.connected` and `.disconnected`, on the session's thread.
+  func sessionStarted()
+  func sessionEnded()
+  /// The server is shutting down.
+  func close()
+}
+
+extension GadgetSource {
+  public func sessionStarted() {}
+  public func sessionEnded() {}
+  public func close() {}
 }
 
 /// Framing over USB bulk transfers, the host's end: the Swift form of
 /// `UsbBulkTransport` on `StreamTransport`, with the rules the bench taught.
 ///
-/// - The gadget pads every message to `Wire.gadgetTxAlign` (16 KB), so the
-///   pipes keep 16 KB reads posted ahead of this end (`ReadRing`): each ends
-///   at a message's end or inside it, never past it, and a message streams
-///   in without the host asking for it piece by piece. A read left
-///   outstanding past a message's end desynced about once in 400 frames.
-/// - This end takes no more from the pipes than the rest of the current
-///   message, in whole packets (a bulk IN whose buffer is not a packet
-///   multiple can overflow; pipes that post only what is asked, after a short
-///   packet, post that) and at most `readChunk` at a time, with a packet of
-///   slack past the message so a grown buffer never ends with room for zero
-///   packets.
+/// - The gadget pads every message to `Wire.gadgetTxAlign` (16 KB), and the
+///   pipes keep 16 KB reads posted ahead of this end (`ReadRing` says why
+///   that is safe), so a message streams in without the host asking for it
+///   piece by piece.
 /// - What this end sends keeps the one-byte PADDED rule, and goes out as one
 ///   transfer: libusb and IOUSBHost have no vectored bulk write, and several
 ///   writes let the host scheduler interleave them.
@@ -56,9 +62,6 @@ public protocol GadgetSource: Sendable {
 /// Every message lands at the start of the receive buffer, so the float32
 /// arrays inside an INFER stay aligned, and the steady state allocates nothing.
 final class USBTransport: MessageLink, @unchecked Sendable {
-  static let packetSize = Pinned.usbMaxPacket
-  static let readChunk = Pinned.usbReadChunk
-  static let readSlack = packetSize
   static let writeTimeout: TimeInterval = 2
 
   let peer: String
@@ -70,36 +73,30 @@ final class USBTransport: MessageLink, @unchecked Sendable {
   static let drainTimeout: TimeInterval = 5.0
   private var interrupted = false
   private let pipes: any BulkPipes
-  private let reader = FrameReader(capacity: 2 << 20, slack: USBTransport.readSlack)
+  private let buffers: LinkBuffers
+  private var reader: FrameReader { buffers.reader }
   var desynced: Bool { reader.desynced }
-  private let sendLock = NSLock()
-  private var tx: UnsafeMutableRawPointer
-  private var txCapacity: Int
+  private var sendLock: NSLock { buffers.sendLock }
 
-  init(pipes: any BulkPipes, peer: String = "usb", medium: LinkMedium? = .usb) {
+  /// `buffers` may be the last session's on the same device, one session at
+  /// a time.
+  init(pipes: any BulkPipes, peer: String = "usb", medium: LinkMedium? = .usb, buffers: LinkBuffers = LinkBuffers()) {
     self.pipes = pipes
     self.peer = peer
     self.medium = medium
-    txCapacity = 1 << 20
-    tx = UnsafeMutableRawPointer.allocate(byteCount: txCapacity, alignment: 64)
+    self.buffers = buffers
+    buffers.reader.reset()
   }
 
   deinit {
     pipes.close()
-    tx.deallocate()
   }
 
   // MARK: receiving
 
   func recv() throws -> Message {
-    try reader.recv(pad: { USBTransport.gadgetPad(Wire.headerSize + Int($0.length)) }) { into, missing, room in
-      let size = USBTransport.readSize(missing: missing, room: room)
-      if size == 0 {
-        // Every read would return nothing and the loop would spin while the
-        // comma blocks. Say so rather than hang.
-        throw LinkError.closed("no room to read the rest of a message (\(missing) bytes to come)")
-      }
-      return try pipes.read(into: into, count: size, timeout: 0)
+    try reader.recv(pad: { USBTransport.gadgetPad(Wire.headerSize + Int($0.length)) }) { into, missing in
+      try pipes.read(into: into, count: missing, timeout: 0)
     }
   }
 
@@ -108,23 +105,17 @@ final class USBTransport: MessageLink, @unchecked Sendable {
     (Wire.gadgetTxAlign - body % Wire.gadgetTxAlign) % Wire.gadgetTxAlign
   }
 
-  /// The bytes to ask for when `missing` of the current message are still to
-  /// come: whole packets, capped by the room left and by `readChunk`.
-  static func readSize(missing: Int, room: Int) -> Int {
-    let wanted = (missing + packetSize - 1) / packetSize * packetSize
-    return min(wanted, room, readChunk) / packetSize * packetSize
-  }
-
   /// After a desync, reads and drops what the comma is still sending until it
   /// goes quiet for `timeout` or the link drops. Reopening instead would
   /// drain a packet per session, and the comma's frame timeout would never
   /// fire. The Python server waits 5 s, longer than the client's own timeout.
   func drain(_ timeout: TimeInterval) {
-    let scratch = UnsafeMutableRawPointer.allocate(byteCount: USBTransport.readChunk, alignment: 64)
+    let size = ReadRing.depth * ReadRing.slotSize
+    let scratch = UnsafeMutableRawPointer.allocate(byteCount: size, alignment: 64)
     defer { scratch.deallocate() }
     var last = ProcessInfo.processInfo.systemUptime
     while ProcessInfo.processInfo.systemUptime - last < timeout {
-      guard let n = try? pipes.read(into: scratch, count: USBTransport.readChunk, timeout: timeout) else { return }
+      guard let n = try? pipes.read(into: scratch, count: size, timeout: timeout) else { return }
       if n > 0 {
         last = ProcessInfo.processInfo.systemUptime
       }
@@ -144,11 +135,7 @@ final class USBTransport: MessageLink, @unchecked Sendable {
       flags.insert(.padded)
     }
     let total = Wire.headerSize + length + (padded ? 1 : 0)
-    if total > txCapacity {
-      tx.deallocate()
-      txCapacity = max(total, txCapacity * 2)
-      tx = UnsafeMutableRawPointer.allocate(byteCount: txCapacity, alignment: 64)
-    }
+    let tx = buffers.tx(total)
     Wire.packHeader(Wire.Header(msgType: type.rawValue, seq: seq, flags: flags.rawValue, length: UInt32(length)), into: tx)
     var offset = Wire.headerSize
     for part in parts where part.count > 0 {
@@ -182,5 +169,31 @@ final class USBTransport: MessageLink, @unchecked Sendable {
       drain(USBTransport.drainTimeout)
     }
     pipes.close()
+  }
+}
+
+/// A USB link's receive and send buffers, kept by a device across its
+/// sessions (`UsbfsGadget`), so a reopen neither allocates them nor faults
+/// them in again.
+final class LinkBuffers: @unchecked Sendable {
+  let reader = FrameReader(capacity: 2 << 20)
+  /// A build's progress can still be going out through the last session's
+  /// transport, so sends share the lock with the buffer.
+  let sendLock = NSLock()
+  private var send = UnsafeMutableRawPointer.allocate(byteCount: 1 << 20, alignment: 64)
+  private var sendCapacity = 1 << 20
+
+  deinit {
+    send.deallocate()
+  }
+
+  /// The send buffer, grown to `bytes` when it is smaller.
+  func tx(_ bytes: Int) -> UnsafeMutableRawPointer {
+    if bytes > sendCapacity {
+      send.deallocate()
+      sendCapacity = max(bytes, sendCapacity * 2)
+      send = UnsafeMutableRawPointer.allocate(byteCount: sendCapacity, alignment: 64)
+    }
+    return send
   }
 }

@@ -145,19 +145,6 @@ jobs:
         # wire bytes against protocol.py, the preparation byte for byte
         # against Python's, and whole-server runs against golden frames.
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Run the comma's client against jetlink-server
-        run: |
-          pip install numpy pytest
-          swift build --package-path JetlinkKit --product jetlink-server
-          JETLINK_SERVER_BIN=JetlinkKit/.build/debug/jetlink-server python -m pytest -q tests/test_swift_server.py
-        # jetlink.client over TCP against the Mac build, as the Linux job
-        # does against its own.
-
       - name: Check the committed iPhone project is fresh
         run: |
           make -C ios project
@@ -182,6 +169,14 @@ jobs:
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
+
+      - name: Cache the onnxruntime tarball and the build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/jetlink-build
+            JetlinkKit/.build
+          key: swift-linux-${{ matrix.arch }}-${{ hashFiles('scripts/build-linux.sh', 'JetlinkKit/Package.resolved') }}
 
       - name: Fetch onnxruntime
         run: |

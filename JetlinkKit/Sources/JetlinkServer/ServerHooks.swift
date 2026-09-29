@@ -3,52 +3,35 @@ import Foundation
 /// What the USB loop and the sessions tell a host that suspends while the
 /// comma is gone: the Python serve loop's `touch` and `idle` calls.
 public enum GadgetIdleEvent: Sendable, Equatable {
-  /// The gadget is on the bus, whether or not it opens. A comma whose gadget
-  /// cannot be opened yet is still there, and the box must not sleep under it.
+  /// On the bus, whether or not it opens: the box must not sleep under it.
   case present
-  /// No gadget on the bus and no comma being served, over any link: the only
-  /// time the host may go to sleep.
+  /// No gadget and no comma served over any link: the only time to sleep.
   case absent
-  /// A comma connected, over any link.
-  case connected
-  /// That connection ended.
-  case disconnected
+  /// A comma connected over any link, and that connection ended.
+  case connected, disconnected
 }
 
 /// What the host running the server supplies besides the backend and the
-/// gadget. Every hook defaults to what the apps do today, so they pass none;
-/// the Linux daemon fills them in.
+/// gadget. The defaults are what the apps want; the Linux daemon fills them in.
 public struct ServerHooks: Sendable {
-  /// The telemetry piggybacked on a frame that asks for it (WANT_STATE), in
-  /// the hello and in STATE_RESP. Called on the session thread right after a
-  /// reply is due, so it returns a cached reading and never blocks; `{}` when
-  /// the host has no sensors, never zeros.
+  /// The host's sensors for WANT_STATE, the hello and STATE_RESP, `{}` with
+  /// none, never zeros. Read on a thread of the server's own, so it may block.
   public var telemetry: @Sendable () -> [String: Any]
-  /// The device's thermal state for the benchmark's reports: "nominal",
-  /// "fair", "serious" or "critical". The platform's own unless the host
-  /// knows better (Android's PowerManager).
+  /// "nominal", "fair", "serious" or "critical", for the benchmark's reports.
   public var thermal: @Sendable () -> String
-  /// HELLO_RESP's `sleep_after`: the seconds with no gadget after which this
-  /// host suspends. 0 says it never does, and the comma then holds the gadget
-  /// for the whole park. Only a host that really sleeps may say more.
+  /// HELLO_RESP's `sleep_after`, the seconds without a gadget before this host
+  /// suspends; 0, it never does, and the comma holds the gadget all park.
   public var sleepAfter: Double
-  /// Hears the gadget's presence on every USB poll and every connection's
-  /// start and end. After `.absent` it may suspend the host, returning once
-  /// the host is awake again; it returns true when it slept, and the loop
-  /// then looks for the gadget at once, since whatever woke the box is
-  /// likely the comma. The return value means nothing for the other events.
+  /// Hears every USB poll's presence and every connection's start and end.
+  /// After `.absent` it may suspend, returning true once awake, and the loop
+  /// then looks for the gadget at once: whatever woke the box is likely the comma.
   public var gadgetIdle: (@Sendable (GadgetIdleEvent) -> Bool)?
-  /// A SHUTDOWN_REQ, with the comma's reason. nil, the default, refuses: the
-  /// reply says ok:false and the apps hear `.shutdownRequested`, as a phone
-  /// or a Mac does not power itself off for the comma. The hook refuses too
-  /// by returning nil, or accepts by returning what to do: the reply says
-  /// `{ok: true, detail: "powering off"}`, and the action runs only once the
-  /// reply is written, so the comma has its answer before the host goes down.
+  /// A SHUTDOWN_REQ and its reason. nil, or a hook returning nil, refuses:
+  /// ok:false, and the apps hear `.shutdownRequested`. A hook accepts by
+  /// returning the power-off, which runs once the ok:true reply is written.
   public var shutdown: (@Sendable (_ reason: String) -> (@Sendable () -> Void)?)?
-  /// Called on the session thread after a frame was answered INFER_FAILED
-  /// for an error the backend marks fatal (`FatalEngineError`). The daemon
-  /// exits with status 3 and systemd starts it again; an app does nothing,
-  /// and the next frame fails the same way.
+  /// After a frame answered INFER_FAILED for an error the backend marks fatal
+  /// (`FatalEngineError`): the daemon exits 3 and systemd restarts it.
   public var fatal: (@Sendable (any Error) -> Void)?
 
   public init(

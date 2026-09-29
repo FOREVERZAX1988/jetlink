@@ -21,3 +21,44 @@ final class Latch: @unchecked Sendable {
     condition.unlock()
   }
 }
+
+/// A value behind a lock that escaping closures can share, which Mutex,
+/// being noncopyable, cannot be.
+package final class Locked<Value>: @unchecked Sendable {
+  private let lock = NSLock()
+  private var stored: Value
+
+  package init(_ value: Value) {
+    stored = value
+  }
+
+  package func withLock<R>(_ body: (inout Value) throws -> R) rethrows -> R {
+    lock.lock()
+    defer { lock.unlock() }
+    return try body(&stored)
+  }
+
+  package var value: Value {
+    get { withLock { $0 } }
+    set { withLock { $0 = newValue } }
+  }
+}
+
+/// Waits on the calling thread for async work, for a synchronous caller: a
+/// command run on the main thread, a JNI call from a Kotlin worker.
+package func blocking<T: Sendable>(_ work: @escaping @Sendable () async throws -> T) throws -> T {
+  let result = Locked<Result<T, any Error>?>(nil)
+  let done = DispatchSemaphore(value: 0)
+  Task.detached {
+    let outcome: Result<T, any Error>
+    do {
+      outcome = .success(try await work())
+    } catch {
+      outcome = .failure(error)
+    }
+    result.withLock { $0 = outcome }
+    done.signal()
+  }
+  done.wait()
+  return try result.withLock { $0! }.get()
+}

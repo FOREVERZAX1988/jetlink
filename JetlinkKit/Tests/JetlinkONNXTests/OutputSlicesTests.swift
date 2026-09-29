@@ -28,7 +28,16 @@ import Testing
       ("desire_state", 2054, 2062), ("action", 2062, 2066), ("hidden_state", 2066, 18450), ("pad", 18450, 18452),
     ]
     #expect(slices == expected.map { OutputSlice(name: $0.0, start: $0.1, stop: $0.2) })
-    #expect(slices.last?.range == 18450..<18452)
+  }
+
+  /// Lebowski's pad is `slice(-2, None)`: `pickle.dumps({'hidden_state':
+  /// slice(2066, 18450), 'pad': slice(-2, None)}, protocol=4)`. And
+  /// `slice(7)`, through TUPLE1, has no start.
+  @Test func openAndNegativeEnds() throws {
+    let slices = try OutputSlices.decode(
+      base64: "gASVRwAAAAAAAAB9lCiMDGhpZGRlbl9zdGF0ZZSMCGJ1aWx0aW5zlIwFc2xpY2WUk5RNEghNEkhOh5RSlIwDcGFklGgESv7///9OToeUUpR1Lg==")
+    #expect(slices == [OutputSlice(name: "hidden_state", start: 2066, stop: 18450), OutputSlice(name: "pad", start: -2, stop: nil)])
+    #expect(try OutputSlices.decode(base64: "gAJ9WAEAAABiY19fYnVpbHRpbl9fCnNsaWNlCksHhVJzLg==") == [OutputSlice(name: "b", start: nil, stop: 7)])
   }
 
   /// `pickle.dumps({'lane_lines': slice(0, 528), 'wide': slice(200, 70000),
@@ -95,8 +104,6 @@ import Testing
       "gASVRQAAAAAAAACMC2NvbGxlY3Rpb25zlIwLT3JkZXJlZERpY3SUk5QpUpSMAWGUjAhidWlsdGluc5SMBXNsaWNllJOUSwBLAU6HlFKUcy4=",
       "unsupported opcode 0x29 (')')"
     ),
-    // {'b': slice(7)}, through TUPLE1: no start
-    ("gAJ9WAEAAABiY19fYnVpbHRpbl9fCnNsaWNlCksHhVJzLg==", "output_slices entry b is not slice(int, int)"),
     ("!!!", "output_slices is not valid base64"),
     // valid base64 of a pickle cut short
     ("gASVdwAAAAAAAAB9lCiMCmxhbmVf", "output_slices pickle: truncated"),

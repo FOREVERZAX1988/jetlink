@@ -14,11 +14,9 @@ struct ModelRowBuilderTests {
   private static let orphanSha = "6b5c2d7a30061c5d9f7ba3bc8e4f90213dac7f6e5a8b1c4d3e2f90617283a4b5"
 
   private func catalogEvent() throws -> CatalogEvent {
-    let data = try Fixture.data("catalog_event.json")
-    guard case .catalog(let catalog) = try ControlEvent(jsonLine: data) else {
-      throw CocoaError(.fileReadCorruptFile)
-    }
-    return catalog
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    return try decoder.decode(CatalogEvent.self, from: Fixture.data("catalog_event.json"))
   }
 
   private func artifact(sha: String, backend: String = "ort", device: String = "coreml-Apple_M1_Pro", current: Bool) -> InventoryArtifact {

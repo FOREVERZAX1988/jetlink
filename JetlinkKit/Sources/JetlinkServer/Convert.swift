@@ -5,22 +5,14 @@
 /// The frame path's bulk conversions, and its finite check.
 ///
 /// A frame converts about 800,000 camera bytes to float16 and 35,000 floats
-/// each way. As element loops these cost 0.2 ms in an optimized build and
-/// over 40 ms in an unoptimized one: an iPhone 17 Pro running the app as
-/// Xcode's Run builds it, Debug, measured 65 ms a frame around a 21 ms model.
-/// So on Apple platforms vImage does them, vectorized whatever the build.
-/// Elsewhere (a Jetson, an Android phone, a Linux PC) they are loops a
-/// release build vectorizes: bytes through a float32 multiply that lands the
-/// float16's bits in place, floats through arm64's own half-precision
-/// conversions, or on x86_64, whose baseline has no F16C, through the same
-/// rounding in integer arithmetic. ConvertTests holds each of them to the
-/// Float16 element loop bit for bit, NaN, overflow and subnormals included,
-/// so the staged tensors keep matching the Python queues: numpy's casts,
-/// round to nearest even.
-///
-/// They are element loops rather than SIMD vectors because Swift's SIMD
-/// types convert, shift and select lane by lane: written with them, these
-/// measured 2 to 100 times slower than what the vectorizer makes of the loops.
+/// each way: 0.2 ms as element loops in an optimized build, over 40 ms in a
+/// Debug one (65 ms a frame on an iPhone 17 Pro run from Xcode). So on Apple
+/// platforms vImage does them, whatever the build; elsewhere they are loops a
+/// release build vectorizes (`NativeHalf`, `IntegerHalf`). ConvertTests holds
+/// each to the Float16 element loop bit for bit, NaN, overflow and subnormals
+/// included, so the staged tensors keep matching numpy's round to nearest
+/// even. Swift's SIMD types convert lane by lane, 2 to 100 times slower than
+/// what the vectorizer makes of the loops.
 enum Convert {
   /// uint8 to float16: 0...255 are all exact in float16.
   static func u8ToF16(_ source: UnsafeRawPointer, _ destination: UnsafeMutableRawPointer, count: Int) {

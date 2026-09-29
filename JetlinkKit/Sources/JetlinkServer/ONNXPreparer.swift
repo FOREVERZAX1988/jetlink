@@ -47,7 +47,7 @@ public struct ONNXPreparer: ModelPreparer {
       frameSkip: frameSkip,
       inputShapes: meta.inputs.map { NamedShape($0.name, $0.dims.map { Int($0) }) },
       outputShapes: meta.outputs.map { NamedShape($0.name, $0.dims.map { Int($0) }) },
-      outputSlices: try meta.outputSlices().map { NamedRange($0.name, $0.range) },
+      outputSlices: try meta.outputSlices().map { NamedSlice($0.name, start: $0.start, stop: $0.stop) },
       checkpoint: meta.modelCheckpoint)
   }
 

@@ -33,10 +33,8 @@ public final class ServerController: @unchecked Sendable {
   static let rateInterval: TimeInterval = 0.5
 
   public let server: Server
-  public let events: AsyncStream<ControlEvent>
 
   private let registry: any ModelRegistry
-  private let continuation: AsyncStream<ControlEvent>.Continuation
   private let log = ServerLog(category: "control")
   private let lock = NSLock()
   private var link: LinkEvent = .waiting
@@ -50,6 +48,8 @@ public final class ServerController: @unchecked Sendable {
   private let observersLock = NSLock()
   private var observers: [(id: Int, listener: @Sendable (ControlEvent) -> Void)] = []
   private var nextObserver = 0
+  private var stream: (events: AsyncStream<ControlEvent>, continuation: AsyncStream<ControlEvent>.Continuation)?
+  private var finished = false
 
   /// One download, queued or running, and the last event it published.
   final class Download: @unchecked Sendable {
@@ -75,17 +75,24 @@ public final class ServerController: @unchecked Sendable {
     }
   }
 
-  /// `streaming: false` for a host that never reads `events` and only
-  /// observes, as the daemon's status page does: the stream is finished at
-  /// once, so nothing piles up in it.
+  /// `streaming` is ignored, until the daemon stops passing it.
   public init(server: Server, registry: any ModelRegistry, streaming: Bool = true) {
     self.server = server
     self.registry = registry
-    (events, continuation) = AsyncStream.makeStream(bufferingPolicy: .unbounded)
-    if !streaming {
-      continuation.finish()
-    }
     server.host.subscribe { [weak self] event in self?.onHost(event) }
+  }
+
+  /// Every event published from the first time this is read, for one
+  /// reader, until `finish`. A host that only observes never makes it, so
+  /// nothing piles up.
+  public var events: AsyncStream<ControlEvent> {
+    observersLock.withLock {
+      if let stream { return stream.events }
+      let made = AsyncStream.makeStream(of: ControlEvent.self)
+      if finished { made.continuation.finish() }
+      stream = (made.stream, made.continuation)
+      return made.stream
+    }
   }
 
   /// Calls `listener` with every event published from now on, on the thread
@@ -138,14 +145,18 @@ public final class ServerController: @unchecked Sendable {
     for download in active.values { download.cancel = true }
     lock.unlock()
     publish(.server(serverEvent("stopping")))
-    continuation.finish()
+    observersLock.withLock {
+      finished = true
+      return stream
+    }?.continuation.finish()
   }
 
   // MARK: publishing
 
   private func publish(_ event: ControlEvent) {
-    continuation.yield(event)
-    for observer in observersLock.withLock({ observers }) {
+    let (continuation, listeners) = observersLock.withLock { (stream?.continuation, observers) }
+    continuation?.yield(event)
+    for observer in listeners {
       observer.listener(event)
     }
   }
@@ -512,7 +523,7 @@ public final class ServerController: @unchecked Sendable {
   private func runImport(_ url: URL) async {
     let path = url.path
     importEvent(path, "hashing")
-    let seen = LockedDouble(-1)
+    let seen = Locked(-1.0)
     do {
       let sha = try await registry.importModelFile(at: url, name: nil) { [weak self] frac in
         // hashing over the first half, copying over the second, as in Python
@@ -589,7 +600,7 @@ public final class ServerController: @unchecked Sendable {
     if FileManager.default.fileExists(atPath: modelPath.path) {
       return Files.size(of: modelPath)
     }
-    if let spec = (try? server.cache.entry(sha256).meta())?["spec"] as? [String: Any],
+    if let spec = Artifact.sidecar(try server.cache.entry(sha256).path)["spec"] as? [String: Any],
       let bytes = (spec["nbytes"] as? NSNumber)?.int64Value, bytes > 0
     {
       return bytes
@@ -612,20 +623,5 @@ public final class ServerController: @unchecked Sendable {
       server.cache.forgetLastLoaded()
     }
     publishInventory()
-  }
-}
-
-/// A Double one closure writes and reads from any thread.
-final class LockedDouble: @unchecked Sendable {
-  private let lock = NSLock()
-  private var stored: Double
-
-  init(_ value: Double) {
-    stored = value
-  }
-
-  var value: Double {
-    get { lock.lock(); defer { lock.unlock() }; return stored }
-    set { lock.lock(); stored = newValue; lock.unlock() }
   }
 }

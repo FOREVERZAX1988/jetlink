@@ -47,7 +47,7 @@ public final class ServerViewState {
     case .shutdownRequest(let value):
       shutdownRequest = value
       shutdownRequests += 1
-    case .inventory, .catalog, .download, .importEvent, .hello, .reply, .unknown:
+    case .inventory, .catalog, .download, .importEvent, .hello, .reply:
       return false
     }
     return true

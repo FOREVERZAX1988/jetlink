@@ -1,4 +1,5 @@
 import Foundation
+import JetlinkRegistry
 import Synchronization
 
 #if canImport(FoundationNetworking)
@@ -75,10 +76,7 @@ public final class MockNet: Sendable {
   /// A numbered JSON file with no route, "..._v27.json", is a 404, as
   /// GitHub answers for a catalog version not published yet.
   static func isNumberedJSON(_ url: String) -> Bool {
-    guard url.hasSuffix(".json") else { return false }
-    let stem = url.dropLast(".json".count)
-    let digits = stem.reversed().prefix { $0.isASCII && $0.isNumber }
-    return !digits.isEmpty && stem.dropLast(digits.count).hasSuffix("_v")
+    Catalog.version(of: url) != nil
   }
 }
 

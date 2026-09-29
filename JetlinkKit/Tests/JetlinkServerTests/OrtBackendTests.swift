@@ -1,44 +1,16 @@
 import Foundation
 import JetlinkKit
+import JetlinkTestSupport
 import Testing
 
 @testable import JetlinkORT
 @testable import JetlinkServer
 
-/// onnxruntime's backend: the build, artifact and load on the CPU profile,
-/// which runs anywhere and serves the golden frames; the other profiles'
-/// sessions, layouts and options, which need a Neural Engine or a Snapdragon
-/// to run, are only checked.
+/// onnxruntime's profiles: their sessions, layouts and options, which need a
+/// Neural Engine or a Snapdragon to run, are only checked. The CPU profile
+/// serves the golden frames in ServerTests.
 @Suite("onnxruntime backend", .serialized)
 struct OrtBackendTests {
-  @Test("A comma is served the Python server's outputs through the CPU profile", arguments: ["tiny_queued", "tiny_stateful"])
-  func servesGoldenFrames(_ name: String) throws {
-    let golden = try Golden(name)
-    let cache = try TemporaryDirectory()
-    let configuration = Server.Configuration(host: "127.0.0.1", port: 0, cacheRoot: cache.url, preload: false)
-    let server = try Server(configuration: configuration, backend: OrtBackend(profile: .cpu, preparer: ONNXPreparer(), keepAlive: false))
-    try server.start()
-    defer { server.stop() }
-    let client = try TestClient(port: server.port!)
-    defer { client.close() }
-    let (hello, count) = try client.replay(golden)
-    #expect(hello["backend"] as? String == "ort")
-    #expect((hello["device"] as? String)?.hasPrefix("cpu-") == true)
-    #expect(count == 8)
-
-    // The artifact: a manifest naming the session and its unit, and a sidecar.
-    let engines = cache.url.appending(path: "engines")
-    let artifacts = try FileManager.default.contentsOfDirectory(atPath: engines.path).filter { $0.hasSuffix(".ortcache") }
-    #expect(artifacts.count == 1)
-    let artifact = engines.appending(path: artifacts[0])
-    let manifest = try JSONSerialization.jsonObject(with: Data(contentsOf: artifact.appending(path: "sessions.json"))) as? [[String: Any]]
-    #expect(manifest?.map { $0["unit"] as? String } == ["cpu"])
-    let meta = Artifact.sidecar(artifact)
-    #expect(meta["prepare"] as? Int == OrtBackend.prepareVersion)
-    #expect(meta["preparer"] as? String == "swift")
-    #expect(((meta["artifact_bytes"] as? NSNumber)?.int64Value ?? 0) > 0)
-  }
-
   @Test("Each profile's sessions and layout")
   func profiles() {
     let table: [(OrtProfile, [String], [OrtUnit], String)] = [
@@ -109,10 +81,6 @@ struct OrtBackendTests {
     #expect(backend.deviceTag() == "htp-SM8650")
     #expect(backend.tag() == "ort\(sanitize(OrtRuntime.version)).htp-SM8650")
     #expect(OrtBackend(profile: .htp, preparer: ONNXPreparer(), chip: "").deviceTag() == "htp-unknown")
-    #if canImport(Metal)
-      #expect(OrtBackend(profile: .cpu, preparer: ONNXPreparer()).deviceTag() == sanitize("cpu-\(OrtBackend.chipName())"))
-    #else
-      #expect(OrtBackend(profile: .cpu, preparer: ONNXPreparer()).deviceTag() == "cpu-cpu")
-    #endif
+    #expect(OrtBackend(profile: .cpu, preparer: ONNXPreparer()).deviceTag() == sanitize("cpu-\(OrtBackend.defaultChip())"))
   }
 }

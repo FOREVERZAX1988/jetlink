@@ -1,6 +1,7 @@
 import Foundation
 import JetlinkKit
 import JetlinkONNX
+import JetlinkRegistry
 import JetlinkServer
 
 #if canImport(Metal)
@@ -106,15 +107,9 @@ enum OrtUnit: Equatable {
 }
 
 /// onnxruntime in process, on one of its profiles: the Swift form of the
-/// Python ort backend.
-///
-/// The artifact is a directory holding each session's model and a
-/// `sessions.json` manifest naming them (OrtArtifact). A CoreML session keeps
-/// CoreML's compiled model in a cache directory beside its prepared ONNX. An
-/// NPU session is compiled once, at build, into onnxruntime's EP context
-/// (`<name>_ctx.onnx` and the QNN context binary beside it), which then
-/// replaces its prepared ONNX, so a load does not finalize the graph again.
-/// A load needs nothing else on disk.
+/// Python ort backend. The artifact is a directory of the sessions' models
+/// and their manifest (OrtArtifact), CoreML's compiled models or QNN's EP
+/// context beside them.
 ///
 /// Nothing QNN has run on a Snapdragon yet: its options follow onnxruntime
 /// 1.29's QNN documentation and source.
@@ -128,8 +123,8 @@ public final class OrtBackend: EngineBackend {
   static let expectedCompileSeconds = 180.0
 
   public let name = "ort"
+  /// A directory: the prepared model and the compiled caches.
   public let suffix = ".ortcache"
-  public let artifactKind = ArtifactKind.directory
   public let profile: OrtProfile
   /// Keep the GPU clocked up between frames (Metal), or the NPU in burst
   /// mode rather than sustained (QNN).
@@ -152,32 +147,26 @@ public final class OrtBackend: EngineBackend {
     self.chip = chip.isEmpty ? "unknown" : chip
   }
 
+  /// The SoC's name on Apple platforms, which is the GPU: "Apple M1 Pro",
+  /// "Apple A17 Pro". On a Mac the CPU brand string, as the Python's gpu_name
+  /// reads it, so the two agree on a cache key. "cpu" elsewhere.
   static func defaultChip() -> String {
-    #if canImport(Metal)
-      chipName()
-    #else
-      "cpu"
-    #endif
-  }
-
-  #if canImport(Metal)
-    /// The SoC's name, which is the GPU: "Apple M1 Pro", "Apple A17 Pro". On a
-    /// Mac the CPU brand string, as the Python's gpu_name reads it, so the two
-    /// agree on a cache key.
-    static func chipName() -> String {
-      #if os(macOS)
-        var size = 0
-        if sysctlbyname("machdep.cpu.brand_string", nil, &size, nil, 0) == 0, size > 1 {
-          var bytes = [CChar](repeating: 0, count: size)
-          if sysctlbyname("machdep.cpu.brand_string", &bytes, &size, nil, 0) == 0 {
-            return String(decoding: bytes.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
-          }
+    #if os(macOS)
+      var size = 0
+      if sysctlbyname("machdep.cpu.brand_string", nil, &size, nil, 0) == 0, size > 1 {
+        var bytes = [CChar](repeating: 0, count: size)
+        if sysctlbyname("machdep.cpu.brand_string", &bytes, &size, nil, 0) == 0 {
+          return String(decoding: bytes.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
         }
-      #endif
+      }
+    #endif
+    #if canImport(Metal)
       let name = MTLCreateSystemDefaultDevice()?.name ?? "unknown"
       return name.hasSuffix(" GPU") ? String(name.dropLast(4)) : name
-    }
-  #endif
+    #else
+      return "cpu"
+    #endif
+  }
 
   public var runtimeVersion: String { OrtRuntime.version }
 
@@ -236,7 +225,8 @@ public final class OrtBackend: EngineBackend {
   public func build(model: URL, artifact: URL, report: @escaping ProgressFn, metaExtra: [String: Any]) throws {
     let started = Date()
     let expect = Artifact.sidecar(artifact)
-    try Artifact.build(artifact, kind: artifactKind, metaExtra: metaExtra, report: report) { staged in
+    try Artifact.build(artifact, metaExtra: metaExtra, report: report) { staged in
+      try FileManager.default.createDirectory(at: staged, withIntermediateDirectories: true)
       report("patch", 0, profile.usesCoreML ? "preparing the model for CoreML" : "preparing the model")
       let prepared = try preparer.prepare(model: model, into: staged, layout: profile.layout) {
         CoreMLPreparation.cacheKey(stem: artifact.deletingPathExtension().lastPathComponent, part: $0)
@@ -275,7 +265,7 @@ public final class OrtBackend: EngineBackend {
           staged, manifest, weightBytes: prepared.parts.reduce(0) { $0 + $1.weightBytes }, expect: expect, model: model, started: started, report: report)
       }
       // Prove it runs before calling it built: minutes on a CPU, so it ticks.
-      let providers = try Ticker.during(interval: 1, { report("load", 0, "loading the model to check it runs, \(Int($0)) s elapsed") }) {
+      let providers = try Ticker.during(interval: 1, Ticker.paced("load", "loading the model to check it runs", took: 0, report: report)) {
         let engine = try OrtEngine(plans: plans(staged, manifest), device: deviceTag(), keepAlive: false, keepCPUWarm: false)
         defer { engine.close() }
         try engine.run()
@@ -283,7 +273,7 @@ public final class OrtBackend: EngineBackend {
       }
       var meta = OrtArtifact.meta(self, manifest: manifest, providers: providers, model: model, started: started)
       meta["compile_seconds"] = pythonRound(compileSeconds, 1)
-      meta["artifact_bytes"] = Artifact.bytes(staged)
+      meta["artifact_bytes"] = Files.size(of: staged)
       return meta
     }
   }
@@ -295,10 +285,7 @@ public final class OrtBackend: EngineBackend {
     let source = staged.appending(path: file)
     let context = staged.appending(path: "\(session)_ctx.onnx")
     report("compile", 0, "compiling \(session) for the NPU")
-    let tick: @Sendable (TimeInterval) -> Void = { elapsed in
-      report("compile", min(0.95, elapsed / took), "compiling \(session) for the NPU, \(Int(elapsed)) s of about \(Int(took.rounded())) s")
-    }
-    try Ticker.during(interval: 2, tick) {
+    try Ticker.during(interval: 2, Ticker.paced("compile", "compiling \(session) for the NPU", took: took, report: report)) {
       let config = [
         "ep.context_enable": "1",
         "ep.context_file_path": context.path,
@@ -444,7 +431,7 @@ final class CoreMLProgress: @unchecked Sendable {
         walker.skipDescendants()
       }
       for url in converted {
-        freed += Artifact.bytes(url)
+        freed += Files.size(of: url)
         try? fm.removeItem(at: url)
       }
     }

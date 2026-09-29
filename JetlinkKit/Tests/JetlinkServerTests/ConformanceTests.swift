@@ -118,8 +118,6 @@ struct PinnedConstantTests {
     #expect(ModelConstants.defaultFrameSkip == Pinned.defaultFrameSkip)
     #expect(ModelConstants.chunk == Pinned.uploadChunk)
     #expect(Int(FrameStats.slowUs) == Pinned.slowFrameUs)
-    #expect(USBTransport.packetSize == Pinned.usbMaxPacket)
-    #expect(USBTransport.readChunk == Pinned.usbReadChunk)
   }
 
   @Test("Builds carry the Python's prepare version, on the Python's onnxruntime")
@@ -211,28 +209,24 @@ struct WireConformanceTests {
 
   @Test("A USB host sends what UsbBulkTransport sends")
   func usbHostSends() throws {
-    let pipes = FakePipes()
-    let transport = USBTransport(pipes: pipes)
+    let kernel = FakeUsbfs()
+    let transport = USBTransport(pipes: UsbfsPipes(device: UsbfsDevice(kernel: kernel), inEndpoint: 0x81, outEndpoint: 0x01))
     for message in try WireMessage.all() {
       try message.send(over: transport)
     }
-    #expect(pipes.written == (try Conformance.data("wire.usb_host.bin")))
+    #expect(kernel.written == (try Conformance.data("wire.usb_host.bin")))
   }
 
-  @Test("A USB host reads the gadget's bursts with the reads UsbBulkTransport posts")
+  @Test("A USB host reads the gadget's padded stream")
   func usbHostReads() throws {
-    let stream = try Conformance.data("wire.usb_gadget.bin")
-    let pipes = FakePipes()
-    pipes.push([UInt8](stream))
-    let transport = USBTransport(pipes: pipes)
+    let kernel = FakeUsbfs()
+    kernel.feed([UInt8](try Conformance.data("wire.usb_gadget.bin")))
+    let transport = USBTransport(pipes: UsbfsPipes(device: UsbfsDevice(kernel: kernel), inEndpoint: 0x81, outEndpoint: 0x01))
     for message in try WireMessage.all() {
       let got = try transport.recv()
       #expect(message.matches(got), "\(message.type) seq \(message.seq)")
     }
-    let streams = try Conformance.json("wire.json")["streams"] as! [String: [String: Any]]
-    let reads = (streams["usb_gadget"]!["reads"] as! [NSNumber]).map(\.intValue)
-    #expect(pipes.readSizes == reads)
-    #expect(pipes.drained)
+    #expect(kernel.buffered == 0)
   }
 }
 
@@ -296,7 +290,7 @@ final class StagingEngine: Engine {
 
   func hostInput(_ name: String) -> UnsafeMutableRawPointer? { buffers[name] }
   func output(_ name: String) -> UnsafeRawPointer? { nil }
-  func loopState(_ pairs: [(input: String, output: String)]) throws -> Bool { false }
+  func loopState(_ pairs: [(input: String, output: String)]) throws {}
   func resetState() {}
   func run() throws {}
   func warm() throws -> String { "" }
@@ -345,7 +339,7 @@ struct StagingCase {
     defer { output.deallocate() }
     UnsafeMutableRawPointer(output).copyMemory(from: request + spec.warpedBytes + spec.packedBytes, byteCount: spec.outputCount * 4)
     if Convert.allFinite(output, count: spec.outputCount) {
-      staging.keep(outputs: output)
+      staging.keep(outputs: output, type: .float)
     }
   }
 
@@ -364,7 +358,9 @@ struct StagingCase {
 struct StagingConformanceTests {
   /// The hidden state each frame returned is fed into the next, as modeld
   /// fed it back through prev_feat: the generator checks Python's queues
-  /// against protocol 2's staging, and this the Swift against Python's.
+  /// against protocol 2's staging, and this the Swift against Python's. The
+  /// frame sits one byte off alignment, as nothing in the receive buffer
+  /// promises the packed floats theirs.
   @Test("Each frame stages the tensors Python's queues feed", arguments: [1, 2, 4])
   func staging(frameSkip: Int) throws {
     let fixture = try StagingCase(frameSkip: frameSkip)
@@ -373,11 +369,11 @@ struct StagingConformanceTests {
     #expect(fixture.staged.count == fixture.count * fixture.stagedBytes)
     let engine = StagingEngine(fixture.inputs)
     let staging = try PolicyQueues(spec: fixture.spec, engine: engine)
-    let request = UnsafeMutableRawPointer.allocate(byteCount: fixture.frameBytes, alignment: 16)
-    defer { request.deallocate() }
+    let request = UnsafeMutableRawPointer.allocate(byteCount: fixture.frameBytes + 1, alignment: 16) + 1
+    defer { (request - 1).deallocate() }
     for frame in 0..<fixture.count {
       try fixture.stage(frame, into: staging, request: request)
-      fixture.check(frame, engine, "at frame_skip \(frameSkip)")
+      fixture.check(frame, engine, "at frame_skip \(frameSkip), one byte off")
     }
   }
 }

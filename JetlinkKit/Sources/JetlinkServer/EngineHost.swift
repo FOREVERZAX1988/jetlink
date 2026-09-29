@@ -102,10 +102,17 @@ public final class EngineHost: @unchecked Sendable {
 
   /// The host's telemetry, thermal state, sleep and power: `ServerHooks`.
   let hooks: ServerHooks
+  /// `hooks.telemetry`, sampled off the frame path.
+  let telemetry: TelemetrySampler
 
   public init(cache: ServerCache, hooks: ServerHooks = ServerHooks()) {
     self.cache = cache
     self.hooks = hooks
+    telemetry = TelemetrySampler(source: hooks.telemetry)
+  }
+
+  deinit {
+    telemetry.close()
   }
 
   var backend: any EngineBackend { cache.backend }
@@ -245,9 +252,9 @@ public final class EngineHost: @unchecked Sendable {
   /// The spec a cached artifact's sidecar carries, if it has one.
   func cachedSpec(_ entry: CacheEntry) -> [String: Any]? {
     guard entry.exists else { return nil }
-    guard let meta = try? entry.meta() else {
+    let meta = Artifact.sidecar(entry.path)
+    if meta.isEmpty {
       log.warning("unreadable sidecar for \(entry.path.lastPathComponent)")
-      return nil
     }
     return meta["spec"] as? [String: Any]
   }
@@ -258,7 +265,8 @@ public final class EngineHost: @unchecked Sendable {
 
   /// Start loading whatever was loaded last, before a client asks for it.
   public func preload() {
-    guard let (sha256, frameSkip) = cache.lastLoaded() else { return }
+    guard let last = cache.lastLoaded() else { return }
+    let (sha256, frameSkip) = (last.sha256, last.frameSkip)
     lock.lock()
     let busy = loaded != nil || job != nil
     lock.unlock()
@@ -393,10 +401,10 @@ public final class EngineHost: @unchecked Sendable {
   }
 
   private func writeSpec(_ entry: CacheEntry, _ spec: ModelSpec) {
-    var meta = (try? entry.meta()) ?? [:]
+    var meta = Artifact.sidecar(entry.path)
     if meta["spec"] == nil {
       meta["spec"] = spec.dictionary()
-      try? entry.writeMeta(meta)
+      try? Artifact.writeSidecar(entry.path, meta)
     }
   }
 
@@ -432,6 +440,7 @@ public final class EngineHost: @unchecked Sendable {
 
   public func close() {
     unload()
+    telemetry.close()
   }
 
   // MARK: talking back

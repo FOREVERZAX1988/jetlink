@@ -35,7 +35,7 @@ public enum Catalog {
   }
 
   /// The version a catalog URL names, or nil for one not in sunnypilot's scheme.
-  static func version(of url: String) -> Int? {
+  package static func version(of url: String) -> Int? {
     guard url.hasSuffix(".json") else { return nil }
     let stem = url.dropLast(".json".count)
     let digits = stem.reversed().prefix { $0.isASCII && $0.isNumber }

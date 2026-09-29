@@ -27,7 +27,7 @@
     @Test("A looped state stays on the device: y = x + state, and the state advances a frame at a time")
     func deviceLoop() throws {
       let engine = try load()
-      #expect(try engine.loopState([(input: "state", output: "next_state")]))
+      try engine.loopState([(input: "state", output: "next_state")])
       #expect(engine.hostInputs == ["x"] && engine.hostOutputs == ["y"])
       #expect(engine.hostInput("state") == nil && engine.output("next_state") == nil)
       // the pair's pinned buffers went: x and y are left
@@ -76,13 +76,11 @@
       engine.close()
     }
 
-    @Test("A pair that differs in type is left to the host")
-    func declinesAMismatchedPair() throws {
+    @Test("A pair that differs in type cannot loop")
+    func refusesAMismatchedPair() throws {
       let lines = defaultLines.replacingOccurrences(of: "output next_state float16", with: "output next_state float32")
       let engine = try load(lines)
-      #expect(try !engine.loopState([(input: "state", output: "next_state")]))
-      #expect(engine.hostInputs == ["state", "x"])
-      #expect(engine.hostInput("state") != nil && engine.output("next_state") != nil)
+      #expect(throws: TrtError.self) { try engine.loopState([(input: "state", output: "next_state")]) }
       engine.close()
     }
 
@@ -228,8 +226,7 @@
     }
   }
 
-  /// Both ways a stateful graph's queues go round: on the device, and on the
-  /// host when the engine declines a pair, frame for frame the same.
+  /// A stateful graph's queues go round on the device.
   @Suite("TensorRT state loop")
   struct TrtStateLoopTests {
     func serve(next: String, frames: Int, resetAt: Int) throws -> (outputs: [[Float]], work: [UInt64]) {
@@ -260,19 +257,16 @@
       return (outputs, trt.work)
     }
 
-    @Test("The host fallback gives what the device loop gives, resets included")
-    func sameEitherWay() throws {
+    @Test("The device loop advances the queues a frame at a time, and starts over at a reset")
+    func deviceLoop() throws {
       let device = try serve(next: "float16", frames: 6, resetAt: 4)
-      let host = try serve(next: "float32", frames: 6, resetAt: 4)
-      #expect(device.outputs == host.outputs)
       // the three queues each advance by one a frame, and start over at the reset
       let first = device.outputs[0]
       for (frame, since) in [(1, 1), (3, 3), (4, 0), (5, 1)] {
         #expect(device.outputs[frame] == first.map { $0 + Float(3 * since) }, "frame \(frame)")
       }
-      // the loop copied on the device, the fallback crossed to the host
-      #expect(device.work[2] > 0 && host.work[2] == 0)
-      #expect(host.work[1] > device.work[1])
+      // the loop copied on the device
+      #expect(device.work[2] > 0)
     }
   }
 #endif

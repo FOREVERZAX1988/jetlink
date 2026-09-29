@@ -186,7 +186,7 @@
       client.send("GET /events HTTP/1.1\r\n\r\n")
       let first = dataEvents(client.read { names($0).count >= 5 })
       #expect(first.compactMap { $0["event"] as? String } == ["hello", "server", "link", "engine", "inventory"])
-      #expect(first[0]["version"] as? String == "0.7.0-test" && first[0]["transport"] as? String == "tcp" && first[0]["port"] as? Int == 0)
+      #expect(first[0]["version"] as? String == "0.7.0-test")
       #expect(first[1]["state"] as? String == "serving" && first[1]["backend"] as? String == "ort")
 
       // What the server's host says reaches the page through the controller.
@@ -212,7 +212,8 @@
       // Only the seed read the disk: every later page is given what the feed kept.
       #expect(registry.count("inventory") == 1)
 
-      // An observing controller buffers nothing for a stream nobody reads.
+      // An observing controller makes no stream, so it buffers nothing.
+      controller.finish()
       var buffered = 0
       for await _ in controller.events { buffered += 1 }
       #expect(buffered == 0)

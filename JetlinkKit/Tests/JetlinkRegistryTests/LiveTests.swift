@@ -1,4 +1,5 @@
 import Foundation
+import JetlinkTestSupport
 import Testing
 
 @testable import JetlinkRegistry
@@ -9,8 +10,7 @@ import Testing
 @Suite(.enabled(if: ProcessInfo.processInfo.environment["JETLINK_LIVE"] == "1"))
 struct LiveTests {
   @Test func catalogAndPointers() async throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let tmp = try TemporaryDirectory()
     let registry = Registry(layout: tmp.layout, session: .shared)
 
     let catalog = await registry.catalog(refresh: true)

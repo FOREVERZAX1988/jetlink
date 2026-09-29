@@ -120,7 +120,7 @@ struct StatusView: View {
           }
         }
       }
-      if server.link.state == .connected, let stats = server.stats {
+      if server.link.state == .connected, let stats = server.state.stats {
         LabeledContent("Frames", value: stats.frames.formatted(.number.grouping(.automatic)))
         LabeledContent("Rate", value: "\(stats.fps.formatted(.number.precision(.fractionLength(1)))) per second")
         LabeledContent("Slow frames") {
@@ -142,9 +142,9 @@ struct StatusView: View {
 
   @ViewBuilder
   private var frameBudgetSection: some View {
-    if server.link.state == .connected, let stats = server.stats {
+    if server.link.state == .connected, let stats = server.state.stats {
       Section {
-        FrameBudgetView(stats: stats, history: server.statsHistory)
+        FrameBudgetView(stats: stats, history: server.state.statsHistory)
       } header: {
         Text("Frame Budget")
       } footer: {

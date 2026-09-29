@@ -7,7 +7,7 @@ import Testing
 
 /// The golden files make_server_fixtures.py writes, read in place.
 enum Fixture {
-  static let directory = SourceTree.root().appending(path: "JetlinkKit/Tests/JetlinkServerTests/Fixtures", directoryHint: .isDirectory)
+  static let directory = TinyModel.fixtures
 
   static func url(_ name: String) -> URL {
     directory.appending(path: name)
@@ -27,29 +27,108 @@ func cpuBackend() -> any EngineBackend {
   OrtBackend(profile: .cpu, preparer: ONNXPreparer(), keepAlive: false)
 }
 
-/// Whether `condition` holds within `timeout`. The session counts a frame
-/// after its reply is on the wire, so the client can read the last reply
-/// before the server has counted it.
-func eventually(timeout: TimeInterval = 2, _ condition: () -> Bool) -> Bool {
-  let deadline = Date().addingTimeInterval(timeout)
-  while !condition() {
-    if Date() >= deadline { return false }
-    Thread.sleep(forTimeInterval: 0.005)
-  }
-  return true
+/// A server on the CPU backend, or `backend`, over TCP on loopback, and a
+/// client connected to it. `gadget` serves USB beside.
+func serve(
+  hooks: ServerHooks = ServerHooks(), backend: any EngineBackend = cpuBackend(), gadget: (any GadgetSource)? = nil,
+  _ body: (Server, TestClient) throws -> Void
+) throws {
+  let cache = try TemporaryDirectory()
+  let server = try Server(
+    configuration: Server.Configuration(host: "127.0.0.1", port: 0, cacheRoot: cache.url, preload: false, usb: gadget != nil),
+    backend: backend, gadget: gadget, hooks: hooks)
+  try server.start()
+  defer { server.shutdown() }
+  let client = try TestClient(port: server.port!)
+  defer { client.close() }
+  try body(server, client)
 }
 
-/// A fresh directory, removed when the test is done with it.
-final class TemporaryDirectory {
-  let url: URL
+/// The CPU backend with what a TensorRT one adds: fields it describes itself
+/// with in the hello, and loads or runs that fail with an error of the
+/// test's choosing.
+final class FlakyBackend: EngineBackend, @unchecked Sendable {
+  private let inner = cpuBackend()
+  private let lock = NSLock()
+  private var runFailure: (any Error)?
+  private var loadFailure: (any Error)?
+  private var loadFailures = 0
+  private var built = 0
+  private var loaded = 0
+  private let fields: [String: String]
 
-  init() throws {
-    url = FileManager.default.temporaryDirectory.appending(path: "jetlink-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
-    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+  init(describing fields: [String: String] = [:]) {
+    self.fields = fields
   }
 
-  deinit {
-    try? FileManager.default.removeItem(at: url)
+  func describe() -> [String: String] { inner.describe().merging(fields) { $1 } }
+
+  var name: String { inner.name }
+  var suffix: String { inner.suffix }
+  var runtimeVersion: String { inner.runtimeVersion }
+  func deviceTag() -> String { inner.deviceTag() }
+
+  /// Every run from now on throws `error`; nil runs the model again.
+  func failRuns(with error: (any Error)?) {
+    lock.withLock { runFailure = error }
+  }
+
+  /// The next `times` loads throw `error`, and the counts start again.
+  func failLoads(with error: (any Error)?, times: Int = .max) {
+    lock.withLock {
+      loadFailure = error
+      loadFailures = times
+      built = 0
+      loaded = 0
+    }
+  }
+
+  var counts: (builds: Int, loads: Int) { lock.withLock { (built, loaded) } }
+
+  func deriveSpec(model: URL, sha256: String, nbytes: Int64, frameSkip: Int) throws -> ModelSpec {
+    try inner.deriveSpec(model: model, sha256: sha256, nbytes: nbytes, frameSkip: frameSkip)
+  }
+
+  func build(model: URL, artifact: URL, report: @escaping ProgressFn, metaExtra: [String: Any]) throws {
+    lock.withLock { built += 1 }
+    try inner.build(model: model, artifact: artifact, report: report, metaExtra: metaExtra)
+  }
+
+  func load(artifact: URL, report: @escaping ProgressFn) throws -> any Engine {
+    let failure = lock.withLock { () -> (any Error)? in
+      loaded += 1
+      guard let loadFailure, loadFailures > 0 else { return nil }
+      loadFailures -= 1
+      return loadFailure
+    }
+    if let failure { throw failure }
+    return FailingEngine(try inner.load(artifact: artifact, report: report)) { [weak self] in self?.lock.withLock { self?.runFailure } }
+  }
+}
+
+/// The engine it loads: the real one, whose run throws when told to.
+final class FailingEngine: Engine {
+  let inner: any Engine
+  let failure: () -> (any Error)?
+
+  init(_ inner: any Engine, failure: @escaping () -> (any Error)?) {
+    self.inner = inner
+    self.failure = failure
+  }
+
+  var inputs: [String: TensorSpec] { inner.inputs }
+  var outputs: [String: TensorSpec] { inner.outputs }
+  var lastGpuUs: UInt32 { inner.lastGpuUs }
+  func hostInput(_ name: String) -> UnsafeMutableRawPointer? { inner.hostInput(name) }
+  func output(_ name: String) -> UnsafeRawPointer? { inner.output(name) }
+  func loopState(_ pairs: [(input: String, output: String)]) throws { try inner.loopState(pairs) }
+  func resetState() { inner.resetState() }
+  func warm() throws -> String { try inner.warm() }
+  func close() { inner.close() }
+
+  func run() throws {
+    if let failure = failure() { throw failure }
+    try inner.run()
   }
 }
 
@@ -203,14 +282,6 @@ final class TestClient: CommaClient {
 
   func close() {
     transport.close()
-  }
-}
-
-struct TestError: Error, CustomStringConvertible {
-  let description: String
-
-  init(_ description: String) {
-    self.description = description
   }
 }
 

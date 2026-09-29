@@ -13,20 +13,6 @@ enum Fixtures {
   }
 }
 
-/// A fresh directory under the temporary directory, removed by `cleanup`.
-struct TemporaryDirectory {
-  let url: URL
-
-  init() throws {
-    url = FileManager.default.temporaryDirectory.appendingPathComponent("jetlink-onnx-tests-\(UUID().uuidString)")
-    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-  }
-
-  func cleanup() {
-    try? FileManager.default.removeItem(at: url)
-  }
-}
-
 /// An encoded message's bytes, source ranges resolved.
 func flatten(_ e: Encoded, _ src: Source) -> [UInt8] {
   var out: [UInt8] = []

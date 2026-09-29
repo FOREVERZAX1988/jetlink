@@ -41,23 +41,19 @@ package enum Artifact {
     ]
   }
 
-  /// Builds `artifact`. `body` fills `staged`, a directory made for it or a
-  /// file it writes, in a `tmp*` directory beside the artifact where the
-  /// cache's sweep finds it if the build is killed, and returns the sidecar.
-  /// The staged artifact then replaces any old one, the sidecar goes beside it
-  /// with `metaExtra` on top, and the build reports done. The staging goes
-  /// either way.
+  /// Builds `artifact`. `body` makes `staged`, the file or directory, in a
+  /// `tmp*` directory beside the artifact where the cache's sweep finds it if
+  /// the build is killed, and returns the sidecar. The staged artifact then
+  /// replaces any old one, the sidecar goes beside it with `metaExtra` on
+  /// top, and the build reports done. The staging goes either way.
   package static func build(
-    _ artifact: URL, kind: ArtifactKind, metaExtra: [String: Any], report: ProgressFn, _ body: (_ staged: URL) throws -> [String: Any]
+    _ artifact: URL, metaExtra: [String: Any], report: ProgressFn, _ body: (_ staged: URL) throws -> [String: Any]
   ) throws {
     let fm = FileManager.default
     let temp = artifact.deletingLastPathComponent().appending(path: "tmp\(UUID().uuidString.prefix(8))", directoryHint: .isDirectory)
     try fm.createDirectory(at: temp, withIntermediateDirectories: true)
     defer { try? fm.removeItem(at: temp) }
-    let staged = temp.appending(path: "artifact", directoryHint: kind == .directory ? .isDirectory : .notDirectory)
-    if kind == .directory {
-      try fm.createDirectory(at: staged, withIntermediateDirectories: true)
-    }
+    let staged = temp.appending(path: "artifact")
     var meta = try body(staged)
     if fm.fileExists(atPath: artifact.path) {
       try fm.removeItem(at: artifact)
@@ -68,6 +64,13 @@ package enum Artifact {
     report("build", 1, "done in \(meta["build_seconds"] ?? 0)s")
   }
 
+  /// Until TensorRT's backend stops passing a kind.
+  package static func build(
+    _ artifact: URL, kind: ArtifactKind, metaExtra: [String: Any], report: ProgressFn, _ body: (_ staged: URL) throws -> [String: Any]
+  ) throws {
+    try build(artifact, metaExtra: metaExtra, report: report, body)
+  }
+
   /// Loads with progress paced by the last load's time, then records this
   /// one's in the sidecar for the next.
   package static func load<E: Engine>(
@@ -76,14 +79,7 @@ package enum Artifact {
     let started = Date()
     let took = (meta["load_seconds"] as? NSNumber)?.doubleValue ?? 0
     report("load", 0, "loading \(what)")
-    let tick: @Sendable (TimeInterval) -> Void = { elapsed in
-      if took > 0 {
-        report("load", min(0.95, elapsed / took), "loading \(what), \(Int(elapsed)) s of about \(Int(took.rounded())) s")
-      } else {
-        report("load", 0, "loading \(what), \(Int(elapsed)) s elapsed")
-      }
-    }
-    let engine = try Ticker.during(interval: 1, tick, body)
+    let engine = try Ticker.during(interval: 1, Ticker.paced("load", "loading \(what)", took: took, report: report), body)
     let seconds = Date().timeIntervalSince(started)
     report("load", 1, "loaded in \(Int(seconds.rounded())) s")
     if !meta.isEmpty {
@@ -92,11 +88,6 @@ package enum Artifact {
       try? writeSidecar(artifact, updated)
     }
     return (engine, seconds)
-  }
-
-  /// A file's bytes, or every regular file's under a directory.
-  package static func bytes(_ url: URL) -> Int64 {
-    Files.size(of: url)
   }
 }
 
@@ -136,6 +127,18 @@ package func formatBytes(_ n: Int64) -> String {
 }
 
 extension Ticker {
+  /// Ticks for `stage` paced by how long it took last time, "what, 12 s of
+  /// about 40 s", or without a last time "what, 12 s elapsed".
+  package static func paced(_ stage: String, _ what: String, took: TimeInterval, report: @escaping ProgressFn) -> @Sendable (TimeInterval) -> Void {
+    { elapsed in
+      if took > 0 {
+        report(stage, min(0.95, elapsed / took), "\(what), \(Int(elapsed)) s of about \(Int(took.rounded())) s")
+      } else {
+        report(stage, 0, "\(what), \(Int(elapsed)) s elapsed")
+      }
+    }
+  }
+
   /// Runs `body` while ticking every `interval`, and stops the ticks however
   /// it ends.
   package static func during<T>(interval: TimeInterval, _ tick: @escaping @Sendable (TimeInterval) -> Void, _ body: () throws -> T) rethrows -> T {

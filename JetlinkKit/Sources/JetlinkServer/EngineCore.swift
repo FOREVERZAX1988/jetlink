@@ -23,7 +23,7 @@ public struct HostAllocator: Sendable {
 /// What every engine keeps, whatever runs the model: its inputs and outputs by
 /// name, a zeroed host buffer per tensor from its allocator, the state pairs
 /// it loops, and the run's guard and timing. An engine subclasses it, supplies
-/// `execute()`, and `bindLoop(_:)` if it can feed state back itself.
+/// `execute()`, and `bindLoop(_:)` to feed state back itself.
 ///
 /// `hostInput(_:)` and `output(_:)` point into those buffers, so the host
 /// stages straight into memory the runtime reads, and reads what it wrote.
@@ -36,7 +36,8 @@ public struct HostAllocator: Sendable {
 open class EngineCore: Engine, @unchecked Sendable {
   public let inputs: [String: TensorSpec]
   public let outputs: [String: TensorSpec]
-  /// The inputs the host writes each frame: all but the looped state_ ones.
+  /// The inputs the host writes each frame, and the outputs it reads: all
+  /// but the looped pairs, which never reach the host.
   public private(set) var hostInputs: [String]
   public private(set) var hostOutputs: [String]
   /// The pairs the engine feeds back itself since `loopState`.
@@ -92,27 +93,22 @@ open class EngineCore: Engine, @unchecked Sendable {
     return buffers[name]
   }
 
-  /// Keep a stateful graph's queues in the engine, each next_state_ output
-  /// fed back as its state_ input on the next run, when the engine can
-  /// (`bindLoop`). False leaves the pairs to the host, which then copies
-  /// them between runs.
-  @discardableResult
-  public func loopState(_ pairs: [(input: String, output: String)]) throws -> Bool {
-    guard try bindLoop(pairs) else { return false }
+  /// Keeps a stateful graph's queues in the engine (`bindLoop`).
+  public func loopState(_ pairs: [(input: String, output: String)]) throws {
+    try bindLoop(pairs)
     looped = pairs
     loopedOutputs = Set(pairs.map(\.output))
     let loopedInputs = Set(pairs.map(\.input))
     hostInputs = inputs.keys.filter { !loopedInputs.contains($0) }.sorted()
     hostOutputs = outputs.keys.filter { !loopedOutputs.contains($0) }.sorted()
     resetState()
-    return true
   }
 
-  /// Makes the engine feed `pairs` back from the next run on. Called by
-  /// `loopState` before `looped` changes, so the engine sees the new pairs
-  /// here. The default cannot.
-  open func bindLoop(_ pairs: [(input: String, output: String)]) throws -> Bool {
-    false
+  /// Makes the engine feed `pairs` back from the next run on, or throws why
+  /// it cannot. Called by `loopState` before `looped` changes, so the engine
+  /// sees the new pairs here. The default cannot.
+  open func bindLoop(_ pairs: [(input: String, output: String)]) throws {
+    throw HostError.failed("\(type(of: self)) cannot loop state")
   }
 
   /// Empty state, as openpilot's warmup leaves it.

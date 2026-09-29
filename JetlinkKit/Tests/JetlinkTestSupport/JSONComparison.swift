@@ -1,22 +1,18 @@
 import Foundation
 
 /// Compares two JSON values as JSONSerialization reads them. A key the Swift
-/// side leaves out matches a Python null; a key only the Python sends is a
-/// difference unless `ignored` names its path.
+/// side leaves out matches a Python null.
 public struct JSONComparison {
-  public let ignored: Set<String>
   public var differences: [String] = []
 
-  public init(ignoring ignored: Set<String> = []) {
-    self.ignored = ignored
-  }
+  public init() {}
 
   public mutating func compare(python: Any, swift: Any, at path: String) {
     switch (python, swift) {
     case (let p as [String: Any], let s as [String: Any]):
       for (key, value) in p where s[key] == nil {
         let child = path.isEmpty ? key : "\(path)/\(key)"
-        if !(value is NSNull) && !ignored.contains(child) && !ignored.contains("*/\(key)") {
+        if !(value is NSNull) {
           differences.append("only Python sends \(child)")
         }
       }

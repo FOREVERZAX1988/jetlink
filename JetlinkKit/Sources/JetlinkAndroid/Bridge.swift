@@ -2,6 +2,7 @@
   import Android
   import Foundation
   import JetlinkKit
+  import JetlinkLog
   import JetlinkORT
   import JetlinkServer
 
@@ -51,10 +52,7 @@
   }
 
   func json(_ object: Any) -> String {
-    guard JSONSerialization.isValidJSONObject(object),
-      let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes])
-    else { return "{}" }
-    return String(decoding: data, as: UTF8.self)
+    ControlJSON.data(object).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
   }
 
   func parse(_ text: String) -> [String: Any] {
@@ -104,7 +102,8 @@
   /// Log lines numbered past `after`: `{"next": n, "lines": [...]}`.
   @_cdecl("Java_io_zoompilot_jetlink_server_Native_logs")
   public func nativeLogs(_ env: Env, _ cls: jclass?, _ after: jlong) -> jstring? {
-    jstring(env, json(Host.shared.logs.lines(after: Int(after))))
+    let (next, lines) = LogRing.shared.lines(after: Int(after))
+    return jstring(env, json(["next": next, "lines": lines]))
   }
 
   /// The comma's gadget is open: `fd` from UsbDeviceConnection with the vendor
@@ -147,12 +146,10 @@
     static let shared = Host()
 
     let state = AppSnapshot()
-    let logs = LogRing(capacity: 5000)
     /// The comma's descriptor, from the app's USB permission flow.
     let gadget = UsbfsGadget()
     private let lock = NSLock()
     private var embedded: EmbeddedServer?
-    private var stream: LogStream?
     private var thermalLabel = "unknown"
 
     var running: EmbeddedServer? {
@@ -183,22 +180,15 @@
         cacheRoot: URL(fileURLWithPath: cache, isDirectory: true),
         preload: (config["preload"] as? Bool) ?? true,
         listen: (config["listen"] as? Bool) ?? true,
-        usb: (config["usb"] as? Bool) ?? true)
+        usb: (config["usb"] as? Bool) ?? true,
+        keepPlans: 2)
       let backend = OrtBackend(
         profile: profile, preparer: ONNXPreparer(), keepAlive: (config["keep_alive"] as? Bool) ?? true,
         keepCPUWarm: (config["keep_cpu_warm"] as? Bool) ?? false, chip: config["chip"] as? String ?? "")
 
-      let logs = self.logs
       // logcat too, where `adb logcat -s jetlink` finds it
-      let stream = LogStream { level, category, message in
-        let line = EmbeddedServer.logLine(level, category, message)
-        _ = __android_log_write(level.logcatPriority, "jetlink", line)
-        return line
-      }
-      Task.detached {
-        for await line in stream.lines {
-          logs.append(line)
-        }
+      Log.sink = { level, category, message in
+        _ = __android_log_write(level.logcatPriority, "jetlink", EmbeddedServer.logLine(level, category, message))
       }
       let server: EmbeddedServer
       do {
@@ -214,25 +204,20 @@
         }
         try server.start()
       } catch {
-        stream.finish()
+        Log.sink = nil
         throw error
       }
-      lock.withLock {
-        embedded = server
-        self.stream = stream
-      }
+      lock.withLock { embedded = server }
       state.serverStarted()
     }
 
     func stop() {
-      let (server, stream) = lock.withLock { () -> (EmbeddedServer?, LogStream?) in
-        let current = (embedded, self.stream)
-        embedded = nil
-        self.stream = nil
-        return current
+      let server = lock.withLock {
+        defer { embedded = nil }
+        return embedded
       }
       server?.stop(releasingEngine: true)
-      stream?.finish()
+      Log.sink = nil
       if server != nil {
         state.serverStopped()
       }
@@ -248,13 +233,7 @@
       } catch {
         return ["ok": false, "error": String(describing: error)]
       }
-      nonisolated(unsafe) var reply: ReplyEvent?
-      let done = DispatchSemaphore(value: 0)
-      Task.detached {
-        reply = await server.handle(command)
-        done.signal()
-      }
-      done.wait()
+      let reply = try? blocking { await server.handle(command) }
       return reply.map { ControlEvent.reply($0).payload() } ?? NSNull()
     }
   }
@@ -264,42 +243,11 @@
     init(_ description: String) { self.description = description }
   }
 
-  /// The last `capacity` log lines or a few more, numbered so the Logs screen
-  /// asks only for what it has not shown.
-  final class LogRing: @unchecked Sendable {
-    private let lock = NSLock()
-    private var kept: [String] = []
-    private var total = 0
-    let capacity: Int
-
-    init(capacity: Int) { self.capacity = capacity }
-
-    func append(_ line: String) {
-      lock.withLock {
-        kept.append(line)
-        // in chunks, not a copy of the whole ring per line
-        if kept.count >= capacity + capacity / 4 {
-          kept.removeFirst(kept.count - capacity)
-        }
-        total += 1
-      }
-    }
-
-    /// Lines numbered after `after` (0 for all kept), and the number to ask
-    /// after next time.
-    func lines(after: Int) -> [String: Any] {
-      lock.withLock {
-        let oldest = total - kept.count
-        let start = min(max(after, oldest) - oldest, kept.count)
-        return ["next": total, "lines": Array(kept[start...])]
-      }
-    }
-  }
-
   extension Log.Level {
-    /// ANDROID_LOG_INFO, WARN and ERROR.
+    /// ANDROID_LOG_DEBUG, INFO, WARN and ERROR.
     var logcatPriority: Int32 {
       switch self {
+      case .debug: 3
       case .info: 4
       case .warning: 5
       case .error: 6

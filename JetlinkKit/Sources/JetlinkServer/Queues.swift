@@ -79,6 +79,11 @@ final class RingQueue {
     head = (head + 1) % rows
   }
 
+  func push(f16 source: UnsafePointer<UInt16>) {
+    (buffer + head * rowCount).update(from: source, count: rowCount)
+    head = (head + 1) % rows
+  }
+
   func row(_ logical: Int) -> UnsafePointer<UInt16> {
     UnsafePointer(buffer + ((head + logical) % rows) * rowCount)
   }
@@ -111,10 +116,10 @@ protocol FrameStaging: AnyObject {
   /// Writes one frame's inputs into the engine's buffers. `packed` is read
   /// where the request put it, aligned or not.
   func stage(warped: UnsafeRawPointer, packed: UnsafeRawPointer) throws
-  /// The frame's driving output, float32 and all finite, which the next
-  /// frame feeds back. Never after NOT_FINITE or a failed run: modeld fed
-  /// back only what reached it, and those raise on the comma first.
-  func keep(outputs: UnsafePointer<Float>)
+  /// The frame's driving output as the engine wrote it, all finite, which
+  /// the next frame feeds back. Never after NOT_FINITE or a failed run:
+  /// modeld fed back only what reached it, and those raise on the comma first.
+  func keep(outputs: UnsafeRawPointer, type: ElementType)
 }
 
 /// A model's INFER_REQ and reply as the session handles them, from the spec
@@ -124,9 +129,11 @@ struct FrameLayout {
   /// INFER_REQ's payload: the request head, the warped frame, the packed floats.
   let requestBytes: Int
   let warpedBytes: Int
-  /// The driving output, float32 on the wire whatever the engine gives.
+  /// The driving output, float32 on the wire whatever the engine gives, and
+  /// where the engine writes it, which stays put from load to close.
   let outputCount: Int
   let outputType: ElementType?
+  let output: UnsafeRawPointer?
   /// The part of it the reply leaves out unless asked, when the model has one.
   let hidden: Range<Int>?
 
@@ -135,6 +142,7 @@ struct FrameLayout {
     warpedBytes = spec.warpedBytes
     outputCount = spec.outputCount
     outputType = engine.outputs[ModelConstants.drivingOutput]?.type
+    output = engine.output(ModelConstants.drivingOutput)
     hidden = spec.hiddenRange
   }
 }
@@ -159,20 +167,13 @@ enum StagingError: Error, CustomStringConvertible {
 /// only a looped pair's state_ input is ever double-buffered or released,
 /// which staging never writes.
 struct StagingTarget {
-  let name: String
   let pointer: UnsafeMutableRawPointer
   let type: ElementType
 
   init(_ engine: any Engine, _ name: String) throws {
     guard let io = engine.inputs[name], let pointer = engine.hostInput(name) else { throw StagingError.missingInput(name) }
-    self.name = name
     self.pointer = pointer
     self.type = io.type
-  }
-
-  /// For the debug build's check that the engine kept its word.
-  func isCurrent(in engine: any Engine) -> Bool {
-    engine.hostInput(name) == pointer
   }
 }
 
@@ -181,15 +182,10 @@ struct StagingTarget {
 /// feature queue where modeld's prev_feat went.
 final class PolicyQueues: FrameStaging {
   let layout: FrameLayout
-  private let engine: any Engine
   private let frameSkip: Int
   /// One camera's share of the warped frame.
   private let cameraBytes: Int
-  // The queues hold float16, as Python's do, so the cast is paid once per
-  // row. An engine that took the images as uint8 and cast them itself (a
-  // plan keeping the graph's Cast) would want uint8 image queues here,
-  // chosen from `img`'s type as the targets below are, and a gather that
-  // copies bytes.
+  // The queues hold float16, as Python's do, so the cast is paid once per row.
   private let imgQueue: RingQueue
   private let bigImgQueue: RingQueue
   private let featQueue: RingQueue
@@ -200,13 +196,12 @@ final class PolicyQueues: FrameStaging {
   private let desireOffset: Int
   /// Where hidden_state sits in the driving output.
   private let hidden: Range<Int>
-  /// The last good frame's hidden state, float32 as the comma held it: the
-  /// values the reply carried and the comma sent back, cast into the feature
-  /// queue at the same point.
-  private let prevFeat: UnsafeMutablePointer<Float>
+  /// The last good frame's hidden state, in the feature queue's float16:
+  /// exact whether the engine gave float16 or float32, as the comma's float32
+  /// copy of a float16 output was.
+  private let prevFeat: UnsafeMutablePointer<UInt16>
 
   init(spec: ModelSpec, engine: any Engine) throws {
-    self.engine = engine
     layout = FrameLayout(spec: spec, engine: engine)
     frameSkip = spec.frameSkip
     cameraBytes = spec.warpedBytes / 2
@@ -243,20 +238,21 @@ final class PolicyQueues: FrameStaging {
     prevFeat.update(repeating: 0, count: hidden.count)
   }
 
-  func keep(outputs: UnsafePointer<Float>) {
-    prevFeat.update(from: outputs + hidden.lowerBound, count: hidden.count)
+  func keep(outputs: UnsafeRawPointer, type: ElementType) {
+    let source = outputs + hidden.lowerBound * type.size
+    switch type {
+    case .float16: prevFeat.update(from: source.assumingMemoryBound(to: UInt16.self), count: hidden.count)
+    default: Stage.store(f32: source, count: hidden.count, into: prevFeat, as: .float16)
+    }
   }
 
   func stage(warped: UnsafeRawPointer, packed: UnsafeRawPointer) throws {
-    assert(
-      gathers.allSatisfy { $0.target.isCurrent(in: engine) } && desire.isCurrent(in: engine)
-        && scalars.allSatisfy { $0.target.isCurrent(in: engine) })
     // push casts into the queue's float16, so the cast costs one row here
     // rather than the whole sampled window later
     imgQueue.push(u8: warped)
     bigImgQueue.push(u8: warped + cameraBytes)
     desireQueue.push(f32: packed + desireOffset)
-    featQueue.push(f32: UnsafeRawPointer(prevFeat))
+    featQueue.push(f16: prevFeat)
 
     for gather in gathers {
       gather.queue.gather(step: frameSkip, into: gather.target.pointer, as: gather.target.type)
@@ -298,29 +294,13 @@ final class PolicyQueues: FrameStaging {
 
 /// A stateful graph (openpilot #38916): the frame goes into new_img and the
 /// scalars into their inputs as they are; the engine loops the queues itself.
-/// An engine that declines the loop (a TensorRT pair whose size or type
-/// differs) has each next_state_ output copied into its state_ input here,
-/// as `queues.StateLoop.after_run` did, when the next frame is staged.
 final class StateLoop: FrameStaging {
-  /// A pair the engine left to the host: the state_ input, and the
-  /// next_state_ output that feeds it, both resolved once as the targets are.
-  private struct HostPair {
-    let input: StagingTarget
-    let count: Int
-    let output: String
-    let source: UnsafeRawPointer
-    let sourceType: ElementType
-  }
-
   let layout: FrameLayout
   private let engine: any Engine
   /// new_img's type picks the conversion: uint8 would be a plain copy, for
   /// an engine that casts on the device.
   private let frame: StagingTarget
   private let scalars: [(offset: Int, count: Int, target: StagingTarget)]
-  private let hostPairs: [HostPair]
-  /// Whether a run since the last reset left next_state_ outputs to carry over.
-  private var carry = false
 
   init(spec: ModelSpec, engine: any Engine) throws {
     self.engine = engine
@@ -331,53 +311,22 @@ final class StateLoop: FrameStaging {
       throw StagingError.missingInput(name)
     }
     // Looping first: that is when an engine settles which buffers it keeps.
-    let looped = try engine.loopState(pairs)
+    try engine.loopState(pairs)
     frame = try StagingTarget(engine, ModelConstants.statefulFrame)
     scalars = try spec.packedLayout.map { ($0.range.lowerBound * 4, $0.range.count, try StagingTarget(engine, $0.name)) }
-    hostPairs =
-      looped
-      ? []
-      : try pairs.map { pair in
-        guard let input = engine.inputs[pair.input], let output = engine.outputs[pair.output], input.count == output.count,
-          input.type == output.type || Set([input.type, output.type]).isSubset(of: [.float, .float16]),
-          let source = engine.output(pair.output)
-        else { throw HostError.failed("state \(pair.input) cannot be fed from \(pair.output)") }
-        return HostPair(input: try StagingTarget(engine, pair.input), count: input.count, output: pair.output, source: source, sourceType: output.type)
-      }
   }
 
   func reset() {
-    guard !hostPairs.isEmpty else {
-      engine.resetState()
-      return
-    }
-    for pair in hostPairs {
-      pair.input.pointer.initializeMemory(as: UInt8.self, repeating: 0, count: pair.count * pair.input.type.size)
-    }
-    carry = false
+    engine.resetState()
   }
 
   /// Nothing: the graph's state is not the client's; RESET_QUEUES clears it.
   func newClient() {}
 
   /// Nothing: the graph keeps its hidden state itself.
-  func keep(outputs: UnsafePointer<Float>) {}
+  func keep(outputs: UnsafeRawPointer, type: ElementType) {}
 
   func stage(warped: UnsafeRawPointer, packed: UnsafeRawPointer) throws {
-    assert(
-      frame.isCurrent(in: engine) && scalars.allSatisfy { $0.target.isCurrent(in: engine) }
-        && hostPairs.allSatisfy { $0.input.isCurrent(in: engine) && engine.output($0.output) == $0.source })
-    if carry {
-      for pair in hostPairs {
-        let dest = pair.input.pointer
-        switch pair.sourceType {
-        case .float16: Stage.store(f16: pair.source.assumingMemoryBound(to: UInt16.self), count: pair.count, into: dest, as: pair.input.type)
-        case .float: Stage.store(f32: pair.source, count: pair.count, into: dest, as: pair.input.type)
-        default: dest.copyMemory(from: pair.source, byteCount: pair.count * pair.input.type.size)
-        }
-      }
-    }
-    carry = !hostPairs.isEmpty
     Stage.store(u8: warped, count: layout.warpedBytes, into: frame.pointer, as: frame.type)
     for scalar in scalars {
       Stage.store(f32: packed + scalar.offset, count: scalar.count, into: scalar.target.pointer, as: scalar.target.type)

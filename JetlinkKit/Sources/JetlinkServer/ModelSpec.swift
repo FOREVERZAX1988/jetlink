@@ -29,13 +29,33 @@ public struct NamedShape: Sendable, Equatable {
   public var count: Int { shape.reduce(1, *) }
 }
 
-public struct NamedRange: Sendable, Equatable {
+/// One of openpilot's output_slices as Python's `slice` holds it: either end
+/// may be None, and either may count from the end, as Lebowski's `pad`,
+/// `slice(-2, None)`, does. Kept as written, so the spec goes back on the
+/// wire as `to_dict` wrote it.
+public struct NamedSlice: Sendable, Equatable {
   public let name: String
-  public let range: Range<Int>
+  public let start: Int?
+  public let stop: Int?
+
+  public init(_ name: String, start: Int?, stop: Int?) {
+    self.name = name
+    self.start = start
+    self.stop = stop
+  }
 
   public init(_ name: String, _ range: Range<Int>) {
-    self.name = name
-    self.range = range
+    self.init(name, start: range.lowerBound, stop: range.upperBound)
+  }
+
+  /// The indices it takes of `count`, as Python's `slice.indices` gives them.
+  public func range(in count: Int) -> Range<Int> {
+    func index(_ value: Int?, _ none: Int) -> Int {
+      guard let value else { return none }
+      return value < 0 ? max(value + count, 0) : min(value, count)
+    }
+    let lower = index(start, 0)
+    return lower..<max(lower, index(stop, count))
   }
 }
 
@@ -48,11 +68,11 @@ public struct ModelSpec: Sendable, Equatable {
   public let frameSkip: Int
   public let inputShapes: [NamedShape]
   public let outputShapes: [NamedShape]
-  public let outputSlices: [NamedRange]
+  public let outputSlices: [NamedSlice]
   public let checkpoint: String?
 
   public init(
-    sha256: String, nbytes: Int64, frameSkip: Int, inputShapes: [NamedShape], outputShapes: [NamedShape], outputSlices: [NamedRange], checkpoint: String?
+    sha256: String, nbytes: Int64, frameSkip: Int, inputShapes: [NamedShape], outputShapes: [NamedShape], outputSlices: [NamedSlice], checkpoint: String?
   ) {
     self.sha256 = sha256
     self.nbytes = nbytes
@@ -175,12 +195,14 @@ public struct ModelSpec: Sendable, Equatable {
   public var outputBytes: Int { outputCount * 4 }
 
   /// Where hidden_state sits in the output: what the reply leaves out. Nil
-  /// when the model names no such slice, and then the reply is whole.
+  /// when the model names no such slice, and then the reply is whole. As
+  /// `hidden_range` reads it, with no end counted from the back, so both
+  /// ends of the wire size the reply alike.
   public var hiddenRange: Range<Int>? {
-    guard let range = outputSlices.first(where: { $0.name == ModelConstants.hiddenState })?.range,
-      range.lowerBound >= 0, range.upperBound <= outputCount, !range.isEmpty
+    guard let slice = outputSlices.first(where: { $0.name == ModelConstants.hiddenState }), let start = slice.start, let stop = slice.stop,
+      0 <= start, start < stop, stop <= outputCount
     else { return nil }
-    return range
+    return start..<stop
   }
 
   /// The floats an INFER_RESP carries: the output less hidden_state.
@@ -202,7 +224,7 @@ public struct ModelSpec: Sendable, Equatable {
       "checkpoint": checkpoint ?? NSNull(),
       "input_shapes": Dictionary(uniqueKeysWithValues: inputShapes.map { ($0.name, $0.shape) }),
       "output_shapes": Dictionary(uniqueKeysWithValues: outputShapes.map { ($0.name, $0.shape) }),
-      "output_slices": Dictionary(uniqueKeysWithValues: outputSlices.map { ($0.name, [$0.range.lowerBound, $0.range.upperBound]) }),
+      "output_slices": Dictionary(uniqueKeysWithValues: outputSlices.map { ($0.name, [$0.start ?? NSNull(), $0.stop ?? NSNull()] as [Any]) }),
     ]
   }
 
@@ -228,10 +250,13 @@ public struct ModelSpec: Sendable, Equatable {
       }
     }
     guard let rawSlices = d["output_slices"] as? [String: Any] else { throw DecodeError.missing("output_slices") }
-    let slices = try rawSlices.map { name, value -> NamedRange in
-      guard let bounds = value as? [NSNumber], bounds.count == 2 else { throw DecodeError.missing("output_slices.\(name)") }
-      return NamedRange(name, bounds[0].intValue..<bounds[1].intValue)
-    }.sorted { $0.range.lowerBound < $1.range.lowerBound }
+    let slices = try rawSlices.keys.sorted().map { name -> NamedSlice in
+      // [start, stop], each an int or null, as slice(*v) takes them back
+      guard let bounds = rawSlices[name] as? [Any], bounds.count == 2, bounds.allSatisfy({ $0 is NSNumber || $0 is NSNull }) else {
+        throw DecodeError.missing("output_slices.\(name)")
+      }
+      return NamedSlice(name, start: (bounds[0] as? NSNumber)?.intValue, stop: (bounds[1] as? NSNumber)?.intValue)
+    }
     return ModelSpec(
       sha256: sha, nbytes: nbytes, frameSkip: frameSkip,
       inputShapes: try shapes("input_shapes"), outputShapes: try shapes("output_shapes"),

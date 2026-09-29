@@ -4,7 +4,7 @@ import JetlinkRegistry
 /// Progress of a build or a load: stage, fraction, message.
 public typealias ProgressFn = @Sendable (String, Double, String) -> Void
 
-/// A file or a directory: the cache names, stages and prunes by it.
+/// Until TensorRT's backend stops naming it.
 public typealias ArtifactKind = JetlinkRegistry.ArtifactKind
 
 /// The artifact on disk is not one this backend can load: another runtime's
@@ -25,14 +25,10 @@ public struct ArtifactInvalid: Error, CustomStringConvertible {
 /// (an illegal address, a failed launch): the context is broken, and every
 /// later frame and every rejoin would fail with the engine still "loaded".
 /// The session answers the frame INFER_FAILED, then calls
-/// `ServerHooks.fatal`. A type whose codes are only sometimes fatal
-/// conforms and says which through `isFatal`.
+/// `ServerHooks.fatal`. A type whose codes are only sometimes fatal says
+/// which through `isFatal`.
 public protocol FatalEngineError: Error {
   var isFatal: Bool { get }
-}
-
-extension FatalEngineError {
-  public var isFatal: Bool { true }
 }
 
 /// A loaded model, ready to run a frame at a time: a backend's engine
@@ -40,9 +36,6 @@ extension FatalEngineError {
 public protocol Engine: AnyObject {
   var inputs: [String: TensorSpec] { get }
   var outputs: [String: TensorSpec] { get }
-  /// The outputs `output(_:)` serves after a run: all but the next_state_
-  /// ones a loop feeds back inside the engine, which never reach the host.
-  var hostOutputs: [String] { get }
   var lastGpuUs: UInt32 { get }
   /// What ran beside the model, for a benchmark report's build line: "CPU
   /// keep-warm on". Empty when there is nothing to say.
@@ -53,7 +46,9 @@ public protocol Engine: AnyObject {
   /// them up once, at load.
   func hostInput(_ name: String) -> UnsafeMutableRawPointer?
   func output(_ name: String) -> UnsafeRawPointer?
-  @discardableResult func loopState(_ pairs: [(input: String, output: String)]) throws -> Bool
+  /// Feeds each next_state_ output back as its state_ input from the next
+  /// run on, inside the engine. Throws for a pair it cannot loop.
+  func loopState(_ pairs: [(input: String, output: String)]) throws
   func resetState()
   func run() throws
   func warm() throws -> String
@@ -67,18 +62,15 @@ public protocol EngineBackend: AnyObject, Sendable {
   var name: String { get }
   /// The artifact's extension.
   var suffix: String { get }
-  var artifactKind: ArtifactKind { get }
   /// The runtime's release, "1.29.0".
   var runtimeVersion: String { get }
   /// The device part of the tag: "ane-Apple_M1_Pro", "htp-SM8650".
   func deviceTag() -> String
   /// What an artifact is valid for: runtime version and device, sanitized.
   func tag() -> String
-  /// backend, runtime_version, device: for the hello.
+  /// backend, runtime_version, device, and whatever else the backend adds
+  /// (TensorRT's `trt_version`, which the comma logs): for the hello.
   func describe() -> [String: String]
-  /// What this backend adds to the hello besides `describe()`: TensorRT's
-  /// `trt_version`, which the comma logs.
-  var helloFields: [String: Any] { get }
   func deriveSpec(model: URL, sha256: String, nbytes: Int64, frameSkip: Int) throws -> ModelSpec
   func build(model: URL, artifact: URL, report: @escaping ProgressFn, metaExtra: [String: Any]) throws
   func load(artifact: URL, report: @escaping ProgressFn) throws -> any Engine
@@ -86,7 +78,6 @@ public protocol EngineBackend: AnyObject, Sendable {
 
 extension Engine {
   public var notes: String { "" }
-  public var hostOutputs: [String] { outputs.keys.sorted() }
 }
 
 extension EngineBackend {
@@ -98,7 +89,6 @@ extension EngineBackend {
     ["backend": name, "runtime_version": runtimeVersion, "device": deviceTag()]
   }
 
-  public var helloFields: [String: Any] { [:] }
 }
 
 /// A version or device name as a filename component.
