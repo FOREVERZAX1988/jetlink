@@ -30,7 +30,7 @@ def test_unsolicited_messages_cannot_extend_a_reply_deadline(monkeypatch, msg_ty
   def recv(timeout):
     clock[0] += 0.02
     assert clock[0] < 1.0, 'client kept consuming messages past its deadline'
-    return SimpleNamespace(msg_type=msg_type, seq=1, payload=memoryview(payload), version=P.VERSION)
+    return SimpleNamespace(msg_type=msg_type, seq=1, payload=memoryview(payload))
 
   monkeypatch.setattr(client_module, 'time', SimpleNamespace(monotonic=lambda: clock[0]))
   client = client_module.JetlinkClient(SimpleNamespace(recv=recv))
@@ -63,7 +63,7 @@ def test_bad_magic_is_diagnosed():
     P.unpack_header(b'\x00' * 32)
 
 
-@pytest.mark.parametrize('version', [1, P.VERSION + 1])
+@pytest.mark.parametrize('version', [1, P.VERSION - 1, P.VERSION + 1])
 def test_incompatible_release_is_rejected_before_payload(version):
   raw = bytearray(P.pack_header(P.Msg.HELLO_RESP, 1, 0))
   raw[4:6] = version.to_bytes(2, 'little')

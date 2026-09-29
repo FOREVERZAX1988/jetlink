@@ -117,11 +117,10 @@ class FakeTransport:
 def test_the_hello_carries_the_link(link, expected):
   t = FakeTransport(link)
   client = JetlinkClient(t, name='modeld')
-  client._expect = lambda *a, **k: SimpleNamespace(payload=memoryview(json.dumps({'protocol': P.VERSION}).encode()))
+  client._expect = lambda *a, **k: SimpleNamespace(payload=memoryview(b'{}'))
   client.hello()
   assert t.sent[0]['client'].get('link') == expected
   assert t.sent[0]['client']['name'] == 'modeld'
-  assert t.sent[0]['client']['protocol'] == P.VERSION
 
 
 def test_the_server_names_the_medium_the_hello_gives(tmp_path):
