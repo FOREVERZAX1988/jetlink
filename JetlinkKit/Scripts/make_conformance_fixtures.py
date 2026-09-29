@@ -87,40 +87,32 @@ WIRE_MESSAGES = [
 FRAMING = ('packet_size', 'read_chunk', 'tx_align', 'rx_align', 'write_chunk', 'read_slack')
 
 
-def _usb_host():
+def _framing(cls) -> dict:
+  return {a: getattr(cls, a) for a in FRAMING}
+
+
+def _usb_host() -> dict:
   """The USB host's framing, as the comma's gadget expects it: whole-packet
-  reads of up to USB_READ_CHUNK into a 2 MB buffer with a packet of slack, the
-  gadget's 16 KB bursts stripped, and the PADDED byte on what it sends. The
-  server is the only USB host now; this is the framing it is held to."""
+  reads of up to USB_READ_CHUNK with a packet of slack, the gadget's 16 KB
+  bursts stripped, and the PADDED byte on what it sends. The server is the only
+  USB host now; this is the framing it is held to."""
   from jetlink import protocol as P
   from jetlink.transport.base import StreamTransport
-
-  class UsbHost(StreamTransport):
-    packet_size = P.USB_MAX_PACKET
-    read_chunk = P.USB_READ_CHUNK
-    rx_align = P.GADGET_TX_ALIGN
-    read_slack = P.USB_MAX_PACKET
-
-    def __init__(self):
-      super().__init__(rx_size=2 << 20)
-
-  return UsbHost
+  return {**_framing(StreamTransport), 'packet_size': P.USB_MAX_PACKET, 'read_chunk': P.USB_READ_CHUNK,
+          'rx_align': P.GADGET_TX_ALIGN, 'read_slack': P.USB_MAX_PACKET}
 
 
-def _memory(base, framing_from=None):
-  """A transport over bytes in memory with `framing_from`'s framing rules, or
-  `base` itself subclassed when its constructor opens nothing."""
+def _memory(framing: dict, rx_size: int = 1 << 20):
+  """A transport over bytes in memory that frames as `framing` says."""
   from jetlink.transport.base import LinkError, StreamTransport
 
-  attrs = {a: getattr(framing_from, a) for a in FRAMING} if framing_from is not None else {}
-
-  class Memory(base if framing_from is None else StreamTransport):
-    def attach(self, incoming: bytes = b''):
+  class Memory(StreamTransport):
+    def __init__(self, incoming: bytes = b''):
+      super().__init__(rx_size)
       self.sent = bytearray()
       self.incoming = memoryview(incoming)
       self.pos = 0
       self.reads: list[int] = []
-      return self
 
     def _write(self, bufs) -> int:
       n = 0
@@ -144,7 +136,7 @@ def _memory(base, framing_from=None):
     def close(self) -> None:
       pass
 
-  for name, value in attrs.items():
+  for name, value in framing.items():
     setattr(Memory, name, value)
   return Memory
 
@@ -166,7 +158,8 @@ def wire(root: Path) -> None:
   from jetlink.transport.ffs import FfsTransport
   from jetlink.transport.tcp import TcpTransport
 
-  host = _usb_host()
+  # the host reads into a 2 MB buffer, as the server does
+  host, gadget, tcp = _memory(_usb_host(), 2 << 20), _memory(_framing(FfsTransport)), _memory(_framing(TcpTransport))
   out = root / SERVER
   out.mkdir(parents=True, exist_ok=True)
 
@@ -185,14 +178,10 @@ def wire(root: Path) -> None:
 
   # usb_host: what a USB host sends and the gadget reads; usb_gadget: the
   # other way, in whole bursts; tcp: both ways over a socket
-  senders = {
-    'tcp': (_memory(TcpTransport, TcpTransport), _memory(TcpTransport, TcpTransport)),
-    'usb_host': (_memory(host), _memory(FfsTransport, FfsTransport)),
-    'usb_gadget': (_memory(FfsTransport, FfsTransport), _memory(host)),
-  }
+  senders = {'tcp': (tcp, tcp), 'usb_host': (host, gadget), 'usb_gadget': (gadget, host)}
   streams = {}
   for name, (sender_cls, receiver_cls) in senders.items():
-    sender = _new(sender_cls).attach()
+    sender = sender_cls()
     for spec in WIRE_MESSAGES:
       parts, _ = _message_bytes(spec)
       sender.send(P.Msg[spec[0]], spec[1], parts, spec[2])
@@ -201,7 +190,7 @@ def wire(root: Path) -> None:
 
     # read it back the way the other end does: the fixture must be a stream
     # the receiving side of the Python takes in whole
-    receiver = _new(receiver_cls).attach(stream)
+    receiver = receiver_cls(stream)
     offsets = []
     for spec in WIRE_MESSAGES:
       m = receiver.recv(timeout=None)
@@ -220,22 +209,6 @@ def wire(root: Path) -> None:
     'headers': headers, 'infer_req': infer_req, 'infer_resp': infer_resp,
     'messages': messages, 'streams': streams,
   }))
-
-
-def _new(cls):
-  """An instance without the real constructor's side effects, where it has any."""
-  from jetlink.transport.base import StreamTransport
-  from jetlink.transport.ffs import FfsTransport
-  from jetlink.transport.tcp import TcpTransport
-  if not issubclass(cls, (FfsTransport, TcpTransport)):
-    return cls()   # the USB host: opens nothing
-  if issubclass(cls, TcpTransport):
-    obj = cls.__new__(cls)
-    StreamTransport.__init__(obj)
-    return obj
-  obj = cls.__new__(cls)
-  StreamTransport.__init__(obj, rx_size=256 << 10)   # FfsTransport's
-  return obj
 
 
 # -- staging ------------------------------------------------------------------
