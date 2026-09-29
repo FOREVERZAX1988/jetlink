@@ -100,7 +100,6 @@ final class PageFeed: @unchecked Sendable {
     }
   }
 
-  /// Waits until everything handed over so far has reached the pages.
   func flush() {
     handoff.sync {}
   }

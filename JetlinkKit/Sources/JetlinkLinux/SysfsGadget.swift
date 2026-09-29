@@ -265,7 +265,7 @@
       }
     }
 
-    /// Under `lock`: stops the transfers, lets go of the interface, closes.
+    /// Under `lock`.
     private func releaseClaim(_ reason: String) {
       guard let claimed else { return }
       self.claimed = nil
