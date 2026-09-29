@@ -159,8 +159,8 @@ class FakeOpenpilot:
   def event(self, name: str, **fields) -> None:
     self.events.append((name, fields))
 
-  def model_dir(self) -> Path:
-    return self.root / 'models' / 'jetlink'
+  def model_root(self) -> Path:
+    return self.root / 'models'
 
   # -- modeld ------------------------------------------------------------------
 

@@ -146,7 +146,7 @@ class Models:
   def model_dir(self) -> Path:
     """Ours, under the model manager's root: its cache clear removes every file
     it does not recognise and leaves directories alone."""
-    return Path(self.op.model_dir())
+    return Path(self.op.model_root()) / 'jetlink'
 
   @staticmethod
   def model_file_name(model: dict) -> str:

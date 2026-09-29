@@ -115,8 +115,11 @@ class WorkerSide(StatusSide, Protocol):
   def event(self, name: str, **fields: Any) -> None:
     """A structured log line (cloudlog.event)."""
 
-  def model_dir(self) -> Path:
-    """Where downloaded ONNX files live."""
+  def model_root(self) -> Path:
+    """The model manager's model root (openpilot's Paths.model_root()). jetlink
+    keeps its downloads in a directory of its own under it, `jetlink/`: the
+    model manager's cache clear deletes every file in the root it does not
+    recognise, a downloaded 1.75 GB ONNX included, and leaves directories alone."""
 
 
 @runtime_checkable

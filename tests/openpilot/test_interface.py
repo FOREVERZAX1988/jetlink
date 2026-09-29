@@ -39,7 +39,7 @@ WORKER = {
   'put': '(key: str, value: Any, block: bool = False) -> None',
   'remove': '(key: str) -> None',
   'event': '(name: str, **fields: Any) -> None',
-  'model_dir': '() -> Path',
+  'model_root': '() -> Path',
 }
 MODELD = {
   **WORKER,

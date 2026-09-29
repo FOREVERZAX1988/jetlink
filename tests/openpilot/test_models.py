@@ -290,8 +290,18 @@ class TestShippedModelPath(ModelsTest):
     path.write_bytes(b'\0' * size)
     return path
 
-  def test_the_directory_is_the_adapters(self):
-    self.assertEqual(self.models.model_dir(), self.op.model_dir())
+  def test_the_downloads_have_a_directory_of_their_own(self):
+    # the model manager's cache clear deletes every file in its root that it
+    # does not recognise, and leaves directories alone
+    self.assertEqual(self.models.model_dir(), self.op.model_root() / 'jetlink')
+
+  def test_a_download_lands_in_it_never_in_the_root(self):
+    from jetlink.registry.lfs import Pointer
+    with mock.patch('jetlink.registry.lfs.lfs_resolve', return_value='https://x/y'), \
+         mock.patch('jetlink.registry.lfs.lfs_download', side_effect=lambda href, pointer, dest, **kw: dest) as download:
+      dest = self.models.fetch_shipped_model()
+    self.assertEqual(dest.parent, self.op.model_root() / 'jetlink')
+    self.assertEqual(download.call_args.args[1], Pointer('a' * 64, 4096))
 
   def test_a_model_not_resolved_yet_is_no_path(self):
     with mock.patch.object(self.models, 'selected_model', return_value={**self.MODEL, 'oid': None, 'size': None}):
