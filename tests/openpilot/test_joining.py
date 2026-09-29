@@ -256,6 +256,19 @@ class JoiningTest(JoiningBase):
     # And it tries again rather than staying small for the rest of the drive.
     self.assertTrue(s._rejoin_at > time.monotonic() or self.connect_calls > 1)
 
+  def test_a_swap_whose_first_frame_fails_is_still_two_handovers(self):
+    # swap and demote inside one run(): modelV2.big is false before and after,
+    # and only the count tells modeld the frame's stall was a handover
+    s = self._state()
+    self._wait_joined(s)
+    s._engaged = False
+    self.big.raises = RuntimeError('first frame timed out')
+    handovers = s.handovers
+    self.assertFalse(s.chestnut)
+    self.assertEqual(self._run(s), {'from': 'small'})
+    self.assertFalse(s.chestnut)
+    self.assertEqual(s.handovers, handovers + 2)
+
   def test_failed_first_inference_never_announces_ready(self):
     s = self._state()
     self._wait_joined(s)
@@ -613,19 +626,23 @@ class LagTest(JoiningBase):
 
   def test_a_late_frame_is_published_and_the_next_one_is_the_small_models(self):
     self.assert_big_drives()
+    handovers = self.s.handovers
     self.assertEqual(self.frame(took=joining.LATE_FRAME + 0.01), {'from': 'big'})
     # the late frame's output is the large model's, and so is everything modeld
-    # reads off the model for it; only modelV2.big says the handover now, which
-    # is what makes modeld forgive the stall instead of counting it as lag
-    self.assertFalse(self.s.chestnut)
+    # reads off the model for it, modelV2.big included. The handover count
+    # moves now, which is what makes modeld forgive the stall
+    self.assertTrue(self.s.chestnut)
     self.assertEqual(self.s.new_constant, 'big')
+    self.assertEqual(self.s.handovers, handovers + 1)
     self.reset.assert_not_called()
     self.assertEqual(self.frame(), {'from': 'small'})
+    self.assertEqual(self.s.handovers, handovers + 2)
     self.reset.assert_called_once()
     self.assertFalse(self.s.chestnut)
     self.assertEqual(self.s.new_constant, 'small')
-    # counted, backed off and reported like a loss, and the link let go
-    self.assertEqual(self.s._drops, 1)
+    # backed off and reported like a loss, and the link let go; counted as lag,
+    # which says nothing about the cable
+    self.assertEqual((self.s._lags, self.s._drops), (1, 0))
     self.assertEqual(self.s.big_model_state, 'retrying')
     self.assertGreater(self.s._rejoin_at, joining.time.monotonic())
     self._wait_reported(self.s, 'the accelerator fell behind, reconnecting')
@@ -636,8 +653,9 @@ class LagTest(JoiningBase):
     self.assertTrue(self.big.closed)
 
   def test_one_slow_frame_is_jitter(self):
+    handovers = self.s.handovers
     self.assertEqual(self.frame(took=joining.SLOW_FRAME + 0.005), {'from': 'big'})
-    self.assertTrue(self.s.chestnut)
+    self.assertEqual(self.s.handovers, handovers)
     for _ in range(5):
       self.assert_big_drives()
     self.reset.assert_not_called()
@@ -646,10 +664,11 @@ class LagTest(JoiningBase):
     self.frame(took=joining.SLOW_FRAME + 0.005)
     self.assert_big_drives()
     self.skew += joining.LAG_WINDOW / 2
+    handovers = self.s.handovers
     self.assertEqual(self.frame(took=joining.SLOW_FRAME + 0.005), {'from': 'big'})
-    self.assertFalse(self.s.chestnut)
+    self.assertEqual(self.s.handovers, handovers + 1)
     self.assertEqual(self.frame(), {'from': 'small'})
-    self.assertEqual(self.s._drops, 1)
+    self.assertEqual(self.s._lags, 1)
 
   def test_slow_frames_further_apart_are_not_a_pattern(self):
     self.frame(took=joining.SLOW_FRAME + 0.005)
@@ -660,6 +679,17 @@ class LagTest(JoiningBase):
     self.frame(took=joining.SLOW_FRAME + 0.005)
     self.assert_big_drives()
     self.reset.assert_not_called()
+
+  def test_lag_never_blames_the_cable(self):
+    for _ in range(joining.DROPS_TO_BLAME_CABLE):
+      self.frame(took=joining.LATE_FRAME + 0.01)
+      self.frame()
+      self.s._rejoin_at = 0.0
+      self.s._rejoin.set()
+      self._wait_joined(self.s)
+      self.swap()
+    self._wait_reported(self.s, 'the accelerator fell behind, reconnecting')
+    self.assertFalse(any('cable' in c.args[2] for c in self.progress.report.call_args_list))
 
   def test_the_next_large_model_starts_with_no_strike_and_settles_again(self):
     self.frame(took=joining.SLOW_FRAME + 0.005)
@@ -741,10 +771,10 @@ class ReplugTest(JoiningBase):
     self._run(self.s)
     self.assertGreater(self.s._rejoin_at, time.monotonic() + 1.0, "no backoff to cut short")
 
-  def connects_within(self, seconds):
+  def connects_within(self, seconds, calls=2):
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
-      if self.connect_calls > 1:
+      if self.connect_calls >= calls:
         return True
       time.sleep(0.005)
     return False
@@ -763,6 +793,39 @@ class ReplugTest(JoiningBase):
     with mock.patch.object(self.s, '_close_retired', side_effect=lambda: setattr(self, 'attached', True)):
       self.lose_the_link()
       self.assertTrue(self.connects_within(1.0))
+
+  def test_a_flapping_host_skips_the_backoff_once_per_streak(self):
+    self.attached = False
+    self.lose_the_link()
+    self.assertFalse(self.connects_within(0.2))   # the join thread has seen the host go
+    self.attached = True
+    self.assertTrue(self.connects_within(1.0))
+    # back, swapped in, and gone again at once: the same failure streak
+    self._wait_joined(self.s)
+    self.attached = False
+    self.assertEqual(self._run(self.s), {'from': 'small'})
+    self.assertGreater(self.s._rejoin_at, time.monotonic() + 5.0)
+    self.assertFalse(self.connects_within(0.2, calls=3))
+    self.attached = True
+    self.assertFalse(self.connects_within(0.5, calls=3), 'a flapping host cycled the swap with no backoff')
+
+  def test_a_join_that_held_starts_a_new_streak(self):
+    self.attached = False
+    self.lose_the_link()
+    self.assertFalse(self.connects_within(0.2))
+    self.attached = True
+    self.assertTrue(self.connects_within(1.0))
+    self._wait_joined(self.s)
+    self.big.raises = None
+    self._run(self.s)
+    self.assertTrue(self.s.chestnut)
+    self.s._joined_at = time.monotonic() - (STABLE_SECONDS + 1)
+    self.attached = False
+    self.big.raises = RuntimeError('pulled again, minutes later')
+    self._run(self.s)
+    self.assertFalse(self.connects_within(0.2, calls=3))
+    self.attached = True
+    self.assertTrue(self.connects_within(1.0, calls=3))
 
   def test_a_failure_with_the_host_present_waits_it_out(self):
     self.lose_the_link()

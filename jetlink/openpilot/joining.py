@@ -75,6 +75,9 @@ SMALL_WARMUP_FRAMES = 3
 # how long the check may take; both off the frame loop
 KEEPALIVE_PERIOD = 10.0
 PING_TIMEOUT = 2.0
+# why a demote happened, as the log and the UI say it
+LOST = 'lost the accelerator'
+BEHIND = 'the accelerator fell behind'
 
 
 class JoiningModelState:
@@ -122,10 +125,15 @@ class JoiningModelState:
     self._rejoin_at = 0.0
     self._failures = 0
     self._joined_at = 0.0
-    # links lost after a swap this drive, and why the last one went while the
-    # join thread still owes the log and the UI a word about it
+    # links lost and lag demotes after a swap this drive, and why the last one
+    # went while the join thread still owes the log and the UI a word about it.
+    # Only a lost link says anything about the cable
     self._drops = 0
+    self._lags = 0
     self._demoted: str | None = None
+    # changes of the model that drives, and decisions to change it: modeld
+    # compares it across run() (handovers)
+    self._handovers = 0
     # set on a frame the large model fell behind on; the next frame demotes.
     # _slow_at is when the last slow frame was, for the second strike
     self._lagging = False
@@ -134,8 +142,10 @@ class JoiningModelState:
     # since it swapped in
     self._small_frames = 0
     self._big_frames = 0
-    # whether the host had let go of the gadget when the last link was lost
+    # whether the host had let go of the gadget when the last link was lost,
+    # and whether this failure streak has already skipped a backoff for a replug
     self._host_left = False
+    self._replugged = False
 
     # assume engaged and moving until a message says otherwise, so a swap can
     # never happen on no information
@@ -171,11 +181,17 @@ class JoiningModelState:
 
   @property
   def chestnut(self) -> bool:
-    # modelV2.big. False while proxying, as the small model would report, and
-    # already on the frame the large model fell behind on: that frame's output
-    # is still published, and modeld, seeing the model change inside run(),
-    # forgives the stall as it does a chestnut's fallback
-    return not self._lagging and getattr(self._active, 'chestnut', False)
+    # modelV2.big. False while proxying, as the small model would report
+    return getattr(self._active, 'chestnut', False)
+
+  @property
+  def handovers(self) -> int:
+    """Moves on every swap and demote, and on the frame that decides a lag
+    demote. modeld resets its dropped-frame filter when this changes across
+    run(), so the stall of a handover is not lag, as for a chestnut's fallback.
+    A count and not modelV2.big: a swap whose first frame fails and demotes in
+    the same run() leaves `chestnut` as it was."""
+    return self._handovers
 
   @property
   def big_model_state(self) -> str:
@@ -242,7 +258,7 @@ class JoiningModelState:
     if self._lagging:
       # the last frame was the large model's last, published as it came
       self._lagging = False
-      self._demote('the accelerator fell behind')
+      self._demote(BEHIND)
     self._maybe_swap()
     active = self._active
     started = time.monotonic()
@@ -254,7 +270,7 @@ class JoiningModelState:
         raise
       failed = time.monotonic()
       self._log.exception("jetlink: large model failed mid-drive, back to the small model")
-      self._demote('lost the accelerator')
+      self._demote(LOST)
       demoted = time.monotonic()
       # re-run the frame rather than propagate: modeld's fallback is permanent,
       # this one is retryable. after_enqueue is dropped, the large model may
@@ -281,7 +297,9 @@ class JoiningModelState:
       self._progress.clear()
       self._log.warning("jetlink: large model joined mid-drive, modelV2.big is now true")
     if self._big_frames > SETTLING_FRAMES and self._fell_behind(took):
+      # this frame's output is published as it came; its stall is forgiven now
       self._lagging = True
+      self._handovers += 1
       self._log.warning("jetlink: large model frame took %.0f ms, the small model drives from the next", took * 1e3)
     return result
 
@@ -328,6 +346,7 @@ class JoiningModelState:
       self._back_off()
       return
     self._big_frames = 0
+    self._handovers += 1
     self._active = big
 
   def _demote(self, why: str) -> None:
@@ -335,9 +354,13 @@ class JoiningModelState:
     nothing here waits: the join thread reads the port, reports and closes
     the link, moments later."""
     big, self._active = self._active, self._small
+    self._handovers += 1
     self._loading = True
     self._slow_at = None
-    self._drops += 1
+    if why == BEHIND:
+      self._lags += 1
+    else:
+      self._drops += 1
     self._demoted = why
     with self._lock:
       self._retired = big
@@ -364,6 +387,8 @@ class JoiningModelState:
     held = time.monotonic() - self._joined_at if self._joined_at else 0.0
     stable = bool(self._joined_at) and held > STABLE_SECONDS
     self._failures = 1 if stable else self._failures + 1
+    if stable:
+      self._replugged = False   # a new streak may skip a backoff for a replug again
     self._joined_at = 0.0
     if stable:
       delay = REJOIN_DELAY_QUICK
@@ -371,8 +396,8 @@ class JoiningModelState:
       delay = min(REJOIN_DELAY * 2 ** (self._failures - 1), REJOIN_DELAY_MAX)
     self._rejoin_at = time.monotonic() + delay
     self._rejoin.set()
-    self._log.warning("jetlink: next attempt in %.0f s (failure %d, link held %.0f s, drop %d this drive)",
-                      delay, self._failures, held, self._drops)
+    self._log.warning("jetlink: next attempt in %.0f s (failure %d, link held %.0f s, drop %d, lag %d this drive)",
+                      delay, self._failures, held, self._drops, self._lags)
 
   # -- background -------------------------------------------------------------
 
@@ -402,7 +427,7 @@ class JoiningModelState:
     # read now, before the teardown: a host back by the time the backoff starts
     # has still been replugged
     self._host_left = not gadget.host_attached()
-    self._log.warning("jetlink: %s, %s; drop %d this drive", why, port, self._drops)
+    self._log.warning("jetlink: %s, %s; drop %d, lag %d this drive", why, port, self._drops, self._lags)
     self._report('connect', f'{why}, reconnecting')
 
   def _join_loop(self) -> None:
@@ -455,13 +480,16 @@ class JoiningModelState:
 
   def _wait_out_back_off(self) -> bool:
     """Until the next attempt is due, or a host configures the gadget again
-    after it went away. True once closed."""
+    after it went away. Once per failure streak: a host that flaps, a marginal
+    cable, would otherwise cycle the swap and its alerts with no backoff at
+    all. True once closed."""
     host_left, self._host_left = self._host_left or not gadget.host_attached(), False
     while (left := self._rejoin_at - time.monotonic()) > 0:
       if self._stop.wait(min(left, REPLUG_POLL)):
         return True
       attached = gadget.host_attached()
-      if attached and host_left:
+      if attached and host_left and not self._replugged:
+        self._replugged = True
         self._log.warning("jetlink: the host configured the gadget again, retrying now")
         return False
       host_left = host_left or not attached
