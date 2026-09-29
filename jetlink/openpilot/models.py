@@ -44,12 +44,9 @@ class Models:
 
   def catalog(self) -> list[dict]:
     """sunnypilot's big-model bundles as {name, ref}, newest first, as the model
-    manager's own picker lists them.
-
-    From the cached JSON rather than the parsed bundles: parsing builds capnp
-    objects and writes chunk manifests, for two fields. Read from the UI's
-    param thread, so nothing escapes.
-    """
+    manager's own picker lists them. From the cached JSON rather than the parsed
+    bundles: parsing builds capnp objects and writes chunk manifests, for two
+    fields. Never raises."""
     try:
       key = self.op.keys.catalog
       bundles = ((self.op.get(key) if key else None) or {}).get('bundles', [])
@@ -144,7 +141,6 @@ class Models:
     return self.default_model()
 
   def selected_model_name(self) -> str | None:
-    """What the accelerator will run: the big-model slot's pick, or the default."""
     selected = self.selected_model()
     return selected['name'] if selected else None
 
@@ -159,11 +155,9 @@ class Models:
     return f"{model['oid'][:16]}.onnx"
 
   def shipped_model_path(self) -> Path | None:
-    """The chosen large model, if it has been fetched.
-
-    Keyed on the oid, not the in-tree pointer, which moves with upstream syncs.
-    Size is the cheap check that the file is the one we mean.
-    """
+    """The chosen large model, if it has been fetched. Keyed on the oid, not
+    the in-tree pointer, which moves with upstream syncs; the size is the cheap
+    check that the file is the one we mean."""
     model = self.selected_model()
     if model is None or not model['oid']:
       return None
@@ -189,11 +183,9 @@ class Models:
     return out + [e for e in LFS_ENDPOINTS if e not in out]
 
   def fetch_shipped_model(self, progress=None, should_stop=None) -> Path | None:
-    """Download the chosen large model if it is not here yet. None when nothing is chosen.
-
-    jetlink's registry streams it to a .part file and hashes it on the way, so
-    only the whole model ever takes the name.
-    """
+    """Download the chosen large model if it is not here yet; None when nothing
+    is chosen. The registry streams it to a .part file and hashes it on the way,
+    so only the whole model ever takes the name."""
     from jetlink.registry.catalog import NetworkError
     from jetlink.registry.lfs import Pointer, lfs_download, lfs_resolve
     model = self.selected_model()

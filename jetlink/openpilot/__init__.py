@@ -44,8 +44,7 @@ SHUTDOWN_TIMEOUT = 25.0
 
 def bind(op) -> Jetlink:
   """jetlink for this process, over the fork's adapter. One per process: it
-  keeps the process's caches, and points jetlink.comma's log at op.log, so a
-  heavy process's lines reach the drive's log while the owner's go to its file."""
+  keeps the process's caches (parts.for_this_process)."""
   return Jetlink(for_this_process(op))
 
 
@@ -61,67 +60,48 @@ class Jetlink:
     # what -> the last failure logged reading it; cleared by a read that works
     self._failures: dict[str, str] = {}
 
-  def _failed(self, what: str, e: Exception) -> str:
-    """Log a reader's failure once per distinct error: the readers are asked
-    several times a second, from threads that have nothing to do with jetlink."""
-    error = f"{type(e).__name__}: {e}"
-    if self._failures.get(what) != error:
-      self._failures[what] = error
-      self._log.exception("jetlink: could not read %s", what)
-    return error
-
-  def _worked(self, what: str) -> None:
+  def _read(self, what: str, read, fallback):
+    """read(), or fallback(error) when it raises. The readers never raise:
+    they are asked several times a second, from threads that have nothing to
+    do with jetlink. A failure is logged once per distinct error, and again
+    after a read that worked."""
+    try:
+      value = read()
+    except Exception as e:
+      error = f"{type(e).__name__}: {e}"
+      if self._failures.get(what) != error:
+        self._failures[what] = error
+        self._log.exception("jetlink: could not read %s", what)
+      return fallback(error)
     self._failures.pop(what, None)
+    return value
 
   def _mode(self) -> str:
     """The link setting, or 'off' when it cannot be read."""
-    try:
-      mode = self._parts.settings.mode()
-    except Exception as e:
-      self._failed('the link setting', e)
-      return 'off'
-    self._worked('the link setting')
-    return mode
+    return self._read('the link setting', lambda: self._parts.settings.mode(), lambda error: 'off')
 
   def enabled(self) -> bool:
-    """Has the user turned the link on, with no chestnut fitted? Configuration
-    only, never link state or readiness. A chestnut runs the big model natively
-    and the link stays off beside it, so jetlinkd never takes the USB
-    controller from it. manager's should_run for jetlinkd, on every device, so
-    it never raises: a failure is False."""
+    """Has the user turned the link on, with no chestnut fitted? The setting,
+    never link state or readiness. A chestnut runs the big model natively and
+    the link stays off beside it, so jetlinkd never takes the USB controller
+    from it. manager's should_run for jetlinkd, on every device."""
     mode = self._mode()
-    try:
-      on = self._parts.enabled(mode)
-    except Exception as e:
-      self._failed('whether the link is on', e)
-      return False
-    self._worked('whether the link is on')
-    return on
+    return self._read('whether the link is on', lambda: self._parts.enabled(mode), lambda error: False)
 
   def status(self) -> Status:
-    """One snapshot for the UI and the panels. Never raises: they read it on
-    their own threads, which have nothing to do with jetlink."""
+    """One snapshot for the UI and the panels."""
     from jetlink.openpilot import status
     mode = self._mode()
-    try:
-      snapshot = status.read(self._parts, mode)
-    except Exception as e:
-      return status.failed(self._failed('the status', e), mode)
-    self._worked('the status')
-    return snapshot
+    return self._read('the status', lambda: status.read(self._parts, mode), lambda error: status.failed(error, mode))
 
   def reason(self) -> str | None:
     """Why the link the user asked for cannot run: hardwared's offroad alert.
     None with the link off. The files the gadget and the build leave, nothing
-    else: hardwared asks twice a second on every device. Never raises."""
+    else: hardwared asks twice a second on every device."""
     from jetlink.openpilot import status
     mode = self._mode()
-    try:
-      why = status.reason(self._parts, mode)
-    except Exception as e:
-      return status.failure(self._failed('why the link cannot run', e), mode)
-    self._worked('why the link cannot run')
-    return why
+    return self._read('why the link cannot run', lambda: status.reason(self._parts, mode),
+                      lambda error: status.failure(error, mode))
 
   def prepare(self) -> bool:
     """Will the link join this modeld? modeld only, before it goes realtime:

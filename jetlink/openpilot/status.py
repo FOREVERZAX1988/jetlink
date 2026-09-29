@@ -50,10 +50,7 @@ class Progress:
     self._last = ('', 0.0)
 
   def read(self) -> dict | None:
-    """{stage, frac, msg} while something provisions, else None.
-
-    Read from the UI's param thread, so nothing may escape, UnknownKeyName included.
-    """
+    """{stage, frac, msg} while something provisions, else None. Never raises."""
     try:
       value = self.op.get(self.op.keys.progress)
     except Exception:
@@ -61,11 +58,8 @@ class Progress:
     return value if isinstance(value, dict) else None
 
   def report(self, stage: str, frac: float, msg: str = '') -> None:
-    """Never raises: called from except handlers.
-
-    Held to 4 Hz within a stage. The end of one always goes through, so the last
-    thing the panel is told is never dropped.
-    """
+    """Never raises: called from except handlers. Held to 4 Hz within a stage;
+    the end of one always goes through, so the panel's last word is never dropped."""
     last_stage, last_at = self._last
     now = time.monotonic()
     if frac < 1.0 and stage == last_stage and now - last_at < PROGRESS_MIN_INTERVAL:
@@ -83,13 +77,9 @@ class Progress:
       self.op.log.exception("jetlink: could not clear progress")
 
   def report_with_eta(self, stage: str, frac: float, msg: str = '') -> None:
-    """Progress, with how long the build still has to run.
-
-    Estimated from the model's size, on measurements of this hardware. It
-    belongs here rather than in the UI, which knows nothing about jetlink. Only
-    the build is estimated: the upload reports MB of MB and a connect has
-    nothing to predict.
-    """
+    """Progress, with how long the build still has to run, from the model's
+    size. Only the build: the upload reports MB of MB and a connect has nothing
+    to predict."""
     if stage == 'build':
       size = self._size() if self._size is not None else None
       if size:
@@ -111,12 +101,8 @@ class Presence:
     self._last_configured = 0.0
 
   def present(self) -> bool:
-    """Is a Jetson actually on the other end right now?
-
-    True once something holds the gadget open and a host has configured us,
-    held for PRESENCE_HOLD after that stops. A phone on the cable is a host on
-    the gadget like any other.
-    """
+    """Is a host on the other end now: configured us, or did within
+    PRESENCE_HOLD? A phone on the cable is a host on the gadget like any other."""
     if gadget.dormant():
       # no enumeration during suspend; the CC line still tells a sleeping host from an unplugged one
       return gadget.port_has_host()
@@ -128,10 +114,9 @@ class Presence:
 
 
 def link_transport(mode: str | None = None) -> str:
-  """What carries the link, for the panels: the gadget the owner built, a
-  Jetson, a Linux PC or a Mac on the vendor interface or an iPhone dialed in
-  over the network interface; `mode` stands in until the owner has said.
-  Never raises: the panels read it on their tick."""
+  """What carries the link, for the panels: a host on the vendor interface,
+  or an iPhone dialed in over the network one; `mode` stands in until the
+  owner has said. Never raises."""
   try:
     if gadget.link_kind(mode) == 'cable':
       peer = gadget.link_peer()
@@ -158,8 +143,7 @@ NO_WARP = "no warp built for this camera"
 
 
 def unavailable(parts) -> str | None:
-  """Why an enabled link cannot run the large model, or None: a file read and
-  a stat, since the UI asks at 5 Hz."""
+  """Why an enabled link cannot run the large model, or None: files only."""
   error = gadget.gadget_error()
   if error is not None:
     return error
@@ -175,8 +159,7 @@ def _built_for_the_pick(parts) -> bool:
 
 def reason(parts, mode: str) -> str | None:
   """Why the link cannot run, for someone who asked for it only: with it off,
-  a device that cannot present the gadget simply does not offer the feature.
-  Files only: hardwared asks twice a second on every device."""
+  a device that cannot present the gadget simply does not offer the feature."""
   return unavailable(parts) if parts.enabled(mode) else None
 
 
@@ -235,8 +218,7 @@ class Status(NamedTuple):
 
 
 def read(parts, mode: str) -> Status:
-  """Everything at once, over the link setting the caller read: each file is
-  read once."""
+  """Everything at once, over the link setting the caller read: each file once."""
   enabled = parts.enabled(mode)
   reason = unavailable(parts) if enabled else None
   return Status(

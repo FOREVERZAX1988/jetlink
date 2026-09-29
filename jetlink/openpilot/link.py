@@ -41,15 +41,12 @@ BUILD_TIMEOUT = 1800.0
 
 
 def connect(log, loan, deadline: float | None = None, name: str | None = None):
-  """Open the link over what jetlinkd lent (see jetlink.comma.lending).
-
-  Only the owner ever holds ep0, and it decided which link this is when it
-  lent it: a phone's dial, which the link rides on, or the endpoint files,
-  which are all this end opens; JetlinkClient.open_loan takes whichever it is.
-  `deadline` is per frame and defaults to FRAME_TIMEOUT: modeld blocks on a
-  frame the way it blocks on a chestnut. `name` is what the server logs this
-  connection as; two comma processes share one gadget and the Jetson's journal
-  has no clock to tell them apart by.
+  """Open the link over what jetlinkd lent (jetlink.comma.lending): a phone's
+  dial or the endpoint files, as the owner decided; JetlinkClient.open_loan
+  takes either. `deadline` is per frame, FRAME_TIMEOUT by default: modeld
+  blocks on a frame the way it blocks on a chestnut. `name` is what the server
+  logs this connection as: two comma processes share one gadget, and the
+  Jetson's journal has no clock to tell them apart by.
   """
   from jetlink.client import FRAME_TIMEOUT, JetlinkClient
   if loan.sock is not None:
@@ -112,17 +109,14 @@ class Link:
 
   def _borrow(self, deadline: float | None):
     """The lease on the gadget jetlinkd owns. Raises without one: only the
-    owner ever holds ep0, so there is no link to open, and the join loop asks
-    again with the small model driving. An owner whose lender cannot listen
-    says so in the gadget status, which is the offroad alert.
-    """
+    owner ever holds ep0, so the join loop asks again with the small model
+    driving. An owner whose lender cannot listen says so in the offroad alert."""
     from jetlink.comma import lending
     # bounded by whatever the caller has left: an early present that spends its
     # whole budget here has nothing left to open the link with
     timeout = lending.BORROW_TIMEOUT if deadline is None else max(0.0, deadline - time.monotonic())
     if self.loan is not None and not self.loan.closed:
-      # the loan lasts the drive, but which link it is for is asked again every
-      # attempt: a phone may have dialed since, or the last dial be spent
+      # which link the loan is for is asked again every attempt (Loan.renew)
       if self.loan.renew(timeout):
         return self.loan
       if not self.loan.closed:
@@ -196,13 +190,10 @@ def connect_patiently(link: Link):
 # -- making the Jetson ready ------------------------------------------------------
 
 def identity(parts, entry: dict) -> tuple[str, int]:
-  """The picked model's sha256 and byte count.
-
-  From the catalog model's LFS pointer, so the comma can name the model
-  without holding or hashing the ONNX. The lookup happens once per model ever
-  and is kept in a param; it needs the internet, and that is the only part of
-  provisioning that does.
-  """
+  """The picked model's sha256 and byte count, from the catalog model's LFS
+  pointer, so the comma can name the model without holding or hashing the
+  ONNX. Looked up once per model ever and kept in a param: the one part of
+  provisioning that needs the internet."""
   sha256, nbytes = entry.get('oid'), entry.get('size')
   if sha256 and nbytes:
     return sha256, int(nbytes)
@@ -218,12 +209,8 @@ _hashed: dict[tuple[str, int, int], str] = {}
 
 
 def verified_upload(log, model_path: Path | None, sha256: str, nbytes: int) -> Path | None:
-  """The file to upload, once its hash is proven to match the registry.
-
-  Uploading under a sha the bytes do not have would leave the Jetson with a
-  plan whose name lies about its contents, so the hash happens here, on the
-  one path where the bytes go somewhere.
-  """
+  """The file to upload, once its hash is proven to match the registry: under
+  a sha the bytes do not have, the Jetson's plan would lie about its contents."""
   if model_path is None:
     return None
   try:
@@ -250,12 +237,9 @@ def verified_upload(log, model_path: Path | None, sha256: str, nbytes: int) -> P
 def ensure(parts, client, sha256: str, nbytes: int, model_path: Path | None, *,
            progress=None, should_stop=None, build_timeout: float = BUILD_TIMEOUT):
   """Make the server ready for this model and remember what it answered.
-
   Asks without the file first: the server answers from the sha alone when it
-  already has the model, which is every poll of a parked car and every join of
-  a drive. EngineMissing means the Jetson has neither the plan nor the bytes
-  and neither has the caller.
-  """
+  has the model, which is every parked poll and every join. EngineMissing means
+  the Jetson has neither the plan nor the bytes, and neither has the caller."""
   from jetlink.client import EngineMissing
   ask = functools.partial(client.ensure_engine, sha256, nbytes, progress=progress,
                           build_timeout=build_timeout, should_stop=should_stop)
@@ -274,16 +258,12 @@ def open_link(parts, link: Link, should_stop=None):
   """Get a client and a spec. Link IO only, so it is safe off modeld's thread;
   everything that touches tinygrad stays in the joining state's build.
 
-  The model the user picked is built here if the Jetson has not got it. That
-  takes minutes and the small model drives through all of them, which beats
-  what it used to do: a provisioning run works offroad only, so a model picked in
-  the driveway and driven off on cost the whole drive, with the link never
-  even presented. Only ever reached with the small model driving (the join
-  loop stops asking once it has joined) so a build here never unloads an
-  engine that is steering.
-
-  Whatever this attempt cannot use stays on `link`, still open, for the next
-  one; see Link.
+  The picked model is built here if the Jetson has not got it, minutes with
+  the small model driving: a provisioning run works offroad only, so a model
+  picked in the driveway cost the whole drive otherwise. Only reached with
+  the small model driving (the join loop stops asking once joined), so a build
+  here never unloads an engine that is steering. Whatever this attempt cannot
+  use stays on `link`, still open, for the next one.
   """
   from jetlink.client import EngineMissing
 

@@ -67,11 +67,29 @@ NET_STATUS = Path("/dev/shm/jetlink-net")   # jetlink-root.sh: "ok 192.168.60.1 
 CABLE_ADDR = (CABLE_ADDRESS, DEFAULT_PORT)
 
 
-def _link_record() -> list[str]:
+def _read(path: Path) -> str:
+  """A record's text, stripped; '' when it is missing or unreadable."""
   try:
-    return LINK.read_text().split()
+    return path.read_text().strip()
   except OSError:
-    return []
+    return ''
+
+
+def _write(path: Path, text: str | None, what: str) -> bool:
+  """Write a record, or remove it with None. False, and logged, when that fails."""
+  try:
+    if text is None:
+      path.unlink(missing_ok=True)
+    else:
+      path.write_text(text)
+    return True
+  except OSError:
+    log.exception("jetlink: could not %s", what)
+    return False
+
+
+def _link_record() -> list[str]:
+  return _read(LINK).split()
 
 
 def link_kind(mode: str | None = None) -> str:
@@ -94,26 +112,16 @@ def link_peer() -> str | None:
 def note_link(kind: str, peer: str | None = None) -> None:
   """The owner's record of the gadget it built, 'usb' or 'cable', and on the
   cable the phone that dialed in; see link_kind and link_peer."""
-  try:
-    LINK.write_text(f"{kind} {peer}".strip() if peer else kind)
-  except OSError:
-    log.exception("jetlink: could not record the link")
+  _write(LINK, f"{kind} {peer}".strip() if peer else kind, "record the link")
 
 
 def clear_link() -> None:
-  try:
-    LINK.unlink(missing_ok=True)
-  except OSError:
-    log.exception("jetlink: could not clear the link record")
-
+  _write(LINK, None, "clear the link record")
 
 
 def net_status() -> str | None:
   """What jetlink-root.sh said about the gadget's network interface, if it ran."""
-  try:
-    return NET_STATUS.read_text().strip() or None
-  except OSError:
-    return None
+  return _read(NET_STATUS) or None
 
 
 def usb_speed() -> str | None:
@@ -157,8 +165,8 @@ STATE = Path("/dev/shm/jetlink-owner-state")
 def owner_state() -> dict:
   """What the provisioning runs left for the owner, or {}."""
   try:
-    value = json.loads(STATE.read_text())
-  except (OSError, ValueError):
+    value = json.loads(_read(STATE))
+  except ValueError:
     return {}
   return value if isinstance(value, dict) else {}
 
@@ -172,10 +180,7 @@ def far_end_sleeps(state: dict | None = None) -> bool:
 def _status_error(path: Path) -> str | None:
   """The reason in an "ok" or "error: <reason>" file. A missing file is not an
   error: whatever writes it has not run."""
-  try:
-    reason = path.read_text().strip()
-  except OSError:
-    return None
+  reason = _read(path)
   if not reason or reason == 'ok':
     return None
   return reason.removeprefix('error:').strip() or None
@@ -198,21 +203,13 @@ def gadget_error() -> str | None:
 
 def note_lender_error(reason: str | None) -> None:
   """The owner's record of a lender that cannot listen, or None once it can."""
-  try:
-    if reason is None:
-      LENDER_STATUS.unlink(missing_ok=True)
-    else:
-      LENDER_STATUS.write_text(f"error: the lender could not listen: {reason}\n")
-  except OSError:
-    log.exception("jetlink: could not record the lender's state")
+  _write(LENDER_STATUS, None if reason is None else f"error: the lender could not listen: {reason}\n",
+         "record the lender's state")
 
 
 def bound_udc() -> str | None:
   """The device controller our gadget is attached to, if it is attached."""
-  try:
-    return (GADGET_PATH / "UDC").read_text().strip() or None
-  except OSError:
-    return None
+  return _read(GADGET_PATH / "UDC") or None
 
 
 def udc_state() -> str | None:
@@ -223,12 +220,7 @@ def udc_state() -> str | None:
   bind as a wake and did not finish waking looks like.
   """
   udc = bound_udc()
-  if udc is None:
-    return None
-  try:
-    return (UDC_PATH / udc / "state").read_text().strip() or None
-  except OSError:
-    return None
+  return None if udc is None else _read(UDC_PATH / udc / "state") or None
 
 
 def host_attached() -> bool:
@@ -243,8 +235,8 @@ def cc_orientation() -> int | None:
   cable's pull-up rides on the host's VBUS and reads the same. None where the
   kernel does not say."""
   try:
-    return int(CC_ORIENTATION.read_text())
-  except (OSError, ValueError):
+    return int(_read(CC_ORIENTATION))
+  except ValueError:
     return None
 
 
@@ -361,20 +353,14 @@ def link_configured() -> bool:
 
 
 def set_dormant(on: bool) -> None:
-  try:
-    if on:
-      DORMANT.write_text(str(os.getpid()))
-    else:
-      DORMANT.unlink(missing_ok=True)
-  except OSError:
-    log.exception("jetlink: could not update the dormant marker")
+  _write(DORMANT, str(os.getpid()) if on else None, "update the dormant marker")
 
 
 def dormant() -> bool:
   """Has a live owner released the gadget on purpose?"""
   try:
-    pid = int(DORMANT.read_text())
-  except (OSError, ValueError):
+    pid = int(_read(DORMANT))
+  except ValueError:
     return False
   try:
     os.kill(pid, 0)
@@ -386,12 +372,7 @@ def dormant() -> bool:
 
 
 def request_shutdown(reason: str) -> bool:
-  try:
-    SHUTDOWN_REQUEST.write_text(json.dumps({'reason': reason}))
-    return True
-  except OSError:
-    log.exception("jetlink: could not write the shutdown request")
-    return False
+  return _write(SHUTDOWN_REQUEST, json.dumps({'reason': reason}), "write the shutdown request")
 
 
 def pending_shutdown() -> str | None:
@@ -403,8 +384,8 @@ def pending_shutdown() -> str | None:
   if not SHUTDOWN_REQUEST.exists():
     return None
   try:
-    return str(json.loads(SHUTDOWN_REQUEST.read_text()).get('reason', ''))
-  except (OSError, ValueError):
+    return str(json.loads(_read(SHUTDOWN_REQUEST)).get('reason', ''))
+  except ValueError:
     return None
 
 
@@ -421,7 +402,4 @@ def await_shutdown(timeout: float, poll: float = 0.25) -> bool:
 
 
 def finish_shutdown() -> None:
-  try:
-    SHUTDOWN_REQUEST.unlink(missing_ok=True)
-  except OSError:
-    log.exception("jetlink: could not remove the shutdown request")
+  _write(SHUTDOWN_REQUEST, None, "remove the shutdown request")

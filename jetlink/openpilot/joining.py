@@ -124,6 +124,15 @@ class JoiningModelState:
       t.start()
 
   # -- what modeld reads ------------------------------------------------------
+  # A read not defined here follows the model that is driving (__getattr__):
+  # vision_input_names, and modeld_v2's constants, smoothing and action
+  # function, which sunnypilot keeps on the ModelState so a custom small bundle
+  # can carry its own. Swaps and demotes happen inside run(), so what is read
+  # after it belongs to the model whose output it is. What the loop writes
+  # lands on both. The frame's inputs are built for the small bundle (its
+  # desire name, its optional slots); the large model reads the desire under
+  # any name and the loop always supplies what it needs, so a swap can land on
+  # any frame
 
   @property
   def big_model_available(self) -> bool:
@@ -149,13 +158,17 @@ class JoiningModelState:
     return 'retrying' if self._failures else 'joining'
 
   @property
-  def vision_input_names(self):
-    return self._active.vision_input_names
-
-  @property
   def client(self):
     # read by the status publisher on every send, so the telemetry follows the link
     return getattr(self._active, 'client', None)
+
+  @property
+  def desire_key(self) -> str:
+    return self._small.desire_key
+
+  @property
+  def numpy_inputs(self):
+    return self._small.numpy_inputs
 
   @property
   def lat_delay(self):
@@ -169,34 +182,6 @@ class JoiningModelState:
     if self._active is not self._small:
       self._active.lat_delay = value
 
-  # -- what modeld_tinygrad reads ---------------------------------------------
-  # sunnypilot's modeld_v2 keeps the constants, the smoothing and the action
-  # function on the ModelState, so a custom small bundle can carry its own.
-  # Each follows the model that is driving; what the loop writes lands on both.
-  # The frame's inputs are built for the small bundle (its desire name, its
-  # optional slots); the large model reads the desire under any name and the
-  # loop always supplies what it needs, so a swap can land on any frame
-
-  @property
-  def constants(self):
-    return self._active.constants
-
-  @property
-  def desire_key(self) -> str:
-    return self._small.desire_key
-
-  @property
-  def numpy_inputs(self):
-    return self._small.numpy_inputs
-
-  @property
-  def LAT_SMOOTH_SECONDS(self):
-    return self._active.LAT_SMOOTH_SECONDS
-
-  @property
-  def LONG_SMOOTH_SECONDS(self):
-    return self._active.LONG_SMOOTH_SECONDS
-
   @property
   def PLANPLUS_CONTROL(self):
     return self._active.PLANPLUS_CONTROL
@@ -207,17 +192,12 @@ class JoiningModelState:
     if self._active is not self._small:
       self._active.PLANPLUS_CONTROL = value
 
-  def get_action_from_model(self, *args, **kwargs):
-    # swaps and demotes happen inside run(), so this is the model whose output it is
-    return self._active.get_action_from_model(*args, **kwargs)
-
   def __getattr__(self, name):
-    # Only for names this class does not define: whatever else modeld starts
-    # reading follows the model that is driving, as the properties above do.
-    # Without it, a comma or sunnypilot sync that adds one read was an
-    # AttributeError on the frame thread, which modeld re-raises: modeld dead
-    # for the drive, on jetlink devices only. Reads only; a new write lands
-    # here and nowhere else, so each one modeld makes has its own setter above
+    # Only for names this class does not define. Without it, a comma or
+    # sunnypilot sync that adds one read was an AttributeError on the frame
+    # thread, which modeld re-raises: modeld dead for the drive, on jetlink
+    # devices only. Reads only; a new write lands here and nowhere else, so
+    # each one modeld makes has its own setter above
     if name.startswith('_'):
       # also what keeps __init__ from recursing before _active exists
       raise AttributeError(name)
@@ -345,26 +325,17 @@ class JoiningModelState:
     Jetson that is not plugged in looked like one six seconds from loading. No
     fraction to give, and the panel does not invent one.
     """
-    self._progress.report(stage, 0.0, self._status(msg))
-
-  def _status(self, msg: str) -> str:
     # the count is the diagnosis. A link that runs for minutes and then goes,
     # again and again, is the cable, and the cable is the one thing the
     # driver can do something about
     if self._drops >= DROPS_TO_BLAME_CABLE:
-      return f"{msg}; link dropped {self._drops} times this drive, check the USB cable or the phone app"
-    return msg
+      msg = f"{msg}; link dropped {self._drops} times this drive, check the USB cable or the phone app"
+    self._progress.report(stage, 0.0, msg)
 
   def _note_link_loss(self) -> None:
-    """Off the frame thread: what the comma's USB-C port sees now.
-
-    The port controller reads the CC pin, so it says whether the cable is
-    electrically there: 0 is a port with no host on it (a legacy A-to-C
-    cable's pull-up rides on the host's VBUS, so a VBUS glitch reads the
-    same), 1 or 2 a cable with a live host, and then the data link alone
-    went. The kernel logs the same edge as a Type-C disconnect, in dmesg;
-    this puts it next to the failure.
-    """
+    """Off the frame thread: what the comma's USB-C port sees now, next to the
+    failure (gadget.cc_orientation). A host still on the cable means the data
+    link alone went; the kernel logs the same edge as a Type-C disconnect."""
     cc = gadget.cc_orientation()
     if cc is None:
       port = "port state unknown"
