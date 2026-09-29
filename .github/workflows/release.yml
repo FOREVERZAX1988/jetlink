@@ -1,5 +1,5 @@
-# Everything a v* tag produces: the macOS app, the Python distributions, the
-# Linux server for Jetsons and PCs, and the GitHub release that carries them.
+# Everything a v* tag produces: the macOS app, the Linux server for Jetsons
+# and PCs, and the GitHub release that carries them.
 # A push to main builds the Linux server too and puts it on the edge
 # prerelease under fixed names, which is what `install.sh --ref main` installs.
 #
@@ -35,31 +35,6 @@ jobs:
 
       - name: Check the tag matches the package version
         run: macos/scripts/check-version.sh "${GITHUB_REF_NAME}"
-
-  python-dist:
-    name: Python sdist and wheel
-    needs: check
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Check out the repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install build
-        run: pip install build
-
-      - name: Build the distributions
-        run: python -m build
-
-      - name: Upload the distributions
-        uses: actions/upload-artifact@v4
-        with:
-          name: python-dist
-          path: dist/*
 
   macos-app:
     name: macOS app
@@ -195,53 +170,34 @@ jobs:
       - name: Check out the repository
         uses: actions/checkout@v4
 
+      # NVIDIA's pinned header debs and onnxruntime's tarball
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/jetlink-build
+          key: jetlink-server-build-${{ matrix.flavor }}-${{ hashFiles('scripts/build-linux.sh') }}
+
       - name: Build the server
-        env:
-          REF_TYPE: ${{ github.ref_type }}
-        run: |
-          # A tag's build is the release: VERSION says 0.7.0, where main's says
-          # 0.7.0-dev.<sha>. The check job holds the tag to __version__.
-          if [ "$REF_TYPE" = tag ]; then
-            scripts/build-linux.sh --release "$FLAVOR"
-          else
-            scripts/build-linux.sh "$FLAVOR"
-          fi
+        run: scripts/build-linux.sh "$FLAVOR"
         # The one way the server is built, here, in a container on a Mac or on
         # a Jetson: dist/jetlink-server-<version>-<flavor>.tar.gz and its
-        # .sha256.
+        # .sha256. On a tag v<__version__> the version is the release's.
 
       - name: Check the tarball
-        env:
-          REF_TYPE: ${{ github.ref_type }}
         run: |
           set -euo pipefail
-          cd dist
-          found=(jetlink-server-*-"$FLAVOR".tar.gz)
-          if [ "${#found[@]}" != 1 ] || [ ! -f "${found[0]}" ]; then
-            echo "error: wanted one tarball, found: ${found[*]}" >&2
-            exit 1
-          fi
-          f=${found[0]}
-          ls -l "$f"
-          # what install.sh checks, and the binary with its page beside it
-          [ "$(awk '{print $1; exit}' "$f.sha256")" = "$(sha256sum "$f" | awk '{print $1}')" ]
-          mkdir unpacked
-          tar -xzf "$f" -C unpacked
-          top=(unpacked/*)
-          [ -x "${top[0]}/bin/jetlink-server" ]
-          [ -f "${top[0]}/bin/JetlinkKit_JetlinkStatusPage.resources/Resources/index.html" ]
-          # this runner is the flavor's processor: the binary runs here
-          version="$("${top[0]}/bin/jetlink-server" --version)"
-          echo "jetlink-server --version: $version"
-          [ "$version" = "$(cat "${top[0]}/VERSION")" ]
-          if [ "$REF_TYPE" = tag ]; then [ "$version" = "${GITHUB_REF_NAME#v}" ]; fi
-          "${top[0]}/bin/jetlink-server" serve --help >/dev/null
+          # what install.sh checks, then the binary, which runs on this
+          # runner: it is the flavor's processor
+          (cd dist && sha256sum -c jetlink-server-*-"$FLAVOR".tar.gz.sha256)
+          tar -xzf dist/jetlink-server-*-"$FLAVOR".tar.gz -C "$RUNNER_TEMP"
+          cd "$RUNNER_TEMP"/jetlink-server-*-"$FLAVOR"
+          [ -f bin/JetlinkKit_JetlinkStatusPage.resources/Resources/index.html ]
+          [ "$(bin/jetlink-server --version)" = "$(cat VERSION)" ]
+          bin/jetlink-server serve --help >/dev/null
           # no GPU here, so TensorRT has to say it cannot run
-          if "${top[0]}/bin/jetlink-server" backends --backend trt; then
+          if bin/jetlink-server backends --backend trt; then
             echo "error: backends --backend trt passed on a runner without a GPU" >&2
             exit 1
           fi
-          rm -rf unpacked
 
       - name: Upload the tarball
         uses: actions/upload-artifact@v4
@@ -296,7 +252,7 @@ jobs:
     name: GitHub release
     # The server is required: install.sh takes the newest release, so one
     # without it would stop every Linux install and update.
-    needs: [python-dist, macos-app, linux-server]
+    needs: [macos-app, linux-server]
     runs-on: ubuntu-24.04
     steps:
       - name: Check out the repository
@@ -309,12 +265,6 @@ jobs:
         with:
           name: macos-app
           path: artifacts/macos-app
-
-      - name: Download the Python distributions
-        uses: actions/download-artifact@v4
-        with:
-          name: python-dist
-          path: artifacts/python-dist
 
       - name: Download the Linux server
         uses: actions/download-artifact@v4
@@ -353,10 +303,8 @@ jobs:
             ARGS=(--generate-notes --title "Jetlink $GITHUB_REF_NAME")
           fi
           # Both spellings of a prerelease: a hyphenated semver tag, and the
-          # PEP 440 suffixes, which carry no hyphen. jetlink.__version__ has to
-          # hold the version verbatim (check-version.sh), so an alpha tagged the
-          # semver way would be built into a wheel named the PEP 440 way; the
-          # tags here are PEP 440 and this has to recognise them.
+          # PEP 440 suffixes jetlink.__version__ carries (check-version.sh),
+          # which have no hyphen.
           case "$GITHUB_REF_NAME" in
             *-*|*a[0-9]*|*b[0-9]*|*rc[0-9]*) ARGS+=(--prerelease) ;;
           esac
@@ -369,8 +317,7 @@ jobs:
           # shellcheck disable=SC2016
           {
             printf '%s\n\n' "$NOTES"
-            # The DMG when signed, else the zip; either way the first asset
-            # on the page, since "-macOS" sorts ahead of the wheel's "-py3".
+            # The DMG when signed, else the zip.
             MAC="$(find artifacts/macos-app -name 'Jetlink-*-macOS.dmg' | head -1)"
             [ -n "$MAC" ] || MAC="$(find artifacts/macos-app -name 'Jetlink-*-macOS.zip' | head -1)"
             MAC="$(basename "$MAC")"
