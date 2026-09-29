@@ -38,7 +38,6 @@ from jetlink.client import EngineMissing, JetlinkClient
 from jetlink.queues import PolicyQueues
 from jetlink.spec import DRIVING_OUTPUT, ModelSpec
 from jetlink.transport.base import LinkError, LinkTimeout
-from jetlink.transport.tcp import TcpTransport
 from tests import tiny_model
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -70,7 +69,7 @@ pytestmark = pytest.mark.skipif(BIN is None, reason='no jetlink-server: set JETL
 def spec_of(path: Path) -> ModelSpec:
   """The spec Python derives, as committed beside the graph: no onnx package
   needed here, so this runs anywhere numpy does."""
-  return ModelSpec.from_dict(json.loads(path.with_suffix('.spec.json').read_text()))
+  return ModelSpec.load(path.with_suffix('.spec.json'))
 
 
 @dataclass
@@ -83,7 +82,7 @@ class Server:
   provisioned: dict = field(default_factory=dict)
 
   def connect(self) -> JetlinkClient:
-    return JetlinkClient(TcpTransport.connect('127.0.0.1', self.port), deadline=10.0, name='test_swift_server')
+    return JetlinkClient.open_tcp('127.0.0.1', self.port, deadline=10.0, name='test_swift_server')
 
   def tail(self) -> str:
     return '\n'.join(self.log.read_text(errors='replace').splitlines()[-40:])

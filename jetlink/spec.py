@@ -26,9 +26,11 @@ own hidden state back, which modeld did through prev_feat until then.
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 from dataclasses import dataclass
 from functools import cached_property
+from pathlib import Path
 
 from jetlink.onnx_meta import parse_file
 from jetlink.protocol import INFER_REQ_SIZE, INFER_RESP_SIZE
@@ -218,6 +220,11 @@ class ModelSpec:
       output_shapes={k: tuple(v) for k, v in d['output_shapes'].items()},
       output_slices={k: slice(*v) for k, v in d['output_slices'].items()},
       checkpoint=d.get('checkpoint'))
+
+  @classmethod
+  def load(cls, path: str | Path) -> ModelSpec:
+    """A spec saved as to_dict's JSON."""
+    return cls.from_dict(json.loads(Path(path).read_text()))
 
 
 def sha256_file(path: str, bufsize: int = 1 << 20) -> tuple[str, int]:

@@ -74,16 +74,12 @@ MDN_LAYOUTS = {
 }
 
 
-def load_spec_file(path: str | Path) -> ModelSpec:
-  return ModelSpec.from_dict(json.loads(Path(path).read_text()))
-
-
 def load_spec(args) -> ModelSpec | None:
   """--spec wins; otherwise the copy capture wrote next to the frames."""
   if args.spec:
-    return load_spec_file(args.spec)
+    return ModelSpec.load(args.spec)
   path = Path(args.dir) / 'spec.json'
-  return load_spec_file(path) if path.exists() else None
+  return ModelSpec.load(path) if path.exists() else None
 
 
 def make_inputs(spec: ModelSpec, n: int, seed: int = 0) -> list[tuple[np.ndarray, np.ndarray]]:
@@ -124,31 +120,10 @@ def make_inputs(spec: ModelSpec, n: int, seed: int = 0) -> list[tuple[np.ndarray
 
 # -- capture: what actually comes back over the link -------------------------
 
-def parse_listen(spec: str, default_host: str = '0.0.0.0') -> tuple[str, int]:
-  """'[HOST:]PORT' for --listen."""
-  host, _, port = spec.rpartition(':')
-  try:
-    return host or default_host, int(port)
-  except ValueError:
-    raise SystemExit(f"--listen wants [HOST:]PORT, not {spec!r}") from None
-
-
-def open_listen(spec: str, timeout: float):
-  """Take one incoming dial and capture over it, the way the comma takes a
-  phone's; see docs/transport.md."""
-  from jetlink.client import JetlinkClient
-  from jetlink.transport.tcp import TcpTransport
-  host, port = parse_listen(spec)
-  print(f"waiting up to {timeout:.0f}s for a peer to dial {host}:{port}...")
-  transport, addr = TcpTransport.listen_once(host, port, timeout)
-  print(f"peer dialed in from {addr[0]}:{addr[1]}")
-  return JetlinkClient(transport, want_hidden=True)
-
-
 def capture(args) -> int:
   from jetlink.client import JetlinkClient
 
-  spec = load_spec_file(args.spec) if args.spec else None
+  spec = ModelSpec.load(args.spec) if args.spec else None
   if spec is not None:
     sha256, nbytes = spec.sha256, spec.nbytes
   elif args.sha256 and args.nbytes:
@@ -165,7 +140,8 @@ def capture(args) -> int:
   elif args.host:
     client = JetlinkClient.open_tcp(args.host, args.port, want_hidden=True)
   else:
-    client = open_listen(args.listen, args.listen_timeout)
+    print(f"waiting up to {args.listen_timeout:.0f}s for a peer to dial {args.listen}...")
+    client = JetlinkClient.open_listen(args.listen, args.listen_timeout, want_hidden=True)
 
   try:
     hello = client.hello(timeout=60.0)  # the jetson may still be re-enumerating
