@@ -33,7 +33,7 @@ public final class TrtEngine: EngineCore, @unchecked Sendable {
   private var replyEvent: OpaquePointer?
   private var zeroState = false
   private var copies: Copies?
-  private var timing: GPUTiming?
+  private(set) var timing: GPUTiming?
   private let faultAfter: Int?
   private var warmed = false
   private var served = 0
@@ -46,8 +46,8 @@ public final class TrtEngine: EngineCore, @unchecked Sendable {
   }
 
   /// `gpuTiming` puts a pair of timing events around every launch, off the
-  /// reply's path, and logs their spread every 1,200 frames. `faultAfter` is
-  /// TrtBackend's H6 fault hook.
+  /// reply's path, and logs their spread every 1,200 frames, and what is left
+  /// at `flushTiming` and `close`. `faultAfter` is TrtBackend's H6 fault hook.
   public init(plan: URL, trt: TensorRT, gpuTiming: Bool = false, faultAfter: Int? = nil) throws {
     let parts = try Parts(plan: plan, trt: trt)
     self.trt = trt
@@ -91,6 +91,10 @@ public final class TrtEngine: EngineCore, @unchecked Sendable {
   /// Zero the looped state before the next run: empty queues.
   public override func stateDidReset() {
     zeroState = true
+  }
+
+  public override func flushTiming() {
+    timing?.flush(trt, log: log)
   }
 
   /// One plain run so lazy CUDA state is paid for, then the graph, then one
@@ -152,6 +156,7 @@ public final class TrtEngine: EngineCore, @unchecked Sendable {
       jl_trt_event_destroy(h, replyEvent)
       self.replyEvent = nil
     }
+    timing?.flush(trt, log: log)
     timing?.destroy(trt)
     timing = nil
     super.close()
@@ -353,13 +358,13 @@ private func io(_ engine: OpaquePointer, _ index: Int32, _ trt: TensorRT) throws
 
 /// A timing event pair around each launch, outside the graph. A frame's
 /// times are read at the start of the next, when its events are long done,
-/// so the reply never waits on them.
-private final class GPUTiming {
+/// so the reply never waits on them. The last frame's are read at `flush`.
+final class GPUTiming {
   static let block = 1200
   private var start: OpaquePointer?
   private var stop: OpaquePointer?
   private var pending = false
-  private var samples: [Double] = []
+  private(set) var samples: [Double] = []
 
   init(_ trt: TensorRT) throws {
     let h = trt.handle
@@ -375,25 +380,45 @@ private final class GPUTiming {
   }
 
   func begin(_ trt: TensorRT, stream: OpaquePointer?, log: ServerLog) throws(TrtError) {
-    let h = trt.handle
-    if pending {
-      var ms: Float = 0
-      try trt.check { jl_trt_event_sync(h, stop, $0, $1) }
-      try trt.check { jl_trt_event_elapsed(h, start, stop, &ms, $0, $1) }
-      pending = false
-      samples.append(Double(ms))
-      if samples.count == Self.block {
-        let stats = BenchmarkStats.of(samples)
-        log.info("gpu (cuda events), \(samples.count) frames: mean \(stats.mean) p50 \(stats.p50) p99 \(stats.p99) max \(stats.max) ms")
-        samples.removeAll(keepingCapacity: true)
-      }
+    try collect(trt)
+    if samples.count == Self.block {
+      report(log)
     }
-    try trt.check { jl_trt_event_record(h, start, stream, 0, $0, $1) }
+    try trt.check { jl_trt_event_record(trt.handle, start, stream, 0, $0, $1) }
   }
 
   func end(_ trt: TensorRT, stream: OpaquePointer?) throws(TrtError) {
     try trt.check { jl_trt_event_record(trt.handle, stop, stream, 0, $0, $1) }
     pending = true
+  }
+
+  /// The last launch's time, into the samples.
+  private func collect(_ trt: TensorRT) throws(TrtError) {
+    guard pending else { return }
+    let h = trt.handle
+    var ms: Float = 0
+    try trt.check { jl_trt_event_sync(h, stop, $0, $1) }
+    try trt.check { jl_trt_event_elapsed(h, start, stop, &ms, $0, $1) }
+    pending = false
+    samples.append(Double(ms))
+  }
+
+  /// Logs what the block holds so far, the last launch included, and starts
+  /// a new one: at a swap, a close or a benchmark's end, which would
+  /// otherwise drop a session shorter than a block without a line.
+  func flush(_ trt: TensorRT, log: ServerLog) {
+    if (try? collect(trt)) == nil {
+      // after a sticky error: that launch has no time to read
+      pending = false
+    }
+    report(log)
+  }
+
+  private func report(_ log: ServerLog) {
+    guard !samples.isEmpty else { return }
+    let stats = BenchmarkStats.of(samples)
+    log.info("gpu (cuda events), \(samples.count) frames: mean \(stats.mean) p50 \(stats.p50) p99 \(stats.p99) max \(stats.max) ms")
+    samples.removeAll(keepingCapacity: true)
   }
 
   func destroy(_ trt: TensorRT) {

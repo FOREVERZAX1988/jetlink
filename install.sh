@@ -594,7 +594,9 @@ load_previous() {
 
 # --ref, else the saved choice, else latest. Installers before 0.5.0 saved
 # main, their default, without asking, and no JETLINK_VERSION: such an
-# install follows releases now.
+# install follows releases now. So does one pinned to a release that ran in
+# Docker (a rollback, `--ref v0.6.0`) that --binary moves to the native
+# server: kept, the pin would hold every later update to that release.
 choose_ref() {
   # a checkout installs what is in it, so a ref there would do nothing
   if [ "$SOURCE" = local ] && [ -n "$OPT_REF" ]; then
@@ -609,6 +611,9 @@ choose_ref() {
     if [ "$SOURCE" != local ]; then
       note "Jetlink now follows releases; for development builds, use --ref main."
     fi
+  elif [ -n "$OPT_BINARY" ] && docker_release "$REF"; then
+    note "Jetlink follows releases again: it was pinned to $REF, which runs the server in Docker."
+    REF=latest
   fi
   REF="${REF:-latest}"
 }
@@ -1337,11 +1342,15 @@ mount_of() {
   { df -P "$where" 2>/dev/null || true; } | awk 'NR == 2 {print $NF}'
 }
 
-# every image the Docker-era installers pulled or built
+# Every image the Docker-era installers pulled or built, as docker rmi takes
+# it: by name, or by ID once a newer pull took its tag ("<none>"), since
+# docker rmi refuses repo:<none>. Only Jetlink's repositories: an untagged
+# image of another repository, or one with none at all, is not ours.
 docker_images() {
   command -v docker >/dev/null 2>&1 || return 0
-  as_root docker image ls --format '{{.Repository}}:{{.Tag}}' 2>/dev/null \
-    | grep -E '^(jetlink|ghcr\.io/zoompilot/jetlink):' | sort -u || true
+  as_root docker image ls --format '{{.Repository}} {{.Tag}} {{.ID}}' 2>/dev/null \
+    | awk '$1 == "jetlink" || $1 == "ghcr.io/zoompilot/jetlink" { print ($2 == "<none>" ? $3 : $1 ":" $2) }' \
+    | sort -u || true
 }
 
 remove_docker_images() {

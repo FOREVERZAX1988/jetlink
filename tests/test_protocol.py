@@ -222,6 +222,23 @@ def test_spec_matches_the_shipped_big_model():
   assert P.HEADER_SIZE + P.INFER_RESP_SIZE + s.output_nbytes == 73_860
 
 
+@pytest.mark.parametrize('hidden,expected', [
+  (slice(2066, 18450), (2066, 18450)),
+  (slice(-16386, -2), (2066, 18450)),        # counted from the back
+  (slice(2068, None), (2068, 18452)),        # an open end
+  (slice(None, 16384), (0, 16384)),
+  (slice(2066, 99999), (2066, 18452)),       # past the end: clamped, as slicing does
+  (slice(18450, 2066), None),                # takes nothing
+  (slice(2066, 18450, 2), None),             # a step: not one run of floats
+])
+def test_hidden_state_ends_resolve_as_python_slices_them(hidden, expected):
+  """The Swift server resolves them alike (NamedSlice.range(in:)); the layout
+  conformance fixture holds the two to it."""
+  s = _spec(output_slices={'hidden_state': hidden})
+  assert s.hidden_range == expected
+  assert s.reply_nelem == 18_452 - (expected[1] - expected[0] if expected else 0)
+
+
 def test_a_stateful_model_sends_and_gets_what_a_queued_one_does():
   stateful, queued = _stateful_spec(), _spec()
   assert stateful.stateful and not queued.stateful
@@ -426,6 +443,28 @@ def test_telemetry_follows_the_outputs():
   client = replying(spec, reply(np.zeros(spec.reply_nelem), json.dumps({'temp_c': 50}).encode()))
   frame(client, want_state=True)
   assert client.last_state == {'temp_c': 50}
+
+
+@pytest.mark.parametrize('tail', [b'', b'{"temp_c": 50}', b'[1, 2]', b'{not json'])
+def test_a_reply_laid_out_another_way_is_refused_when_telemetry_was_asked_for(tail):
+  """With WANT_STATE the bytes after the outputs are telemetry, a JSON object.
+  The hidden state left in (or resolved differently on the server) is floats
+  there instead, and read as outputs they would reach modelV2: refused."""
+  spec = _spec()
+  client = replying(spec, reply(np.full(spec.output_nelem, 0.5, np.float32), tail))
+  with pytest.raises(LinkError, match='bytes, expected 8292'):
+    frame(client, want_state=True)
+  assert client.dead
+  assert client.last_state is None
+
+
+@pytest.mark.parametrize('tail', [b'[1, 2]', b'"hot"', b'{not json'])
+def test_telemetry_that_is_not_a_json_object_is_refused(tail):
+  spec = _spec()
+  client = replying(spec, reply(np.zeros(spec.reply_nelem), tail))
+  with pytest.raises(LinkError, match='bytes, expected 8292'):
+    frame(client, want_state=True)
+  assert client.dead
 
 
 class _CappedTransport(StreamTransport):

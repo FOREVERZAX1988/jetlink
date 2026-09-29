@@ -8,7 +8,8 @@
 
   /// The sleeper on a copy of the Jetson's sysfs and a clock the test moves.
   /// The kernel is the writer: `mem` to /sys/power/state sleeps (the success
-  /// count rises), or fails with the errno the test chooses.
+  /// count rises, the RTC moves on to the wake), or fails with the errno the
+  /// test chooses.
   final class Kernel: @unchecked Sendable {
     let tree = Tree.jetsonCopy()
     let monotonic = Locked(1000.0)
@@ -19,6 +20,9 @@
     let failing = Locked<[String: Int32]>([:])
     /// Whether a suspend sleeps, or returns at once without sleeping.
     let sleeps = Locked(true)
+    /// RTC seconds into a sleep that a USB edge wakes it, unless the armed
+    /// alarm comes first; nil, only the alarm does.
+    let usbWake = Locked<Int?>(60)
 
     /// Made at once, so the idle count starts with the kernel.
     private(set) var sleeper: Sleeper!
@@ -40,10 +44,29 @@
         if sleeps.value {
           let count = Int(tree.read("/sys/power/suspend_stats/success")!.trimmingCharacters(in: .whitespacesAndNewlines))!
           tree.write("/sys/power/suspend_stats/success", "\(count + 1)\n")
+          sleepRTC()
         }
         return
       }
       try Sysfs.write(path, text)
+    }
+
+    /// The RTC counts on while asleep, to the USB edge or the armed alarm,
+    /// whichever comes first; with neither the test never wakes, so it stands.
+    private func sleepRTC() {
+      let rtc = "/sys/class/rtc/rtc0"
+      guard let text = tree.read("\(rtc)/since_epoch"), let now = Int(text.trimmingCharacters(in: .whitespacesAndNewlines)) else { return }
+      let armed = writes.value.last { $0.0 == "\(rtc)/wakealarm" }.flatMap { Int($0.1.trimmingCharacters(in: .whitespacesAndNewlines)) }
+      let alarm = armed.flatMap { $0 > 0 ? $0 : nil }
+      guard let wake = [usbWake.value.map { now + $0 }, alarm].compactMap({ $0 }).min() else { return }
+      tree.write("\(rtc)/since_epoch", "\(wake)\n")
+    }
+
+    /// A gadget away long enough: the sleeper suspends, and is back.
+    func sleepOnce() -> Bool {
+      _ = sleeper.handle(.absent)
+      wait(sleeper.after)
+      return sleeper.handle(.absent)
     }
 
     var suspends: Int { writes.value.filter { $0.0 == "/sys/power/state" }.count }
@@ -69,7 +92,7 @@
       // Deep is selected already ("s2idle [deep]"), and every hub is armed.
       #expect(!kernel.writes.value.contains { $0.0 == "/sys/power/mem_sleep" })
       #expect(!kernel.writes.value.contains { $0.0.hasSuffix("/power/wakeup") })
-      // Awake again: whatever woke it gets the whole count to show up.
+      // Awake again on a USB edge: whatever woke it gets the whole count to show up.
       kernel.wait(119)
       #expect(!kernel.sleeper.handle(.absent))
       kernel.wait(1)
@@ -126,6 +149,68 @@
       kernel.wait(120)
       #expect(kernel.sleeper.idle())
       #expect(kernel.lines.has(.warning, "could not arm the 1800 s wake backstop"))
+      #expect(!kernel.lines.has(.info, "woken by the wake backstop"))
+    }
+
+    @Test("The backstop's wake with no gadget sleeps again after the 15 s grace, every time")
+    func backstopGrace() {
+      let kernel = Kernel()
+      kernel.usbWake.value = nil
+      #expect(kernel.sleepOnce())
+      #expect(kernel.lines.has(.info, "woken by the wake backstop: sleeping again unless a gadget shows up within 15 s"))
+      for suspends in 2...4 {
+        kernel.wait(14)
+        #expect(!kernel.sleeper.handle(.absent))
+        kernel.wait(1)
+        #expect(kernel.sleeper.handle(.absent))
+        #expect(kernel.suspends == suspends)
+      }
+      #expect(kernel.lines.count("no gadget for 15 s after the wake backstop, suspending") == 3)
+      // Each sleep ran to its alarm, half an hour on the RTC's count.
+      #expect(kernel.tree.read("/sys/class/rtc/rtc0/since_epoch") == "\(1_790_625_382 + 4 * 1800)\n")
+    }
+
+    @Test("A wake before the alarm's time is the USB's: the whole count, as before")
+    func usbWake() {
+      let kernel = Kernel()
+      // a second short of the alarm
+      kernel.usbWake.value = 1799
+      #expect(kernel.sleepOnce())
+      #expect(!kernel.lines.has(.info, "woken by the wake backstop"))
+      kernel.wait(119)
+      #expect(!kernel.sleeper.handle(.absent))
+      kernel.wait(1)
+      #expect(kernel.sleeper.handle(.absent))
+      #expect(kernel.suspends == 2)
+    }
+
+    @Test("A gadget or a connection within the grace is a USB wake that raced the alarm: the whole count again")
+    func racedTheBackstop() {
+      let gadget = Kernel()
+      gadget.usbWake.value = nil
+      #expect(gadget.sleepOnce())
+      gadget.wait(10)
+      #expect(!gadget.sleeper.handle(.present))
+      // served, then gone: the count starts from the going
+      gadget.wait(300)
+      #expect(!gadget.sleeper.handle(.absent))
+      gadget.wait(119)
+      #expect(!gadget.sleeper.handle(.absent))
+      gadget.wait(1)
+      #expect(gadget.sleeper.handle(.absent))
+      #expect(gadget.lines.count("no gadget for 120 s, suspending") == 2)
+
+      // a comma over TCP, with no gadget on the bus
+      let tcp = Kernel()
+      tcp.usbWake.value = nil
+      #expect(tcp.sleepOnce())
+      tcp.wait(10)
+      #expect(!tcp.sleeper.handle(.connected))
+      tcp.wait(119)
+      #expect(!tcp.sleeper.handle(.absent))
+      tcp.wait(1)
+      #expect(tcp.sleeper.handle(.absent))
+      #expect(tcp.suspends == 2)
     }
 
     @Test("A hub shipped disarmed is armed before the suspend; one that will not arm is said loudly")
@@ -281,6 +366,28 @@
       kernel.wait(1)
       #expect(kernel.sleeper.idle())
       #expect(kernel.suspends == 1)
+    }
+
+    @Test("Held after the backstop's wake: no suspend past the grace; the release gives the whole count")
+    func heldAfterBackstop() {
+      let kernel = kernel()
+      kernel.usbWake.value = nil
+      #expect(kernel.sleepOnce())
+      let holder = Holder(kernel.tree.path("/run/jetlink-awake.lock"))
+      kernel.wait(15)
+      for _ in 0..<5 {
+        #expect(!kernel.sleeper.handle(.absent))
+        kernel.wait(600)
+      }
+      #expect(kernel.suspends == 1)
+      holder.release()
+      #expect(!kernel.sleeper.handle(.absent))
+      #expect(kernel.lines.count("no longer held awake; suspending after 120 s more") == 1)
+      kernel.wait(119)
+      #expect(!kernel.sleeper.handle(.absent))
+      kernel.wait(1)
+      #expect(kernel.sleeper.handle(.absent))
+      #expect(kernel.suspends == 2)
     }
 
     @Test("A holder that died let go with its descriptor: no hold")

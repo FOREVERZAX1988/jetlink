@@ -20,6 +20,20 @@ printf '%s %s%s\n' "$name" "$*" "$held" >>"${FAKE_LOG:-/tmp/fake.log}"
 
 # an installed package's version; fails when it is not installed
 pkg() { cat "$state/pkg-$1" 2>/dev/null; }
+# The images Docker has, a "REPOSITORY TAG ID" line each, from $state/images,
+# where a line is "repo:tag", or "repo:tag id" for an ID the scenario names.
+# An untagged image is repo:<none>, or <none>:<none> with no repository.
+fake_images() {
+  [ -f "$state/images" ] || return 0
+  sort -u "$state/images" | while read -r ref id; do
+    [ -n "$ref" ] || continue
+    printf '%s %s %s\n' "${ref%:*}" "${ref##*:}" "$(fake_image_id "$ref" "$id")"
+  done
+}
+# an image line's ID: the scenario's, else one made from its name
+fake_image_id() {
+  if [ -n "${2:-}" ]; then echo "$2"; else printf '%s' "$1" | cksum | awk '{ printf "%012x\n", $1 }'; fi
+}
 # what JetPack's repository offers
 TRT10="${FAKE_TRT10:-10.16.2.10-1+cuda13.2}"
 
@@ -202,14 +216,28 @@ case "$name" in
         prev=''
         for a in "$@"; do [ "$prev" = -t ] && echo "$a" >>"$state/images"; prev=$a; done ;;
       rmi)
-        # each image deleted frees FAKE_IMAGE_GB on /
+        # each image deleted frees FAKE_IMAGE_GB on /; by repo:tag or by ID,
+        # and repo:<none> is no reference at all, as Docker says
         shift
+        rc=0
         for a in "$@"; do
-          grep -qxF -- "$a" "$state/images" 2>/dev/null || continue
-          grep -vxF -- "$a" "$state/images" >"$state/images.new"
+          case "$a" in *"<none>"*)
+            echo "Error response from daemon: invalid reference format" >&2
+            rc=1
+            continue ;;
+          esac
+          found=0
+          : >"$state/images.new"
+          while read -r ref id; do
+            [ -n "$ref" ] || continue
+            if [ "$ref" = "$a" ] || [ "$(fake_image_id "$ref" "$id")" = "$a" ]; then found=1; continue; fi
+            echo "$ref${id:+ $id}" >>"$state/images.new"
+          done < <(cat "$state/images" 2>/dev/null)
           mv "$state/images.new" "$state/images"
+          [ "$found" = 1 ] || continue
           echo $(($(cat "$state/freed-gb" 2>/dev/null || echo 0) + ${FAKE_IMAGE_GB:-5})) >"$state/freed-gb"
-        done ;;
+        done
+        exit "$rc" ;;
       rm|stop) ;;
       ps)
         # a container that outlived docker rm -f
@@ -217,7 +245,9 @@ case "$name" in
       image)
         case "${2:-}" in
           inspect) echo "sha256:$(printf '%064d' 7)" ;;
-          ls) sort -u "$state/images" 2>/dev/null ;;
+          ls)
+            if [[ " $* " == *'{{.ID}}'* ]]; then fake_images
+            else fake_images | awk '{ print $1 ":" $2 }'; fi ;;
         esac ;;
       run)
         # the Docker installers' GPU probe; every way in works

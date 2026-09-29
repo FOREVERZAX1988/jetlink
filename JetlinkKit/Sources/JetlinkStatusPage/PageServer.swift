@@ -159,7 +159,6 @@
       case .tooLarge:
         reply = PageResponse.text(431, "request too large\n")
       case .incomplete:
-        // Timed out, or the page's server is stopping.
         reply = PageResponse.text(408, "no request\n")
       case nil:
         return
@@ -172,17 +171,20 @@
     /// Closing with unread bytes waiting resets the connection, and a reset
     /// can throw away the reply before the client reads it: the end of an
     /// oversized request, say. So stop sending, and read what is left for up
-    /// to a second.
+    /// to a second, or until the server stops: a browser's idle spare socket
+    /// never answers, and the daemon's exit waits for this thread.
     private func linger(_ client: Int32) {
       _ = shutdown(client, Int32(SHUT_WR))
       let deadline = Date(timeIntervalSinceNow: 1)
       var sink = [UInt8](repeating: 0, count: 4096)
       var drained = 0
-      while drained < 1 << 16 {
+      while drained < 1 << 16 && !isStopped {
         let left = deadline.timeIntervalSinceNow
         if left <= 0 { return }
         var poller = pollfd(fd: client, events: Int16(POLLIN), revents: 0)
-        if poll(&poller, 1, Int32(left * 1000) + 1) <= 0 { return }
+        let ready = poll(&poller, 1, Int32(min(left, 0.1) * 1000) + 1)
+        if ready < 0 && errno != EINTR { return }
+        if ready <= 0 { continue }
         let n = sink.withUnsafeMutableBytes { recv(client, $0.baseAddress, $0.count, 0) }
         if n <= 0 { return }
         drained += n
@@ -204,7 +206,9 @@
     }
 
     /// The request, or `.incomplete` once the header timeout passes; nil
-    /// when the client went away first.
+    /// when the client went away first, or the server stops. A browser opens
+    /// a spare connection it may never send on, and answering that at a
+    /// stop would only hold the exit up in `linger`.
     private func readRequest(_ client: Int32) -> PageRequest? {
       let deadline = Date(timeIntervalSinceNow: headerTimeout)
       var bytes: [UInt8] = []
@@ -225,7 +229,7 @@
         let request = PageRequest.parse(bytes, limit: PageServer.headerBytes)
         if request != .incomplete { return request }
       }
-      return .incomplete
+      return nil
     }
 
     private func stream(_ client: Int32) {

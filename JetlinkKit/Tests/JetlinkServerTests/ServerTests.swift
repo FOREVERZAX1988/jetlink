@@ -1,5 +1,6 @@
 import Foundation
 import JetlinkKit
+import JetlinkLog
 import JetlinkORT
 import JetlinkTestSupport
 import Testing
@@ -51,6 +52,12 @@ struct ServerTests {
     let media = links.all.filter { $0.state == .connected }.compactMap(\.linkMedium)
     #expect(media.last == .usb2)
     #expect(media.dropLast().allSatisfy { $0 == .tcp })
+    // one "client connected" line for the session, and the hello's word on its own
+    let peer = try #require(links.all.first { $0.state == .connected }?.peer)
+    let lines = LogRing.shared.lines()
+    #expect(lines.filter { $0.contains("jetlink.server: client connected from \(peer) over TCP") }.count == 1)
+    #expect(!lines.contains { $0.contains("client connected from \(peer) over USB") })
+    #expect(lines.contains { $0.contains("jetlink.server: the comma's hello says its link is USB 2") })
   }
 
   @Test("Progress is throttled within a stage, never across one")

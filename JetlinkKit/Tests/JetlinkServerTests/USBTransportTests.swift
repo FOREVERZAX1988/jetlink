@@ -180,6 +180,22 @@ final class UsbfsFakeGadget: GadgetSource, @unchecked Sendable {
   }
 }
 
+/// A `FakeGadget` that also keeps what the server tells it about sessions.
+final class ListeningGadget: GadgetSource, @unchecked Sendable {
+  private let gadget: FakeGadget
+  let heard = Recorded<String>()
+
+  init(_ ends: [FakeUsbfs]) {
+    gadget = FakeGadget(ends)
+  }
+
+  func present() -> Bool { gadget.present() }
+  func open() throws -> any MessageLink { try gadget.open() }
+  func sessionStarted() { heard.append("started") }
+  func sessionEnded() { heard.append("ended") }
+  func sessionHeard() { heard.append("message") }
+}
+
 /// The comma over a fake USB link.
 final class GadgetClient: CommaClient {
   let pipes: FakeUsbfs
@@ -189,6 +205,9 @@ final class GadgetClient: CommaClient {
   init(_ pipes: FakeUsbfs) {
     self.pipes = pipes
   }
+
+  /// Messages sent so far, each with the next seq.
+  var sent: Int { Int(seq) }
 
   func sendMessage(_ type: Wire.Msg, _ payload: Data, flags: Wire.Flag, seq explicit: UInt32?) throws -> UInt32 {
     if explicit == nil { seq += 1 }
@@ -264,6 +283,48 @@ struct ServerUSBTests {
     }
     #expect(links.all.filter { $0.state == .connected }.count == 1)
     #expect(links.all.contains { $0.state == .disconnected })
+  }
+
+  /// Over USB the hello is the first message: the session is announced once,
+  /// with the medium settled. install.sh waits for the "client connected" line.
+  @Test("A USB session is announced once: the hello's speed, or the host's when the hello names none")
+  func announcedOnce() throws {
+    for (link, expected) in [(["kind": "usb"], LinkMedium.usb3), (["kind": "usb", "usb_speed": "high-speed"], .usb2)] {
+      let cache = try TemporaryDirectory()
+      let comma = FakeUsbfs()
+      let server = try makeServer(cache, gadget: FakeGadget([comma]))
+      let links = Recorded<LinkEvent>()
+      server.host.subscribe { if case .link(let link) = $0 { links.append(link) } }
+      try server.start()
+      defer { server.shutdown() }
+      _ = try GadgetClient(comma).hello(name: "modeld", link: link)
+      let connected = links.all.filter { $0.state == .connected }
+      #expect(connected.map(\.linkMedium) == [expected], "\(link)")
+    }
+  }
+
+  /// Linux keeps USB 3 link power management off only while the comma talks.
+  @Test("The gadget hears a session start, each message before it is answered, a finished build's push, and the end")
+  func gadgetHearsTheSession() throws {
+    let golden = try Golden("tiny_stateful")
+    let cache = try TemporaryDirectory()
+    let comma = FakeUsbfs()
+    let gadget = ListeningGadget([comma])
+    let server = try makeServer(cache, gadget: gadget)
+    try server.start()
+    defer { server.shutdown() }
+    let client = GadgetClient(comma)
+    _ = try client.hello(name: "modeld")
+    #expect(gadget.heard.all == ["started", "message"])
+    try client.send(.ping)
+    _ = try client.recv(.pong)
+    #expect(gadget.heard.all == ["started", "message", "message"])
+    // a comma waiting on a build says nothing; the server's ready push counts
+    _ = try client.ensureEngine(model: golden.model, sha256: golden.sha256)
+    #expect(gadget.heard.all.filter { $0 == "message" }.count == client.sent + 1)
+    comma.unplug()
+    #expect(gadget.heard.wait { $0.last == "ended" })
+    #expect(gadget.heard.all.filter { $0 == "started" || $0 == "ended" } == ["started", "ended"])
   }
 
   @Test("A comma that left and came back is opened again a poll after a stale open fails, not the quiet retry later")

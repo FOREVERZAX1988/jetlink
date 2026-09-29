@@ -171,6 +171,10 @@ open class EngineCore: Engine, @unchecked Sendable {
 
   open var notes: String { "" }
 
+  /// Logs whatever timing of its own the engine has gathered but not said
+  /// yet (TensorRT's --gpu-timing), for a benchmark's end. Nothing by default.
+  open func flushTiming() {}
+
   /// Frees the host buffers. An engine with more to release overrides this,
   /// letting go of whatever uses the buffers before calling super, and of
   /// whatever the allocator needs after. Nothing here closes on deinit: an

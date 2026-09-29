@@ -46,9 +46,10 @@ Latency needs USB 3 (SuperSpeed). A frame is about 400 KB to the server and
 
 On Linux the server turns off USB 3 link power management on the comma's port
 while it serves the comma, and puts the kernel's default back when the session
-ends: waking the link from its low-power states cost 2.2 ms a frame on the
-bench Jetson, and keeping it awake with nothing to carry costs 0.18 W
-([details](installation-reference.md#custom-usb-integrations)).
+ends or the comma has sent nothing for 30 s (parked with its gadget still up),
+until its next message: waking the link from its low-power states cost 2.2 ms a
+frame on the bench Jetson, and keeping it awake with nothing to carry costs
+0.18 W ([details](installation-reference.md#custom-usb-integrations)).
 
 Negotiated speed on the comma: `/sys/class/udc/*/current_speed`
 (`super-speed` is USB 3, `high-speed` USB 2), also printed with the built
@@ -133,7 +134,8 @@ bench tools). There is one version: update the comma and Jetlink together.
   the next. A short packet means the stream left the grid, which only a
   broken stream does: the session ends and the comma reconnects.
 - **Link power.** On Linux, USB 3 link power management is off on the comma's
-  port for the session only ([why](#bus-speed)).
+  port while a session is served and the comma has sent something in the last
+  30 s ([why](#bus-speed)).
 
 Measured on the bench Jetson: [performance](status.md#measured-performance).
 

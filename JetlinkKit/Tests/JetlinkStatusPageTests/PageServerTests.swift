@@ -168,6 +168,30 @@
       #expect(throws: (any Error).self) { try Client.get(page.port, "/") }
     }
 
+    /// A browser with the page open holds its event stream, and often a spare
+    /// connection it has sent nothing on: answering that one 408 and waiting
+    /// for it to close held SIGTERM up a second on the bench Jetson.
+    @Test("Stopping closes a connection that sent nothing, and a reply's linger, without waiting on them")
+    func stopPromptly() throws {
+      let page = try RunningPage()
+      let stream = try Client(port: page.port)
+      stream.send("GET /events HTTP/1.1\r\n\r\n")
+      stream.read { $0.contains("\r\n\r\n") }
+      let spare = try Client(port: page.port)
+      // a reply the client never reads to the end nor closes: the server lingers on it
+      let lingering = try Client(port: page.port)
+      lingering.send("GET /nope HTTP/1.1\r\n\r\n")
+      Thread.sleep(forTimeInterval: 0.1)
+      let started = Date()
+      page.server.stop()
+      // It waited out its one-second bound before; now a poll or two.
+      let took = Date().timeIntervalSince(started)
+      #expect(took < 0.6, "stop took \(took) s")
+      #expect(spare.read(timeout: 3).isEmpty && spare.closed)
+      _ = stream.read(timeout: 3)
+      #expect(stream.closed)
+    }
+
     @Test("The page only watches the controller: no catalog fetch, no download, no build")
     func readOnly() async throws {
       let scratch = try TemporaryDirectory()

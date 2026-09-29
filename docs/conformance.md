@@ -20,6 +20,7 @@ Python:
 | Constants: the wire's magic, version, sizes, message, flag and status numbers; USB ids and packet sizes; USB speeds; model constants; the product version; the onnxruntime release | `make_pins.py` writes `JetlinkKit/Sources/JetlinkKit/Pinned.swift` | the Swift code uses `Pinned`; `ConformanceTests` checks every Swift constant against it |
 | Wire bytes: headers and INFER bodies; the byte streams of TCP, a USB host and the gadget's 16 KB bursts | `make_conformance_fixtures.py wire` | `JetlinkServerTests/ConformanceTests.swift` |
 | Tensors the queues stage each frame at frame_skip 1, 2 and 4, each frame's hidden state fed into the next, with a reset, a hello, a non-finite frame and desires with NaNs, signed zeros and infinities | `make_conformance_fixtures.py staging` | the same file |
+| Where the reply leaves hidden_state out, for slices with open ends, ends counted from the back or past the end, and whether a queued graph's queues can feed it back | `make_conformance_fixtures.py layout` | the same file |
 | LFS pointers, model identities, catalog parsing and merging | `make_conformance_fixtures.py registry` | `JetlinkRegistryTests/ConformanceTests.swift` |
 
 Generators live in `JetlinkKit/Scripts` and import the `jetlink` package of
@@ -96,7 +97,7 @@ its directory (`linux-aarch64` on Apple silicon).
 
    ```bash
    .venv/bin/python JetlinkKit/Scripts/make_pins.py
-   .venv/bin/python JetlinkKit/Scripts/make_conformance_fixtures.py   # or one part: wire, staging, registry
+   .venv/bin/python JetlinkKit/Scripts/make_conformance_fixtures.py   # or one part: wire, staging, layout, registry
    ```
 
    The staging files match only under the pinned onnx

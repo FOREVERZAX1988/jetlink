@@ -1117,6 +1117,32 @@ expect_in /etc/jetlink/install.conf "JETLINK_AUTOSTART=1"
 expect_no_file "$UNITS/jetlink-server.service.d/20-jetson-clocks.conf"
 expect_in /etc/jetlink/server.env 'JETLINK_POWEROFF=""'
 
+scenario "a move from Docker deletes Jetlink's untagged images by ID, and nobody else's"
+reset_box; jetson 39 2.1; with_docker
+old_install v0.6.0
+# a pre-0.5.0 image whose tag a newer pull took, one built here, and other people's
+{
+  echo "ghcr.io/zoompilot/jetlink:<none> 5b1e0c7a9f00"
+  echo "jetlink:<none> 77aa00bb11cc"
+  echo "ubuntu:24.04"
+  echo "someone/else:<none> 0000feedbeef"
+  echo "<none>:<none> 1111deadbeef"
+} >>"$FAKE_STATE/images"
+cli update
+expect_rc 0
+expect_out "Jetlink is installed and running"
+grep '^docker rmi' "$FAKE_LOG" >/tmp/rmi.txt
+check "the tagged image was not deleted by name" grep -qE ' ghcr\.io/zoompilot/jetlink:0\.6\.0-' /tmp/rmi.txt
+expect_in /tmp/rmi.txt " 5b1e0c7a9f00"
+expect_in /tmp/rmi.txt " 77aa00bb11cc"
+# docker rmi refuses repo:<none>, and the rest are not Jetlink's
+expect_not_in /tmp/rmi.txt "<none>"
+expect_not_in /tmp/rmi.txt "ubuntu"
+expect_not_in /tmp/rmi.txt "0000feedbeef"
+expect_not_in /tmp/rmi.txt "1111deadbeef"
+refute "a Jetlink image is left" grep -qE '^(jetlink|ghcr\.io/zoompilot/jetlink):' "$FAKE_STATE/images"
+check "another's image went" test "$(LC_ALL=C sort "$FAKE_STATE/images" | tr '\n' '|')" = "<none>:<none> 1111deadbeef|someone/else:<none> 0000feedbeef|ubuntu:24.04|"
+
 scenario "a failed move puts the Docker server back, and the next update finishes it"
 reset_box; jetson 39 2.1; with_docker
 old_install v0.6.0
@@ -1313,8 +1339,10 @@ expect_in "$UNITS/jetlink-server.service" "/opt/jetlink/current/bin/jetlink-serv
 expect_in /usr/local/bin/jetlink "SERVER=/opt/jetlink/current/bin/jetlink-server"
 expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=120"
 expect_ran "jetlink-server started: native, sleep 120"
-# the release it went back to stays pinned, and an update does not follow it into Docker
-expect_in /etc/jetlink/install.conf "JETLINK_REF=v0.6.0"
+# the way back pinned v0.6.0; kept, the pin would hold every later update there
+expect_out "Jetlink follows releases again: it was pinned to v0.6.0, which runs the server in Docker."
+expect_in /etc/jetlink/install.conf "JETLINK_REF=latest"
+# while the newest release runs in Docker, an update does not follow it there
 : >"$FAKE_LOG"
 FAKE_LATEST=v0.6.0 cli update
 expect_rc 0
@@ -1325,6 +1353,15 @@ expect_link /opt/jetlink/current /opt/jetlink/0.12.0-dev
 jetlink status >/tmp/status.txt 2>&1
 expect_in /tmp/status.txt "0.12.0-dev (a build between releases)"
 expect_not_in /tmp/status.txt "v0.6.0 ("
+# and once the newest release runs natively, the install follows it
+FAKE_LATEST=v0.10.0 cli update
+expect_rc 0
+expect_out "v0.10.0, the release this install follows, is older than the server here (0.12.0-dev)."
+# a --ref given with --binary still wins
+bash /opt/jetlink/src/install.sh --update --binary /tmp/dev/jetlink-server-0.12.0-dev-linux-aarch64.tar.gz --ref v0.6.0 >"$OUT" 2>&1; RC=$?
+expect_rc 0
+expect_no_out "follows releases again"
+expect_in /etc/jetlink/install.conf "JETLINK_REF=v0.6.0"
 
 scenario "uninstall after a move removes the Docker leftovers too"
 echo "jetlink:local-cuda" >>"$FAKE_STATE/images"

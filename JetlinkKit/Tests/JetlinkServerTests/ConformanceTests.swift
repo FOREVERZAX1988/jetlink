@@ -266,6 +266,33 @@ extension Thread {
   }
 }
 
+@Suite("Conformance: reply layout")
+struct LayoutConformanceTests {
+  /// A reply the two ends size differently is refused on the comma, every
+  /// frame: the hidden_state slice must resolve alike on both.
+  @Test("hidden_state's ends resolve as the comma's spec resolves them, and the queues take what Python's take")
+  func hiddenState() throws {
+    let fixture = try Conformance.json("layout.json")
+    let cases = fixture["cases"] as! [[String: Any]]
+    #expect(cases.count == 12)
+    for entry in cases {
+      var d = fixture["spec"] as! [String: Any]
+      var slices: [String: Any] = ["plan": [0, 16]]
+      if let bounds = entry["hidden_state"] as? [Any] { slices["hidden_state"] = bounds }
+      d["output_slices"] = slices
+      let spec = try ModelSpec.from(d)
+      let said = "\(entry["hidden_state"] ?? "none")"
+      let expected = (entry["hidden_range"] as? [NSNumber]).map { $0[0].intValue..<$0[1].intValue }
+      #expect(spec.hiddenRange == expected, "\(said)")
+      #expect(spec.replyCount == int(entry["reply_nelem"]), "\(said)")
+      #expect(spec.inferRespBytes == int(entry["infer_resp_nbytes"]), "\(said)")
+      let engine = StagingEngine(spec.inputShapes.map { TensorSpec(name: $0.name, type: .float16, shape: $0.shape) })
+      let queues = try? PolicyQueues(spec: spec, engine: engine)
+      #expect((queues != nil) == (entry["feeds_back"] as! Bool), "\(said)")
+    }
+  }
+}
+
 /// An engine that is only its input buffers, for staging without a runtime.
 final class StagingEngine: Engine {
   let inputs: [String: TensorSpec]

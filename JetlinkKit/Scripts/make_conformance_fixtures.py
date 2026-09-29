@@ -16,6 +16,9 @@ Every file comes from the code the comma runs, on fixed inputs:
             the tiny queued graph at frame_skip 1, 2 and 4, with the hidden
             state each frame's output feeds back, a hello, a non-finite frame,
             a reset, and desires with NaNs and signed zeros included
+  layout    .../conformance/layout.json: where a reply leaves hidden_state out,
+            for slices with open ends and ends counted from the back, and
+            whether a queued graph's queues can feed it back
   registry  tests/fixtures/conformance/registry.json: LFS pointers, model
             identities, catalog parsing and merging. Its `cache` block (one
             cache directory's catalog and inventory payloads) was written by
@@ -295,6 +298,49 @@ def staging(root: Path) -> None:
   }))
 
 
+# -- layout -------------------------------------------------------------------
+
+# A queued graph as small as the tiny one: 64 output floats, and a hidden state
+# of 32 (features_buffer's 4 x 8) for the queues to feed back.
+LAYOUT_SPEC = {
+  'sha256': 'cd' * 32, 'nbytes': 4096, 'frame_skip': 4, 'checkpoint': None,
+  'input_shapes': {'img': [1, 12, 8, 16], 'big_img': [1, 12, 8, 16], 'desire_pulse': [1, 33, 8],
+                   'traffic_convention': [1, 2], 'action_t': [1, 2], 'features_buffer': [1, 32, 4, 8]},
+  'output_shapes': {'outputs': [1, 64]},
+}
+# hidden_state as output_slices carries it, [start, stop], each an int or None;
+# None for a model with no such slice
+LAYOUT_SLICES = [
+  [32, 64], [-32, None], [32, None], [-32, 64], [None, 32], [30, -2],
+  [40, 100], [-100, 10], [50, 40], [64, None], [None, None], None,
+]
+
+
+def layout(root: Path) -> None:
+  from jetlink.queues import PolicyQueues
+  from jetlink.spec import ModelSpec
+
+  out = root / SERVER
+  out.mkdir(parents=True, exist_ok=True)
+  cases = []
+  for bounds in LAYOUT_SLICES:
+    slices = {'plan': [0, 16], **({'hidden_state': bounds} if bounds is not None else {})}
+    spec = ModelSpec.from_dict({**LAYOUT_SPEC, 'output_slices': slices})
+    try:
+      PolicyQueues(spec)
+      feeds_back = True
+    except ValueError:
+      feeds_back = False
+    hidden = spec.hidden_range
+    cases.append({'hidden_state': bounds, 'hidden_range': list(hidden) if hidden else None,
+                  'reply_nelem': spec.reply_nelem, 'infer_resp_nbytes': spec.infer_resp_nbytes, 'feeds_back': feeds_back})
+  (out / 'layout.json').write_text(dump({
+    'spec': LAYOUT_SPEC,
+    'slices': 'each case adds output_slices {"plan": [0, 16], "hidden_state": its bounds}, or no hidden_state for null',
+    'cases': cases,
+  }))
+
+
 # -- registry -----------------------------------------------------------------
 
 POINTER_TEXTS = [
@@ -380,7 +426,7 @@ def registry(root: Path) -> None:
 
 # -----------------------------------------------------------------------------
 
-PARTS = {'wire': wire, 'staging': staging, 'registry': registry}
+PARTS = {'wire': wire, 'staging': staging, 'layout': layout, 'registry': registry}
 
 
 def generate(root: Path = ROOT, parts=tuple(PARTS)) -> None:

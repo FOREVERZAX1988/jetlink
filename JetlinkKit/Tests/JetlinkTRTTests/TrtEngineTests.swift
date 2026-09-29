@@ -238,6 +238,27 @@
       engine.close()
     }
 
+    @Test("CUDA-event timing says a block shorter than 1,200 frames when flushed and at close, the last launch included")
+    func gpuTimingFlush() throws {
+      let engine = try load(timing: true)
+      try engine.loopState([(input: "state", output: "next_state")])
+      _ = try engine.warm()
+      // more launches than the fake backend's half-second benchmark makes,
+      // which logs a block of its own meanwhile
+      let first = timingLines("37 frames")
+      for _ in 0..<37 { try engine.run() }
+      engine.flushTiming()
+      #expect(timingLines("37 frames") == first + 1)
+      // flushed: nothing left to say until the next launch
+      #expect(engine.timing?.samples.isEmpty == true)
+      let second = timingLines("23 frames")
+      for _ in 0..<23 { try engine.run() }
+      // a swap closes the engine the session ran
+      engine.close()
+      #expect(timingLines("23 frames") == second + 1)
+      #expect(trt.live.allSatisfy { $0 == 0 }, "\(trt.live)")
+    }
+
     @Test("The pinned host buffers are TensorRT's, and zeroed")
     func pinnedBuffers() throws {
       let engine = try load()

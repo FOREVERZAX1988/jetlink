@@ -195,14 +195,14 @@ public struct ModelSpec: Sendable, Equatable {
   public var outputBytes: Int { outputCount * 4 }
 
   /// Where hidden_state sits in the output: what the reply leaves out. Nil
-  /// when the model names no such slice, and then the reply is whole. As
-  /// `hidden_range` reads it, with no end counted from the back, so both
-  /// ends of the wire size the reply alike.
+  /// when the model names no such slice or it takes nothing, and then the
+  /// reply is whole. Its ends resolve as Python's `slice.indices` resolves
+  /// them, as `hidden_range` does, so both ends of the wire size the reply
+  /// alike (the layout conformance fixture holds them to it).
   public var hiddenRange: Range<Int>? {
-    guard let slice = outputSlices.first(where: { $0.name == ModelConstants.hiddenState }), let start = slice.start, let stop = slice.stop,
-      0 <= start, start < stop, stop <= outputCount
+    guard let range = outputSlices.first(where: { $0.name == ModelConstants.hiddenState })?.range(in: outputCount), !range.isEmpty
     else { return nil }
-    return start..<stop
+    return range
   }
 
   /// The floats an INFER_RESP carries: the output less hidden_state.

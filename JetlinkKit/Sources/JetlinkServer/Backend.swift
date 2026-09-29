@@ -49,6 +49,8 @@ public protocol Engine: AnyObject {
   func resetState()
   func run() throws
   func warm() throws -> String
+  /// Logs the engine's own timing so far: a benchmark's end.
+  func flushTiming()
   func close()
 }
 
@@ -75,6 +77,7 @@ public protocol EngineBackend: AnyObject, Sendable {
 
 extension Engine {
   public var notes: String { "" }
+  public func flushTiming() {}
 }
 
 extension EngineBackend {
