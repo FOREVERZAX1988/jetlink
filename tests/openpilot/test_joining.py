@@ -16,6 +16,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from jetlink.openpilot import joining
@@ -115,6 +116,15 @@ class JoiningBase(unittest.TestCase):
   def _run(self, s):
     s._engagement_updated = time.monotonic()
     return s.run({}, {}, {})
+
+  def _wait_reported(self, s, msg, timeout=2.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+      if any(c.args[:2] == ('connect', 0.0) and c.args[2].startswith(msg)
+             for c in self.progress.report.call_args_list):
+        return
+      time.sleep(0.005)
+    self.fail(f"never reported {msg!r}: {self.progress.report.call_args_list}")
 
 
 class JoiningTest(JoiningBase):
@@ -359,15 +369,6 @@ class JoiningTest(JoiningBase):
     s.close()
     self.assertEqual(s.big_model_state, 'unavailable')
 
-  def _wait_reported(self, s, msg, timeout=2.0):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-      if any(c.args[:2] == ('connect', 0.0) and c.args[2].startswith(msg)
-             for c in self.progress.report.call_args_list):
-        return
-      time.sleep(0.005)
-    self.fail(f"never reported {msg!r}: {self.progress.report.call_args_list}")
-
   def test_a_lost_link_is_counted_and_repeated_drops_blame_the_cable(self):
     # every drop on the 2026-09-07 drives was the USB port letting go, and the
     # driver saw "Big Model Failed" six times with no hint of a cause
@@ -460,7 +461,7 @@ class JoiningTest(JoiningBase):
 
   def test_failures_back_off_and_a_stable_join_starts_over(self):
     # A link that dies on its first frame every time used to cost a swap, a
-    # demote, a soft disable and a chime every REJOIN_DELAY for the drive.
+    # demote and a chime every REJOIN_DELAY for the drive.
     s = self._state()
     s._joined_at = 0.0
     delays = []
@@ -552,6 +553,111 @@ class JoiningTest(JoiningBase):
     self.big.raises = RuntimeError("link gone")
     self._run(s)
     self.assertEqual(s.big_model_state, 'retrying')
+
+
+class LagTest(JoiningBase):
+  """A large model that answers, but late, is handed back as if it were lost.
+
+  The frames' lengths are faked on the joining state's own clock, so nothing
+  here waits them out and a busy machine cannot turn jitter into a fault.
+  """
+
+  def setUp(self):
+    super().setUp()
+    self.skew = 0.0
+    real = time.monotonic
+    patcher = mock.patch.object(joining, 'time', SimpleNamespace(monotonic=lambda: real() + self.skew))
+    patcher.start()
+    self.addCleanup(patcher.stop)
+    self.reset = mock.Mock()
+    self.took = 0.0
+    run = self.big.run
+
+    def slow_run(*args):
+      self.skew += self.took
+      return run(*args)
+    self.big.run = slow_run
+    self.small.new_constant, self.big.new_constant = 'small', 'big'
+    self.s = self._make(self.small, self._connect, self._build, reset_small=self.reset)
+    self.addCleanup(self._close, self.s)
+    self._wait_joined(self.s)
+    self.s._engaged = False
+    # the swap frame carries the history reset and is never counted as slow
+    self.took = 0.3
+    self.assertEqual(self.frame(), {'from': 'big'})
+    self.assertTrue(self.s.chestnut)
+
+  def _run(self, s):
+    s._engagement_updated = joining.time.monotonic()
+    return s.run({}, {}, {})
+
+  def frame(self, took=None):
+    if took is not None:
+      self.took = took
+    result = self._run(self.s)
+    self.took = 0.03
+    return result
+
+  def assert_big_drives(self):
+    self.assertEqual(self.frame(), {'from': 'big'})
+    self.assertTrue(self.s.chestnut)
+
+  def test_a_late_frame_is_published_and_the_next_one_is_the_small_models(self):
+    self.assert_big_drives()
+    self.assertEqual(self.frame(took=joining.LATE_FRAME + 0.01), {'from': 'big'})
+    # the late frame's output is the large model's, and so is everything modeld
+    # reads off the model for it; only modelV2.big says the handover now, which
+    # is what makes modeld forgive the stall instead of counting it as lag
+    self.assertFalse(self.s.chestnut)
+    self.assertEqual(self.s.new_constant, 'big')
+    self.reset.assert_not_called()
+    self.assertEqual(self.frame(), {'from': 'small'})
+    self.reset.assert_called_once()
+    self.assertFalse(self.s.chestnut)
+    self.assertEqual(self.s.new_constant, 'small')
+    # counted, backed off and reported like a loss, and the link let go
+    self.assertEqual(self.s._drops, 1)
+    self.assertEqual(self.s.big_model_state, 'retrying')
+    self.assertGreater(self.s._rejoin_at, joining.time.monotonic())
+    self._wait_reported(self.s, 'the accelerator fell behind, reconnecting')
+    for _ in range(100):
+      if self.big.closed:
+        break
+      time.sleep(0.01)
+    self.assertTrue(self.big.closed)
+
+  def test_one_slow_frame_is_jitter(self):
+    self.assertEqual(self.frame(took=joining.SLOW_FRAME + 0.005), {'from': 'big'})
+    self.assertTrue(self.s.chestnut)
+    for _ in range(5):
+      self.assert_big_drives()
+    self.reset.assert_not_called()
+
+  def test_a_second_slow_frame_within_the_window_hands_back(self):
+    self.frame(took=joining.SLOW_FRAME + 0.005)
+    self.assert_big_drives()
+    self.skew += joining.LAG_WINDOW / 2
+    self.assertEqual(self.frame(took=joining.SLOW_FRAME + 0.005), {'from': 'big'})
+    self.assertFalse(self.s.chestnut)
+    self.assertEqual(self.frame(), {'from': 'small'})
+    self.assertEqual(self.s._drops, 1)
+
+  def test_slow_frames_further_apart_are_not_a_pattern(self):
+    self.frame(took=joining.SLOW_FRAME + 0.005)
+    self.skew += joining.LAG_WINDOW + 1
+    self.frame(took=joining.SLOW_FRAME + 0.005)
+    self.assert_big_drives()
+    self.skew += joining.LAG_WINDOW + 1
+    self.frame(took=joining.SLOW_FRAME + 0.005)
+    self.assert_big_drives()
+    self.reset.assert_not_called()
+
+  def test_the_next_large_model_starts_with_no_strike(self):
+    self.frame(took=joining.SLOW_FRAME + 0.005)
+    self.frame(took=joining.LATE_FRAME + 0.01)
+    self.frame()
+    self.assertFalse(self.s.chestnut)
+    self.assertIsNone(self.s._slow_at)
 
 
 class EngagementTest(unittest.TestCase):

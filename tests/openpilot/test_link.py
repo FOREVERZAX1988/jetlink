@@ -384,5 +384,32 @@ class BuildingOnroad(OpenpilotTest):
     self.client.close.assert_called_once()
 
 
+class FrameDeadline(unittest.TestCase):
+  def test_a_silent_host_costs_one_short_frame(self):
+    # a hung server or a phone's cable leaves no USB edge, so only the deadline
+    # ends the frame. The fallback's small-model frame runs behind it, and both
+    # have to fit inside modelV2's alive limit (10 frames at 20 Hz), or the
+    # fallback also flashes commIssue
+    import numpy as np
+
+    from jetlink.client import JetlinkClient
+    from jetlink.transport.base import LinkError
+    from tests.test_protocol import _spec, make_pair
+    self.assertLess(link.INFERENCE_TIMEOUT + 0.1, 10 / 20)
+    a, b = make_pair()
+    client = JetlinkClient(a, deadline=link.INFERENCE_TIMEOUT)
+    client.spec = spec = _spec()
+    try:
+      t0 = time.monotonic()
+      with self.assertRaises(LinkError):   # nothing is serving b
+        client.infer(np.zeros(spec.warped_shape, np.uint8), np.zeros(spec.packed_nelem, np.float32))
+      took = time.monotonic() - t0
+    finally:
+      client.close()
+      b.close()
+    self.assertGreaterEqual(took, link.INFERENCE_TIMEOUT * 0.9)
+    self.assertLess(took, link.INFERENCE_TIMEOUT + 0.1)
+
+
 if __name__ == '__main__':
   unittest.main()

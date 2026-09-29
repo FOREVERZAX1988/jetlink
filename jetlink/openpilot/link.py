@@ -29,8 +29,11 @@ from jetlink.comma import gadget
 # boots after the comma is already onroad
 CONNECT_TIMEOUT = 45.0
 CONNECT_DELAY = 0.5
-# ten frame periods; a dead server must not hold the frame thread for seconds
-INFERENCE_TIMEOUT = 0.5
+# four frame periods, and four times the slowest frame seen. A host that goes
+# silent with no USB edge (a hung server, a phone's cable) costs one frame this
+# long plus the small model's, inside modelV2's 0.5 s alive limit; 0.5 s here
+# flashed commIssue on top of the fallback
+INFERENCE_TIMEOUT = 0.2
 # how long the load may wait for the early gadget bind; a provisioning run may
 # still be letting go of the endpoints
 PRESENT_TIMEOUT = 5.0

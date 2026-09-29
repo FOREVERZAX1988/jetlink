@@ -234,8 +234,8 @@ class Status(NamedTuple):
     # attached, a pending join is loading, not a failed model
     if state in ('joining', 'retrying') or not model_seen:
       return 'loading'
-    # the engine is up and only the swap window is missing, which on a MADS car
-    # is the rest of the drive unless the driver stops
+    # the engine is up and only the swap window is missing: it opens when
+    # nothing is in control, so a driver who stays engaged keeps the small model
     if state == 'ready':
       return 'waiting'
     if not self.ready:
