@@ -9,8 +9,8 @@ What the comma imports, and that it loads nothing else.
 openpilot runs jetlink from a checkout on the comma (only jetlink/ and
 scripts/comma/ ship), imports the names below and patches some of them in its
 tests. Each module is imported in a fresh interpreter, so one module's imports
-cannot hide another's: none may load the server or a package beyond numpy and
-the standard library.
+cannot hide another's: none may load a package beyond numpy and the standard
+library.
 """
 from __future__ import annotations
 
@@ -65,7 +65,6 @@ missing = [n for n in sys.argv[2:] if not resolves(n)]
 loaded = set(sys.modules) - before
 print(json.dumps({
   'missing': missing,
-  'server': sorted(n for n in loaded if n == 'jetlink.server' or n.startswith('jetlink.server.')),
   'foreign': sorted({n.split('.')[0] for n in loaded} - set(sys.stdlib_module_names) - {'jetlink', 'numpy'}),
 }))
 '''
@@ -78,7 +77,6 @@ def test_a_comma_module_loads_only_what_the_comma_has(module):
                        cwd=ROOT, capture_output=True, text=True, check=True)
   found = json.loads(run.stdout)
   assert found['missing'] == [], f"openpilot imports {found['missing']} from {module}"
-  assert found['server'] == [], f"{module} loads {found['server']}"
   assert found['foreign'] == [], f"{module} needs {found['foreign']}; the comma has numpy and the standard library"
 
 

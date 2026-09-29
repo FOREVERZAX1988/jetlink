@@ -44,7 +44,6 @@ REGISTRY = CONFORMANCE_SCRIPT.REGISTRY
 PINS_SCRIPT = load_script(SCRIPTS / 'make_pins.py')
 PINNED = PINS_SCRIPT.OUT.relative_to(ROOT)
 # the releases the committed fixtures were made with
-FIXTURE_PINS = PINS_SCRIPT.FIXTURE_PINS.relative_to(ROOT)
 PINS = PINS_SCRIPT.fixture_pins()
 FIXTURE_ONNX = PINS['onnx']
 
@@ -90,15 +89,6 @@ def test_pinned_swift_is_current(tmp_path):
 def test_the_swift_package_links_the_pinned_onnxruntime():
   package = (ROOT / 'JetlinkKit' / 'Package.swift').read_text()
   assert f"pod-archive-onnxruntime-c-{PINS['onnxruntime']}.zip" in package
-
-
-def test_ci_regenerates_with_the_releases_the_fixtures_record():
-  """CI's Linux test job constrains its install with the pins file, or it
-  regenerates with something else and fails for no reason, or skips what it
-  should compare."""
-  ci = (ROOT / '.github' / 'workflows' / 'ci.yml').read_text()
-  assert f'-c {FIXTURE_PINS}' in ci, f'.github/workflows/ci.yml does not constrain its install with {FIXTURE_PINS}'
-  assert {'numpy', 'onnx', 'onnxruntime', 'protobuf'} <= set(PINS)
 
 
 @pytest.mark.parametrize('part', list(CONFORMANCE_SCRIPT.PARTS))

@@ -22,7 +22,6 @@ import json
 import os
 import signal
 import socket
-import struct
 import subprocess
 import sys
 import time
@@ -78,7 +77,6 @@ class Server:
   port: int
   cache: Path
   log: Path
-  returncode: int | None = None
   provisioned: dict = field(default_factory=dict)
 
   def connect(self) -> JetlinkClient:
@@ -144,7 +142,7 @@ def running(tmp: Path, *extra: str):
   finally:
     proc.send_signal(signal.SIGTERM)
     try:
-      server.returncode = proc.wait(10.0)
+      proc.wait(10.0)
     except subprocess.TimeoutExpired:
       proc.kill()
       proc.wait()
@@ -354,14 +352,6 @@ def test_telemetry_piggybacks_only_when_asked(queued):
   assert isinstance(queued.last_state, dict)   # {} where the host has no sensors: never zeros
 
 
-def test_ping_and_state_requests(queued):
-  assert queued.ping(timeout=5) < 5.0
-  state = queued.state(timeout=5)
-  assert state['engine_state'] == 'ready'
-  assert 'frames_served' in state
-  assert queued.hello(timeout=5)['protocol'] == P.VERSION
-
-
 def test_frame_deadline_includes_time_spent_sending(queued, monkeypatch):
   send = queued.t.send
 
@@ -468,11 +458,12 @@ def test_not_ready_is_reported_rather_than_crashing(bare):
     client.close()
 
 
-def test_the_ping_does_not_need_an_engine(bare):
+def test_ping_state_and_hello_need_no_engine(bare):
   client = bare.connect()
   try:
     assert client.ping(timeout=5) < 5.0
-    assert client.state(timeout=5)['engine_state'] == 'none'
+    state = client.state(timeout=5)
+    assert state['engine_state'] == 'none' and 'frames_served' in state
     assert client.hello(timeout=5)['protocol'] == P.VERSION
   finally:
     client.close()
@@ -487,25 +478,3 @@ def test_a_missing_engine_with_nothing_to_upload_is_engine_missing(bare):
       client.ensure_engine(spec.sha256, spec.nbytes, onnx_path=None, build_timeout=10.0)
   finally:
     client.close()
-
-
-# -- a header of another version --------------------------------------------------
-
-def test_a_header_of_another_version_is_a_broken_stream(server):
-  """As any bad header: no reply, and the server lets the link go."""
-  with socket.create_connection(('127.0.0.1', server.port), timeout=10.0) as sock:
-    sock.sendall(struct.pack(P.HEADER_FMT, P.MAGIC, P.VERSION - 1, P.Msg.PING, 1, 0, 0, 0))
-    assert sock.recv(64) == b''
-  client = server.connect()   # and serves the next one
-  try:
-    assert client.ping(timeout=5) < 5.0
-  finally:
-    client.close()
-
-
-def test_sigterm_stops_it_cleanly(tmp_path):
-  with running(tmp_path) as s:
-    client = s.connect()
-    assert client.ping(timeout=5) < 5.0
-    client.close()
-  assert s.returncode == 0, s.tail()

@@ -41,7 +41,7 @@ def weights(seed: int = 7) -> tuple[np.ndarray, np.ndarray]:
   return w, b
 
 
-def write(path: Path, with_contiguous: bool = True, shapes: bool = False) -> Path:
+def write(path: Path, shapes: bool = False) -> Path:
   from onnx import TensorProto, helper, numpy_helper
 
   w, b = weights()
@@ -56,22 +56,15 @@ def write(path: Path, with_contiguous: bool = True, shapes: bool = False) -> Pat
     helper.make_node('Flatten', ['features_buffer'], ['feat_flat'], axis=1),
     helper.make_node('Concat', ['img_mean', 'desire_flat', 'traffic_convention', 'action_t', 'feat_flat'],
                      ['features'], axis=1),
-  ]
-  matmul_in = 'features'
-  if with_contiguous:
-    nodes.append(helper.make_node('Contiguous', ['features'], ['features_c'], domain='org.tinygrad'))
-    matmul_in = 'features_c'
-  nodes += [
-    helper.make_node('MatMul', [matmul_in, 'W'], ['mm']),
+    helper.make_node('Contiguous', ['features'], ['features_c'], domain='org.tinygrad'),
+    helper.make_node('MatMul', ['features_c', 'W'], ['mm']),
     helper.make_node('Add', ['mm', 'B'], ['outputs']),
   ]
   graph = helper.make_graph(
     nodes, 'tiny_driving', inputs,
     [helper.make_tensor_value_info('outputs', TensorProto.FLOAT16, (1, N_OUT))],
     initializer=[numpy_helper.from_array(w, 'W'), numpy_helper.from_array(b, 'B')])
-  opsets = [helper.make_opsetid('', 17)]
-  if with_contiguous:
-    opsets.append(helper.make_opsetid('org.tinygrad', 1))
+  opsets = [helper.make_opsetid('', 17), helper.make_opsetid('org.tinygrad', 1)]
   return _with_shapes(_save(graph, opsets, SLICES, 'tiny-test', path), shapes)
 
 
@@ -101,17 +94,6 @@ def reference(inputs: dict[str, np.ndarray]) -> np.ndarray:
            inputs['features_buffer'].astype(np.float32).reshape(1, -1)]
   feats = np.concatenate(parts, axis=1)
   return (feats @ w.astype(np.float32) + b.astype(np.float32)).reshape(-1)
-
-
-def random_inputs(seed: int = 0) -> dict[str, np.ndarray]:
-  rng = np.random.default_rng(seed)
-  out = {}
-  for name, shape in SHAPES.items():
-    if name.endswith('img'):
-      out[name] = rng.integers(0, 256, shape, dtype=np.uint8)
-    else:
-      out[name] = (rng.standard_normal(shape) * 0.5).astype(np.float16)
-  return out
 
 
 # -- the stateful layout (openpilot #38916) ----------------------------------
