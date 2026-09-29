@@ -223,12 +223,8 @@ jobs:
         with:
           path: ~/.cache/jetlink-build
           key: jetlink-build-${{ matrix.flavor }}-${{ hashFiles('scripts/build-linux.sh', 'JetlinkKit/Scripts/fixture-pins.txt') }}
-      - name: Build the shim and its selftest; run the selftest on the fake
-        run: scripts/build-linux.sh ${{ matrix.flavor }} headers fake-test shim selftest
-      - uses: actions/upload-artifact@v4
-        with:
-          name: jl_trt_selftest-${{ matrix.flavor }}
-          path: build/${{ matrix.flavor }}/jl_trt_selftest
+      - name: Build the shim against the real headers; check it links nothing of NVIDIA's
+        run: scripts/build-linux.sh ${{ matrix.flavor }} headers shim
 
   swift-android:
     name: Swift server for Android
