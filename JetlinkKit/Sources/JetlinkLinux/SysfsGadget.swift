@@ -185,7 +185,11 @@
     /// for good with sleep_after 0. Off, that idle link drew 0.18 W more on
     /// the bench, so after `quietAfter` with no message the link goes back to
     /// the default, and the next message turns it off again. That write is
-    /// queued like the others, so the frame that brings it does not wait.
+    /// queued like the others, so the message that brings it does not wait
+    /// for it in user space. The kernel does hold the comma's device lock
+    /// across the write's control transfers, and every usbfs call takes that
+    /// lock, so its reply can wait a few ms, as at every session start. In
+    /// the car that message is a hello or a keep-alive ping, not a frame.
     ///
     /// The kernel applies a permit to the attached device at once, but a
     /// write that cannot reach it (the bus suspended) reports success and
@@ -215,7 +219,8 @@
 
     /// For every message, on the session's thread, and for a finished
     /// build's push, on the job's: a clock read and a lock, and a queued
-    /// write only for the first after a quiet spell.
+    /// write only for the first after a quiet spell (see above for what that
+    /// write can hold up in the kernel).
     public func sessionHeard() {
       let now = DispatchTime.now().uptimeNanoseconds
       let woke = heardLock.withLock {
