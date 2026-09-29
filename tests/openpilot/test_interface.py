@@ -190,7 +190,7 @@ class TestFileParams(unittest.TestCase):
     self.assertEqual(self.settings.marks(), {'ModelManager_ActiveBundleChestnut': 0, 'JetlinkSpec': 0})
     self.write('JetlinkSpec', b'{}')
     marks = self.settings.marks()
-    self.assertEqual(marks['JetlinkSpec'], self.params.mtime('JetlinkSpec'))
+    self.assertEqual(marks['JetlinkSpec'], (self.dir / 'JetlinkSpec').stat().st_mtime_ns)
     self.assertGreater(marks['JetlinkSpec'], 0)
     self.assertEqual(marks['ModelManager_ActiveBundleChestnut'], 0)
 

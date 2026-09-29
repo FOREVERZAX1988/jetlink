@@ -43,9 +43,8 @@ public struct Pointer: Sendable, Equatable, Hashable {
 /// folder that id starts. That repo speaks the LFS batch protocol too, so it
 /// is one more endpoint to ask.
 ///
-/// This mirrors `jetlink/registry/lfs.py` and the fork's
-/// `openpilot/sunnypilot/accelerators/jetlink/lfs.py`: same URLs, same
-/// endpoint order, same verify rules.
+/// This mirrors `jetlink/registry/lfs.py`: same URLs, same endpoint order,
+/// same verify rules.
 public enum LFS {
   public static let bigONNX = "big_driving_supercombo.onnx"
   public static let pointerURLTemplate = "https://raw.githubusercontent.com/commaai/openpilot/{ref}/openpilot/selfdrive/modeld/models/" + bigONNX

@@ -104,7 +104,7 @@ class OwnerTest(unittest.TestCase):
     self.addCleanup(o.cable.close)
     # a run has already reported, so nothing is outstanding and the far end sleeps
     self.note_state(sleep_after=1.0, unfinished=False)
-    o.seen = o.marks()
+    o.seen = o.settings.marks()
     o.had_host = True
     return o
 
