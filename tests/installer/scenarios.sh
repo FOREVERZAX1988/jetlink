@@ -1117,6 +1117,32 @@ expect_in /etc/jetlink/install.conf "JETLINK_AUTOSTART=1"
 expect_no_file "$UNITS/jetlink-server.service.d/20-jetson-clocks.conf"
 expect_in /etc/jetlink/server.env 'JETLINK_POWEROFF=""'
 
+scenario "a move from Docker deletes Jetlink's untagged images by ID, and nobody else's"
+reset_box; jetson 39 2.1; with_docker
+old_install v0.6.0
+# a pre-0.5.0 image whose tag a newer pull took, one built here, and other people's
+{
+  echo "ghcr.io/zoompilot/jetlink:<none> 5b1e0c7a9f00"
+  echo "jetlink:<none> 77aa00bb11cc"
+  echo "ubuntu:24.04"
+  echo "someone/else:<none> 0000feedbeef"
+  echo "<none>:<none> 1111deadbeef"
+} >>"$FAKE_STATE/images"
+cli update
+expect_rc 0
+expect_out "Jetlink is installed and running"
+grep '^docker rmi' "$FAKE_LOG" >/tmp/rmi.txt
+check "the tagged image was not deleted by name" grep -qE ' ghcr\.io/zoompilot/jetlink:0\.6\.0-' /tmp/rmi.txt
+expect_in /tmp/rmi.txt " 5b1e0c7a9f00"
+expect_in /tmp/rmi.txt " 77aa00bb11cc"
+# docker rmi refuses repo:<none>, and the rest are not Jetlink's
+expect_not_in /tmp/rmi.txt "<none>"
+expect_not_in /tmp/rmi.txt "ubuntu"
+expect_not_in /tmp/rmi.txt "0000feedbeef"
+expect_not_in /tmp/rmi.txt "1111deadbeef"
+refute "a Jetlink image is left" grep -qE '^(jetlink|ghcr\.io/zoompilot/jetlink):' "$FAKE_STATE/images"
+check "another's image went" test "$(LC_ALL=C sort "$FAKE_STATE/images" | tr '\n' '|')" = "<none>:<none> 1111deadbeef|someone/else:<none> 0000feedbeef|ubuntu:24.04|"
+
 scenario "a failed move puts the Docker server back, and the next update finishes it"
 reset_box; jetson 39 2.1; with_docker
 old_install v0.6.0

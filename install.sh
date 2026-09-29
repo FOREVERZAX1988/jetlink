@@ -1337,11 +1337,15 @@ mount_of() {
   { df -P "$where" 2>/dev/null || true; } | awk 'NR == 2 {print $NF}'
 }
 
-# every image the Docker-era installers pulled or built
+# Every image the Docker-era installers pulled or built, as docker rmi takes
+# it: by name, or by ID once a newer pull took its tag ("<none>"), since
+# docker rmi refuses repo:<none>. Only Jetlink's repositories: an untagged
+# image of another repository, or one with none at all, is not ours.
 docker_images() {
   command -v docker >/dev/null 2>&1 || return 0
-  as_root docker image ls --format '{{.Repository}}:{{.Tag}}' 2>/dev/null \
-    | grep -E '^(jetlink|ghcr\.io/zoompilot/jetlink):' | sort -u || true
+  as_root docker image ls --format '{{.Repository}} {{.Tag}} {{.ID}}' 2>/dev/null \
+    | awk '$1 == "jetlink" || $1 == "ghcr.io/zoompilot/jetlink" { print ($2 == "<none>" ? $3 : $1 ":" $2) }' \
+    | sort -u || true
 }
 
 remove_docker_images() {
