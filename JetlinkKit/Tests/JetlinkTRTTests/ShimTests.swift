@@ -22,8 +22,9 @@ struct ShimTests {
 
     @Test("A binary built on the fake never finds TensorRT, and says so")
     func fakeIsUnavailable() {
-      #expect(throws: TensorRTUnavailable.self) { try TensorRT.probe() }
-      #expect((try? TensorRT.probe(device: -1)) == nil)
+      #expect(throws: TensorRTUnavailable.self) { try TensorRT() }
+      #expect(throws: TensorRTUnavailable.self) { try TensorRT(device: -1) }
+      #expect(throws: TensorRTUnavailable.self) { try TrtBackend() }
     }
   #endif
 }

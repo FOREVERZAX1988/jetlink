@@ -210,13 +210,11 @@ def _run(args, client) -> int:
     t = time.perf_counter()
     seq = client.infer_begin(warped, packed, frame_id=i, reset=(i == 0))
     t_sent = time.perf_counter()
-    out = client.infer_end(seq)
+    client.infer_end(seq)
     t_done = time.perf_counter()
     lat.append((t_done - t) * 1e3)
     send_ms.append((t_sent - t) * 1e3)
     recv_ms.append((t_done - t_sent) * 1e3)
-    # feed the hidden state back as modeld does, so the queues see a real sequence
-    spec.feed_back(packed, out)
     g_us, q_us, t_us = client.last_timings
     gpu.append(g_us / 1e3)
     queue.append(q_us / 1e3)

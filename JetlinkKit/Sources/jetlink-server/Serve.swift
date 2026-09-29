@@ -3,15 +3,24 @@
   import Dispatch
   import Foundation
   import JetlinkKit
+  import JetlinkLog
+  import JetlinkRegistry
   import JetlinkServer
   import JetlinkStatusPage
   #if os(Linux)
     import JetlinkLinux
-    import JetlinkLog
   #endif
 
   enum LogLevel: String, CaseIterable, ExpressibleByArgument {
     case debug, info, warning, error
+  }
+
+  /// --cache, which every command that touches the cache takes.
+  struct CacheArguments: ParsableArguments {
+    @Option(help: "Where models and built engines live. Default: $JETLINK_CACHE, else /mnt/data/jetlink on a Jetson, else the user's cache directory.")
+    var cache: String?
+
+    var root: URL { cache.map { URL(fileURLWithPath: $0, isDirectory: true) } ?? defaultCache() }
   }
 
   /// `jetlink-server serve`, the default: serves the comma until SIGINT or
@@ -19,12 +28,7 @@
   struct Serve: ParsableCommand {
     static let configuration = CommandConfiguration(abstract: "Serve the comma (the default).")
 
-    @Option(help: "auto, trt or ort. auto takes TensorRT where it loads, else onnxruntime; a named one that cannot run here is an error.")
-    var backend = BackendName.auto
-    @Option(
-      help: ArgumentHelp(
-        "trt: a CUDA device index (0). ort: ane (default), ane-whole, coreml or cpu on a Mac; cpu on Linux.", valueName: "device"))
-    var device: String?
+    @OptionGroup var chosen: BackendArguments
     @Flag(help: "Be the USB host for the comma's gadget. No TCP listener then, unless --listen too.")
     var usb = false
     @Flag(help: "Listen on TCP, as without --usb.")
@@ -35,8 +39,7 @@
     var port = Wire.defaultPort
     @Option(help: ArgumentHelp("Also dial this end and serve it, as the phone dials the comma over a USB network link.", valueName: "host[:port]"))
     var dial: String?
-    @Option(help: "Where models and built engines live. Default: $JETLINK_CACHE, else /mnt/data/jetlink on a Jetson, else the user's cache directory.")
-    var cache: String?
+    @OptionGroup var cache: CacheArguments
     @Option(help: "Suspend after this many seconds with no gadget (Linux, with --usb); 0 never.")
     var sleepAfter = 0.0
     @Option(help: "Serve the read-only status page on this port; 0 is off.")
@@ -55,6 +58,8 @@
         throw ValidationError("--dial wants HOST or HOST:PORT, not \(dial)")
       }
       guard sleepAfter >= 0 else { throw ValidationError("--sleep-after cannot be negative") }
+      // A TCP listener never sees the comma go, so nothing would say when to sleep.
+      guard sleepAfter == 0 || usb else { throw ValidationError("--sleep-after needs --usb") }
       guard (0...65535).contains(statusPort) else { throw ValidationError("--status-port \(statusPort) is not a port") }
     }
 
@@ -62,57 +67,75 @@
       holdStopSignals()
       setUpLogging(logLevel)
       let log = ServerLog(category: "main")
-      let options = BackendOptions(device: device, keepAlive: !noKeepAlive, keepCPUWarm: !noCPUKeepWarm)
-      let chosen: any EngineBackend
-      do {
-        chosen = try options.pick(backend) { name, why in log.info("not using \(name.rawValue): \(why)") }
-      } catch {
-        log.error("\(error)")
-        throw ExitCode.failure
-      }
-      let root = cache.map { URL(fileURLWithPath: $0, isDirectory: true) } ?? defaultCache()
+      let backend = try chosen.pick(keepAlive: !noKeepAlive, keepCPUWarm: !noCPUKeepWarm)
+      let root = cache.root
 
       var hooks = ServerHooks()
       var gadget: (any GadgetSource)?
       #if os(macOS)
         gadget = USBGadget()
       #elseif os(Linux)
-        // The Linux host's gadget, telemetry, sleeper and poweroff plug in here.
-        hooks = LinuxHost.hooks(cache: root, sleepAfter: sleepAfter)
+        // The gadget through sysfs, and telemetry, the sleeper and poweroff
+        // as hooks; NVML reads the GPU TensorRT runs on.
+        hooks = LinuxHost.hooks(cache: root, sleepAfter: sleepAfter, gpu: Int(chosen.options().device ?? "") ?? 0)
         gadget = LinuxHost.gadget()
       #endif
-      if sleepAfter > 0 && hooks.sleepAfter != sleepAfter {
-        log.warning("this build does not suspend this host: --sleep-after \(sleepAfter) is ignored, and the comma is told it never sleeps")
-      }
       hooks.fatal = exitOnFatal
 
       let server: Server
+      let controller: ServerController?
       do {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         server = try Server(
           configuration: Server.Configuration(
             host: host, port: port, cacheRoot: root, preload: !noPreload, dial: dial.flatMap { DialTarget($0) }, listen: listen || !usb, usb: usb),
-          backend: chosen, gadget: gadget, hooks: hooks)
-        log.info("backend \(chosen.name) \(chosen.runtimeVersion) on \(chosen.deviceTag()), cache \(root.path)")
+          backend: backend, gadget: gadget, hooks: hooks)
+        // Made before the server starts, so it hears the first link event:
+        // a comma on the bus at boot connects at once.
+        controller = statusPort > 0 ? ServerController(server: server, registry: Registry(layout: server.cache.layout), streaming: false) : nil
+        log.info("backend \(backend.name) \(backend.runtimeVersion) on \(backend.deviceTag()), cache \(root.path)")
         try server.start()
       } catch {
         log.error("cannot serve: \(error)")
         throw ExitCode.failure
       }
-      if statusPort > 0 {
-        // The status page starts here, on its own threads, once it serves.
-        // Without its page it stays off: the comma matters more than a page.
-        do {
-          _ = try StatusPage.page()
-          log.warning("--status-port \(statusPort): this build does not serve the status page yet")
-        } catch {
-          log.warning("\(error)")
-        }
-      }
+      let page = controller.flatMap { startPage($0, log: log) }
       stopOnSignals { signal in
         log.info("stopping on \(signal)")
-        server.shutdown()
+        var steps: [(name: String, stop: () -> Void)] = [("the server", server.shutdown)]
+        if let page { steps.append(("the status page", page.stop)) }
+        shutDown(steps, log: log)
       }
+    }
+
+    /// The read-only status page, on its own low-priority threads. It
+    /// observes `controller` and sends it no command, so a page never starts
+    /// a catalog fetch, a download or a build. Without its page it stays
+    /// off: the comma matters more than a page.
+    private func startPage(_ controller: ServerController, log: ServerLog) -> PageServer? {
+      var hardware: (any PageHardwareSource)?
+      #if os(Linux)
+        hardware = PageHardware(cache: controller.server.configuration.cacheRoot, gpu: Int(chosen.options().device ?? "") ?? 0)
+      #endif
+      do {
+        let page = try PageServer.start(port: statusPort, controller: controller, version: productVersion(), hardware: hardware)
+        log.info("status page on port \(page.port)")
+        return page
+      } catch {
+        log.warning("no status page: \(error)")
+        return nil
+      }
+    }
+  }
+
+  /// Takes down what serves, in the order given, and says so: the comma's
+  /// server and its engine first, so a frame in flight is answered or cut
+  /// before anything else goes, then the status page, which shows the
+  /// server stopping until the end.
+  func shutDown(_ steps: [(name: String, stop: () -> Void)], log: ServerLog) {
+    for step in steps {
+      step.stop()
+      log.info("stopped \(step.name)")
     }
   }
 
@@ -134,6 +157,8 @@
       Log.sink = { level, category, message in
         guard rank[level]! >= least else { return }
         FileHandle.standardError.write(Data((EmbeddedServer.logLine(level, category, message) + "\n").utf8))
+        // The status page's /logs; Linux's loggers keep their own lines there.
+        LogRing.shared.append("\(level.rawValue.uppercased()) jetlink.\(category): \(message)")
       }
     #endif
   }
@@ -181,38 +206,17 @@
     withExtendedLifetime(sources) { dispatchMain() }
   }
 
-  /// $JETLINK_CACHE, else the Jetson's data partition, else the user's cache
-  /// directory, as the Python server chose.
-  func defaultCache() -> URL {
-    let environment = ProcessInfo.processInfo.environment
-    if let named = environment["JETLINK_CACHE"], !named.isEmpty {
-      return URL(fileURLWithPath: named, isDirectory: true)
-    }
-    let jetson = URL(fileURLWithPath: "/mnt/data/jetlink", isDirectory: true)
-    var isDirectory: ObjCBool = false
-    if FileManager.default.fileExists(atPath: jetson.path, isDirectory: &isDirectory) && isDirectory.boolValue || isTegra() {
-      return jetson
-    }
-    let home = FileManager.default.homeDirectoryForCurrentUser
-    #if os(macOS)
-      return home.appending(path: "Library/Caches/jetlink", directoryHint: .isDirectory)
-    #else
-      let base = environment["XDG_CACHE_HOME"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true) }
-      return (base ?? home.appending(path: ".cache", directoryHint: .isDirectory)).appending(path: "jetlink", directoryHint: .isDirectory)
-    #endif
-  }
-
-  /// Any one of these says Tegra, as the Python server looked.
-  func isTegra() -> Bool {
+  /// $JETLINK_CACHE, else on Linux the Jetson's data partition or the XDG
+  /// cache (JetlinkLinux's Platform), else a Mac's user cache directory, as
+  /// the Python server chose.
+  func defaultCache(environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
     #if os(Linux)
-      for path in ["/sys/firmware/devicetree/base/compatible", "/proc/device-tree/compatible"] {
-        if let data = FileManager.default.contents(atPath: path), String(decoding: data, as: UTF8.self).lowercased().contains("tegra") {
-          return true
-        }
-      }
-      return ["/etc/nv_tegra_release", "/sys/devices/platform/bus@0/17000000.gpu"].contains { FileManager.default.fileExists(atPath: $0) }
+      Platform.defaultCache(environment: environment)
     #else
-      return false
+      if let named = environment["JETLINK_CACHE"], !named.isEmpty {
+        return URL(fileURLWithPath: named, isDirectory: true)
+      }
+      return FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Caches/jetlink", directoryHint: .isDirectory)
     #endif
   }
 #endif

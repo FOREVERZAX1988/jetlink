@@ -9,8 +9,10 @@ that keeps its own.
 
 openpilot folds these into the tinygrad JIT on the GPU. Shipping the history
 across the link would cost ~10 MB a frame, so the queues live on the server and
-the comma sends only the newest warped frame and the packed scalars.
-tests/test_queues.py checks this against the tinygrad original.
+the comma sends only the newest warped frame and the packed scalars. The hidden
+state the graph returns stays here too: the next frame pushes it into the
+features queue, where modeld's prev_feat went. The fork's tests/test_queues.py
+checks this against the tinygrad original.
 
 Two value-preserving differences: ring buffers rather than openpilot's rolling
 `cat(buf[1:], new)`, which copies 8.4 MB a frame; and float16 storage rather
@@ -25,7 +27,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from jetlink.spec import ModelSpec
+from jetlink.spec import DRIVING_OUTPUT, ModelSpec
 
 
 # numpy 1.x has no vectorised float16 store on aarch64: casting one 393 KB frame
@@ -129,7 +131,8 @@ def _check_frame(spec: ModelSpec, warped: np.ndarray, packed: np.ndarray) -> Non
 
 
 class PolicyQueues:
-  """Server-side state for one model. Everything `run_policy` owned in the JIT."""
+  """Server-side state for one model. Everything `run_policy` owned in the JIT,
+  and the prev_feat modeld carried from one frame's output to the next."""
 
   def __init__(self, spec: ModelSpec, dtype=np.float16):
     self.spec = spec
@@ -143,16 +146,37 @@ class PolicyQueues:
     self.feat_q = RingQueue(spec.feat_q_shape, dtype)
     self.desire_q = RingQueue(spec.desire_q_shape, dtype)
 
+    hidden, size = spec.hidden_range, int(np.prod(spec.prev_feat_shape))
+    if hidden is None or hidden[1] - hidden[0] != size:
+      raise ValueError(f"a queued graph needs a hidden_state output of {size} floats to feed back; "
+                       f"its output_slices give {hidden}")
+    self._hidden = slice(*hidden)
+    # float32, as the comma held it: the values the reply carried and the
+    # comma sent back, cast into the queue at the same point
+    self.prev_feat = np.zeros(spec.prev_feat_shape, np.float32)
+
     # features_buffer is declared 4-D (1,32,32,512); the queue produces the flat
     # (1,32,16384) over the same memory, so a reshape covers it.
     self.model_shapes = dict(spec.input_shapes)
 
   def reset(self) -> None:
+    """RESET_QUEUES: empty history, and nothing to feed back."""
     for q in (self.img_q, self.big_img_q, self.feat_q, self.desire_q):
       q.reset()
+    self.prev_feat[...] = 0
+
+  def new_client(self) -> None:
+    """A hello: the next frame feeds back zeros, as a new modeld's prev_feat
+    did. The queues stay until the client resets them."""
+    self.prev_feat[...] = 0
 
   def after_run(self, outputs: dict[str, np.ndarray], dest: dict[str, np.ndarray]) -> None:
-    """Nothing: the comma sends the hidden state back as prev_feat."""
+    """Keep this frame's hidden state for the next one.
+
+    Only after a frame whose outputs are all finite: modeld fed back only
+    what infer_end returned, and it raises on NOT_FINITE and on a failed run.
+    """
+    self.prev_feat.reshape(-1)[...] = np.asarray(outputs[DRIVING_OUTPUT], np.float32).reshape(-1)[self._hidden]
 
   def _unpack(self, packed: np.ndarray):
     # slice views, not np.split: the offsets never change and split allocates
@@ -160,21 +184,22 @@ class PolicyQueues:
 
   def _push(self, warped: np.ndarray, packed: np.ndarray):
     _check_frame(self.spec, warped, packed)
-    desire, traffic_convention, action_t, prev_feat = self._unpack(packed)
+    desire, traffic_convention, action_t = self._unpack(packed)
     # push() casts into a typed buffer, so uint8 -> float16 costs one row here
     # rather than the whole sampled window later
     self.img_q.push(warped[0])
     self.big_img_q.push(warped[1])
     self.desire_q.push(desire.reshape(1, -1))
-    self.feat_q.push(prev_feat.reshape(1, -1))
+    self.feat_q.push(self.prev_feat.reshape(1, -1))
     return traffic_convention, action_t
 
   def step(self, warped: np.ndarray, packed: np.ndarray) -> dict[str, np.ndarray]:
     """Advance the queues one frame and return the model's inputs.
 
     warped: (2, 6, H, W) uint8 from openpilot's warp. packed: flat float32,
-    laid out per ModelSpec.packed_shapes. Allocates; the server uses
-    step_into(), so there is one implementation to keep correct.
+    laid out per ModelSpec.packed_shapes. The features queue takes prev_feat,
+    the hidden state after_run kept. Allocates; the server uses step_into(),
+    so there is one implementation to keep correct.
     """
     dest = {n: np.empty(s, self.dtype) for n, s in self.model_shapes.items()}
     self.step_into(warped, packed, dest)
@@ -227,6 +252,9 @@ class StateLoop:
     self._packed_layout = spec.packed_layout
     loop = getattr(engine, 'loop_state', None)
     self.on_engine = bool(loop(self.pairs)) if callable(loop) else False
+
+  def new_client(self) -> None:
+    """Nothing: the graph's state is not the client's; RESET_QUEUES clears it."""
 
   def reset(self) -> None:
     """Empty queues, as openpilot's warmup leaves them."""

@@ -143,7 +143,7 @@ def open_listen(spec: str, timeout: float):
   print(f"waiting up to {timeout:.0f}s for a peer to dial {host}:{port}...")
   transport, addr = TcpTransport.listen_once(host, port, timeout)
   print(f"peer dialed in from {addr[0]}:{addr[1]}")
-  return JetlinkClient(transport)
+  return JetlinkClient(transport, want_hidden=True)
 
 
 def capture(args) -> int:
@@ -159,14 +159,16 @@ def capture(args) -> int:
   out = Path(args.dir)
   out.mkdir(parents=True, exist_ok=True)
 
+  # the whole output, hidden_state included: it is most of the vector, and the
+  # server's own feedback of it is part of what this checks
   if args.ffs:
-    client = JetlinkClient.open_ffs(args.ffs_mount, gadget=args.gadget)
+    client = JetlinkClient.open_ffs(args.ffs_mount, gadget=args.gadget, want_hidden=True)
   elif args.host:
-    client = JetlinkClient.open_tcp(args.host, args.port)
+    client = JetlinkClient.open_tcp(args.host, args.port, want_hidden=True)
   elif args.listen:
     client = open_listen(args.listen, args.listen_timeout)
   else:
-    client = JetlinkClient.open_usb()
+    client = JetlinkClient.open_usb(want_hidden=True)
 
   try:
     hello = client.hello(timeout=60.0)  # the jetson may still be re-enumerating
@@ -179,13 +181,11 @@ def capture(args) -> int:
     frames = make_inputs(spec, args.n, args.seed)
 
     for i, (warped, packed) in enumerate(frames):
-      # carry the hidden state as modeld does, or frame 2 on compares two recurrences
+      # the server feeds each frame's hidden state into the next, as modeld did
       result = client.infer(warped, packed, frame_id=i, reset=(i == 0))
       np.save(out / f'in_warped_{i}.npy', warped)
       np.save(out / f'in_packed_{i}.npy', packed)
       np.save(out / f'out_link_{i}.npy', np.asarray(result, np.float32))
-      if i + 1 < len(frames):
-        spec.feed_back(frames[i + 1][1], result)
       print(f"  frame {i}: {len(result)} values, "
             f"finite={bool(np.all(np.isfinite(result)))}")
   finally:
@@ -241,14 +241,9 @@ def reference(args) -> int:
   queues = PolicyQueues(spec)
   queues.reset()
 
-  prev_out = None
   for i in range(n):
     warped = np.load(d / f'in_warped_{i}.npy')
-    packed = np.load(d / f'in_packed_{i}.npy').copy()
-    # the hidden state is our own previous output; feeding the link's back would
-    # hide the drift this is looking for
-    if prev_out is not None:
-      spec.feed_back(packed, prev_out)
+    packed = np.load(d / f'in_packed_{i}.npy')
     feed = queues.step(warped, packed)
     missing = set(dtypes) - set(feed)
     if missing:
@@ -257,7 +252,9 @@ def reference(args) -> int:
     out = np.asarray(sess.run(None, feed)[0], np.float32).reshape(-1)
     np.save(d / f'out_ref_{i}.npy', out)
     print(f"  frame {i}: {out.shape[0]} values, finite={bool(np.all(np.isfinite(out)))}")
-    prev_out = out
+    # the hidden state fed back is our own previous output, as the server's
+    # is its own; the link's would hide the drift this is looking for
+    queues.after_run({DRIVING_OUTPUT: out}, feed)
   return 0
 
 

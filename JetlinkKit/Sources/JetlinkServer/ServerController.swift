@@ -47,6 +47,9 @@ public final class ServerController: @unchecked Sendable {
   private var inventoryPayload: InventoryEvent?
   private var inventoryAt: TimeInterval = 0
   private var benchmark: BenchmarkRun?
+  private let observersLock = NSLock()
+  private var observers: [(id: Int, listener: @Sendable (ControlEvent) -> Void)] = []
+  private var nextObserver = 0
 
   /// One download, queued or running, and the last event it published.
   final class Download: @unchecked Sendable {
@@ -72,11 +75,43 @@ public final class ServerController: @unchecked Sendable {
     }
   }
 
-  public init(server: Server, registry: any ModelRegistry) {
+  /// `streaming: false` for a host that never reads `events` and only
+  /// observes, as the daemon's status page does: the stream is finished at
+  /// once, so nothing piles up in it.
+  public init(server: Server, registry: any ModelRegistry, streaming: Bool = true) {
     self.server = server
     self.registry = registry
     (events, continuation) = AsyncStream.makeStream(bufferingPolicy: .unbounded)
+    if !streaming {
+      continuation.finish()
+    }
     server.host.subscribe { [weak self] event in self?.onHost(event) }
+  }
+
+  /// Calls `listener` with every event published from now on, on the thread
+  /// that publishes it, beside `events`: any number may listen, and nothing
+  /// is kept for them. Listening sends no command and starts nothing, so the
+  /// status page can never cause a catalog fetch, a download or a build. The
+  /// listener must return quickly: it runs on the server's threads.
+  @discardableResult
+  public func observe(_ listener: @escaping @Sendable (ControlEvent) -> Void) -> Int {
+    observersLock.withLock {
+      nextObserver += 1
+      observers.append((nextObserver, listener))
+      return nextObserver
+    }
+  }
+
+  public func stopObserving(_ id: Int) {
+    observersLock.withLock { observers.removeAll { $0.id == id } }
+  }
+
+  /// A first screen as events, from memory and the disk: server, link, engine
+  /// and inventory. Unlike `publishInitialState` it publishes nothing and
+  /// never fetches the catalog. It takes the host's lock, which a frame holds,
+  /// so it is not for a low-priority thread.
+  public func currentState() -> [ControlEvent] {
+    [.server(serverEvent("serving")), .link(currentLink), .engine(server.host.snapshot()), .inventory(inventory())]
   }
 
   /// Everything a client needs for its first screen, before it asks.
@@ -110,6 +145,9 @@ public final class ServerController: @unchecked Sendable {
 
   private func publish(_ event: ControlEvent) {
     continuation.yield(event)
+    for observer in observersLock.withLock({ observers }) {
+      observer.listener(event)
+    }
   }
 
   private var currentLink: LinkEvent {

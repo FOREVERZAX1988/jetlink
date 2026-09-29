@@ -9,6 +9,7 @@
 
 #include <linux/usbdevice_fs.h>
 #include <poll.h>
+#include <stdio.h>
 #include <sys/eventfd.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
@@ -32,6 +33,14 @@ jl_urb *jl_urb_create(uint8_t endpoint, void *buffer, int length, void *context)
   u->urb.flags = 0;
   u->urb.usercontext = context;
   return u;
+}
+
+void jl_urb_set(jl_urb *urb, void *buffer, int length) {
+  urb->urb.buffer = buffer;
+  urb->urb.buffer_length = length;
+  urb->urb.status = 0;
+  urb->urb.actual_length = 0;
+  urb->urb.error_count = 0;
 }
 
 void jl_urb_free(jl_urb *urb) {
@@ -106,6 +115,53 @@ int jl_usbfs_wait(int fd, int wake_fd, int timeout_ms) {
 int jl_usbfs_speed(int fd) {
   int speed = ioctl(fd, USBDEVFS_GET_SPEED);
   return speed >= 0 ? speed : -errno;
+}
+
+int jl_usbfs_descriptors(int fd, void *buffer, int capacity) {
+  if (lseek(fd, 0, SEEK_SET) < 0) {
+    return -errno;
+  }
+  int total = 0;
+  while (total < capacity) {
+    ssize_t n = read(fd, (char *)buffer + total, (size_t)(capacity - total));
+    if (n < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      return -errno;
+    }
+    if (n == 0) {
+      break;
+    }
+    total += (int)n;
+  }
+  return total;
+}
+
+int jl_usbfs_driver(int fd, unsigned interface, char *name, int capacity) {
+  struct usbdevfs_getdriver driver = {.interface = interface};
+  if (ioctl(fd, USBDEVFS_GETDRIVER, &driver) != 0) {
+    return errno;
+  }
+  if (capacity > 0) {
+    snprintf(name, (size_t)capacity, "%s", driver.driver);
+  }
+  return 0;
+}
+
+int jl_usbfs_disconnect(int fd, unsigned interface) {
+  struct usbdevfs_ioctl command = {.ifno = (int)interface, .ioctl_code = USBDEVFS_DISCONNECT, .data = NULL};
+  return ioctl(fd, USBDEVFS_IOCTL, &command) >= 0 ? 0 : errno;
+}
+
+int jl_usbfs_claim(int fd, unsigned interface) {
+  unsigned int number = interface;
+  return ioctl(fd, USBDEVFS_CLAIMINTERFACE, &number) == 0 ? 0 : errno;
+}
+
+int jl_usbfs_release(int fd, unsigned interface) {
+  unsigned int number = interface;
+  return ioctl(fd, USBDEVFS_RELEASEINTERFACE, &number) == 0 ? 0 : errno;
 }
 
 #endif
