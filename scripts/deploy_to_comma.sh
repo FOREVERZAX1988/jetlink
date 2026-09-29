@@ -19,6 +19,17 @@ HOST="${1:?usage: deploy_to_comma.sh user@host [dest]}"
 DEST="${2:-/data/openpilot/jetlink_repo}"
 
 here="$(cd "$(dirname "$0")/.." && pwd)"
+root="$(dirname "$DEST")"
+
+# This jetlink keeps none of the names a fork from before its jetlink adapter
+# (openpilot/sunnypilot/accelerators) calls: there, manager's should_run for
+# jetlinkd raises and manager exits on every boot, link on or off.
+if ! ssh "$HOST" "test -f '$root/openpilot/sunnypilot/jetlink_adapter/__init__.py'"; then
+  echo "!! $HOST:$root has no openpilot/sunnypilot/jetlink_adapter: that fork predates the adapter," >&2
+  echo "   and this jetlink would stop its manager. Update the fork first, or deploy an older jetlink." >&2
+  exit 1
+fi
+
 echo "==> syncing $here -> $HOST:$DEST"
 rsync -a --delete \
   --exclude '.git' --exclude '__pycache__' --exclude '.pytest_cache' \
@@ -27,7 +38,6 @@ rsync -a --delete \
   --exclude '.build' --exclude 'build' --exclude '*.egg-info' \
   "$here/" "$HOST:$DEST/"
 
-root="$(dirname "$DEST")"
 echo "==> linking $root/jetlink -> $(basename "$DEST")/jetlink"
 # ln -sfn refuses to replace a real directory, so clear one an older install left
 ssh "$HOST" "[ -d '$root/jetlink' ] && [ ! -L '$root/jetlink' ] && rm -rf '$root/jetlink'; \
