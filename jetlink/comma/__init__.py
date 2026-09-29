@@ -11,7 +11,8 @@ on (lending), the USB-C port (port), and the one root script all of it goes
 through (root), the VM tuning included. For the comma four and the comma 3X.
 
 The standard library and jetlink's transport only: the owner that imports it
-stays resident at about 10 MB. openpilot runs the owner through a shim in the fork,
-openpilot/sunnypilot/accelerators/jetlink/owner.py, which names its
-provisioning worker.
+stays resident at about 10 MB. openpilot starts the owner through
+jetlink.openpilot.owner, with what the fork's adapter names: the settings, the
+chestnut's USB ids and the provisioning worker. The fork's older shim,
+openpilot/sunnypilot/accelerators/jetlink/owner.py, names only the worker.
 """

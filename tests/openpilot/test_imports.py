@@ -34,7 +34,7 @@ MODULES = sorted({'jetlink.openpilot', *(m.name for m in pkgutil.walk_packages(j
                                                                               'jetlink.openpilot.'))})
 # what stays resident for the whole drive, at about 10 MB: the gadget owner and
 # everything it opens. The provisioning run and modeld are the heavy half
-OWNER_PATH = ('jetlink.openpilot', 'jetlink.openpilot.interface', 'jetlink.openpilot.settings',
+OWNER_PATH = ('jetlink.openpilot.owner', 'jetlink.openpilot', 'jetlink.openpilot.interface', 'jetlink.openpilot.settings',
               'jetlink.comma.owner', 'jetlink.comma.gadget', 'jetlink.comma.lending', 'jetlink.comma.port',
               'jetlink.comma.root', 'jetlink.transport.ffs')
 # jetlink's own heavy half, which the owner must not reach either: numpy, and

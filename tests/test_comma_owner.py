@@ -6,6 +6,11 @@ See the LICENSE file in the root directory for more details.
 
 The process that holds the gadget: what it keeps, what it lets go of, and when
 it starts the heavy half.
+
+Every test runs twice, once for each way the owner can be told its settings:
+by gadget's own param names and path rule, as the fork's shim starts it, and
+through jetlink.openpilot's Settings over the directory and keys the fork's
+adapter names, as jetlink.openpilot.owner starts it. The two must not differ.
 """
 import json
 import logging
@@ -19,10 +24,17 @@ from pathlib import Path
 from unittest import mock
 
 from jetlink.comma import gadget, owner, root
+from jetlink.openpilot import owner as openpilot_owner
+from jetlink.openpilot.settings import FileParams, Settings
 from tests import comma_fakes
+from tests.openpilot.fakes import CHESTNUT_IDS, KEYS
 
 
 class OwnerTest(unittest.TestCase):
+  # the owner reads its settings through jetlink.openpilot's Settings, as
+  # jetlink.openpilot.owner has it, rather than by gadget's own rule
+  SETTINGS = False
+
   def setUp(self):
     self.tmp = Path(tempfile.mkdtemp())
     self.params = self.tmp / 'params'
@@ -34,7 +46,8 @@ class OwnerTest(unittest.TestCase):
                         ('STATE', self.tmp / 'state'),
                         ('GADGET_STATUS', self.tmp / 'gadget-status'),
                         ('LENDER_STATUS', self.tmp / 'lender-status'),
-                        ('params_dir', mock.Mock(return_value=self.params)),
+                        # with Settings, gadget's own rule leads nowhere: nothing may read by it
+                        ('params_dir', mock.Mock(return_value=self.tmp / 'elsewhere' if self.SETTINGS else self.params)),
                         ('link_configured', mock.Mock(return_value=True)),
                         ('host_attached', mock.Mock(return_value=True)),
                         ('udc_state', mock.Mock(return_value='configured')),
@@ -68,6 +81,12 @@ class OwnerTest(unittest.TestCase):
     self.stamp = max(getattr(self, 'stamp', 0), time.time_ns()) + 10_000_000
     os.utime(path, ns=(self.stamp, self.stamp))
 
+  def make(self, *args, **kwargs) -> owner.Owner:
+    if self.SETTINGS:
+      kwargs.setdefault('settings', Settings(FileParams(self.params), KEYS))
+      kwargs.setdefault('chestnut_ids', CHESTNUT_IDS)
+    return owner.Owner(*args, **kwargs)
+
   def vm_calls(self) -> list[str]:
     """What the owner asked jetlink-root.sh vm to do, in order."""
     return [c.args[1] for c in self.root_run.call_args_list if c.args[0] == 'vm']
@@ -76,7 +95,7 @@ class OwnerTest(unittest.TestCase):
     gadget.STATE.write_text(json.dumps(kw))
 
   def owner(self, presented=True, lendable=False):
-    o = owner.Owner()
+    o = self.make()
     o.lender = mock.Mock(lent=False, listening=True)
     o.transport = mock.Mock(lendable=lendable) if presented else None
     for name in ('open_link', 'spawn_worker'):
@@ -549,7 +568,10 @@ class IosTest(OwnerTest):
 
   def owner(self, **kw):
     o = super().owner(**kw)
+    # built for iOS and said so, as the first step of a real owner does:
+    # without the record a reader falls back to the setting by gadget's rule
     o.built_ios = True
+    o.publish()
     return o
 
 
@@ -667,7 +689,7 @@ class TestCable(IosTest):
     o.spawn_worker.assert_called_once()
 
   def test_closing_the_link_takes_the_listener_and_the_record_with_it(self):
-    o = owner.Owner()
+    o = self.make()
     o.lender = mock.Mock(lent=False, listening=True)
     o.transport = mock.Mock()
     self.assertTrue(o.cable.open())
@@ -885,7 +907,7 @@ class TestTheWorker(OwnerTest):
   """The caller names the provisioning run; the owner knows no openpilot module."""
 
   def test_the_run_is_the_callers_argv_cwd_and_env(self):
-    o = owner.Owner(['python3', '-m', 'the.worker'], cwd='/data/openpilot', env={'PYTHONPATH': '/data/openpilot'})
+    o = self.make(['python3', '-m', 'the.worker'], cwd='/data/openpilot', env={'PYTHONPATH': '/data/openpilot'})
     with mock.patch.object(owner.subprocess, 'Popen') as popen:
       o.spawn_worker('nothing has been checked since boot')
     (argv,), kwargs = popen.call_args
@@ -895,7 +917,7 @@ class TestTheWorker(OwnerTest):
     self.assertIs(o.worker, popen.return_value)
 
   def test_a_run_that_will_not_start_is_not_an_error(self):
-    o = owner.Owner()
+    o = self.make()
     with mock.patch.object(owner.subprocess, 'Popen', side_effect=OSError('no such file')):
       o.spawn_worker('nothing has been checked since boot')
     self.assertIsNone(o.worker)
@@ -905,13 +927,50 @@ class TestTheWorker(OwnerTest):
     with mock.patch.object(owner, 'Owner') as made, mock.patch.object(owner.signal, 'signal'), \
          mock.patch.object(gadget, 'set_logger') as set_logger:
       owner.main(['python3', '-m', 'the.worker'], cwd='/x', env={'A': 'b'}, log_file=log)
-    made.assert_called_once_with(['python3', '-m', 'the.worker'], cwd='/x', env={'A': 'b'})
+    made.assert_called_once_with(['python3', '-m', 'the.worker'], cwd='/x', env={'A': 'b'}, settings=None,
+                                 chestnut_ids=None)
     made.return_value.run.assert_called_once()
     logger = set_logger.call_args.args[0]
     self.addCleanup(lambda: [logger.removeHandler(h) or h.close() for h in list(logger.handlers)])
     logger.warning('jetlink: a line for the file')
     self.assertIn('a line for the file', log.read_text())
     self.assertIsInstance(logger, logging.Logger)
+
+
+class TestTheOpenpilotEntry(OwnerTest):
+  """jetlink.openpilot.owner.main: the owner as the fork's adapter starts it."""
+
+  def config(self):
+    from tests.openpilot.fakes import FakeOpenpilot
+    op = FakeOpenpilot(self.tmp / 'op')
+    return op.owner()
+
+  def test_it_hands_the_owner_the_whole_config(self):
+    config = self.config()
+    with mock.patch.object(owner, 'main') as main:
+      openpilot_owner.main(config)
+    (worker,), kwargs = main.call_args
+    self.assertEqual(worker, list(config.worker))
+    self.assertEqual((kwargs['cwd'], kwargs['env'], kwargs['log_file']), (config.cwd, dict(config.env), config.log_file))
+    self.assertEqual(kwargs['chestnut_ids'], config.chestnut_ids)
+    settings = kwargs['settings']
+    self.assertEqual((settings.params.directory, settings.keys), (config.params_dir, config.keys))
+
+  def test_its_settings_are_read_off_the_directory_it_names(self):
+    config = self.config()
+    s = openpilot_owner.settings(config)
+    self.assertEqual((s.mode(), s.offroad()), ('off', True))
+    (config.params_dir / 'JetlinkLink').write_bytes(b'2')
+    (config.params_dir / 'IsOffroad').write_bytes(b'0')
+    self.assertEqual((s.mode(), s.offroad()), ('ios', False))
+
+  def test_the_port_takes_the_ids_the_owner_was_given(self):
+    self.make(chestnut_ids={(1, 2)})
+    owner.port.Port.assert_called_with({(1, 2)})
+
+  def test_without_them_the_port_has_its_own(self):
+    owner.Owner()
+    owner.port.Port.assert_called_with(None)
 
 
 class TestLending(OwnerTest):
@@ -939,3 +998,9 @@ class TestLending(OwnerTest):
     o.transport.rebind.side_effect = OSError('no such device')
     self.assertFalse(o.bounce_gadget())
 
+
+
+# Every test above again, with the settings the fork's adapter names
+for _name, _cls in list(globals().items()):
+  if isinstance(_cls, type) and issubclass(_cls, OwnerTest) and _name.startswith('Test'):
+    globals()[f'{_name}WithSettings'] = type(f'{_name}WithSettings', (_cls,), {'SETTINGS': True})

@@ -139,6 +139,18 @@ class TestAccessories(PortTest):
   def test_a_chestnut_being_flashed_is_left_alone(self):
     self.left_alone(CHESTNUT_ROM)
 
+  def test_the_ids_the_caller_names_are_the_chestnut(self):
+    # the fork's adapter hands over openpilot's own; nothing else is one then
+    self.port = port.Port(chestnut_ids={JETSON_GADGET})
+    self.left_alone(JETSON_GADGET)
+
+  def test_ids_the_caller_did_not_name_are_not_a_chestnut(self):
+    self.port = port.Port(chestnut_ids={JETSON_GADGET})
+    self.plug('source')
+    self.enumerate('2-1', CHESTNUT)
+    self.run_for(SWAP + 1)
+    self.assertEqual(self.commands(), ['off', 'hold'])
+
   def test_a_sink_that_cannot_host_is_not_cycled(self):
     self.plug('source')
     self.run_for(SWAP + 1)
