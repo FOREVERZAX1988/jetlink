@@ -28,7 +28,7 @@ import inspect
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol
 
 # the Accelerator Link setting: off; a Jetson, a Linux PC or a Mac on USB; an
 # iPhone on the cable. The INT param holds the index
@@ -56,8 +56,8 @@ class OwnerConfig:
   params_dir: Path                           # the params store's directory, by params.cc's rule
   keys: Keys                                 # the settings it reads and the pick it watches
   chestnut_ids: frozenset[tuple[int, int]]   # (vid, pid) of comma's chestnut, running or in its ROM: never held as a host
-  worker: tuple[str, ...]                    # the argv of one provisioning run
-  cwd: str                                   # where the run starts
+  adapter: str                               # the adapter module, which the provisioning run is started with
+  cwd: Path                                  # where the run starts: the checkout
   env: Mapping[str, str]                     # over the owner's environment, for the run
   log_file: Path                             # the owner's rotating log
 
@@ -66,31 +66,32 @@ class OwnerConfig:
 class ModelFace:
   """What openpilot's modeld reads off a ModelState, supplied for comma's large model."""
   parser: Callable[[], Any]                  # a new Parser: .parse_outputs(dict[str, ndarray]) -> dict
-  nv12_info: Callable[[int, int], tuple]     # get_nv12_info(w, h); [3] is a frame buffer's size
+  frame_size: Callable[[int, int], int]      # a camera frame buffer's size for (w, h): get_nv12_info(w, h)[3]
   desire_len: int                            # ModelConstants.DESIRE_LEN
   constants: Any                             # modeld_v2's ModelConstants, which modeld_tinygrad reads off the model
   lat_smooth_seconds: float                  # modeld's LAT_SMOOTH_SECONDS
   long_smooth_seconds: float                 # modeld's LONG_SMOOTH_SECONDS
   get_action_from_model: Callable[..., Any]  # modeld's action function
-  lat_delay: Callable[[], float]             # the lat_delay a new ModelState starts with
-  telemetry_every: int                       # frames between telemetry asks: model rate over chestnutState's
 
 
-@runtime_checkable
+# The sides are typing Protocols so a type checker can hold the adapter to
+# them; conformance() is the check both repos run. A parameter jetlink passes
+# by keyword is keyword-only here, and only those names must match.
+
 class StatusSide(Protocol):
   """Every reader: manager, the UI, hardwared, the model manager."""
   keys: Keys
   log: Any                  # logging.Logger-like (cloudlog): debug, info, warning, error, exception
   catalog_selector: int     # the model manager's REQUIRED_JSON_VERSION; 0 without a model manager
 
+  def params_dir(self) -> Path:
+    """The params store's directory, by params.cc's rule, worked out on every
+    call so it follows OPENPILOT_PREFIX as Params does. jetlink reads the link
+    setting and IsOffroad there as files, for every setting a heavy process
+    reads (manager's should_run among them), so it is cheap and never raises."""
+
   def get(self, key: str) -> Any:
     """A param's decoded value. None when unset or unknown to this build; never raises."""
-
-  def owner(self) -> OwnerConfig:
-    """The owner's config, which is also where the settings files are. Read
-    for every setting a heavy process reads (manager's should_run among them),
-    so it is cheap and never raises, and it follows OPENPILOT_PREFIX as Params
-    does."""
 
   def chestnut_present(self) -> bool:
     """Is comma's chestnut fitted? A USB walk; jetlink caches the answer."""
@@ -102,19 +103,15 @@ class StatusSide(Protocol):
     """Where the build puts the warp for this geometry."""
 
 
-@runtime_checkable
 class WorkerSide(StatusSide, Protocol):
   """The provisioning run: writes, files, the network."""
   basedir: Path             # the checkout, whose .lfsconfig names the nearest LFS server
 
-  def put(self, key: str, value: Any, block: bool = False) -> None:
+  def put(self, key: str, value: Any, *, block: bool = False) -> None:
     """Write a param. May raise, as Params does for a key this build does not declare."""
 
   def remove(self, key: str) -> None:
     """Clear a param."""
-
-  def event(self, name: str, **fields: Any) -> None:
-    """A structured log line (cloudlog.event)."""
 
   def model_root(self) -> Path:
     """The model manager's model root (openpilot's Paths.model_root()). jetlink
@@ -123,9 +120,9 @@ class WorkerSide(StatusSide, Protocol):
     recognise, a downloaded 1.75 GB ONNX included, and leaves directories alone."""
 
 
-@runtime_checkable
 class ModelSide(WorkerSide, Protocol):
-  """modeld: comma's model face, and the engagement a swap waits out."""
+  """modeld: comma's model face, the engagement a swap waits out, and the
+  structured log line the link's telemetry goes to."""
 
   def model_face(self) -> ModelFace:
     """What a ModelState for comma's large model has to carry."""
@@ -135,16 +132,18 @@ class ModelSide(WorkerSide, Protocol):
     up to timeout_ms for news and answers True when controls are engaged, or when
     that is not known."""
 
+  def event(self, name: str, **fields: Any) -> None:
+    """A structured log line (cloudlog.event)."""
 
-@runtime_checkable
+
 class BuildSide(Protocol):
   """scons: comma's warp graph."""
 
   def make_warp(self, cam_w: int, cam_h: int, model_w: int, model_h: int) -> tuple[Callable[..., Any], int]:
-    """The warp graph for this geometry, and the size of the NV12 frame it reads."""
+    """The warp graph for this geometry, and the size of the NV12 frame it
+    reads. Imports comma's graph module before anything of tinygrad's."""
 
 
-@runtime_checkable
 class Openpilot(ModelSide, BuildSide, Protocol):
   """The whole adapter: one object implements every side."""
 
@@ -175,9 +174,12 @@ def members(protocol: type) -> dict[str, inspect.Signature | None]:
   return found
 
 
-def _shape(sig: inspect.Signature) -> list[tuple[str, Any, bool]]:
-  # names, kinds and which have defaults: what a caller depends on
-  return [(p.name, p.kind, p.default is not p.empty) for p in sig.parameters.values()]
+def _shape(sig: inspect.Signature) -> list[tuple[str | None, Any, bool]]:
+  """What a caller depends on: each parameter's kind and whether it has a
+  default, and the name of one jetlink passes by keyword (keyword-only). The
+  other names are the adapter's to choose."""
+  return [(p.name if p.kind is p.KEYWORD_ONLY else None, p.kind, p.default is not p.empty)
+          for p in sig.parameters.values()]
 
 
 def _plain(sig: inspect.Signature) -> str:
@@ -187,9 +189,11 @@ def _plain(sig: inspect.Signature) -> str:
 
 
 def conformance(obj: object, protocol: type) -> list[str]:
-  """Each member of `protocol` that `obj` lacks, or has with other parameters;
-  [] when it conforms. One checker for both repos: jetlink pins the interface
-  with it, and the fork's tests run it against the real adapter."""
+  """Each member of `protocol` that `obj` lacks, or has with parameters a
+  caller would trip on (another count, kind or default, or another name for
+  one passed by keyword); [] when it conforms. One checker for both repos:
+  jetlink pins the interface with it, and the fork's tests run it against the
+  real adapter."""
   problems = []
   for name, expected in members(protocol).items():
     if not hasattr(obj, name):

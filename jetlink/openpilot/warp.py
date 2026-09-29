@@ -125,7 +125,7 @@ class Warps:
 
 def warm(warp, frame_size: int) -> None:
   """Run a loaded warp JIT until it is cheap to call. `frame_size` is the
-  camera's NV12 buffer size (ModelFace.nv12_info(w, h)[3]).
+  camera's NV12 buffer size (ModelFace.frame_size).
 
   Measured: loading 0.3 s, the first call 1.9 s, the second 5 ms. Paid on
   modeld's frame loop that was ~26 dropped frames and 16 s of modeldLagging

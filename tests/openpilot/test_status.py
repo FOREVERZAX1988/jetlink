@@ -133,13 +133,20 @@ class SelectionTest(OpenpilotTest):
     self.assertEqual(self.op.log.lines('exception'), ['jetlink: could not read whether the link is on'])
     self.assertTrue(self.jl.enabled())
 
+  def test_a_directory_named_as_text_is_not_a_new_store_every_read(self):
+    self.configure(model='m')
+    self.op.params_dir = lambda: str(self.op.store_dir)
+    first = self.parts.settings
+    self.assertIs(self.parts.settings, first)
+    self.assertTrue(self.jl.enabled())
+
   def test_the_setting_follows_the_store_the_adapter_names(self):
     # a bench shell under its own OPENPILOT_PREFIX, as Params follows it
     self.configure(model='m')
     self.assertTrue(self.jl.enabled())
     elsewhere = self.tmp / 'params' / 'other'
     elsewhere.mkdir(parents=True)
-    self.op.params_dir = elsewhere
+    self.op.store_dir = elsewhere
     self.assertFalse(self.jl.enabled())
 
 
@@ -405,7 +412,7 @@ class TestTheSnapshot(OpenpilotTest):
     self.assertEqual(len(self.op.log.lines('exception')), 2)
 
   def test_a_setting_that_cannot_be_read_is_off(self):
-    with mock.patch.object(self.op, 'owner', side_effect=RuntimeError('adapter bug')):
+    with mock.patch.object(self.op, 'params_dir', side_effect=RuntimeError('adapter bug')):
       s = self.jl.status()
       self.assertFalse(self.jl.enabled())
     self.assertEqual((s.mode, s.enabled, s.reason), ('off', False, None))

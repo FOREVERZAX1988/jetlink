@@ -222,7 +222,7 @@ class TestTheJoinFactory(OpenpilotTest):
     self.parts.spec.store(spec(model_hw=(64, 128)))
     self.join()
     self.loaded.assert_called_once_with(1928, 1208, 256, 128)
-    self.warm.assert_called_once_with(self.loaded.return_value, fakes.nv12_info(1928, 1208)[3])
+    self.warm.assert_called_once_with(self.loaded.return_value, fakes.frame_size(1928, 1208))
     self.reset.assert_called_once_with(self.small)
     self.present.assert_called_once()
 

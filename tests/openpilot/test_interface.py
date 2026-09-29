@@ -27,8 +27,8 @@ READERS = {
   'keys': None,
   'log': None,
   'catalog_selector': None,
+  'params_dir': '() -> Path',
   'get': '(key: str) -> Any',
-  'owner': '() -> OwnerConfig',
   'chestnut_present': '() -> bool',
   'camera': '() -> tuple[int, int, int, int]',
   'warp_path': '(cam_w: int, cam_h: int, model_w: int, model_h: int) -> Path',
@@ -36,15 +36,15 @@ READERS = {
 WORKER = {
   **READERS,
   'basedir': None,
-  'put': '(key: str, value: Any, block: bool = False) -> None',
+  'put': '(key: str, value: Any, *, block: bool = False) -> None',
   'remove': '(key: str) -> None',
-  'event': '(name: str, **fields: Any) -> None',
   'model_root': '() -> Path',
 }
 MODELD = {
   **WORKER,
   'model_face': '() -> ModelFace',
   'engagement': '() -> Callable[[int], bool]',
+  'event': '(name: str, **fields: Any) -> None',
 }
 BUILD = {
   'make_warp': '(cam_w: int, cam_h: int, model_w: int, model_h: int) -> tuple[Callable[..., Any], int]',
@@ -54,9 +54,9 @@ SIDES = {'StatusSide': READERS, 'WorkerSide': WORKER, 'ModelSide': MODELD, 'Buil
 
 FIELDS = {
   'Keys': ['link', 'offroad', 'progress', 'spec', 'pointers', 'big_model', 'catalog'],
-  'OwnerConfig': ['params_dir', 'keys', 'chestnut_ids', 'worker', 'cwd', 'env', 'log_file'],
-  'ModelFace': ['parser', 'nv12_info', 'desire_len', 'constants', 'lat_smooth_seconds', 'long_smooth_seconds',
-                'get_action_from_model', 'lat_delay', 'telemetry_every'],
+  'OwnerConfig': ['params_dir', 'keys', 'chestnut_ids', 'adapter', 'cwd', 'env', 'log_file'],
+  'ModelFace': ['parser', 'frame_size', 'desire_len', 'constants', 'lat_smooth_seconds', 'long_smooth_seconds',
+                'get_action_from_model'],
 }
 
 
@@ -99,7 +99,6 @@ class TestConformance(unittest.TestCase):
 
   def test_the_fake_is_a_whole_adapter(self):
     self.assertEqual(jo.conformance(self.op, jo.Openpilot), [])
-    self.assertIsInstance(self.op, jo.Openpilot)
 
   def test_a_side_needs_only_its_own_members(self):
     class Reader:
@@ -107,8 +106,8 @@ class TestConformance(unittest.TestCase):
       log = fakes.RecordingLog()
       catalog_selector = 0
 
+      def params_dir(self): ...
       def get(self, key): ...
-      def owner(self): ...
       def chestnut_present(self): ...
       def camera(self): ...
       def warp_path(self, cam_w, cam_h, model_w, model_h): ...
@@ -123,11 +122,27 @@ class TestConformance(unittest.TestCase):
   def test_other_parameters_are_named(self):
     self.op.put = lambda key, value: None   # no block
     [problem] = jo.conformance(self.op, jo.Openpilot)
-    self.assertEqual(problem, 'put(key, value): expected put(key, value, block=False)')
+    self.assertEqual(problem, 'put(key, value): expected put(key, value, *, block=False)')
 
-  def test_a_renamed_parameter_is_a_difference(self):
-    # callers pass some of these by keyword
+  def test_a_positional_parameter_is_the_adapters_to_name(self):
+    # jetlink passes it by position; a caller cannot trip on its name
     self.op.remove = lambda name: None
+    self.op.get = lambda param: None
+    self.assertEqual(jo.conformance(self.op, jo.Openpilot), [])
+
+  def test_a_keyword_parameter_must_keep_its_name(self):
+    # jetlink passes block by keyword
+    self.op.put = lambda key, value, *, blocking=False: None
+    self.assertEqual(len(jo.conformance(self.op, jo.Openpilot)), 1)
+
+  def test_one_parameter_too_many_or_too_few_is_a_difference(self):
+    self.op.warp_path = lambda cam_w, cam_h, model_w: None
+    self.op.camera = lambda which: None
+    self.assertEqual(len(jo.conformance(self.op, jo.Openpilot)), 2)
+
+  def test_a_default_where_none_is_expected_is_a_difference(self):
+    # a caller relying on it being required never passes it; the other way round breaks
+    self.op.put = lambda key, value=None, *, block=False: None
     self.assertEqual(len(jo.conformance(self.op, jo.Openpilot)), 1)
 
   def test_a_member_that_is_not_callable_is_named(self):

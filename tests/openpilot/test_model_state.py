@@ -174,10 +174,10 @@ class TestTheFace(ModelStateTest):
     self.assertEqual(state.PLANPLUS_CONTROL, 1.0)
     # the module function, not bound to the model
     self.assertEqual(state.get_action_from_model('out', 'prev'), ('action', ('out', 'prev')))
-    self.assertEqual(state.lat_delay, 0.2)
+    self.assertEqual(state.lat_delay, 0.0, "the joining model's to set, from the small model")
     self.assertIsInstance(state.parser, fakes.FakeParser)
     self.assertEqual(state.prev_desire.shape, (face.desire_len,))
-    self.assertEqual(state.frame_buf_params['img'], face.nv12_info(1928, 1208))
+    self.assertEqual(state.frame_size, face.frame_size(1928, 1208))
     self.assertIs(state.chestnut, True)
 
   def test_outputs_go_through_the_parser_sliced(self):

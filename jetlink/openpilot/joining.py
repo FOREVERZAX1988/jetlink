@@ -511,7 +511,7 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
     try:
       ready['reset_small'] = prepare_reset(small)
       warp = parts.warps.load(cam_w, cam_h, *geometry)
-      warm(warp, face.nv12_info(cam_w, cam_h)[3])
+      warm(warp, face.frame_size(cam_w, cam_h))
     except Exception:
       link.close()
       raise

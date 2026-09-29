@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 import tempfile
 import time
 import unittest
@@ -87,20 +86,18 @@ class FakeParser:
     return dict(outputs)
 
 
-def nv12_info(width: int, height: int) -> tuple[int, int, int, int]:
-  # stride, the Y plane's height, the UV plane's offset and the buffer size,
-  # in the layout get_nv12_info returns; jetlink only reads the size
-  return width, height, width * height, width * height * 3 // 2
+def frame_size(width: int, height: int) -> int:
+  """An NV12 buffer's size, as get_nv12_info(w, h)[3] gives it (without the stride padding)."""
+  return width * height * 3 // 2
 
 
 def get_action_from_model(*args):
   return ('action', args)
 
 
-FACE = ModelFace(parser=FakeParser, nv12_info=nv12_info, desire_len=8,
+FACE = ModelFace(parser=FakeParser, frame_size=frame_size, desire_len=8,
                  constants=SimpleNamespace(MODEL_FREQ=20, DESIRE_LEN=8), lat_smooth_seconds=0.0,
-                 long_smooth_seconds=0.3, get_action_from_model=get_action_from_model, lat_delay=lambda: 0.2,
-                 telemetry_every=2)
+                 long_smooth_seconds=0.3, get_action_from_model=get_action_from_model)
 
 
 class FakeOpenpilot:
@@ -114,8 +111,9 @@ class FakeOpenpilot:
     self.catalog_selector = catalog_selector
     self.basedir = self.root / 'openpilot'
     self.basedir.mkdir(parents=True, exist_ok=True)
-    self.params_dir = self.root / 'params' / 'd'
-    self.params_dir.mkdir(parents=True, exist_ok=True)
+    # the params store, where openpilot's rule puts it under PARAMS_ROOT=<root>/params
+    self.store_dir = self.root / 'params' / 'd'
+    self.store_dir.mkdir(parents=True, exist_ok=True)
     self.store: dict[str, object] = {}
     self.events: list[tuple[str, dict]] = []
     self.chestnut = chestnut
@@ -123,7 +121,6 @@ class FakeOpenpilot:
     self.engaged = True
     self.put_error: Exception | None = None
     self.face = FACE
-    self.worker = (sys.executable, '-m', 'jetlink.openpilot.provision', '--adapter', __name__)
 
   # -- the readers ------------------------------------------------------------
 
@@ -132,10 +129,8 @@ class FakeOpenpilot:
     value = self.store.get(key)
     return None if value is None else json.loads(json.dumps(value))
 
-  def owner(self) -> OwnerConfig:
-    return OwnerConfig(params_dir=self.params_dir, keys=self.keys, chestnut_ids=CHESTNUT_IDS, worker=self.worker,
-                       cwd=str(self.basedir), env={'PYTHONPATH': str(self.basedir)},
-                       log_file=self.root / 'jetlink-owner.log')
+  def params_dir(self) -> Path:
+    return self.store_dir
 
   def chestnut_present(self) -> bool:
     return self.chestnut
@@ -148,16 +143,13 @@ class FakeOpenpilot:
 
   # -- the provisioning run ----------------------------------------------------
 
-  def put(self, key: str, value, block: bool = False) -> None:
+  def put(self, key: str, value, *, block: bool = False) -> None:
     if self.put_error is not None:
       raise self.put_error
     self.store[key] = json.loads(json.dumps(value))
 
   def remove(self, key: str) -> None:
     self.store.pop(key, None)
-
-  def event(self, name: str, **fields) -> None:
-    self.events.append((name, fields))
 
   def model_root(self) -> Path:
     return self.root / 'models'
@@ -175,25 +167,34 @@ class FakeOpenpilot:
       return self.engaged
     return engaged
 
+  def event(self, name: str, **fields) -> None:
+    self.events.append((name, fields))
+
   # -- the build ---------------------------------------------------------------
 
   def make_warp(self, cam_w: int, cam_h: int, model_w: int, model_h: int):
     def warp(tfm, big_tfm, frame, big_frame):
       return SimpleNamespace(tfm=tfm, big_tfm=big_tfm, frame=frame, big_frame=big_frame)
-    return warp, nv12_info(cam_w, cam_h)[3]
+    return warp, frame_size(cam_w, cam_h)
+
+  # -- the adapter module's, for jetlinkd --------------------------------------
+
+  def owner_config(self) -> OwnerConfig:
+    return OwnerConfig(params_dir=self.store_dir, keys=self.keys, chestnut_ids=CHESTNUT_IDS, adapter=__name__,
+                       cwd=self.basedir, env={'PYTHONPATH': str(self.basedir)}, log_file=self.root / 'jetlink-owner.log')
 
   # -- what a test sets --------------------------------------------------------
 
   def set_mode(self, mode: str | None) -> None:
     """The Accelerator Link setting as the panels write it; None unsets it."""
-    path = self.params_dir / self.keys.link
+    path = self.store_dir / self.keys.link
     if mode is None:
       path.unlink(missing_ok=True)
     else:
       path.write_bytes(str(MODES.index(mode)).encode())
 
   def set_offroad(self, parked: bool | None) -> None:
-    path = self.params_dir / self.keys.offroad
+    path = self.store_dir / self.keys.offroad
     if parked is None:
       path.unlink(missing_ok=True)
     else:
@@ -209,7 +210,7 @@ def adapter() -> FakeOpenpilot:
 
 
 def owner_config() -> OwnerConfig:
-  return adapter().owner()
+  return adapter().owner_config()
 
 
 # every file of the comma layer's that a jetlink.openpilot test could reach:
@@ -222,7 +223,7 @@ GADGET_FILES = ('LINK', 'NET_STATUS', 'GADGET_STATUS', 'LENDER_STATUS', 'DORMANT
 def isolate(test: unittest.TestCase, root: Path) -> None:
   """Point everything jetlink could read or write outside the fake under
   `root`, for the length of `test`: openpilot's params store by gadget's own
-  rule (PARAMS_ROOT and the prefix, so it lands on FakeOpenpilot's params_dir),
+  rule (PARAMS_ROOT and the prefix, so it lands on FakeOpenpilot's store_dir),
   and the comma layer's device files. conftest.py fails a test that still
   reaches the real ones."""
   from jetlink.comma import gadget, lending, port

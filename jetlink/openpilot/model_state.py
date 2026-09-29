@@ -37,6 +37,9 @@ from jetlink.openpilot.warp import call_warp
 
 SEND_RAW_PRED = os.getenv('SEND_RAW_PRED')
 SLOW_FRAME = 0.05  # the full 20 Hz budget, not just the largest outliers
+# frames between asks for the server's telemetry, which rides on the response:
+# every second one, as modeld sent a chestnut's state (20 Hz over 10 Hz)
+TELEMETRY_EVERY = 2
 # telemetry goes to the log at most this often
 TELEMETRY_PERIOD = 1.0
 
@@ -60,7 +63,9 @@ class JetlinkModelState:
     # (name, **fields): a structured log line, cloudlog.event on a comma
     self._event = event
     self.face = face
-    self.lat_delay = face.lat_delay()
+    # the joining model sets it from the small model before the first frame,
+    # and modeld writes it every frame after
+    self.lat_delay = 0.0
     self.constants = face.constants
     self.LAT_SMOOTH_SECONDS = face.lat_smooth_seconds
     self.LONG_SMOOTH_SECONDS = face.long_smooth_seconds
@@ -105,9 +110,9 @@ class JetlinkModelState:
     self.warp_dev = Device.DEFAULT
     self.prev_desire = np.zeros(face.desire_len, dtype=np.float32)
     self.parser = face.parser()
-    self.frame_buf_params = {k: face.nv12_info(cam_w, cam_h) for k in ('img', 'big_img')}
+    self.frame_size = face.frame_size(cam_w, cam_h)
     # the camera buffers modeld hands over, whatever the graph calls its inputs
-    self.vision_input_names = list(self.frame_buf_params)
+    self.vision_input_names = ['img', 'big_img']
     self.full_frames: dict = {}
     self._blob_cache: dict = {}
     self._need_reset = True
@@ -135,10 +140,9 @@ class JetlinkModelState:
           inputs: dict[str, np.ndarray], after_enqueue: Callable[[], None] | None = None) -> dict[str, np.ndarray]:
     for key in bufs.keys():
       ptr = np.frombuffer(bufs[key].data, dtype=np.uint8).ctypes.data
-      yuv_size = self.frame_buf_params[key][3]
       cache_key = (key, ptr)
       if cache_key not in self._blob_cache:
-        self._blob_cache[cache_key] = self._tensor.from_blob(ptr, (yuv_size,), dtype='uint8', device=self.warp_dev)
+        self._blob_cache[cache_key] = self._tensor.from_blob(ptr, (self.frame_size,), dtype='uint8', device=self.warp_dev)
       self.full_frames[key] = self._blob_cache[cache_key]
 
     # Model decides when action is completed, so desire input is just a pulse triggered on rising edge.
@@ -167,8 +171,8 @@ class JetlinkModelState:
 
     self._frame_id += 1
     # the telemetry is asked for on the frames modeld would have sent a
-    # chestnut's state on: its own callback's, or every telemetry_every-th
-    telemetry = after_enqueue is not None or self._frame_id % self.face.telemetry_every == 0
+    # chestnut's state on: its own callback's, or every TELEMETRY_EVERY-th
+    telemetry = after_enqueue is not None or self._frame_id % TELEMETRY_EVERY == 0
     seq = self.client.infer_begin(data, self.packed, self._frame_id, reset=self._need_reset, want_state=telemetry)
     t3 = time.perf_counter()
     self._need_reset = False

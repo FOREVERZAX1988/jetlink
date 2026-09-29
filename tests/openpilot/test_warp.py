@@ -268,7 +268,7 @@ class TestTheBuild(OpenpilotTest):
     load.assert_called_once_with('x.adapter')
     make_warp.assert_called_once_with(1344, 760, 512, 256)
     graph, frame_size = compile_warp.call_args.args[:2]
-    self.assertEqual(frame_size, fakes.nv12_info(1344, 760)[3])
+    self.assertEqual(frame_size, fakes.frame_size(1344, 760))
     self.assertEqual(compile_warp.call_args.args[2], out)
 
   def test_sizes_are_w_by_h(self):

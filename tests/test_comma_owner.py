@@ -17,6 +17,7 @@ import logging
 import os
 import select
 import socket
+import sys
 import tempfile
 import time
 import unittest
@@ -943,15 +944,16 @@ class TestTheOpenpilotEntry(OwnerTest):
   def config(self):
     from tests.openpilot.fakes import FakeOpenpilot
     op = FakeOpenpilot(self.tmp / 'op')
-    return op.owner()
+    return op.owner_config()
 
   def test_it_hands_the_owner_the_whole_config(self):
     config = self.config()
     with mock.patch.object(owner, 'main') as main:
       openpilot_owner.main(config)
     (worker,), kwargs = main.call_args
-    self.assertEqual(worker, list(config.worker))
-    self.assertEqual((kwargs['cwd'], kwargs['env'], kwargs['log_file']), (config.cwd, dict(config.env), config.log_file))
+    # the run is jetlink's to name, over the adapter the fork names
+    self.assertEqual(worker, [sys.executable, '-m', 'jetlink.openpilot.provision', '--adapter', 'tests.openpilot.fakes'])
+    self.assertEqual((kwargs['cwd'], kwargs['env'], kwargs['log_file']), (str(config.cwd), dict(config.env), config.log_file))
     self.assertEqual(kwargs['chestnut_ids'], config.chestnut_ids)
     settings = kwargs['settings']
     self.assertEqual((settings.params.directory, settings.keys), (config.params_dir, config.keys))

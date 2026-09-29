@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import time
 from functools import cached_property
+from pathlib import Path
 
 from jetlink.comma import gadget
 from jetlink.openpilot.settings import FileParams, Settings
@@ -49,7 +50,7 @@ class Parts:
     """The link setting and whether the car is parked, off the params files,
     as the owner reads them. Follows the directory the adapter names, which
     moves with OPENPILOT_PREFIX as Params does."""
-    directory = self.op.owner().params_dir
+    directory = Path(self.op.params_dir())
     if self._settings is None or self._settings.params.directory != directory:
       self._settings = Settings(FileParams(directory), self.op.keys)
     return self._settings
