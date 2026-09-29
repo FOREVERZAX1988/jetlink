@@ -903,6 +903,27 @@ resolve_ref() {
         "or name a release: --ref v0.5.0"
     fi
   fi
+  stay_native "$had"
+}
+
+# An update or a setup does not take a native install back to Docker by
+# itself, while the release it follows (the newest, until one runs natively)
+# is one that ran in Docker: only --ref goes there. The server here stays, and
+# so does its source.
+stay_native() {
+  local had=$1
+  if [ -n "$OPT_REF" ] || [ "$SOURCE" = local ] || [ "$KEEP_SOURCE" = 1 ] || [ "$DOCKER_ERA" = 1 ] \
+      || [ ! -L "$SRC_ROOT/current" ] || ! docker_release "$RESOLVED"; then
+    return 0
+  fi
+  note "$RESOLVED runs Jetlink in Docker, so the server installed here stays. To go back to it:"
+  note "  curl -fsSL $RAW_URL/$RESOLVED/install.sh | bash -s -- --update --ref $RESOLVED"
+  RESOLVED="$had" KEEP_SOURCE=1 REUSE_SERVER=1
+}
+
+# a release from before the native server
+docker_release() {
+  [[ $1 =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && version_ge "${DOCKER_LAST#v}" "${1#v}"
 }
 
 # The newest release's tag, or nothing: GitHub's latest release, never a draft
@@ -928,7 +949,7 @@ latest_release() {
 # installer can put back (the switch itself is decided on its source).
 ASSET_URL='' GOING_BACK=0 REUSE_SERVER=0
 choose_server() {
-  if [ -n "$OPT_BINARY" ]; then return 0; fi
+  if [ -n "$OPT_BINARY" ] || [ "$REUSE_SERVER" = 1 ]; then return 0; fi
   if [ "$SOURCE" = local ]; then
     if [ "$DOCKER_ERA" = 0 ] && [ -L "$SRC_ROOT/current" ]; then
       REUSE_SERVER=1
@@ -942,9 +963,7 @@ choose_server() {
     main) ASSET_URL="$RELEASES_URL/edge/jetlink-server-edge-$FLAVOR.tar.gz" ;;
     v[0-9]*)
       ASSET_URL="$RELEASES_URL/$RESOLVED/jetlink-server-${RESOLVED#v}-$FLAVOR.tar.gz"
-      if [[ $RESOLVED =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && version_ge "${DOCKER_LAST#v}" "${RESOLVED#v}"; then
-        GOING_BACK=1
-      fi ;;
+      if docker_release "$RESOLVED"; then GOING_BACK=1; fi ;;
     *) no_server ;;
   esac
 }

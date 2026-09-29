@@ -905,6 +905,47 @@ expect_rc 0
 expect_in /etc/jetlink/install.conf "JETLINK_VERSION=v0.9.0"
 expect_not_in "$UNITS/jetlink-server.service" "0.12.0-dev"
 
+scenario "while the newest release runs in Docker, a native install stays put unless --ref says"
+reset_box; jetson 39 2.1
+run_installer curl '' --yes
+head_before="$(git -C /opt/jetlink/src rev-parse HEAD)"
+: >"$FAKE_LOG"
+FAKE_LATEST=v0.6.0 cli update
+expect_rc 0
+expect_out "runs the server in Docker. Nothing changed."
+expect_out "curl -fsSL https://raw.githubusercontent.com/zoompilot/jetlink/v0.6.0/install.sh | bash -s -- --update --ref v0.6.0"
+expect_not_ran "systemctl"
+check "the source moved" test "$(git -C /opt/jetlink/src rev-parse HEAD)" = "$head_before"
+# the installer run by itself, as curl | bash or jetlink setup runs it, keeps the server too
+FAKE_LATEST=v0.6.0 run_installer curl '' --update
+expect_rc 0
+expect_out "v0.6.0 runs Jetlink in Docker, so the server installed here stays."
+expect_out "Keep the Jetlink server that is installed"
+expect_no_out "its own installer takes over"
+expect_not_ran "releases/download"
+expect_link /opt/jetlink/current /opt/jetlink/0.10.0
+expect_in "$UNITS/jetlink-server.service" "/opt/jetlink/current/bin/jetlink-server"
+check "the source moved" test "$(git -C /opt/jetlink/src rev-parse HEAD)" = "$head_before"
+answers '1\ny\n\ny\n'
+FAKE_LATEST=v0.6.0 JETLINK_INPUT=/tmp/answers jetlink setup >"$OUT" 2>&1; RC=$?
+expect_rc 0
+expect_out "Keep the Jetlink server that is installed"
+expect_in "$UNITS/jetlink-server.service" "/opt/jetlink/current/bin/jetlink-server"
+# nor to a release older than the server here
+bash /opt/jetlink/src/install.sh --update --binary /tmp/dev/jetlink-server-0.12.0-dev-linux-aarch64.tar.gz >"$OUT" 2>&1
+: >"$FAKE_LOG"
+cli update
+expect_rc 0
+expect_out "v0.10.0, the release this install follows, is older than the server here (0.12.0-dev)."
+expect_not_ran "systemctl"
+expect_link /opt/jetlink/current /opt/jetlink/0.12.0-dev
+# --ref goes back, as asked
+FAKE_LATEST=v0.6.0 FAKE_PUBLISHED=1 cli update --ref v0.6.0
+expect_rc 0
+expect_in "$UNITS/jetlink-server.service" "run-server"
+expect_in /etc/jetlink/server.env "JETLINK_IMAGE_REF=ghcr.io/zoompilot/jetlink:0.6.0-cuda"
+expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=120"
+
 scenario "TensorRT already here without its plugins: they come, or it does without"
 reset_box; jetson 36 4.3
 with_trt 10.3.0.30-1+cuda12.5 10
