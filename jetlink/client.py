@@ -395,15 +395,15 @@ class JetlinkClient:
       self.dead = True
       raise LinkError('inference response is missing model outputs')
     if msg.payload.nbytes > end:
-      if not self._infer_flags & P.Flag.WANT_STATE:
-        # outputs laid out some other way, hidden_state left in by a server
-        # that says protocol 3: every float after it would be misread
+      # piggybacked telemetry, when asked for; anything else is outputs laid
+      # out some other way (hidden_state left in by a server that says
+      # protocol 3, or a slice the two ends resolve differently): every float
+      # after it would be misread
+      state = _telemetry(msg.payload[end:]) if self._infer_flags & P.Flag.WANT_STATE else None
+      if state is None:
         self.dead = True
         raise LinkError(f'inference response is {msg.payload.nbytes} bytes, expected {end}')
-      try:   # piggybacked telemetry
-        self.last_state = json.loads(bytes(msg.payload[end:]))
-      except ValueError:
-        pass
+      self.last_state = state
     receive = getattr(self.t, 'last_receive', None)
     if receive is not None and time.monotonic() - self._infer_started > 0.05:
       log.warning('frame %d receive maxima: prepare %.1f read_wait %.1f handoff %.1f ms; '
@@ -446,6 +446,19 @@ class JetlinkClient:
     # open a new one rather than reuse a closed socket or endpoint file
     self.dead = True
     self.t.close()
+
+
+def _telemetry(tail) -> dict | None:
+  """A WANT_STATE reply's telemetry: the JSON object after the outputs. None
+  for anything else, floats included, which is a reply laid out another way."""
+  raw = bytes(tail)
+  if raw[:1] != b'{':
+    return None
+  try:
+    state = json.loads(raw)
+  except ValueError:
+    return None
+  return state if isinstance(state, dict) else None
 
 
 def _whole_output(spec: ModelSpec, reply: np.ndarray, whole: bool) -> np.ndarray:
