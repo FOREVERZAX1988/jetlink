@@ -224,7 +224,7 @@ def queued_reference(frames, resets=(0,), hellos=(), fed=None, dropped=()) -> li
       queues.new_client()
     outs.append(tiny_model.reference(queues.step(warped, packed)))
     if i not in dropped:
-      queues.after_run({DRIVING_OUTPUT: outs[-1] if fed is None else fed[i]}, {})
+      queues.after_run({DRIVING_OUTPUT: outs[-1] if fed is None else fed[i]})
   return outs
 
 

@@ -251,7 +251,7 @@ def reference(args) -> int:
     print(f"  frame {i}: {out.shape[0]} values, finite={bool(np.all(np.isfinite(out)))}")
     # the hidden state fed back is our own previous output, as the server's
     # is its own; the link's would hide the drift this is looking for
-    queues.after_run({DRIVING_OUTPUT: out}, feed)
+    queues.after_run({DRIVING_OUTPUT: out})
   return 0
 
 

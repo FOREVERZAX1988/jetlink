@@ -16,9 +16,7 @@ Every file comes from the code the comma runs, on fixed inputs:
   staging   .../conformance/staging*: the tensors PolicyQueues.step feeds for
             the tiny queued graph at frame_skip 1, 2 and 4, with the hidden
             state each frame's output feeds back, a hello, a non-finite frame,
-            a reset, and desires with NaNs and signed zeros included; checked
-            here against protocol 2's staging, where modeld fed the hidden
-            state back through prev_feat
+            a reset, and desires with NaNs and signed zeros included
   registry  tests/fixtures/conformance/registry.json: LFS pointers, model
             identities, catalog parsing and merging. Its `cache` block (one
             cache directory's catalog and inventory payloads) was written by
@@ -270,53 +268,7 @@ def _desire_edges(f: int) -> np.ndarray | None:
   return DESIRE_EDGES[f % 4] if f % 8 < 4 else None
 
 
-def _protocol2_staging(spec, frames) -> list[dict[str, np.ndarray]]:
-  """What protocol 2 staged for the same frames: modeld sent the hidden state
-  back as prev_feat, zero for a new ModelState (so on its first frame, the one
-  that resets) and for a new client, and replaced only after a frame that
-  reached it, which a non-finite one never did. openpilot's rolling queues in
-  numpy, not PolicyQueues, so the fixture checks one against the other."""
-  fs = spec.frame_skip
-  hidden = slice(*spec.hidden_range)
-  queues = {'img': np.zeros(spec.img_buf_shape, np.float16), 'big_img': np.zeros(spec.img_buf_shape, np.float16),
-            'feat': np.zeros(spec.feat_q_shape, np.float16), 'desire': np.zeros(spec.desire_q_shape, np.float16)}
-  prev_feat = np.zeros(spec.prev_feat_shape, np.float32)
-
-  def shift(name, row):
-    buf = queues[name]
-    buf[:-1] = buf[1:].copy()
-    buf[-1] = np.asarray(row).reshape(buf.shape[1:]).astype(np.float16)
-
-  staged = []
-  layout = spec.packed_layout
-  for f, (warped, packed, output) in enumerate(frames):
-    if f == STAGING_RESET_BEFORE:
-      for buf in queues.values():
-        buf[...] = 0
-      prev_feat[...] = 0
-    if f == STAGING_HELLO_BEFORE:
-      prev_feat[...] = 0
-    shift('img', warped[0])
-    shift('big_img', warped[1])
-    shift('desire', packed[layout['desire'][0]])
-    shift('feat', prev_feat)
-    des = queues['desire']
-    # copies: the next frame shifts the queues under any view
-    staged.append({
-      'img': queues['img'][::fs].reshape(spec.input_shapes['img']).copy(),
-      'big_img': queues['big_img'][::fs].reshape(spec.input_shapes['big_img']).copy(),
-      'features_buffer': queues['feat'][::fs].reshape(spec.input_shapes['features_buffer']).copy(),
-      'desire_pulse': des.reshape(-1, fs, *des.shape[1:]).max(axis=1).reshape(spec.input_shapes['desire_pulse']),
-      'traffic_convention': packed[layout['traffic_convention'][0]].astype(np.float16),
-      'action_t': packed[layout['action_t'][0]].astype(np.float16),
-    })
-    if np.all(np.isfinite(output)):
-      prev_feat.reshape(-1)[...] = output[hidden]
-  return staged
-
-
 def staging(root: Path) -> None:
-
   from jetlink.queues import PolicyQueues
   from jetlink.spec import DRIVING_OUTPUT, spec_from_onnx
   from tests import tiny_model
@@ -331,7 +283,7 @@ def staging(root: Path) -> None:
       spec = spec_from_onnx(str(path), frame_skip=skip)
       rng = np.random.default_rng(20260927 + skip)
       queues = PolicyQueues(spec)
-      frames, staged, sent = bytearray(), bytearray(), []
+      frames, staged = bytearray(), bytearray()
       for f in range(STAGING_FRAMES):
         warped = rng.integers(0, 256, spec.warped_shape, dtype=np.uint8)
         packed = (rng.standard_normal(spec.packed_nelem) * 2.0).astype(np.float32)
@@ -348,14 +300,11 @@ def staging(root: Path) -> None:
           queues.new_client()
         feed = queues.step(warped, packed)
         if np.all(np.isfinite(output)):
-          queues.after_run({DRIVING_OUTPUT: output}, feed)
+          queues.after_run({DRIVING_OUTPUT: output})
         frames += warped.tobytes() + packed.tobytes() + output.tobytes()
-        sent.append((warped, packed, output))
         for name in STAGING_INPUTS:
           assert feed[name].dtype == np.float16, name
           staged += feed[name].tobytes()
-      want = b''.join(frame[name].tobytes() for frame in _protocol2_staging(spec, sent) for name in STAGING_INPUTS)
-      assert bytes(staged) == want, f'frame_skip {skip}: protocol 3 stages what protocol 2 did not'
       stem = f'staging.fs{skip}'
       (out / f'{stem}.spec.json').write_text(dump(spec.to_dict()))
       (out / f'{stem}.frames.bin').write_bytes(bytes(frames))

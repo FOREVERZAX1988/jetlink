@@ -19,7 +19,7 @@ Python:
 | --- | --- | --- |
 | Constants: the wire's magic, versions, sizes, message, flag and status numbers; USB ids and packet sizes; link media; model constants; the product version; the onnxruntime release | `make_pins.py` writes `JetlinkKit/Sources/JetlinkKit/Pinned.swift` | the Swift code uses `Pinned`; `ConformanceTests` checks every Swift constant against it |
 | Wire bytes: headers and INFER bodies; the byte streams of TCP, a USB host and the gadget's 16 KB bursts; the reads a USB host posts | `make_conformance_fixtures.py wire` | `JetlinkServerTests/ConformanceTests.swift` |
-| Tensors the queues stage each frame at frame_skip 1, 2 and 4, each frame's hidden state fed into the next, with a reset, a hello, a non-finite frame and desires with NaNs, signed zeros and infinities; the generator also checks them against protocol 2's staging | `make_conformance_fixtures.py staging` | the same file |
+| Tensors the queues stage each frame at frame_skip 1, 2 and 4, each frame's hidden state fed into the next, with a reset, a hello, a non-finite frame and desires with NaNs, signed zeros and infinities | `make_conformance_fixtures.py staging` | the same file |
 | LFS pointers, model identities, catalog parsing and merging | `make_conformance_fixtures.py registry` | `JetlinkRegistryTests/ConformanceTests.swift` |
 
 Generators live in `JetlinkKit/Scripts` and import the `jetlink` package of
