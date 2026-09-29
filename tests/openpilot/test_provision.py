@@ -16,11 +16,13 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from jetlink.client import EngineMissing
+from jetlink import protocol as P
+from jetlink.client import EngineMissing, JetlinkClient
 from jetlink.comma import gadget, lending
 from jetlink.openpilot import link, provision
 from tests.openpilot import fakes
@@ -406,6 +408,39 @@ class TestTheRun(OpenpilotTest):
     d.provision.assert_called_once()
 
 
+class ReplayDroppingServer:
+  """The server's session rule, scripted (JetlinkServer's Session.handle): a
+  hello starts the session over at its seq, and any other message at or below
+  the last seq seen is a replay and dropped without an answer. It answers a
+  hello and a shutdown request, and records the rest."""
+
+  def __init__(self, transport, last_seq: int):
+    self.t = transport
+    self.last = last_seq
+    self.dropped: list[int] = []
+    self.shutdowns: list[dict] = []
+    self.done = threading.Event()
+    threading.Thread(target=self.serve, daemon=True).start()
+
+  def serve(self) -> None:
+    try:
+      while not self.done.is_set():
+        msg = self.t.recv(timeout=10.0)
+        if msg.msg_type == P.Msg.HELLO_REQ:
+          self.last = msg.seq
+          self.t.send_json(P.Msg.HELLO_RESP, msg.seq, {'protocol': P.VERSION, 'device': 'orin', 'sleep_after': 0.0})
+        elif msg.seq <= self.last:
+          self.dropped.append(msg.msg_type)
+        else:
+          self.last = msg.seq
+          if msg.msg_type == P.Msg.SHUTDOWN_REQ:
+            self.shutdowns.append(json.loads(bytes(msg.payload)))
+            self.t.send_json(P.Msg.SHUTDOWN_RESP, msg.seq, {'ok': True})
+            self.done.set()
+    except Exception:
+      self.done.set()
+
+
 class TestShuttingTheJetsonDown(OpenpilotTest):
   def setUp(self):
     super().setUp()
@@ -420,6 +455,26 @@ class TestShuttingTheJetsonDown(OpenpilotTest):
     self.d.shutdown_jetson('car battery')
     self.d.client.shutdown.assert_called_once_with('car battery', timeout=5.0)
     self.assertFalse(self.request.exists(), 'hardwared is waiting on the file')
+
+  def test_a_session_that_outlived_the_last_borrower_still_hears_it(self):
+    # the gadget stayed bound since the last borrower (an always-on Jetson, a
+    # build just stopped, inside the dormant hold), so the server's session
+    # did too, at the last borrower's seq. This client starts at seq 1
+    from jetlink.transport.tcp import TcpTransport
+    srv = TcpTransport.listen('127.0.0.1', 0)
+    ours = TcpTransport.connect('127.0.0.1', srv.getsockname()[1])
+    theirs, _ = TcpTransport.accept(srv)
+    srv.close()
+    server = ReplayDroppingServer(theirs, last_seq=40)
+    self.addCleanup(ours.close)
+    self.addCleanup(theirs.close)
+    self.d.client = JetlinkClient(ours, name='provision')
+    self.d.shutdown_jetson('car battery')
+    server.done.wait(5.0)
+    self.assertEqual(server.shutdowns, [{'reason': 'car battery'}])
+    self.assertEqual(server.dropped, [])
+    self.assertTrue(self.op.log.has("jetson answered the shutdown request: {'ok': True}"))
+    self.assertFalse(self.request.exists())
 
   def test_the_request_is_taken_whatever_happens(self):
     self.wait.return_value = False
