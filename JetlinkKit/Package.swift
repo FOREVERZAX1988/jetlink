@@ -106,7 +106,7 @@ let package = Package(
       exclude: ["tools", tensorRT == nil ? "jl_trt.cpp" : "jl_trt_fake.c"],
       cxxSettings: tensorRT.map { [.unsafeFlags(["-isystem", $0])] } ?? [],
       linkerSettings: [.linkedLibrary("dl", .when(platforms: [.linux])), .linkedLibrary("m", .when(platforms: [.linux]))]),
-    .target(name: "JetlinkTRT", dependencies: ["CTrt", "JetlinkServer", "JetlinkONNX"]),
+    .target(name: "JetlinkTRT", dependencies: ["CTrt", "JetlinkKit", "JetlinkServer", "JetlinkONNX"]),
     .target(
       name: "JetlinkLinux",
       dependencies: [

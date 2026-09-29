@@ -21,7 +21,6 @@ import JetlinkServer
 public final class TrtBackend: EngineBackend {
   public let name = "trt"
   public let suffix = ".plan"
-  public let artifactKind = ArtifactKind.file
   public let trt: TensorRT
   let gpuTiming: Bool
   let faultAfter: Int?
@@ -56,8 +55,10 @@ public final class TrtBackend: EngineBackend {
     sanitize("\(trt.deviceName)-sm\(trt.computeCapability.major)\(trt.computeCapability.minor)")
   }
 
-  /// The comma logs it.
-  public var helloFields: [String: Any] { ["trt_version": trt.fullVersion] }
+  /// The hello's and the status page's; the comma logs trt_version.
+  public func describe() -> [String: String] {
+    ["backend": name, "runtime_version": runtimeVersion, "device": deviceTag(), "trt_version": trt.fullVersion]
+  }
 
   /// `engines/timing.<tag>.cache`: kernel timings mostly do not depend on
   /// the model (a warm cache cut a Lebowski build from 254 s to 173 s), but
@@ -85,7 +86,7 @@ public final class TrtBackend: EngineBackend {
     let workspace = Self.workspaceBytes(available: free)
     log.info("building with a \(workspace >> 20) MB workspace (\(free >> 20) MB available)")
     let cacheURL = timingCache(beside: artifact)
-    try Artifact.build(artifact, kind: artifactKind, metaExtra: metaExtra, report: report) { staged in
+    try Artifact.build(artifact, metaExtra: metaExtra, report: report) { staged in
       report("patch", 0, "retyping uint8 image inputs to fp16")
       let prepared = try CoreMLPreparation.prepare(source: model, into: staged.deletingLastPathComponent(), layout: .trt, cacheKey: { _ in "" })
       report("patch", 1, "patched")

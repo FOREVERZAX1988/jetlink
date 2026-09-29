@@ -94,8 +94,7 @@ extension Recorded<Event> {
       // Python's tensorrt.__version__ left the build out on JetPack 6 only
       #expect(try backend { ($0.patch, $0.build) = (1, 2) }.runtimeVersion == "10.3.1")
       #expect(jp6.runtimeVersion == "10.3.0" && jp6.deviceTag() == "Orin-sm87")
-      #expect(jp6.describe() == ["backend": "trt", "runtime_version": "10.3.0", "device": "Orin-sm87"])
-      #expect(jp6.helloFields["trt_version"] as? String == "10.3.0.30")
+      #expect(jp6.describe() == ["backend": "trt", "runtime_version": "10.3.0", "device": "Orin-sm87", "trt_version": "10.3.0.30"])
 
       let jp7 = try backend {
         ($0.major, $0.minor, $0.patch, $0.build) = (10, 16, 2, 10)
@@ -111,7 +110,7 @@ extension Recorded<Event> {
         ($0.major, $0.minor, $0.patch, $0.build, $0.cc_major, $0.cc_minor, $0.strongly_typed) = (11, 3, 0, 99, 8, 9, 1)
       }
       #expect(pc.tag() == "trt11.3.0.99.NVIDIA_GeForce_RTX_4090-sm89")
-      #expect(pc.name == "trt" && pc.suffix == ".plan" && pc.artifactKind == .file)
+      #expect(pc.name == "trt" && pc.suffix == ".plan")
     }
 
     @Test("A build reports Python's stages and messages, and writes Python's sidecar keys")

@@ -64,13 +64,6 @@ package enum Artifact {
     report("build", 1, "done in \(meta["build_seconds"] ?? 0)s")
   }
 
-  /// Until TensorRT's backend stops passing a kind.
-  package static func build(
-    _ artifact: URL, kind: ArtifactKind, metaExtra: [String: Any], report: ProgressFn, _ body: (_ staged: URL) throws -> [String: Any]
-  ) throws {
-    try build(artifact, metaExtra: metaExtra, report: report, body)
-  }
-
   /// Loads with progress paced by the last load's time, then records this
   /// one's in the sidecar for the next.
   package static func load<E: Engine>(

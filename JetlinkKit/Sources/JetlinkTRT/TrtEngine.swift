@@ -1,5 +1,6 @@
 import CTrt
 import Foundation
+import JetlinkKit
 import JetlinkServer
 
 #if canImport(Android)
@@ -378,13 +379,8 @@ private final class GPUTiming {
       pending = false
       samples.append(Double(ms))
       if samples.count == Self.block {
-        let sorted = samples.sorted()
-        let mean = samples.reduce(0, +) / Double(samples.count)
-        let at = { (q: Double) in sorted[min(sorted.count - 1, Int(q * Double(sorted.count)))] }
-        log.info(
-          String(
-            format: "gpu (cuda events), %d frames: mean %.2f p50 %.2f p99 %.2f max %.2f ms", samples.count, mean, at(0.5), at(0.99),
-            sorted.last!))
+        let stats = BenchmarkStats.of(samples)
+        log.info("gpu (cuda events), \(samples.count) frames: mean \(stats.mean) p50 \(stats.p50) p99 \(stats.p99) max \(stats.max) ms")
         samples.removeAll(keepingCapacity: true)
       }
     }
