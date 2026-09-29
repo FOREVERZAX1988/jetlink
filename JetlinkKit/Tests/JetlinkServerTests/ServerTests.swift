@@ -26,7 +26,7 @@ struct ServerTests {
     let golden = try Golden(name)
     try serve { server, client in
       let (hello, count) = try client.replay(golden)
-      #expect(hello["protocol"] as? Int == 2)
+      #expect(hello["protocol"] as? Int == Int(Wire.version))
       #expect(hello["backend"] as? String == "ort")
       #expect(count == 8)
       #expect(eventually { server.framesServed == count })
@@ -41,9 +41,7 @@ struct ServerTests {
       try client.send(.ping)
       _ = try client.recv(.pong)
       #expect(server.currentLink.linkMedium == .tcp)
-      let hello: [String: Any] = ["client": ["name": "modeld", "nonce": 1, "link": ["kind": "cable", "usb_speed": "high-speed"]]]
-      try client.send(.helloReq, JSONSerialization.data(withJSONObject: hello))
-      _ = try client.recv(.helloResp)
+      _ = try client.hello(name: "modeld", link: ["kind": "cable", "usb_speed": "high-speed"])
       #expect(server.currentLink.linkMedium == .usb2)
     }
     let media = links.all.filter { $0.state == .connected }.compactMap(\.linkMedium)

@@ -10,11 +10,6 @@ import Testing
 #else
   import Crypto
 #endif
-#if canImport(Darwin)
-  import Darwin
-#elseif canImport(Glibc)
-  import Glibc
-#endif
 #if canImport(FoundationNetworking)
   import FoundationNetworking
 #endif
@@ -127,172 +122,11 @@ struct TempDir {
 
 // MARK: - the network
 
-/// A URLSession whose requests are answered from a table, and refused when
-/// they are not in it, as the Python suite's FakeOpener does. Each MockNet
-/// has its own table, found by a header its session adds, so tests running in
-/// parallel do not see each other's routes. A table outlives its MockNet: a
-/// test that keeps only the session still has its routes.
-final class MockNet: Sendable {
-  enum Reply: Sendable {
-    case body(Data)
-    /// An HTTP error status with a short body.
-    case status(Int)
-    /// A transport failure, as urllib's URLError.
-    case failure
-    /// A body delivered in pieces, for progress.
-    case chunks([Data])
-  }
+// MockNet and LocalServer are JetlinkTestSupport's, which the command's tests
+// share.
 
-  struct Call: Sendable {
-    let url: String
-    let method: String
-    let body: Data?
-  }
-
-  static let header = "X-Jetlink-Test-Net"
-  fileprivate static let tables = Mutex<[String: Table]>([:])
-
-  fileprivate struct Table {
-    var routes: [String: Reply]
-    var calls: [Call] = []
-  }
-
-  /// Whether MockProtocol sees a mock session's requests. It tells them by
-  /// the session's extra header, which swift-corelibs-foundation (Linux,
-  /// Android) adds only as it sends, so there they would reach the network.
-  static let intercepts: Bool = {
-    #if canImport(FoundationNetworking)
-      false
-    #else
-      true
-    #endif
-  }()
-
-  let id = UUID().uuidString
-  let session: URLSession
-
-  init(_ routes: [String: Reply] = [:]) {
-    let configuration = URLSessionConfiguration.ephemeral
-    configuration.protocolClasses = [MockProtocol.self]
-    configuration.httpAdditionalHeaders = [MockNet.header: id]
-    session = URLSession(configuration: configuration)
-    MockNet.tables.withLock { $0[id] = Table(routes: routes) }
-  }
-
-  subscript(url: String) -> Reply? {
-    get { MockNet.tables.withLock { $0[id]?.routes[url] } }
-    set { MockNet.tables.withLock { $0[id]?.routes[url] = newValue } }
-  }
-
-  var calls: [Call] { MockNet.tables.withLock { $0[id]?.calls ?? [] } }
-  var urls: [String] { calls.map(\.url) }
-
-  func count(_ url: String) -> Int { urls.filter { $0 == url }.count }
-}
-
-final class MockProtocol: URLProtocol, @unchecked Sendable {
-  override class func canInit(with request: URLRequest) -> Bool {
-    // The local server's requests go to the real socket.
-    request.value(forHTTPHeaderField: MockNet.header) != nil && request.url?.host != "127.0.0.1"
-  }
-
-  override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-
-  override func startLoading() {
-    guard let client, let url = request.url, let id = request.value(forHTTPHeaderField: MockNet.header) else { return }
-    let body = request.httpBody ?? request.httpBodyStream.map(MockProtocol.drain)
-    let call = MockNet.Call(url: url.absoluteString, method: request.httpMethod ?? "GET", body: body)
-    let reply = MockNet.tables.withLock { tables -> MockNet.Reply? in
-      tables[id]?.calls.append(call)
-      return tables[id]?.routes[url.absoluteString]
-    }
-    func respond(_ status: Int, _ pieces: [Data]) {
-      let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: nil)!
-      client.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-      for piece in pieces { client.urlProtocol(self, didLoad: piece) }
-      client.urlProtocolDidFinishLoading(self)
-    }
-    switch reply {
-    case .body(let data): respond(200, [data])
-    case .chunks(let pieces): respond(200, pieces)
-    case .status(let status): respond(status, [Data("error \(status)".utf8)])
-    case .none where Catalog.version(of: url.absoluteString) != nil:
-      // a catalog version with no fixture is a 404, as it is on GitHub
-      respond(404, [Data("error 404".utf8)])
-    case .failure, nil:
-      client.urlProtocol(self, didFailWithError: URLError(.cannotFindHost, userInfo: [NSURLErrorFailingURLStringErrorKey: url.absoluteString]))
-    }
-  }
-
-  override func stopLoading() {}
-
-  private static func drain(_ stream: InputStream) -> Data {
-    stream.open()
-    defer { stream.close() }
-    var out = Data()
-    var buffer = [UInt8](repeating: 0, count: 4096)
-    while true {
-      let n = stream.read(&buffer, maxLength: buffer.count)
-      if n <= 0 { break }
-      out.append(buffer, count: n)
-    }
-    return out
-  }
-}
-
-// FetchTests' loopback server speaks Darwin sockets; the Linux build
-// (docs/conformance.md) runs the registry's conformance tests without it.
-#if canImport(Darwin)
-  // MARK: - a real HTTP server on loopback
-
-  /// Serves `total` bytes of a repeating pattern to every GET, over a real
-  /// socket, so a download goes through URLSession's own HTTP stack. Nothing is
-  /// read from disk on the serving side.
-  final class LocalServer: Sendable {
-    let port: UInt16
-    let total: Int64
-    let pattern: Data
-    private let listener: Int32
-
-    init(total: Int64, patternBytes: Int = 1 << 20) throws {
-      self.total = total
-      var generator = SystemRandomNumberGenerator()
-      pattern = Data((0..<patternBytes).map { _ in UInt8.random(in: 0...255, using: &generator) })
-
-      let fd = socket(AF_INET, SOCK_STREAM, 0)
-      guard fd >= 0 else { throw POSIXError(.EIO) }
-      var yes: Int32 = 1
-      setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout<Int32>.size))
-      var address = sockaddr_in()
-      address.sin_family = sa_family_t(AF_INET)
-      address.sin_addr.s_addr = inet_addr("127.0.0.1")
-      address.sin_port = 0
-      let bound = withUnsafePointer(to: &address) {
-        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
-      }
-      guard bound == 0, listen(fd, 8) == 0 else {
-        close(fd)
-        throw POSIXError(.EADDRINUSE)
-      }
-      var length = socklen_t(MemoryLayout<sockaddr_in>.size)
-      _ = withUnsafeMutablePointer(to: &address) {
-        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &length) }
-      }
-      port = UInt16(bigEndian: address.sin_port)
-      listener = fd
-
-      let pattern = self.pattern
-      Thread.detachNewThread {
-        while true {
-          let client = accept(fd, nil, nil)
-          if client < 0 { return }  // the listener was closed
-          Thread.detachNewThread { LocalServer.serve(client, total: total, pattern: pattern) }
-        }
-      }
-    }
-
-    var url: String { "http://127.0.0.1:\(port)/object" }
-
+#if canImport(Darwin) || canImport(Glibc)
+  extension LocalServer {
     /// The SHA-256 of what is served, without holding it.
     var sha256: String {
       var hasher = SHA256()
@@ -303,47 +137,6 @@ final class MockProtocol: URLProtocol, @unchecked Sendable {
         left -= Int64(n)
       }
       return hasher.finalize().map { String(format: "%02x", $0) }.joined()
-    }
-
-    func stop() {
-      shutdown(listener, SHUT_RDWR)
-      close(listener)
-    }
-
-    private static func serve(_ client: Int32, total: Int64, pattern: Data) {
-      defer { close(client) }
-      var yes: Int32 = 1
-      // A client that hangs up mid-body must not take the test process with SIGPIPE.
-      setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &yes, socklen_t(MemoryLayout<Int32>.size))
-      var request = Data()
-      var buffer = [UInt8](repeating: 0, count: 4096)
-      while request.range(of: Data("\r\n\r\n".utf8)) == nil {
-        let n = read(client, &buffer, buffer.count)
-        if n <= 0 { return }
-        request.append(buffer, count: n)
-      }
-      let header = "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: \(total)\r\nConnection: close\r\n\r\n"
-      guard send(client, Data(header.utf8)) else { return }
-      var left = total
-      while left > 0 {
-        let n = Int(min(Int64(pattern.count), left))
-        guard send(client, pattern.prefix(n)) else { return }
-        left -= Int64(n)
-      }
-    }
-
-    private static func send(_ fd: Int32, _ data: Data) -> Bool {
-      data.withUnsafeBytes { raw -> Bool in
-        guard var base = raw.baseAddress else { return true }
-        var left = raw.count
-        while left > 0 {
-          let n = write(fd, base, left)
-          if n <= 0 { return false }
-          base += n
-          left -= n
-        }
-        return true
-      }
     }
   }
 #endif

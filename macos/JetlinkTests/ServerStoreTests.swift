@@ -46,12 +46,12 @@ struct ServerStoreTests {
   }
 
   @Test(arguments: [
-    (BackendChoice.auto, CoreMLBackend.Device.ane),
-    (BackendChoice.coreml, CoreMLBackend.Device.coreml),
+    (BackendChoice.auto, OrtProfile.ane),
+    (BackendChoice.coreml, OrtProfile.coreml),
   ])
-  func backendMapping(choice: BackendChoice, device: CoreMLBackend.Device) {
+  func backendMapping(choice: BackendChoice, profile: OrtProfile) {
     let backend = ServerStore.backend(for: choice)
-    #expect(backend.device == device)
+    #expect(backend.profile == profile)
     #expect(backend.keepAlive && backend.keepCPUWarm)
   }
 

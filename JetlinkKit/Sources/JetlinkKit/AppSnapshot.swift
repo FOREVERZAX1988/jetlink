@@ -1,8 +1,9 @@
 import Foundation
 
-/// Everything an app's screens show, kept from the server's events as the
-/// iPhone's PhoneServer and ModelStore keep it, behind a lock instead of the
-/// main actor, and handed out whole as JSON. The Android app draws these
+/// Everything an app's screens show, kept from the server's events: the
+/// server as every app keeps it (ServerViewState) and the Models rows as
+/// ModelStore builds them, behind a lock instead of the main actor, and
+/// handed out whole as JSON. The Android app draws these
 /// snapshots (JetlinkAndroid); `android_snapshot.json` in the tests' fixtures
 /// is one, which the Android app's own tests parse.
 public final class AppSnapshot: @unchecked Sendable {
@@ -10,37 +11,29 @@ public final class AppSnapshot: @unchecked Sendable {
   public static let recentWindow: TimeInterval = 10
 
   private let condition = NSCondition()
-  private let encoder = ControlJSONEncoder()
   private var version = 1
   private var running = false
-  private var server: ServerEvent?
-  private var link: LinkEvent = .waiting
-  private var engine: EngineEvent = .none
+  /// What every app keeps of the server; the rest here is the Models screen's.
+  private let state = ServerViewState()
   private var catalog: CatalogEvent?
   private var inventory: InventoryEvent?
   private var downloads: [String: DownloadEvent] = [:]
   private var finished: [String: Date] = [:]
   private var imports: [ImportEvent] = []
-  private var history: [StatsSample] = []
   /// Each history sample's stats, encoded once when it arrived.
   private var encodedStats: [Date: Any] = [:]
   /// The Models rows, built again only when what they come from changes.
   private var rows: [[String: Any]]?
-  private var benchmark: Any = NSNull()
-  private var shutdownRequests = 0
 
   public init() {}
 
   public func reset() {
     condition.lock()
-    server = nil
-    link = .waiting
-    engine = .none
+    state.reset()
     downloads = [:]
     finished = [:]
     imports = []
-    clearHistory()
-    benchmark = NSNull()
+    encodedStats = [:]
     rows = nil
     bump()
     condition.unlock()
@@ -56,8 +49,8 @@ public final class AppSnapshot: @unchecked Sendable {
   public func serverStopped() {
     condition.lock()
     running = false
-    link = .waiting
-    clearHistory()
+    state.serverStopped()
+    encodedStats = [:]
     rows = nil
     bump()
     condition.unlock()
@@ -69,34 +62,12 @@ public final class AppSnapshot: @unchecked Sendable {
     condition.broadcast()
   }
 
-  /// Under the lock.
-  private func clearHistory() {
-    history = []
-    encodedStats = [:]
-  }
-
   public func apply(_ event: ControlEvent) {
     condition.lock()
     defer { condition.unlock() }
     switch event {
-    case .server(let value):
-      server = value
-    case .link(let value):
-      link = value
-      if value.state != .connected { clearHistory() }
+    case .link, .engine:
       rows = nil
-    case .engine(let value):
-      engine = value
-      rows = nil
-    case .stats(let value):
-      history = StatsSample.appending(value, to: history)
-      if let sample = history.last {
-        encodedStats[sample.at] = encoder.object(sample.stats)
-      }
-      if encodedStats.count > history.count {
-        let kept = Set(history.map(\.at))
-        encodedStats = encodedStats.filter { kept.contains($0.key) }
-      }
     case .inventory(let value):
       inventory = value
       rows = nil
@@ -113,18 +84,18 @@ public final class AppSnapshot: @unchecked Sendable {
       } else {
         imports.append(value)
       }
-    case .benchmark(let value):
-      // with the report as the other apps share it
-      var event = encoder.object(value)
-      if var object = event as? [String: Any], let text = value.report?.text {
-        object["report_text"] = text
-        event = object
-      }
-      benchmark = event
-    case .shutdownRequest:
-      shutdownRequests += 1
     case .hello, .reply, .unknown:
       return
+    case .server, .stats, .benchmark, .shutdownRequest:
+      break
+    }
+    state.apply(event)
+    if case .stats = event, let sample = state.statsHistory.last {
+      encodedStats[sample.at] = ControlEvent.object(sample.stats)
+    }
+    if encodedStats.count > state.statsHistory.count {
+      let kept = Set(state.statsHistory.map(\.at))
+      encodedStats = encodedStats.filter { kept.contains($0.key) }
     }
     bump()
   }
@@ -149,23 +120,31 @@ public final class AppSnapshot: @unchecked Sendable {
       rows = nil
       bump()
     }
+    let link = state.link
     guard version > after || link.state == .connected else { return nil }
     if rows == nil {
-      rows = ModelRowBuilder.build(catalog: catalog, inventory: inventory, downloads: downloads, engine: engine, link: link)
-        .map { AppSnapshot.row($0, inventory: inventory, encoder: encoder) }
+      rows = ModelRowBuilder.build(catalog: catalog, inventory: inventory, downloads: downloads, engine: state.engine, link: link)
+        .map { AppSnapshot.row($0, inventory: inventory) }
     }
     let recentStats = link.state == .connected ? recent() : nil
+    // with the report as the other apps share it
+    var benchmark: Any = NSNull()
+    if let event = state.benchmark {
+      var object = ControlEvent.benchmark(event).payload()
+      if let text = event.report?.text { object["report_text"] = text }
+      benchmark = object
+    }
     return [
       "version": version,
       "running": running,
       "port": port ?? NSNull(),
-      "server": encoder.object(server),
-      "link": encoder.object(link),
+      "server": state.server.map { ControlEvent.object($0) } ?? NSNull(),
+      "link": ControlEvent.object(link),
       // what the connected comma's link is carried over, as the apps name it
       "medium": link.connectedMedium.map { ["name": $0.rawValue, "title": $0.title, "slow": $0.isSlow] as [String: Any] } ?? NSNull(),
-      "engine": encoder.object(engine),
-      "recent": encoder.object(recentStats),
-      "history": history.map { ["at": $0.at.timeIntervalSince1970, "stats": encodedStats[$0.at] ?? NSNull()] as [String: Any] },
+      "engine": ControlEvent.object(state.engine),
+      "recent": recentStats.map { ControlEvent.object($0) } ?? NSNull(),
+      "history": state.statsHistory.map { ["at": $0.at.timeIntervalSince1970, "stats": encodedStats[$0.at] ?? NSNull()] as [String: Any] },
       "models": rows ?? [],
       "catalog": catalog.map { catalog -> Any in
         [
@@ -175,15 +154,15 @@ public final class AppSnapshot: @unchecked Sendable {
           "count": catalog.models.count,
         ] as [String: Any]
       } ?? NSNull(),
-      "disk": inventory.map { encoder.object($0.disk) } ?? NSNull(),
-      "imports": imports.map { encoder.object($0) },
+      "disk": inventory.map { ControlEvent.object($0.disk) } ?? NSNull(),
+      "imports": imports.map { ControlEvent.object($0) },
       "benchmark": benchmark,
-      "shutdown_requests": shutdownRequests,
+      "shutdown_requests": state.shutdownRequests,
     ]
   }
 
   /// A Models row as the app draws it.
-  static func row(_ row: ModelRow, inventory: InventoryEvent?, encoder: ControlJSONEncoder) -> [String: Any] {
+  static func row(_ row: ModelRow, inventory: InventoryEvent?) -> [String: Any] {
     var status: [String: Any]
     switch row.status {
     case .unresolved: status = ["kind": "unresolved"]
@@ -204,7 +183,7 @@ public final class AppSnapshot: @unchecked Sendable {
       "bytes": row.bytes ?? NSNull(),
       "build_time": row.buildTime ?? NSNull(),
       "status": status,
-      "prepared_for": row.preparedFor.map { encoder.object($0) },
+      "prepared_for": row.preparedFor.map { ControlEvent.object($0) },
       "is_loaded": row.isLoaded,
       "is_default": row.isDefault,
       "is_requested_by_comma": row.isRequestedByComma,
@@ -213,26 +192,6 @@ public final class AppSnapshot: @unchecked Sendable {
       "can_use": ModelStore.canUse(row),
       "has_files": row.hasFiles(in: inventory),
     ]
-  }
-}
-
-/// Encodable events as the control protocol writes them: snake_case
-/// objects. Its options are set once, and JSONEncoder encodes on any number
-/// of threads at once.
-public final class ControlJSONEncoder: @unchecked Sendable {
-  private let encoder: JSONEncoder
-
-  public init() {
-    encoder = JSONEncoder()
-    encoder.keyEncodingStrategy = .convertToSnakeCase
-  }
-
-  /// `value` as a JSON object, or null.
-  public func object<T: Encodable>(_ value: T?) -> Any {
-    guard let value, let data = try? encoder.encode(value),
-      let object = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
-    else { return NSNull() }
-    return object
   }
 }
 

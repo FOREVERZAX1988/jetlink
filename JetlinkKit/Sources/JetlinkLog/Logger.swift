@@ -30,7 +30,9 @@
 
     private func write(_ level: Level, _ name: String, _ message: LogMessage) {
       guard level >= Logger.threshold else { return }
-      FileHandle.standardError.write(Data("\(name) \(label): \(message.text)\n".utf8))
+      let line = "\(name) \(label): \(message.text)"
+      FileHandle.standardError.write(Data((line + "\n").utf8))
+      LogRing.shared.append(line)
     }
   }
 

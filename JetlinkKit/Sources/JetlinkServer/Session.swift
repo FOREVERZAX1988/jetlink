@@ -28,13 +28,12 @@ final class Session: @unchecked Sendable {
   /// The reply's float32 outputs, reused every frame.
   private var outputBuffer: UnsafeMutablePointer<Float>
   private var outputCapacity: Int
-  /// The packed scalars, copied out of the receive buffer to align them.
-  private var packedBuffer: UnsafeMutableRawPointer
-  private var packedCapacity: Int
   /// The reply's fixed head, packed in place every frame.
   private let responseHead: UnsafeMutableRawPointer
-  /// The reply's parts: head, outputs, and the telemetry when asked for.
+  /// The reply's parts: head, the outputs either side of hidden_state, and
+  /// the telemetry when asked for.
   private let parts: UnsafeMutablePointer<UnsafeRawBufferPointer>
+  private static let maxParts = 4
 
   init(transport: any MessageLink, host: EngineHost) {
     self.transport = transport
@@ -42,16 +41,13 @@ final class Session: @unchecked Sendable {
     self.host = host
     outputCapacity = 18_452
     outputBuffer = .allocate(capacity: outputCapacity)
-    packedCapacity = 1 << 16
-    packedBuffer = .allocate(byteCount: packedCapacity, alignment: 16)
     responseHead = .allocate(byteCount: Wire.inferRespSize, alignment: 8)
-    parts = .allocate(capacity: 3)
-    parts.initialize(repeating: UnsafeRawBufferPointer(start: nil, count: 0), count: 3)
+    parts = .allocate(capacity: Session.maxParts)
+    parts.initialize(repeating: UnsafeRawBufferPointer(start: nil, count: 0), count: Session.maxParts)
   }
 
   deinit {
     outputBuffer.deallocate()
-    packedBuffer.deallocate()
     responseHead.deallocate()
     parts.deallocate()
   }
@@ -145,13 +141,25 @@ final class Session: @unchecked Sendable {
   }
 
   func handle(_ message: Message) throws {
+    guard Wire.sameProtocol(version: message.version, msgType: message.msgType) else {
+      // An older comma that skipped the hello. The frame was read whole, so
+      // the stream is still in sync: refuse it by name and read on.
+      try error(message.seq, "protocol", Wire.updateHint(comma: Int(message.version)))
+      return
+    }
     guard let type = Wire.Msg(rawValue: message.msgType) else {
       try error(message.seq, "unknown_message", "type \(message.msgType)")
       return
     }
     if type == .helloReq {
       // A hello means "a new client process", answered whatever the seq says.
-      greet(message)
+      let comma = greet(message)
+      guard comma == Int(Wire.version) else {
+        // In the envelope, so every version reads it: the comma stops here
+        // and says which side to update. Every comma before 3 was 2.
+        try error(message.seq, "protocol", Wire.updateHint(comma: comma ?? 2))
+        return
+      }
       try onHello(message)
       return
     }
@@ -179,14 +187,18 @@ final class Session: @unchecked Sendable {
     return (request.sha256, request.frameSkip)
   }
 
-  private func greet(_ message: Message) {
+  /// Starts the session over for whoever said hello, and returns the
+  /// protocol its hello names, if any.
+  private func greet(_ message: Message) -> Int? {
     var who = ""
     var said: LinkMedium?
+    var comma: Int?
     if let object = JSONLine.decode(message.payload), let d = object["client"] as? [String: Any] {
       let name = (d["name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "client"
       let nonce = d["nonce"].map { "\($0)" } ?? "?"
       who = "\(name)/\(nonce)"
       said = LinkMedium(link: d["link"] as? [String: Any])
+      comma = (d["protocol"] as? NSNumber)?.intValue
     }
     if let said, said != medium {
       medium = said
@@ -199,7 +211,11 @@ final class Session: @unchecked Sendable {
     lastSeq = message.seq
     request = nil
     frames = 0
+    host.lock.lock()
+    host.loaded?.staging.newClient()
+    host.lock.unlock()
     log.info("hello from \(who.isEmpty ? "an unnamed client" : who) (seq \(message.seq))")
+    return comma
   }
 
   private func onHello(_ message: Message) throws {
@@ -333,7 +349,10 @@ final class Session: @unchecked Sendable {
     var gpuUs: UInt32 = 0
     var queueUs: UInt32 = 0
     var totalUs: UInt32 = 0
-    var outputBytes = 0
+    /// Floats of `outputBuffer` the reply carries, 0 for none.
+    var outputCount = 0
+    /// Left out of those, unless the comma asked for them.
+    var hidden: Range<Int>?
     var wantsState = false
     /// The model ran, so the frame counts and is timed.
     var ran = false
@@ -341,28 +360,37 @@ final class Session: @unchecked Sendable {
     var failure: (any Error)?
   }
 
-  /// INFER_RESP: the head, `outputBytes` of the output buffer, and the
-  /// telemetry, in one write from buffers this session owns.
+  /// INFER_RESP: the head, the output buffer less hidden_state, and the
+  /// telemetry, in one write from buffers this session owns. The outputs go
+  /// as the runs either side of hidden_state, so leaving it out copies nothing.
   private func respond(_ seq: UInt32, _ reply: InferReply, state: Data? = nil) throws {
     Wire.packInferResp(
       frameID: reply.frameID, status: reply.status, gpuUs: reply.gpuUs, queueUs: reply.queueUs, totalUs: reply.totalUs, into: responseHead)
     parts[0] = UnsafeRawBufferPointer(start: responseHead, count: Wire.inferRespSize)
-    parts[1] = UnsafeRawBufferPointer(start: outputBuffer, count: reply.outputBytes)
+    var count = 1
+    if let hidden = reply.hidden {
+      parts[1] = UnsafeRawBufferPointer(start: outputBuffer, count: hidden.lowerBound * 4)
+      parts[2] = UnsafeRawBufferPointer(start: outputBuffer + hidden.upperBound, count: (reply.outputCount - hidden.upperBound) * 4)
+      count = 3
+    } else if reply.outputCount > 0 {
+      parts[1] = UnsafeRawBufferPointer(start: outputBuffer, count: reply.outputCount * 4)
+      count = 2
+    }
     if let state {
       try state.withUnsafeBytes { bytes in
-        parts[2] = bytes
-        try transport.sendParts(.inferResp, seq: seq, parts: UnsafeBufferPointer(start: parts, count: 3), flags: [])
+        parts[count] = bytes
+        try transport.sendParts(.inferResp, seq: seq, parts: UnsafeBufferPointer(start: parts, count: count + 1), flags: [])
       }
     } else {
-      try transport.sendParts(.inferResp, seq: seq, parts: UnsafeBufferPointer(start: parts, count: 2), flags: [])
+      try transport.sendParts(.inferResp, seq: seq, parts: UnsafeBufferPointer(start: parts, count: count), flags: [])
     }
   }
 
   /// The frame itself: stage, run, read the output back. Caller holds `host.lock`.
   private func infer(_ loaded: Loaded, _ message: Message) -> InferReply {
     let started = DispatchTime.now().uptimeNanoseconds
-    let spec = loaded.spec
-    guard message.payload.count == spec.inferReqBytes else {
+    let layout = loaded.staging.layout
+    guard message.payload.count == layout.requestBytes else {
       // The offsets below come from the spec, not the wire: a client on
       // another model would have its scalars read out of the image.
       return InferReply(status: .badShape)
@@ -374,18 +402,14 @@ final class Session: @unchecked Sendable {
       loaded.staging.reset()
     }
     let warped = base + Wire.inferReqSize
-    if spec.packedBytes > packedCapacity {
-      packedBuffer.deallocate()
-      packedCapacity = spec.packedBytes
-      packedBuffer = .allocate(byteCount: packedCapacity, alignment: 16)
-    }
-    packedBuffer.copyMemory(from: warped + spec.warpedBytes, byteCount: spec.packedBytes)
 
     var status = Wire.Status.ok
     var queueUs: UInt32 = 0
     var failure: (any Error)?
     do {
-      try loaded.staging.stage(warped: warped, packed: packedBuffer)
+      // The packed floats stay where they arrived: every cast and copy of
+      // them reads unaligned, so they need no aligned copy first.
+      try loaded.staging.stage(warped: warped, packed: warped + layout.warpedBytes)
       queueUs = microseconds(since: started)
       try loaded.engine.run()
     } catch {
@@ -394,17 +418,16 @@ final class Session: @unchecked Sendable {
       failure = error
     }
 
-    let count = spec.outputCount
+    let count = layout.outputCount
     if count > outputCapacity {
       outputBuffer.deallocate()
       outputCapacity = count
       outputBuffer = .allocate(capacity: count)
     }
-    if status == .ok, let io = loaded.engine.outputs[ModelConstants.drivingOutput], let out = loaded.engine.output(ModelConstants.drivingOutput) {
+    if status == .ok, let type = layout.outputType, let out = loaded.engine.output(ModelConstants.drivingOutput) {
       // float32 on the wire whatever the graph says; openpilot drops to the
       // small model on a non-finite output either way, so say so here.
-      var finite = true
-      switch io.type {
+      switch type {
       case .float:
         outputBuffer.update(from: out.assumingMemoryBound(to: Float.self), count: count)
       case .float16:
@@ -412,20 +435,21 @@ final class Session: @unchecked Sendable {
       default:
         status = .inferFailed
       }
-      for i in 0..<count where !outputBuffer[i].isFinite {
-        finite = false
-        break
-      }
-      if !finite && status == .ok {
+      if status == .ok && !Convert.allFinite(outputBuffer, count: count) {
         status = .notFinite
       }
     } else if status == .ok {
       status = .inferFailed
     }
+    if status == .ok {
+      loaded.staging.keep(outputs: outputBuffer)
+    }
 
+    let replied = status == .ok || status == .notFinite
     return InferReply(
       frameID: frameID, status: status, gpuUs: loaded.engine.lastGpuUs, queueUs: queueUs, totalUs: microseconds(since: started),
-      outputBytes: status == .ok || status == .notFinite ? count * 4 : 0, wantsState: flags.contains(.wantState), ran: true, failure: failure)
+      outputCount: replied ? count : 0, hidden: replied && !flags.contains(.wantHidden) ? layout.hidden : nil,
+      wantsState: flags.contains(.wantState), ran: true, failure: failure)
   }
 
   private func onShutdown(_ message: Message) throws {

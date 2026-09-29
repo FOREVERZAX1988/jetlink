@@ -10,6 +10,8 @@ public enum ModelConstants {
   public static let chunk = Pinned.uploadChunk
   /// The driving output every layout has, 18452 floats in openpilot's layout.
   public static let drivingOutput = "outputs"
+  /// The slice of it that stays on the server; 16384 of the 18452.
+  public static let hiddenState = "hidden_state"
   /// The input only a stateful graph (openpilot #38916) has.
   public static let statefulFrame = "new_img"
   public static let stateOutputPrefix = "next_"
@@ -124,19 +126,23 @@ public struct ModelSpec: Sendable, Equatable {
     return fb[2...].reduce(1, *)
   }
 
+  /// The floats a frame sends after the image: compile_modeld's
+  /// packed_npy_inputs less prev_feat, which the server keeps.
   public var packedShapes: [NamedShape] {
     let scalars = [
       NamedShape("traffic_convention", input("traffic_convention") ?? []),
       NamedShape("action_t", input("action_t") ?? []),
     ]
     if stateful {
-      // the pulse is the graph's own input and the hidden state stays inside it
+      // the pulse is the graph's own input
       return [NamedShape("desire", [(input("desire") ?? []).reduce(1, *)])] + scalars
     }
-    let fb = input("features_buffer") ?? [0]
     let dp = input("desire_pulse") ?? [0, 0, 0]
-    return [NamedShape("desire", [dp.count > 2 ? dp[2] : 0])] + scalars + [NamedShape("prev_feat", [fb[0], featDim])]
+    return [NamedShape("desire", [dp.count > 2 ? dp[2] : 0])] + scalars
   }
+
+  /// The hidden state a queued graph's server feeds back each frame, as floats.
+  public var prevFeatCount: Int { (input("features_buffer")?.first ?? 0) * featDim }
 
   /// Where each of packedShapes sits in the flat floats.
   public var packedLayout: [(name: String, range: Range<Int>, shape: [Int])] {
@@ -168,10 +174,23 @@ public struct ModelSpec: Sendable, Equatable {
   /// float32 on the wire, as openpilot's JIT returns.
   public var outputBytes: Int { outputCount * 4 }
 
+  /// Where hidden_state sits in the output: what the reply leaves out. Nil
+  /// when the model names no such slice, and then the reply is whole.
+  public var hiddenRange: Range<Int>? {
+    guard let range = outputSlices.first(where: { $0.name == ModelConstants.hiddenState })?.range,
+      range.lowerBound >= 0, range.upperBound <= outputCount, !range.isEmpty
+    else { return nil }
+    return range
+  }
+
+  /// The floats an INFER_RESP carries: the output less hidden_state.
+  public var replyCount: Int { outputCount - (hiddenRange?.count ?? 0) }
+
   // MARK: wire sizes
 
   public var inferReqBytes: Int { Wire.inferReqSize + warpedBytes + packedBytes }
-  public var inferRespBytes: Int { Wire.inferRespSize + outputBytes }
+  /// Without telemetry; Flag.wantHidden adds hidden_state back.
+  public var inferRespBytes: Int { Wire.inferRespSize + replyCount * 4 }
 
   // MARK: the wire form, spec.py's to_dict and from_dict
 
