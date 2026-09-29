@@ -17,8 +17,11 @@ tests/test_queues.py catches the drift.
 The stateful one (openpilot #38916, 2026-09-15; Cinque Terre V3 onwards)
 carries its history in the graph: the newest warped frame goes in as new_img,
 each queue goes in as state_<q> and comes back advanced as next_state_<q>, and
-the hidden state never leaves the graph. The wire is the same frame and the
-same scalars minus prev_feat; see queues.StateLoop.
+the hidden state never leaves the graph; see queues.StateLoop.
+
+Either way the wire carries the newest frame and three scalars, and the reply
+the outputs less hidden_state (protocol 3): the queued graph's server feeds its
+own hidden state back, which modeld did through prev_feat until then.
 """
 from __future__ import annotations
 
@@ -38,6 +41,8 @@ CHUNK = 4 << 20  # model upload chunk
 
 # the driving output every layout has, 18452 floats in openpilot's layout
 DRIVING_OUTPUT = 'outputs'
+# the slice of it that stays on the server; 16384 of the 18452
+HIDDEN_STATE = 'hidden_state'
 # the input only a stateful graph has; see the module docstring
 STATEFUL_FRAME = 'new_img'
 STATE_OUTPUT_PREFIX = 'next_'
@@ -106,14 +111,19 @@ class ModelSpec:
 
   @property
   def packed_shapes(self) -> dict[str, tuple[int, ...]]:
+    """The floats a frame sends after the image: compile_modeld's
+    packed_npy_inputs less prev_feat, which the server keeps."""
     scalars = {'traffic_convention': tuple(self.input_shapes['traffic_convention']),
                'action_t': tuple(self.input_shapes['action_t'])}
     if self.stateful:
-      # the pulse is the graph's own input and the hidden state stays inside it
+      # the pulse is the graph's own input
       return {'desire': (math.prod(self.input_shapes['desire']),), **scalars}
-    fb = self.input_shapes['features_buffer']
-    return {'desire': (self.input_shapes['desire_pulse'][2],), **scalars,
-            'prev_feat': (fb[0], self.feat_dim)}
+    return {'desire': (self.input_shapes['desire_pulse'][2],), **scalars}
+
+  @property
+  def prev_feat_shape(self) -> tuple[int, int]:
+    """The hidden state a queued graph's server feeds back each frame."""
+    return (self.input_shapes['features_buffer'][0], self.feat_dim)
 
   @property
   def packed_layout(self) -> dict[str, tuple[slice, tuple[int, ...]]]:
@@ -129,10 +139,8 @@ class ModelSpec:
     return sum(math.prod(s) for s in self.packed_shapes.values())
 
   def feed_back(self, packed, output) -> None:
-    """Carry the hidden state `output` returned into the next frame's packed
-    floats, as modeld does. A stateful graph keeps its own: nothing to do."""
-    if not self.stateful:
-      packed[self.packed_layout['prev_feat'][0]] = output[self.output_slices['hidden_state']]
+    """Nothing: the server feeds the hidden state back itself (protocol 3).
+    Kept for the modeld glue that still calls it after every frame."""
 
   @property
   def packed_nbytes(self) -> int:
@@ -157,6 +165,21 @@ class ModelSpec:
   def output_nbytes(self) -> int:
     return self.output_nelem * 4  # we return float32, as openpilot's JIT does
 
+  @property
+  def hidden_range(self) -> tuple[int, int] | None:
+    """[start, stop) of hidden_state in the output: what the reply leaves out.
+    None when the model names no such slice, and then the reply is whole."""
+    s = self.output_slices.get(HIDDEN_STATE)
+    if s is None or s.step not in (None, 1) or s.start is None or s.stop is None:
+      return None
+    return (s.start, s.stop) if 0 <= s.start < s.stop <= self.output_nelem else None
+
+  @property
+  def reply_nelem(self) -> int:
+    """The floats an INFER_RESP carries: the output less hidden_state."""
+    h = self.hidden_range
+    return self.output_nelem - (h[1] - h[0] if h else 0)
+
   # --- wire sizes ---
   @property
   def infer_req_nbytes(self) -> int:
@@ -164,7 +187,9 @@ class ModelSpec:
 
   @property
   def infer_resp_nbytes(self) -> int:
-    return INFER_RESP_SIZE + self.output_nbytes
+    """Without telemetry; with Flag.WANT_HIDDEN it is INFER_RESP_SIZE +
+    output_nbytes."""
+    return INFER_RESP_SIZE + self.reply_nelem * 4
 
   # -- the wire form of a spec ---------------------------------------------
   # One encoder and one decoder: both ends and the bench need this, and copies

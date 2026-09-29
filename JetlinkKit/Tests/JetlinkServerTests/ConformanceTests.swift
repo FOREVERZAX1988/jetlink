@@ -84,6 +84,8 @@ struct PinnedConstantTests {
   func wire() {
     #expect(Wire.magic == Pinned.magic)
     #expect(Wire.version == Pinned.protocolVersion)
+    #expect(Wire.envelopeVersion == Pinned.envelopeVersion)
+    #expect(Wire.envelope == Set(Pinned.envelopeMessages))
     #expect(Wire.headerSize == Pinned.headerSize)
     #expect(Wire.packetMultiple == Pinned.packetMultiple)
     #expect(Wire.gadgetTxAlign == Pinned.gadgetTxAlign)
@@ -100,7 +102,7 @@ struct PinnedConstantTests {
       #expect(message.map { String(describing: $0) } == camel(name), "message \(name) = \(value)")
     }
     #expect((0...UInt16(255)).compactMap(Wire.Msg.init(rawValue:)).count == Pinned.messageTypes.count)
-    let flags: [String: Wire.Flag] = ["RESET_QUEUES": .resetQueues, "WANT_STATE": .wantState, "PADDED": .padded]
+    let flags: [String: Wire.Flag] = ["RESET_QUEUES": .resetQueues, "WANT_STATE": .wantState, "WANT_HIDDEN": .wantHidden, "PADDED": .padded]
     #expect(Set(flags.keys) == Set(Pinned.flags.map(\.name)))
     for (name, value) in Pinned.flags {
       #expect(flags[name]?.rawValue == value, "flag \(name)")
@@ -303,44 +305,81 @@ final class StagingEngine: Engine {
   func close() {}
 }
 
+/// One case of the staging fixture: frames as the comma sends them, each with
+/// the output its run returned, and the tensors Python's queues fed for them.
+struct StagingCase {
+  let spec: ModelSpec
+  let inputs: [TensorSpec]
+  let frames: Data
+  let staged: Data
+  let count: Int
+  let resetBefore: Int
+  let helloBefore: Int
+
+  init(frameSkip: Int, type: (String) -> ElementType = { _ in .float16 }) throws {
+    let manifest = try Conformance.json("staging.json")
+    let entry = try #require((manifest["cases"] as! [[String: Any]]).first { int($0["frame_skip"]) == frameSkip })
+    spec = try ModelSpec.from(Conformance.json(entry["spec"] as! String))
+    inputs = (entry["inputs"] as! [[String: Any]]).map {
+      let name = $0["name"] as! String
+      return TensorSpec(name: name, type: type(name), shape: ($0["shape"] as! [NSNumber]).map(\.intValue))
+    }
+    frames = try Conformance.data(entry["frames"] as! String)
+    staged = try Conformance.data(entry["staged"] as! String)
+    count = int(manifest["frames"])
+    resetBefore = int(manifest["reset_before"])
+    helloBefore = int(manifest["hello_before"])
+  }
+
+  /// The frame: warped, packed, then the output its run returned.
+  var frameBytes: Int { spec.warpedBytes + spec.packedBytes + spec.outputCount * 4 }
+  var stagedBytes: Int { inputs.reduce(0) { $0 + $1.byteCount } }
+
+  /// Frame `frame` as the session takes it: the reset or the hello before
+  /// it, staged from `request` (the frame copied there, aligned as the
+  /// caller likes), and its output kept for the next when it is all finite.
+  func stage(_ frame: Int, into staging: any FrameStaging, request: UnsafeMutableRawPointer) throws {
+    if frame == resetBefore { staging.reset() }
+    if frame == helloBefore { staging.newClient() }
+    frames.withUnsafeBytes { request.copyMemory(from: $0.baseAddress! + frame * frameBytes, byteCount: frameBytes) }
+    try staging.stage(warped: request, packed: request + spec.warpedBytes)
+    let output = UnsafeMutablePointer<Float>.allocate(capacity: spec.outputCount)
+    defer { output.deallocate() }
+    UnsafeMutableRawPointer(output).copyMemory(from: request + spec.warpedBytes + spec.packedBytes, byteCount: spec.outputCount * 4)
+    if Convert.allFinite(output, count: spec.outputCount) {
+      staging.keep(outputs: output)
+    }
+  }
+
+  /// Each input `engine` holds against what Python staged for `frame`.
+  func check(_ frame: Int, _ engine: StagingEngine, _ label: String) {
+    var offset = frame * stagedBytes
+    for input in inputs {
+      let got = Data(bytes: engine.hostInput(input.name)!, count: input.byteCount)
+      #expect(got == staged.subdata(in: offset..<offset + input.byteCount), "frame \(frame) \(input.name) \(label)")
+      offset += input.byteCount
+    }
+  }
+}
+
 @Suite("Conformance: queue staging against queues.PolicyQueues")
 struct StagingConformanceTests {
+  /// The hidden state each frame returned is fed into the next, as modeld
+  /// fed it back through prev_feat: the generator checks Python's queues
+  /// against protocol 2's staging, and this the Swift against Python's.
   @Test("Each frame stages the tensors Python's queues feed", arguments: [1, 2, 4])
   func staging(frameSkip: Int) throws {
-    let manifest = try Conformance.json("staging.json")
-    let cases = manifest["cases"] as! [[String: Any]]
-    let entry = try #require(cases.first { int($0["frame_skip"]) == frameSkip })
-    let spec = try ModelSpec.from(Conformance.json(entry["spec"] as! String))
-    #expect(spec.frameSkip == frameSkip)
-    let inputs = (entry["inputs"] as! [[String: Any]]).map {
-      TensorSpec(name: $0["name"] as! String, type: .float16, shape: ($0["shape"] as! [NSNumber]).map(\.intValue))
-    }
-    let engine = StagingEngine(inputs)
-    let staging = try PolicyQueues(spec: spec, engine: engine)
-    let frames = try Conformance.data(entry["frames"] as! String)
-    let staged = try Conformance.data(entry["staged"] as! String)
-    let frameBytes = spec.warpedBytes + spec.packedBytes
-    let stagedBytes = inputs.reduce(0) { $0 + $1.byteCount }
-    let count = int(manifest["frames"])
-    #expect(frames.count == count * frameBytes)
-    #expect(staged.count == count * stagedBytes)
-    let packed = UnsafeMutableRawPointer.allocate(byteCount: spec.packedBytes, alignment: 16)
-    defer { packed.deallocate() }
-    for frame in 0..<count {
-      if frame == int(manifest["reset_before"]) {
-        staging.reset()
-      }
-      try frames.withUnsafeBytes { raw in
-        let base = raw.baseAddress! + frame * frameBytes
-        packed.copyMemory(from: base + spec.warpedBytes, byteCount: spec.packedBytes)
-        try staging.stage(warped: base, packed: packed)
-      }
-      var offset = frame * stagedBytes
-      for input in inputs {
-        let got = Data(bytes: engine.hostInput(input.name)!, count: input.byteCount)
-        #expect(got == staged.subdata(in: offset..<offset + input.byteCount), "frame \(frame) \(input.name) at frame_skip \(frameSkip)")
-        offset += input.byteCount
-      }
+    let fixture = try StagingCase(frameSkip: frameSkip)
+    #expect(fixture.spec.frameSkip == frameSkip)
+    #expect(fixture.frames.count == fixture.count * fixture.frameBytes)
+    #expect(fixture.staged.count == fixture.count * fixture.stagedBytes)
+    let engine = StagingEngine(fixture.inputs)
+    let staging = try PolicyQueues(spec: fixture.spec, engine: engine)
+    let request = UnsafeMutableRawPointer.allocate(byteCount: fixture.frameBytes, alignment: 16)
+    defer { request.deallocate() }
+    for frame in 0..<fixture.count {
+      try fixture.stage(frame, into: staging, request: request)
+      fixture.check(frame, engine, "at frame_skip \(frameSkip)")
     }
   }
 }

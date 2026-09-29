@@ -47,7 +47,8 @@ struct StagingBenchmark {
   static func run(_ label: String, inputs: [NamedShape], outputs: [NamedShape]) throws {
     let sha = String(repeating: "ab", count: 32)
     let spec = ModelSpec(
-      sha256: sha, nbytes: 765_955_335, frameSkip: 4, inputShapes: inputs, outputShapes: outputs, outputSlices: [], checkpoint: nil)
+      sha256: sha, nbytes: 765_955_335, frameSkip: 4, inputShapes: inputs, outputShapes: outputs,
+      outputSlices: [NamedRange("hidden_state", 2066..<18450)], checkpoint: nil)
     let tensors = { (shapes: [NamedShape]) in
       Dictionary(uniqueKeysWithValues: shapes.map { ($0.name, TensorSpec(name: $0.name, type: .float16, shape: $0.shape)) })
     }

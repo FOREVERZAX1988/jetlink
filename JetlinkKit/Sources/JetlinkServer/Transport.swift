@@ -28,6 +28,16 @@ public struct Message {
   public let seq: UInt32
   public let flags: UInt32
   public let payload: UnsafeRawBufferPointer
+  /// The header's; see `Wire.sameProtocol`.
+  public let version: UInt16
+
+  public init(msgType: UInt16, seq: UInt32, flags: UInt32, payload: UnsafeRawBufferPointer, version: UInt16 = Wire.version) {
+    self.msgType = msgType
+    self.seq = seq
+    self.flags = flags
+    self.payload = payload
+    self.version = version
+  }
 }
 
 /// Framing over a connected TCP socket, as `StreamTransport` and `TcpTransport`
