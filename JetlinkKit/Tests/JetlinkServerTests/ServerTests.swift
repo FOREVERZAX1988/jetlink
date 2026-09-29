@@ -319,4 +319,99 @@ struct ServerLifecycleTests {
     #expect(try transport.recv().msgType == Wire.Msg.pong.rawValue)
     transport.close()
   }
+  /// Two loops taking over at once, as the accept, dial and USB loops can:
+  /// the first link's interrupt waits for a second one, so two takeovers
+  /// that both read it as the session being served are both inside the swap
+  /// together, and each would start a session of its own.
+  @Test("Takeovers from two loops at once serve one session at a time")
+  func takeoversAreSerialized() throws {
+    let cache = try TemporaryDirectory()
+    let server = try Server(
+      configuration: Server.Configuration(host: "127.0.0.1", port: 0, cacheRoot: cache.url, preload: false, listen: false),
+      backend: cpuBackend())
+    try server.start()
+    defer { server.shutdown() }
+    let live = LiveCount()
+    let interrupts = Recorded<String>()
+    server.takeover(ParkedLink("a", live: live, interrupts: interrupts, holdFirstInterrupt: 1.0))
+    #expect(eventually { live.current == 1 })
+    let group = DispatchGroup()
+    for name in ["b", "c"] {
+      DispatchQueue.global().async(group: group) {
+        server.takeover(ParkedLink(name, live: live, interrupts: interrupts))
+      }
+    }
+    group.wait()
+    #expect(eventually { live.current == 1 })
+    Thread.sleep(forTimeInterval: 0.2)
+    #expect(live.most == 1, "\(live.most) sessions served at once")
+    #expect(interrupts.all.filter { $0 == "a" }.count == 1, "\(interrupts.all)")
+  }
+}
+
+/// How many links are being read at once, and the most there ever were.
+final class LiveCount: @unchecked Sendable {
+  private let lock = NSLock()
+  private var now = 0
+  private var peak = 0
+
+  var current: Int { lock.withLock { now } }
+  var most: Int { lock.withLock { peak } }
+
+  func enter() {
+    lock.withLock {
+      now += 1
+      peak = max(peak, now)
+    }
+  }
+
+  func leave() {
+    lock.withLock { now -= 1 }
+  }
+}
+
+/// A link with a comma that never sends: its session reads until the link
+/// is shut down. The first shutdown can wait for a second, up to
+/// `holdFirstInterrupt`.
+final class ParkedLink: MessageLink, @unchecked Sendable {
+  let peer: String
+  private let live: LiveCount
+  private let interrupts: Recorded<String>
+  private let hold: TimeInterval
+  private let condition = NSCondition()
+  private var shut = false
+
+  init(_ peer: String, live: LiveCount, interrupts: Recorded<String>, holdFirstInterrupt: TimeInterval = 0) {
+    self.peer = peer
+    self.live = live
+    self.interrupts = interrupts
+    hold = holdFirstInterrupt
+  }
+
+  var medium: LinkMedium? { .tcp }
+  var connectsOnOpen: Bool { true }
+
+  func recv() throws -> Message {
+    live.enter()
+    defer { live.leave() }
+    condition.withLock {
+      while !shut { condition.wait() }
+    }
+    throw LinkError.closed("shut down")
+  }
+
+  func sendParts(_ type: Wire.Msg, seq: UInt32, parts: UnsafeBufferPointer<UnsafeRawBufferPointer>, flags: Wire.Flag) throws {}
+
+  func shutdown() {
+    interrupts.append(peer)
+    if hold > 0 {
+      _ = interrupts.wait(timeout: hold) { seen in seen.filter { $0 == self.peer }.count >= 2 }
+    }
+    condition.withLock {
+      shut = true
+      condition.broadcast()
+    }
+  }
+
+  func close() {}
 }
