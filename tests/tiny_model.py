@@ -82,7 +82,9 @@ def _save(graph, opsets, slices: dict, checkpoint: str, path: Path) -> Path:
 
   model = helper.make_model(graph, opset_imports=opsets)
   model.ir_version = 8
-  model.metadata_props.add(key='output_slices', value=codecs.encode(pickle.dumps(slices), 'base64').decode())
+  # protocol 5, Python 3.14's default, that the committed graphs and fixtures
+  # were made with: 3.10 to 3.13 default to 4, and the model's sha256 with it
+  model.metadata_props.add(key='output_slices', value=codecs.encode(pickle.dumps(slices, protocol=5), 'base64').decode())
   model.metadata_props.add(key='model_checkpoint', value=checkpoint)
   onnx.save(model, str(path))
   return path
