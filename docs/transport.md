@@ -44,9 +44,11 @@ Latency needs USB 3 (SuperSpeed). A frame is about 400 KB to the server and
 8 KB back (the model's hidden state stays on the server): about 1 ms on USB 3,
 10 ms on USB 2 (hence USB 3 on every hop: cable, adapter, any hub).
 
-On Linux the server turns off USB 3 link power management on the comma's port:
-waking the link from its low-power states cost 3.9 of the 7.6 ms each frame
-spent in transport on the bench Jetson.
+On Linux the server turns off USB 3 link power management on the comma's port
+while it serves the comma, and puts the kernel's default back when the session
+ends: waking the link from its low-power states cost 2.2 ms a frame on the
+bench Jetson, and keeping it awake with nothing to carry costs 0.18 W
+([details](installation-reference.md#custom-usb-integrations)).
 
 Negotiated speed on the comma: `/sys/class/udc/*/current_speed`
 (`super-speed` is USB 3, `high-speed` USB 2), also printed with the built
@@ -74,7 +76,8 @@ its own block size and showed no slow path (reference phone: 393 KB up in under
 19 ms).
 
 With the cap, parked live bench on the comma (Cinque Terre V3, 180 s, 3,416 big
-frames, every frame delivered):
+frames, every frame delivered; 2026-09-27, with the earlier link protocol's
+74 KB replies):
 
 | Link | p50 | p99 |
 | --- | ---: | ---: |
@@ -84,6 +87,51 @@ frames, every frame delivered):
 The ~8 ms gap is all in the comma's send of the 393 KB frame (`bench_link.py`:
 26 ms of transport vs 8.6 ms). That is the network link's floor on this kernel;
 the vendor interface stays the link for every host that can open it.
+
+## Link protocol
+
+The comma (`jetlink/protocol.py` in this repo) and every server speak protocol
+3, over the vendor interface's bulk pipes or over TCP (a phone's cable network,
+bench tools). There is one version: update the comma and Jetlink together.
+
+- **Messages.** A 32-byte header (magic `JLNK`, version 3, type, sequence
+  number, flags, length) and a payload. Every message carries version 3. A
+  header with any other version is a broken stream: the server drops the
+  link, a comma on another version gets no answer to its hello, and it drives
+  on its small model.
+- **Session.** The comma says hello, asks for its model's engine (uploading
+  the model if the server lacks it), waits until it is ready, then sends one
+  INFER_REQ per model frame, 20 a second.
+- **INFER_REQ.** The comma's warped camera images (uint8) and 12 floats
+  (`desire`, `traffic_convention`, `action_t`): 393,304 bytes, 409,600 on the
+  wire with the comma's padding.
+- **INFER_RESP.** The status, the server's timings, and the model's outputs in
+  float32 without `hidden_state`: 8,324 bytes for the current models (73,860
+  with it). The comma sets WANT_HIDDEN on a frame to get the whole vector, for
+  logging every output; WANT_STATE appends the server's telemetry as JSON.
+- **Hidden state on the server.** A queued model (BMRLNAP, Cinque Terre V2,
+  Lebowski) feeds each frame's `hidden_state` into the next frame, where
+  openpilot's modeld feeds its own. The server keeps it: zero when an engine
+  loads, on every hello and on a frame flagged RESET_QUEUES, and replaced only
+  after a frame whose outputs are all finite (a NOT_FINITE or failed frame
+  leaves the last good one). Outputs are bit for bit what they were when the
+  comma sent the state back each frame. A stateful model (Cinque Terre V3)
+  keeps its state in the engine.
+- **Padding.** A bulk transfer ends on a short packet. The comma pads every
+  message it sends to a whole 16 KB and never ends one on a short packet;
+  messages to the comma get one pad byte when their length is an exact
+  multiple of the packet size. TCP keeps the same bytes.
+- **Host reads.** Every USB host (usbfs on Linux and Android, IOKit on a Mac)
+  keeps 32 reads of 16 KB posted on the comma's pipe, so a whole request
+  streams without the server asking for the next piece, and hands the bytes
+  over in the order the reads were posted. Since each message ends on the
+  16 KB grid, a read never holds the end of one message while it waits for
+  the next. A short packet means the stream left the grid, which only a
+  broken stream does: the session ends and the comma reconnects.
+- **Link power.** On Linux, USB 3 link power management is off on the comma's
+  port for the session only ([why](#bus-speed)).
+
+Measured on the bench Jetson: [performance](status.md#measured-performance).
 
 ## Power requirements
 
