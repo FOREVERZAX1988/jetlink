@@ -216,10 +216,13 @@ make_release v0.9.0 0.9.0
 make_release v0.10.0 0.10.0
 make_release edge 0.11.0-dev.1 edge
 # a build of the kind the hardware bench installs by hand: a dev version, its
-# files inside one folder
-mkdir -p /tmp/dev/jetlink-server-0.12.0-dev/bin
-ln -s "$SRC/tests/installer/fake.sh" /tmp/dev/jetlink-server-0.12.0-dev/bin/jetlink-server
-echo 0.12.0-dev >/tmp/dev/jetlink-server-0.12.0-dev/VERSION
+# files inside one folder, and a unit of its own
+dev=/tmp/dev/jetlink-server-0.12.0-dev
+mkdir -p "$dev/bin" "$dev/share/jetlink/systemd" "$dev/share/jetlink/udev"
+ln -s "$SRC/tests/installer/fake.sh" "$dev/bin/jetlink-server"
+echo 0.12.0-dev >"$dev/VERSION"
+{ cat "$SRC/scripts/jetlink-server.service"; echo "# the 0.12.0-dev build's unit"; } >"$dev/share/jetlink/systemd/jetlink-server.service"
+cp "$SRC"/scripts/*.rules "$dev/share/jetlink/udev/"
 tar -czf /tmp/dev/jetlink-server-0.12.0-dev-linux-aarch64.tar.gz -C /tmp/dev jetlink-server-0.12.0-dev
 # shellcheck disable=SC1091
 . /etc/os-release
@@ -260,25 +263,20 @@ expect_in /etc/jetlink/server.env "JETLINK_STATUS_PORT=5600"
 expect_in /etc/jetlink/server.env "JETLINK_JETSON=1"
 expect_in /etc/jetlink/server.env "JETLINK_FLAVOR=linux-aarch64"
 expect_in /etc/jetlink/server.env "JETLINK_SERVER_VERSION=0.10.0"
+expect_in /etc/jetlink/server.env "JETLINK_POWEROFF=--poweroff"
 expect_not_in /etc/jetlink/server.env "JETLINK_IMAGE"
 expect_in /etc/jetlink/install.conf "JETLINK_POWER=always"
 expect_in /etc/jetlink/install.conf "JETLINK_POWEROFF_WITH_COMMA=1"
 expect_in /etc/jetlink/install.conf "JETLINK_SOURCE=git"
 expect_in /etc/jetlink/install.conf "JETLINK_REF=latest"
 expect_in /etc/jetlink/install.conf "JETLINK_VERSION=v0.10.0"
-# shellcheck disable=SC2016
-expect_in "$UNITS/jetlink-server.service" 'ExecStart=/opt/jetlink/current/bin/jetlink-server --usb --backend trt --cache ${JETLINK_CACHE_DIR} --sleep-after ${JETLINK_SLEEP_AFTER} --status-port ${JETLINK_STATUS_PORT}'
-expect_in "$UNITS/jetlink-server.service" "EnvironmentFile=-/etc/jetlink/server.env"
-expect_in "$UNITS/jetlink-server.service" "RestartSec=2"
-expect_not_in "$UNITS/jetlink-server.service" "docker"
+check "the unit is not the server's own" cmp -s "$UNITS/jetlink-server.service" /opt/jetlink/0.10.0/share/jetlink/systemd/jetlink-server.service
 expect_in "$UNITS/jetlink-server.service.d/10-cache.conf" "RequiresMountsFor=/mnt/data/jetlink"
 expect_in "$UNITS/jetlink-server.service.d/20-jetson-clocks.conf" "ExecStartPre=-/usr/bin/jetson_clocks"
 expect_file /usr/local/bin/jetlink
 expect_file /etc/udev/rules.d/99-jetlink-usb-wakeup.rules
 expect_no_file /usr/local/lib/jetlink
 expect_no_file "$UNITS/jetlink-poweroff.path"
-# the comma may power it off, so no guard in the cache
-expect_no_file /mnt/data/jetlink/poweroff-dry-run
 expect_file /etc/systemd/journald.conf.d/60-jetlink.conf
 expect_in /etc/fstab "/mnt/data/jetlink-swapfile none swap sw 0 0"
 expect_file "$FAKE_STATE/masked-systemd-networkd-wait-online.service"
@@ -291,11 +289,13 @@ expect_in /tmp/status.txt "comma          not connected"
 expect_in /tmp/status.txt "status page    http://"
 expect_in /tmp/status.txt ".local:5600"
 expect_in /tmp/status.txt "always on: sleeps when the car is off; the comma can shut it down"
-jetlink models list >/tmp/models.txt 2>&1
-expect_in /tmp/models.txt "fake model list in /mnt/data/jetlink"
-expect_ran "jetlink-server models list"
-jetlink run --log-level debug >/tmp/run.txt 2>&1
-expect_ran "jetlink-server --usb --backend trt --cache /mnt/data/jetlink --sleep-after 120 --status-port 5600 --log-level debug"
+jetlink models list >/dev/null 2>&1
+expect_ran "jetlink-server models list --cache /mnt/data/jetlink"
+jetlink models --help >/dev/null 2>&1
+expect_ran "jetlink-server models --help"
+# the installed unit's command line, with server.env's settings
+jetlink run --log-level debug >/dev/null 2>&1
+expect_ran "jetlink-server --usb --backend trt --cache /mnt/data/jetlink --sleep-after 120 --status-port 5600 --poweroff --log-level debug"
 systemctl start jetlink-server
 show_on_failure "$f"
 
@@ -382,6 +382,7 @@ show_on_failure "$f"
 scenario "a failed update puts the previous server back"
 : >"$FAKE_LOG"; f=$FAILED
 echo '# the previous settings' >>/etc/jetlink/server.env
+echo "# 0.10.0's own unit" >>/opt/jetlink/0.10.0/share/jetlink/systemd/jetlink-server.service
 # the new server never gets as far as waiting for the comma
 export FAKE_SERVER_BROKEN=1 FAKE_RESTARTS=3
 piped '' --update --ref v0.9.0
@@ -390,6 +391,7 @@ expect_out "The previous Jetlink server is running again."
 expect_in /etc/jetlink/server.env "# the previous settings"
 expect_in /etc/jetlink/install.conf "JETLINK_REF=latest"
 expect_link /opt/jetlink/current /opt/jetlink/0.10.0
+expect_in "$UNITS/jetlink-server.service" "# 0.10.0's own unit"
 check "the previous server was not started again" test "$(grep -c "systemctl restart jetlink-server" "$FAKE_LOG")" -ge 2
 refute "the unit was left stopped" test -f "$FAKE_STATE/stopped-jetlink-server"
 unset FAKE_SERVER_BROKEN FAKE_RESTARTS
@@ -597,8 +599,7 @@ expect_ran "nvpmodel -m 2"
 expect_in /etc/fstab "/mnt/data/jetlink-swapfile none swap sw 0 0"
 expect_no_file /etc/udev/rules.d/99-jetlink-usb-wakeup.rules
 expect_file "$UNITS/jetlink-server.service.d/20-jetson-clocks.conf"
-# the comma may not power it off: the server finds this in the cache
-expect_in /mnt/data/jetlink/poweroff-dry-run "Written by the Jetlink installer"
+expect_in /etc/jetlink/server.env "JETLINK_POWEROFF=''"
 show_on_failure "$f"
 
 # ---------------------------------------------------------------------------
@@ -614,11 +615,15 @@ expect_no_out "Status page:"
 expect_in /etc/jetlink/install.conf "JETLINK_POWER=always"
 expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=120"
 expect_in /etc/jetlink/server.env "JETLINK_STATUS_PORT=0"
-expect_no_file /mnt/data/jetlink/poweroff-dry-run
+expect_in /etc/jetlink/server.env "JETLINK_POWEROFF=--poweroff"
 expect_file /etc/udev/rules.d/99-jetlink-usb-wakeup.rules
 jetlink status >/tmp/status.txt 2>&1
 expect_not_in /tmp/status.txt "status page"
-# a guard made by hand for a bench stays
+# the file an earlier installer wrote for "no" goes; one made by hand stays
+echo "Written by the Jetlink installer: the comma may not power this computer off." >/mnt/data/jetlink/poweroff-dry-run
+piped '' --update
+expect_rc 0
+expect_no_file /mnt/data/jetlink/poweroff-dry-run
 touch /mnt/data/jetlink/poweroff-dry-run
 piped '' --update
 expect_rc 0
@@ -669,7 +674,7 @@ expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=0"
 expect_in /etc/jetlink/server.env "JETLINK_FLAVOR=linux-x86_64"
 expect_no_file /etc/systemd/journald.conf.d/60-jetlink.conf
 expect_no_file "$UNITS/jetlink-server.service.d/20-jetson-clocks.conf"
-expect_in /var/lib/jetlink/poweroff-dry-run "Written by the Jetlink installer"
+expect_in /etc/jetlink/server.env "JETLINK_POWEROFF=''"
 expect_out "Keep this computer plugged in and awake"
 # a server that never sleeps serves until the new one is downloaded and checked
 : >"$FAKE_LOG"
@@ -693,7 +698,6 @@ expect_no_file /opt/jetlink
 expect_no_file /usr/local/bin/jetlink
 expect_no_file "$UNITS/jetlink-server.service"
 expect_file /var/lib/jetlink/models/m.onnx
-expect_no_file /var/lib/jetlink/poweroff-dry-run
 refute "removed a package" grep -qE '^apt-get .* (remove|purge)' "$FAKE_LOG"
 show_on_failure "$f"
 
@@ -815,10 +819,13 @@ expect_not_ran "releases/download"
 expect_link /opt/jetlink/current /opt/jetlink/0.12.0-dev
 expect_link /opt/jetlink/previous /opt/jetlink/0.10.0
 expect_in /etc/jetlink/install.conf "JETLINK_VERSION=v0.10.0"
+# the unit that came with the binary, not the source's
+expect_in "$UNITS/jetlink-server.service" "# the 0.12.0-dev build's unit"
 # a release's build says which release it is
 piped '' --update --binary /tmp/releases/v0.9.0/jetlink-server-0.9.0-linux-aarch64.tar.gz
 expect_rc 0
 expect_in /etc/jetlink/install.conf "JETLINK_VERSION=v0.9.0"
+expect_not_in "$UNITS/jetlink-server.service" "0.12.0-dev"
 show_on_failure "$f"
 
 # ---------------------------------------------------------------------------
@@ -892,6 +899,7 @@ expect_in /etc/jetlink/server.env.prev "JETLINK_IMAGE="
 # the answers, all kept
 expect_in /etc/jetlink/install.conf "JETLINK_POWER=always"
 expect_in /etc/jetlink/install.conf "JETLINK_POWEROFF_WITH_COMMA=1"
+expect_in /etc/jetlink/server.env "JETLINK_POWEROFF=--poweroff"
 expect_in /etc/jetlink/install.conf "JETLINK_AUTOSTART=1"
 expect_in /etc/jetlink/install.conf "JETLINK_SWAP_FILE=/mnt/data/jetlink-swapfile"
 expect_in /etc/jetlink/install.conf "JETLINK_MASKED_UNITS=systemd-networkd-wait-online.service"
@@ -985,7 +993,7 @@ expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=0"
 expect_in /etc/jetlink/server.env "JETLINK_FLAVOR=linux-x86_64"
 expect_in /etc/jetlink/install.conf "JETLINK_AUTOSTART=1"
 expect_no_file "$UNITS/jetlink-server.service.d/20-jetson-clocks.conf"
-expect_in /var/lib/jetlink/poweroff-dry-run "Written by the Jetlink installer"
+expect_in /etc/jetlink/server.env "JETLINK_POWEROFF=''"
 show_on_failure "$f"
 
 # ---------------------------------------------------------------------------

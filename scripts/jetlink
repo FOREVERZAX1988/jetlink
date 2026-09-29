@@ -9,6 +9,7 @@ CONF="$ETC_DIR/install.conf"
 ENV_FILE="$ETC_DIR/server.env"
 SERVER=/opt/jetlink/current/bin/jetlink-server
 UNIT=jetlink-server
+UNIT_FILE=/etc/systemd/system/$UNIT.service
 # the server does not suspend while anyone holds a shared lock on this; it
 # makes the file, readable by all, when it starts
 AWAKE_LOCK="${JETLINK_TEST_AWAKE_LOCK:-/run/jetlink-awake.lock}"
@@ -158,7 +159,11 @@ cmd_models() {
     echo "supported: run ${B}jetlink stop${N} first, and ${B}jetlink start${N} afterwards."
     exit 1
   fi
-  JETLINK_CACHE="$JETLINK_CACHE_DIR" exec "$SERVER" models "$@"
+  # --cache is each subcommand's option, so it follows the subcommand's name
+  case "${1:--}" in
+    -*) exec "$SERVER" models "$@" ;;
+    *) exec "$SERVER" models "$1" --cache "$JETLINK_CACHE_DIR" "${@:2}" ;;
+  esac
 }
 
 # Like macOS's caffeinate: hold the server's awake lock until Ctrl-C, for -t
@@ -257,7 +262,8 @@ main() {
       echo "Jetlink: $cmd done."
       ;;
     run)
-      # the server in this terminal, for a bench; stop the service first
+      # the server in this terminal, for a bench: the unit's command line with
+      # server.env's settings, then the flags given here; the service stops first
       as_root run "$@"
       load
       if systemctl is-active --quiet "$UNIT"; then
@@ -268,8 +274,9 @@ main() {
       if [ "${JETLINK_JETSON:-0}" = 1 ] && command -v jetson_clocks >/dev/null 2>&1; then
         jetson_clocks || true
       fi
-      exec "$SERVER" --usb --backend trt --cache "$JETLINK_CACHE_DIR" --sleep-after "${JETLINK_SLEEP_AFTER:-0}" \
-        --status-port "${JETLINK_STATUS_PORT:-0}" "$@"
+      # as systemd expands it: an unset variable is empty
+      set +u
+      eval "exec $(sed -n 's/^ExecStart=//p' "$UNIT_FILE") \"\$@\""
       ;;
     models|model) as_root models "$@"; cmd_models "$@" ;;
     caffeinate) cmd_caffeinate "$@" ;;

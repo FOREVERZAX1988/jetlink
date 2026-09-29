@@ -40,6 +40,8 @@ LIB_DIR=/usr/local/lib/jetlink
 SRC_ROOT=/opt/jetlink
 UNIT_DIR=/etc/systemd/system
 UNIT=jetlink-server
+# in a server's directory: the unit and udev rules built with it
+SHARE=share/jetlink
 CLOCKS_DROPIN="$UNIT_DIR/$UNIT.service.d/20-jetson-clocks.conf"
 WAKE_RULE=/etc/udev/rules.d/99-jetlink-usb-wakeup.rules
 JOURNALD_DROPIN=/etc/systemd/journald.conf.d/60-jetlink.conf
@@ -1034,7 +1036,7 @@ restore_previous_server() {
     if [ "$DOCKER_ERA" = 1 ]; then
       restore_docker_era
     elif [ -n "$OLD_CURRENT" ]; then
-      point_current "$OLD_CURRENT" >>"$LOG" 2>&1 || true
+      { point_current "$OLD_CURRENT" && install_unit "$OLD_CURRENT"; } >>"$LOG" 2>&1 || true
     fi
   fi
   as_root systemctl daemon-reload >>"$LOG" 2>&1 || true
@@ -1293,9 +1295,9 @@ unpack_server() {
     top="$(find "$stage" -mindepth 3 -maxdepth 3 -path '*/bin/jetlink-server' | head -n 1 || true)"
     top="${top%/bin/jetlink-server}"
   fi
-  if [ -z "$top" ] || [ ! -x "$top/bin/jetlink-server" ]; then
+  if [ -z "$top" ] || [ ! -x "$top/bin/jetlink-server" ] || [ ! -f "$top/$SHARE/systemd/$UNIT.service" ]; then
     as_root rm -rf "$stage"
-    die "$(basename "$tarball") has no bin/jetlink-server in it."
+    die "$(basename "$tarball") has no bin/jetlink-server and $SHARE/systemd/$UNIT.service in it."
   fi
   ver="$(tr -d '[:space:]' <"$top/VERSION" 2>/dev/null || true)"
   if [ -z "$ver" ]; then
@@ -1425,11 +1427,10 @@ add_swap() {
 }
 
 install_files() {
-  local src="$SOURCE_DIR/scripts"
   as_root install -d -m 755 "$ETC_DIR"
   as_root mkdir -p "$CACHE_DIR"
-  as_root install -D -m 755 "$src/jetlink" "$BIN"
-  as_root install -D -m 644 "$src/jetlink-server.service" "$UNIT_DIR/$UNIT.service"
+  as_root install -D -m 755 "$SOURCE_DIR/scripts/jetlink" "$BIN"
+  install_unit "$NEW_DIR"
   printf '# Jetlink: the cache has to be mounted before the server starts\n[Unit]\nRequiresMountsFor=%s\n' "$CACHE_DIR" \
     | root_write "$UNIT_DIR/$UNIT.service.d/10-cache.conf"
   if [ "$JETSON" = 1 ]; then
@@ -1446,7 +1447,7 @@ install_files() {
   # the hubs are armed for remote wakeup at boot by the rule, and again by
   # the server before every suspend
   if [ "$SLEEP_AFTER" != 0 ]; then
-    as_root install -D -m 644 "$src/99-jetlink-usb-wakeup.rules" "$WAKE_RULE"
+    as_root install -D -m 644 "$NEW_DIR/$SHARE/udev/99-jetlink-usb-wakeup.rules" "$WAKE_RULE"
     as_root udevadm control --reload-rules >>"$LOG" 2>&1 || true
     as_root udevadm trigger --subsystem-match=usb --action=add >>"$LOG" 2>&1 || true
   else
@@ -1454,9 +1455,17 @@ install_files() {
   fi
 
   remove_docker_era_files
-  poweroff_guard
+  # the "no" to the poweroff question before the server took a flag for it
+  if grep -qs "Written by the Jetlink installer" "$CACHE_DIR/poweroff-dry-run"; then
+    as_root rm -f "$CACHE_DIR/poweroff-dry-run"
+  fi
   write_env
   write_conf
+}
+
+# the unit of the server in directory $1, so the two always match
+install_unit() {
+  as_root install -D -m 644 "$1/$SHARE/systemd/$UNIT.service" "$UNIT_DIR/$UNIT.service"
 }
 
 # A drop-in of the user's for the Docker-era unit that runs docker would stop
@@ -1485,25 +1494,16 @@ remove_docker_era_files() {
     "$UNIT_DIR/jetlink-web.service" "$UNIT_DIR/jetlink-web.service.d" "$LIB_DIR"
 }
 
-# The server powers the computer off when the comma asks, unless this file is
-# in the cache; it stands for "no" to that question, and on every PC. Only a
-# file the installer wrote is removed, not one made by hand for a bench.
-POWEROFF_GUARD_TEXT="Written by the Jetlink installer: the comma may not power this computer off. jetlink setup changes that."
-poweroff_guard() {
-  local f="$CACHE_DIR/poweroff-dry-run"
-  if [ "$POWEROFF_WITH_COMMA" = 1 ]; then
-    if grep -qs "Written by the Jetlink installer" "$f"; then as_root rm -f "$f"; fi
-  elif [ ! -e "$f" ]; then
-    printf '%s\n' "$POWEROFF_GUARD_TEXT" | root_write "$f"
-  fi
-}
-
 write_env() {
+  # the unit passes the server --poweroff only on a Jetson whose user said yes
+  local poweroff=''
+  if [ "$JETSON" = 1 ] && [ "$POWEROFF_WITH_COMMA" = 1 ]; then poweroff=--poweroff; fi
   {
     echo "# Written by the Jetlink installer; run it again (jetlink setup) to change these."
     printf 'JETLINK_CACHE_DIR=%q\n' "$CACHE_DIR"
     printf 'JETLINK_SLEEP_AFTER=%q\n' "$SLEEP_AFTER"
     printf 'JETLINK_STATUS_PORT=%q\n' "$STATUS_PORT"
+    printf 'JETLINK_POWEROFF=%q\n' "$poweroff"
     printf 'JETLINK_JETSON=%q\n' "$JETSON"
     printf 'JETLINK_FLAVOR=%q\n' "$FLAVOR"
     printf 'JETLINK_SERVER_VERSION=%q\n' "$SERVER_VERSION"
@@ -1662,9 +1662,6 @@ uninstall() {
     fi
   fi
   if [ -n "$CACHE_DIR" ] && [ -d "$CACHE_DIR" ]; then
-    if grep -qs "Written by the Jetlink installer" "$CACHE_DIR/poweroff-dry-run"; then
-      as_root rm -f "$CACHE_DIR/poweroff-dry-run"
-    fi
     local size rm_cache
     size="$(as_root du -sh "$CACHE_DIR" 2>/dev/null | cut -f1)"
     ask_yn rm_cache n "Also delete the downloaded models in $CACHE_DIR ($size)?" \

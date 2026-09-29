@@ -155,7 +155,6 @@ case "$name" in
         fi
         echo "trt: usable: TensorRT 10.16.2.10 on Orin-sm87"
         echo "ort: not usable: libonnxruntime.so: cannot open shared object file: No such file or directory" ;;
-      models) echo "fake model list in ${JETLINK_CACHE:-?}" ;;
       *) echo "serving" ;;
     esac ;;
 
