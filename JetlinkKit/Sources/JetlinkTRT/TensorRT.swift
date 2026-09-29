@@ -49,17 +49,20 @@ public final class TensorRT: @unchecked Sendable {
   public let plugins: Bool
   /// cuDriverGetVersion: 12060 for CUDA 12.6.
   public let cudaDriver: Int
+  /// The libnvinfer loaded, as a path.
+  public let library: String
 
-  /// Opens `device`, and checks it answers. Throws JL_TRT_UNAVAILABLE on a
-  /// machine without a driver, a TensorRT of the shim's major, or the
-  /// device, and always on the fake shim: a build without TensorRT's
-  /// headers never runs a model.
-  public convenience init(device: Int = 0) throws(TrtError) {
+  /// Opens `device`, and checks it answers. TensorRT comes from `libraries`,
+  /// a directory holding a self-contained copy, else from the loader path.
+  /// Throws JL_TRT_UNAVAILABLE on a machine without a driver, a TensorRT of
+  /// the shim's major, or the device, and always on the fake shim: a build
+  /// without TensorRT's headers never runs a model.
+  public convenience init(device: Int = 0, libraries: String? = nil) throws(TrtError) {
     let unavailable = Int32(JL_TRT_UNAVAILABLE)
     guard let index = Int32(exactly: device), index >= 0 else { throw TrtError(code: unavailable, "no CUDA device \(device)") }
     var handle: OpaquePointer?
     var err = [CChar](repeating: 0, count: 512)
-    guard jl_trt_open(index, &handle, &err, err.count) == JL_TRT_OK, let handle else {
+    guard jl_trt_open(index, libraries, &handle, &err, err.count) == JL_TRT_OK, let handle else {
       throw TrtError(code: unavailable, string(err))
     }
     self.init(handle: handle, device: device)
@@ -88,12 +91,13 @@ public final class TensorRT: @unchecked Sendable {
     stronglyTyped = info.strongly_typed != 0
     plugins = info.plugins != 0
     cudaDriver = Int(info.cuda_driver)
+    library = info.library.map { String(cString: $0) } ?? ""
     // Python's trt.Logger(WARNING). Set before any engine or build, as the
     // shim asks; it never logs the plugin registration, which came before.
     jl_trt_set_logger(handle, Int32(JL_TRT_LOG_WARNING), forwardLog, nil)
     trtLog.info(
       "TensorRT \(fullVersion) on \(deviceName) (sm\(computeCapability.major)\(computeCapability.minor)), CUDA driver "
-        + "\(cudaDriver / 1000).\(cudaDriver % 1000 / 10), \(plugins ? "plugins registered" : "no plugin library")")
+        + "\(cudaDriver / 1000).\(cudaDriver % 1000 / 10), \(plugins ? "plugins registered" : "no plugin library"), from \(library)")
   }
 
   deinit {

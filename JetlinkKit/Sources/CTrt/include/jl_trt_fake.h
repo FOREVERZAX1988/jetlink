@@ -32,9 +32,9 @@
 // x + 2... Each enqueue adds 1 ms to the clock timing events read.
 //
 // A build writes the plan set by jl_trt_fake_set_build (by default the one
-// above, which is also jl_trt_selftest's model), with `built` and a
-// `settings` line that records what the build was given: fp16=0|1
-// optimization_level=N workspace=BYTES timing_cache=none|cold|warm. It
+// above), with `built` and a `settings` line that records what the build was
+// given: fp16=0|1 optimization_level=N workspace=BYTES
+// timing_cache=none|cold|warm. It
 // reports a root phase "fake build" with a step per layer, each with a nested
 // phase "fake tactics" of two steps, and logs one warning. A timing cache is
 // the line "jl_trt_fake_timing <major>.<minor>.<patch>.<build> <builds>";

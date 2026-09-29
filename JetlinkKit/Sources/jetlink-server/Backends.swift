@@ -23,11 +23,18 @@
     var device: String?
     @Flag(help: "TensorRT: time each launch with CUDA events and log their spread every 1,200 frames.")
     var gpuTiming = false
+    @Option(
+      help: ArgumentHelp(
+        "TensorRT's libraries, a self-contained copy of libnvinfer, its ONNX parser and plugins. Default: lib/tensorrt beside bin/ when it is there, else the loader path (a Jetson's JetPack).",
+        valueName: "dir"))
+    var tensorrtLibs: String?
 
     /// The options, with "auto" read as each backend's default device, as
     /// the Python server's --device took it.
     func options(keepAlive: Bool = true, keepCPUWarm: Bool = true) -> BackendOptions {
-      BackendOptions(device: device == "auto" ? nil : device, keepAlive: keepAlive, keepCPUWarm: keepCPUWarm, gpuTiming: gpuTiming)
+      BackendOptions(
+        device: device == "auto" ? nil : device, keepAlive: keepAlive, keepCPUWarm: keepCPUWarm, gpuTiming: gpuTiming,
+        tensorrtLibs: tensorrtLibs ?? bundledTensorRT())
     }
 
     /// The backend asked for; with none, logs why and exits 1. `auto` logs
@@ -58,6 +65,8 @@
     var keepAlive = true
     var keepCPUWarm = true
     var gpuTiming = false
+    /// Where TensorRT's libraries are; nil for the loader path.
+    var tensorrtLibs: String?
 
     /// TensorRT, if it loads here and the GPU answers. A build without
     /// TensorRT's headers has the fake shim, which never loads.
@@ -72,7 +81,8 @@
         }
         let faultAfter = ProcessInfo.processInfo.environment["JETLINK_FAULT_CUDA_AFTER"].flatMap { Int($0) }
         return TrtBackend(
-          trt: try TensorRT(device: index), gpuTiming: gpuTiming, faultAfter: faultAfter, available: { Platform.memAvailableBytes() })
+          trt: try TensorRT(device: index, libraries: tensorrtLibs), gpuTiming: gpuTiming, faultAfter: faultAfter,
+          available: { Platform.memAvailableBytes() })
       #else
         throw HostError.invalid("TensorRT runs on Linux only")
       #endif
@@ -115,6 +125,14 @@
     }
   }
 
+  /// lib/tensorrt beside the executable's bin/, where a release can carry
+  /// TensorRT, when it is there.
+  func bundledTensorRT(executable: URL? = executableURL()) -> String? {
+    guard let directory = executable?.deletingLastPathComponent().deletingLastPathComponent().appending(path: "lib/tensorrt") else { return nil }
+    var isDirectory: ObjCBool = false
+    return FileManager.default.fileExists(atPath: directory.path, isDirectory: &isDirectory) && isDirectory.boolValue ? directory.path : nil
+  }
+
   /// `jetlink-server backends`: what can run here and why the rest cannot.
   /// The installer asks it whether this machine has a usable GPU.
   struct ListBackends: ParsableCommand {
@@ -131,7 +149,13 @@
       for name in chosen.backend == .auto ? [BackendName.trt, .ort] : [chosen.backend] {
         switch options.make(name) {
         case .success(let backend):
-          print("\(name.rawValue): usable: \(name == .trt ? "TensorRT" : "onnxruntime") \(backend.runtimeVersion) on \(backend.deviceTag())")
+          var line = "\(name.rawValue): usable: \(name == .trt ? "TensorRT" : "onnxruntime") \(backend.runtimeVersion) on \(backend.deviceTag())"
+          #if os(Linux)
+            if let trt = (backend as? TrtBackend)?.trt, !trt.library.isEmpty {
+              line += ", libraries in \(URL(fileURLWithPath: trt.library).deletingLastPathComponent().path)"
+            }
+          #endif
+          print(line)
           usable = true
         case .failure(let why):
           print("\(name.rawValue): not usable: \(why)")

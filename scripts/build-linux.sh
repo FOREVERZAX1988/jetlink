@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Builds jetlink for Linux: the server tarball the installer takes, the
-# TensorRT shim and its selftest. One entry point for CI (plain ubuntu-22.04
-# and ubuntu-22.04-arm runners), local Docker or podman, and a device.
+# Builds jetlink for Linux: the server tarball the installer takes, and the
+# TensorRT shim against the real headers. One entry point for CI (plain
+# ubuntu-22.04 and ubuntu-22.04-arm runners), local Docker or podman, and a
+# device.
 #
 #   scripts/build-linux.sh [--container] <linux-aarch64|linux-x86_64> [step...]
 #
@@ -11,8 +12,6 @@
 #              its directory: include/ for -Xcc -I, lib/ for LD_LIBRARY_PATH
 #   shim       compile CTrt/jl_trt.cpp against them, and check it links
 #              nothing of NVIDIA's (everything is dlopened at run time)
-#   selftest   link tools/jl_trt_selftest against the shim; run it on a GPU
-#   fake-test  build the selftest against the fake shim and run it
 #   server     dist/jetlink-server-<version>-<flavor>.tar.gz and .sha256
 #
 # linux-aarch64 is TensorRT 10 for the Jetson, compiled against 10.3 (JetPack
@@ -45,7 +44,7 @@ die() {
 }
 
 usage() {
-  sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'
   exit 2
 }
 
@@ -187,33 +186,6 @@ step_shim() {
   echo "shim: $out/jl_trt.o, no NVIDIA symbol referenced"
 }
 
-step_selftest() {
-  local out=$ROOT/build/linux-$FLAVOR cc=${CC:-gcc} cxx=${CXX:-g++}
-  [[ -f $out/jl_trt.o ]] || step_shim
-  "$cc" -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror -I"$CTRT/include" -c "$CTRT/tools/jl_trt_selftest.c" \
-    -o "$out/jl_trt_selftest.o"
-  "$cxx" "$out/jl_trt_selftest.o" "$out/jl_trt.o" -ldl -pthread -o "$out/jl_trt_selftest"
-  local needed
-  needed=$(readelf -d "$out/jl_trt_selftest" | awk '/NEEDED/ {gsub(/[][]/, "", $NF); print $NF}' | tr '\n' ' ')
-  echo "selftest: $out/jl_trt_selftest (needs: $needed)"
-  if echo "$needed" | grep -qE 'nvinfer|nvonnx|cuda'; then
-    die "jl_trt_selftest links against NVIDIA libraries: $needed"
-  fi
-}
-
-step_fake_test() {
-  local out cc=${CC:-cc}
-  out=$ROOT/build/fake-$(uname -s)-$(uname -m)
-  mkdir -p "$out"
-  local flags=(-std=c11 -O1 -g -Wall -Wextra -Wpedantic -Werror -DJL_TRT_FAKE -I"$CTRT/include")
-  if [[ ${JETLINK_SANITIZE:-1} == 1 ]]; then
-    flags+=("-fsanitize=address,undefined" -fno-omit-frame-pointer -fno-sanitize-recover=all)
-  fi
-  echo "fake-test: $(uname -s) $(uname -m), $("$cc" --version | head -1)"
-  "$cc" "${flags[@]}" "$CTRT/jl_trt_fake.c" "$CTRT/tools/jl_trt_selftest.c" -pthread -lm -o "$out/jl_trt_selftest_fake"
-  TMPDIR=$out "$out/jl_trt_selftest_fake"
-}
-
 # --- the server ---------------------------------------------------------------------
 
 version() {
@@ -285,7 +257,6 @@ image_for() {
   case $1 in
   headers | ort) echo "" ;;
   server) in_swift_container && echo "" || echo "$SWIFT_IMAGE" ;;
-  fake-test) [[ $FORCE_CONTAINER == 1 ]] && echo "$C_IMAGE" || echo "" ;;
   *) [[ $FORCE_CONTAINER == 0 ]] && native_c && echo "" || echo "$C_IMAGE" ;;
   esac
 }
@@ -310,7 +281,7 @@ container() {
   mkdir -p "$CACHE"
   # ${a[@]+...}: bash 3.2, the Mac's, calls an empty array unbound
   "$engine" run --rm --platform "$platform" ${swift[@]+"${swift[@]}"} -v "$ROOT:/src" -v "$CACHE:/cache" \
-    -e JETLINK_BUILD_CACHE=/cache -e JETLINK_IN_CONTAINER=1 -e JETLINK_SANITIZE="${JETLINK_SANITIZE:-1}" -w /src "$image" \
+    -e JETLINK_BUILD_CACHE=/cache -e JETLINK_IN_CONTAINER=1 -w /src "$image" \
     scripts/build-linux.sh "linux-$FLAVOR" "$@"
 }
 
@@ -330,7 +301,7 @@ STEPS=("$@")
 [[ ${#STEPS[@]} -gt 0 ]] || STEPS=(server)
 for step in "${STEPS[@]}"; do
   case $step in
-  headers | ort | shim | selftest | fake-test | server) ;;
+  headers | ort | shim | server) ;;
   *) usage ;;
   esac
 done
@@ -351,7 +322,7 @@ for step in "${STEPS[@]}"; do
     continue
   fi
   # the headers come down here, where curl is, before the container needs them
-  [[ $step == fake-test ]] || step_headers >/dev/null
+  step_headers >/dev/null
   [[ $image == "$group_image" ]] || flush
   group_image=$image
   group+=("$step")

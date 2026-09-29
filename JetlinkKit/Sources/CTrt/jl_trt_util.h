@@ -1,5 +1,5 @@
-// What the shim, the fake and the selftest share. Beside the sources rather
-// than in include/, so Swift never imports it.
+// What the shim and the fake share. Beside the sources rather than in
+// include/, so Swift never imports it.
 #ifndef JL_TRT_UTIL_H
 #define JL_TRT_UTIL_H
 

@@ -77,17 +77,33 @@
       #expect(kernel.suspends == 2)
     }
 
-    @Test("The gadget, a connection or its end restarts the count")
+    @Test("A connection or its end restarts the count while the gadget is away")
     func touches() {
-      for event in [GadgetIdleEvent.present, .connected, .disconnected] {
+      for event in [GadgetIdleEvent.connected, .disconnected] {
         let kernel = Kernel()
+        #expect(!kernel.sleeper.handle(.absent))
         kernel.wait(100)
+        // a comma over TCP, with no gadget on the bus
         #expect(!kernel.sleeper.handle(event))
         kernel.wait(100)
         #expect(!kernel.sleeper.handle(.absent))
         kernel.wait(20)
         #expect(kernel.sleeper.handle(.absent))
       }
+    }
+
+    @Test("A gadget held with no session longer than sleep_after starts the count when it goes, not before")
+    func countsFromTheGoing() {
+      let kernel = Kernel()
+      #expect(!kernel.sleeper.handle(.present))
+      // The session that never said hello: nothing polls meanwhile.
+      kernel.wait(200)
+      #expect(!kernel.sleeper.handle(.absent))
+      kernel.wait(119)
+      #expect(!kernel.sleeper.handle(.absent))
+      kernel.wait(1)
+      #expect(kernel.sleeper.handle(.absent))
+      #expect(kernel.suspends == 1)
     }
 
     @Test("An RTC alarm half an hour out on the RTC's own count, cleared first, disarmed after")
@@ -241,6 +257,7 @@
       let kernel = kernel()
       let holder = Holder(kernel.tree.path("/run/jetlink-awake.lock"))
       defer { holder.release() }
+      #expect(!kernel.sleeper.handle(.absent))
       kernel.wait(120)
       for _ in 0..<5 {
         #expect(!kernel.sleeper.handle(.absent))

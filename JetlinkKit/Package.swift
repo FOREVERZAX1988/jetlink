@@ -84,7 +84,7 @@ let package = Package(
       linkerSettings: [.linkedFramework("Metal", .when(platforms: apple))]),
     .target(
       name: "CTrt",
-      exclude: ["tools", tensorRT == nil ? "jl_trt.cpp" : "jl_trt_fake.c"],
+      exclude: [tensorRT == nil ? "jl_trt.cpp" : "jl_trt_fake.c"],
       cxxSettings: tensorRT.map { [.unsafeFlags(["-isystem", $0])] } ?? [],
       linkerSettings: [.linkedLibrary("dl", .when(platforms: [.linux])), .linkedLibrary("m", .when(platforms: [.linux]))]),
     .target(name: "JetlinkTRT", dependencies: ["CTrt", "JetlinkKit", "JetlinkServer", "JetlinkONNX"]),
