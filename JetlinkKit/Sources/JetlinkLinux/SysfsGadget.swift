@@ -6,7 +6,7 @@
   import JetlinkServer
 
   /// What `SysfsGadget` hands the claimed interface to: the server's
-  /// `UsbfsGadget`, Android's transport, or a test's stand-in.
+  /// `UsbfsGadget`, or a test's stand-in.
   protocol UsbfsTarget: GadgetSource {
     func attach(fd: Int32, inEndpoint: UInt8, outEndpoint: UInt8) throws
     func detach()
@@ -38,7 +38,6 @@
   /// claim goes when the gadget leaves the bus, re-enumerates, or its
   /// transfers see ENODEV.
   public final class SysfsGadget: @unchecked Sendable {
-    /// The gadget as sysfs names it.
     struct Found: Equatable {
       let name: String
       let bus: Int
@@ -53,6 +52,14 @@
       let interface: UInt8
     }
 
+    /// The comma's USB 3 link power files, found at the claim: its port's
+    /// permit, by its real path since the port outlives the device's `port`
+    /// link, and the device's own U1 and U2 states.
+    struct LinkPower {
+      let permit: String
+      let states: [String]
+    }
+
     let root: HostRoot
     private let node: any UsbfsNode
     private let target: any UsbfsTarget
@@ -63,11 +70,16 @@
     private let lock = NSLock()
     private var claimed: Claimed?
     private var seen: Found?
-    /// A comma session is being served: between `.connected` and `.disconnected`.
+    /// Link power management's writes and the state below, in order and off
+    /// the session thread: a permit write makes the hub send control
+    /// transfers, and a session's first message should not wait on them.
+    let power = DispatchQueue(label: "jetlink-usb-lpm")
+    /// On `power`: the claimed comma's files, when its link has any.
+    private var linkPower: LinkPower?
+    /// On `power`: a comma session is being served.
     private var serving = false
-    /// The comma's port while its link power management is off, as a real
-    /// path: the device's `port` link goes with the device, the port stays.
-    private var lpmOff: (port: String, device: String)?
+    /// On `power`: the files of a link whose power management is off.
+    private var lpmOff: LinkPower?
     private var closed = false
 
     public convenience init() {
@@ -102,14 +114,10 @@
       return nil
     }
 
-    /// The usbfs node sysfs's bus and device numbers name.
-    func nodePath(_ found: Found) -> String {
-      root.path(String(format: "/dev/bus/usb/%03d/%03d", found.bus, found.device))
-    }
-
-    /// Opens the node, finds the vendor interface, and claims it for `target`.
+    /// Opens the node sysfs's bus and device numbers name, finds the vendor
+    /// interface, and claims it for `target`.
     private func claim(_ found: Found) throws -> Claimed {
-      let path = nodePath(found)
+      let path = root.path(String(format: "/dev/bus/usb/%03d/%03d", found.bus, found.device))
       let fd = try node.open(path)
       do {
         let active = Sysfs.readInt(root.path("/sys/bus/usb/devices/\(found.name)/bConfigurationValue"))
@@ -131,11 +139,16 @@
           node.release(fd, interface: picked.interface)
           throw error
         }
+        let endpoints = String(format: "bulk in %02x out %02x", picked.inEndpoint, picked.outEndpoint)
         log(
           .info,
-          "claimed the comma's gadget at \(found.name) (\(path), \(found.speed.map { "\($0) Mb/s" } ?? "unknown speed")): interface \(picked.interface), bulk in \(hex(picked.inEndpoint)) out \(hex(picked.outEndpoint))"
+          "claimed the comma's gadget at \(found.name) (\(path), \(found.speed.map { "\($0) Mb/s" } ?? "unknown speed")): interface \(picked.interface), \(endpoints)"
         )
-        linkPowerAtClaim(found)
+        let files = linkPowerFiles(found)
+        power.async { [self] in
+          linkPower = files
+          linkPowerAtClaim()
+        }
         return Claimed(found: found, fd: fd, interface: picked.interface)
       } catch {
         node.close(fd)
@@ -162,45 +175,46 @@
     /// Heard through `ServerHooks.gadgetIdle`, which reports any link: a comma
     /// served over TCP while this gadget is claimed turns it off too.
     public func hear(_ event: GadgetIdleEvent) {
-      lock.withLock {
-        switch event {
-        case .connected:
+      switch event {
+      case .connected:
+        power.async { [self] in
           serving = true
-          if let claimed { linkPowerOff(claimed.found) }
-        case .disconnected:
+          if let linkPower { linkPowerOff(linkPower) }
+        }
+      case .disconnected:
+        power.async { [self] in
           serving = false
           linkPowerStock()
-        case .present, .absent:
-          break
         }
+      case .present, .absent:
+        break
       }
     }
 
-    /// The server is stopping: the comma's link goes back to the default.
+    /// The server is stopping: the comma's link goes back to the default
+    /// before this returns.
     public func close() {
-      lock.withLock {
+      power.sync {
         closed = true
         serving = false
         linkPowerStock()
       }
     }
 
-    /// The comma's permit, its port's real path and its U1/U2 state files,
-    /// when its link has any.
-    private func linkPowerFiles(_ found: Found) -> (permit: String, port: String, device: String, states: [String])? {
+    private func linkPowerFiles(_ found: Found) -> LinkPower? {
       let device = root.path("/sys/bus/usb/devices/\(found.name)")
-      let permit = "\(device)/port/usb3_lpm_permit"
       let states = ["u1", "u2"].map { "\(device)/power/usb3_hardware_lpm_\($0)" }
-      guard (found.speed.flatMap { Int($0) } ?? 5000) >= 5000, Sysfs.read(permit) != nil, states.allSatisfy({ Sysfs.read($0) != nil }),
+      guard (found.speed.flatMap { Int($0) } ?? 5000) >= 5000, states.allSatisfy({ Sysfs.read($0) != nil }),
         let port = realpath("\(device)/port", nil)
       else { return nil }
       defer { free(port) }
-      return (permit, String(cString: port), device, states)
+      let permit = String(cString: port) + "/usb3_lpm_permit"
+      return Sysfs.read(permit) == nil ? nil : LinkPower(permit: permit, states: states)
     }
 
-    /// Under `lock`, with the comma on the bus: a session starts.
-    private func linkPowerOff(_ found: Found) {
-      guard !closed, let files = linkPowerFiles(found) else { return }
+    /// On `power`: a session starts.
+    private func linkPowerOff(_ files: LinkPower) {
+      guard !closed else { return }
       if keepLPM {
         // A port an earlier session left off would stay so until a reboot.
         try? write(files.permit, "u1_u2")
@@ -213,7 +227,7 @@
         log(.warning, "could not turn usb 3 link power management off for the comma's session: \(error)")
         return
       }
-      lpmOff = (files.port, files.device)
+      lpmOff = files
       let read = files.states.map { Sysfs.read($0) ?? "unreadable" }
       if read.allSatisfy({ $0 == "disabled" }) {
         log(.info, "usb 3 link power management off for the comma's session")
@@ -222,35 +236,35 @@
       }
     }
 
-    /// Under `lock`: the session ended or the server stops. Written to the
+    /// On `power`: the session ended or the server stops. Written to the
     /// port itself, which outlives a comma that left the bus.
     private func linkPowerStock(_ why: String = "") {
       guard let off = lpmOff else { return }
       lpmOff = nil
       do throws(KernelError) {
-        try write("\(off.port)/usb3_lpm_permit", "u1_u2")
+        try write(off.permit, "u1_u2")
       } catch {
         log(.warning, "could not put usb 3 link power management back to stock for the comma's link: \(error)")
         return
       }
-      let read = ["u1", "u2"].map { Sysfs.read("\(off.device)/power/usb3_hardware_lpm_\($0)") }
-      if read.contains(nil) {
-        log(.info, "usb 3 link power management back to stock for the comma's port (the comma is off the bus)\(why)")
-      } else if read.allSatisfy({ $0 == "enabled" }) {
-        log(.info, "usb 3 link power management back to stock for the comma's link\(why)")
+      // A comma that left the bus took its state files with it.
+      let read = off.states.map { Sysfs.read($0) }
+      if read.contains(where: { $0 != nil && $0 != "enabled" }) {
+        log(.warning, "usb 3 link power management back to stock for the comma's link, but u1 \(read[0] ?? "gone"), u2 \(read[1] ?? "gone")\(why)")
       } else {
-        log(.warning, "usb 3 link power management back to stock for the comma's link, but u1 \(read[0]!), u2 \(read[1]!)\(why)")
+        log(.info, "usb 3 link power management back to stock for the comma's link\(why)")
       }
     }
 
-    /// Under `lock`, at a claim: a session in progress (the comma came back
+    /// On `power`, at a claim: a session in progress (the comma came back
     /// under it) gets its link off again; otherwise a port an earlier server
     /// left off, by crashing mid-session, goes back to stock for the park.
-    private func linkPowerAtClaim(_ found: Found) {
+    private func linkPowerAtClaim() {
+      guard let linkPower else { return }
       if serving {
-        linkPowerOff(found)
-      } else if !keepLPM, let files = linkPowerFiles(found), Sysfs.read(files.permit) == "0" {
-        lpmOff = (files.port, files.device)
+        linkPowerOff(linkPower)
+      } else if !keepLPM, Sysfs.read(linkPower.permit) == "0" {
+        lpmOff = linkPower
         linkPowerStock(" (an earlier server left it off)")
       }
     }
@@ -262,11 +276,8 @@
       target.detach()
       node.release(claimed.fd, interface: claimed.interface)
       node.close(claimed.fd)
+      power.async { [self] in linkPower = nil }
       log(.info, "released the comma's gadget at \(claimed.found.name): \(reason)")
-    }
-
-    private func hex(_ endpoint: UInt8) -> String {
-      String(format: "%02x", endpoint)
     }
   }
 
