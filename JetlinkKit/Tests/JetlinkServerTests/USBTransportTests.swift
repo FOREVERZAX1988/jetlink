@@ -385,8 +385,7 @@ struct ServerUSBTests {
     try server.start()
     defer { server.shutdown() }
     let client = GadgetClient(comma)
-    try client.sendJSON(.helloReq, ["client": ["name": "modeld", "nonce": 1]])
-    let hello = try client.recv(.helloResp).json
+    let hello = try client.hello(name: "modeld")
     #expect(hello["protocol"] as? Int == Int(Wire.version))
     try client.send(.ping)
     _ = try client.recv(.pong)

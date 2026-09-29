@@ -59,7 +59,7 @@ final class FrameReader {
       start = 0
       end = 0
     }
-    return Message(msgType: header.msgType, seq: header.seq, flags: header.flags, payload: payload)
+    return Message(msgType: header.msgType, seq: header.seq, flags: header.flags, payload: payload, version: header.version)
   }
 
   /// Reads until `need` bytes of the current message are buffered.

@@ -166,8 +166,7 @@ struct ServerHooksTests {
   }
 
   func hello(_ client: TestClient) throws -> [String: Any] {
-    try client.sendJSON(.helloReq, ["client": ["name": "test", "nonce": 1]])
-    return try client.recv(.helloResp).json
+    try client.hello()
   }
 
   /// One frame of `golden`'s model, zeros throughout.
@@ -217,10 +216,11 @@ struct ServerHooksTests {
       _ = try client.ensureEngine(model: golden.model, sha256: golden.sha256)
       let plain = try frame(client, golden)
       let spec = try ModelSpec.from(golden.spec)
-      #expect(plain.payload.count == Wire.inferRespSize + spec.outputBytes)
+      #expect(plain.payload.count == spec.inferRespBytes)
       let asked = try frame(client, golden, flags: .wantState)
       #expect(asked.status == Wire.Status.ok.rawValue)
-      let piggyback = asked.payload[(Wire.inferRespSize + spec.outputBytes)...]
+      try #require(asked.payload.count > spec.inferRespBytes)
+      let piggyback = asked.payload[spec.inferRespBytes...]
       #expect(readings(try JSONSerialization.jsonObject(with: piggyback)) == ["temp_c": 51.5, "power_w": 12.25])
     }
   }
@@ -267,8 +267,7 @@ struct ServerHooksTests {
     let comma = FakePipes()
     gadget.plug(comma)
     let client = GadgetClient(comma)
-    try client.sendJSON(.helloReq, ["client": ["name": "modeld", "nonce": 1]])
-    _ = try client.recv(.helloResp)
+    _ = try client.hello(name: "modeld")
     gadget.unplug()
     #expect(events.wait { $0.last == .absent })
     let seen = events.all.drop { $0 == .absent }

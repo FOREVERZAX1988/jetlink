@@ -98,14 +98,23 @@ final class RingQueue {
 
 /// A model's server-side history. The Swift form of `queues.PolicyQueues` and
 /// `queues.StateLoop`: the comma sends only the newest warped frame and the
-/// packed scalars, and this turns them into the model's inputs.
+/// packed scalars, and this turns them into the model's inputs, the hidden
+/// state the last frame returned included.
 protocol FrameStaging: AnyObject {
   /// The frame's sizes, worked out once at load.
   var layout: FrameLayout { get }
+  /// RESET_QUEUES: empty history and nothing to feed back.
   func reset()
+  /// A hello: the next frame feeds back zeros, as a new modeld's prev_feat
+  /// did. The queues stay until the client resets them.
+  func newClient()
   /// Writes one frame's inputs into the engine's buffers. `packed` is read
   /// where the request put it, aligned or not.
   func stage(warped: UnsafeRawPointer, packed: UnsafeRawPointer) throws
+  /// The frame's driving output, float32 and all finite, which the next
+  /// frame feeds back. Never after NOT_FINITE or a failed run: modeld fed
+  /// back only what reached it, and those raise on the comma first.
+  func keep(outputs: UnsafePointer<Float>)
 }
 
 /// A model's INFER_REQ and reply as the session handles them, from the spec
@@ -118,23 +127,28 @@ struct FrameLayout {
   /// The driving output, float32 on the wire whatever the engine gives.
   let outputCount: Int
   let outputType: ElementType?
+  /// The part of it the reply leaves out unless asked, when the model has one.
+  let hidden: Range<Int>?
 
   init(spec: ModelSpec, engine: any Engine) {
     requestBytes = spec.inferReqBytes
     warpedBytes = spec.warpedBytes
     outputCount = spec.outputCount
     outputType = engine.outputs[ModelConstants.drivingOutput]?.type
+    hidden = spec.hiddenRange
   }
 }
 
 enum StagingError: Error, CustomStringConvertible {
   case missingInput(String)
   case noStatePairs
+  case noHiddenState(Int)
 
   var description: String {
     switch self {
     case .missingInput(let name): return "the engine has no input \(name) to stage"
     case .noStatePairs: return "the graph takes new_img but returns no next_state_ outputs"
+    case .noHiddenState(let count): return "a queued graph needs a hidden_state output of \(count) floats to feed back"
     }
   }
 }
@@ -162,7 +176,9 @@ struct StagingTarget {
   }
 }
 
-/// A queued graph (V1, V2): the image, feature and desire queues live here.
+/// A queued graph (V1, V2): the image, feature and desire queues live here,
+/// and the hidden state each frame returns, which the next pushes into the
+/// feature queue where modeld's prev_feat went.
 final class PolicyQueues: FrameStaging {
   let layout: FrameLayout
   private let engine: any Engine
@@ -182,13 +198,22 @@ final class PolicyQueues: FrameStaging {
   private let desire: StagingTarget
   private let scalars: [(offset: Int, count: Int, target: StagingTarget)]
   private let desireOffset: Int
-  private let prevFeatOffset: Int
+  /// Where hidden_state sits in the driving output.
+  private let hidden: Range<Int>
+  /// The last good frame's hidden state, float32 as the comma held it: the
+  /// values the reply carried and the comma sent back, cast into the feature
+  /// queue at the same point.
+  private let prevFeat: UnsafeMutablePointer<Float>
 
   init(spec: ModelSpec, engine: any Engine) throws {
     self.engine = engine
     layout = FrameLayout(spec: spec, engine: engine)
     frameSkip = spec.frameSkip
     cameraBytes = spec.warpedBytes / 2
+    guard let hidden = spec.hiddenRange, hidden.count == spec.prevFeatCount else {
+      throw StagingError.noHiddenState(spec.prevFeatCount)
+    }
+    self.hidden = hidden
     imgQueue = RingQueue(shape: spec.imgBufShape)
     bigImgQueue = RingQueue(shape: spec.imgBufShape)
     featQueue = RingQueue(shape: spec.featQShape)
@@ -201,11 +226,25 @@ final class PolicyQueues: FrameStaging {
       return (packed[name]!.lowerBound * 4, engine.inputs[name]!.count, target)
     }
     desireOffset = packed["desire"]!.lowerBound * 4
-    prevFeatOffset = packed["prev_feat"]!.lowerBound * 4
+    prevFeat = .allocate(capacity: hidden.count)
+    prevFeat.initialize(repeating: 0, count: hidden.count)
+  }
+
+  deinit {
+    prevFeat.deallocate()
   }
 
   func reset() {
     for queue in [imgQueue, bigImgQueue, featQueue, desireQueue] { queue.reset() }
+    newClient()
+  }
+
+  func newClient() {
+    prevFeat.update(repeating: 0, count: hidden.count)
+  }
+
+  func keep(outputs: UnsafePointer<Float>) {
+    prevFeat.update(from: outputs + hidden.lowerBound, count: hidden.count)
   }
 
   func stage(warped: UnsafeRawPointer, packed: UnsafeRawPointer) throws {
@@ -217,7 +256,7 @@ final class PolicyQueues: FrameStaging {
     imgQueue.push(u8: warped)
     bigImgQueue.push(u8: warped + cameraBytes)
     desireQueue.push(f32: packed + desireOffset)
-    featQueue.push(f32: packed + prevFeatOffset)
+    featQueue.push(f32: UnsafeRawPointer(prevFeat))
 
     for gather in gathers {
       gather.queue.gather(step: frameSkip, into: gather.target.pointer, as: gather.target.type)
@@ -317,6 +356,12 @@ final class StateLoop: FrameStaging {
     }
     carry = false
   }
+
+  /// Nothing: the graph's state is not the client's; RESET_QUEUES clears it.
+  func newClient() {}
+
+  /// Nothing: the graph keeps its hidden state itself.
+  func keep(outputs: UnsafePointer<Float>) {}
 
   func stage(warped: UnsafeRawPointer, packed: UnsafeRawPointer) throws {
     assert(
