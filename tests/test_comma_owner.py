@@ -1171,10 +1171,46 @@ class TestACrashLoop(OwnerTest):
 
   def test_an_owner_that_dies_is_counted(self):
     o = self.owner()
-    with mock.patch.object(o, 'forget_status', side_effect=SystemExit('killed')), self.assertRaises(SystemExit):
-      o.stop = True
+    with mock.patch.object(o, 'step', side_effect=SystemExit('nothing catches this')), \
+         mock.patch.object(o, 'forget_status', side_effect=SystemExit('killed in the teardown')), \
+         self.assertRaises(SystemExit):
       o.run()
     self.assertEqual(len(owner._starts()), 1)
+
+  def test_a_stop_asked_for_is_clean_however_long_its_teardown(self):
+    # link Off with a run in a hello: stop_worker's grace is 10 s, and manager
+    # SIGKILLs 5 s after its SIGINT, before any finally
+    o = self.owner()
+    o.born = time.monotonic()
+    owner.note_start(o.born)
+    seen = []
+
+    def wait(timeout):
+      seen.append(list(owner._starts()))
+      if len(seen) < 3:
+        raise subprocess.TimeoutExpired('run', timeout)
+      return 0
+    o.worker = mock.Mock(**{'wait.side_effect': wait})
+    o.request_stop()
+    o.published = 0.0
+    with mock.patch.object(owner, 'POLL', 0.0):
+      o.stop_worker()
+    self.assertEqual(seen[1], [], 'still counted while the teardown waited: a SIGKILL there was a death')
+    self.assertIs(gadget.owner_status()['stopping'], True)
+
+  def test_a_stopping_owner_killed_in_its_teardown_leaves_no_alert(self):
+    from jetlink.openpilot import status
+    o = self.owner()
+    o.request_stop()
+    o.publish_status()
+    record = gadget.owner_status()
+    self.assertIs(record['stopping'], True)
+    with mock.patch.object(gadget.time, 'monotonic', return_value=record['at'] + 60.0):
+      self.assertEqual(status.owner_record(), (None, None))
+    record['stopping'] = False
+    gadget.write_record(gadget.STATUS, record)
+    with mock.patch.object(gadget.time, 'monotonic', return_value=record['at'] + 60.0):
+      self.assertEqual(status.owner_record(), (record, None))
 
 
 class TestStartingAgain(OwnerTest):

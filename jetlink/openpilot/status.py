@@ -101,9 +101,13 @@ STOPPED = "accelerator service stopped"
 
 
 def owner_record() -> tuple[dict | None, dict | None]:
-  """The owner's status record, and the same record if it is live, else None."""
+  """The owner's status record, and the same record if it is live, else None.
+  A stale record from an owner that was asked to stop is no record: manager
+  SIGKILLed it in a slow teardown, and nothing is wrong."""
   record = gadget.owner_status()
-  return record, (record if record is not None and gadget.owner_alive(record) else None)
+  if record is None or gadget.owner_alive(record):
+    return record, record
+  return (None, None) if record.get('stopping') else (record, None)
 
 
 class Presence:
@@ -184,7 +188,7 @@ def _built_for_the_pick(parts) -> bool:
 def reason(parts, mode: str) -> str | None:
   """Why the link cannot run, for someone who asked for it only: with it off,
   a device that cannot present the gadget simply does not offer the feature."""
-  return unavailable(parts, gadget.owner_status()) if parts.enabled(mode) else None
+  return unavailable(parts, owner_record()[0]) if parts.enabled(mode) else None
 
 
 # -- the snapshot ----------------------------------------------------------------

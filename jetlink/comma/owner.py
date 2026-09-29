@@ -211,6 +211,8 @@ class Owner:
     # why a crash loop's backoff holds this start back, for the status record
     self.backing_off: str | None = None
     self.lock_fd: int | None = None      # gadget.OWNER_LOCK, held for the life of run()
+    # this owner's entry in gadget.STARTS, until a stop that was asked for takes it back
+    self.born: float | None = None
     self.port = port.Port(chestnut_ids)
     self.cable = lending.CableListener()
     self.lender = lending.Lender(self.lendable, self.bounce_gadget, holding=self.holding, cable=self.cable,
@@ -512,11 +514,15 @@ class Owner:
       'server': self.server,
       'worker': self.worker is not None and self.worker.poll() is None,
       'unfinished': self.unfinished,
+      # asked to stop: a record a SIGKILL during the teardown leaves behind is
+      # an owner that was stopped, not one that died, and readers take it for none
+      'stopping': self.stop,
     }
 
   def publish_status(self) -> None:
     """Rewrite the status record, which is the heartbeat as well. Never
     raises; a failure is logged once, until a write works again."""
+    self.stopping_cleanly()
     try:
       gadget.write_record(gadget.STATUS, self.status_record())
     except Exception as e:
@@ -551,6 +557,18 @@ class Owner:
 
   def request_stop(self, *_) -> None:
     self.stop = True
+
+  def stopping_cleanly(self) -> None:
+    """A stop that was asked for is clean however long its teardown takes:
+    manager SIGKILLs an owner still in stop_worker's 10 s grace 5 s after its
+    SIGINT, and a start left in gadget.STARTS would count as a death, three of
+    them a crash loop. So the start is taken back as soon as the main thread
+    sees the request, at the next record (within 0.5 s), not in the finally
+    a SIGKILL never reaches. Not in the signal handler: it can land inside
+    a write of the same file."""
+    if self.stop and self.born is not None:
+      forget_start(self.born)
+      self.born = None
 
   def step(self) -> None:
     # each read is a file; take them once and pass them down
@@ -808,7 +826,7 @@ class Owner:
         os.close(fd)
 
   def hold_the_gadget(self) -> None:
-    born = time.monotonic()
+    born = self.born = time.monotonic()
     wait, died = note_start(born)
     self.adopt()
     # the heartbeat from the start: the first step builds the gadget
@@ -840,7 +858,10 @@ class Owner:
       self.close_link()
       gadget.set_dormant(False)
       self.forget_status()
-      # last: an owner killed before it got this far counts as one that died
-      forget_start(born)
+      # an owner killed before it got this far without being asked to stop
+      # counts as one that died; one that was asked took it back already
+      if self.born is not None:
+        forget_start(born)
+        self.born = None
     gadget.log.warning("jetlink: stopped")
 

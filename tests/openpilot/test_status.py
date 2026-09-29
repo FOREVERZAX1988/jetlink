@@ -265,6 +265,14 @@ class TestTheOwnersRecord(OpenpilotTest):
     self.record()   # manager started it again
     self.assertIsNone(self.jl.reason())
 
+  def test_an_owner_stopped_on_purpose_and_killed_in_its_teardown_is_no_alert(self):
+    # manager SIGKILLs an owner still stopping 5 s after its SIGINT; the next
+    # owner writes its own record a moment after it starts
+    self.record(age=60.0, stopping=True)
+    with mock.patch.object(gadget, 'gadget_error', return_value=None):
+      self.assertIsNone(self.jl.reason())
+      self.assertIsNone(self.jl.status().reason)
+
   def test_a_stopped_service_nags_only_someone_who_turned_the_link_on(self):
     self.record(age=60.0)
     self.op.set_mode('off')
