@@ -1,4 +1,5 @@
 import Foundation
+import JetlinkKit
 import Testing
 
 @testable import JetlinkServer
@@ -38,11 +39,35 @@ struct SpecTests {
     #expect(stateful.inferRespBytes == Wire.inferRespSize + 4 * 48)
   }
 
+  /// Lebowski's pad is `slice(-2, None)`, which its sidecar and ENGINE_RESP
+  /// carry as `[-2, null]`. `expected` is jetlink.spec's `to_dict` of this
+  /// spec, `json.dumps(sort_keys=True, separators=(',', ':'))`.
+  @Test("Slices with an open end or one counted from the back go back as Python writes them")
+  func pythonSlices() throws {
+    let expected =
+      #"{"checkpoint":null,"frame_skip":4,"input_shapes":{"action_t":[1,2],"desire":[1,8],"new_img":[2,6,128,256],"state_feat_q":[4,1,512],"traffic_convention":[1,2]},"nbytes":123,"output_shapes":{"next_state_feat_q":[4,1,512],"outputs":[1,2580]},"output_slices":{"action":[2574,2578],"head":[null,4],"pad":[-2,null],"plan":[0,2574]},"sha256":"abababababababababababababababababababababababababababababababab"}"#
+    let spec = try ModelSpec.from(try #require(try JSONSerialization.jsonObject(with: Data(expected.utf8)) as? [String: Any]))
+    #expect(ControlJSON.data(spec.dictionary()).map { String(decoding: $0, as: UTF8.self) } == expected)
+    let slices = Dictionary(uniqueKeysWithValues: spec.outputSlices.map { ($0.name, $0) })
+    #expect(slices["pad"] == NamedSlice("pad", start: -2, stop: nil))
+    #expect(slices["pad"]?.range(in: spec.outputCount) == 2578..<2580)
+    #expect(slices["head"]?.range(in: spec.outputCount) == 0..<4)
+    #expect(NamedSlice("x", start: 5, stop: -1).range(in: 10) == 5..<9)
+    #expect(NamedSlice("x", start: 8, stop: 2).range(in: 10) == 8..<8)
+    // no hidden_state: the reply is the whole output, as hidden_range says
+    #expect(spec.hiddenRange == nil && spec.replyCount == 2580)
+    // and one with an open end is no hidden range either
+    let open = ModelSpec(
+      sha256: spec.sha256, nbytes: 1, frameSkip: 4, inputShapes: spec.inputShapes, outputShapes: spec.outputShapes,
+      outputSlices: [NamedSlice("hidden_state", start: 2000, stop: nil)], checkpoint: nil)
+    #expect(open.hiddenRange == nil)
+  }
+
   /// A 766 MB model's frame, whichever layout: one 16 KB read on the comma
   /// down (it was five), and 64 KB less up for a queued one.
   @Test("A big model's reply fits the one read the comma keeps posted")
   func bigModel() {
-    let slices = [NamedRange("plan", 917..<1907), NamedRange("hidden_state", 2066..<18450), NamedRange("pad", 18450..<18452)]
+    let slices = [NamedSlice("plan", 917..<1907), NamedSlice("hidden_state", 2066..<18450), NamedSlice("pad", 18450..<18452)]
     let queued = ModelSpec(
       sha256: "", nbytes: 0, frameSkip: 4,
       inputShapes: [

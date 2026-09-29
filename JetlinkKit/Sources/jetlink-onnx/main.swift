@@ -55,7 +55,7 @@ func meta(_ path: String) throws {
 func slices(_ path: String) throws {
   let m = try OnnxMeta.read(contentsOf: URL(fileURLWithPath: path))
   for s in try m.outputSlices() {
-    print("  slice \(padded(s.name, 24)) slice(\(s.start), \(s.stop), None)")
+    print("  slice \(padded(s.name, 24)) slice(\(s.start.map(String.init) ?? "None"), \(s.stop.map(String.init) ?? "None"), None)")
   }
 }
 
