@@ -6,11 +6,9 @@ See the LICENSE file in the root directory for more details.
 
 Who may do endpoint IO on the gadget, while one process owns it throughout.
 
-The comma is the USB device: the link exists only while some process holds ep0
-with the UDC bound. Two processes used to take turns at that, and every change
-of owner was an unplug and a replug as the Jetson saw it, a fresh libusb open
-and a fresh server session. The owner (owner.py) holds ep0 for as long as the
-link is enabled now, and nothing else ever does, so none of that happens.
+The owner (owner.py) holds ep0 for as long as the link is on, and nothing else
+ever does: when two processes took turns at it, every change of owner was an
+unplug, a fresh libusb open and a fresh server session as the Jetson saw it.
 
 What still has to change hands is the right to read the endpoint files.
 FunctionFS keeps a queued read queued until something completes it, so a second
@@ -134,13 +132,12 @@ class Loan:
   def renew(self, timeout: float = BORROW_TIMEOUT) -> bool:
     """Ask again which link this loan is for, before another attempt at a join.
 
-    The owner answers as it would a new borrower: the phone's dial if it holds
-    one, "retry" while it waits for a phone, else the endpoint files. The loan lasts the
-    drive and the answer changes under it: a phone that dialed after the first
-    answer was never used, and a dial whose session ended with the last
-    attempt is spent. Without this a borrower that took the endpoint files
-    once wrote a hello to a phone every attempt, 15 s and a bounce each, and
-    every bounce took the phone's network interface down before it could dial.
+    The owner answers as it would a new borrower. The loan lasts the drive and
+    the answer changes under it: a phone that dialed after the first answer was
+    never used, and a dial whose session ended with the last attempt is spent.
+    Without this a borrower that took the endpoint files once wrote a hello to
+    a phone every attempt, 15 s and a bounce each, and every bounce took the
+    phone's network interface down before it could dial.
 
     False when the owner gave no link in time or refused; the loan is closed
     only when the owner is gone.
@@ -187,16 +184,11 @@ class Loan:
 
 
 def borrow(name: str = 'modeld', timeout: float = BORROW_TIMEOUT, path: Path | None = None) -> Loan | None:
-  """Ask the owner for the endpoints, or None if there is nobody to ask.
-
-  None while the link was only just turned on, or with an owner that died or
-  cannot listen, which then says so in gadget.gadget_error(). There is no link
-  without a loan: only the owner ever holds ep0, so the caller asks again
-  later rather than opening the gadget itself.
-
-  Over the cable the answer carries the phone's socket. `path` defaults to
-  SOCKET as it is when called, so a test that points SOCKET elsewhere is
-  never lent the real owner's link.
+  """Ask the owner for the link, or None if there is nobody to ask: the link
+  was only just turned on, or the owner died or cannot listen, which it says
+  in gadget.gadget_error(). The caller asks again later; only the owner ever
+  holds ep0. `path` defaults to SOCKET as it is when called, so a test that
+  points SOCKET elsewhere is never lent the real owner's link.
   """
   try:
     conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
