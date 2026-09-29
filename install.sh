@@ -75,8 +75,6 @@ SYSTEMD_RUN="${JETLINK_TEST_SYSTEMD_RUN:-/run/systemd/system}"
 AWAKE_LOCK="${JETLINK_TEST_AWAKE_LOCK:-/run/jetlink-awake.lock}"
 # seconds between looks at something the installer waits on
 POLL_S="${JETLINK_TEST_POLL_S:-5}"
-# seconds a download may make no progress before it is abandoned and tried again
-NET_TIMEOUT_S="${JETLINK_TEST_NET_TIMEOUT_S:-60}"
 
 OPT_YES=0 OPT_UPDATE=0 OPT_RECONFIGURE=0 OPT_DRY_RUN=0 OPT_UNINSTALL=0
 OPT_REF="" OPT_BINARY=""
@@ -217,17 +215,36 @@ read_answer() {
   printf -v "$1" '%s' "$__ra_reply"
 }
 
+# ask_intro "question" ["explanation"...]
+ask_intro() {
+  printf '\n  %s%s%s\n' "$B" "$1" "$N"
+  shift
+  local __in_line
+  for __in_line in "$@"; do printf '  %s%s%s\n' "$D" "$__in_line" "$N"; done
+}
+
+# ask_number VAR default MIN MAX: until a number from MIN to MAX, or Enter
+ask_number() {
+  local __nb_a
+  while true; do
+    printf '  Type a number and press Enter [%s] ' "$2"
+    read_answer __nb_a
+    [ -z "$__nb_a" ] && __nb_a=$2
+    if [[ "$__nb_a" =~ ^[0-9]{1,5}$ ]] && [ "$((10#$__nb_a))" -ge "$3" ] && [ "$((10#$__nb_a))" -le "$4" ]; then break; fi
+    printf '  Please type a number from %d to %d.\n' "$3" "$4"
+  done
+  printf -v "$1" '%s' "$((10#$__nb_a))"
+}
+
 # ask_yn VAR default(y|n) "question" ["explanation"...]
 ask_yn() {
-  local __yn_var=$1 __yn_def=$2 __yn_q=$3
-  shift 3
+  local __yn_var=$1 __yn_def=$2
+  shift 2
   if [ "$INTERACTIVE" != 1 ]; then
     printf -v "$__yn_var" '%s' "$__yn_def"
     return
   fi
-  printf '\n  %s%s%s\n' "$B" "$__yn_q" "$N"
-  local __yn_line
-  for __yn_line in "$@"; do printf '  %s%s%s\n' "$D" "$__yn_line" "$N"; done
+  ask_intro "$@"
   local __yn_hint="Y/n"
   [ "$__yn_def" = n ] && __yn_hint="y/N"
   local __yn_a
@@ -247,49 +264,32 @@ ask_yn() {
 
 # ask_choice VAR default_number "question" "option 1" "option 2" ...
 ask_choice() {
-  local __ch_var=$1 __ch_def=$2 __ch_q=$3
-  shift 3
+  local __ch_var=$1 __ch_def=$2
+  shift 2
   if [ "$INTERACTIVE" != 1 ]; then
     printf -v "$__ch_var" '%s' "$__ch_def"
     return
   fi
-  printf '\n  %s%s%s\n' "$B" "$__ch_q" "$N"
+  ask_intro "$1"
+  shift
   local __ch_i=1 __ch_opt
   for __ch_opt in "$@"; do
     printf '    %s%d)%s %s\n' "$B" "$__ch_i" "$N" "$__ch_opt"
     __ch_i=$((__ch_i + 1))
   done
-  local __ch_a
-  while true; do
-    printf '  Type a number and press Enter [%s] ' "$__ch_def"
-    read_answer __ch_a
-    [ -z "$__ch_a" ] && __ch_a=$__ch_def
-    if [[ "$__ch_a" =~ ^[0-9]+$ ]] && [ "$__ch_a" -ge 1 ] && [ "$__ch_a" -le $# ]; then break; fi
-    printf '  Please type a number from 1 to %d.\n' "$#"
-  done
-  printf -v "$__ch_var" '%s' "$__ch_a"
+  ask_number "$__ch_var" "$__ch_def" 1 $#
 }
 
 # ask_port VAR default "question" ["explanation"...]: 0 to 65535
 ask_port() {
-  local __pt_var=$1 __pt_def=$2 __pt_q=$3
-  shift 3
+  local __pt_var=$1 __pt_def=$2
+  shift 2
   if [ "$INTERACTIVE" != 1 ]; then
     printf -v "$__pt_var" '%s' "$__pt_def"
     return
   fi
-  printf '\n  %s%s%s\n' "$B" "$__pt_q" "$N"
-  local __pt_line
-  for __pt_line in "$@"; do printf '  %s%s%s\n' "$D" "$__pt_line" "$N"; done
-  local __pt_a
-  while true; do
-    printf '  Type a number and press Enter [%s] ' "$__pt_def"
-    read_answer __pt_a
-    [ -z "$__pt_a" ] && __pt_a=$__pt_def
-    if [[ "$__pt_a" =~ ^[0-9]{1,5}$ ]] && [ "$((10#$__pt_a))" -le 65535 ]; then break; fi
-    printf '  Please type a number from 0 to 65535.\n'
-  done
-  printf -v "$__pt_var" '%s' "$((10#$__pt_a))"
+  ask_intro "$@"
+  ask_number "$__pt_var" "$__pt_def" 0 65535
 }
 
 # ---------------------------------------------------------------------------
@@ -1080,9 +1080,16 @@ restore_docker_era() {
 # ---------------------------------------------------------------------------
 # The runtime: TensorRT on the host, where the Docker era had it in the image
 
+# TensorRT's library, ONNX parser and plugins for major $1, at build $2 if given
+trt_packages() {
+  printf '%s ' "libnvinfer$1${2:+=$2}" "libnvonnxparsers$1${2:+=$2}" "libnvinfer-plugin$1${2:+=$2}"
+}
+
 ensure_runtime() {
   if [ "$JETSON" = 1 ]; then jetson_trt; else pc_trt; fi
   trt_plugins
+  # what apt downloaded is as big again as what it installed
+  if [ "$APT_UPDATED" = 1 ]; then apt_get clean >>"$LOG" 2>&1 || true; fi
   if ! { has_lib "libnvinfer.so.$TRT_MAJOR" && has_lib "libnvonnxparser.so.$TRT_MAJOR"; }; then
     die "TensorRT $TRT_MAJOR is not where the server can load it." \
       "Check that libnvinfer.so.$TRT_MAJOR appears in: ldconfig -p"
@@ -1103,9 +1110,8 @@ jetson_trt() {
   fi
   make_room_for_trt
   apt_update
-  step "Installing TensorRT" apt_get install --no-install-recommends libnvinfer10 libnvonnxparsers10 libnvinfer-plugin10
-  # the downloaded packages are as big again as what they installed
-  apt_get clean >>"$LOG" 2>&1 || true
+  # shellcheck disable=SC2046
+  step "Installing TensorRT" apt_get install --no-install-recommends $(trt_packages 10)
 }
 
 # JetPack 7.2 follows the newest TensorRT 10 in NVIDIA's Jetson repository; a
@@ -1122,15 +1128,14 @@ newest_jetson_trt() {
     note "Not enough room on / to update TensorRT; staying on ${have%%-*}."
     return 0
   fi
-  if ! run_step "Updating TensorRT to ${want%%-*}" \
-      apt_get install --only-upgrade --no-install-recommends libnvinfer10 libnvonnxparsers10 libnvinfer-plugin10; then
+  # shellcheck disable=SC2046
+  if ! run_step "Updating TensorRT to ${want%%-*}" apt_get install --only-upgrade --no-install-recommends $(trt_packages 10); then
     note "Could not update TensorRT; staying on ${have%%-*}."
   fi
-  apt_get clean >>"$LOG" 2>&1 || true
 }
 
 # TensorRT 11.3 from NVIDIA's CUDA repository for the Ubuntu release (WSL uses
-# the same: its own repository has no TensorRT). Only the two libraries, at
+# the same: its own repository has no TensorRT). Only the libraries, at
 # the exact build the server is compiled against: 11.3.0.99 is built for CUDA
 # 12.9 and 13.4 under one version number, which apt's resolver mixes up, and
 # the tensorrt meta packages bring 1.6 GB of builder resources and the
@@ -1153,9 +1158,8 @@ pc_trt() {
   builds="$(apt-cache madison libnvinfer11 2>/dev/null | awk -F'|' '{gsub(/ /, "", $2); print $2}' || true)"
   grep -qxF "$PC_TRT" <<<"$builds" || die "NVIDIA's package source has no TensorRT $PC_TRT." \
     "Run the installer again later; if it keeps failing, open an issue."
-  step "Installing TensorRT ${PC_TRT%%-*} (about 1.9 GB)" \
-    apt_get install --no-install-recommends "libnvinfer11=$PC_TRT" "libnvonnxparsers11=$PC_TRT" "libnvinfer-plugin11=$PC_TRT"
-  apt_get clean >>"$LOG" 2>&1 || true
+  # shellcheck disable=SC2046
+  step "Installing TensorRT ${PC_TRT%%-*} (about 1.9 GB)" apt_get install --no-install-recommends $(trt_packages 11 "$PC_TRT")
 }
 
 # TensorRT's plugin library, where TensorRT came without it: the servers in
@@ -1173,7 +1177,6 @@ trt_plugins() {
       apt_get install --no-install-recommends "libnvinfer-plugin$TRT_MAJOR=$have"; then
     note "Could not install TensorRT's plugins; Jetlink's models do not need them."
   fi
-  apt_get clean >>"$LOG" 2>&1 || true
 }
 
 add_cuda_repo() {
@@ -1267,7 +1270,8 @@ download() {
   local url=$1 out=$2 attempt rc=0
   for attempt in 1 2 3; do
     rc=0
-    curl -fL --connect-timeout 20 --speed-limit 1024 --speed-time "$NET_TIMEOUT_S" -o "$out" "$url" || rc=$?
+    # a minute without progress abandons the attempt
+    curl -fL --connect-timeout 20 --speed-limit 1024 --speed-time 60 -o "$out" "$url" || rc=$?
     case "$rc" in
       0) return 0 ;;
       22) return 22 ;;
@@ -1668,7 +1672,7 @@ uninstall() {
   as_root rm -rf "$ETC_DIR" "$SRC_ROOT"
   heading "Jetlink is removed."
   local p trt=''
-  for p in libnvinfer10 libnvonnxparsers10 libnvinfer-plugin10 libnvinfer11 libnvonnxparsers11 libnvinfer-plugin11; do
+  for p in $(trt_packages 10) $(trt_packages 11); do
     [ -n "$(pkg_version "$p")" ] && trt="$trt $p"
   done
   [ -z "$trt" ] || say "  TensorRT stays installed; to remove it: sudo apt remove$trt"
