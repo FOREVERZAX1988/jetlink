@@ -31,6 +31,11 @@ public protocol GadgetSource: Sendable {
   /// server says as `.connected` and `.disconnected`, on the session's thread.
   func sessionStarted()
   func sessionEnded()
+  /// A message arrived on the session, before it is handled, on the
+  /// session's thread: a session outlives the comma's modeld while its
+  /// gadget stays up, so a quiet one is told apart this way. Called for
+  /// every frame, so it must return at once.
+  func sessionHeard()
   /// The server is shutting down.
   func close()
 }
@@ -38,6 +43,7 @@ public protocol GadgetSource: Sendable {
 extension GadgetSource {
   public func sessionStarted() {}
   public func sessionEnded() {}
+  public func sessionHeard() {}
   public func close() {}
 }
 

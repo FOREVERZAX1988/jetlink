@@ -2,6 +2,7 @@
   import Foundation
   import Glibc
   import JetlinkKit
+  import JetlinkTestSupport
   import Testing
 
   @testable import JetlinkLinux
@@ -128,11 +129,16 @@
     let lpmTakes = Locked(true)
     /// What was written to the comma's usb3_lpm_permit, in order.
     let permits = Locked<[String]>([])
+    /// How long each permit write takes: the hub's control transfers.
+    let writeTakes = Locked<TimeInterval>(0)
+    /// How long a session may go without a message.
+    var quietAfter: TimeInterval = 30
     lazy var gadget = SysfsGadget(
       root: tree.root, node: node, target: target, environment: environment,
-      write: { [tree, lpmTakes, permits] path, text throws(KernelError) in
+      write: { [tree, lpmTakes, permits, writeTakes] path, text throws(KernelError) in
         try Sysfs.write(path, text)
         guard path.hasSuffix("/usb3_lpm_permit") else { return }
+        if writeTakes.value > 0 { Thread.sleep(forTimeInterval: writeTakes.value) }
         permits.value.append(text)
         // The kernel applies a permit to the port's child at once, if it has one.
         let child = "/sys/bus/usb/devices/2-1.3/power"
@@ -140,7 +146,7 @@
         for state in ["u1", "u2"] {
           tree.write("\(child)/usb3_hardware_lpm_\(state)", text == "0" ? "disabled\n" : "enabled\n")
         }
-      }, log: lines.log)
+      }, log: lines.log, quietAfter: quietAfter)
 
     /// The comma's port, which outlives the comma.
     static let port = "/sys/devices/usb2/2-1/2-1:1.0/2-1-port3/usb3_lpm_permit"
@@ -459,6 +465,81 @@
       #expect(tcp.permits.value.isEmpty)
     }
 
+    @Test("A session quiet for a while is back at stock until the comma talks, and the message that turns it off does not wait for the write")
+    func quiet() throws {
+      let bus = Bus()
+      bus.quietAfter = 0.5
+      try bus.claimed()
+      bus.started()
+      #expect(bus.permits.value == ["0"])
+      // modeld exits at ignition off; the owner keeps the gadget, and so the session
+      #expect(eventually { bus.permits.value == ["0", "u1_u2"] })
+      bus.settle()
+      #expect(bus.lpm("u1") == "enabled\n" && bus.lpm("u2") == "enabled\n")
+      #expect(bus.lines.has(.info, "usb 3 link power management back to stock for the comma's link (nothing from the comma for 0.5 s)"))
+
+      // The next message queues the write and goes on to be handled: here the
+      // write takes half a second, as a hub's control transfers never should.
+      bus.writeTakes.value = 0.5
+      let started = DispatchTime.now().uptimeNanoseconds
+      bus.gadget.sessionHeard()
+      let heardMs = Double(DispatchTime.now().uptimeNanoseconds - started) / 1e6
+      #expect(heardMs < 50, "the message waited \(heardMs) ms for sysfs")
+      for _ in 0..<20 {
+        let each = DispatchTime.now().uptimeNanoseconds
+        bus.gadget.sessionHeard()
+        #expect(Double(DispatchTime.now().uptimeNanoseconds - each) / 1e6 < 50)
+      }
+      bus.settle()
+      bus.writeTakes.value = 0
+      #expect(bus.permits.value == ["0", "u1_u2", "0"])
+      #expect(bus.lpm("u1") == "disabled\n" && bus.lpm("u2") == "disabled\n")
+      #expect(bus.lines.has(.info, "usb 3 link power management off for the comma's session (the comma is sending again)"))
+
+      // A comma that keeps talking, as frames or its 10 s keep-alive do, keeps it off.
+      for _ in 0..<10 {
+        Thread.sleep(forTimeInterval: 0.1)
+        bus.gadget.sessionHeard()
+      }
+      bus.settle()
+      #expect(bus.permits.value == ["0", "u1_u2", "0"])
+
+      // Quiet again, then the session ends: nothing is left to put back, and
+      // no check runs after the end.
+      #expect(eventually { bus.permits.value == ["0", "u1_u2", "0", "u1_u2"] })
+      bus.settle()
+      bus.ended()
+      bus.gadget.sessionHeard()
+      Thread.sleep(forTimeInterval: 0.7)
+      bus.settle()
+      #expect(bus.permits.value == ["0", "u1_u2", "0", "u1_u2"])
+      #expect(bus.lines.count("back to stock") == 2 && bus.lines.count("off for the comma's session") == 2)
+    }
+
+    @Test("A quiet session's comma that re-enumerates comes back at stock, and off at its next message")
+    func quietReplugged() throws {
+      let bus = Bus()
+      bus.quietAfter = 0.2
+      try bus.claimed()
+      bus.started()
+      #expect(eventually { bus.permits.value == ["0", "u1_u2"] })
+      bus.settle()
+      bus.unplug()
+      #expect(!bus.gadget.present())
+      bus.plug(device: 8, lpm: true)
+      #expect(bus.gadget.present())
+      _ = try bus.gadget.open()
+      bus.settle()
+      #expect(bus.permits.value == ["0", "u1_u2"])
+      #expect(bus.lpm("u1") == "enabled\n")
+      bus.gadget.sessionHeard()
+      bus.settle()
+      #expect(bus.permits.value == ["0", "u1_u2", "0"])
+      #expect(bus.lpm("u1") == "disabled\n")
+      bus.gadget.close()
+      #expect(bus.permit == "u1_u2")
+    }
+
     @Test("JETLINK_USB_LPM=1 keeps it on for the session, putting back a port left off")
     func keptOn() throws {
       let bus = Bus()
@@ -472,6 +553,20 @@
       bus.ended()
       bus.gadget.close()
       #expect(bus.permits.value == ["u1_u2"])
+    }
+
+    @Test("JETLINK_USB_LPM=1 through a quiet spell: nothing more written or said")
+    func keptOnQuiet() throws {
+      let bus = Bus()
+      bus.environment = ["JETLINK_USB_LPM": "1"]
+      bus.quietAfter = 0.2
+      try bus.claimed()
+      bus.started()
+      Thread.sleep(forTimeInterval: 0.4)
+      bus.gadget.sessionHeard()
+      bus.settle()
+      #expect(bus.permits.value == ["u1_u2"])
+      #expect(bus.lines.count("link power management") == 1)
     }
   }
 

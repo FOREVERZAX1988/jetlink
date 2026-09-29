@@ -320,6 +320,9 @@ public final class Server: @unchecked Sendable {
         gadget?.sessionStarted()
       }
     }
+    if let gadget {
+      session.onMessage = { gadget.sessionHeard() }
+    }
     let done = Latch()
     lock.lock()
     current = (session, done)

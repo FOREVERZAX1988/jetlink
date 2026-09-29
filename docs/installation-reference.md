@@ -212,10 +212,12 @@ The cache is `--cache DIR`, else `$JETLINK_CACHE`, else:
   and no gadget kernel modules on the host.
 - On Linux the server turns off USB 3 link power management (U1/U2) on the
   comma's port while it serves the comma, and puts the kernel's default back
-  when the session ends or the server stops. On, waking the link cost 2.2 ms a
-  frame on the bench Jetson (4.2 against 2.0 ms of transport, p50); off, the
-  idle link drew 0.18 W more, so it is not off for the whole park. Deep sleep
-  and USB wake are unaffected. `JETLINK_USB_LPM=1` leaves it on.
+  when the session ends, when the comma has sent nothing for 30 s (parked with
+  its gadget still up; off again at its next message), or when the server
+  stops. On, waking the link cost 2.2 ms a frame on the bench Jetson (4.2
+  against 2.0 ms of transport, p50); off, the idle link drew 0.18 W more, so it
+  is not off for the whole park. Deep sleep and USB wake are unaffected.
+  `JETLINK_USB_LPM=1` leaves it on.
 - How the link carries a frame: [link protocol](transport.md#link-protocol).
 - Nothing on the comma runs by hand. The owner builds the gadget on its first
   step, USB or iOS per the comma's Accelerator Link setting, and rebuilds it

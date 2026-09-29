@@ -81,6 +81,18 @@
     /// On `power`: the files of a link whose power management is off.
     private var lpmOff: LinkPower?
     private var closed = false
+    /// A session with nothing from the comma for this long has its link back
+    /// at the default until the comma's next message. Three of the comma's
+    /// 10 s keep-alive pings, so a modeld waiting to swap keeps it off.
+    let quietAfter: TimeInterval
+    /// Under `heardLock`, which the session thread takes once a message: when
+    /// it last heard the comma (uptime, ns), and whether the link went back
+    /// to the default for the quiet since.
+    private let heardLock = NSLock()
+    private var lastHeard: UInt64 = 0
+    private var dozing = false
+    /// On `power`: bumped by every (re)arm, so only the latest quiet check runs.
+    private var quietCheck = 0
 
     public convenience init() {
       self.init(root: .system, node: DevUsbfs(), target: UsbfsGadget())
@@ -88,7 +100,8 @@
 
     init(
       root: HostRoot, node: any UsbfsNode, target: any UsbfsTarget, environment: [String: String] = ProcessInfo.processInfo.environment,
-      write: @escaping @Sendable (String, String) throws(KernelError) -> Void = Sysfs.write, log: ServerLog = ServerLog(category: "usb")
+      write: @escaping @Sendable (String, String) throws(KernelError) -> Void = Sysfs.write, log: ServerLog = ServerLog(category: "usb"),
+      quietAfter: TimeInterval = 30
     ) {
       self.root = root
       self.node = node
@@ -97,6 +110,7 @@
       keepLPM = environment["JETLINK_USB_LPM"] == "1"
       self.write = write
       self.log = log
+      self.quietAfter = quietAfter
     }
 
     /// 1209:0001 in /sys/bus/usb/devices, the first by name.
@@ -158,12 +172,20 @@
     // MARK: link power management
 
     /// USB 3 link power management (U1/U2) is off on the comma's own port
-    /// while a session is served, and the kernel's default otherwise. On it
-    /// is the largest single cost of the link: every idle gap between frames
-    /// ends in an exit from U1 or U2, 3.9 ms of the 7.6 ms onroad transport on
-    /// the bench. Off only the comma's port: the hub then keeps its uplink in
-    /// U0 by itself. Between sessions (parked, the comma holding the gadget)
-    /// the link dozes in U2 again. Suspend is U3 and is unaffected.
+    /// while a session is served and the comma is talking, and the kernel's
+    /// default otherwise. On it is the largest single cost of the link: every
+    /// idle gap between frames ends in an exit from U1 or U2, 3.9 ms of the
+    /// 7.6 ms onroad transport on the bench. Off only the comma's port: the
+    /// hub then keeps its uplink in U0 by itself. Between sessions (parked,
+    /// the comma holding the gadget) the link dozes in U2 again. Suspend is
+    /// U3 and is unaffected.
+    ///
+    /// A session outlives the comma's modeld: it ends only when the gadget
+    /// leaves the bus, and the comma's owner keeps it up 60 s after a drive,
+    /// for good with sleep_after 0. Off, that idle link drew 0.18 W more on
+    /// the bench, so after `quietAfter` with no message the link goes back to
+    /// the default, and the next message turns it off again. That write is
+    /// queued like the others, so the frame that brings it does not wait.
     ///
     /// The kernel applies a permit to the attached device at once, but a
     /// write that cannot reach it (the bus suspended) reports success and
@@ -174,16 +196,38 @@
     /// The server says when a session starts and ends over any link: a comma
     /// served over TCP while this gadget is claimed turns it off too.
     public func sessionStarted() {
+      resetHeard()
       power.async { [self] in
         serving = true
         if let linkPower { linkPowerOff(linkPower) }
+        armQuietCheck(after: quietAfter)
       }
     }
 
     public func sessionEnded() {
+      resetHeard()
       power.async { [self] in
         serving = false
+        quietCheck += 1
         linkPowerStock()
+      }
+    }
+
+    /// On the session's thread, for every message: a clock read and a lock,
+    /// and a queued write only for the first message after a quiet spell.
+    public func sessionHeard() {
+      let now = DispatchTime.now().uptimeNanoseconds
+      let woke = heardLock.withLock {
+        let woke = dozing
+        lastHeard = now
+        dozing = false
+        return woke
+      }
+      guard woke else { return }
+      power.async { [self] in
+        guard serving else { return }
+        if let linkPower, !keepLPM { linkPowerOff(linkPower, " (the comma is sending again)") }
+        armQuietCheck(after: quietAfter)
       }
     }
 
@@ -193,7 +237,50 @@
       power.sync {
         closed = true
         serving = false
+        quietCheck += 1
         linkPowerStock()
+      }
+    }
+
+    /// A session starts or ends: the quiet counts from now.
+    private func resetHeard() {
+      let now = DispatchTime.now().uptimeNanoseconds
+      heardLock.withLock {
+        lastHeard = now
+        dozing = false
+      }
+    }
+
+    /// On `power`: checks for quiet once `delay` has passed, instead of any
+    /// check armed before.
+    private func armQuietCheck(after delay: TimeInterval) {
+      quietCheck += 1
+      let armed = quietCheck
+      power.asyncAfter(deadline: .now() + max(delay, 0)) { [weak self] in
+        guard let self, armed == quietCheck, serving else { return }
+        checkQuiet()
+      }
+    }
+
+    /// On `power`: after `quietAfter` with nothing heard the link goes back to
+    /// the default and stays there until `sessionHeard`; else the check is
+    /// armed again for when that would be.
+    private func checkQuiet() {
+      let quiet = UInt64(quietAfter * 1e9)
+      let left: UInt64? = heardLock.withLock {
+        // Read under the lock, so no message can be stamped later than now.
+        let now = DispatchTime.now().uptimeNanoseconds
+        let since = now > lastHeard ? now - lastHeard : 0
+        guard since < quiet else {
+          dozing = true
+          return nil
+        }
+        return quiet - since
+      }
+      if let left {
+        armQuietCheck(after: Double(left) / 1e9)
+      } else {
+        linkPowerStock(" (nothing from the comma for \(String(format: "%g", quietAfter)) s)")
       }
     }
 
@@ -208,8 +295,8 @@
       return Sysfs.read(permit) == nil ? nil : LinkPower(permit: permit, states: states)
     }
 
-    /// On `power`: a session starts.
-    private func linkPowerOff(_ files: LinkPower) {
+    /// On `power`: a session starts, or the comma talks again after a quiet spell.
+    private func linkPowerOff(_ files: LinkPower, _ why: String = "") {
       guard !closed else { return }
       if keepLPM {
         // A port an earlier session left off would stay so until a reboot.
@@ -226,14 +313,14 @@
       lpmOff = files
       let read = files.states.map { Sysfs.read($0) ?? "unreadable" }
       if read.allSatisfy({ $0 == "disabled" }) {
-        log.info("usb 3 link power management off for the comma's session")
+        log.info("usb 3 link power management off for the comma's session\(why)")
       } else {
         log.warning("usb 3 link power management is still on for the comma's session after writing 0 to \(files.permit): u1 \(read[0]), u2 \(read[1])")
       }
     }
 
-    /// On `power`: the session ended or the server stops. Written to the
-    /// port itself, which outlives a comma that left the bus.
+    /// On `power`: the session ended or went quiet, or the server stops.
+    /// Written to the port itself, which outlives a comma that left the bus.
     private func linkPowerStock(_ why: String = "") {
       guard let off = lpmOff else { return }
       lpmOff = nil
@@ -253,12 +340,13 @@
     }
 
     /// On `power`, at a claim: a session in progress (the comma came back
-    /// under it) gets its link off again; otherwise a port an earlier server
-    /// left off, by crashing mid-session, goes back to stock for the park.
+    /// under it) gets its link off again, unless it has gone quiet; otherwise
+    /// a port an earlier server left off, by crashing mid-session, goes back
+    /// to stock for the park.
     private func linkPowerAtClaim() {
       guard let linkPower else { return }
       if serving {
-        linkPowerOff(linkPower)
+        if !heardLock.withLock({ dozing }) { linkPowerOff(linkPower) }
       } else if !keepLPM, Sysfs.read(linkPower.permit) == "0" {
         lpmOff = linkPower
         linkPowerStock(" (an earlier server left it off)")

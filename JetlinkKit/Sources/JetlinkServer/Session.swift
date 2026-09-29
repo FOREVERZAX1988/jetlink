@@ -27,6 +27,8 @@ final class Session: @unchecked Sendable {
   /// Hears the link event when the session announces it (`first`), and
   /// again when the hello changes its medium.
   var onLink: ((_ event: LinkEvent, _ first: Bool) -> Void)?
+  /// Hears every message that arrives, before it is handled.
+  var onMessage: (() -> Void)?
 
   /// The reply's float32 outputs, reused every frame.
   private var outputBuffer: UnsafeMutablePointer<Float>
@@ -128,6 +130,7 @@ final class Session: @unchecked Sendable {
       } catch {
         return String(describing: error)
       }
+      onMessage?()
       do {
         try handle(message)
       } catch let error as LinkError {
