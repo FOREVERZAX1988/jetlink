@@ -125,8 +125,6 @@ def main() -> int:
   p = argparse.ArgumentParser()
   g = p.add_mutually_exclusive_group(required=True)
   g.add_argument('--host', help='TCP host of the Jetson')
-  g.add_argument('--usb', action='store_true',
-                 help='this end is the USB host (libusb)')
   g.add_argument('--ffs', action='store_true',
                  help='this end is the USB gadget (FunctionFS) - use this on a comma')
   g.add_argument('--listen', metavar='[HOST:]PORT',
@@ -153,9 +151,7 @@ def main() -> int:
     p.error('--loan goes with --ffs')
 
   loan = None
-  if args.usb:
-    client = JetlinkClient.open_usb()
-  elif args.loan:
+  if args.loan:
     loan, client = open_loan()
   elif args.ffs:
     # opening this writes the descriptors and binds the UDC, so the Jetson can enumerate us

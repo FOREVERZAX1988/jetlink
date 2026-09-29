@@ -96,12 +96,6 @@ class JetlinkClient:
   # -- construction ---------------------------------------------------------
 
   @classmethod
-  def open_usb(cls, **kw) -> JetlinkClient:
-    """This end is the USB host (libusb)."""
-    from jetlink.transport.usbbulk import UsbBulkTransport
-    return cls(UsbBulkTransport.open(), **kw)
-
-  @classmethod
   def open_ffs(cls, mount: str = '/dev/ffs-jetlink', gadget: str | None = None,
                udc: str | None = None, **kw) -> JetlinkClient:
     """This end is the USB gadget (FunctionFS).

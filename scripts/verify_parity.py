@@ -164,10 +164,8 @@ def capture(args) -> int:
     client = JetlinkClient.open_ffs(args.ffs_mount, gadget=args.gadget, want_hidden=True)
   elif args.host:
     client = JetlinkClient.open_tcp(args.host, args.port, want_hidden=True)
-  elif args.listen:
-    client = open_listen(args.listen, args.listen_timeout)
   else:
-    client = JetlinkClient.open_usb(want_hidden=True)
+    client = open_listen(args.listen, args.listen_timeout)
 
   try:
     hello = client.hello(timeout=60.0)  # the jetson may still be re-enumerating
@@ -436,17 +434,17 @@ def main() -> int:
   p.add_argument('--ffs', action='store_true', help='capture mode: this end is the gadget')
   p.add_argument('--ffs-mount', default='/dev/ffs-jetlink')
   p.add_argument('--gadget', default='/sys/kernel/config/usb_gadget/jetlink')
-  p.add_argument('--host', help='capture mode: TCP host instead of USB')
+  p.add_argument('--host', help='capture mode: the server over TCP')
   p.add_argument('--port', type=int, default=5599)
   p.add_argument('--listen', metavar='[HOST:]PORT',
                  help='capture mode: accept one incoming dial (a phone over the cable network '
-                      'dials the comma; from a Mac this stands in for it) instead of USB or --host')
+                      'dials the comma; from a Mac this stands in for it)')
   p.add_argument('--listen-timeout', type=float, default=120.0, metavar='SECONDS',
                  help='--listen: how long to wait for the dial')
   args = p.parse_args()
 
-  if args.listen and (args.host or args.ffs):
-    p.error('--listen takes the place of --host and --ffs')
+  if args.mode == 'capture' and sum(map(bool, (args.ffs, args.host, args.listen))) != 1:
+    p.error('capture takes one of --ffs, --host and --listen')
 
   if args.mode == 'reference' and not args.onnx:
     raise SystemExit('reference mode needs --onnx')

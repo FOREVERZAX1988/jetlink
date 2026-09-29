@@ -29,11 +29,6 @@ USB_MEDIA = {'super-speed-plus': 'usb3', 'super-speed': 'usb3', 'high-speed': 'u
 UDC_SYSFS = '/sys/class/udc'
 
 
-def medium_from_usb_speed(speed: str | None) -> str:
-  """'usb3', 'usb2' or 'usb1' for a speed as Linux names it, else 'usb'."""
-  return USB_MEDIA.get(speed or '', 'usb')
-
-
 def udc_speed(udc: str | None = None, root: str | None = None) -> str | None:
   """The speed a device controller negotiated with its host, as Linux names it
   (super-speed, high-speed, ...), from `udc` or the first controller; None

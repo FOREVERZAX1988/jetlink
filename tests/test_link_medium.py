@@ -21,7 +21,6 @@ from jetlink.transport import base
 from jetlink.transport.base import udc_speed
 from jetlink.transport.ffs import FfsTransport
 from jetlink.transport.tcp import CABLE_ADDRESS, TcpTransport
-from jetlink.transport.usbbulk import UsbBulkTransport
 
 
 @pytest.fixture
@@ -60,13 +59,6 @@ def test_a_phones_dial_is_the_cable_and_a_lan_is_tcp(udc):
   lan = TcpTransport.__new__(TcpTransport)
   lan.sock = SimpleNamespace(getsockname=lambda: ('10.0.0.5', 40000), getpeername=lambda: ('10.0.0.9', 5599))
   assert lan.link_info() == {'kind': 'tcp'}
-
-
-def test_a_usb_host_reads_the_speed_libusb_negotiated():
-  t = UsbBulkTransport.__new__(UsbBulkTransport)
-  t.usb_speed = 'super-speed'
-  assert t.medium == 'usb3'
-  assert t.link_info() == {'kind': 'usb', 'usb_speed': 'super-speed'}
 
 
 class FakeTransport:

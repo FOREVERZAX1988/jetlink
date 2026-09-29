@@ -481,10 +481,6 @@ class TestOversizeMessageDoesNotStall:
     with pytest.raises(LinkError, match="read_slack too small"):
       t.recv(timeout=None)
 
-  def test_the_real_host_transport_has_slack(self):
-    from jetlink.transport.usbbulk import MAX_PACKET, UsbBulkTransport
-    assert UsbBulkTransport.read_slack >= MAX_PACKET
-
 
 def test_a_closed_client_is_dead():
   """Whoever still holds a closed client must open a new one: a big model

@@ -19,6 +19,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -38,6 +39,11 @@ FORK_IMPORTS = {
   'jetlink.registry.lfs': ('LFS_ENDPOINTS', 'POINTER_URL', 'Pointer', 'fetch_pointer', 'lfs_download', 'lfs_resolve'),
   'jetlink.transport.tcp': ('CABLE_ADDRESS', 'TcpTransport'),
 }
+# What openpilot calls on a client and reads off one (helpers.py, backend.py,
+# joining.py, provision.py, model_state.py)
+CLIENT_CALLS = ('open_socket', 'open_borrowed_ffs', 'open_ffs', 'hello', 'ensure_engine', 'infer_begin', 'infer_end',
+                'shutdown', 'rebind', 'close')
+CLIENT_FIELDS = ('t', 'dead', 'deadline', 'last_timings', 'last_state')
 # and the rest of what runs there
 COMMA_MODULES = (*FORK_IMPORTS, 'jetlink.protocol', 'jetlink.comma.gadget', 'jetlink.comma.lending', 'jetlink.comma.port',
                  'jetlink.comma.root', 'jetlink.transport.ffs')
@@ -75,6 +81,13 @@ def test_a_comma_module_loads_only_what_the_comma_has(module):
   assert found['missing'] == [], f"openpilot imports {found['missing']} from {module}"
   assert found['server'] == [], f"{module} loads {found['server']}"
   assert found['foreign'] == [], f"{module} needs {found['foreign']}; the comma has numpy and the standard library"
+
+
+def test_the_client_has_what_openpilot_calls():
+  from jetlink.client import JetlinkClient
+  assert [n for n in CLIENT_CALLS if not callable(getattr(JetlinkClient, n, None))] == []
+  client = JetlinkClient(SimpleNamespace())
+  assert [n for n in CLIENT_FIELDS if not hasattr(client, n)] == []
 
 
 def test_the_gadget_presents_what_a_host_looks_for():
