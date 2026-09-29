@@ -826,7 +826,12 @@ static int parse_plan(jl_trt *t, char *text, jl_trt_engine *e, char *err, size_t
 int jl_trt_engine_deserialize(jl_trt *t, const void *plan, size_t size, jl_trt_engine **out, char *err,
                               size_t errlen) {
   *out = NULL;
-  ENTER(t, "engine_deserialize");
+  int entered = enter(t, "engine_deserialize", err, errlen);
+  if (entered != JL_TRT_OK) {
+    // An injected refusal reads as the shim reads TensorRT's log: one for
+    // want of memory is not the plan's.
+    return entered == JL_TRT_ERROR && err != NULL && is_allocation_failure(err) ? JL_TRT_CUDA_ERROR : entered;
+  }
   int rc = unsafe(t, "cuMemAlloc", err, errlen);
   char *text = rc == JL_TRT_OK ? strndup(plan, size) : NULL;
   jl_trt_engine *e = text != NULL ? calloc(1, sizeof(jl_trt_engine)) : NULL;
@@ -834,7 +839,7 @@ int jl_trt_engine_deserialize(jl_trt *t, const void *plan, size_t size, jl_trt_e
     e->trt = t;
     rc = parse_plan(t, text, e, err, errlen);
   } else if (rc == JL_TRT_OK) {
-    rc = say(err, errlen, JL_TRT_ERROR, "out of memory");
+    rc = say(err, errlen, JL_TRT_CUDA_ERROR, "out of memory");
   }
   free(text);
   if (rc != JL_TRT_OK) {

@@ -35,7 +35,8 @@ enum {
   // TensorRT, the ONNX parser or a file said no.
   JL_TRT_ERROR = 1,
   // A CUDA call failed and the context still works: out of memory, a bad
-  // argument, a capture that was invalidated.
+  // argument, a capture that was invalidated. Also a deserialize that failed
+  // for want of memory or of a runtime.
   JL_TRT_CUDA_ERROR = 2,
   // A CUDA error that breaks the context for good (CUDA's sticky errors: an
   // illegal address, a failed launch, a hardware exception) or a device that
@@ -223,7 +224,10 @@ void jl_trt_graph_exec_destroy(jl_trt *trt, jl_trt_graph_exec *exec);
 // --- runtime ----------------------------------------------------------------
 
 // Over the caller's bytes, which TensorRT does not keep past the call. A plan
-// from another TensorRT build is JL_TRT_ERROR.
+// from another TensorRT build is JL_TRT_ERROR, and only a refusal of the plan
+// is: no runtime, or a refusal TensorRT logged as memory it could not
+// allocate, is JL_TRT_CUDA_ERROR, since the plan may be good (D21 deletes a
+// plan on JL_TRT_ERROR).
 int jl_trt_engine_deserialize(jl_trt *trt, const void *plan, size_t size, jl_trt_engine **out, char *err,
                               size_t errlen);
 void jl_trt_engine_destroy(jl_trt_engine *engine);

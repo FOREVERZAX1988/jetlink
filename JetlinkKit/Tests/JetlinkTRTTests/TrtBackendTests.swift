@@ -254,5 +254,46 @@ extension Recorded<Event> {
       host.close()
       #expect(backend.trt.live.allSatisfy { $0 == 0 }, "\(backend.trt.live)")
     }
+
+    @Test("A plan TensorRT refuses is rebuilt once; one that met a full device or no runtime stays, and only the job fails")
+    func refusedPlans() throws {
+      let backend = try backend()
+      let cache = try ServerCache(root: tmp.url, backend: backend)
+      let request = try request(cache)
+      let plan = cache.entry(request).path
+      let built = EngineHost(cache: cache)
+      _ = built.request(request, session: nil)
+      #expect(built.settles(timeout: 60) && built.snapshot().state == .ready)
+      built.close()
+
+      /// One request on a fresh host, whose first deserialize is refused
+      /// with `code`; the plan is dated long ago first, so a rebuild shows.
+      func attempt(_ code: Int32, _ message: String) throws -> (event: String, detail: String, rebuilt: Bool) {
+        let old = Date(timeIntervalSince1970: 1_000_000_000)
+        try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: plan.path)
+        backend.trt.fail("engine_deserialize", code: code, message)
+        let host = EngineHost(cache: cache)
+        defer { host.close() }
+        _ = host.request(request, session: nil)
+        #expect(host.settles(timeout: 60))
+        let snapshot = host.snapshot()
+        let modified = try FileManager.default.attributesOfItem(atPath: plan.path)[.modificationDate] as? Date
+        return (snapshot.state.rawValue, snapshot.detail, modified != old)
+      }
+
+      let notThePlan: [(code: Int32, message: String)] = [
+        (Int32(JL_TRT_ERROR), "Requested amount of GPU memory (1718548480 bytes) could not be allocated"),
+        (Int32(JL_TRT_CUDA_ERROR), "createInferRuntime: TensorRT returned no runtime"),
+      ]
+      for refusal in notThePlan {
+        let kept = try attempt(refusal.code, refusal.message)
+        #expect(kept.event == "failed" && kept.detail.contains(refusal.message), "\(kept)")
+        #expect(!kept.rebuilt)
+      }
+      let replaced = try attempt(Int32(JL_TRT_ERROR), "The engine plan file is not compatible with this version of TensorRT")
+      #expect(replaced.event == "ready" && replaced.rebuilt, "\(replaced)")
+      #expect(!backend.trt.isSticky)
+      #expect(backend.trt.live.allSatisfy { $0 == 0 }, "\(backend.trt.live)")
+    }
   }
 #endif

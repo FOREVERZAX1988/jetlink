@@ -69,8 +69,10 @@ int jl_trt_fake_open(const jl_trt_fake_config *config, jl_trt **out, char *err, 
 // is the function's name without "jl_trt_": "graph_launch",
 // "context_enqueue", "engine_deserialize", "build_write_plan", "mem_alloc".
 // It returns `code`, with err reading "<call>: <message>", and does nothing
-// else; JL_TRT_CUDA_STICKY latches as the real shim's does. Calls that return
-// nothing cannot fail.
+// else; JL_TRT_CUDA_STICKY latches as the real shim's does. A JL_TRT_ERROR
+// injected into "engine_deserialize" whose message names an allocation
+// failure comes back JL_TRT_CUDA_ERROR, as the real shim reads TensorRT's
+// log. Calls that return nothing cannot fail.
 void jl_trt_fake_fail(jl_trt *trt, const char *call, int nth, int code, const char *message);
 
 // The input and output lines the next build writes into its plan, and the
