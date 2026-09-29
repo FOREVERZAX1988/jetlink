@@ -1,0 +1,262 @@
+"""
+Copyright (c) 2026-, Zeph Leggett.
+
+This file is part of jetlink and is licensed under the MIT License.
+See the LICENSE file in the root directory for more details.
+
+What the fork calls, and the answers it gets.
+
+modeld, manager, hardwared, the UI and the model manager reach jetlink
+through bind() and the Jetlink it returns, so what is pinned here is the
+surface itself and selection: what a device with the link off, on but not
+ready, and ready gets told, and that a request that hangs costs the large
+model and nothing else.
+"""
+import inspect
+import json
+import sys
+import tempfile
+import threading
+import time
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
+
+import jetlink.openpilot as jo
+from jetlink.comma import gadget
+from tests.openpilot import fakes
+from tests.openpilot.fakes import OpenpilotTest
+
+# what the fork calls on a Jetlink, as it calls it. Additive only: a changed
+# or removed one is an API bump (see jetlink/openpilot/__init__.py)
+JETLINK = {
+  'enabled': '()',
+  'status': '()',
+  'prepare': '()',
+  'shutdown': "(reason='', timeout=25.0)",
+  'extends_catalog': '()',
+  'extend_catalog': '(catalog)',
+}
+
+
+def plain(fn) -> str:
+  sig = inspect.signature(fn)
+  return str(sig.replace(parameters=[p.replace(annotation=p.empty) for p in sig.parameters.values()],
+                         return_annotation=sig.empty))
+
+
+class TestTheSurface(OpenpilotTest):
+  def test_the_methods_the_fork_calls(self):
+    for name, expected in JETLINK.items():
+      with self.subTest(name):
+        self.assertEqual(plain(getattr(self.jl, name)), expected)
+
+  def test_the_entry_points_the_fork_names(self):
+    from jetlink.openpilot import owner, provision, warp
+    self.assertEqual(plain(owner.main), '(config)')
+    for module in (provision, warp):
+      self.assertEqual(plain(module.main), '(argv=None)', module)
+    self.assertEqual(plain(jo.bind), '(op)')
+    self.assertEqual(plain(jo.load_adapter), '(module)')
+
+  def test_bind_points_the_comma_layers_log_at_the_adapters(self):
+    # a heavy process's lines belong in the drive's log
+    self.assertIs(gadget.log, self.op.log)
+    self.assertIs(gadget.root.log, self.op.log)
+    self.assertIsInstance(self.jl, jo.Jetlink)
+    self.assertIs(self.jl.op, self.op)
+
+  def test_an_adapter_module_makes_its_adapter(self):
+    with mock.patch.dict('os.environ', {'JETLINK_FAKE_ROOT': str(self.tmp)}):
+      op = jo.load_adapter('tests.openpilot.fakes')
+    self.assertIsInstance(op, fakes.FakeOpenpilot)
+    self.assertEqual(op.root, self.tmp)
+
+
+class LenderFailureTest(OpenpilotTest):
+  """Only the owner holds ep0. When its lender cannot listen it keeps the
+  gadget, retries, and records why: that line is the offroad alert. modeld
+  still prepares, so its join picks the link up once the lender listens."""
+
+  def test_the_owners_lender_error_is_the_alert_not_a_no(self):
+    built = self.tmp / 'jetlink-gadget'
+    built.write_text('ok\n')
+    self.op.set_mode('usb')
+    self.patch(gadget, 'GADGET_STATUS', built)
+    self.patch(gadget, 'LENDER_STATUS', self.tmp / 'jetlink-lender')
+    self.patch(gadget, 'link_configured', return_value=True)
+    self.patch(self.jl.warps, 'built', return_value=True)
+    with mock.patch('jetlink.openpilot.warp.init_device'):
+      gadget.note_lender_error('address in use')
+      self.assertEqual(self.jl.status().reason, 'the lender could not listen: address in use')
+      self.assertFalse(self.jl.status().ready)
+      self.assertTrue(self.jl.prepare())
+      # cleared once the lender listens again
+      gadget.note_lender_error(None)
+      self.assertIsNone(self.jl.status().reason)
+
+
+class LoadTest(OpenpilotTest):
+  """modeld's two calls: prepare() before it goes realtime, attach() once the camera is up."""
+
+  def setUp(self):
+    super().setUp()
+    self.small = SimpleNamespace(name='small', client=None)
+    self.init_device = self.patch(sys.modules['jetlink.openpilot.warp'], 'init_device')
+
+  def prepared(self):
+    """prepare() down its yes path, with nothing real behind it."""
+    with mock.patch.object(self.jl, 'enabled', return_value=True), \
+         mock.patch.object(gadget, 'link_configured', return_value=True), \
+         mock.patch.object(self.jl.warps, 'built', return_value=True):
+      self.assertTrue(self.jl.prepare())
+    self.init_device.assert_called_once_with(self.op.log)
+
+  def test_no_warp_is_no_before_the_gpu_comes_up(self):
+    with mock.patch.object(self.jl, 'enabled', return_value=True), \
+         mock.patch.object(gadget, 'link_configured', return_value=True), \
+         mock.patch.object(self.jl.warps, 'built', return_value=False):
+      self.assertFalse(self.jl.prepare())
+    self.init_device.assert_not_called()
+    self.assertTrue(self.op.log.has('no warp built for this camera, staying on the small model'))
+
+  def test_no_usable_gadget_is_no_and_says_why(self):
+    with mock.patch.object(self.jl, 'enabled', return_value=True), \
+         mock.patch.object(gadget, 'link_configured', return_value=False), \
+         mock.patch.object(gadget, 'gadget_error', return_value='no configfs'):
+      self.assertFalse(self.jl.prepare())
+    self.init_device.assert_not_called()
+    self.assertTrue(self.op.log.has('no usable gadget (no configfs), staying on the small model'))
+
+  def test_the_link_off_says_no_before_any_setup(self):
+    with mock.patch.object(self.jl, 'enabled', return_value=False), \
+         mock.patch.object(gadget, 'link_configured') as link_configured:
+      self.assertFalse(self.jl.prepare())
+    link_configured.assert_not_called()
+
+  def test_yes_brings_the_gpu_up_first(self):
+    self.prepared()
+
+
+class TestShutdown(OpenpilotTest):
+  """hardwared's call at power-off: bounded, and it never raises."""
+
+  def setUp(self):
+    super().setUp()
+    self.op.set_mode('usb')
+
+  def test_disabled_costs_one_read_and_nothing_else(self):
+    self.op.set_mode('off')
+    with mock.patch.object(self.jl, '_request_shutdown') as request:
+      self.jl.shutdown('car battery')
+    request.assert_not_called()
+
+  def test_beside_a_chestnut_nothing_is_asked(self):
+    self.op.chestnut = True
+    with mock.patch.object(self.jl, '_request_shutdown') as request:
+      self.jl.shutdown('car battery')
+    request.assert_not_called()
+
+  def test_the_request_is_forwarded_with_the_bound(self):
+    with mock.patch.object(self.jl, '_request_shutdown') as request:
+      self.jl.shutdown('car battery', timeout=3.0)
+    request.assert_called_once_with('car battery', 3.0)
+
+  def test_a_request_that_hangs_cannot_hold_hardwared(self):
+    release = threading.Event()
+    self.addCleanup(release.set)
+    with mock.patch.object(self.jl, '_request_shutdown', side_effect=lambda *a: release.wait(30)):
+      t0 = time.monotonic()
+      self.jl.shutdown('car battery', timeout=0.2)
+      self.assertLess(time.monotonic() - t0, 2.0)
+    self.assertEqual(self.op.log.lines('warning'),
+                     ['jetlink: shutdown request still pending after 0 s, going on without it'])
+
+  def test_a_request_that_raises_is_logged_not_propagated(self):
+    with mock.patch.object(self.jl, '_request_shutdown', side_effect=RuntimeError('no')):
+      self.jl.shutdown('car battery', timeout=1.0)
+    self.assertEqual(self.op.log.lines('exception'), ['jetlink: shutdown request failed'])
+
+
+class ShuttingTheJetsonDown(OpenpilotTest):
+  """hardwared hands the request to the owner only when a Jetson is there to take it."""
+
+  def shutdown(self, mode='usb', present=True, requested=True, taken=True):
+    self.op.set_mode(mode)
+    with mock.patch.object(self.jl.presence, 'present', return_value=present), \
+         mock.patch.object(gadget, 'request_shutdown', return_value=requested) as request, \
+         mock.patch.object(self.jl, '_await_shutdown', return_value=taken) as wait:
+      self.jl._request_shutdown('car battery', 3.0)
+    return request, wait
+
+  def test_the_link_off_asks_nothing(self):
+    request, wait = self.shutdown(mode='off')
+    request.assert_not_called()
+    wait.assert_not_called()
+
+  def test_no_jetson_there_asks_nothing(self):
+    request, wait = self.shutdown(present=False)
+    request.assert_not_called()
+    wait.assert_not_called()
+
+  def test_a_jetson_there_is_asked_and_waited_for(self):
+    request, wait = self.shutdown()
+    request.assert_called_once_with('car battery')
+    wait.assert_called_once_with(3.0)
+    self.assertTrue(self.op.log.has('shutdown request handed to the jetson'))
+
+  def test_a_request_that_could_not_be_written_is_not_waited_on(self):
+    request, wait = self.shutdown(requested=False)
+    request.assert_called_once_with('car battery')
+    wait.assert_not_called()
+
+  def test_nobody_taking_it_is_logged(self):
+    self.shutdown(taken=False)
+    self.assertTrue(self.op.log.has('nobody took the shutdown request within 3 s'))
+
+
+class TestAwaitingTheOwner(unittest.TestCase):
+  def setUp(self):
+    self.tmp = Path(tempfile.mkdtemp())
+    p = mock.patch.object(gadget, 'SHUTDOWN_REQUEST', self.tmp / 'shutdown')
+    p.start()
+    self.addCleanup(p.stop)
+
+  def test_it_gives_up_and_cleans_up(self):
+    gadget.request_shutdown('car battery')
+    self.assertFalse(jo.Jetlink._await_shutdown(0.3))
+    self.assertIsNone(gadget.pending_shutdown())
+
+  def test_it_returns_when_taken(self):
+    gadget.request_shutdown('car battery')
+    gadget.finish_shutdown()
+    self.assertTrue(jo.Jetlink._await_shutdown(0.3))
+
+  def test_the_request_carries_the_reason(self):
+    gadget.request_shutdown('car battery')
+    self.assertEqual(json.loads(gadget.SHUTDOWN_REQUEST.read_text()), {'reason': 'car battery'})
+
+
+class TestExtendsCatalog(OpenpilotTest):
+  """Hardware, not the link setting: the model manager drops a pick its catalog
+  does not list, so a catalog that followed the setting lost one on a boot with
+  it off."""
+
+  def extends(self, chestnut=False, mode='off'):
+    self.op.chestnut = chestnut
+    self.op.set_mode(mode)
+    self.jl._chestnut = None
+    return self.jl.extends_catalog()
+
+  def test_without_a_chestnut_it_is_extended_whatever_the_setting(self):
+    self.assertTrue(self.extends(mode='off'))
+    self.assertTrue(self.extends(mode='usb'))
+
+  def test_a_chestnut_leaves_it_as_fetched(self):
+    self.assertFalse(self.extends(chestnut=True, mode='usb'))
+    self.assertFalse(self.extends(chestnut=True, mode='off'))
+
+
+if __name__ == '__main__':
+  unittest.main()

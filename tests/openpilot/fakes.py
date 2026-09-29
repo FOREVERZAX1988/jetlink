@@ -21,8 +21,12 @@ import os
 import sys
 import tempfile
 import time
+import unittest
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
+from unittest import mock
+
+import numpy as np
 
 from jetlink.openpilot.interface import MODES, Keys, ModelFace, OwnerConfig
 
@@ -206,3 +210,85 @@ def adapter() -> FakeOpenpilot:
 
 def owner_config() -> OwnerConfig:
   return adapter().owner()
+
+
+class OpenpilotTest(unittest.TestCase):
+  """A test with a fresh fake adapter and jetlink bound to it."""
+
+  def setUp(self):
+    from jetlink.comma import gadget
+    from jetlink.openpilot import bind
+    self.tmp = Path(tempfile.mkdtemp())
+    self.op = FakeOpenpilot(self.tmp)
+    # bind points jetlink.comma's log at the fake's; put it back after
+    p = mock.patch.object(gadget, 'log', gadget.log)
+    p.start()
+    self.addCleanup(p.stop)
+    p = mock.patch.object(gadget.root, 'log', gadget.root.log)
+    p.start()
+    self.addCleanup(p.stop)
+    self.jl = bind(self.op)
+
+  def patch(self, target, name, *args, **kwargs):
+    """mock.patch.object, undone after the test; the mock it made."""
+    p = mock.patch.object(target, name, *args, **kwargs)
+    self.addCleanup(p.stop)
+    return p.start()
+
+
+# -- tinygrad, over numpy -------------------------------------------------------
+# The fork's tinygrad is not jetlink's to install. What jetlink calls of it is
+# small, and these stand-ins do it with numpy; the fork's tests run the real one.
+
+class FakeTensor:
+  def __init__(self, data=None, device=None, dtype=None):
+    self.array = np.asarray(data) if data is not None else np.zeros(0)
+    self.device = device
+
+  def realize(self, *others):
+    return self
+
+  def assign(self, value):
+    self.array[...] = value
+    return self
+
+  def numpy(self):
+    return self.array
+
+  @staticmethod
+  def from_blob(ptr, shape, dtype=None, device=None):
+    return SimpleNamespace(ptr=ptr, shape=shape, device=device)
+
+  @staticmethod
+  def randint(*shape, low=0, high=256, dtype=None, device=None):
+    return FakeTensor(np.zeros(shape, dtype=np.uint8), device=device)
+
+
+class FakeDevice:
+  DEFAULT = 'CPU'
+  default = SimpleNamespace(synchronize=lambda: None)
+
+
+def fake_jit(fn=None, prune=False):
+  """TinyJit as a decorator or a wrapper: the function as it is."""
+  if fn is None:
+    return lambda f: f
+  return fn
+
+
+def fake_tinygrad(get_worker_pool=None) -> dict[str, ModuleType]:
+  """sys.modules entries for what jetlink imports of tinygrad; patch them in
+  with mock.patch.dict(sys.modules, fake_tinygrad())."""
+  def module(name, **attrs):
+    m = ModuleType(name)
+    m.__dict__.update(attrs)
+    return m
+  return {
+    'tinygrad': module('tinygrad', Tensor=FakeTensor, TinyJit=fake_jit, Device=FakeDevice),
+    'tinygrad.tensor': module('tinygrad.tensor', Tensor=FakeTensor),
+    'tinygrad.device': module('tinygrad.device', Device=FakeDevice),
+    'tinygrad.engine': module('tinygrad.engine'),
+    'tinygrad.engine.jit': module('tinygrad.engine.jit', TinyJit=fake_jit),
+    'tinygrad.engine.worker': module('tinygrad.engine.worker',
+                                     get_worker_pool=get_worker_pool or mock.Mock(name='get_worker_pool')),
+  }
