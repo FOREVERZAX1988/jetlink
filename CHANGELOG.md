@@ -11,7 +11,7 @@ Jetlink v0.7.0
 * **Update the comma and Jetlink together:** New link protocol; zoompilot's `jetson-trt` branch pins Jetlink v0.7.0. A comma on an older build stays on the small model.
 
 **General Updates & Fixes**
-* **Faster Link:** Frames about 5 ms quicker on the bench Jetson: 2.2 ms of USB transport (was 8.5). Replies are 8 KB (was 74 KB): the hidden state stays on the server. USB 3 power saving is off only while the comma is connected.
+* **Faster Link:** Big-model frames 3 to 5 ms quicker on the bench Jetson: 2.2 ms of USB transport (was 8.5). Replies are 8 KB (was 74 KB): the hidden state stays on the server. USB 3 power saving is off only while the comma is connected.
 * **Status Page:** Watch the server from your phone at `http://<name>.local:5600`.
 * **Stay Awake:** `jetlink caffeinate` keeps a Jetson awake while you work on it.
 * **iPhone:** Neural Engine + GPU is the default (14 ms a frame on an iPhone 18 Pro).
