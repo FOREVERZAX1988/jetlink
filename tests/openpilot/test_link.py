@@ -216,10 +216,14 @@ class BorrowingTheGadget(OpenpilotTest):
 
 class TestConnect(unittest.TestCase):
   """Which transport the client is opened over: whatever the owner lent, a
-  phone's dial or the endpoint files. Never the gadget itself."""
+  phone's dial or the endpoint files. Never the gadget itself. The choice is
+  JetlinkClient.open_loan's, which both borrowers go through."""
 
   def setUp(self):
-    self.client = mock.patch('jetlink.client.JetlinkClient').start()
+    from jetlink.client import JetlinkClient
+    self.client = mock.Mock(name='JetlinkClient')
+    for name in ('open_socket', 'open_borrowed_ffs', 'open_ffs'):
+      setattr(self.client, name, mock.patch.object(JetlinkClient, name).start())
     self.addCleanup(mock.patch.stopall)
     self.log = RecordingLog()
 

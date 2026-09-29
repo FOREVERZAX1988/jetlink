@@ -45,18 +45,16 @@ def connect(log, loan, deadline: float | None = None, name: str | None = None):
 
   Only the owner ever holds ep0, and it decided which link this is when it
   lent it: a phone's dial, which the link rides on, or the endpoint files,
-  which are all this end opens. `deadline` is per frame and defaults to
-  FRAME_TIMEOUT: modeld blocks on a frame the way it blocks on a chestnut.
-  `name` is what the server logs this connection as; two comma processes share
-  one gadget and the Jetson's journal has no clock to tell them apart by.
+  which are all this end opens; JetlinkClient.open_loan takes whichever it is.
+  `deadline` is per frame and defaults to FRAME_TIMEOUT: modeld blocks on a
+  frame the way it blocks on a chestnut. `name` is what the server logs this
+  connection as; two comma processes share one gadget and the Jetson's journal
+  has no clock to tell them apart by.
   """
   from jetlink.client import FRAME_TIMEOUT, JetlinkClient
-  deadline = FRAME_TIMEOUT if deadline is None else deadline
   if loan.sock is not None:
     log.warning("jetlink: connecting over the phone's dial (%s)", gadget.link_peer())
-    return JetlinkClient.open_socket(loan.sock, deadline=deadline, name=name)
-  return JetlinkClient.open_borrowed_ffs(loan.mount, loan.udc, bounce=loan.bounce,
-                                         deadline=deadline, name=name)
+  return JetlinkClient.open_loan(loan, deadline=FRAME_TIMEOUT if deadline is None else deadline, name=name)
 
 
 class Link:
