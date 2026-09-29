@@ -86,7 +86,10 @@ class StatusSide(Protocol):
     """A param's decoded value. None when unset or unknown to this build; never raises."""
 
   def owner(self) -> OwnerConfig:
-    """The owner's config, which is also where the settings files are."""
+    """The owner's config, which is also where the settings files are. Read
+    for every setting a heavy process reads (manager's should_run among them),
+    so it is cheap and never raises, and it follows OPENPILOT_PREFIX as Params
+    does."""
 
   def chestnut_present(self) -> bool:
     """Is comma's chestnut fitted? A USB walk; jetlink caches the answer."""
