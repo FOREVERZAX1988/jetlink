@@ -2,11 +2,11 @@ import JetlinkKit
 import JetlinkUI
 import SwiftUI
 
-/// Everything known about one model, shown in the Models inspector.
-struct ModelDetailView: View {
-  @Environment(ModelStore.self) private var models
+/// Everything known about one model, shown in the Models inspector, with the
+/// actions that apply to it right under its facts.
+struct ModelDetailView<Actions: View>: View {
   let row: ModelRow
-  @State private var confirmingDelete = false
+  @ViewBuilder let actions: Actions
 
   var body: some View {
     Form {
@@ -29,6 +29,8 @@ struct ModelDetailView: View {
           ModelStatusLabel(row.status)
         }
       }
+
+      actions
 
       Section("Prepared Engines") {
         if row.preparedFor.isEmpty {
@@ -53,17 +55,10 @@ struct ModelDetailView: View {
             }
             .padding(.vertical, 2)
           }
-          Button("Delete Prepared Engines…", role: .destructive) { confirmingDelete = true }
         }
       }
     }
     .formStyle(.grouped)
-    .alert("Delete the prepared engines?", isPresented: $confirmingDelete) {
-      Button("Delete", role: .destructive) { models.forget(row, artifacts: true, model: false) }
-      Button("Cancel", role: .cancel) {}
-    } message: {
-      Text("Deletes every prepared engine for \(row.displayName). Using it again prepares it again, which takes as long as the first time.")
-    }
     .frame(minWidth: 280)
   }
 
@@ -102,7 +97,12 @@ struct ModelDetailView: View {
 }
 
 #Preview {
-  ModelDetailView(row: PreviewData.loadedRow)
-    .environment(ModelStore.preview(catalog: PreviewData.catalog, inventory: PreviewData.inventory, engine: PreviewData.engineReady))
-    .frame(width: 320, height: 560)
+  ModelDetailView(row: PreviewData.loadedRow) {
+    Section("Actions") {
+      Button("Stop Using Model") {}
+      Button("Show in Finder") {}
+    }
+  }
+  .environment(ModelStore.preview(catalog: PreviewData.catalog, inventory: PreviewData.inventory, engine: PreviewData.engineReady))
+  .frame(width: 320, height: 560)
 }

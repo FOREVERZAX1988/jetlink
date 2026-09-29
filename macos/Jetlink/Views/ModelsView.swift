@@ -46,27 +46,19 @@ struct ModelsView: View {
           Button("Add Model File…", systemImage: "plus") { importing = true }
             .help("Add an ONNX model file from this Mac")
         }
+        // Only opens and closes the inspector, which holds the model's actions.
         ToolbarItem {
-          Menu {
-            if let row = selectedRow {
-              actionButtons(for: row)
-            }
-          } label: {
-            Label("Actions", systemImage: "ellipsis.circle")
+          Button(inspectorPresented ? "Hide Inspector" : "Show Inspector", systemImage: "sidebar.trailing") {
+            inspectorPresented.toggle()
           }
-          .disabled(selectedRow == nil)
-          .help("Actions for the selected model")
-        }
-        ToolbarItem {
-          Button("Inspector", systemImage: "info.circle") { inspectorPresented.toggle() }
-            .keyboardShortcut("i", modifiers: .command)
-            .help(inspectorPresented ? "Hide the model's details" : "Show the model's details")
+          .keyboardShortcut("i", modifiers: .command)
+          .help(inspectorPresented ? "Hide the model's details and actions" : "Show the model's details and actions")
         }
       }
       .inspector(isPresented: $inspectorPresented) {
         Group {
           if let row = selectedRow {
-            ModelDetailView(row: row)
+            ModelDetailView(row: row) { inspectorActions(for: row) }
           } else {
             ContentUnavailableView("No Model Selected", systemImage: "shippingbox", description: Text("Select a model to see its details."))
           }
@@ -203,28 +195,84 @@ struct ModelsView: View {
   /// Only what applies to this model, as a context menu should be.
   @ViewBuilder
   private func actionButtons(for row: ModelRow) -> some View {
+    useActions(for: row)
+    if revealURL(row) != nil {
+      Divider()
+      finderAction(for: row)
+    }
+    if hasDeletable(row) {
+      Divider()
+      deleteActions(for: row)
+    }
+  }
+
+  /// The context menu's actions as two rows of buttons: what to do with the
+  /// model, with the main one prominent, then the deletes in red.
+  @ViewBuilder
+  private func inspectorActions(for row: ModelRow) -> some View {
+    let hasMain = ModelStore.canUse(row) || isDownloading(row) || row.status == .loaded || revealURL(row) != nil
+    if hasMain || hasDeletable(row) {
+      Section("Actions") {
+        if hasMain {
+          HStack(spacing: 8) {
+            useActions(for: row)
+              .buttonStyle(.borderedProminent)
+            finderAction(for: row)
+            Spacer(minLength: 0)
+          }
+        }
+        if hasDeletable(row) {
+          // Side by side when the inspector is wide enough, stacked when not.
+          ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+              deleteActions(for: row)
+              Spacer(minLength: 0)
+            }
+            VStack(alignment: .leading, spacing: 6) { deleteActions(for: row) }
+          }
+          .foregroundStyle(.red)
+        }
+      }
+    }
+  }
+
+  @ViewBuilder
+  private func useActions(for row: ModelRow) -> some View {
     if ModelStore.canUse(row) {
       Button("Use Model") { startUse(row) }
     }
-    if case .downloading = row.status {
+    if isDownloading(row) {
       Button("Cancel Download") { models.cancelDownload(row) }
     }
     if row.status == .loaded {
       Button("Stop Using Model") { models.unload() }
     }
+  }
+
+  @ViewBuilder
+  private func finderAction(for row: ModelRow) -> some View {
     if let url = revealURL(row) {
-      Divider()
       Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
     }
-    if hasModelFile(row) || !row.preparedFor.isEmpty {
-      Divider()
-    }
+  }
+
+  @ViewBuilder
+  private func deleteActions(for row: ModelRow) -> some View {
     if hasModelFile(row) {
       Button("Delete Download…", role: .destructive) { confirmation = .deleteDownload(row) }
     }
     if !row.preparedFor.isEmpty {
       Button("Delete Prepared Engines…", role: .destructive) { confirmation = .deleteEngines(row) }
     }
+  }
+
+  private func isDownloading(_ row: ModelRow) -> Bool {
+    if case .downloading = row.status { return true }
+    return false
+  }
+
+  private func hasDeletable(_ row: ModelRow) -> Bool {
+    hasModelFile(row) || !row.preparedFor.isEmpty
   }
 
   private func startUse(_ row: ModelRow) {
