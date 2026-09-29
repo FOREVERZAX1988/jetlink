@@ -12,8 +12,8 @@
       public static func < (a: Level, b: Level) -> Bool { a.rawValue < b.rawValue }
     }
 
-    /// The least severe level written, for every logger in the process: a
-    /// daemon's --log-level. Set once at startup, before any thread logs.
+    /// The least severe level written, for every logger in the process:
+    /// `Log.threshold` sets it. Set once at startup, before any thread logs.
     nonisolated(unsafe) public static var threshold = Level.info
 
     private let label: String
@@ -32,7 +32,6 @@
       guard level >= Logger.threshold else { return }
       let line = "\(name) \(label): \(message.text)"
       FileHandle.standardError.write(Data((line + "\n").utf8))
-      LogRing.shared.append(line)
     }
   }
 
