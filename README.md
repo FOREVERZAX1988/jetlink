@@ -11,7 +11,8 @@
 **Jetlink is experimental.** It needs zoompilot's
 [`jetson-trt` branch](https://github.com/zoompilot/zoompilot/tree/jetson-trt);
 update the comma and Jetlink together.
-If the link drops while engaged, the comma soft-disables: take over.
+If the link drops or lags while engaged, the comma says **TAKE CONTROL** and
+stays engaged on the small model: be ready to take over.
 Read the [operating limits](docs/status.md) first.
 
 ## Quick start
@@ -116,11 +117,13 @@ Not yet run on a phone. You need:
 ## What to expect when driving
 
 * The small model drives until the large model is ready.
-* The large model takes over **at a stop with cruise off, or with lateral
-  control off**. With lateral control always on, disengaging alone is not enough.
-* Dimmed green icon: waiting to switch. **Big Model Ready**: switched.
-* **Big Model Lost** while engaged: take over. The comma soft-disables and
-  falls back to the small model.
+* The large model takes over only when nothing is engaged. Ready while you
+  drive engaged? The icon dims and the comma says **Big Model Ready:
+  Re-engage to switch**. Turn cruise fully off (and lateral control, if it
+  stays on), then engage again. No need to stop.
+* **Big Model Ready** chime: switched.
+* **TAKE CONTROL: Big model lost** while engaged: the link dropped or lagged.
+  openpilot stays engaged on the small model. Switch back the same way.
 
 More: [daily use and icon meanings](docs/using-jetlink.md).
 

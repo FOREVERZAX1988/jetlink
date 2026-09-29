@@ -1,7 +1,8 @@
 # Performance and operating limits
 
-Jetlink is experimental. If the link drops while engaged, the comma
-soft-disables: take over. See [daily use](using-jetlink.md).
+Jetlink is experimental. If the link drops or lags while engaged, the comma
+says **TAKE CONTROL** and stays engaged on the small model: be ready to take
+over. See [daily use](using-jetlink.md).
 
 <a id="status-and-known-limitations"></a>
 <a id="platform-testing"></a>

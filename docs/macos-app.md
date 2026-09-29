@@ -135,7 +135,7 @@ through macOS's USB framework, or listens on the TCP port for a bench client.
 | The server failed to start | Open **Logs**: the last lines say why. Usually another server holds the USB device (a `jetlink-server` in a terminal, say), or the cache folder is not writable. |
 | Stays on Waiting for comma | Use a USB 3 data cable, or a USB-A to USB-C cable with a USB-C adapter. Check **Accelerator Link** is **USB** under Settings > Models on the comma. |
 | Use Model takes a long time | Expect about 20 seconds to prepare and up to 10 to load. If it takes minutes, right-click the model in **Models**, choose **Delete Prepared Engines…**, and use it again. Close large apps to free memory. |
-| The comma says **Big Model Lost** | Check the cable. Turn on **Keep the Mac awake while serving** and keep the Mac on power. |
+| The comma says **Big model lost** | Check the cable. Turn on **Keep the Mac awake while serving** and keep the Mac on power. |
 | Everything rebuilt after an update | Expected: a new runtime prepares the model again. The download is kept. |
 | The model list is empty | Connect the Mac to the internet, then choose **Refresh** in **Models**. |
 | Slow frames, or rate below 20 | Check the cable and port. If another app is using the GPU or Neural Engine, choose **CoreML on the GPU** under Settings > Server. |

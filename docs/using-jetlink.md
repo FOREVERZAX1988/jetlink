@@ -22,13 +22,21 @@ to the comma.
 
 - The small model drives while the server starts (a switched-power Jetson has
   its prepared model ready about 30 seconds after power-on).
-- The large model takes over only when nothing is steering: **at a stop with
-  cruise off, or with lateral control off**. Until then the icon is dimmed and
-  the comma says **Big Model Available** at every stop. With lateral control
-  always on, disengaging alone is not enough.
-- **Big Model Ready** chime: it has taken over.
-- **Big Model Lost** while engaged is a soft disable: take over. The small model
-  drives; Jetlink reconnects and switches back at the next chance.
+- The large model takes over only when nothing is engaged. Connected while
+  you drive engaged, it waits: the icon dims and the comma says **Big Model
+  Ready: Re-engage to switch** once. To switch, turn cruise fully off (and
+  lateral control, if it stays on without cruise), then engage again. You do
+  not need to stop or restart the car; a stop with only lateral control on
+  also switches. Connected while nothing is engaged, it takes over at once.
+- **Big Model Ready** chime: it has taken over. For about a second after the
+  switch the comma will not engage (**Big Model Loading**) while the large
+  model builds its history.
+- **TAKE CONTROL: Big model lost, small model driving** while engaged: the link
+  dropped, or the large model fell behind (one frame over 100 ms, or two over
+  75 ms within 10 seconds). openpilot stays engaged on the small model, which
+  starts without history: be ready to take over for the next few seconds.
+  Jetlink reconnects in the background, at once if you plug the cable back
+  in; switch back the same way.
 
 ## Parking and waking a Jetson
 
