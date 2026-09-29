@@ -95,6 +95,7 @@
     "load_only" : false,
     "msg" : "",
     "sha256" : "a086d5249fc308bb7c0ffbcbb2b8a53c3f6b1f0a1d2c3b4a5e6f7081920304050",
+    "stage" : null,
     "state" : "ready"
   },
   "history" : [
@@ -103,6 +104,7 @@
       "stats" : {
         "fps" : 19.899999999999999,
         "frames" : 12345,
+        "gpu_ms" : null,
         "served_ms" : {
           "max" : 41.899999999999999,
           "mean" : 31.600000000000001,
@@ -115,6 +117,7 @@
           "queue" : 0.59999999999999998,
           "send" : 0.40000000000000002
         },
+        "total_ms" : null,
         "window_s" : 1
       }
     }
@@ -177,6 +180,7 @@
           "build_seconds" : 190.5,
           "built_at" : "2026-09-28T10:00:00Z",
           "bytes" : 800000000,
+          "checkpoint" : null,
           "current" : true,
           "device" : "htp-SM8650",
           "key" : "a086d5249fc308bb.ort1.29.0.htp-SM8650",
@@ -196,6 +200,7 @@
   "recent" : {
     "fps" : 19.899999999999999,
     "frames" : 12345,
+    "gpu_ms" : null,
     "served_ms" : {
       "max" : 41.899999999999999,
       "mean" : 31.600000000000001,
@@ -208,6 +213,7 @@
       "queue" : 0.59999999999999998,
       "send" : 0.40000000000000002
     },
+    "total_ms" : null,
     "window_s" : 1
   },
   "running" : true,

@@ -22,14 +22,9 @@ enum Fixture {
   }
 }
 
-/// onnxruntime's CPU provider, which every platform's tests run the model on:
-/// under the CoreML backend on Apple platforms, under QNN's elsewhere.
+/// onnxruntime's CPU provider, which every platform's tests run the model on.
 func cpuBackend() -> any EngineBackend {
-  #if canImport(Metal)
-    CoreMLBackend(device: .cpu, preparer: ONNXPreparer(), keepAlive: false)
-  #else
-    QNNBackend(device: .cpu, preparer: ONNXPreparer(), keepAlive: false)
-  #endif
+  OrtBackend(profile: .cpu, preparer: ONNXPreparer(), keepAlive: false)
 }
 
 /// Whether `condition` holds within `timeout`. The session counts a frame

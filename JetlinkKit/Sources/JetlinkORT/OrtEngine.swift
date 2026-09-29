@@ -32,15 +32,11 @@ public struct SessionPlan: Sendable, Equatable {
     self.usesNeuralEngine = usesNeuralEngine
   }
 
-  /// A CoreML session on `computeUnits` ("CPUAndNeuralEngine", "CPUAndGPU",
-  /// "ALL", or nil for the CPU provider alone), with CoreML's compiled model
-  /// kept in `cacheDirectory` so a load does not compile again. The provider
-  /// options are the ones the Python backend passes (backends/ort/__init__.py).
-  public init(model: URL, computeUnits: String?, cacheDirectory: URL?) {
-    guard let computeUnits else {
-      self.init(model: model, provider: nil, label: "CPU")
-      return
-    }
+  /// A CoreML session on `computeUnits` ("CPUAndNeuralEngine", "CPUAndGPU"
+  /// or "ALL"), with CoreML's compiled model kept in `cacheDirectory` so a
+  /// load does not compile again. The provider options are the ones the
+  /// Python backend passes (backends/ort/__init__.py).
+  public init(model: URL, computeUnits: String, cacheDirectory: URL?) {
     let neuralEngine = computeUnits == "CPUAndNeuralEngine" || computeUnits == "ALL"
     var options = [
       "ModelFormat": "MLProgram",

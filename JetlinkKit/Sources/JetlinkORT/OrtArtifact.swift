@@ -2,9 +2,9 @@ import Foundation
 import JetlinkKit
 import JetlinkServer
 
-/// An onnxruntime artifact as both backends build and load it: a directory
+/// An onnxruntime artifact as OrtBackend builds and loads it: a directory
 /// holding each session's model and a `sessions.json` manifest naming them,
-/// with the sidecar beside it (CoreMLBackend, QNNBackend).
+/// with the sidecar beside it.
 enum OrtArtifact {
   static let manifestName = "sessions.json"
 
@@ -17,7 +17,7 @@ enum OrtArtifact {
   /// another version, a session's model is missing, or `check` says what is
   /// wrong with an entry.
   static func open(
-    _ artifact: URL, prepareVersion: Int, builds: String, check: ([String: Any]) -> String? = { _ in nil }
+    _ artifact: URL, check: ([String: Any]) -> String? = { _ in nil }
   ) throws -> (manifest: [[String: Any]], meta: [String: Any]) {
     let name = artifact.lastPathComponent
     guard let data = try? Data(contentsOf: artifact.appending(path: manifestName)),
@@ -27,8 +27,8 @@ enum OrtArtifact {
     }
     let meta = Artifact.sidecar(artifact)
     let version = (meta["prepare"] as? NSNumber)?.intValue ?? 1
-    if version != prepareVersion {
-      throw ArtifactInvalid("\(name): prepared as version \(version), \(builds) builds are now at \(prepareVersion); rebuilding")
+    if version != OrtBackend.prepareVersion {
+      throw ArtifactInvalid("\(name): prepared as version \(version), onnxruntime builds are now at \(OrtBackend.prepareVersion); rebuilding")
     }
     for entry in manifest {
       guard let model = entry["model"] as? String, FileManager.default.fileExists(atPath: artifact.appending(path: model).path) else {
@@ -43,12 +43,12 @@ enum OrtArtifact {
 
   /// The sidecar keys every build writes, as the Python backend names them.
   static func meta(
-    _ backend: any EngineBackend, manifest: [[String: Any]], providers: [String], model: URL, prepareVersion: Int, started: Date
+    _ backend: any EngineBackend, manifest: [[String: Any]], providers: [String], model: URL, started: Date
   ) -> [String: Any] {
     var meta = Artifact.meta(backend, runtimeKey: "onnxruntime", model: model, started: started)
     meta["sessions"] = manifest
     meta["providers"] = providers
-    meta["prepare"] = prepareVersion
+    meta["prepare"] = OrtBackend.prepareVersion
     meta["preparer"] = "swift"
     return meta
   }

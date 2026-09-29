@@ -8,7 +8,7 @@ enum BackendChoice: String, CaseIterable, Codable, Sendable {
   case auto, coreml
 
   /// What the Swift server is asked to be.
-  var device: CoreMLBackend.Device {
+  var profile: OrtProfile {
     switch self {
     case .auto: .ane
     case .coreml: .coreml

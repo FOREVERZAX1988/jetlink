@@ -83,22 +83,19 @@
     /// onnxruntime: CoreML on a Mac, its CPU provider on Linux, where the
     /// library is opened at run time and may be missing.
     func ort() throws -> any EngineBackend {
-      #if canImport(Metal)
-        let name = device ?? CoreMLBackend.Device.ane.rawValue
-        guard let unit = CoreMLBackend.Device(rawValue: name) else {
-          throw BackendUnusable("onnxruntime has no device \(name) here: ane, ane-whole, coreml or cpu")
-        }
-        return CoreMLBackend(device: unit, preparer: ONNXPreparer(), keepAlive: keepAlive, keepCPUWarm: keepCPUWarm)
-      #else
-        let name = device ?? QNNBackend.Device.cpu.rawValue
-        guard name == QNNBackend.Device.cpu.rawValue else { throw BackendUnusable("onnxruntime runs on the CPU here, not \(name)") }
+      let available = OrtProfile.available
+      let name = device ?? available[0].rawValue
+      guard let profile = OrtProfile(rawValue: name), available.contains(profile) else {
+        throw BackendUnusable("onnxruntime has no device \(name) here: \(available.map(\.rawValue).joined(separator: ", "))")
+      }
+      #if !canImport(Metal)
         do {
           try OrtRuntime.load()
         } catch {
           throw BackendUnusable(String(describing: error))
         }
-        return QNNBackend(device: .cpu, preparer: ONNXPreparer(), keepAlive: keepAlive, keepCPUWarm: keepCPUWarm)
       #endif
+      return OrtBackend(profile: profile, preparer: ONNXPreparer(), keepAlive: keepAlive, keepCPUWarm: keepCPUWarm)
     }
 
     /// Each backend in the order `auto` tries them, made or refused.
