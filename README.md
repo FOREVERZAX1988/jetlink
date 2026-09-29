@@ -121,7 +121,7 @@ Not yet run on a phone. You need:
   drive engaged? The icon dims and the comma says **Big Model Ready:
   Re-engage to switch**. Turn cruise fully off (and lateral control, if it
   stays on), then engage again. No need to stop.
-* **Big Model Ready** chime: switched.
+* **Big Model Active** chime, a second after the switch: engage on it.
 * **TAKE CONTROL: Big model lost** while engaged: the link dropped or lagged.
   openpilot stays engaged on the small model. Switch back the same way.
 

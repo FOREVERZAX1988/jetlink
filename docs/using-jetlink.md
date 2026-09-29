@@ -29,9 +29,10 @@ to the comma.
   not need to stop or restart the car, and a stop does not switch while
   lateral control is on. Connected while nothing is engaged, it takes over at
   once.
-- **Big Model Ready** chime: it has taken over. For about a second after the
-  switch the comma will not engage (**Big Model Loading**) while the large
-  model builds its history.
+- **Big Model Active** chime, about a second after the switch: it has taken
+  over and you can engage. Inside that second cruise will not engage (**Big
+  Model Loading**) while the large model builds its history; lateral control
+  turned on then comes on by itself when the second ends.
 - **TAKE CONTROL: Big model lost, small model driving** while engaged: the link
   dropped, or the large model fell behind (one frame over 100 ms, or two over
   75 ms within 10 seconds). openpilot stays engaged on the small model, which
