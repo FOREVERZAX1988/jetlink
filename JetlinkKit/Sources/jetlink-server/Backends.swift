@@ -13,14 +13,6 @@
     case auto, trt, ort
   }
 
-  struct BackendUnusable: Error, CustomStringConvertible {
-    let description: String
-
-    init(_ description: String) {
-      self.description = description
-    }
-  }
-
   /// --backend and --device, as every command that runs a model takes them.
   struct BackendArguments: ParsableArguments {
     @Option(help: "auto, trt or ort. auto takes TensorRT where it loads, else onnxruntime; a named one that cannot run here is an error.")
@@ -75,18 +67,14 @@
       #if os(Linux)
         var index = 0
         if let device {
-          guard let parsed = Int(device), parsed >= 0 else { throw BackendUnusable("--device \(device) is not a CUDA device index") }
+          guard let parsed = Int(device), parsed >= 0 else { throw HostError.invalid("--device \(device) is not a CUDA device index") }
           index = parsed
         }
         let faultAfter = ProcessInfo.processInfo.environment["JETLINK_FAULT_CUDA_AFTER"].flatMap { Int($0) }
-        do {
-          return TrtBackend(
-            trt: try TensorRT(device: index), gpuTiming: gpuTiming, faultAfter: faultAfter, available: { Platform.memAvailableBytes() })
-        } catch {
-          throw BackendUnusable(String(describing: error))
-        }
+        return TrtBackend(
+          trt: try TensorRT(device: index), gpuTiming: gpuTiming, faultAfter: faultAfter, available: { Platform.memAvailableBytes() })
       #else
-        throw BackendUnusable("TensorRT runs on Linux only")
+        throw HostError.invalid("TensorRT runs on Linux only")
       #endif
     }
 
@@ -96,51 +84,34 @@
       let available = OrtProfile.available
       let name = device ?? available[0].rawValue
       guard let profile = OrtProfile(rawValue: name), available.contains(profile) else {
-        throw BackendUnusable("onnxruntime has no device \(name) here: \(available.map(\.rawValue).joined(separator: ", "))")
+        throw HostError.invalid("onnxruntime has no device \(name) here: \(available.map(\.rawValue).joined(separator: ", "))")
       }
       #if !canImport(Metal)
-        do {
-          try OrtRuntime.load()
-        } catch {
-          throw BackendUnusable(String(describing: error))
-        }
+        try OrtRuntime.load()
       #endif
       return OrtBackend(profile: profile, preparer: ONNXPreparer(), keepAlive: keepAlive, keepCPUWarm: keepCPUWarm)
     }
 
-    /// Each backend in the order `auto` tries them, made or refused.
-    func candidates() -> [(name: BackendName, backend: Result<any EngineBackend, BackendUnusable>)] {
-      [(.trt, attempt(trt)), (.ort, attempt(ort))]
+    /// `trt` or `ort`, made or refused.
+    func make(_ name: BackendName) -> Result<any EngineBackend, any Error> {
+      Result { name == .trt ? try trt() : try ort() }
     }
 
-    /// The backend `name` asks for, or why there is none. `auto` says why it
-    /// passed over each one it did not take.
-    func pick(_ name: BackendName, skipped: (BackendName, BackendUnusable) -> Void = { _, _ in }) throws -> any EngineBackend {
-      switch name {
-      case .trt: return try trt()
-      case .ort: return try ort()
-      case .auto:
-        var reasons: [String] = []
-        for (candidate, made) in candidates() {
-          switch made {
-          case .success(let backend): return backend
-          case .failure(let why):
-            skipped(candidate, why)
-            reasons.append("\(candidate.rawValue): \(why)")
-          }
+    /// The backend `name` asks for, or why there is none. `auto` tries
+    /// TensorRT, then onnxruntime, and says why it passed over each one it
+    /// did not take.
+    func pick(_ name: BackendName, skipped: (BackendName, any Error) -> Void = { _, _ in }) throws -> any EngineBackend {
+      guard name == .auto else { return try make(name).get() }
+      var reasons: [String] = []
+      for candidate in [BackendName.trt, .ort] {
+        switch make(candidate) {
+        case .success(let backend): return backend
+        case .failure(let why):
+          skipped(candidate, why)
+          reasons.append("\(candidate.rawValue): \(why)")
         }
-        throw BackendUnusable("no backend can run here (\(reasons.joined(separator: "; ")))")
       }
-    }
-
-    private func attempt(_ make: () throws -> any EngineBackend) -> Result<any EngineBackend, BackendUnusable> {
-      do {
-        return .success(try make())
-      } catch let why as BackendUnusable {
-        return .failure(why)
-      } catch {
-        return .failure(BackendUnusable(String(describing: error)))
-      }
+      throw HostError.failed("no backend can run here (\(reasons.joined(separator: "; ")))")
     }
   }
 
@@ -150,26 +121,23 @@
     static let configuration = CommandConfiguration(
       commandName: "backends",
       abstract: "List the backends and why each can or cannot run here.",
-      discussion: "Exits 0 when the backend --backend names can run: auto's pick by default, so --backend trt asks for TensorRT and a GPU.")
+      discussion: "Exits 0 when one can: --backend trt tries TensorRT alone, so it asks for a GPU.")
 
     @OptionGroup var chosen: BackendArguments
 
     func run() throws {
-      let found = chosen.options().candidates()
-      for (name, made) in found {
-        switch made {
+      let options = chosen.options()
+      var usable = false
+      for name in chosen.backend == .auto ? [BackendName.trt, .ort] : [chosen.backend] {
+        switch options.make(name) {
         case .success(let backend):
-          let runtime = backend.name == BackendName.trt.rawValue ? "TensorRT" : "onnxruntime"
-          print("\(name.rawValue): usable: \(runtime) \(backend.runtimeVersion) on \(backend.deviceTag())")
+          print("\(name.rawValue): usable: \(name == .trt ? "TensorRT" : "onnxruntime") \(backend.runtimeVersion) on \(backend.deviceTag())")
+          usable = true
         case .failure(let why):
           print("\(name.rawValue): not usable: \(why)")
         }
       }
-      let usable = found.first { (name, made) in
-        guard case .success = made else { return false }
-        return chosen.backend == .auto || chosen.backend == name
-      }
-      guard usable != nil else { throw ExitCode.failure }
+      guard usable else { throw ExitCode.failure }
     }
   }
 #endif

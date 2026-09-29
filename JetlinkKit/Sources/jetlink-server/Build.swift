@@ -19,7 +19,7 @@
     @OptionGroup var chosen: BackendArguments
     @OptionGroup var cache: CacheArguments
     @Option(help: "debug, info, warning or error.")
-    var logLevel = LogLevel.info
+    var logLevel = Log.Level.info
 
     func validate() throws {
       guard frameSkip > 0 else { throw ValidationError("--frame-skip must be at least 1") }
@@ -27,36 +27,64 @@
 
     func run() throws {
       setUpLogging(logLevel)
-      try buildEngine(model: URL(fileURLWithPath: onnx), frameSkip: frameSkip, backend: chosen.pick(), root: cache.root)
+      let backend = try chosen.pick()
+      let (model, frameSkip, root) = (URL(fileURLWithPath: onnx), frameSkip, cache.root)
+      try blocking { try await buildEngine(model: model, frameSkip: frameSkip, backend: backend, root: root) }
     }
   }
 
-  /// Builds the engine for `model` into the cache at `root`, unless it is
-  /// there. Logs each stage every 2 %, carries the spec into the sidecar as
-  /// a served build does, so the first comma loads rather than reparses, and
-  /// with nothing recorded as loaded last, records this model so the next
-  /// server start preloads it. Throws ExitCode.failure after logging why.
-  func buildEngine(model: URL, frameSkip: Int, backend: any EngineBackend, root: URL) throws {
+  /// Builds `model`'s engine into the cache at `root` unless it is there,
+  /// and loads it once, through the controller's prepare: the one path that
+  /// builds and loads an engine, as a comma's request does. The model is
+  /// taken into the cache first, where a plan that goes stale is rebuilt
+  /// from, unless `sha256` says it is there already. The sidecar carries the
+  /// spec, and the model is what the next server start here preloads.
+  /// Throws ExitCode.failure after logging why.
+  func buildEngine(model: URL, sha256 known: String? = nil, frameSkip: Int, backend: any EngineBackend, root: URL) async throws {
     let log = ServerLog(category: "main")
     do {
       log.info("backend \(backend.name) \(backend.runtimeVersion) on \(backend.deviceTag()), cache \(root.path)")
-      let cache = try ServerCache(root: root, backend: backend)
-      let (sha256, nbytes) = try Registry.hashFile(model)
-      let entry = try cache.entry(sha256)
-      log.info("model \(sha256.prefix(16)) (\(nbytes >> 20) MB) -> \(entry.path.path)")
-      if entry.exists {
-        log.info("already built: \(sidecar(entry))")
-        return
+      let server = try Server(configuration: Server.Configuration(cacheRoot: root, preload: false, listen: false), backend: backend)
+      defer { server.shutdown() }
+      var sha256 = known
+      if sha256 == nil {
+        sha256 = try await Registry(layout: server.cache.layout).importModel(at: model).sha256
       }
-      let spec = try backend.deriveSpec(model: model, sha256: sha256, nbytes: nbytes, frameSkip: frameSkip)
-      try backend.build(model: model, artifact: entry.path, report: stageLog { log.info($0) }, metaExtra: ["spec": spec.dictionary()])
-      log.info("built: \(sidecar(entry))")
-      if cache.lastLoaded() == nil {
-        cache.rememberLoaded(sha256, frameSkip: spec.frameSkip)
-      }
+      let entry = try server.cache.entry(sha256!)
+      let built = entry.exists
+      log.info("model \(sha256!.prefix(16)) -> \(entry.path.path)")
+      try await prepare(sha256!, frameSkip: frameSkip, on: server)
+      log.info("\(built ? "already built" : "built"): \(sidecar(entry))")
     } catch {
       log.error("could not build \(model.path): \(error)")
       throw ExitCode.failure
+    }
+  }
+
+  /// Loads `sha256` through the controller's prepare, building its engine
+  /// first when there is none, and waits for it, logging each stage.
+  func prepare(_ sha256: String, frameSkip: Int, on server: Server) async throws {
+    let log = ServerLog(category: "main")
+    let progress = stageLog { log.info($0) }
+    let (ended, ending) = AsyncStream<Void>.makeStream()
+    server.host.subscribe { event in
+      switch event {
+      case .progress(let stage, let frac, let msg): progress(stage, frac, msg)
+      case .engine(let engine) where engine.sha256 == sha256 && (engine.state == .ready || engine.state == .failed): ending.yield()
+      default: break
+      }
+    }
+    let controller = ServerController(server: server, registry: Registry(layout: server.cache.layout))
+    let reply = await controller.handle(.prepare(sha256: sha256, frameSkip: frameSkip))
+    guard reply.ok else { throw HostError.failed(reply.error ?? "could not load \(sha256.prefix(16))") }
+    let started = server.host.snapshot()
+    guard started.sha256 == sha256, started.state != .none else {
+      throw HostError.failed("could not load \(sha256.prefix(16)): its sidecar has no spec and the model is not here")
+    }
+    for await _ in ended { break }
+    let engine = server.host.snapshot()
+    guard engine.state == .ready, engine.sha256 == sha256 else {
+      throw HostError.failed("could not load \(sha256.prefix(16)): \(engine.detail)")
     }
   }
 
@@ -121,7 +149,7 @@
     @OptionGroup var chosen: BackendArguments
     @OptionGroup var cache: CacheArguments
     @Option(help: "debug, info, warning or error.")
-    var logLevel = LogLevel.info
+    var logLevel = Log.Level.info
 
     func validate() throws {
       guard seconds > 0 && seconds <= 3600 else { throw ValidationError("--seconds must be above 0 and at most 3600") }
@@ -144,7 +172,8 @@
         guard try server.cache.entry(wanted).exists else {
           throw HostError.failed("\(wanted.prefix(16)) is not built for \(backend.tag()): build it first")
         }
-        try load(wanted, frameSkip: frameSkip ?? (last?.sha256 == wanted ? last!.frameSkip : Pinned.defaultFrameSkip), on: server)
+        let frameSkip = frameSkip ?? (last?.sha256 == wanted ? last!.frameSkip : Pinned.defaultFrameSkip)
+        try blocking { try await prepare(wanted, frameSkip: frameSkip, on: server) }
         // The report goes to stdout alone, where a script reads it.
         let report = try server.host.benchmark(seconds: seconds, run: BenchmarkRun(), logsReport: false)
         print(report.text)
@@ -153,33 +182,6 @@
       } catch {
         log.error("\(error)")
         throw ExitCode.failure
-      }
-    }
-
-    /// Loads the model through the host's own request, the one piece of
-    /// code that loads an engine, and waits for it.
-    private func load(_ sha256: String, frameSkip: Int, on server: Server) throws {
-      let done = DispatchSemaphore(value: 0)
-      let log = ServerLog(category: "main")
-      let progress = stageLog { log.info($0) }
-      server.host.subscribe { event in
-        switch event {
-        case .progress(let stage, let frac, let msg): progress(stage, frac, msg)
-        case .engine(let engine) where engine.sha256 == sha256 && (engine.state == .ready || engine.state == .failed): done.signal()
-        default: break
-        }
-      }
-      let controller = ServerController(server: server, registry: Registry(layout: server.cache.layout))
-      let reply = try blocking { await controller.handle(.prepare(sha256: sha256, frameSkip: frameSkip)) }
-      guard reply.ok else { throw HostError.failed(reply.error ?? "could not load \(sha256.prefix(16))") }
-      let started = server.host.snapshot()
-      guard started.sha256 == sha256, started.state != .none else {
-        throw HostError.failed("could not load \(sha256.prefix(16)): its sidecar has no spec and the model is not here")
-      }
-      done.wait()
-      let engine = server.host.snapshot()
-      guard engine.state == .ready, engine.sha256 == sha256 else {
-        throw HostError.failed("could not load \(sha256.prefix(16)): \(engine.detail)")
       }
     }
   }

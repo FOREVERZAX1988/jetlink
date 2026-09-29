@@ -26,25 +26,16 @@
       err: { FileHandle.standardError.write(Data($0.utf8)) })
   }
 
-  /// A request the command turns down before asking the registry.
-  struct Refusal: Error, CustomStringConvertible {
-    let description: String
-
-    init(_ description: String) {
-      self.description = description
-    }
-  }
-
   protocol ModelsCommand: ParsableCommand, Sendable {
     /// What goes to stderr besides the progress: warnings, as jetlink-models
     /// showed, so the registry's own lines stay out of a script's way.
-    static var logLevel: LogLevel { get }
+    static var logLevel: Log.Level { get }
     var cache: CacheArguments { get }
     func run(_ registry: Registry, _ console: Console) async throws
   }
 
   extension ModelsCommand {
-    static var logLevel: LogLevel { .warning }
+    static var logLevel: Log.Level { .warning }
 
     func run() throws {
       setUpLogging(Self.logLevel)
@@ -135,7 +126,7 @@
       @OptionGroup var cache: CacheArguments
 
       func run(_ registry: Registry, _ console: Console) async throws {
-        guard CacheLayout.isRef(ref) else { throw Refusal("'\(ref)' is not a 40 character commit") }
+        guard CacheLayout.isRef(ref) else { throw HostError.invalid("'\(ref)' is not a 40 character commit") }
         let pointer = try await registry.resolve(ref: ref)
         console.out(json ? try jsonText(["ref": ref, "sha256": pointer.oid, "bytes": pointer.size] as [String: Any]) : "\(pointer.oid) \(pointer.size)")
       }
@@ -182,10 +173,13 @@
       @OptionGroup var cache: CacheArguments
 
       func run(_ registry: Registry, _ console: Console) async throws {
-        // `current` marks the engine a server started here would load: the
-        // one of the backend auto picks, when one can run.
-        let backend = try? BackendOptions().pick(.auto)
-        let payload = registry.inventory(artifactTag: backend?.tag(), artifactSuffix: backend?.suffix ?? "", loaded: nil)
+        // `current` marks the engines built for what a server here loaded
+        // last: its newest engine's tag. From the cache alone, so listing
+        // never opens the GPU.
+        let untagged = registry.inventory(artifactTag: nil, artifactSuffix: "", loaded: nil)
+        let last = untagged.artifacts.filter { $0.sha256 == untagged.lastLoaded }.max { ($0.builtAt ?? "") < ($1.builtAt ?? "") }
+        // a key is "<sha16>.<tag>"
+        let payload = last.map { registry.inventory(artifactTag: String($0.key.dropFirst(17)), artifactSuffix: "", loaded: nil) } ?? untagged
         if json {
           console.out(try jsonText(ControlEvent.inventory(payload).payload()))
           return
@@ -221,8 +215,8 @@
       @OptionGroup var cache: CacheArguments
 
       func run(_ registry: Registry, _ console: Console) async throws {
-        guard artifacts || model else { throw Refusal("say what to remove, --artifacts or --model or both") }
-        guard CacheLayout.isSHA256(sha256) else { throw Refusal("'\(sha256)' is not a 64 character sha256") }
+        guard artifacts || model else { throw HostError.invalid("say what to remove, --artifacts or --model or both") }
+        guard CacheLayout.isSHA256(sha256) else { throw HostError.invalid("'\(sha256)' is not a 64 character sha256") }
         try registry.remove(sha256: sha256, artifacts: artifacts, model: model)
         let removed = [("engines", artifacts), ("the model", model)].filter(\.1).map(\.0).joined(separator: " and ")
         console.out("removed \(removed) for \(sha256.prefix(16))")
@@ -240,12 +234,13 @@
       @OptionGroup var cache: CacheArguments
 
       /// The build's stage lines are what shows it working.
-      static var logLevel: LogLevel { .info }
+      static var logLevel: Log.Level { .info }
 
       func run(_ registry: Registry, _ console: Console) async throws {
         console.err("building outside the server; stop any running jetlink-server that uses this cache first\n")
         let path = try await fetch(refOrSHA256, registry, console)
-        try buildEngine(model: path, frameSkip: Pinned.defaultFrameSkip, backend: chosen.pick(), root: registry.layout.root)
+        let sha256 = CacheLayout.isSHA256(refOrSHA256) ? refOrSHA256 : try await registry.resolve(ref: refOrSHA256).oid
+        try await buildEngine(model: path, sha256: sha256, frameSkip: Pinned.defaultFrameSkip, backend: chosen.pick(), root: registry.layout.root)
       }
     }
   }

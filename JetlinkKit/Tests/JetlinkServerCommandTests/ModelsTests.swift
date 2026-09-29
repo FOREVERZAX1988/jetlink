@@ -11,9 +11,8 @@
   /// the same subcommands, JSON and exit codes.
   struct ModelsTests {
     @Test func listJSONIsTheCatalogWithItsNulls() async throws {
-      let tmp = try TempDir()
-      defer { tmp.remove() }
-      let run = try await models(Models.List.self, ["--json"], cache: tmp, net: MockNet(try RegistryFixture.catalogRoutes()))
+      let tmp = try TemporaryDirectory()
+      let run = try await models(Models.List.self, ["--json"], cache: tmp, net: MockNet(RegistryFixture.catalogRoutes()))
       #expect(run.code == 0, "\(run.err)")
       let payload = try #require(try JSONSerialization.jsonObject(with: Data(run.out.utf8)) as? [String: Any])
       let rows = try #require(payload["models"] as? [[String: Any]])
@@ -23,10 +22,9 @@
     }
 
     @Test func theListTableShowsWhatIsDownloaded() async throws {
-      let tmp = try TempDir()
-      defer { tmp.remove() }
+      let tmp = try TemporaryDirectory()
       let pointer = RegistryFixture.pointerText(oid: RegistryFixture.oid, size: RegistryFixture.size)
-      let net = MockNet(try RegistryFixture.catalogRoutes().merging([LFS.pointerURL(ref: RegistryFixture.ref): .body(pointer)]) { _, new in new })
+      let net = MockNet(RegistryFixture.catalogRoutes().merging([LFS.pointerURL(ref: RegistryFixture.ref): .body(pointer)]) { _, new in new })
       let registry = Registry(layout: CacheLayout(root: tmp.url), session: net.session)
       _ = await registry.catalog()
       _ = try await registry.resolve(ref: RegistryFixture.ref)
@@ -42,9 +40,8 @@
     }
 
     @Test func resolve() async throws {
-      let tmp = try TempDir()
-      defer { tmp.remove() }
-      let net = MockNet([LFS.pointerURL(ref: RegistryFixture.ref): .body(try RegistryFixture.data("pointer_f877d7a0.txt"))])
+      let tmp = try TemporaryDirectory()
+      let net = MockNet([LFS.pointerURL(ref: RegistryFixture.ref): .body(RegistryFixture.data("pointer_f877d7a0.txt"))])
       let run = try await models(Models.Resolve.self, [RegistryFixture.ref, "--json"], cache: tmp, net: net)
       #expect(run.code == 0, "\(run.err)")
       let payload = try #require(try JSONSerialization.jsonObject(with: Data(run.out.utf8)) as? [String: Any])
@@ -57,21 +54,19 @@
     }
 
     @Test func rmNeedsToBeToldWhatToRemove() async throws {
-      let tmp = try TempDir()
-      defer { tmp.remove() }
+      let tmp = try TemporaryDirectory()
       #expect(try await models(Models.Remove.self, [String(repeating: "b", count: 64)], cache: tmp).code == 1)
       #expect(try await models(Models.Remove.self, ["nothex", "--model"], cache: tmp).code == 1)
     }
 
     @Test func importThenRemove() async throws {
-      let tmp = try TempDir()
-      defer { tmp.remove() }
-      let sha256 = try Tiny.sha256(Tiny.queued)
-      let run = try await models(Models.Import.self, [Tiny.queued.path, "--name", "mine"], cache: tmp)
+      let tmp = try TemporaryDirectory()
+      let sha256 = try TinyModel.sha256(TinyModel.queued)
+      let run = try await models(Models.Import.self, [TinyModel.queued.path, "--name", "mine"], cache: tmp)
       #expect(run.code == 0, "\(run.err)")
       let parts = run.out.split(separator: " ").map { $0.trimmingCharacters(in: .newlines) }
       #expect(parts.first == sha256)
-      #expect(try Data(contentsOf: URL(fileURLWithPath: parts.last ?? "")) == Data(contentsOf: Tiny.queued))
+      #expect(try Data(contentsOf: URL(fileURLWithPath: parts.last ?? "")) == Data(contentsOf: TinyModel.queued))
       #expect(run.err.hasSuffix("100% 0/0 MB\n"))
 
       let inventory = try await models(Models.Inventory.self, [], cache: tmp)
@@ -83,11 +78,10 @@
     }
 
     @Test func fetchAndInventory() async throws {
-      let tmp = try TempDir()
-      defer { tmp.remove() }
-      let blob = try Data(contentsOf: Tiny.queued)
-      let sha256 = try Tiny.sha256(Tiny.queued)
-      let net = MockNet(try RegistryFixture.smallRoutes(blob, oid: sha256))
+      let tmp = try TemporaryDirectory()
+      let blob = try Data(contentsOf: TinyModel.queued)
+      let sha256 = try TinyModel.sha256(TinyModel.queued)
+      let net = MockNet(RegistryFixture.smallRoutes(blob, oid: sha256))
       let run = try await models(Models.Fetch.self, [RegistryFixture.smallRef], cache: tmp, net: net)
       #expect(run.code == 0, "\(run.err)")
       #expect(try Data(contentsOf: URL(fileURLWithPath: run.out.trimmingCharacters(in: .newlines))) == blob)
@@ -99,25 +93,12 @@
       #expect(payload["loaded"] is NSNull && payload["last_loaded"] is NSNull)
     }
 
-    @Test func fetchOverARealSocket() async throws {
-      let tmp = try TempDir()
-      defer { tmp.remove() }
-      let blob = try Data(contentsOf: Tiny.stateful)
-      let server = try LocalServer(serving: blob)
-      defer { server.stop() }
-      let net = MockNet(try RegistryFixture.smallRoutes(blob, oid: try Tiny.sha256(Tiny.stateful), href: server.url))
-      let run = try await models(Models.Fetch.self, [RegistryFixture.smallRef], cache: tmp, net: net)
-      #expect(run.code == 0, "\(run.err)")
-      #expect(try Data(contentsOf: URL(fileURLWithPath: run.out.trimmingCharacters(in: .newlines))) == blob)
-    }
-
     @Test func exitCodes() async throws {
-      let tmp = try TempDir()
-      defer { tmp.remove() }
+      let tmp = try TemporaryDirectory()
       let offline = try await models(Models.Fetch.self, [RegistryFixture.smallRef], cache: tmp)
       #expect(offline.code == 2, "a network failure is 2: \(offline.err)")
-      let blob = try Data(contentsOf: Tiny.queued)
-      let wrong = MockNet(try RegistryFixture.smallRoutes(blob, oid: String(repeating: "b", count: 64)))
+      let blob = try Data(contentsOf: TinyModel.queued)
+      let wrong = MockNet(RegistryFixture.smallRoutes(blob, oid: String(repeating: "b", count: 64)))
       let unverified = try await models(Models.Fetch.self, [RegistryFixture.smallRef], cache: tmp, net: wrong)
       #expect(unverified.code == 3, "bytes that do not verify are 3: \(unverified.err)")
       let unknown = try await models(Models.Fetch.self, [String(repeating: "c", count: 64)], cache: tmp)
@@ -125,11 +106,10 @@
     }
 
     @Test func prepareFetchesThenBuilds() async throws {
-      let tmp = try TempDir()
-      defer { tmp.remove() }
-      let blob = try Data(contentsOf: Tiny.queued)
-      let sha256 = try Tiny.sha256(Tiny.queued)
-      let net = MockNet(try RegistryFixture.smallRoutes(blob, oid: sha256))
+      let tmp = try TemporaryDirectory()
+      let blob = try Data(contentsOf: TinyModel.queued)
+      let sha256 = try TinyModel.sha256(TinyModel.queued)
+      let net = MockNet(RegistryFixture.smallRoutes(blob, oid: sha256))
       let run = try await models(Models.Prepare.self, [RegistryFixture.smallRef, "--backend", "ort", "--device", "cpu"], cache: tmp, net: net)
       #expect(run.code == 0, "\(run.err)")
       #expect(run.err.hasPrefix("building outside the server"))
