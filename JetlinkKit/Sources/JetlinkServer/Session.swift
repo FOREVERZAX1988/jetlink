@@ -322,11 +322,17 @@ final class Session: @unchecked Sendable {
 
     let state: Data? = reply.wantsState ? host.telemetry.json() : nil
     let sendStarted = DispatchTime.now().uptimeNanoseconds
-    try respond(message.seq, reply, state: state)
-    if let failure = reply.failure, (failure as? any FatalEngineError)?.isFatal == true {
-      // After the reply, so the comma hears INFER_FAILED rather than a timeout.
-      log.error("the engine cannot recover from this: \(String(describing: failure))")
-      host.hooks.fatal?(failure)
+    do {
+      // After the reply, so the comma hears INFER_FAILED rather than a
+      // timeout, and after a reply that could not be written too (the comma
+      // already gave up): the device stays broken for the next session.
+      defer {
+        if let failure = reply.failure, (failure as? any FatalEngineError)?.isFatal == true {
+          log.error("the engine cannot recover from this: \(String(describing: failure))")
+          host.hooks.fatal?(failure)
+        }
+      }
+      try respond(message.seq, reply, state: state)
     }
     guard reply.ran else { return }
     let sendUs = microseconds(since: sendStarted)
