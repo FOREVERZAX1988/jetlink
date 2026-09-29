@@ -100,17 +100,16 @@
 
   /// The link interface's bulk IN and OUT pipes, opened through IOUSBHost.
   ///
-  /// A read with no deadline, the steady state, is one synchronous request on
-  /// the session's thread. A write, or a read with a deadline, is queued and
-  /// waited for instead, because only a completion reports the bytes that
-  /// went before a timeout, and those are part of the stream.
-  ///
-  /// Transfers go through one NSMutableData per direction, copied to and from
-  /// the transport's buffers. Not NSMutableData(bytesNoCopy:) over those
-  /// buffers: mutable data copies the bytes into storage of its own, so a
-  /// read landed in the copy and the transport read zeros ("bad magic 0x0"),
-  /// which only a real gadget showed.
-  final class IOUSBHostPipes: BulkPipes, @unchecked Sendable {
+  /// Reads come from a `ReadRing` of 16 KB requests kept queued on the IN
+  /// pipe, each landing in an NSMutableData of its own that the ring copies
+  /// out of. A write is queued and waited for, because only a completion
+  /// reports the bytes that went before a timeout, and those are part of the
+  /// stream; it goes out of one NSMutableData the transport's buffer is copied
+  /// into. Not NSMutableData(bytesNoCopy:) over the transport's buffers:
+  /// mutable data copies the bytes into storage of its own, so a read landed
+  /// in the copy and the transport read zeros ("bad magic 0x0"), which only a
+  /// real gadget showed.
+  final class IOUSBHostPipes: BulkPipes, ReadRingPipe, @unchecked Sendable {
     /// The interface's registry entry, held for as long as the interface is
     /// open rather than trusting IOUSBHost to hold its own.
     private let service: io_service_t
@@ -121,10 +120,13 @@
     private var closing = false
     private var gone = false
     private var destroyed = false
-    /// What a read lands in and a write is sent from. Reads are one at a time
-    /// on the session's thread, writes one at a time under the transport's
-    /// send lock, so one each is enough.
-    private let inData = NSMutableData(length: USBTransport.readChunk)!
+    /// What the ring's reads land in, one per slot.
+    private let slots = (0..<ReadRing.depth).map { _ in SlotData(NSMutableData(length: ReadRing.slotSize)!) }
+    /// Guards the ring, which completions reach on IOUSBHost's queue.
+    private let ringLock = NSCondition()
+    private var ring: ReadRing!
+    /// What a write is sent from: writes are one at a time, under the
+    /// transport's send lock.
     private let outData = NSMutableData()
 
     private static let queue = DispatchQueue(label: "io.zoompilot.jetlink.usb", qos: .userInteractive)
@@ -166,6 +168,7 @@
         if let error = error as? LinkError { throw error }
         throw LinkError.closed("could not open the gadget's endpoints: \(IOUSBHostPipes.describe(error))")
       }
+      ring = ReadRing(lock: ringLock, pipe: self)
       flag.notify { [weak self] in self?.lost() }
     }
 
@@ -173,22 +176,76 @@
       close()
     }
 
+    /// What the ring holds or has next, up to `count` bytes. A timeout leaves
+    /// the ring queued, so what arrives later is kept for the next read.
     func read(into buffer: UnsafeMutableRawPointer, count: Int, timeout: TimeInterval) throws -> Int {
-      inData.length = count
-      var transferred = 0
-      if timeout == 0 {
-        try checkRunning()
-        do {
-          try input.__sendIORequest(with: inData, bytesTransferred: &transferred, completionTimeout: 0)
-        } catch {
-          let status = IOReturn(truncatingIfNeeded: (error as NSError).code)
-          guard UInt32(bitPattern: status) == IOUSBHostPipes.underrun else { throw failure(status, "read") }
-        }
-      } else {
-        transferred = try transfer(input, inData, timeout, "read")
+      let deadline = timeout > 0 ? Date().addingTimeInterval(timeout) : nil
+      ringLock.lock()
+      defer { ringLock.unlock() }
+      try checkRunning()
+      return try ring.read(into: buffer, count: count, deadline: deadline)
+    }
+
+    // MARK: ReadRingPipe, under ringLock
+
+    func post(_ slot: Int, size: Int) throws {
+      try checkRunning()
+      let held = slots[slot]
+      if held.data.length != size {
+        held.data.length = size
       }
-      buffer.copyMemory(from: inData.bytes, byteCount: transferred)
-      return transferred
+      do {
+        try input.enqueueIORequest(with: held.data, completionTimeout: 0) { [weak self] status, transferred in
+          // The request's buffer outlives it even if these pipes do not.
+          withExtendedLifetime(held) {}
+          self?.completed(slot, status, transferred)
+        }
+      } catch {
+        throw LinkError.closed("usb bulk read could not start: \(IOUSBHostPipes.describe(error))")
+      }
+    }
+
+    /// Aborts every request on the IN pipe: only the ring's are ever there.
+    func discardPosted() {
+      try? input.__abort(with: .asynchronous)
+    }
+
+    func awaitCompletion(until deadline: Date?) throws {
+      try checkRunning()
+      if let deadline {
+        _ = ringLock.wait(until: deadline)
+      } else {
+        ringLock.wait()
+      }
+    }
+
+    func bytes(_ slot: Int) -> UnsafeRawPointer {
+      slots[slot].data.bytes
+    }
+
+    /// On IOUSBHost's queue.
+    private func completed(_ slot: Int, _ status: IOReturn, _ transferred: Int) {
+      let completion: ReadRing.Completion
+      switch UInt32(bitPattern: status) {
+      case UInt32(bitPattern: kIOReturnSuccess), IOUSBHostPipes.underrun:
+        // A short packet ends a request; it is not an error.
+        completion = .data
+      case IOUSBHostPipes.aborted:
+        completion = stopReason.map { .failed(.closed($0)) } ?? .discarded
+      default:
+        completion = .failed(failure(status, "read"))
+      }
+      ringLock.lock()
+      ring.complete(slot, completion, count: transferred)
+      ringLock.broadcast()
+      ringLock.unlock()
+    }
+
+    /// Wakes a reader waiting on the ring, after a flag it checks has changed.
+    private func wakeReader() {
+      ringLock.lock()
+      ringLock.broadcast()
+      ringLock.unlock()
     }
 
     func write(from buffer: UnsafeRawPointer, count: Int, timeout: TimeInterval) throws -> Int {
@@ -243,6 +300,7 @@
     func abort() {
       lock.withLock { closing = true }
       abortPipes(.asynchronous)
+      wakeReader()
     }
 
     func close() {
@@ -252,6 +310,7 @@
       }
       guard first else { return }
       abortPipes(.synchronous)
+      wakeReader()
       interface.destroy()
       IOObjectRelease(service)
     }
@@ -260,6 +319,7 @@
     private func lost() {
       lock.withLock { gone = true }
       abortPipes(.asynchronous)
+      wakeReader()
     }
 
     // MARK: status codes
@@ -287,6 +347,15 @@
         return describe(IOReturn(truncatingIfNeeded: ns.code))
       }
       return ns.localizedDescription
+    }
+  }
+
+  /// A ring slot's buffer, held by its request's completion handler.
+  private final class SlotData: @unchecked Sendable {
+    let data: NSMutableData
+
+    init(_ data: NSMutableData) {
+      self.data = data
     }
   }
 
