@@ -15,6 +15,11 @@ there is work.
 The owner stays resident for the whole drive at about 10 MB, so this module
 and everything it imports is the standard library and jetlink's light half;
 tests/openpilot/test_imports.py holds the line.
+
+manager starts it again if it dies (the fork's process_config), and every
+start adopts what the last owner left. A crash loop would re-enumerate the
+Jetson at every start, so the owner's own backoff holds a start back once
+owners keep dying (jetlink.comma.owner.note_start).
 """
 from __future__ import annotations
 

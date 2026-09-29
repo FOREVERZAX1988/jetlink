@@ -9,6 +9,7 @@ it starts the heavy half. Its settings are jetlink.openpilot's Settings over
 the directory and keys the fork's adapter names, as jetlink.openpilot.owner
 hands them over.
 """
+import errno
 import json
 import logging
 import os
@@ -41,6 +42,7 @@ class OwnerTest(unittest.TestCase):
                         ('GADGET_STATUS', self.tmp / 'gadget-status'),
                         ('LENDER_STATUS', self.tmp / 'lender-status'),
                         ('STATUS', self.tmp / 'run' / 'status.json'),
+                        ('STARTS', self.tmp / 'run' / 'starts.json'),
                         ('CC_ORIENTATION', self.tmp / 'cc'),
                         ('link_configured', mock.Mock(return_value=True)),
                         ('host_attached', mock.Mock(return_value=True)),
@@ -1090,6 +1092,189 @@ class TestTheStatusRecord(OwnerTest):
     o.publish_status()
     self.assertIsNone(o.status_error)
     self.assertGreater(o.published, 0.0)
+
+
+class TestACrashLoop(OwnerTest):
+  """manager starts a dead owner again, and every start re-enumerates the
+  Jetson. Starts are written down and a clean stop takes its own back, so
+  only owners that died count, and past CRASH_FREE of them a start waits."""
+
+  def test_only_owners_that_died_lately_count(self):
+    t = 1000.0
+    for n in range(owner.CRASH_FREE):
+      self.assertEqual(owner.note_start(t + n), (0.0, n))
+    self.assertEqual(owner.note_start(t + 3), (owner.CRASH_BACKOFF, 3))
+    self.assertEqual(owner.note_start(t + 4), (2 * owner.CRASH_BACKOFF, 4))
+    for n in range(5, 15):
+      wait, _ = owner.note_start(t + n)
+    self.assertEqual(wait, owner.CRASH_BACKOFF_MAX)
+    # a window later, none of them count
+    self.assertEqual(owner.note_start(t + 15 + owner.CRASH_WINDOW), (0.0, 0))
+
+  def run_two_steps(self) -> None:
+    """An owner that steps twice and is stopped, as manager stops it."""
+    o = self.owner()
+    steps = []
+
+    def step():
+      steps.append(1)
+      o.stop = len(steps) == 2
+    with mock.patch.object(owner, 'POLL', 0.0), mock.patch.object(o, 'step', side_effect=step):
+      o.run()
+    self.assertEqual(len(steps), 2)
+
+  def test_owners_that_stop_cleanly_never_wait(self):
+    # the bench turns the link off and on again as often as it likes
+    for _ in range(owner.CRASH_FREE + 3):
+      self.run_two_steps()
+      self.assertEqual(owner._starts(), [], 'a clean stop was counted as a death')
+    self.assertEqual(owner.note_start(time.monotonic())[0], 0.0)
+
+  def test_a_record_that_cannot_be_read_counts_nothing(self):
+    gadget.STARTS.parent.mkdir(parents=True, exist_ok=True)
+    for text in ('', 'garbage', '{"a": 1}', '["x", null]'):
+      gadget.STARTS.write_text(text)
+      self.assertEqual(owner.note_start(1000.0), (0.0, 0), text)
+      gadget.STARTS.unlink()
+
+  def test_the_wait_holds_nothing_and_says_why(self):
+    now = time.monotonic()
+    gadget.write_record(gadget.STARTS, [now - 30.0, now - 20.0, now - 10.0])   # three owners that died
+    o = self.owner(presented=False)
+    seen = []
+
+    def sleep(seconds):
+      seen.append(gadget.owner_status())
+      o.stop = True   # manager stops it mid-wait
+    with mock.patch.object(owner.time, 'sleep', side_effect=sleep), mock.patch.object(o, 'step') as step:
+      o.run()
+    step.assert_not_called()
+    o.open_link.assert_not_called()
+    o.port.update.assert_not_called()
+    self.assertTrue(gadget.owner_alive(seen[0]))
+    self.assertIn('keeps stopping (3 times in 10 min), starting it again in 10 s', seen[0]['error'])
+    # manager's stop is a clean one: it does not count against the next start
+    self.assertEqual(len(owner._starts()), 3)
+
+  def test_after_the_wait_it_starts_as_any_owner_does(self):
+    now = time.monotonic()
+    gadget.write_record(gadget.STARTS, [now - 30.0, now - 20.0, now - 10.0])
+    o = self.owner()
+    with mock.patch.object(owner, 'CRASH_BACKOFF', 0.05), mock.patch.object(owner, 'POLL', 0.01), \
+         mock.patch.object(o, 'step', side_effect=lambda: setattr(o, 'stop', True)) as step:
+      started = time.monotonic()
+      o.run()
+    step.assert_called_once()
+    self.assertGreaterEqual(time.monotonic() - started, 0.05)
+    self.assertIsNone(o.backing_off)
+
+  def test_an_owner_that_dies_is_counted(self):
+    o = self.owner()
+    with mock.patch.object(o, 'forget_status', side_effect=SystemExit('killed')), self.assertRaises(SystemExit):
+      o.stop = True
+      o.run()
+    self.assertEqual(len(owner._starts()), 1)
+
+
+class TestStartingAgain(OwnerTest):
+  """An owner started after one that died finds its gadget and its records."""
+
+  def test_its_records_are_cleared_and_its_gadget_used_as_it_is(self):
+    gadget.note_link('cable', '192.168.60.3')
+    gadget.DORMANT.write_text('999999')
+    gadget.note_lender_error('address in use')
+    o = self.owner()
+    with mock.patch.object(gadget, 'setup_gadget') as setup:
+      o.adopt()
+      self.assertFalse(gadget.DORMANT.exists())
+      self.assertIsNone(gadget.gadget_error())
+      self.assertIsNone(gadget.link_peer())
+      o.step()
+    setup.assert_not_called()   # the configfs gadget is there, so nothing is rebuilt
+    self.assertEqual(gadget.link_kind(), 'usb')
+
+  def test_a_shutdown_request_waiting_for_it_is_kept(self):
+    # hardwared's, not the dead owner's: the new owner still takes it
+    gadget.SHUTDOWN_REQUEST.write_text(json.dumps({'reason': 'car battery'}))
+    o = self.owner()
+    o.adopt()
+    o.step()
+    o.spawn_worker.assert_called_once()
+    self.assertIn('shut down', o.spawn_worker.call_args.args[0])
+
+
+class TestABusyEp0(OwnerTest):
+  """An owner started while a borrower from before it still has ep1 and ep2:
+  modeld mid-drive, or the dead owner's own run. FunctionFS refuses ep0 until
+  they are closed, and the borrower's link has to carry on meanwhile."""
+
+  def setUp(self):
+    super().setUp()
+    self.configfs = self.tmp / 'configfs'
+    self.configfs.mkdir()
+    (self.configfs / 'UDC').write_text('a600000.dwc3\n')   # bound, by the owner that died
+    for name, value in (('GADGET_PATH', self.configfs), ('FFS_MOUNT', self.tmp / 'ffs')):
+      p = mock.patch.object(gadget, name, value)
+      self.addCleanup(p.stop)
+      p.start()
+
+  def fresh(self):
+    o = self.make()
+    self.addCleanup(o.cable.close)
+    o.lender = mock.Mock(lent=False, listening=True)
+    return o
+
+  def refused(self):
+    """os.open as FunctionFS answers while somebody else has an endpoint file open."""
+    real = os.open
+
+    def refuse(path, *args, **kwargs):
+      if os.path.basename(os.fsdecode(path)) == 'ep0':
+        raise OSError(errno.EBUSY, os.strerror(errno.EBUSY), os.fsdecode(path))
+      return real(path, *args, **kwargs)
+    return mock.patch('jetlink.transport.ffs.os.open', side_effect=refuse)
+
+  def test_the_borrowers_gadget_is_left_bound(self):
+    o = self.fresh()
+    with self.refused(), mock.patch.object(gadget, 'log') as log:
+      self.assertFalse(o.open_link())
+      self.assertFalse(o.open_link())
+    self.assertEqual((self.configfs / 'UDC').read_text(), 'a600000.dwc3\n', 'the refused open unbound the gadget')
+    self.assertIsNone(o.transport)
+    log.warning.assert_called_once()   # said once, and no traceback
+    log.exception.assert_not_called()
+    self.assertAlmostEqual(o.next_attempt - time.monotonic(), owner.EP0_BUSY_RETRY, delta=0.25)
+
+  def test_it_is_presented_once_the_borrower_lets_go(self):
+    o = self.fresh()
+    with self.refused():
+      o.open_link()
+    self.assertTrue(o.ep0_busy)
+    with mock.patch('jetlink.transport.ffs.FfsTransport') as made:
+      self.assertTrue(o.open_link())
+    made.assert_called_once()
+    self.assertFalse(o.ep0_busy)
+
+  def test_onroad_it_is_asked_once_a_second_not_every_step(self):
+    self.write('IsOffroad', b'0')
+    o = self.fresh()
+    busy = OSError(errno.EBUSY, 'Device or resource busy', str(self.tmp / 'ffs' / 'ep0'))
+    with mock.patch('jetlink.transport.ffs.FfsTransport', side_effect=busy) as made:
+      for _ in range(3):
+        o.step()
+      made.assert_called_once()
+      o.next_attempt = 0.0
+      o.step()
+      self.assertEqual(made.call_count, 2)
+
+  def test_a_busy_udc_is_not_a_busy_ep0(self):
+    o = self.fresh()
+    busy = OSError(errno.EBUSY, 'Device or resource busy', str(self.configfs / 'UDC'))
+    with mock.patch('jetlink.transport.ffs.FfsTransport', side_effect=busy), mock.patch.object(gadget, 'log') as log:
+      self.assertFalse(o.open_link())
+    log.exception.assert_called_once()
+    self.assertFalse(o.ep0_busy)
+    self.assertAlmostEqual(o.next_attempt - time.monotonic(), owner.RECONNECT_BACKOFF, delta=0.25)
 
 
 class TestSetup(OwnerTest):

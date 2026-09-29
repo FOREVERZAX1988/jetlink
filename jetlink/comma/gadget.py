@@ -163,6 +163,8 @@ STATUS = Path("/dev/shm/jetlink/status.json")
 # how old that record may be before a reader takes its owner for gone: six of
 # its 0.5 s steps. A wait inside a step renews it (Owner.beat)
 HEARTBEAT_TIMEOUT = 3.0
+# the owner's start times, for its crash-loop backoff (see the owner)
+STARTS = Path("/dev/shm/jetlink/starts.json")
 # how long a host that stopped reading configured still counts as there. The
 # owner holds the gadget for as long as the link is enabled, so presence no
 # longer blinks at every handover; what is left to bridge is a USB3 link
@@ -171,9 +173,9 @@ HEARTBEAT_TIMEOUT = 3.0
 PRESENCE_HOLD = 5.0
 
 
-def write_record(path: Path, record: dict) -> None:
+def write_record(path: Path, record) -> None:
   """Replace a JSON record whole: a reader gets the old one or the new one,
-  never half of either. Raises OSError; the writer says so, once."""
+  never half of either. Raises OSError, for the writer to say once."""
   path.parent.mkdir(parents=True, exist_ok=True)
   tmp = path.with_name(f".{path.name}.{os.getpid()}")
   tmp.write_text(json.dumps(record))
