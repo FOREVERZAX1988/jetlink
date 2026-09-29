@@ -61,6 +61,11 @@ class JoiningBase(unittest.TestCase):
     patcher = mock.patch.object(JoiningModelState, '_watch_engagement', lambda self: None)
     patcher.start()
     self.addCleanup(patcher.stop)
+    # the small model's warm-up frames at start have their own tests (WarmupTest);
+    # everywhere else a join may swap on the first frame
+    patcher = mock.patch.object(joining, 'SMALL_WARMUP_FRAMES', 0)
+    patcher.start()
+    self.addCleanup(patcher.stop)
 
     # The join reports what it waits on as progress; what it says is asserted here.
     self.progress = mock.Mock()
@@ -582,10 +587,14 @@ class LagTest(JoiningBase):
     self.addCleanup(self._close, self.s)
     self._wait_joined(self.s)
     self.s._engaged = False
-    # the swap frame carries the history reset and is never counted as slow
-    self.took = 0.3
-    self.assertEqual(self.frame(), {'from': 'big'})
-    self.assertTrue(self.s.chestnut)
+    self.swap()
+
+  def swap(self):
+    # the first frames after a swap are never counted as slow: the first
+    # carries the history reset, and a Mac's is ~100 ms of warm-up
+    for _ in range(joining.SETTLING_FRAMES):
+      self.assertEqual(self.frame(took=0.3), {'from': 'big'})
+      self.assertTrue(self.s.chestnut)
 
   def _run(self, s):
     s._engagement_updated = joining.time.monotonic()
@@ -652,12 +661,112 @@ class LagTest(JoiningBase):
     self.assert_big_drives()
     self.reset.assert_not_called()
 
-  def test_the_next_large_model_starts_with_no_strike(self):
+  def test_the_next_large_model_starts_with_no_strike_and_settles_again(self):
     self.frame(took=joining.SLOW_FRAME + 0.005)
     self.frame(took=joining.LATE_FRAME + 0.01)
     self.frame()
     self.assertFalse(self.s.chestnut)
     self.assertIsNone(self.s._slow_at)
+    # the join comes back and swaps: its first frames are slow and forgiven
+    self.s._rejoin_at = 0.0
+    self.s._rejoin.set()
+    self._wait_joined(self.s)
+    self.swap()
+    self.frame(took=joining.SLOW_FRAME + 0.005)
+    self.assert_big_drives()
+
+
+class WarmupTest(JoiningBase):
+  """The small model runs before the large one first drives, however soon that
+  could be: its first run in a process is slow, and it must not be the frame
+  of the first fallback."""
+
+  def setUp(self):
+    super().setUp()
+    patcher = mock.patch.object(joining, 'SMALL_WARMUP_FRAMES', 3)
+    patcher.start()
+    self.addCleanup(patcher.stop)
+    self.first_small_frame_at = None
+    run = self.small.run
+
+    def small_run(*args):
+      if self.small.calls == 0:
+        # the ~1.3 s first run, marked rather than waited out
+        self.first_small_frame_at = self.big.calls
+      return run(*args)
+    self.small.run = small_run
+
+  def test_the_small_model_drives_the_first_frames_with_the_large_one_ready(self):
+    s = self._state()
+    self._wait_joined(s)
+    s._engaged = False
+    for _ in range(joining.SMALL_WARMUP_FRAMES):
+      self.assertEqual(self._run(s), {'from': 'small'})
+    self.assertEqual(self._run(s), {'from': 'big'})
+
+  def test_the_first_fallback_is_not_the_small_models_first_run(self):
+    s = self._state()
+    self._wait_joined(s)
+    s._engaged = False
+    while self._run(s) != {'from': 'big'}:
+      pass
+    self.assertEqual(self.first_small_frame_at, 0, "the large model drove before the small one had run")
+    self.big.raises = RuntimeError('pulled')
+    calls = self.small.calls
+    self.assertEqual(self._run(s), {'from': 'small'})
+    self.assertGreater(calls, 0)
+
+
+class ReplugTest(JoiningBase):
+  """The backoff after a loss is for a host that is still there. One that let
+  go of the gadget and configured it again is a replug: try at once."""
+
+  def setUp(self):
+    super().setUp()
+    self.attached = True
+    patcher = mock.patch.object(joining.gadget, 'host_attached', lambda: self.attached)
+    patcher.start()
+    self.addCleanup(patcher.stop)
+    patcher = mock.patch.object(joining, 'REPLUG_POLL', 0.01)
+    patcher.start()
+    self.addCleanup(patcher.stop)
+    self.s = self._state()
+    self._wait_joined(self.s)
+    self.s._engaged = False
+    self._run(self.s)
+    self.assertTrue(self.s.chestnut)
+
+  def lose_the_link(self):
+    self.big.raises = RuntimeError('host dropped the gadget configuration (udc: not attached)')
+    self._run(self.s)
+    self.assertGreater(self.s._rejoin_at, time.monotonic() + 1.0, "no backoff to cut short")
+
+  def connects_within(self, seconds):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+      if self.connect_calls > 1:
+        return True
+      time.sleep(0.005)
+    return False
+
+  def test_a_replug_ends_the_backoff(self):
+    self.attached = False
+    self.lose_the_link()
+    self.assertFalse(self.connects_within(0.2))
+    self.attached = True
+    self.assertTrue(self.connects_within(1.0))
+    self.assertTrue(self.log.has('the host configured the gadget again, retrying now'))
+
+  def test_a_host_back_before_the_backoff_began_was_still_replugged(self):
+    # the teardown between the loss and the backoff can take longer than a replug
+    self.attached = False
+    with mock.patch.object(self.s, '_close_retired', side_effect=lambda: setattr(self, 'attached', True)):
+      self.lose_the_link()
+      self.assertTrue(self.connects_within(1.0))
+
+  def test_a_failure_with_the_host_present_waits_it_out(self):
+    self.lose_the_link()
+    self.assertFalse(self.connects_within(0.5))
 
 
 class EngagementTest(unittest.TestCase):

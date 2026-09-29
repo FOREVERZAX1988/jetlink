@@ -45,6 +45,10 @@ STABLE_SECONDS = 60.0
 # drop, and the host re-enumerates a rebound gadget in under a second. The
 # rest of the old delay was the driver's time, not the Jetson's
 REJOIN_DELAY_QUICK = 1.0
+# how often a backoff looks at the gadget. A host that configures it again
+# after it went away is a replug, which the backoff is not for: one waited 16 s
+# for a Jetson that was back in 0.4 (2026-09-29)
+REPLUG_POLL = 0.25
 # link drops in one drive before the status names the cable. One is weather;
 # the 2026-09-07 evening drive had six in twelve minutes, every one the
 # USB-C port losing its host, and nothing the driver could see said so
@@ -59,6 +63,14 @@ ENGAGEMENT_MAX_AGE = 0.25
 LATE_FRAME = 0.1
 SLOW_FRAME = 0.075
 LAG_WINDOW = 10.0
+# the first frames after every swap are never counted as slow: they carry the
+# history reset, and a Mac's first after a join is ~100 ms of CoreML warm-up
+SETTLING_FRAMES = 3
+# the small model drives the first frames of every modeld start, even with the
+# large model ready: its first run in a process costs ~1.3 s, which the first
+# fallback frame paid (25 dropped frames, commIssue) when the large model had
+# driven from frame one. Nothing is in control at a modeld start
+SMALL_WARMUP_FRAMES = 3
 # how often a link that is ready but has nowhere to land gets checked, and
 # how long the check may take; both off the frame loop
 KEEPALIVE_PERIOD = 10.0
@@ -118,6 +130,12 @@ class JoiningModelState:
     # _slow_at is when the last slow frame was, for the second strike
     self._lagging = False
     self._slow_at: float | None = None
+    # frames each model has run: the small one's since start, the large one's
+    # since it swapped in
+    self._small_frames = 0
+    self._big_frames = 0
+    # whether the host had let go of the gadget when the last link was lost
+    self._host_left = False
 
     # assume engaged and moving until a message says otherwise, so a swap can
     # never happen on no information
@@ -242,26 +260,27 @@ class JoiningModelState:
       # this one is retryable. after_enqueue is dropped, the large model may
       # already have called it
       result = self._small.run(bufs, transforms, inputs, None)
-      # all of it is one modeld frame, measured 186 to 211 ms on the car. The
-      # dropped camera frames are forgiven (modeld sees the model change), but
-      # the log should say which part it was
+      # all of it is one modeld frame, 42 to 107 ms on the 2026-09-29 drives
+      # with the small model warm. The dropped camera frames are forgiven
+      # (modeld sees the model change), but the log should say which part it was
       done = time.monotonic()
       self._log.warning("jetlink: fallback frame %.0f ms: link %.0f, demote %.0f, small model %.0f",
                         (done - started) * 1e3, (failed - started) * 1e3,
                         (demoted - failed) * 1e3, (done - demoted) * 1e3)
       return result
     if active is self._small:
+      self._small_frames += 1
       return result
     took = time.monotonic() - started
+    self._big_frames += 1
     if self._loading:
       # a connected engine can still fail its first inference; only announce
-      # readiness after a frame the caller can publish. Never counted as slow:
-      # it carries the history reset, and nothing is in control at a swap
+      # readiness after a frame the caller can publish
       self._joined_at = time.monotonic()
       self._loading = False
       self._progress.clear()
       self._log.warning("jetlink: large model joined mid-drive, modelV2.big is now true")
-    elif self._fell_behind(took):
+    if self._big_frames > SETTLING_FRAMES and self._fell_behind(took):
       self._lagging = True
       self._log.warning("jetlink: large model frame took %.0f ms, the small model drives from the next", took * 1e3)
     return result
@@ -283,7 +302,7 @@ class JoiningModelState:
     return fresh and not self._engaged
 
   def _maybe_swap(self) -> None:
-    if self._joined is None or not self._window_open:
+    if self._joined is None or not self._window_open or self._small_frames < SMALL_WARMUP_FRAMES:
       return
     with self._lock:
       joined, self._joined = self._joined, None
@@ -308,6 +327,7 @@ class JoiningModelState:
       # time is a connect and a build per second for the drive
       self._back_off()
       return
+    self._big_frames = 0
     self._active = big
 
   def _demote(self, why: str) -> None:
@@ -379,6 +399,9 @@ class JoiningModelState:
       port = "port state unknown"
     else:
       port = f"port sees a host (cc {cc})" if cc else "port sees no host (cc 0)"
+    # read now, before the teardown: a host back by the time the backoff starts
+    # has still been replugged
+    self._host_left = not gadget.host_attached()
     self._log.warning("jetlink: %s, %s; drop %d this drive", why, port, self._drops)
     self._report('connect', f'{why}, reconnecting')
 
@@ -405,7 +428,7 @@ class JoiningModelState:
       if self._stop.is_set():
         return
       self._rejoin.clear()
-      if self._stop.wait(max(0.0, self._rejoin_at - time.monotonic())):
+      if self._wait_out_back_off():
         return
       self._report('connect', 'waiting for the accelerator')
       try:
@@ -429,6 +452,20 @@ class JoiningModelState:
       self._log.warning("jetlink: link ready, waiting for a window to swap")
       self._report('connect', 'ready; re-engage to switch models')
       self._keep_alive()
+
+  def _wait_out_back_off(self) -> bool:
+    """Until the next attempt is due, or a host configures the gadget again
+    after it went away. True once closed."""
+    host_left, self._host_left = self._host_left or not gadget.host_attached(), False
+    while (left := self._rejoin_at - time.monotonic()) > 0:
+      if self._stop.wait(min(left, REPLUG_POLL)):
+        return True
+      attached = gadget.host_attached()
+      if attached and host_left:
+        self._log.warning("jetlink: the host configured the gadget again, retrying now")
+        return False
+      host_left = host_left or not attached
+    return self._stop.is_set()
 
   def _keep_alive(self) -> None:
     """Ping a link that is waiting for a swap window.
