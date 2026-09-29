@@ -773,13 +773,19 @@ class Owner:
   def sit_out(self, until: float, died: int) -> None:
     """A crash loop's backoff: hold nothing, not the gadget, the lender or
     the port, until `until` or a stop. The status record says why, and that
-    is the offroad alert while the link is on."""
+    is the offroad alert while the link is on.
+
+    A power-off request ends it: hardwared waits 25 s for the owner to take
+    one, and the Jetson on its own supply stays on otherwise."""
     self.backing_off = (f"the accelerator service keeps stopping ({died} times in {CRASH_WINDOW / 60:.0f} min), "
-                        f"starting it again in {until - time.monotonic():.0f} s")
+                        f"waiting {until - time.monotonic():.0f} s before starting it again")
     gadget.log.warning("jetlink: %s", self.backing_off)
     self.publish_status()
     try:
       while not self.stop and time.monotonic() < until:
+        if gadget.SHUTDOWN_REQUEST.exists():
+          gadget.log.warning("jetlink: a power-off request ends the wait")
+          break
         time.sleep(min(POLL, max(0.0, until - time.monotonic())))
         self.beat()
     finally:

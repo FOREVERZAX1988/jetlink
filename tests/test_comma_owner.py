@@ -1153,7 +1153,7 @@ class TestACrashLoop(OwnerTest):
     o.open_link.assert_not_called()
     o.port.update.assert_not_called()
     self.assertTrue(gadget.owner_alive(seen[0]))
-    self.assertIn('keeps stopping (3 times in 10 min), starting it again in 10 s', seen[0]['error'])
+    self.assertIn('keeps stopping (3 times in 10 min), waiting 10 s before starting it again', seen[0]['error'])
     # manager's stop is a clean one: it does not count against the next start
     self.assertEqual(len(owner._starts()), 3)
 
@@ -1168,6 +1168,20 @@ class TestACrashLoop(OwnerTest):
     step.assert_called_once()
     self.assertGreaterEqual(time.monotonic() - started, 0.05)
     self.assertIsNone(o.backing_off)
+
+  def test_a_power_off_request_ends_the_wait(self):
+    # hardwared waits 25 s for the owner; a wait of up to 5 min would leave
+    # the Jetson on its own supply running
+    now = time.monotonic()
+    gadget.write_record(gadget.STARTS, [now - 30.0, now - 20.0, now - 10.0])
+    gadget.SHUTDOWN_REQUEST.write_text(json.dumps({'reason': 'car battery'}))
+    o = self.owner()
+    with mock.patch.object(owner, 'CRASH_BACKOFF', 60.0), \
+         mock.patch.object(o, 'step', side_effect=lambda: setattr(o, 'stop', True)) as step:
+      started = time.monotonic()
+      o.run()
+    self.assertLess(time.monotonic() - started, 1.0)
+    step.assert_called_once()
 
   def test_an_owner_that_dies_is_counted(self):
     o = self.owner()
