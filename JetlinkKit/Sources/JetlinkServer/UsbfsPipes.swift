@@ -99,6 +99,7 @@ final class UsbfsPipes: BulkPipes, ReadRingPipe, @unchecked Sendable {
     } else {
       // The kernel may still write these at a reap: keep them for good
       // rather than hand their memory to something else.
+      ServerLog(category: "usb").warning("the kernel kept this link's USB reads past its close; keeping their \(slots.count * ReadRing.slotSize >> 10) KB")
       for urb in slots + [outURB] {
         _ = Unmanaged.passRetained(urb)
       }
