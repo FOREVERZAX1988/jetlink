@@ -18,8 +18,10 @@ tests/openpilot/test_imports.py holds the line.
 """
 from __future__ import annotations
 
+import signal
 import sys
 
+from jetlink.comma import gadget
 from jetlink.comma import owner as comma_owner
 from jetlink.openpilot.interface import OwnerConfig
 from jetlink.openpilot.settings import FileParams, Settings
@@ -29,12 +31,6 @@ from jetlink.openpilot.settings import FileParams, Settings
 WORKER = 'jetlink.openpilot.provision'
 
 
-def settings(config: OwnerConfig) -> Settings:
-  """What the owner reads: the link setting, whether the car is parked, and
-  when the pick and the built model last changed."""
-  return Settings(FileParams(config.params_dir), config.keys)
-
-
 def worker(config: OwnerConfig) -> list[str]:
   """One provisioning run's argv, on this interpreter, over the fork's adapter."""
   return [sys.executable, '-m', WORKER, '--adapter', config.adapter]
@@ -42,5 +38,10 @@ def worker(config: OwnerConfig) -> list[str]:
 
 def main(config: OwnerConfig) -> None:
   """Hold the gadget until manager stops this process (SIGINT, or SIGTERM)."""
-  comma_owner.main(worker(config), cwd=str(config.cwd), env=dict(config.env), log_file=config.log_file,
-                   settings=settings(config), chestnut_ids=config.chestnut_ids)
+  gadget.set_logger(comma_owner.logger(config.log_file))
+  owner = comma_owner.Owner(worker(config), cwd=str(config.cwd), env=dict(config.env),
+                            settings=Settings(FileParams(config.params_dir), config.keys),
+                            chestnut_ids=config.chestnut_ids)
+  signal.signal(signal.SIGTERM, owner.request_stop)
+  signal.signal(signal.SIGINT, owner.request_stop)
+  owner.run()

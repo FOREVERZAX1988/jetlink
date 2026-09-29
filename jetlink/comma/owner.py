@@ -21,14 +21,14 @@ since every unbind drops the phone's network interface with it.
 
 It is deliberately small. Everything heavy jetlink does is episodic, so none of
 it lives here: a download, an upload and a TensorRT build all belong to the
-provisioning run (the fork's worker), which this spawns when there is
+provisioning run (jetlink.openpilot.provision), which this spawns when there is
 something to do and which exits when there is not. That keeps a parked car and
 a drive alike at one resident jetlink process of about 13 MB rather than
 47.5 MB, and it is why nothing in this module may import swaglog, Params,
 numpy, capnp or zmq; see gadget.py and tests/test_comma_gadget.py. The caller
-names the worker and hands over the settings: jetlink.openpilot.owner runs
-main() with what the fork's adapter says (OwnerConfig), so nothing here knows an
-openpilot module or a param name.
+names the worker and hands over the settings: jetlink.openpilot.owner makes
+and runs the Owner from what the fork's adapter says (OwnerConfig), so nothing
+here knows an openpilot module or a param name.
 
 manager stops this on shutdown with SIGINT and SIGKILLs it 5 s later, so every
 long wait polls `stop`: a FunctionFS owner killed mid-transfer leaves the
@@ -38,7 +38,6 @@ from __future__ import annotations
 
 import logging
 import os
-import signal
 import subprocess
 import time
 from collections.abc import Mapping, Sequence
@@ -69,16 +68,14 @@ WORKER_BACKOFF = 300.0
 SHUTDOWN_RETRY = 2.0      # a shutdown run that exited with the request still there
 WORKER_GRACE = 10.0
 
-# under /data/log rather than /dev/shm: this is the one jetlink process alive
-# for a whole drive, and a bench session wants its lines afterwards. Rotated,
-# because the loop below logs a traceback per cycle if something stays broken
-LOG = Path('/data/log/jetlink-owner.log')
+# the log is rotated: the loop below logs a traceback per cycle if something stays broken
 LOG_BYTES = 1 << 20
 
 
-def _own_logger(path: Path) -> logging.Logger:
-  """swaglog costs 28 MB, so the owner keeps its own. The worker's lines go to
-  the drive as they always did; these are for a bench session."""
+def logger(path: Path) -> logging.Logger:
+  """The owner's log, to stderr and `path`: swaglog costs 28 MB, so the owner
+  keeps its own. The worker's lines go to the drive; these are for a bench
+  session, which wants them after the drive."""
   log = logging.getLogger('jetlink.owner')
   log.setLevel(logging.INFO)
   handlers: list[logging.Handler] = [logging.StreamHandler()]
@@ -571,16 +568,3 @@ class Owner:
       gadget.set_dormant(False)
     gadget.log.warning("jetlink: stopped")
 
-
-def main(worker: Sequence[str], cwd: str | None = None, env: Mapping[str, str] | None = None,
-         log_file: Path | None = None, *, settings, chestnut_ids) -> None:
-  """Hold the gadget until SIGTERM or SIGINT. `worker` is the provisioning
-  run's argv, started in `cwd` with `env` over this process's environment;
-  `log_file` defaults to LOG. `settings` (mode(), offroad(), marks()) and
-  `chestnut_ids` are the fork adapter's, as jetlink.openpilot.owner hands
-  them over."""
-  gadget.set_logger(_own_logger(LOG if log_file is None else log_file))
-  owner = Owner(worker, cwd=cwd, env=env, settings=settings, chestnut_ids=chestnut_ids)
-  signal.signal(signal.SIGTERM, owner.request_stop)
-  signal.signal(signal.SIGINT, owner.request_stop)
-  owner.run()

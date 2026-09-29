@@ -5,12 +5,9 @@ This file is part of jetlink and is licensed under the MIT License.
 See the LICENSE file in the root directory for more details.
 
 The process that holds the gadget: what it keeps, what it lets go of, and when
-it starts the heavy half.
-
-Every test runs twice, once for each way the owner can be told its settings:
-by gadget's own param names and path rule, as the fork's shim starts it, and
-through jetlink.openpilot's Settings over the directory and keys the fork's
-adapter names, as jetlink.openpilot.owner starts it. The two must not differ.
+it starts the heavy half. Its settings are jetlink.openpilot's Settings over
+the directory and keys the fork's adapter names, as jetlink.openpilot.owner
+hands them over.
 """
 import json
 import logging
@@ -56,9 +53,6 @@ class OwnerTest(unittest.TestCase):
       p = mock.patch.object(gadget, name, value)
       self.addCleanup(p.stop)
       p.start()
-    p = mock.patch.object(owner, 'LOG', self.tmp / 'owner.log')
-    self.addCleanup(p.stop)
-    p.start()
     # every root step: the real one is sudo on a comma
     p = mock.patch.object(root, 'run', mock.Mock(return_value=True))
     self.addCleanup(p.stop)
@@ -918,21 +912,6 @@ class TestTheWorker(OwnerTest):
       o.spawn_worker('nothing has been checked since boot')
     self.assertIsNone(o.worker)
 
-  def test_main_hands_the_worker_to_the_owner_and_logs_to_the_file(self):
-    log = self.tmp / 'owner-main.log'
-    settings = Settings(FileParams(self.params), KEYS)
-    with mock.patch.object(owner, 'Owner') as made, mock.patch.object(owner.signal, 'signal'), \
-         mock.patch.object(gadget, 'set_logger') as set_logger:
-      owner.main(['python3', '-m', 'the.worker'], cwd='/x', env={'A': 'b'}, log_file=log, settings=settings,
-                 chestnut_ids=CHESTNUT_IDS)
-    made.assert_called_once_with(['python3', '-m', 'the.worker'], cwd='/x', env={'A': 'b'}, settings=settings,
-                                 chestnut_ids=CHESTNUT_IDS)
-    made.return_value.run.assert_called_once()
-    logger = set_logger.call_args.args[0]
-    self.addCleanup(lambda: [logger.removeHandler(h) or h.close() for h in list(logger.handlers)])
-    logger.warning('jetlink: a line for the file')
-    self.assertIn('a line for the file', log.read_text())
-    self.assertIsInstance(logger, logging.Logger)
 
 
 class TestTheOpenpilotEntry(OwnerTest):
@@ -943,25 +922,31 @@ class TestTheOpenpilotEntry(OwnerTest):
     op = FakeOpenpilot(self.tmp / 'op')
     return op.owner_config()
 
-  def test_it_hands_the_owner_the_whole_config(self):
+  def test_it_runs_an_owner_over_the_whole_config(self):
     config = self.config()
-    with mock.patch.object(owner, 'main') as main:
+    with mock.patch.object(owner, 'Owner') as made, mock.patch.object(openpilot_owner.signal, 'signal') as handle, \
+         mock.patch.object(gadget, 'set_logger') as set_logger:
       openpilot_owner.main(config)
-    (worker,), kwargs = main.call_args
+    (worker,), kwargs = made.call_args
     # the run is jetlink's to name, over the adapter the fork names
     self.assertEqual(worker, [sys.executable, '-m', 'jetlink.openpilot.provision', '--adapter', 'tests.openpilot.fakes'])
-    self.assertEqual((kwargs['cwd'], kwargs['env'], kwargs['log_file']), (str(config.cwd), dict(config.env), config.log_file))
+    self.assertEqual((kwargs['cwd'], kwargs['env']), (str(config.cwd), dict(config.env)))
     self.assertEqual(kwargs['chestnut_ids'], config.chestnut_ids)
-    settings = kwargs['settings']
-    self.assertEqual((settings.params.directory, settings.keys), (config.params_dir, config.keys))
-
-  def test_its_settings_are_read_off_the_directory_it_names(self):
-    config = self.config()
-    s = openpilot_owner.settings(config)
+    made.return_value.run.assert_called_once()
+    self.assertEqual(handle.call_args_list, [mock.call(openpilot_owner.signal.SIGTERM, made.return_value.request_stop),
+                                             mock.call(openpilot_owner.signal.SIGINT, made.return_value.request_stop)])
+    # its settings are read off the directory the config names
+    s = kwargs['settings']
     self.assertEqual((s.mode(), s.offroad()), ('off', True))
     (config.params_dir / 'JetlinkLink').write_bytes(b'2')
     (config.params_dir / 'IsOffroad').write_bytes(b'0')
     self.assertEqual((s.mode(), s.offroad()), ('ios', False))
+    # and it logs to the file the config names
+    logger = set_logger.call_args.args[0]
+    self.addCleanup(lambda: [logger.removeHandler(h) or h.close() for h in list(logger.handlers)])
+    logger.warning('jetlink: a line for the file')
+    self.assertIn('a line for the file', config.log_file.read_text())
+    self.assertIsInstance(logger, logging.Logger)
 
   def test_the_port_takes_the_ids_the_owner_was_given(self):
     self.make(chestnut_ids={(1, 2)})
@@ -972,8 +957,6 @@ class TestTheOpenpilotEntry(OwnerTest):
     # rather than running on a guess
     with self.assertRaises(TypeError):
       owner.Owner(())
-    with self.assertRaises(TypeError):
-      owner.main([])
 
 
 class TestLending(OwnerTest):

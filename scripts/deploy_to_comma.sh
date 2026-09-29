@@ -45,7 +45,7 @@ ssh "$HOST" "[ -d '$root/jetlink' ] && [ ! -L '$root/jetlink' ] && rm -rf '$root
 
 echo "==> checking the package imports under the AGNOS venv"
 ssh "$HOST" "cd '$root' && PYTHONPATH='$root' /usr/local/venv/bin/python3 -c '
-import jetlink, jetlink.client, jetlink.transport.ffs, jetlink.queues, jetlink.comma.owner
+import jetlink, jetlink.client, jetlink.transport.ffs, jetlink.queues, jetlink.openpilot.owner
 print(\"jetlink\", jetlink.__version__, \"ok\")'"
 
 cat <<'NEXT'
