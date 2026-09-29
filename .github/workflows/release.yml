@@ -3,7 +3,7 @@
 # A push to main builds the Linux server too and puts it on the edge
 # prerelease under fixed names, which is what `install.sh --ref main` installs.
 #
-# Signing and notarizing need six secrets (docs/releasing.md lists them). With
+# Signing and notarizing need six secrets (docs/publishing.md lists them). With
 # none of them the build still runs and produces an ad hoc signed zip labelled
 # unsigned, so a fork can cut its own release.
 name: Release
@@ -196,21 +196,52 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Build the server
-        run: scripts/build-linux.sh "$FLAVOR"
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          # A tag's build is the release: VERSION says 0.7.0, where main's says
+          # 0.7.0-dev.<sha>. The check job holds the tag to __version__.
+          if [ "$REF_TYPE" = tag ]; then
+            scripts/build-linux.sh --release "$FLAVOR"
+          else
+            scripts/build-linux.sh "$FLAVOR"
+          fi
         # The one way the server is built, here, in a container on a Mac or on
         # a Jetson: dist/jetlink-server-<version>-<flavor>.tar.gz and its
         # .sha256.
 
       - name: Check the tarball
+        env:
+          REF_TYPE: ${{ github.ref_type }}
         run: |
           set -euo pipefail
           cd dist
-          for f in jetlink-server-*-"$FLAVOR".tar.gz; do
-            # what install.sh checks, and the binary where it looks for it
-            [ "$(awk '{print $1; exit}' "$f.sha256")" = "$(sha256sum "$f" | awk '{print $1}')" ]
-            tar -tzf "$f" | grep -qE '(^|/)bin/jetlink-server$'
-            ls -l "$f"
-          done
+          found=(jetlink-server-*-"$FLAVOR".tar.gz)
+          if [ "${#found[@]}" != 1 ] || [ ! -f "${found[0]}" ]; then
+            echo "error: wanted one tarball, found: ${found[*]}" >&2
+            exit 1
+          fi
+          f=${found[0]}
+          ls -l "$f"
+          # what install.sh checks, and the binary with its page beside it
+          [ "$(awk '{print $1; exit}' "$f.sha256")" = "$(sha256sum "$f" | awk '{print $1}')" ]
+          mkdir unpacked
+          tar -xzf "$f" -C unpacked
+          top=(unpacked/*)
+          [ -x "${top[0]}/bin/jetlink-server" ]
+          [ -f "${top[0]}/bin/JetlinkKit_JetlinkStatusPage.resources/Resources/index.html" ]
+          # this runner is the flavor's processor: the binary runs here
+          version="$("${top[0]}/bin/jetlink-server" --version)"
+          echo "jetlink-server --version: $version"
+          [ "$version" = "$(cat "${top[0]}/VERSION")" ]
+          if [ "$REF_TYPE" = tag ]; then [ "$version" = "${GITHUB_REF_NAME#v}" ]; fi
+          "${top[0]}/bin/jetlink-server" serve --help >/dev/null
+          # no GPU here, so TensorRT has to say it cannot run
+          if "${top[0]}/bin/jetlink-server" backends --backend trt; then
+            echo "error: backends --backend trt passed on a runner without a GPU" >&2
+            exit 1
+          fi
+          rm -rf unpacked
 
       - name: Upload the tarball
         uses: actions/upload-artifact@v4
