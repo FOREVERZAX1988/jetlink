@@ -69,8 +69,8 @@ pytestmark = pytest.mark.skipif(BIN is None, reason='no jetlink-server: set JETL
 
 
 def spec_of(path: Path) -> ModelSpec:
-  """The spec Python derives, as make_server_fixtures.py recorded it: no onnx
-  package needed here, so this runs anywhere numpy does."""
+  """The spec Python derives, as committed beside the graph: no onnx package
+  needed here, so this runs anywhere numpy does."""
   return ModelSpec.from_dict(json.loads(path.with_suffix('.spec.json').read_text()))
 
 

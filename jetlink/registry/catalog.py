@@ -46,15 +46,15 @@ _SHA256 = re.compile(r'[0-9a-f]{64}')
 
 
 class RegistryError(Exception):
-  """Anything the registry refuses to do. Exit code 1 in the CLI."""
+  """Anything the registry refuses to do."""
 
 
 class NetworkError(RegistryError):
-  """A server could not be reached or did not answer sensibly. Exit code 2."""
+  """A server could not be reached or did not answer sensibly."""
 
 
 class VerifyError(RegistryError):
-  """Bytes arrived, but not the bytes that were asked for. Exit code 3."""
+  """Bytes arrived, but not the bytes that were asked for."""
 
 
 class NotFound(NetworkError):

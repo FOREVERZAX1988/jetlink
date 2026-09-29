@@ -10,8 +10,8 @@ openpilot's output_slices and model_checkpoint metadata_props.
 Adapter over whichever parser the host has, neither a hard dependency.
 tinygrad's OnnxPBParser is preferred and is what openpilot's
 get_model_metadata.py uses: it walks the protobuf without materialising 766 MB
-of weights, and a comma has it already. The onnx package is the Jetson's, which
-needs it for onnx_patch anyway.
+of weights, and a comma has it already. The onnx package is the fallback
+everywhere else.
 """
 from __future__ import annotations
 

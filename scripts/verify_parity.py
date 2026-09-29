@@ -9,8 +9,8 @@ Does the link return the same numbers the model would?
 
 Compares what comes back over the cable against onnxruntime on the unmodified
 ONNX, per output slice and per column, so a regression lands on a named head
-rather than in an 18452-wide vector. That covers onnx_patch's UINT8->FP16
-surgery, the TensorRT build, the wire format and the output slicing. For a
+rather than in an 18452-wide vector. That covers the server's UINT8->FP16
+preparation, the TensorRT build, the wire format and the output slicing. For a
 queued graph, not the queues: reference() runs the same PolicyQueues, so a queue
 bug cancels out on both sides, and tests/test_queues.py is the queue check. For
 a stateful graph (openpilot #38916, Cinque Terre V3 on) reference() feeds each
@@ -19,8 +19,7 @@ next_state_ output back itself, so the server's state loop is checked too.
 The graph is float16 end to end, so this is two float16 implementations
 differing in accumulation order, not half against full precision: expect an
 absolute 0.005 to 0.03 across the head values. MIN_SAMPLES and
-CONSTANT_FRACTION say what a correlation can judge from that, and
-`verify_engine.py --capture` rules the transport out bit for bit.
+CONSTANT_FRACTION say what a correlation can judge from that.
 
     # 1. on the comma, over the cable (stop jetlinkd first, it owns the link).
     #    the server returns the spec of a model it already has, so only the

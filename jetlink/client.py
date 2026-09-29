@@ -197,7 +197,7 @@ class JetlinkClient:
   def hello(self, timeout: float = 5.0) -> dict:
     """Introduce this client. The server starts its session over on a hello,
     so this is also how a new owner of the gadget takes over one the server
-    never saw end; see Session._greet.
+    never saw end; see Session.greet in JetlinkServer.
 
     Also where a version mismatch ends, in one round trip and naming the side
     to update: the hello travels in the envelope every version reads, a server

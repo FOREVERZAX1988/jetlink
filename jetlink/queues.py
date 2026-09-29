@@ -4,24 +4,25 @@ Copyright (c) 2026-, Zeph Leggett.
 This file is part of jetlink and is licensed under the MIT License.
 See the LICENSE file in the root directory for more details.
 
-The model's history buffers, reimplemented in numpy, or looped for a graph
-that keeps its own.
+A queued graph's history buffers, reimplemented in numpy: the reference the
+server's staging is held to.
 
 openpilot folds these into the tinygrad JIT on the GPU. Shipping the history
 across the link would cost ~10 MB a frame, so the queues live on the server and
 the comma sends only the newest warped frame and the packed scalars. The hidden
-state the graph returns stays here too: the next frame pushes it into the
+state the graph returns stays there too: the next frame pushes it into the
 features queue, where modeld's prev_feat went. The fork's tests/test_queues.py
-checks this against the tinygrad original.
+checks this against the tinygrad original, and the staging conformance fixture
+(JetlinkKit/Scripts/make_conformance_fixtures.py) holds the Swift server's
+queues to this, bit for bit.
 
 Two value-preserving differences: ring buffers rather than openpilot's rolling
 `cat(buf[1:], new)`, which copies 8.4 MB a frame; and float16 storage rather
 than float32 cast at the model boundary, so only the new row is cast. Pass
 dtype=np.float32 for openpilot's exact intermediates.
 
-A stateful graph (openpilot #38916) does the queueing itself, so for one of
-those there is nothing to reimplement: StateLoop feeds each next_state_ output
-back as its state_ input. for_model() picks the one a spec needs.
+A stateful graph (openpilot #38916) does the queueing itself, so there is
+nothing here for one of those.
 """
 from __future__ import annotations
 
@@ -131,8 +132,8 @@ def _check_frame(spec: ModelSpec, warped: np.ndarray, packed: np.ndarray) -> Non
 
 
 class PolicyQueues:
-  """Server-side state for one model. Everything `run_policy` owned in the JIT,
-  and the prev_feat modeld carried from one frame's output to the next."""
+  """The server's state for one queued model. Everything `run_policy` owned in
+  the JIT, and the prev_feat modeld carried from one frame's output to the next."""
 
   def __init__(self, spec: ModelSpec, dtype=np.float16):
     self.spec = spec
@@ -198,7 +199,7 @@ class PolicyQueues:
 
     warped: (2, 6, H, W) uint8 from openpilot's warp. packed: flat float32,
     laid out per ModelSpec.packed_shapes. The features queue takes prev_feat,
-    the hidden state after_run kept. Allocates; the server uses step_into(),
+    the hidden state after_run kept. Allocates; step_into() does the work,
     so there is one implementation to keep correct.
     """
     dest = {n: np.empty(s, self.dtype) for n, s in self.model_shapes.items()}
@@ -209,8 +210,8 @@ class PolicyQueues:
                 dest: dict[str, np.ndarray]) -> None:
     """Same as step(), writing into caller-owned buffers.
 
-    `dest` maps input name to an array of the declared shape. In the server
-    those are TensorRT's pinned buffers, so the gather is the only copy.
+    `dest` maps input name to an array of the declared shape, so the gather
+    is the only copy.
     """
     traffic_convention, action_t = self._push(warped, packed)
     fs = self.frame_skip
@@ -227,60 +228,3 @@ class PolicyQueues:
       dest['traffic_convention'].shape)
     dest['action_t'][...] = action_t.reshape(dest['action_t'].shape)
 
-
-class StateLoop:
-  """Server-side state for a graph that keeps its own history.
-
-  The frame goes into new_img and the scalars into their inputs as they are;
-  the queues are the graph's, handed back each frame as next_state_<q> and fed
-  in as state_<q> on the next. That is openpilot's ModelState since #38916,
-  which aliases each next_ output onto its state_ input.
-
-  An engine with `loop_state` keeps the loop itself, TensorRT in device memory
-  and onnxruntime in its worker: the queues are 12 MB, which would otherwise
-  cross to the host and back every frame. For an engine that declines the
-  loop (a TensorRT pair that does not match) the copy is done here, after the
-  reply has gone.
-  """
-
-  def __init__(self, spec: ModelSpec, engine):
-    self.spec = spec
-    self.engine = engine
-    self.pairs = spec.state_pairs
-    if not self.pairs:
-      raise ValueError("the graph takes new_img but returns no next_state_ outputs")
-    self._packed_layout = spec.packed_layout
-    loop = getattr(engine, 'loop_state', None)
-    self.on_engine = bool(loop(self.pairs)) if callable(loop) else False
-
-  def new_client(self) -> None:
-    """Nothing: the graph's state is not the client's; RESET_QUEUES clears it."""
-
-  def reset(self) -> None:
-    """Empty queues, as openpilot's warmup leaves them."""
-    if self.on_engine:
-      self.engine.reset_state()
-    else:
-      for name in self.pairs:
-        self.engine.host_input(name)[...] = 0
-
-  def step_into(self, warped: np.ndarray, packed: np.ndarray,
-                dest: dict[str, np.ndarray]) -> None:
-    """Write one frame's inputs; the state inputs are already in place."""
-    _check_frame(self.spec, warped, packed)
-    store(dest['new_img'], warped)
-    for name, (s, _) in self._packed_layout.items():
-      store(dest[name], packed[s])
-
-  def after_run(self, outputs: dict[str, np.ndarray], dest: dict[str, np.ndarray]) -> None:
-    """Advance the queues: each next_state_ becomes next frame's state_."""
-    if self.on_engine:
-      return
-    for name, nxt in self.pairs.items():
-      store(dest[name], outputs[nxt])
-
-
-def for_model(spec: ModelSpec, engine) -> PolicyQueues | StateLoop:
-  """The server-side state a model needs: queues for a queued graph, the loop
-  for a stateful one."""
-  return StateLoop(spec, engine) if spec.stateful else PolicyQueues(spec)

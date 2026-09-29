@@ -321,6 +321,30 @@ def test_send_rejects_a_wrongly_sized_buffer():
     b.close()
 
 
+@pytest.mark.parametrize('kind', ['wrong_frame', 'short_header', 'short_output'])
+def test_invalid_inference_response_abandons_the_stream(kind):
+  from jetlink.client import JetlinkClient
+
+  spec = _spec()
+  payload = P.pack_infer_resp(42 if kind == 'wrong_frame' else 7, P.Status.OK, 0, 0, 0)
+  payload += bytes(spec.reply_nelem * 4)
+  if kind == 'short_header':
+    payload = payload[:P.INFER_RESP_SIZE - 1]
+  elif kind == 'short_output':
+    payload = payload[:-1]
+  transport = SimpleNamespace(send=lambda *a, **kw: None,
+                              recv=lambda **kw: SimpleNamespace(msg_type=P.Msg.INFER_RESP, seq=1,
+                                                               payload=memoryview(payload), version=P.VERSION))
+  client = JetlinkClient(transport)
+  client.spec = spec
+  seq = client.infer_begin(bytes(spec.warped_nbytes), bytes(spec.packed_nbytes), frame_id=7)
+  with pytest.raises(LinkError):
+    client.infer_end(seq)
+  assert client.dead
+  with pytest.raises(LinkError, match='previously failed'):
+    client.infer_begin(bytes(spec.warped_nbytes), bytes(spec.packed_nbytes), frame_id=8)
+
+
 class _CappedTransport(StreamTransport):
   """Records the size of every write the framing layer submits."""
   write_chunk = 64

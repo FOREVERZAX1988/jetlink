@@ -163,7 +163,7 @@ def test_negated_small_slice_fails_pooled():
   assert not passed['lead_prob']
 
 
-def test_single_frame_still_works_for_verify_engine():
+def test_a_single_frame_reports_every_column_ungated():
   refs = reference_frames()
   links = fp16_noisy(refs)
   passed, text = gate(links[0], refs[0])

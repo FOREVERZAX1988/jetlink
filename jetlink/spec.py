@@ -17,7 +17,7 @@ tests/test_queues.py catches the drift.
 The stateful one (openpilot #38916, 2026-09-15; Cinque Terre V3 onwards)
 carries its history in the graph: the newest warped frame goes in as new_img,
 each queue goes in as state_<q> and comes back advanced as next_state_<q>, and
-the hidden state never leaves the graph; see queues.StateLoop.
+the hidden state never leaves the graph.
 
 Either way the wire carries the newest frame and three scalars, and the reply
 the outputs less hidden_state (protocol 3): the queued graph's server feeds its
