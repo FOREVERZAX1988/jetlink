@@ -81,10 +81,8 @@ def pct(a: np.ndarray, q: float) -> float:
 
 
 def open_loan(timeout: float = LOAN_TIMEOUT):
-  """Borrow the link from the comma's gadget owner and open it as modeld does
-  (openpilot's jetlink helpers.connect): over the phone's dial if the owner
-  lent one, else over the endpoint files. (loan, client); close the client,
-  then the loan."""
+  """Borrow the link from the comma's gadget owner and open it as modeld
+  does. (loan, client); close the client, then the loan."""
   from jetlink.comma import lending
   loan = lending.borrow('bench', timeout=timeout)
   if loan is None:
@@ -92,9 +90,7 @@ def open_loan(timeout: float = LOAN_TIMEOUT):
                      "and is modeld or jetlink_hold.py holding it?")
   print(f"borrowed the {'cable link' if loan.sock is not None else 'gadget'}: udc {loan.udc}, mount {loan.mount}")
   try:
-    if loan.sock is not None:
-      return loan, JetlinkClient.open_socket(loan.sock)
-    return loan, JetlinkClient.open_borrowed_ffs(loan.mount, loan.udc, bounce=loan.bounce)
+    return loan, JetlinkClient.open_loan(loan)
   except BaseException:
     loan.close()
     raise

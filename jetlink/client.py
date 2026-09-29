@@ -119,6 +119,14 @@ class JetlinkClient:
     return cls(FfsTransport.borrowed(mount, udc, bounce=bounce, owner_gadget=owner_gadget), **kw)
 
   @classmethod
+  def open_loan(cls, loan, **kw) -> JetlinkClient:
+    """Over what the comma's gadget owner lent (jetlink.comma.lending.Loan):
+    the phone's dial when it lent one, else the endpoint files."""
+    if loan.sock is not None:
+      return cls.open_socket(loan.sock, **kw)
+    return cls.open_borrowed_ffs(loan.mount, loan.udc, bounce=loan.bounce, **kw)
+
+  @classmethod
   def open_tcp(cls, host: str, port: int = 5599, **kw) -> JetlinkClient:
     from jetlink.transport.tcp import TcpTransport
     return cls(TcpTransport.connect(host, port), **kw)
