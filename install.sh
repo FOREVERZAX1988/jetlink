@@ -42,6 +42,10 @@ UNIT_DIR=/etc/systemd/system
 UNIT=jetlink-server
 # in a server's directory: the unit and udev rules built with it
 SHARE=share/jetlink
+# what the Docker-era installers made (the status page's own unit was never
+# released, but a bench has it): a move from Docker saves these, and a failed
+# one puts them back
+DOCKER_ERA_UNITS="$UNIT.service $UNIT.service.d jetlink-poweroff.path jetlink-poweroff.service jetlink-web.service jetlink-web.service.d"
 CLOCKS_DROPIN="$UNIT_DIR/$UNIT.service.d/20-jetson-clocks.conf"
 WAKE_RULE=/etc/udev/rules.d/99-jetlink-usb-wakeup.rules
 JOURNALD_DROPIN=/etc/systemd/journald.conf.d/60-jetlink.conf
@@ -1012,10 +1016,10 @@ backup_install() {
   as_root rm -rf "$DOCKER_ERA_DIR"
   as_root install -d -m 755 "$DOCKER_ERA_DIR/systemd"
   local f u enabled=''
-  for f in "$UNIT_DIR"/jetlink-*; do
+  for u in $DOCKER_ERA_UNITS; do
+    f="$UNIT_DIR/$u"
     [ -e "$f" ] || continue
     as_root cp -a "$f" "$DOCKER_ERA_DIR/systemd/"
-    u="$(basename "$f")"
     case "$u" in
       *.service|*.path)
         if [ "$(as_root systemctl is-enabled "$u" 2>/dev/null || true)" = enabled ]; then
@@ -1133,6 +1137,23 @@ restore_docker_era() {
       esac
     done <"$DOCKER_ERA_DIR/enabled"
   } >>"$LOG" 2>&1 || true
+}
+
+# A jetlink-* unit the installer did not make, set up by hand on a bench,
+# stays as it is, and is not saved or started again with the Docker era's.
+# One that runs may hold the comma's USB interface the server needs.
+others_units() {
+  local f u
+  for f in "$UNIT_DIR"/jetlink-*.service; do
+    [ -e "$f" ] || continue
+    u="$(basename "$f")"
+    case " $DOCKER_ERA_UNITS " in *" $u "*) continue ;; esac
+    if as_root systemctl is-active --quiet "$u" || [ "$(as_root systemctl is-enabled "$u" 2>/dev/null || true)" = enabled ]; then
+      note "$u is not the installer's, and stays as it is. If it serves the comma too, stop it:"
+      note "  sudo systemctl disable --now $u"
+    fi
+  done
+  return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -1913,6 +1934,7 @@ main() {
   install_base_packages
   prepare_source
   backup_install
+  others_units
   hold_sleep
   get_server
   ensure_runtime

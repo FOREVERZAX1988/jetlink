@@ -1062,6 +1062,9 @@ old_install v0.6.0
 # the status page's own unit, from before it moved into the server
 printf '[Service]\nExecStart=/usr/bin/python3 /usr/local/lib/jetlink/web/jetlink_web.py\n[Install]\nWantedBy=multi-user.target\n' \
   >"$UNITS/jetlink-web.service"
+# and a unit of the bench's own, which is not the installer's to save or start
+printf '[Service]\nExecStart=/usr/local/bin/jetlink-swift\n[Install]\nWantedBy=multi-user.target\n' \
+  >"$UNITS/jetlink-swift.service"
 # a failure while it serves without sleeping puts the sleep back
 FAKE_BAD_SUM=1 cli update
 expect_rc 1
@@ -1087,6 +1090,11 @@ expect_file "$UNITS/jetlink-poweroff.path"
 expect_file "$UNITS/jetlink-web.service"
 expect_ran "systemctl enable --now jetlink-poweroff.path"
 expect_ran "systemctl enable --now jetlink-web.service"
+expect_out "jetlink-swift.service is not the installer's, and stays as it is."
+expect_no_file /etc/jetlink/docker-era/systemd/jetlink-swift.service
+expect_not_in /etc/jetlink/docker-era/enabled "jetlink-swift.service"
+expect_not_ran "systemctl enable --now jetlink-swift.service"
+expect_file "$UNITS/jetlink-swift.service"
 expect_not_ran "docker rmi"
 check "the Docker server was not started again" test "$(grep -c "systemctl restart jetlink-server" "$FAKE_LOG")" -ge 2
 refute "the unit was left stopped" test -f "$FAKE_STATE/stopped-jetlink-server"
