@@ -56,9 +56,11 @@ cat <<'NEXT'
     that exits.
 
     An owner or modeld that was already running still has the OLD package
-    imported, and manager never respawns a process that exited on its own.
-    Reboot the comma, or restart them yourself (get the pid first: pkill -f
-    over ssh matches your own ssh command line and kills the session):
+    imported. Reboot the comma, or kill the owner: a fork with jetlinkd's
+    restart wrapper starts it again on manager's next loop (an older fork
+    leaves it dead until a reboot), and three kills in 10 min make its next
+    start wait. Get the pid first: pkill -f over ssh matches your own ssh
+    command line and kills the session:
 
       pgrep -f "^openpilot.sunnypilot.jetlink_adapter$"
 
