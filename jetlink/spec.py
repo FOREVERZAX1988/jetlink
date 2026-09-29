@@ -173,11 +173,15 @@ class ModelSpec:
   @cached_property
   def hidden_range(self) -> tuple[int, int] | None:
     """[start, stop) of hidden_state in the output: what the reply leaves out.
-    None when the model names no such slice, and then the reply is whole."""
+    Its ends resolve as Python slicing resolves them, an open end or one
+    counted from the back included, which is also how the Swift server reads
+    them (NamedSlice.range(in:)). None when the model names no such slice or
+    it takes nothing, and then the reply is whole."""
     s = self.output_slices.get(HIDDEN_STATE)
-    if s is None or s.step not in (None, 1) or s.start is None or s.stop is None:
+    if s is None or s.step not in (None, 1):
       return None
-    return (s.start, s.stop) if 0 <= s.start < s.stop <= self.output_nelem else None
+    start, stop, _ = s.indices(self.output_nelem)
+    return (start, stop) if start < stop else None
 
   @cached_property
   def reply_nelem(self) -> int:

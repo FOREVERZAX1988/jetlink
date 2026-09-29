@@ -56,11 +56,11 @@ struct SpecTests {
     #expect(NamedSlice("x", start: 8, stop: 2).range(in: 10) == 8..<8)
     // no hidden_state: the reply is the whole output, as hidden_range says
     #expect(spec.hiddenRange == nil && spec.replyCount == 2580)
-    // and one with an open end is no hidden range either
+    // one with an open end runs to the end, as Python slices it
     let open = ModelSpec(
       sha256: spec.sha256, nbytes: 1, frameSkip: 4, inputShapes: spec.inputShapes, outputShapes: spec.outputShapes,
       outputSlices: [NamedSlice("hidden_state", start: 2000, stop: nil)], checkpoint: nil)
-    #expect(open.hiddenRange == nil)
+    #expect(open.hiddenRange == 2000..<2580 && open.replyCount == 2000)
   }
 
   /// A 766 MB model's frame, whichever layout: one 16 KB read on the comma
