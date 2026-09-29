@@ -22,7 +22,7 @@ public struct OnnxMeta: Sendable, Equatable {
       self.dims = dims
     }
 
-    /// numpy's name for the element type, as onnx_meta.py prints it.
+    /// numpy's name for the element type.
     public var typeName: String { OnnxMeta.typeName(elemType) }
   }
 
@@ -81,8 +81,7 @@ public struct OnnxMeta: Sendable, Equatable {
     return try OutputSlices.decode(base64: raw)
   }
 
-  /// numpy's dtype name for an ONNX element type, as onnx_meta.py's ELEM_TYPE
-  /// maps it, and `unknown(<n>)` for the rest.
+  /// numpy's dtype name for an ONNX element type, and `unknown(<n>)` for the rest.
   public static func typeName(_ elemType: Int32) -> String {
     switch elemType {
     case 1: "float32"

@@ -4,7 +4,7 @@ import JetlinkKit
 /// The two bulk endpoints of the comma's vendor interface: IOUSBHost on a Mac,
 /// usbfs on Linux and Android, a fake in the tests. Both calls block.
 protocol BulkPipes: AnyObject, Sendable {
-  /// Reads up to `count` bytes, a whole number of packets, into `buffer`, and
+  /// Reads up to `count` bytes of the stream into `buffer` (`ReadRing`), and
   /// returns how many arrived. A timeout is not an error: whatever did arrive
   /// is returned, or kept for the next read, because dropping it desyncs the
   /// stream. A `timeout` of 0 waits until data comes or the link goes. Throws
