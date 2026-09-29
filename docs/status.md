@@ -32,9 +32,10 @@ with its CPU as when driving. Measured 2026-09-28 and 29.
 * v0.7.0: 3 of 13,304 frames over 50 ms, each the first after a model swap.
 * The v0.7.0 runs came after the bench Jetson's GPU started throttling on
   over-current following a power cycle (hardware, not Jetlink): 0.4 to 0.8 ms
-  more GPU time on the 766 MB models. Lebowski lost 3.1 ms (40.5 / 41.7 ms),
-  so its row is the Swift server's run from before that, on the earlier link
-  protocol; Lebowski's transport is the same on both within 0.2 ms.
+  more GPU time on the 766 MB models, 3.1 ms on Lebowski (its frames then:
+  40.5 / 41.7 ms). So Lebowski's row is the Swift server's run from before
+  that, on the earlier link protocol; Lebowski's transport is the same on both
+  within 0.2 ms.
 * Sustained use at high temperatures is untested.
 
 The servers side by side, on the same Jetson and the same engine files
@@ -54,12 +55,12 @@ The servers side by side, on the same Jetson and the same engine files
   four models).
 * Transport: the round trip minus the server's own time, from
   `scripts/bench_link.py` on the comma, in 1,200-frame blocks. v0.6.0 left USB 3
-  link power management on; with it off, v0.6.0 measured 3.9 ms. v0.7.0 with it
-  on measures 4.2 ms p50 (2.0 off).
+  link power management on; with it off, v0.6.0 measured 3.9 ms mean. v0.7.0
+  with it on measures 4.2 ms p50, against 2.0 off.
 * Building a model's engine took 168 to 179 s when TensorRT's timing cache had
   nothing for its layers, and 33 to 44 s when an earlier model had filled it
   (v0.6.0's builds; v0.7.0's take the same, above). A built engine loads in 1
-  to 3 s; a Jetson powered on with one built has it ready in about 27 s.
+  to 3 s. After a power-on, the engine loaded last was ready in 27 s.
 
 Mac numbers: [Mac performance](mac-performance.md).
 
