@@ -17,7 +17,7 @@ Python:
 
 | What | Written by | Read by the Swift in |
 | --- | --- | --- |
-| Constants: the wire's magic, versions, sizes, message, flag and status numbers; USB ids and packet sizes; link media; model constants; the product version; the onnxruntime release | `make_pins.py` writes `JetlinkKit/Sources/JetlinkKit/Pinned.swift` | the Swift code uses `Pinned`; `ConformanceTests` checks every Swift constant against it |
+| Constants: the wire's magic, versions, sizes, message, flag and status numbers; USB ids and packet sizes; USB speeds; model constants; the product version; the onnxruntime release | `make_pins.py` writes `JetlinkKit/Sources/JetlinkKit/Pinned.swift` | the Swift code uses `Pinned`; `ConformanceTests` checks every Swift constant against it |
 | Wire bytes: headers and INFER bodies; the byte streams of TCP, a USB host and the gadget's 16 KB bursts; the reads a USB host posts | `make_conformance_fixtures.py wire` | `JetlinkServerTests/ConformanceTests.swift` |
 | Tensors the queues stage each frame at frame_skip 1, 2 and 4, each frame's hidden state fed into the next, with a reset, a hello, a non-finite frame and desires with NaNs, signed zeros and infinities | `make_conformance_fixtures.py staging` | the same file |
 | LFS pointers, model identities, catalog parsing and merging | `make_conformance_fixtures.py registry` | `JetlinkRegistryTests/ConformanceTests.swift` |
@@ -29,7 +29,6 @@ their own checkout, whatever the environment has installed.
 
 | What | Where | Changed by |
 | --- | --- | --- |
-| `slowFrameUs`, `controlProtocol`, `prepareVersion` | the Swift-owned section at the end of `Pinned.swift` | editing it there; `make_pins.py` copies the section through |
 | The `stats` event from fixed samples | `JetlinkServerTests/Fixtures/conformance/stats.json` | editing the file |
 | Every control event the Mac app and the status page read | `JetlinkKitTests/Fixtures/control_events_golden.jsonl` | editing the file |
 | One cache directory's catalog and inventory payloads | the `cache` block of `tests/fixtures/conformance/registry.json` | editing the file; the generator copies the block through |
@@ -38,7 +37,7 @@ their own checkout, whatever the environment has installed.
 | The Android app's snapshot | `JetlinkKitTests/Fixtures/android_snapshot.json` | `JETLINK_WRITE_FIXTURES=1` on its test |
 
 A change to one of these is a change to what the server does: say why in the
-commit. A bump of `prepareVersion` rebuilds every cached onnxruntime artifact
+commit. A bump of `OrtBackend.prepareVersion` rebuilds every cached onnxruntime artifact
 on its next load.
 
 ## The live test

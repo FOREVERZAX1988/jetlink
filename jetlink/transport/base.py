@@ -18,12 +18,10 @@ MAX_MESSAGE = 16 << 20
 _PAD = bytes(P.GADGET_TX_ALIGN)
 
 
-# How a link is carried, as the server's link event names it: the USB
-# generation the comma's controller negotiated, 'usb' when that is unknown, or
-# 'tcp'. The comma's hello says which (Transport.link_info), because only its
-# end always knows: a phone's cable is TCP over USB, and a host may not see the
-# bus speed. The server maps the speed with USB_MEDIA (Pinned.usbSpeedMedia).
-LINK_MEDIA = ('usb3', 'usb2', 'usb1', 'usb', 'tcp')
+# The USB generation of each speed Linux names, as the server's link event
+# shows it. The comma's hello carries the speed (Transport.link_info), because
+# only its end always knows: a phone's cable is TCP over USB, and a host may
+# not see the bus speed. The server maps it with this (Pinned.usbSpeedMedia).
 USB_MEDIA = {'super-speed-plus': 'usb3', 'super-speed': 'usb3', 'high-speed': 'usb2',
              'full-speed': 'usb1', 'low-speed': 'usb1'}
 UDC_SYSFS = '/sys/class/udc'
