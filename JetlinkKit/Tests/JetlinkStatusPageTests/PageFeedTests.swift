@@ -133,27 +133,30 @@ struct PageFeedTests {
     #expect(eventually { !feed.isSampling })
   }
 
-  @Test("The page's threads run at the lowest priority, and only they do")
-  func priority() {
-    final class Seen: @unchecked Sendable {
-      let lock = NSLock()
-      var value: Int32?
-    }
-    let seen = Seen()
-    PageThread.start("jetlink-page-test") {
+  // Lowered where the page is served: Linux and macOS.
+  #if canImport(Darwin) || canImport(Glibc)
+    @Test("The page's threads run at the lowest priority, and only they do")
+    func priority() {
+      final class Seen: @unchecked Sendable {
+        let lock = NSLock()
+        var value: Int32?
+      }
+      let seen = Seen()
+      PageThread.start("jetlink-page-test") {
+        #if os(Linux)
+          let nice = getpriority(__priority_which_t(PRIO_PROCESS.rawValue), 0)
+        #else
+          let nice: Int32 = Thread.current.qualityOfService == .background ? 19 : 0
+        #endif
+        seen.lock.withLock { seen.value = nice }
+      }
+      #expect(eventually { seen.lock.withLock { seen.value } != nil })
+      #expect(seen.lock.withLock { seen.value } == 19)
       #if os(Linux)
-        let nice = getpriority(__priority_which_t(PRIO_PROCESS.rawValue), 0)
-      #else
-        let nice: Int32 = Thread.current.qualityOfService == .background ? 19 : 0
+        #expect(getpriority(__priority_which_t(PRIO_PROCESS.rawValue), 0) != 19)
       #endif
-      seen.lock.withLock { seen.value = nice }
     }
-    #expect(eventually { seen.lock.withLock { seen.value } != nil })
-    #expect(seen.lock.withLock { seen.value } == 19)
-    #if os(Linux)
-      #expect(getpriority(__priority_which_t(PRIO_PROCESS.rawValue), 0) != 19)
-    #endif
-  }
+  #endif
 
   @Test("Stopping tells the open pages the server is stopping, then ends them")
   func stop() throws {

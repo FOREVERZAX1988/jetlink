@@ -6,7 +6,7 @@ import JetlinkServer
 
 #if canImport(Glibc)
   import Glibc
-#else
+#elseif canImport(Darwin)
   import Darwin
 #endif
 
@@ -164,109 +164,112 @@ final class Scratch {
   }
 }
 
-/// A page server on a free port of its own, stopped with the value.
-final class RunningPage {
-  let feed: PageFeed
-  let server: PageServer
+// Where PageServer is: Linux and macOS, not Android.
+#if canImport(Darwin) || canImport(Glibc)
+  /// A page server on a free port of its own, stopped with the value.
+  final class RunningPage {
+    let feed: PageFeed
+    let server: PageServer
 
-  init(
-    limits: PageServer.Limits = PageServer.Limits(), hardware: (any PageHardwareSource)? = nil,
-    clock: @escaping @Sendable () -> TimeInterval = {
-      ProcessInfo.processInfo.systemUptime
-    }, logs: @escaping @Sendable () -> [String] = { [] }
-  ) throws {
-    feed = PageFeed(hardware: hardware, limits: limits.feed, clock: clock)
-    server = try PageServer(port: 0, page: Data("<!doctype html><p>page</p>".utf8), feed: feed, limits: limits, logs: logs)
-  }
-
-  var port: UInt16 { server.port }
-
-  deinit {
-    server.stop()
-  }
-}
-
-/// A raw HTTP client, so a test sees exactly the bytes the page sends.
-final class Client {
-  let fd: Int32
-  private(set) var received = Data()
-  private(set) var closed = false
-
-  init(port: UInt16) throws {
-    #if canImport(Glibc)
-      fd = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
-    #else
-      fd = socket(AF_INET, SOCK_STREAM, 0)
-    #endif
-    guard fd >= 0 else { throw PageTestError("socket failed") }
-    #if canImport(Darwin)
-      var on: Int32 = 1
-      _ = setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
-    #endif
-    var address = sockaddr_in()
-    #if canImport(Darwin)
-      address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-    #endif
-    address.sin_family = sa_family_t(AF_INET)
-    address.sin_port = port.bigEndian
-    address.sin_addr.s_addr = inet_addr("127.0.0.1")
-    let connected = withUnsafePointer(to: &address) {
-      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+    init(
+      limits: PageServer.Limits = PageServer.Limits(), hardware: (any PageHardwareSource)? = nil,
+      clock: @escaping @Sendable () -> TimeInterval = {
+        ProcessInfo.processInfo.systemUptime
+      }, logs: @escaping @Sendable () -> [String] = { [] }
+    ) throws {
+      feed = PageFeed(hardware: hardware, limits: limits.feed, clock: clock)
+      server = try PageServer(port: 0, page: Data("<!doctype html><p>page</p>".utf8), feed: feed, limits: limits, logs: logs)
     }
-    guard connected == 0 else {
-      close(fd)
-      throw PageTestError("cannot connect to port \(port): \(String(cString: strerror(errno)))")
+
+    var port: UInt16 { server.port }
+
+    deinit {
+      server.stop()
     }
   }
 
-  deinit {
-    close(fd)
-  }
+  /// A raw HTTP client, so a test sees exactly the bytes the page sends.
+  final class Client {
+    let fd: Int32
+    private(set) var received = Data()
+    private(set) var closed = false
 
-  var text: String { String(decoding: received, as: UTF8.self) }
-
-  func send(_ text: String) {
-    let bytes = Array(text.utf8)
-    var offset = 0
-    while offset < bytes.count {
+    init(port: UInt16) throws {
       #if canImport(Glibc)
-        let n = bytes[offset...].withUnsafeBytes { Glibc.send(fd, $0.baseAddress, $0.count, Int32(MSG_NOSIGNAL)) }
+        fd = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
       #else
-        let n = bytes[offset...].withUnsafeBytes { Darwin.send(fd, $0.baseAddress, $0.count, 0) }
+        fd = socket(AF_INET, SOCK_STREAM, 0)
       #endif
-      if n <= 0 { return }
-      offset += n
-    }
-  }
-
-  /// Reads until `done` holds for all received so far, the page closes the
-  /// connection, or `timeout` passes. Returns everything received.
-  @discardableResult
-  func read(timeout: TimeInterval = 5, until done: (String) -> Bool = { _ in false }) -> String {
-    let deadline = Date(timeIntervalSinceNow: timeout)
-    var chunk = [UInt8](repeating: 0, count: 65536)
-    while !closed && !done(text) {
-      let left = deadline.timeIntervalSinceNow
-      if left <= 0 { break }
-      var poller = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
-      if poll(&poller, 1, Int32(left * 1000) + 1) <= 0 { continue }
-      let n = chunk.withUnsafeMutableBytes { recv(fd, $0.baseAddress, $0.count, 0) }
-      if n <= 0 {
-        closed = true
-      } else {
-        received.append(contentsOf: chunk[..<n])
+      guard fd >= 0 else { throw PageTestError("socket failed") }
+      #if canImport(Darwin)
+        var on: Int32 = 1
+        _ = setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+      #endif
+      var address = sockaddr_in()
+      #if canImport(Darwin)
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+      #endif
+      address.sin_family = sa_family_t(AF_INET)
+      address.sin_port = port.bigEndian
+      address.sin_addr.s_addr = inet_addr("127.0.0.1")
+      let connected = withUnsafePointer(to: &address) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+      }
+      guard connected == 0 else {
+        close(fd)
+        throw PageTestError("cannot connect to port \(port): \(String(cString: strerror(errno)))")
       }
     }
-    return text
-  }
 
-  /// One whole request and its whole reply, read until the page closes.
-  static func get(_ port: UInt16, _ path: String, method: String = "GET") throws -> String {
-    let client = try Client(port: port)
-    client.send("\(method) \(path) HTTP/1.1\r\nHost: jetlink.local\r\n\r\n")
-    return client.read()
+    deinit {
+      close(fd)
+    }
+
+    var text: String { String(decoding: received, as: UTF8.self) }
+
+    func send(_ text: String) {
+      let bytes = Array(text.utf8)
+      var offset = 0
+      while offset < bytes.count {
+        #if canImport(Glibc)
+          let n = bytes[offset...].withUnsafeBytes { Glibc.send(fd, $0.baseAddress, $0.count, Int32(MSG_NOSIGNAL)) }
+        #else
+          let n = bytes[offset...].withUnsafeBytes { Darwin.send(fd, $0.baseAddress, $0.count, 0) }
+        #endif
+        if n <= 0 { return }
+        offset += n
+      }
+    }
+
+    /// Reads until `done` holds for all received so far, the page closes the
+    /// connection, or `timeout` passes. Returns everything received.
+    @discardableResult
+    func read(timeout: TimeInterval = 5, until done: (String) -> Bool = { _ in false }) -> String {
+      let deadline = Date(timeIntervalSinceNow: timeout)
+      var chunk = [UInt8](repeating: 0, count: 65536)
+      while !closed && !done(text) {
+        let left = deadline.timeIntervalSinceNow
+        if left <= 0 { break }
+        var poller = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+        if poll(&poller, 1, Int32(left * 1000) + 1) <= 0 { continue }
+        let n = chunk.withUnsafeMutableBytes { recv(fd, $0.baseAddress, $0.count, 0) }
+        if n <= 0 {
+          closed = true
+        } else {
+          received.append(contentsOf: chunk[..<n])
+        }
+      }
+      return text
+    }
+
+    /// One whole request and its whole reply, read until the page closes.
+    static func get(_ port: UInt16, _ path: String, method: String = "GET") throws -> String {
+      let client = try Client(port: port)
+      client.send("\(method) \(path) HTTP/1.1\r\nHost: jetlink.local\r\n\r\n")
+      return client.read()
+    }
   }
-}
+#endif
 
 /// The JSON objects in a stream's `data:` lines, in order.
 func dataEvents(_ text: String) -> [[String: Any]] {
