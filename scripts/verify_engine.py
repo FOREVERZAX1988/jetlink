@@ -59,7 +59,8 @@ def replay_capture(engine: Engine, d: Path) -> int:
   from jetlink.server.session import warm
 
   # the server's own warm-up, so the replay runs the kernels the server runs
-  queues, host_inputs = warm(engine, load_spec_file(d / 'spec.json'))
+  spec = load_spec_file(d / 'spec.json')
+  queues, host_inputs = warm(engine, spec)
 
   n = len(list(d.glob('in_warped_*.npy')))
   if not n:
@@ -67,12 +68,14 @@ def replay_capture(engine: Engine, d: Path) -> int:
     return 1
   bad = 0
   for i in range(n):
-    # in_packed_i already carries the hidden state the link returned for frame
-    # i-1; a stateful graph carries it in its own queues instead
+    # the queues feed each frame's hidden state into the next as the server
+    # does: a queued graph's after a finite frame only, a stateful graph's
+    # through its own queues every frame
     queues.step_into(np.load(d / f'in_warped_{i}.npy'), np.load(d / f'in_packed_{i}.npy'), host_inputs)
     outputs = engine.run()
     out = model_output(outputs)
-    queues.after_run(outputs, host_inputs)
+    if spec.stateful or np.all(np.isfinite(out)):
+      queues.after_run(outputs, host_inputs)
     link = np.load(d / f'out_link_{i}.npy').reshape(-1)
     same = np.array_equal(out, link)
     bad += not same

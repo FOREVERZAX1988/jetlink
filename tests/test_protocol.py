@@ -30,7 +30,7 @@ def test_unsolicited_messages_cannot_extend_a_reply_deadline(monkeypatch, msg_ty
   def recv(timeout):
     clock[0] += 0.02
     assert clock[0] < 1.0, 'client kept consuming messages past its deadline'
-    return SimpleNamespace(msg_type=msg_type, seq=1, payload=memoryview(payload))
+    return SimpleNamespace(msg_type=msg_type, seq=1, payload=memoryview(payload), version=P.VERSION)
 
   monkeypatch.setattr(client_module, 'time', SimpleNamespace(monotonic=lambda: clock[0]))
   client = client_module.JetlinkClient(SimpleNamespace(recv=recv))
@@ -192,14 +192,19 @@ def test_spec_matches_the_shipped_big_model():
   assert s.warped_shape == (2, 6, 128, 256)
   assert s.warped_nbytes == 393_216
   assert s.feat_dim == 16_384                    # 32 * 512, == hidden_state length
-  assert s.packed_nelem == 8 + 2 + 2 + 16_384
-  assert s.packed_nbytes == 65_584
+  assert s.prev_feat_shape == (1, 16_384)        # kept on the server
+  assert s.packed_nelem == 8 + 2 + 2
+  assert s.packed_nbytes == 48
   assert s.output_nelem == 18_452
+  assert s.hidden_range == (2066, 18450)
+  assert s.reply_nelem == 2066 + 2
   assert s.img_buf_shape == (5, 6, 128, 256)     # frame_skip*(n_frames-1)+1
   assert s.feat_q_shape == (128, 1, 16_384)
   assert s.desire_q_shape == (132, 1, 8)
-  # ~533 KB/frame, 85 Mbit/s at 20 Hz
-  assert s.infer_req_nbytes + s.infer_resp_nbytes < 540_000
+  # the messages with their 32-byte headers: 393,304 B up (409,600 once the
+  # gadget pads it to 16 KB) and 8,324 B down, one 16 KB read on the comma
+  assert P.HEADER_SIZE + s.infer_req_nbytes == 393_304
+  assert P.HEADER_SIZE + s.infer_resp_nbytes == 8_324
 
 
 def test_spec_handles_the_older_3d_features_buffer():
@@ -207,7 +212,8 @@ def test_spec_handles_the_older_3d_features_buffer():
                           'desire_pulse': (1, 25, 8), 'traffic_convention': (1, 2),
                           'action_t': (1, 2), 'features_buffer': (1, 24, 512)})
   assert s.feat_dim == 512
-  assert s.packed_nelem == 8 + 2 + 2 + 512
+  assert s.prev_feat_shape == (1, 512)
+  assert s.packed_nelem == 8 + 2 + 2
 
 
 def test_rx_buffer_compaction_preserves_a_partial_message():

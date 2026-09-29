@@ -173,8 +173,10 @@
     }
   ],
   "dtype": "float16",
-  "frame_layout": "warped uint8 then packed float32, per frame",
+  "feedback": "the output's hidden_state is fed back after the frame when every value is finite",
+  "frame_layout": "warped uint8, packed float32, then the driving output float32 the frame returned, per frame",
   "frames": 12,
+  "hello_before": 5,
   "reset_before": 8,
   "staged_layout": "each input in `inputs` order, float16, per frame"
 }

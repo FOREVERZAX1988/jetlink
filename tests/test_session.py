@@ -34,6 +34,11 @@ from jetlink.transport.base import LinkError
 from jetlink.transport.tcp import TcpTransport
 from tests.fake_backend import FakeBackend, FakeEngine
 
+# The Python server answers INFER in protocol 2 (the whole output, hidden_state
+# in it) and goes at the cutover; the client stopped reading that layout.
+PYTHON_SERVER_V2 = ('the Python server answers INFER in protocol 2 and is deleted at the cutover; '
+                    'tests/test_swift_server.py runs this against the Swift server')
+
 BIG = {
   'img': (1, 12, 128, 256), 'big_img': (1, 12, 128, 256),
   'desire_pulse': (1, 33, 8), 'traffic_convention': (1, 2),
@@ -71,14 +76,14 @@ def test_invalid_inference_response_abandons_the_stream(kind):
   from types import SimpleNamespace
   spec = make_spec()
   payload = P.pack_infer_resp(42 if kind == 'wrong_frame' else 7, P.Status.OK, 0, 0, 0)
-  payload += bytes(spec.output_nbytes)
+  payload += bytes(spec.reply_nelem * 4)
   if kind == 'short_header':
     payload = payload[:P.INFER_RESP_SIZE-1]
   elif kind == 'short_output':
     payload = payload[:-1]
   transport = SimpleNamespace(send=lambda *a, **kw: None,
                               recv=lambda **kw: SimpleNamespace(msg_type=P.Msg.INFER_RESP, seq=1,
-                                                               payload=memoryview(payload)))
+                                                               payload=memoryview(payload), version=P.VERSION))
   client = JetlinkClient(transport)
   client.spec = spec
   seq = client.infer_begin(bytes(spec.warped_nbytes), bytes(spec.packed_nbytes), frame_id=7)
@@ -136,6 +141,7 @@ def link():
     yield client, session, engine, spec
 
 
+@pytest.mark.skip(reason=PYTHON_SERVER_V2)
 def test_infer_round_trip(link):
   client, session, engine, spec = link
   rng = np.random.default_rng(0)
@@ -151,6 +157,7 @@ def test_infer_round_trip(link):
   assert gpu_us == 1234 and total_us >= 0
 
 
+@pytest.mark.skip(reason=PYTHON_SERVER_V2)
 def test_hidden_state_feeds_back_into_the_queues(link):
   """prev_feat goes out, comes back as features_buffer on the next frame."""
   client, session, engine, spec = link
@@ -172,6 +179,7 @@ def test_hidden_state_feeds_back_into_the_queues(link):
   assert seen, "prev_feat never reached the engine's features_buffer"
 
 
+@pytest.mark.skip(reason=PYTHON_SERVER_V2)
 def test_queues_reset_flag_clears_history(link):
   client, session, engine, spec = link
   warped = np.full(spec.warped_shape, 9, np.uint8)
@@ -192,6 +200,7 @@ def test_nonfinite_output_is_reported_not_returned(link):
                  np.zeros(spec.packed_nelem, np.float32))
 
 
+@pytest.mark.skip(reason=PYTHON_SERVER_V2)
 def test_telemetry_piggybacks_without_an_extra_round_trip(link):
   client, session, engine, spec = link
   warped = np.zeros(spec.warped_shape, np.uint8)
@@ -210,6 +219,7 @@ def test_telemetry_piggybacks_without_an_extra_round_trip(link):
   assert 'temp_c' in client.last_state and 'power_w' in client.last_state
 
 
+@pytest.mark.skip(reason=PYTHON_SERVER_V2)
 def test_blocked_sensor_does_not_delay_following_inferences(link):
   from jetlink.server.telemetry import CachedTelemetry
 
