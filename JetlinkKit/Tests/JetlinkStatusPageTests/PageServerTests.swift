@@ -130,6 +130,32 @@ struct PageServerTests {
     #expect(tenth.read { $0.contains("retry: 2000\n\n") }.hasPrefix("HTTP/1.1 200 OK\r\n"))
   }
 
+  @Test("A page's socket gives up on a vanished phone in about half a minute")
+  func keepalive() throws {
+    #if canImport(Glibc)
+      let fd = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
+      let idle = TCP_KEEPIDLE
+    #else
+      let fd = socket(AF_INET, SOCK_STREAM, 0)
+      let idle = TCP_KEEPALIVE
+    #endif
+    try #require(fd >= 0)
+    defer { close(fd) }
+    PageServer.tune(fd, writeTimeout: 10)
+    func option(_ level: Int32, _ name: Int32) -> Int32 {
+      var value: Int32 = -1
+      var length = socklen_t(MemoryLayout<Int32>.size)
+      return getsockopt(fd, level, name, &value, &length) == 0 ? value : -1
+    }
+    let tcp = Int32(IPPROTO_TCP)
+    #expect(option(SOL_SOCKET, SO_KEEPALIVE) != 0)
+    #expect(option(tcp, idle) == 15 && option(tcp, TCP_KEEPINTVL) == 5 && option(tcp, TCP_KEEPCNT) == 3)
+    #expect(option(tcp, TCP_NODELAY) != 0)
+    #if canImport(Glibc)
+      #expect(option(tcp, TCP_USER_TIMEOUT) == 30_000)
+    #endif
+  }
+
   @Test("Stopping ends every stream after telling it the server is stopping")
   func stop() throws {
     let page = try RunningPage()
