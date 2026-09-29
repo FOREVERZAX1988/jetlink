@@ -1516,8 +1516,9 @@ install_files() {
   if [ "$JETSON" = 1 ]; then
     # jetson_clocks pins the clocks and turns DVFS off, so the GPU sits at the
     # power mode's ceiling instead of ramping between frames. A reboot undoes
-    # it, so it runs before every start.
-    printf '# Jetlink: the GPU at full clock while the server runs\n[Service]\nExecStartPre=-/usr/bin/jetson_clocks\n' \
+    # it, so it runs before every start, and after nvpmodel, whose mode sets
+    # the ceiling and would undo it too.
+    printf '# Jetlink: the GPU at full clock while the server runs\n[Unit]\nAfter=nvpmodel.service\n[Service]\nExecStartPre=-/usr/bin/jetson_clocks\n' \
       | root_write "$CLOCKS_DROPIN"
   else
     as_root rm -f "$CLOCKS_DROPIN"

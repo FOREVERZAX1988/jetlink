@@ -307,6 +307,8 @@ expect_in /etc/jetlink/install.conf "JETLINK_VERSION=v0.10.0"
 check "the unit is not the server's own" cmp -s "$UNITS/jetlink-server.service" /opt/jetlink/0.10.0/share/jetlink/systemd/jetlink-server.service
 expect_in "$UNITS/jetlink-server.service.d/10-cache.conf" "RequiresMountsFor=/mnt/data/jetlink"
 expect_in "$UNITS/jetlink-server.service.d/20-jetson-clocks.conf" "ExecStartPre=-/usr/bin/jetson_clocks"
+# after the power mode is set at boot, which would undo it
+expect_in "$UNITS/jetlink-server.service.d/20-jetson-clocks.conf" "After=nvpmodel.service"
 # up once it says it serves: the line the Swift server says, whatever the comma does
 expect_in /var/log/jetlink-install.log "jetlink-server is serving"
 check "Serve.swift no longer says the line install.sh waits for" \
