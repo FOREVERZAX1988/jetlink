@@ -18,6 +18,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -860,8 +861,9 @@ class TestTheGadgetNetwork(IosTest):
 
 
 class TestSwitchingMode(OwnerTest):
-  """USB and iOS are different gadgets; moving the setting rebuilds it, and
-  only while parked with nobody on the link: the rebuild is an unplug."""
+  """USB and iOS are different gadgets; moving the setting rebuilds it, only
+  while parked: the rebuild is an unplug. These enter iOS from USB, which also
+  waits for nobody to be on the link; TestLeavingIos goes the other way."""
 
   def setUp(self):
     super().setUp()
@@ -884,7 +886,7 @@ class TestSwitchingMode(OwnerTest):
     o.step()
     self.setup_gadget.assert_called_once()
 
-  def test_a_dead_owners_borrower_holds_the_rebuild_back(self):
+  def test_entering_ios_a_dead_owners_borrower_holds_the_rebuild_back(self):
     # the owner died parked during a run, and the run is still on the
     # endpoints of the gadget the dead owner bound; the rebuild's unbind
     # would pull it out from under the run
@@ -907,7 +909,7 @@ class TestSwitchingMode(OwnerTest):
       o.step()
     self.setup_gadget.assert_called_once()
 
-  def test_onroad_it_waits_for_the_car_to_park(self):
+  def test_entering_ios_onroad_waits_for_the_car_to_park(self):
     self.write('IsOffroad', b'0')
     o = self.switched()
     o.step()
@@ -916,7 +918,7 @@ class TestSwitchingMode(OwnerTest):
     o.step()
     self.setup_gadget.assert_called_once()
 
-  def test_a_borrower_on_the_link_is_not_unplugged(self):
+  def test_entering_ios_a_borrower_on_the_link_is_not_unplugged(self):
     o = self.switched()
     o.lender.lent = True
     o.step()
@@ -953,19 +955,234 @@ class TestSwitchingMode(OwnerTest):
       o.step()
     self.setup_gadget.assert_called_once()
     self.assertFalse(o.built_ios)
+    o.next_gadget_attempt = 0.0
+    self.setup_gadget.return_value = True
+    o.step()
+    self.assertEqual(self.setup_gadget.call_count, 2)
+    self.assertTrue(o.built_ios)
 
-  def test_a_run_in_flight_is_not_unplugged(self):
-    # the rebuild is an unplug, and a run may be mid-upload or mid-build
+  def test_entering_ios_parked_a_run_of_ours_is_stopped_not_waited_for(self):
+    # a run can sit in a build for half an hour; it is ours to stop, and its
+    # loan ends as it exits
+    o = self.switched()
+    o.worker = worker = mock.Mock(**{'poll.return_value': None, 'wait.return_value': 0})
+    o.step()
+    worker.terminate.assert_called_once()
+    self.assertIsNone(o.worker)
+    self.setup_gadget.assert_not_called()
+    o.step()
+    self.setup_gadget.assert_called_once_with(True)
+    self.assertTrue(o.built_ios)
+
+  def test_entering_ios_a_run_asking_the_jetson_to_power_off_finishes_first(self):
     o = self.switched()
     o.worker = mock.Mock(**{'poll.return_value': None})
+    o.shutting_down = True
+    with mock.patch.object(gadget, 'pending_shutdown', return_value='comma shutting down'):
+      o.step()
+    o.worker.terminate.assert_not_called()
+    self.setup_gadget.assert_not_called()
+
+
+class TestLeavingIos(IosTest):
+  """Out of iOS, parked, nothing on the comma's side holds the switch back: an
+  iOS gadget lends nobody the endpoint files, so the rebuild pulls nothing out
+  from under a borrower. A borrower waiting for a phone that never dials, and
+  a run stuck with a silent one, used to keep the comma on iOS until a power
+  cycle."""
+
+  def setUp(self):
+    super().setUp()
+    p = mock.patch.object(gadget, 'setup_gadget', mock.Mock(return_value=True))
+    self.addCleanup(p.stop)
+    self.setup_gadget = p.start()
+
+  def assert_usb(self, o):
+    self.setup_gadget.assert_called_once_with(False)
+    self.assertFalse(o.built_ios)
+    self.assertFalse(o.holding())
+    self.assertEqual(gadget.link_kind(), 'usb')
+
+  def test_no_phone_and_a_borrower_waiting_for_one(self):
+    o = self.owner()
+    o.lender.lent = True   # modeld's join, told "retry, waiting for a phone to dial"
+    o.step()
+    self.write('JetlinkLink', b'1')
+    o.step()
+    o.close_link.assert_called_once()
+    self.assert_usb(o)
+
+  def test_a_real_borrower_waiting_for_a_dial_is_lent_the_usb_gadget(self):
+    o = self.make()
+    sock = self.tmp / 'lend.sock'
+    o.lender = lending.Lender(o.lendable, o.bounce_gadget, path=sock, holding=o.holding, cable=o.cable,
+                              server=o.note_server)
+    self.addCleanup(o.lender.stop)
+    self.addCleanup(o.cable.close)
+    for name in ('open_link', 'spawn_worker'):
+      p = mock.patch.object(o, name, mock.Mock(return_value=True))
+      self.addCleanup(p.stop)
+      p.start()
+    o.built_ios = True
+    o.publish()
+    o.seen = o.settings.marks()
+    o.had_host = True
+    self.assertTrue(o.lender.start())
+    got = {}
+
+    def borrow():
+      got['loan'] = lending.borrow('modeld', timeout=5.0, path=sock)
+
+    t = threading.Thread(target=borrow, daemon=True)
+    t.start()
+    deadline = time.monotonic() + 2.0
+    while not o.lender.lent and time.monotonic() < deadline:
+      time.sleep(0.01)
+    self.assertTrue(o.lender.lent, 'the borrower never asked')
+    self.write('JetlinkLink', b'1')
+    with mock.patch.object(gadget, 'bound_udc', return_value='a600000.dwc3'):
+      o.step()
+      self.assert_usb(o)
+      # the USB gadget presented, as open_link does on the next step
+      o.transport = mock.Mock(lendable=True)
+      t.join(5.0)
+    loan = got.get('loan')
+    self.assertIsNotNone(loan, 'the waiting borrower was never lent the USB gadget')
+    self.addCleanup(loan.close)
+    self.assertIsNone(loan.sock)   # the endpoint files, not a phone's socket
+    self.assertEqual(loan.udc, 'a600000.dwc3')
+
+  def test_a_silent_phone_with_a_stuck_run_is_left_inside_the_grace(self):
+    o = self.owner()
+    o.close_link.side_effect = lambda: owner.Owner.close_link(o)   # the real one: it hangs up on the phone
+    o.step()
+    phone = self.dial(o)   # connects and never sends a byte
+    o.step()
+    self.assertTrue(o.cable.held)
+    # the run the dial started, stuck in the phone's hello
+    worker = mock.Mock(**{'poll.return_value': None, 'wait.side_effect': subprocess.TimeoutExpired('run', 0.1)})
+    o.worker = worker
+    o.lender.lent = True
+    self.write('JetlinkLink', b'1')
+    with mock.patch.object(owner, 'WORKER_GRACE', 0.2):
+      t0 = time.monotonic()
+      o.step()
+      took = time.monotonic() - t0
+    self.assertLess(took, 0.2 + 1.0)
+    worker.terminate.assert_called_once()
+    worker.kill.assert_called_once()
+    self.assertIsNone(o.worker)
+    self.assert_usb(o)
+    self.assertFalse(o.cable.listening)
+    phone.settimeout(2.0)
+    self.assertEqual(phone.recv(1), b'', 'the phone was not hung up on')
+
+  def test_a_failed_ios_build_does_not_delay_the_way_back(self):
+    # a half-built composite gadget: iOS failed, and the setting goes back to
+    # USB inside the 60 s backoff
+    o = self.owner()
+    o.built_ios = False
+    o.publish()
+    self.setup_gadget.return_value = False
+    o.step()   # iOS wanted: the build fails and backs off
+    self.setup_gadget.assert_called_once_with(True)
+    self.assertGreater(o.next_gadget_attempt, time.monotonic() + 30)
+    self.setup_gadget.reset_mock(return_value=True)
+    self.setup_gadget.return_value = True
+    self.write('JetlinkLink', b'1')
+    o.step()
+    self.assert_usb(o)
+
+  def test_off_lets_everything_go(self):
+    o = self.owner()
+    o.worker = worker = mock.Mock(**{'poll.return_value': None, 'wait.return_value': 0})
+    o.lender.lent = True
+    self.write('JetlinkLink', b'0')
+    o.step()
+    o.close_link.assert_called_once()
+    worker.terminate.assert_called_once()
+    self.setup_gadget.assert_not_called()
+
+  def test_onroad_a_setting_written_another_way_waits_for_park(self):
+    # the panels refuse the change onroad; the owner is the second line
+    self.write('IsOffroad', b'0')
+    o = self.owner()
+    o.lender.lent = True
+    self.write('JetlinkLink', b'1')
+    for _ in range(3):
+      o.step()
+    self.setup_gadget.assert_not_called()
+    self.assertTrue(o.built_ios)
+    self.write('IsOffroad', b'1')
+    o.step()
+    self.assert_usb(o)
+
+
+class TestTheSetModeOnroad(OwnerTest):
+  """The lock while driving is on changing the setting, never on the link:
+  the mode that is set is built, and built again, onroad as parked, so a
+  Jetson on USB joins mid-drive after a boot, a failed build or a replug."""
+
+  def setUp(self):
+    super().setUp()
+    self.write('IsOffroad', b'0')
+    self.configured = False
+    p = mock.patch.object(gadget, 'link_configured', lambda: self.configured)
+    self.addCleanup(p.stop)
+    p.start()
+    p = mock.patch.object(gadget, 'setup_gadget', mock.Mock(side_effect=self.setup))
+    self.addCleanup(p.stop)
+    self.setup_gadget = p.start()
+    self.works = True
+
+  def setup(self, ios):
+    self.configured = self.configured or self.works
+    return self.works
+
+  def test_no_gadget_yet_one_step_builds_usb_and_presents_it(self):
+    o = self.owner(presented=False)
+    o.built_ios = None
+    o.step()
+    self.setup_gadget.assert_called_once_with(False)
+    self.assertFalse(o.built_ios)
+    o.open_link.assert_called()
+
+  def test_a_failed_build_of_the_set_mode_is_retried_onroad(self):
+    self.works = False
+    o = self.owner(presented=False)
+    o.built_ios = None
+    o.step()
+    o.step()
+    self.setup_gadget.assert_called_once_with(False)
+    self.works = True
+    o.next_gadget_attempt = 0.0   # the backoff has passed
+    o.step()
+    self.assertEqual(self.setup_gadget.call_count, 2)
+    self.assertFalse(o.built_ios)
+    o.open_link.assert_called()
+
+  def test_a_half_built_ios_gadget_is_built_as_usb_onroad(self):
+    # parked, a switch to iOS failed half way; the setting went back to USB and
+    # the car started before the next step
+    self.configured = True
+    o = self.owner(presented=False)
+    o.built_ios = False
+    o.failed_ios = True
+    o.next_gadget_attempt = time.monotonic() + 60
+    o.step()
+    self.setup_gadget.assert_called_once_with(False)
+    self.assertIsNone(o.failed_ios)
+    self.assertFalse(o.built_ios)
+
+  def test_a_replug_keeps_the_gadget(self):
+    self.configured = True
+    o = self.owner()
+    o.built_ios = False
+    with mock.patch.object(gadget, 'host_attached', return_value=False):
+      o.step()
     o.step()
     self.setup_gadget.assert_not_called()
     o.close_link.assert_not_called()
-    o.worker.poll.return_value = 0
-    o.worker.returncode = 0
-    o.step()
-    self.setup_gadget.assert_called_once()
-    self.assertTrue(o.built_ios)
 
 
 class TestTheLoop(OwnerTest):

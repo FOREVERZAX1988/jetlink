@@ -5,6 +5,9 @@ Jetlink v0.7.1
 * **No Lag Alert After a Pull:** The small model takes over within a frame, the first pull of a drive included (was over a second), with no "Driving Model Lagging" afterwards. A server that stops answering is caught in 0.2 s (was 0.5).
 * **Switch Without Stopping:** Connected mid-drive? Turn cruise fully off and engage again: the next engagement uses the big model. The comma says **Big Model Ready: Re-engage to switch** once, not at every stop.
 * **Replug:** A Jetson plugged back in reconnects at once (could wait up to a minute).
+
+**General Updates & Fixes**
+* **Accelerator Link:** Switching out of iOS no longer needs a power cycle: change it with the car off.
 * **Update the comma:** zoompilot's `jetson-trt` branch pins Jetlink v0.7.1. All of this runs on the comma; the server needs no update.
 
 Jetlink v0.7.0

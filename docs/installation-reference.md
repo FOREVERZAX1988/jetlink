@@ -221,7 +221,8 @@ The cache is `--cache DIR`, else `$JETLINK_CACHE`, else:
 - How the link carries a frame: [link protocol](transport.md#link-protocol).
 - Nothing on the comma runs by hand. The owner builds the gadget on its first
   step, USB or iOS per the comma's Accelerator Link setting, and rebuilds it
-  when the setting changes.
+  when the setting changes with the car off (the setting is locked while
+  driving).
 
 `scripts/comma/jetlink-root.sh` is every root action Jetlink takes on the comma
 (comma four and 3X); the owner runs it under `sudo -n`.

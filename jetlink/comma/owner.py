@@ -178,6 +178,7 @@ class Owner:
     self.idle_since = time.monotonic()
     self.next_attempt = 0.0
     self.next_gadget_attempt = 0.0
+    self.failed_ios: bool | None = None  # the mode whose last build failed, until one works
     self.next_worker = 0.0
     self.shutting_down = False          # the run in flight is the one asking the jetson to power off
     self.next_shutdown_run = 0.0
@@ -323,13 +324,16 @@ class Owner:
   def build(self, ios: bool) -> bool:
     """Set the gadget up for USB or iOS. A failure backs off, since the script
     is sudo, configfs and for iOS the network; a success does not, or a switch
-    just after a build would wait out the backoff."""
+    just after a build would wait out the backoff. The backoff is the failed
+    mode's: a half-built iOS gadget never delays the way back to USB."""
     now = time.monotonic()
-    if now < self.next_gadget_attempt:
+    if now < self.next_gadget_attempt and ios == self.failed_ios:
       return False
     if not gadget.setup_gadget(ios):
+      self.failed_ios = ios
       self.next_gadget_attempt = now + GADGET_SETUP_BACKOFF
       return False
+    self.failed_ios = None
     self.built_ios = ios
     self.publish()
     return True
@@ -744,31 +748,54 @@ class Owner:
 
   def switch_mode(self, offroad: bool, ios: bool) -> bool:
     """Rebuild the gadget when the setting moved between USB and iOS: they are
-    different devices. Only while parked and with nobody on the link, since
-    the rebuild is an unplug. True when this step went on it.
+    different devices, and the rebuild is an unplug. True when this step went
+    on it.
+
+    A switch waits for the car to park: the panels lock the setting while
+    driving, and one written some other way waits too. Building the mode that
+    is set is never held back, onroad included. Parked, leaving iOS is not held
+    back either: an iOS gadget lends nobody the endpoint files (holding), so
+    nothing of a borrower's is under the rebuild, and a borrower waiting for a
+    phone that never dials, or a run stuck with a silent one, kept the comma on
+    iOS until a power cycle. Entering iOS unplugs a USB host whose endpoint
+    files may be lent, so it waits for nobody to be on the link, except a run
+    of ours, which is stopped.
 
     What is built is learned once, onroad too: an iOS gadget taken for USB
     would lend a phone the endpoint files."""
     if self.built_ios is None:
       self.built_ios = gadget.built_for_ios() if gadget.link_configured() else ios
       self.publish()
-    if not offroad or self.lender.lent or self.worker_running():
+    # a failed build of the other mode left the gadget half built: build the
+    # set mode again. A failure of the set mode itself is build()'s to retry
+    half_built = self.failed_ios is not None and self.failed_ios != ios
+    if ios == self.built_ios and not half_built:
       return False
-    if ios == self.built_ios:
-      return False
-    if self.transport is None and gadget.bound_udc():
-      # bound, and not by us: the borrower of an owner that died (its run) is
-      # still on the endpoints. The rebuild's unbind would pull the gadget
-      # from under it, so it waits for the borrower to let go, when the
-      # kernel unbinds
-      if not self.switch_waiting:
-        gadget.log.warning("jetlink: Accelerator Link is now %s; the gadget is still bound for a borrower from "
-                           "before this owner, rebuilding it once that lets go", 'iOS' if ios else 'USB')
-        self.switch_waiting = True
-      return False
+    if ios != self.built_ios:
+      if not offroad:
+        return False
+      if ios:
+        if self.worker_running():
+          if self.shutting_down:
+            return False   # the run asking the jetson to power off finishes first
+          self.stop_worker()   # its loan ends as it exits
+          return True
+        if self.lender.lent:
+          return False
+        if self.transport is None and gadget.bound_udc():
+          # bound, and not by us: the borrower of an owner that died (its run)
+          # is still on the endpoints. The rebuild's unbind would pull the
+          # gadget from under it, so it waits for the borrower to let go, when
+          # the kernel unbinds
+          if not self.switch_waiting:
+            gadget.log.warning("jetlink: Accelerator Link is now iOS; the gadget is still bound for a borrower "
+                               "from before this owner, rebuilding it once that lets go")
+            self.switch_waiting = True
+          return False
     self.switch_waiting = False
-    if time.monotonic() < self.next_gadget_attempt:
-      return True   # the last rebuild failed; build() says when to try again
+    if time.monotonic() < self.next_gadget_attempt and ios == self.failed_ios:
+      return True   # this mode's last build failed; build() says when to try again
+    self.stop_worker()   # bounded: WORKER_GRACE, then SIGKILL
     gadget.log.warning("jetlink: Accelerator Link is now %s, rebuilding the gadget", 'iOS' if ios else 'USB')
     self.close_link()
     self.dialed = False
