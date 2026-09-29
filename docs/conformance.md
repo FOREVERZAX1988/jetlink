@@ -45,17 +45,16 @@ on its next load.
 `jetlink-server` (`--backend ort --device cpu --listen`) and drives it through
 `jetlink.client`, as a comma does: upload and build, inference, the hidden
 state, resets, NOT_FINITE, telemetry, NOT_READY, deadlines, shutdown as a dry
-run, the stateful graph, and a comma of the protocol before, played from its
-bytes. The binary comes from `JETLINK_SERVER_BIN`, else the newest build in
-`JetlinkKit/.build`; `JETLINK_SERVER_BUILD=1` builds it first. Without one it
-skips.
+run and the stateful graph. The binary comes from `JETLINK_SERVER_BIN`, else
+the newest build in `JetlinkKit/.build`; `JETLINK_SERVER_BUILD=1` builds it
+first. Without one it skips.
 
 ## How it runs
 
 - `tests/test_conformance.py` reruns each generator into a temporary directory
   and compares byte for byte with the committed files. It also checks that
-  `Pinned.swift` is current, that the Swift package links the pinned
-  onnxruntime, and that CI installs with the pinned releases.
+  `Pinned.swift` is current and that the Swift package links the pinned
+  onnxruntime.
 - The staging spec comes from a graph onnx shape-infers, so the staging files
   are compared only under the onnx in `JetlinkKit/Scripts/fixture-pins.txt`.
   CI's Python 3.12 job installs with those releases (`pip install -c`), so
@@ -84,18 +83,10 @@ needs its headers, and the tests that run a model need its library.
   whole body and cuts it (Linux URLSession has no byte stream).
 - Not on Linux: JetlinkUI, the IOUSBHost gadget, CoreML and Metal.
 
-Locally, from the checkout root, in the image CI and the release builds use.
-`scripts/build-linux.sh <flavor> ort` fetches the pinned tarball and prints its
-directory (`linux-aarch64` on Apple silicon):
-
-```bash
-ORT=$(scripts/build-linux.sh linux-aarch64 ort)
-docker run --rm -v "$PWD":/src:ro -v "$ORT":/ort:ro --tmpfs /work:exec,size=6g swift:6.3.3-jammy bash -c '
-  tar -C /src --exclude=.build -cf - JetlinkKit jetlink tests | tar -C /work -xf - && cd /work &&
-  LD_LIBRARY_PATH=/ort/lib swift test --package-path JetlinkKit -Xcc -I/ort/include &&
-  apt-get update -qq && apt-get install -y -qq python3-pip && python3 -m pip install -q numpy pytest &&
-  LD_LIBRARY_PATH=/ort/lib JETLINK_SERVER_BIN=JetlinkKit/.build/debug/jetlink-server python3 -m pytest -q tests/test_swift_server.py'
-```
+Locally, run the steps of CI's `swift-linux` job (`.github/workflows/ci.yml`)
+in `swift:6.3.3-jammy`, the image it and the release builds use.
+`scripts/build-linux.sh <flavor> ort` fetches the pinned onnxruntime and prints
+its directory (`linux-aarch64` on Apple silicon).
 
 ## When a change is intentional
 
@@ -117,14 +108,8 @@ docker run --rm -v "$PWD":/src:ro -v "$ORT":/ort:ro --tmpfs /work:exec,size=6g s
 ## What the Swift preparation refuses on purpose
 
 It has no shape or type inferrer. Where an export omits a shape or type, the
-Python preparation inferred it and the Swift does not. The frozen fixtures
-record that:
-
-| Fixture | Layout | Swift |
-| --- | --- | --- |
-| `noshape.onnx` | split | refuses the layout, saying what is missing |
-| `notype.onnx`, `noentry.onnx` | ane-whole | refuses the layout, saying what is missing |
-| `unrecorded.onnx` | whole, ane-whole | leaves a Gather index Python rewrote, so the files differ |
-
-The driving models checked so far record every shape and type these passes
-read.
+Python preparation inferred it; the Swift refuses the layout, saying what is
+missing, or leaves a Gather index as it is. The frozen `noshape`, `notype`,
+`noentry` and `unrecorded` fixtures in `JetlinkONNXTests/Fixtures` record each
+case. The driving models checked so far record every shape and type these
+passes read.
