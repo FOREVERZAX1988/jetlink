@@ -1,7 +1,7 @@
 # Updates and rollback
 
-The comma and Jetlink speak one protocol: update them together. Update
-offroad, with both devices powered and online.
+Update the comma and Jetlink together: a comma on an older build stays on its
+small model. Update offroad, with both devices powered and online.
 
 ## Updating
 
@@ -21,14 +21,6 @@ offroad, with both devices powered and online.
 
 3. Connect the comma offroad and wait for green. A new Jetlink or model may
    prepare the engine again.
-
-If only one side was updated, the comma drives on its small model, and the
-server's log (`jetlink logs`) or the comma's says which side is behind:
-
-| The log says | Update |
-| --- | --- |
-| `update the comma's jetlink package` | the comma, in **Settings > Software** |
-| `update jetlink on the Jetson` | Jetlink on the server |
 
 ## Rolling back
 

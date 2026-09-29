@@ -7,7 +7,7 @@ Jetlink v0.7.0
 **One Swift engine everywhere**
 * Jetsons, Linux PCs, the Mac, iPhone/iPad and Android all run the same Swift server.
 * **No Docker:** Jetsons and PCs run it natively. `jetlink update` moves your install over, keeping settings, models and engines.
-* **Update the comma and Jetlink together:** New link protocol; zoompilot's Jetlink pin moves to v0.7.0. On a mismatch the comma drives on the small model and the log says which side to update.
+* **Update the comma and Jetlink together:** New link protocol; zoompilot's `jetson-trt` branch pins Jetlink v0.7.0. A comma on an older build stays on the small model.
 
 **General Updates & Fixes**
 * **Faster Link:** USB 3 power saving off on Linux: 3.7 ms of transport a frame on the bench Jetson (was 7.6). Replies are 8 KB (was 74 KB): the hidden state stays on the server.

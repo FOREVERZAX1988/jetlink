@@ -113,11 +113,9 @@ Custom distributions need their own USB product ID.
   next. `jetlink update --ref main` switches to development builds (the `edge`
   prerelease).
 - The zoompilot fork pins the Jetlink it was tested with as its `jetlink_repo`
-  submodule.
-- The comma and the server speak one protocol (protocol 3 since 0.7.0): update
-  them together. On a mismatch the server refuses the comma, which drives on
-  its small model, and the logs name the side to update:
-  `update the comma's jetlink package` or `update jetlink on the Jetson`.
+  submodule; its `jetson-trt` branch pins v0.7.0.
+- Update the comma and Jetlink together: a comma on an older build stays on
+  its small model.
 
 To pin a release, pass it to the installer (replace `v0.7.0`);
 `jetlink update --ref latest` follows releases again:

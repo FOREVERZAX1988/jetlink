@@ -133,7 +133,7 @@ More: [daily use and icon meanings](docs/using-jetlink.md).
 | Model list is empty | Connect the comma to the internet, then use Refresh Model List. |
 | Setup alert or orange icon | Read the alert. Check internet, then set Accelerator Link to Off and back to USB or iOS. |
 | Alert says **no warp built for this camera** | Update or reinstall the `jetson-trt` branch. |
-| Log says `update the comma's jetlink package` or `update jetlink on the Jetson` | Update both: [updates](docs/releasing.md). |
+| Comma stays on its small model after an update | Update both the comma and Jetlink: [updates](docs/releasing.md). |
 | Link drops repeatedly | Check the cable, separate power, cooling, and computer sleep. |
 
 Logs and more: [Jetson](docs/jetson.md#troubleshooting),

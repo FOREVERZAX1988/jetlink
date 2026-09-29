@@ -100,7 +100,7 @@ network can watch the server on its [status page](using-jetlink.md#status-page);
 | Jetson will not wake | After a full shutdown, press its power button or reconnect power. Otherwise check **Always on** with `jetlink setup`. |
 | Jetson sleeps while you work on it over SSH | Run `jetlink caffeinate` and keep it running. |
 | Model fails to prepare or keeps disconnecting | Run `jetlink logs`. Check storage space, power, cable, and cooling. |
-| Log says `update the comma's jetlink package` or `update jetlink on the Jetson` | [Update both the comma and Jetlink](releasing.md). |
+| Comma stays on its small model after an update | [Update both the comma and Jetlink](releasing.md). |
 
 <details>
 <summary>Commands and reporting a problem</summary>
