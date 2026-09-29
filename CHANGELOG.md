@@ -5,7 +5,20 @@ Jetlink v0.7.0
 * Turn on: Settings > Models > Accelerator Link > USB.
 
 **One Swift engine everywhere**
-* The Mac, iPhone/iPad and Android apps all run the same Swift server.
+* Jetsons, Linux PCs, the Mac, iPhone/iPad and Android all run the same Swift server.
+* **No Docker:** Jetsons and PCs run it natively. `jetlink update` moves your install over, keeping settings, models and engines.
+* **Update the comma and Jetlink together:** New link protocol; zoompilot's Jetlink pin moves to v0.7.0. On a mismatch the comma drives on the small model and the log says which side to update.
+
+**General Updates & Fixes**
+* **Faster Link:** USB 3 power saving off on Linux: 3.7 ms of transport a frame on the bench Jetson (was 7.6). Replies are 8 KB (was 74 KB): the hidden state stays on the server.
+* **Status Page:** Watch the server from your phone at `http://<name>.local:5600`.
+* **Stay Awake:** `jetlink caffeinate` keeps a Jetson awake while you work on it.
+* **iPhone:** Neural Engine + GPU is the default (14 ms a frame on an iPhone 18 Pro).
+* **Linux PCs:** TensorRT 11.3 from NVIDIA's packages; each model may prepare once more.
+* **Tested:** JetPack 7.2.1. JetPack 6.2, Linux PCs and WSL2 are untested.
+
+**Removed**
+* Python server, Docker images and `scripts/run-mac.sh` (use `jetlink-server`).
 
 Jetlink v0.6.0
 ==============
