@@ -152,7 +152,7 @@ class FfsTransport(StreamTransport):
   # dwc3 resends a TRB about once in 400 frames. A message that fits one writev
   # is replayed whole and the receiver drops it by seq; split across two writes
   # the replay lands mid-stream and the link is lost. The largest inference
-  # request is 475 KB padded, and only uploads, which sha256 covers, are bigger.
+  # request is 400 KB padded, and only uploads, which sha256 covers, are bigger.
   write_chunk = 512 * SS_MAX_PACKET
   tx_align = P.GADGET_TX_ALIGN
 
@@ -210,9 +210,10 @@ class FfsTransport(StreamTransport):
     return t
 
   def _prepare(self, mount: str, gadget: str | None) -> None:
-    # This end only receives replies: an INFER_RESP is ~74 KB with telemetry and
-    # padding, and the upload goes the other way. 256 KB is a 3x margin the
-    # memory-tight comma can spare, and RxBuffer grows past it on demand.
+    # This end only receives replies: an INFER_RESP is 8 KB, or 74 KB when
+    # WANT_HIDDEN asks for the whole output, and the upload goes the other way.
+    # 256 KB leaves margin the memory-tight comma can spare, and RxBuffer grows
+    # past it on demand.
     super().__init__(rx_size=256 << 10)
     self.mount = mount
     self.gadget = gadget
