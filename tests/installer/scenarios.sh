@@ -77,7 +77,8 @@ reset_box() {
     ln -sf "$SRC/tests/installer/fake.sh" "$FAKE_BIN/$c"
   done
   unset FAKE_ARCH FAKE_SMI FAKE_PUBLISHED FAKE_PM_REBOOT FAKE_SERVER_BROKEN FAKE_RESTARTS FAKE_GPU_BROKEN \
-    FAKE_TRT10 FAKE_NO_CURL FAKE_ROOT_FREE_GB FAKE_IMAGE_GB FAKE_DOWNLOAD_FAILS FAKE_BAD_SUM
+    FAKE_TRT10 FAKE_NO_CURL FAKE_ROOT_FREE_GB FAKE_IMAGE_GB FAKE_DOWNLOAD_FAILS FAKE_BAD_SUM FAKE_NO_PLUGIN \
+    FAKE_DOCKER_STUCK FAKE_TRT11_BUILDS
   export JETLINK_REPO_URL=file:///tmp/repo FAKE_LATEST=v0.10.0 JETLINK_TEST_SYSTEMD_RUN=/tmp
 }
 
@@ -241,7 +242,9 @@ expect_out "Install NVIDIA TensorRT from JetPack's package source"
 expect_no_out "fastest power mode ("
 expect_out "Jetlink is installed and running"
 expect_out "Status page:"
-expect_ran "$(apt_install "libnvinfer10 libnvonnxparsers10")"
+expect_ran "$(apt_install "libnvinfer10 libnvonnxparsers10 libnvinfer-plugin10")"
+# the plugins came with it
+expect_not_ran "libnvinfer-plugin10="
 expect_ran "apt-get -o DPkg::Lock::Timeout=900 -y clean"
 expect_out "TensorRT 10.16.2.10"
 refute "Docker or its toolkit was touched" grep -qE '^(docker|nvidia-ctk) |install .*(docker|nvidia-container)' "$FAKE_LOG"
@@ -249,7 +252,7 @@ expect_ran "https://github.com/zoompilot/jetlink/releases/download/v0.10.0/jetli
 expect_ran "https://github.com/zoompilot/jetlink/releases/download/v0.10.0/jetlink-server-0.10.0-linux-aarch64.tar.gz"
 expect_link /opt/jetlink/current /opt/jetlink/0.10.0
 expect_before "jetlink-server backends --backend trt" "systemctl restart jetlink-server"
-expect_out "The server can use the GPU: trt: usable"
+expect_out "The server can use the GPU: TensorRT 10.16.2.10 on Orin-sm87"
 expect_ran "nvpmodel -m 2"
 expect_in /etc/jetlink/server.env "JETLINK_CACHE_DIR=/mnt/data/jetlink"
 expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=120"
@@ -283,7 +286,8 @@ expect_ran "systemctl enable jetlink-server"
 # the helper
 jetlink status >/tmp/status.txt 2>&1
 expect_in /tmp/status.txt "Jetlink is running"
-expect_in /tmp/status.txt "jetlink-server 0.10.0 (TensorRT 10.16.2.10)"
+expect_in /tmp/status.txt "server         0.10.0 (TensorRT 10.16.2.10)"
+expect_in /tmp/status.txt "comma          not connected"
 expect_in /tmp/status.txt "status page    http://"
 expect_in /tmp/status.txt ".local:5600"
 expect_in /tmp/status.txt "always on: sleeps when the car is off; the comma can shut it down"
@@ -409,8 +413,9 @@ scenario "a server that cannot use the GPU fails with advice, before anything ch
 reset_box; jetson 39 2.1; f=$FAILED
 FAKE_GPU_BROKEN=1 piped '' --yes
 expect_rc 1
-expect_out "TensorRT cannot run on this GPU."
-expect_out "trt: not usable"
+expect_out "TensorRT cannot run on this computer."
+expect_out "The Jetlink server cannot use the GPU: no CUDA driver: libcuda.so.1: cannot open shared object file"
+expect_no_out "ort: not usable"
 expect_no_file "$UNITS/jetlink-server.service"
 expect_no_file /opt/jetlink/current
 show_on_failure "$f"
@@ -561,9 +566,12 @@ with_trt 10.16.2.10-1+cuda13.2 10
 FAKE_TRT10=10.16.3.1-1+cuda13.2 piped '' --yes
 expect_rc 0
 expect_out "Updating TensorRT to 10.16.3.1"
-expect_ran "apt-get -o DPkg::Lock::Timeout=900 -y install --only-upgrade --no-install-recommends libnvinfer10 libnvonnxparsers10"
+expect_ran "apt-get -o DPkg::Lock::Timeout=900 -y install --only-upgrade --no-install-recommends libnvinfer10 libnvonnxparsers10 libnvinfer-plugin10"
 expect_not_ran "$(apt_install "libnvinfer10")"
 expect_out "TensorRT 10.16.3.1"
+# the TensorRT it had came without plugins: they come now, the same build
+expect_ran "$(apt_install "libnvinfer-plugin10=10.16.3.1-1+cuda13.2")"
+check "wanted the package list fetched once" test "$(grep -c "apt-get .* update" "$FAKE_LOG")" = 1
 reset_box; jetson 39 2.1
 with_trt 10.16.1.1-1+cuda13.2 10
 FAKE_TRT10=10.16.1.1-1+cuda13.2 piped '' --yes
@@ -650,8 +658,10 @@ check "never installed libcurl4" grep -qE '^apt-get .* install --no-install-reco
 expect_ran "https://developer.download.nvidia.com/compute/cuda/repos/$DIST/x86_64/cuda-keyring_1.1-1_all.deb"
 expect_ran "dpkg -i"
 # the CUDA 13 build, by its exact version, and never the meta packages
-expect_ran "$(apt_install "libnvinfer11=11.3.0.99-1+cuda13.4 libnvonnxparsers11=11.3.0.99-1+cuda13.4")"
+expect_ran "$(apt_install "libnvinfer11=11.3.0.99-1+cuda13.4 libnvonnxparsers11=11.3.0.99-1+cuda13.4 libnvinfer-plugin11=11.3.0.99-1+cuda13.4")"
 refute "installed a TensorRT meta package" grep -qE 'install .*(tensorrt|cuda12\.9)' "$FAKE_LOG"
+# for libcurl4, then again for NVIDIA's new package source
+check "wanted the package list fetched twice" test "$(grep -c "apt-get .* update" "$FAKE_LOG")" = 2
 expect_ran "releases/download/v0.10.0/jetlink-server-0.10.0-linux-x86_64.tar.gz"
 expect_in /etc/jetlink/server.env "JETLINK_JETSON=0"
 expect_in /etc/jetlink/server.env "JETLINK_CACHE_DIR=/var/lib/jetlink"
@@ -677,7 +687,7 @@ mkdir -p /var/lib/jetlink/models && echo x >/var/lib/jetlink/models/m.onnx
 install 'y\nn\n' --uninstall
 expect_rc 0
 expect_out "Jetlink is removed."
-expect_out "TensorRT stays installed; to remove it: sudo apt remove libnvinfer11 libnvonnxparsers11"
+expect_out "TensorRT stays installed; to remove it: sudo apt remove libnvinfer11 libnvonnxparsers11 libnvinfer-plugin11"
 expect_no_file /etc/jetlink
 expect_no_file /opt/jetlink
 expect_no_file /usr/local/bin/jetlink
@@ -694,7 +704,7 @@ piped '' --yes
 expect_rc 0
 expect_out "Windows (WSL) support is untested."
 expect_out "usbipd"
-expect_ran "$(apt_install "libnvinfer11=11.3.0.99-1+cuda13.4 libnvonnxparsers11=11.3.0.99-1+cuda13.4")"
+expect_ran "$(apt_install "libnvinfer11=11.3.0.99-1+cuda13.4 libnvonnxparsers11=11.3.0.99-1+cuda13.4 libnvinfer-plugin11=11.3.0.99-1+cuda13.4")"
 # a Linux driver or CUDA package inside WSL breaks the Windows driver's
 refute "installed CUDA or a driver in WSL" grep -qE 'install .*(cuda |cuda-drivers|cuda-toolkit|nvidia-driver)' "$FAKE_LOG"
 expect_in /etc/jetlink/install.conf "WSL"
@@ -812,6 +822,31 @@ expect_in /etc/jetlink/install.conf "JETLINK_VERSION=v0.9.0"
 show_on_failure "$f"
 
 # ---------------------------------------------------------------------------
+scenario "TensorRT already here without its plugins: they come, or it does without"
+reset_box; jetson 36 4.3; f=$FAILED
+with_trt 10.3.0.30-1+cuda12.5 10
+piped '' --yes
+expect_rc 0
+expect_not_ran "$(apt_install "libnvinfer10")"
+expect_out "Installing TensorRT's plugins"
+expect_ran "$(apt_install "libnvinfer-plugin10=10.3.0.30-1+cuda12.5")"
+# a package source without them: said, and not a failure
+reset_box; jetson 36 4.3
+with_trt 10.3.0.30-1+cuda12.5 10
+FAKE_NO_PLUGIN=1 piped '' --yes
+expect_rc 0
+expect_out "Could not install TensorRT's plugins; Jetlink's models do not need them."
+expect_out "Jetlink is installed and running"
+# with them already there, nothing to do
+reset_box; jetson 36 4.3
+with_trt 10.3.0.30-1+cuda12.5 10
+echo 10.3.0.30-1+cuda12.5 >"$FAKE_STATE/pkg-libnvinfer-plugin10"
+piped '' --yes
+expect_rc 0
+expect_not_ran "install --no-install-recommends libnvinfer"
+show_on_failure "$f"
+
+# ---------------------------------------------------------------------------
 # From the Docker releases: each installed by its own installer, then moved by
 # its own `jetlink update`, which runs this tree's installer.
 
@@ -889,7 +924,7 @@ expect_no_file "$UNITS/jetlink-poweroff.service"
 expect_ran "systemctl disable --now jetlink-poweroff.path"
 expect_in /usr/local/bin/jetlink "SERVER=/opt/jetlink/current/bin/jetlink-server"
 jetlink status >/tmp/status.txt 2>&1
-expect_in /tmp/status.txt "jetlink-server 0.10.0"
+expect_in /tmp/status.txt "server         0.10.0"
 show_on_failure "$f"
 
 # ---------------------------------------------------------------------------
@@ -899,7 +934,7 @@ old_install v0.5.0
 cli update
 expect_rc 0
 expect_out "Jetlink is installed and running"
-expect_ran "$(apt_install "libnvinfer10 libnvonnxparsers10")"
+expect_ran "$(apt_install "libnvinfer10 libnvonnxparsers10 libnvinfer-plugin10")"
 expect_out "TensorRT 10.3.0.30"
 expect_not_ran "apt-cache policy"
 expect_ran "docker rmi ghcr.io/zoompilot/jetlink:0.5.0-jetpack6"
@@ -940,7 +975,7 @@ old_install v0.6.0
 cli update
 expect_rc 0
 expect_out "Jetlink is installed and running"
-expect_ran "$(apt_install "libnvinfer11=11.3.0.99-1+cuda13.4 libnvonnxparsers11=11.3.0.99-1+cuda13.4")"
+expect_ran "$(apt_install "libnvinfer11=11.3.0.99-1+cuda13.4 libnvonnxparsers11=11.3.0.99-1+cuda13.4 libnvinfer-plugin11=11.3.0.99-1+cuda13.4")"
 expect_ran "releases/download/v0.10.0/jetlink-server-0.10.0-linux-x86_64.tar.gz"
 expect_ran "docker rmi ghcr.io/zoompilot/jetlink:0.6.0-cuda"
 refute "removed the toolkit" grep -qE '^apt-get .* (remove|purge)' "$FAKE_LOG"
@@ -1001,6 +1036,22 @@ expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=120"
 show_on_failure "$f"
 
 # ---------------------------------------------------------------------------
+scenario "a Docker server that will not stop keeps serving, and no native one starts beside it"
+reset_box; jetson 39 2.1; with_docker; f=$FAILED
+old_install v0.6.0
+FAKE_DOCKER_STUCK=1 cli update
+expect_rc 1
+expect_out "The Docker server did not stop."
+expect_before "docker rm -f jetlink" "docker ps -q --filter name=^/?jetlink$"
+expect_not_ran "jetlink-server started: native"
+expect_in "$UNITS/jetlink-server.service" "run-server"
+expect_in /etc/jetlink/server.env "JETLINK_IMAGE="
+expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=120"
+expect_out "The previous Jetlink server is running again."
+expect_not_ran "docker rmi"
+show_on_failure "$f"
+
+# ---------------------------------------------------------------------------
 scenario "going back to v0.6.0 runs its own installer, and the curl line comes forward"
 : >"$FAKE_LOG"; f=$FAILED
 FAKE_PUBLISHED=1 cli update --ref v0.6.0
@@ -1038,7 +1089,7 @@ expect_out "Jetlink is removed."
 expect_ran "docker rmi jetlink:local-cuda"
 expect_no_file /etc/jetlink
 expect_no_file /opt/jetlink
-expect_out "sudo apt remove libnvinfer10 libnvonnxparsers10"
+expect_out "sudo apt remove libnvinfer10 libnvonnxparsers10 libnvinfer-plugin10"
 expect_file /mnt/data/jetlink/engines/abc.plan
 show_on_failure "$f"
 

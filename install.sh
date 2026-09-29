@@ -55,9 +55,12 @@ SWAP_GB=8
 # against, as NVIDIA's package index spells it.
 JP7_MIN_TRT=10.16.2.10
 PC_TRT=11.3.0.99-1+cuda13.4
-# free space on / that installing TensorRT takes: the download and the files
+# free space on / that installing TensorRT takes, the download and the files
+# together; NVIDIA's package indexes give libnvinfer, its ONNX parser and its
+# plugins as 2.33 GB + 3.05 GB on JetPack 7.2, 0.11 + 0.40 on 6.2, and
+# 1.91 + 2.62 on a PC
 TRT_GB_JP7=6
-TRT_GB_JP6=3
+TRT_GB_JP6=1
 TRT_GB_PC=6
 # units that hold up boot waiting for a network the car does not have
 WAIT_ONLINE_UNITS="systemd-networkd-wait-online.service NetworkManager-wait-online.service"
@@ -327,6 +330,14 @@ root_write() {
 apt_get() {
   # a fresh Jetson runs unattended-upgrades for a while after its first boot
   as_root env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=900 -y "$@"
+}
+
+# the package list, once a run; a new package source clears APT_UPDATED
+APT_UPDATED=0
+apt_update() {
+  [ "$APT_UPDATED" = 1 ] && return 0
+  step "Getting the package list" apt_get update
+  APT_UPDATED=1
 }
 
 # the loader's cache holds this library
@@ -927,7 +938,7 @@ install_base_packages() {
     esac
   done
   [ ${#missing[@]} -eq 0 ] && return 0
-  step "Getting the package list" apt_get update
+  apt_update
   step "Installing ${missing[*]}" apt_get install --no-install-recommends "${missing[@]}"
 }
 
@@ -998,9 +1009,13 @@ stop_running_server() {
     step "Stopping the running Jetlink server for the update" as_root systemctl stop "$UNIT"
     SERVER_STOPPED=1
   fi
-  # the unit removes its container on the way down; one a crash left holds the name
+  # the unit removes its container on the way down; one a crash left holds the
+  # name, and the comma's USB interface, which the native server cannot share
   if [ "$DOCKER_ERA" = 1 ] && command -v docker >/dev/null 2>&1; then
     as_root docker rm -f jetlink >>"$LOG" 2>&1 || true
+    if as_root docker ps -q --filter 'name=^/?jetlink$' 2>>"$LOG" | grep -q .; then
+      die "The Docker server did not stop." "Stop it (sudo docker rm -f jetlink) and run the installer again."
+    fi
   fi
   return 0
 }
@@ -1065,6 +1080,7 @@ restore_docker_era() {
 
 ensure_runtime() {
   if [ "$JETSON" = 1 ]; then jetson_trt; else pc_trt; fi
+  trt_plugins
   if ! { has_lib "libnvinfer.so.$TRT_MAJOR" && has_lib "libnvonnxparser.so.$TRT_MAJOR"; }; then
     die "TensorRT $TRT_MAJOR is not where the server can load it." \
       "Check that libnvinfer.so.$TRT_MAJOR appears in: ldconfig -p"
@@ -1084,8 +1100,8 @@ jetson_trt() {
     return 0
   fi
   make_room_for_trt
-  step "Getting the package list" apt_get update
-  step "Installing TensorRT" apt_get install --no-install-recommends libnvinfer10 libnvonnxparsers10
+  apt_update
+  step "Installing TensorRT" apt_get install --no-install-recommends libnvinfer10 libnvonnxparsers10 libnvinfer-plugin10
   # the downloaded packages are as big again as what they installed
   apt_get clean >>"$LOG" 2>&1 || true
 }
@@ -1094,7 +1110,7 @@ jetson_trt() {
 # plan built by the one before fails to load and is built again, once.
 newest_jetson_trt() {
   local have want
-  step "Getting the package list" apt_get update
+  apt_update
   have="$(pkg_version libnvinfer10)"
   want="$(apt-cache policy libnvinfer10 2>/dev/null | sed -n 's/^ *Candidate: *//p' | head -n 1 || true)"
   if [ -z "$have" ] || [ -z "$want" ] || [ "$want" = '(none)' ] || version_ge "$have" "$want"; then
@@ -1105,7 +1121,7 @@ newest_jetson_trt() {
     return 0
   fi
   if ! run_step "Updating TensorRT to ${want%%-*}" \
-      apt_get install --only-upgrade --no-install-recommends libnvinfer10 libnvonnxparsers10; then
+      apt_get install --only-upgrade --no-install-recommends libnvinfer10 libnvonnxparsers10 libnvinfer-plugin10; then
     note "Could not update TensorRT; staying on ${have%%-*}."
   fi
   apt_get clean >>"$LOG" 2>&1 || true
@@ -1129,13 +1145,32 @@ pc_trt() {
   make_room_for_trt
   if [ -z "$(pkg_version cuda-keyring)" ]; then
     step "Adding NVIDIA's package source" add_cuda_repo "$dist"
+    APT_UPDATED=0
   fi
-  step "Getting the package list" apt_get update
+  apt_update
   builds="$(apt-cache madison libnvinfer11 2>/dev/null | awk -F'|' '{gsub(/ /, "", $2); print $2}' || true)"
   grep -qxF "$PC_TRT" <<<"$builds" || die "NVIDIA's package source has no TensorRT $PC_TRT." \
     "Run the installer again later; if it keeps failing, open an issue."
   step "Installing TensorRT ${PC_TRT%%-*} (about 1.9 GB)" \
-    apt_get install --no-install-recommends "libnvinfer11=$PC_TRT" "libnvonnxparsers11=$PC_TRT"
+    apt_get install --no-install-recommends "libnvinfer11=$PC_TRT" "libnvonnxparsers11=$PC_TRT" "libnvinfer-plugin11=$PC_TRT"
+  apt_get clean >>"$LOG" 2>&1 || true
+}
+
+# TensorRT's plugin library, where TensorRT came without it: the servers in
+# Docker had it, so a plan with a plugin layer loads here too. The same build
+# as libnvinfer, which it depends on exactly. Jetlink's own models use no
+# plugin, so doing without is not an error.
+trt_plugins() {
+  local have
+  has_lib "libnvinfer_plugin.so.$TRT_MAJOR" && return 0
+  have="$(pkg_version "libnvinfer$TRT_MAJOR")"
+  # a TensorRT from outside the package manager brings its own, or none
+  [ -n "$have" ] || return 0
+  apt_update
+  if ! run_step "Installing TensorRT's plugins" \
+      apt_get install --no-install-recommends "libnvinfer-plugin$TRT_MAJOR=$have"; then
+    note "Could not install TensorRT's plugins; Jetlink's models do not need them."
+  fi
   apt_get clean >>"$LOG" 2>&1 || true
 }
 
@@ -1280,19 +1315,25 @@ unpack_server() {
 # a GPU. It runs before the old server stops, so a server that cannot work
 # never replaces one that does.
 check_gpu() {
-  local out rc=0
+  local out rc=0 trt
   printf '\n==> %s/bin/jetlink-server backends --backend trt\n' "$NEW_DIR" >>"$LOG"
   out="$(as_root "$NEW_DIR/bin/jetlink-server" backends --backend trt 2>&1)" || rc=$?
   printf '%s\n' "$out" >>"$LOG"
+  # "trt: usable: TensorRT 10.16.2.10 on Orin-sm87", or "trt: not usable: why"
+  trt="$(printf '%s\n' "$out" | sed -n 's/^trt: //p' | head -n 1)"
   if [ "$rc" = 0 ]; then
-    good "The server can use the GPU: $(printf '%s\n' "$out" | grep -m 1 -i trt || printf '%s' "$out" | head -n 1)"
+    good "The server can use the GPU: ${trt#usable: }"
     return 0
   fi
-  bad "The Jetlink server cannot use the GPU."
-  printf '%s\n' "$out" | tail -n 5 | sed 's/^/    /'
+  if [ -n "$trt" ]; then
+    bad "The Jetlink server cannot use the GPU: ${trt#not usable: }"
+  else
+    bad "The Jetlink server did not start."
+    printf '%s\n' "$out" | tail -n 5 | sed 's/^/    /'
+  fi
   local hint="Restart the computer and run the installer again: a new driver needs a restart."
   [ "$JETSON" = 1 ] && hint="Check that JetPack installed completely (sudo apt install nvidia-jetpack), then run the installer again."
-  die "TensorRT cannot run on this GPU." "$hint"
+  die "TensorRT cannot run on this computer." "$hint"
 }
 
 # An atomic switch: a new link renamed over the old one.
@@ -1636,7 +1677,7 @@ uninstall() {
   as_root rm -rf "$ETC_DIR" "$SRC_ROOT"
   heading "Jetlink is removed."
   local p trt=''
-  for p in libnvinfer10 libnvonnxparsers10 libnvinfer11 libnvonnxparsers11; do
+  for p in libnvinfer10 libnvonnxparsers10 libnvinfer-plugin10 libnvinfer11 libnvonnxparsers11 libnvinfer-plugin11; do
     [ -n "$(pkg_version "$p")" ] && trt="$trt $p"
   done
   [ -z "$trt" ] || say "  TensorRT stays installed; to remove it: sudo apt remove$trt"

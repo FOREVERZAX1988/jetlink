@@ -32,13 +32,21 @@ case "$name" in
     esac ;;
 
   apt-get)
-    # installing a package makes its commands and libraries appear
+    # installing a package makes its commands and libraries appear; an
+    # upgrade leaves alone what is not installed
+    upgrade=0
+    [[ " $* " == *" --only-upgrade "* ]] && upgrade=1
+    if [ "${FAKE_NO_PLUGIN:-0}" = 1 ] && [[ " $* " == *" libnvinfer-plugin"* ]]; then
+      echo "E: Unable to locate package libnvinfer-plugin" >&2
+      exit 100
+    fi
     for arg in "$@"; do
+      [ "$upgrade" = 1 ] && ! pkg "${arg%%=*}" >/dev/null && continue
       case "$arg" in
         docker.io|docker-ce) ln -sf "$0" "$FAKE_BIN/docker" ;;
         nvidia-container-toolkit) ln -sf "$0" "$FAKE_BIN/nvidia-ctk" ;;
-        libnvinfer10|libnvonnxparsers10) echo "$TRT10" >"$state/pkg-$arg" ;;
-        libnvinfer11=*|libnvonnxparsers11=*) echo "${arg#*=}" >"$state/pkg-${arg%%=*}" ;;
+        libnvinfer10|libnvonnxparsers10|libnvinfer-plugin10) echo "$TRT10" >"$state/pkg-$arg" ;;
+        libnvinfer*=*|libnvonnxparsers*=*) echo "${arg#*=}" >"$state/pkg-${arg%%=*}" ;;
         libcurl4) echo 8.5.0 >"$state/pkg-libcurl4" ;;
       esac
     done ;;
@@ -85,6 +93,7 @@ case "$name" in
     for m in 10 11; do
       pkg "libnvinfer$m" >/dev/null && printf '\tlibnvinfer.so.%s (libc6) => /usr/lib/libnvinfer.so.%s\n' "$m" "$m"
       pkg "libnvonnxparsers$m" >/dev/null && printf '\tlibnvonnxparser.so.%s (libc6) => /usr/lib/libnvonnxparser.so.%s\n' "$m" "$m"
+      pkg "libnvinfer-plugin$m" >/dev/null && printf '\tlibnvinfer_plugin.so.%s (libc6) => /usr/lib/libnvinfer_plugin.so.%s\n' "$m" "$m"
     done ;;
 
   df)
@@ -125,26 +134,27 @@ case "$name" in
     esac ;;
 
   journalctl)
+    # the server's log, as it writes it
     if [ "${FAKE_SERVER_BROKEN:-0}" = 1 ]; then
-      echo "jetlink-server: cannot load TensorRT: libnvinfer.so.10: cannot open shared object file"
+      echo "ERROR io.zoompilot.jetlink.main: no TensorRT 10: libnvinfer.so.10: cannot open shared object file"
     else
-      echo "backend trt 10.16.2.10 on Orin-sm87, cache /mnt/data/jetlink"
-      echo "waiting for a jetlink gadget at 1209:0001"
+      echo "INFO io.zoompilot.jetlink.main: backend trt 10.16.2.10 on Orin-sm87, cache /mnt/data/jetlink"
+      echo "INFO io.zoompilot.jetlink.server: waiting for a jetlink gadget at 1209:0001"
     fi ;;
 
   jetlink-server)
     # the server from a release tarball: bin/ in the version's directory
     home="$(dirname "$(dirname "$0")")"
     case "${1:-}" in
-      --version) echo "jetlink-server $(cat "$home/VERSION")" ;;
+      --version) cat "$home/VERSION" ;;
       backends)
         if [ "${FAKE_GPU_BROKEN:-0}" = 1 ]; then
-          echo "trt: not usable: cuInit: no CUDA-capable device is detected"
-          echo "ort: usable, cpu"
+          echo "trt: not usable: no CUDA driver: libcuda.so.1: cannot open shared object file: No such file or directory"
+          echo "ort: not usable: libonnxruntime.so: cannot open shared object file: No such file or directory"
           exit 1
         fi
-        echo "trt: usable, TensorRT 10.16.2.10 on Orin (compute 8.7)"
-        echo "ort: usable, cpu" ;;
+        echo "trt: usable: TensorRT 10.16.2.10 on Orin-sm87"
+        echo "ort: not usable: libonnxruntime.so: cannot open shared object file: No such file or directory" ;;
       models) echo "fake model list in ${JETLINK_CACHE:-?}" ;;
       *) echo "serving" ;;
     esac ;;
@@ -170,6 +180,9 @@ case "$name" in
           echo $(($(cat "$state/freed-gb" 2>/dev/null || echo 0) + ${FAKE_IMAGE_GB:-5})) >"$state/freed-gb"
         done ;;
       rm|stop) ;;
+      ps)
+        # a container that outlived docker rm -f
+        [ "${FAKE_DOCKER_STUCK:-0}" = 1 ] && echo 0123456789ab ;;
       image)
         case "${2:-}" in
           inspect) echo "sha256:$(printf '%064d' 7)" ;;
