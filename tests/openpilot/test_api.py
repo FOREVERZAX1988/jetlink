@@ -206,6 +206,12 @@ class TestTheJoinFactory(OpenpilotTest):
     self.reset.assert_called_once_with(self.small)
     self.present.assert_called_once()
 
+  def test_the_early_present_leaves_modelds_realtime_core(self):
+    from jetlink.transport.priority import background_thread
+    self.join()
+    link, background = self.present.call_args.args
+    self.assertIs(background, background_thread)
+
   def test_without_a_record_it_is_this_devices_geometry(self):
     self.join()
     self.loaded.assert_called_once_with(1928, 1208, 512, 256)

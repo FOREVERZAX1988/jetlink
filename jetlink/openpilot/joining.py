@@ -27,11 +27,11 @@ Two rules the swap keeps:
 """
 from __future__ import annotations
 
-import os
 import threading
 import time
 
 from jetlink.comma import gadget
+from jetlink.transport.priority import background_thread
 
 # after a join fails or the large model dies mid-drive. Long enough not to
 # thrash a booting Jetson, short enough to catch one that finished a moment later
@@ -55,29 +55,6 @@ ENGAGEMENT_MAX_AGE = 0.25
 # how long the check may take; both off the frame loop
 KEEPALIVE_PERIOD = 10.0
 PING_TIMEOUT = 2.0
-
-
-def _background_priority() -> None:
-  """Get this thread off modeld's realtime core before it does anything.
-
-  A thread started after config_realtime_process(7, 54) inherits SCHED_FIFO
-  and the single-core affinity, and an equal-priority thread that wakes takes
-  the core until it blocks. Measured with these threads left as created: exec
-  p95 90.8 ms, max 159.9, 5% frame drops, enough for modeldLagging.
-  """
-  try:
-    os.sched_setscheduler(0, os.SCHED_OTHER, os.sched_param(0))
-  except (OSError, AttributeError):
-    pass   # no scheduler call off Linux
-  try:
-    online = os.sched_getaffinity(0)
-    everything = set(range(os.cpu_count() or 1))
-    if everything - online:
-      os.sched_setaffinity(0, sorted(everything))
-  except (OSError, AttributeError):
-    # PC, or a kernel that will not widen the mask; SCHED_OTHER is the part
-    # that matters
-    pass
 
 
 class JoiningModelState:
@@ -398,7 +375,12 @@ class JoiningModelState:
 
   def _join_loop(self) -> None:
     """Open the link and get the engine ready. No tinygrad in here."""
-    _background_priority()
+    # off modeld's realtime core first. A thread started after
+    # config_realtime_process(7, 54) inherits SCHED_FIFO and the single-core
+    # affinity, and an equal-priority thread that wakes takes the core until
+    # it blocks. Measured with these threads left as created: exec p95
+    # 90.8 ms, max 159.9, 5% frame drops, enough for modeldLagging
+    background_thread()
     while not self._stop.is_set():
       # no timeout: once joined there is nothing to poll for, and close() sets
       # this. An idle wake per second is not free on modeld's core
@@ -476,7 +458,7 @@ class JoiningModelState:
         self._joined = joined
 
   def _watch_engagement(self) -> None:
-    _background_priority()
+    background_thread()   # off modeld's realtime core; see _join_loop
     # made on this thread: the poller's sockets (a SubMaster) belong to the
     # thread that made them
     engaged = self._engagement()
@@ -519,7 +501,7 @@ def join(jl, cam_w: int, cam_h: int, small) -> JoiningModelState:
     # the gadget first, so the Jetson enumerates while the warp loads. Left to
     # the join thread the bind landed ~3 s later, behind the small model's
     # first frame, and one ignition had a 655 ms frame during the bind
-    links.present_early(link, _background_priority)
+    links.present_early(link, background_thread)
     cached = jl.spec.load()
     if cached is not None:
       img_h, img_w = cached.model_hw

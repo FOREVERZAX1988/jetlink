@@ -615,6 +615,19 @@ class EngagementTest(unittest.TestCase):
     s._engagement_updated = time.monotonic() - 1.0
     self.assertFalse(s._window_open)
 
+  def test_both_threads_leave_modelds_realtime_core_first(self):
+    # created after config_realtime_process(7, 54), they inherit SCHED_FIFO on
+    # core 7; each drops it before anything else, the watcher before it makes
+    # the poller
+    events = []
+    self.made_on = events
+    with mock.patch.object(joining, 'background_thread', lambda: events.append(('off', threading.current_thread().name))):
+      s = self.state()
+      self.assertTrue(self.wait_for(lambda: len(events) >= 3))
+    join_loop, watcher = (t.name for t in s._threads)
+    self.assertIn(('off', join_loop), events)
+    self.assertLess(events.index(('off', watcher)), events.index(watcher), 'made the poller on a realtime thread')
+
   def test_the_poller_is_made_on_the_watchers_thread(self):
     # a SubMaster's sockets belong to the thread that made them
     self.state()
