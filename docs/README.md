@@ -12,6 +12,7 @@ New? Start with the [quick start](../README.md#quick-start).
 | Try the Android app (experimental) | [Jetlink for Android](android-app.md) |
 | Set up a Linux PC, WSL2, or a source install | [Platform setup](platforms.md) |
 | Understand icons, startup, and model switching | [Using Jetlink](using-jetlink.md) |
+| Watch a Jetson or PC from a phone | [Status page](using-jetlink.md#status-page) |
 | Choose a model or prepare one ahead of time | [Model management](models.md) |
 | Update or roll back | [Updates and rollback](releasing.md) |
 | Choose a cable, or set up power and sleep | [Cables, networking, and power](transport.md) |
@@ -26,12 +27,12 @@ then your platform guide's troubleshooting.
 | --- | --- |
 | Install manually or customize USB | [Installation reference](installation-reference.md) |
 | Use the model CLI | [Commands, identifiers, and cache files](model-cli.md) |
-| Control a running server from an app or script | [Control protocol](control-protocol.md) |
+| Understand how the apps and the status page talk to the server | [Control protocol](control-protocol.md) |
 | Choose or investigate an inference backend | [Backends and measurements](backends.md) |
 | Mac benchmarks and implementation | [Mac performance](mac-performance.md) |
 | Test a server without a comma | [Benchmark setup](platforms.md#test-without-a-comma) |
 | Build the Mac app | [Mac development](../macos/README.md) |
 | Build the iPhone and iPad app | [iPhone development](../ios/README.md) |
 | Build the Android app | [Android development](../android/README.md) |
-| Keep the Swift and Python servers in step | [Conformance](conformance.md) |
+| Keep the server in step with the comma's package | [Conformance](conformance.md) |
 | Publish releases | [Publishing](publishing.md) |

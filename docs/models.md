@@ -14,6 +14,7 @@ saves time when the comma is on LTE.
 
 On a Mac, open **Models**, click **Use Model**, and wait for **In Use**. Then pick
 the same model on the comma. See the [Mac guide](macos-app.md#use-a-model-before-you-drive).
+The iPhone and Android apps: **Get** under **Models**.
 
 ### On a Jetson or an installed PC
 
@@ -34,15 +35,17 @@ jetlink start
 ```
 
 **Do not prepare a model in a separate process while the server uses the same
-cache.** Concurrent builds are unsupported and can exhaust memory. The Mac app
-prepares through the running server, so it needs no stop and start.
+cache.** Concurrent builds are unsupported and can exhaust memory;
+`jetlink models prepare` refuses while the service runs. The apps prepare
+through their running server, so they need no stop and start.
 
-### From a source install
+<a id="from-a-source-install"></a>
 
-In the Python environment Jetlink is installed in, run
-`jetlink-models list --json`, `jetlink-models fetch <ref>`, and
-`jetlink-models prepare <ref>`. Stop any server using that cache before
-`prepare`.
+### From a checkout
+
+The same commands on a built `jetlink-server`: `jetlink-server models list
+--json`, `jetlink-server models fetch <ref>`, `jetlink-server models prepare
+<ref>`. Stop any server using that cache before `prepare`.
 
 ## Downloads, prepared engines, and disk space
 
@@ -55,18 +58,18 @@ In the Python environment Jetlink is installed in, run
 
 | Installation | Default cache folder |
 | --- | --- |
-| Jetson or PC installer | `/mnt/data/jetlink` |
+| Jetson installer | `/mnt/data/jetlink` |
+| PC installer | `/var/lib/jetlink` |
 | Mac app | `~/Library/Application Support/Jetlink/cache` |
-| Mac source script | `models_cache/` in the checkout |
-| Other Mac terminal setup | `~/Library/Caches/jetlink` |
-| Other desktop setup | `~/.cache/jetlink` |
+| `jetlink-server` on a Mac | `~/Library/Caches/jetlink` |
+| `jetlink-server` on Linux | `/mnt/data/jetlink` on a Jetson, else `~/.cache/jetlink` |
 
 - Mac app: choose a cache folder in Settings.
-- Source installs: `JETLINK_CACHE` or `--cache DIR`.
+- `jetlink-server`: `JETLINK_CACHE` or `--cache DIR`.
 - The installer's `jetlink models` uses the server's cache.
 
-Disk use: `jetlink models inventory` (installer), `jetlink-models inventory`
-(source install), or **Models** in the Mac app.
+Disk use: `jetlink models inventory` (installer), `jetlink-server models
+inventory`, or **Models** in the apps.
 
 ## Commands
 
@@ -75,7 +78,7 @@ Listing, fetching, importing, preparing and deleting models:
 
 ## Developer reference
 
-[Model CLI](model-cli.md) and [server control protocol](control-protocol.md).
+[Model CLI](model-cli.md) and [control protocol](control-protocol.md).
 
 <a id="model-identifiers-and-storage"></a>
 <a id="the-protocol"></a>

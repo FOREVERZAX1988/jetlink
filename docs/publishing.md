@@ -1,34 +1,43 @@
 # Publish a release
 
 Updating an installed server: [updates and rollback](releasing.md). This page:
-publishing the app, Python packages, and container images.
+publishing a release.
 
-A pushed `v*` tag runs the Release workflow: the macOS app, the Python sdist and
-wheel, and the container images.
+A pushed `v*` tag runs the Release workflow: the macOS app, the Linux server for
+Jetsons and PCs, and the Python sdist and wheel (the comma-side package).
 
-1. Set `__version__` in `jetlink/__init__.py` (`pyproject.toml` reads it), add a
-   `Jetlink vX.Y.Z` section at the top of `CHANGELOG.md`, and commit.
+1. Set `__version__` in `jetlink/__init__.py` (`pyproject.toml` reads it), run
+   `.venv/bin/python JetlinkKit/Scripts/make_pins.py` so `Pinned.swift` carries
+   the new version, add a `Jetlink vX.Y.Z` section at the top of
+   `CHANGELOG.md`, and commit.
    - The tag must match `__version__`; `macos/scripts/check-version.sh` checks
      before the build.
    - The section becomes the release notes: write what installers will notice,
      not how it was done. Without one, GitHub generates the notes.
-2. Tag and push (replace `0.3.0`):
+2. Tag and push (replace `0.7.0`):
 
 ```bash
-git tag v0.3.0
-git push origin v0.3.0
+git tag v0.7.0
+git push origin v0.7.0
 ```
 
 3. Watch **Actions > Release**. The macOS job builds, smoke-tests and notarizes
-   the app; each image builds on a native runner for its architecture.
-4. Check the release page: `Jetlink-0.3.0-macOS.dmg`, `SHA256SUMS`, the sdist,
-   the wheel, and notes made of the changelog section, the installer command and
-   the GHCR image lines.
+   the app; each Linux server builds on a native runner for its architecture
+   with `scripts/build-linux.sh`.
+4. Check the release page: `Jetlink-0.7.0-macOS.dmg`, `SHA256SUMS`,
+   `jetlink-server-0.7.0-linux-aarch64.tar.gz` and `-linux-x86_64.tar.gz`
+   with their `.sha256`, the sdist, the wheel, and notes made of the changelog
+   section and the install commands.
 
-Prereleases: a hyphen (`v0.3.0-rc1`) or a PEP 440 suffix (`v0.3.0a1`,
-`v0.3.0b2`, `v0.3.0rc1`) publishes as a prerelease. Use the same version in
-`jetlink/__init__.py` and the tag, minus the leading `v`. Prefer PEP 440
-suffixes to avoid wheel filename normalization.
+- The release waits for both Linux servers: the installer takes the newest
+  release, so one without them would stop every install and update.
+- Each push to `main` refreshes the `edge` prerelease with
+  `jetlink-server-edge-linux-aarch64.tar.gz` and `-x86_64`, which the installer
+  takes with `--ref main`.
+- Prereleases: a hyphen (`v0.7.0-rc1`) or a PEP 440 suffix (`v0.7.0a1`,
+  `v0.7.0b2`, `v0.7.0rc1`) publishes as a prerelease. Use the same version in
+  `jetlink/__init__.py` and the tag, minus the leading `v`. Prefer PEP 440
+  suffixes to avoid wheel filename normalization.
 
 ## Installing the app
 
@@ -37,26 +46,6 @@ Open the DMG and drag Jetlink to Applications. Verify against `SHA256SUMS`:
 ```bash
 shasum -a 256 -c SHA256SUMS
 ```
-
-## The container images
-
-Each release pushes two images to `ghcr.io/zoompilot/jetlink`, tagged with the
-full version and with `major.minor`:
-
-| Tag | Platform | Base |
-| --- | --- | --- |
-| `0.4.0-cuda` | linux/amd64 (NVIDIA PCs, driver 580+) and linux/arm64 (JetPack 7.2+) | `nvidia/cuda:13.2.1-base-ubuntu24.04` |
-| `0.4.0-jetpack6`, also `0.4.0-jetson` | linux/arm64, JetPack 6 | `l4t-jetpack:r36.4.0` |
-
-- `-cuda` is one tag for two architectures; Docker pulls the machine's.
-- The JetPack 6 image needs L4T r36 and the NVIDIA container runtime; it does
-  not run on JetPack 7 or generic Arm servers.
-- No `latest` tag.
-- Each push to `main` also publishes `edge-cuda` and `edge-jetpack6` (Docker
-  Images workflow), which the installer pulls with `--ref main`. With no image
-  for a machine, the installer builds it there.
-- A failed image job does not block the release; the notes say which failed,
-  and `install.sh --build` still works.
 
 ## Signing secrets
 
@@ -77,3 +66,5 @@ signing mode" says which mode ran.
   Access > Integrations** in App Store Connect.
 - Encode a certificate with `base64 -i cert.p12 | pbcopy`; for
   `NOTARY_PRIVATE_KEY_P8_BASE64` encode the `.p8` file instead.
+
+<a id="the-container-images"></a>

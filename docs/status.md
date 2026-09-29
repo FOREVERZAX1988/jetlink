@@ -8,18 +8,30 @@ soft-disables: take over. See [daily use](using-jetlink.md).
 
 Requirements: [Jetson](jetson.md), [Mac](macos-app.md),
 [iPhone](iphone-app.md), [Android](android-app.md), [PC](platforms.md).
+Tested on a Jetson with JetPack 7.2.1 and on a Mac; JetPack 6.2, Linux PCs and
+WSL2 are untested.
 
 ## Measured performance
 
-Orin Nano Super 8 GB, TensorRT 10.3 FP16, USB 3, recorded-segment replay:
+<!--
+  TODO(v0.7.0) SWIFT JETSON NUMBERS: fill this table from the Phase 2 A/B of
+  the Swift server (live bench on the comma, and the first build per model),
+  then delete this comment and the TBD cells.
+-->
 
-| Model | GPU inference | Full modeld mean / max | First engine build |
+Orin Nano Super 8 GB, JetPack 7.2.1, TensorRT 10.16 FP16, MAXN SUPER, USB 3:
+
+| Model | GPU inference | Frame on the comma, p50 / p99 / max | First engine build |
 | --- | ---: | ---: | ---: |
-| BMRLNAP, 766 MB | 19.8 ms | 31.0 / 32.7 ms | 166 s |
-| TGC v2, 766 MB | ~20 ms | 31.1 / 33.5 ms | 166 s |
-| Lebowski, 1757 MB | 36.2 ms | 46.3 / 49.5 ms | 290 s |
+| Cinque Terre V3 (default), 766 MB | TBD | TBD | TBD |
+| BMRLNAP, 766 MB | TBD | TBD | TBD |
+| Cinque Terre V2, 766 MB | TBD | TBD | TBD |
+| Lebowski, 1757 MB | TBD | TBD | TBD |
 
-* The frame budget is 50 ms; Lebowski leaves little margin.
+* The frame budget is 50 ms; Lebowski leaves the least margin.
+* USB transport on the bench Jetson (round trip minus the server's time,
+  comma onroad): 7.6 ms p50 with USB 3 link power management on, 3.7 ms with it
+  off. The server turns it off.
 * Sustained use at high temperatures is untested.
 
 Mac numbers: [Mac performance](mac-performance.md).
