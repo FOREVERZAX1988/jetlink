@@ -155,6 +155,10 @@ jobs:
             JetlinkKit/.build
           key: swift-linux-${{ matrix.arch }}-${{ hashFiles('scripts/build-linux.sh', 'JetlinkKit/Package.resolved') }}
 
+      - name: Install curl
+        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl
+        # The swift image has no curl, which build-linux.sh fetches with.
+
       - name: Fetch onnxruntime
         run: |
           ort=$(scripts/build-linux.sh "linux-${{ matrix.arch }}" ort)
@@ -176,7 +180,6 @@ jobs:
 
       - name: Install numpy and pytest
         run: |
-          apt-get update
           apt-get install -y --no-install-recommends python3-pip
           python3 -m pip install numpy==2.2.6 pytest==8.4.2
 
@@ -215,8 +218,8 @@ jobs:
       - name: Check out the repository
         uses: actions/checkout@v4
 
-      - name: Install unzip
-        run: apt-get update && apt-get install -y --no-install-recommends unzip
+      - name: Install curl and unzip
+        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip
 
       - name: Cache the NDK
         id: ndk
