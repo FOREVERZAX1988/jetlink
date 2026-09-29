@@ -23,9 +23,16 @@
     /// The USB wake is not guaranteed: a sleeping Jetson once answered a
     /// bind with a bus reset and no enumeration through four connect cycles
     /// and needed its button, which in the car is a drive on the small model.
-    /// An RTC alarm does not depend on the path that failed, and costs under
-    /// a tenth of a watt.
+    /// An RTC alarm does not depend on the path that failed. A park wakes on
+    /// it every half hour and, with no gadget, sleeps again after
+    /// `backstopGrace`: about 20 s awake in 30 min counting the resume, near
+    /// 1%, under a tenth of a watt at the 7-8 W it draws awake. Waiting the
+    /// whole count instead kept it up 6% of the park, about half a watt.
     public static let wakeBackstop: TimeInterval = 1800
+    /// How long a wake the backstop caused waits for a gadget before it
+    /// sleeps again: time for a USB wake that raced the alarm to enumerate
+    /// the comma's gadget and for the USB loop to claim it.
+    public static let backstopGrace: TimeInterval = 15
     /// Outside any systemd RuntimeDirectory, so a restart of the server never
     /// unlinks it under a holder.
     public static let awakeLock = "/run/jetlink-awake.lock"
@@ -43,6 +50,9 @@
     private let lock = NSLock()
     private(set) var enabled = true
     private var lastSeen: TimeInterval
+    /// Seconds without a gadget before the next suspend: `after`, or the
+    /// grace after a wake the backstop caused, until anything touches.
+    private var limit: TimeInterval
     private var retryAt: TimeInterval = 0
     private var backoff = Sleeper.retryMin
     private var held = false
@@ -60,6 +70,7 @@
       self.write = write
       self.log = log
       lastSeen = monotonic()
+      limit = after
     }
 
     static func now(_ clock: clockid_t) -> TimeInterval {
@@ -98,17 +109,18 @@
     public func touch() {
       lock.withLock {
         lastSeen = monotonic()
+        limit = after
         backoff = Sleeper.retryMin
       }
     }
 
     /// True when the box slept, and is back.
     public func idle() -> Bool {
-      let due = lock.withLock {
+      let due: TimeInterval? = lock.withLock {
         let now = monotonic()
-        return enabled && now - lastSeen >= after && now >= retryAt
+        return (enabled && now - lastSeen >= limit && now >= retryAt) ? limit : nil
       }
-      guard due else { return false }
+      guard let due else { return false }
       let holding = heldAwake()
       let wasHeld = lock.withLock {
         defer { held = holding }
@@ -124,19 +136,21 @@
         touch()
         return false
       }
-      let ok = suspend()
+      let wake = suspend(idleFor: due)
       lock.withLock {
         let now = monotonic()
-        if ok {
-          // Woken by an edge: give whatever caused it the whole count to show up.
+        if let wake {
+          // Woken by an edge: give whatever caused it the whole count to show
+          // up. The backstop's alarm brings no one, so it gets the grace.
           lastSeen = now
+          limit = wake == .backstop ? min(Sleeper.backstopGrace, after) : after
           backoff = Sleeper.retryMin
         } else {
           retryAt = now + backoff
           backoff = min(backoff * 2, Sleeper.retryMax)
         }
       }
-      return ok
+      return wake != nil
     }
 
     /// Creates the hold-awake lock for `jetlink caffeinate`, world-readable
@@ -164,22 +178,31 @@
 
     // MARK: the suspend
 
-    private func suspend() -> Bool {
+    /// What ended a suspend that slept.
+    enum Wake {
+      /// The RTC reached the backstop's alarm.
+      case backstop
+      /// Anything before it: USB, the button.
+      case edge
+    }
+
+    /// The wake, or nil when the box did not sleep.
+    private func suspend(idleFor idle: TimeInterval) -> Wake? {
       guard selectDeep() else {
         lock.withLock { enabled = false }
-        return false
+        return nil
       }
       let power = root.path("/sys/power")
       let successes = Sysfs.readInt("\(power)/suspend_stats/success") ?? -1
       // CLOCK_BOOTTIME keeps counting while asleep
       let start = Sleeper.now(CLOCK_BOOTTIME)
-      log.info("no gadget for \(Int(after)) s, suspending")
+      log.info("no gadget for \(Int(idle)) s\(idle < after ? " after the wake backstop" : ""), suspending")
       armHubWakeup()
-      let armed = armBackstop()
+      let alarm = armBackstop()
       do throws(KernelError) {
         try write("\(power)/state", "mem")
       } catch {
-        disarmBackstop(armed)
+        disarmBackstop(alarm)
         if [EACCES, EPERM, EROFS, ENOENT].contains(error.errno) {
           // Configuration, not weather: nothing will change by the next try.
           log.error("cannot write \(power)/state (\(error)); sleep disabled")
@@ -189,18 +212,27 @@
           // refused: both are worth another try later.
           log.warning("suspend failed: \(error) (\(failure()))")
         }
-        return false
+        return nil
       }
-      disarmBackstop(armed)
+      disarmBackstop(alarm)
       let asleep = Sleeper.now(CLOCK_BOOTTIME) - start
       if successes >= 0 && (Sysfs.readInt("\(power)/suspend_stats/success") ?? -1) <= successes {
         // A clean return with the counter unmoved: a wake edge landed during
         // the freeze and the box never left.
         log.warning("suspend returned after \(String(format: "%.1f", asleep)) s without sleeping (\(failure()))")
-        return false
+        return nil
+      }
+      // The alarm's own counter says whether its time came. A USB edge that
+      // raced it shows its gadget within the grace; an RTC that cannot be
+      // read, or fired early, gets the whole count as any other wake.
+      let rtc = root.path("/sys/class/rtc/rtc0/since_epoch")
+      if let alarm, let now = Sysfs.readInt(rtc), now >= alarm {
+        let grace = Int(min(Sleeper.backstopGrace, after))
+        log.info("resumed after \(Int(asleep.rounded())) s asleep, woken by the wake backstop: sleeping again unless a gadget shows up within \(grace) s")
+        return .backstop
       }
       log.info("resumed after \(Int(asleep.rounded())) s asleep")
-      return true
+      return .edge
     }
 
     /// Deep suspend: s2idle keeps the CPUs in idle states and saves nothing
@@ -254,8 +286,9 @@
 
     /// An RTC alarm `wakeBackstop` seconds out, against the RTC's own count:
     /// this box boots unset and never sees NTP in the car, so only both sides
-    /// coming from the same counter matters.
-    private func armBackstop() -> Bool {
+    /// coming from the same counter matters. The alarm's time on that count,
+    /// or nil when none is armed.
+    private func armBackstop() -> Int? {
       let backstop = Int(Sleeper.wakeBackstop)
       let rtc = root.path("/sys/class/rtc/rtc0")
       do {
@@ -265,16 +298,16 @@
         // A stale alarm blocks setting a new one.
         try write("\(rtc)/wakealarm", "0\n")
         try write("\(rtc)/wakealarm", "\(now + backstop)\n")
-        return true
+        return now + backstop
       } catch {
         // The USB edge is still the wake source; this was only the backstop.
         log.warning("could not arm the \(backstop) s wake backstop: \(error)")
-        return false
+        return nil
       }
     }
 
-    private func disarmBackstop(_ armed: Bool) {
-      guard armed else { return }
+    private func disarmBackstop(_ alarm: Int?) {
+      guard alarm != nil else { return }
       // It has either fired or fires once and is spent: a failure is fine.
       try? write(root.path("/sys/class/rtc/rtc0/wakealarm"), "0\n")
     }

@@ -311,6 +311,8 @@ the Jetson, sets `--sleep-after 120`, and checks for `deep` in
   one minute has passed.
 - The Jetson sleeps after 120 s without a USB connection. USB connect or
   disconnect wakes it; with no new connection it sleeps again after 120 s.
+- A 30-minute RTC alarm also wakes it, in case a USB wake failed. With no comma
+  it sleeps again after 15 s.
 - `jetlink caffeinate` keeps an awake Jetson awake, like the Mac's
   `caffeinate`: until Ctrl-C, for `-t SECONDS`, or while `COMMAND` runs. No
   sudo needed. Updates hold it awake on their own.
