@@ -596,6 +596,12 @@ load_previous() {
 # main, their default, without asking, and no JETLINK_VERSION: such an
 # install follows releases now.
 choose_ref() {
+  # a checkout installs what is in it, so a ref there would do nothing
+  if [ "$SOURCE" = local ] && [ -n "$OPT_REF" ]; then
+    die "--ref does nothing from a checkout, which installs what is in it." \
+      "For $OPT_REF, run the installer of that ref instead:" \
+      "  curl -fsSL $RAW_URL/$OPT_REF/install.sh | bash -s -- --update --ref $OPT_REF"
+  fi
   if [ -n "$OPT_REF" ]; then
     REF="$OPT_REF"
   elif [ "$REF" = main ] && [ -z "$RESOLVED" ]; then

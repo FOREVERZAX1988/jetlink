@@ -860,6 +860,14 @@ expect_rc 0
 expect_out "Keep the Jetlink server that is installed"
 expect_link /opt/jetlink/current /opt/jetlink/0.10.0
 
+scenario "--ref from a checkout, which installs what is in it, says what to run instead"
+reset_box; jetson 39 2.1
+run_installer checkout '' --yes --ref v0.9.0
+expect_rc 1
+expect_out "--ref does nothing from a checkout"
+expect_out "curl -fsSL https://raw.githubusercontent.com/zoompilot/jetlink/v0.9.0/install.sh | bash -s -- --update --ref v0.9.0"
+expect_no_file /etc/jetlink
+
 scenario "a tarball from a tree before the native server is refused"
 reset_box; jetson 39 2.1
 old=/tmp/dev/old-unit
