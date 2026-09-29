@@ -107,12 +107,13 @@
       #expect(!benchLog.contains("Jetlink benchmark"), "the report is on stdout only")
     }
 
-    /// SIGTERM stops it cleanly, in order: the server, then (once it serves)
-    /// the status page.
+    /// SIGTERM stops it cleanly, in order: the server, then the status page.
     @Test func sigtermStopsItCleanly() throws {
       let tmp = try TempDir()
       defer { tmp.remove() }
       let port = try freePort()
+      var page = try freePort()
+      while page == port { page = try freePort() }
       let log = tmp.url.appending(path: "server.log")
       FileManager.default.createFile(atPath: log.path, contents: nil)
       let handle = try FileHandle(forWritingTo: log)
@@ -120,6 +121,7 @@
       process.executableURL = try #require(Binary.url)
       process.arguments = [
         "--backend", "ort", "--device", "cpu", "--listen", "--host", "127.0.0.1", "--port", "\(port)", "--cache", tmp.path, "--no-preload",
+        "--status-port", "\(page)",
       ]
       process.standardOutput = handle
       process.standardError = handle
@@ -127,7 +129,7 @@
       defer { if process.isRunning { process.terminate() } }
 
       let deadline = Date().addingTimeInterval(30)
-      while !canConnect(port) {
+      while !canConnect(port) || !canConnect(page) {
         guard process.isRunning, Date() < deadline else {
           Issue.record("never listened: \(String(decoding: (try? Data(contentsOf: log)) ?? Data(), as: UTF8.self))")
           return
@@ -142,7 +144,9 @@
       let text = String(decoding: try Data(contentsOf: log), as: UTF8.self)
       let stopping = try #require(text.range(of: "stopping on SIGTERM"), "\(text)")
       let server = try #require(text.range(of: "stopped the server"), "\(text)")
+      let statusPage = try #require(text.range(of: "stopped the status page"), "\(text)")
       #expect(stopping.upperBound <= server.lowerBound)
+      #expect(server.upperBound <= statusPage.lowerBound)
     }
 
     private func freePort() throws -> UInt16 {

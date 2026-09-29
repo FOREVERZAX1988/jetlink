@@ -2,13 +2,13 @@ import Foundation
 import JetlinkKit
 
 /// The two bulk endpoints of the comma's vendor interface: IOUSBHost on a Mac,
-/// a fake in the tests. Both calls block.
+/// usbfs on Linux and Android, a fake in the tests. Both calls block.
 protocol BulkPipes: AnyObject, Sendable {
   /// Reads up to `count` bytes, a whole number of packets, into `buffer`, and
   /// returns how many arrived. A timeout is not an error: whatever did arrive
-  /// is returned, because dropping it desyncs the stream. A `timeout` of 0
-  /// waits until data comes or the link goes. Throws `LinkError` when the
-  /// link is gone or the transfer failed.
+  /// is returned, or kept for the next read, because dropping it desyncs the
+  /// stream. A `timeout` of 0 waits until data comes or the link goes. Throws
+  /// `LinkError` when the link is gone or the transfer failed.
   func read(into buffer: UnsafeMutableRawPointer, count: Int, timeout: TimeInterval) throws -> Int
   /// Writes `count` bytes as one transfer and returns how many went out, also
   /// after a timeout, so the caller resends only the rest.
@@ -31,14 +31,17 @@ public protocol GadgetSource: Sendable {
 /// Framing over USB bulk transfers, the host's end: the Swift form of
 /// `UsbBulkTransport` on `StreamTransport`, with the rules the bench taught.
 ///
-/// - The gadget pads every message to `Wire.gadgetTxAlign` (16 KB), so each
-///   read asks for exactly the rest of the current message, rounded up to a
-///   whole packet, and never stays outstanding past its end. Reading further
-///   desynced about once in 400 frames.
-/// - A read asks for whole packets only (a bulk IN whose buffer is not a
-///   packet multiple can overflow) and at most `readChunk` at a time, with a
-///   packet of slack past the message so a grown buffer never ends with room
-///   for zero packets.
+/// - The gadget pads every message to `Wire.gadgetTxAlign` (16 KB), so the
+///   pipes keep 16 KB reads posted ahead of this end (`ReadRing`): each ends
+///   at a message's end or inside it, never past it, and a message streams
+///   in without the host asking for it piece by piece. A read left
+///   outstanding past a message's end desynced about once in 400 frames.
+/// - This end takes no more from the pipes than the rest of the current
+///   message, in whole packets (a bulk IN whose buffer is not a packet
+///   multiple can overflow; pipes that post only what is asked, after a short
+///   packet, post that) and at most `readChunk` at a time, with a packet of
+///   slack past the message so a grown buffer never ends with room for zero
+///   packets.
 /// - What this end sends keeps the one-byte PADDED rule, and goes out as one
 ///   transfer: libusb and IOUSBHost have no vectored bulk write, and several
 ///   writes let the host scheduler interleave them.

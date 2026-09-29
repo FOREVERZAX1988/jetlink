@@ -168,14 +168,7 @@
     }
 
     private func serve(_ client: Int32) {
-      var on: Int32 = 1
-      #if canImport(Darwin)
-        _ = setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
-      #endif
-      _ = setsockopt(client, Int32(IPPROTO_TCP), TCP_NODELAY, &on, socklen_t(MemoryLayout<Int32>.size))
-      var timeout = timeval(tv_sec: .init(limits.writeTimeout), tv_usec: 0)
-      _ = setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-
+      PageServer.tune(client, writeTimeout: limits.writeTimeout)
       let reply: Data
       switch readRequest(client) {
       case .request("GET", "/"):
@@ -222,6 +215,35 @@
         drained += n
       }
     }
+
+    /// A page's socket: replies go out at once, and a phone that vanished
+    /// without closing (it left the hotspot, its radio slept) frees its
+    /// stream in about half a minute rather than once the send buffer
+    /// fills. Keepalive probes after 15 s of silence, 5 s apart, 3 of them,
+    /// find an idle one; on Linux, TCP_USER_TIMEOUT drops one whose
+    /// events go unacknowledged for 30 s. Loopback never loses a packet,
+    /// so the tests check the options, not a vanishing phone.
+    static func tune(_ fd: Int32, writeTimeout: TimeInterval) {
+      func set(_ level: Int32, _ name: Int32, _ value: Int32) {
+        var value = value
+        _ = setsockopt(fd, level, name, &value, socklen_t(MemoryLayout<Int32>.size))
+      }
+      #if canImport(Darwin)
+        set(SOL_SOCKET, SO_NOSIGPIPE, 1)
+        set(Int32(IPPROTO_TCP), TCP_KEEPALIVE, keepalive.idle)
+      #else
+        set(Int32(IPPROTO_TCP), TCP_KEEPIDLE, keepalive.idle)
+        set(Int32(IPPROTO_TCP), TCP_USER_TIMEOUT, keepalive.userTimeoutMs)
+      #endif
+      set(Int32(IPPROTO_TCP), TCP_NODELAY, 1)
+      set(SOL_SOCKET, SO_KEEPALIVE, 1)
+      set(Int32(IPPROTO_TCP), TCP_KEEPINTVL, keepalive.interval)
+      set(Int32(IPPROTO_TCP), TCP_KEEPCNT, keepalive.count)
+      var timeout = timeval(tv_sec: .init(writeTimeout), tv_usec: 0)
+      _ = setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+    }
+
+    static let keepalive: (idle: Int32, interval: Int32, count: Int32, userTimeoutMs: Int32) = (15, 5, 3, 30_000)
 
     /// The request, or `.incomplete` once the header timeout passes; nil
     /// when the client went away first.
