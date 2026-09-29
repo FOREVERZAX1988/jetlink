@@ -37,7 +37,9 @@ jetlink models prepare   REF_OR_SHA256 [--backend auto|trt|ort] [--device D]
 ```
 
 - From a checkout, run `jetlink-server models ...` with the same arguments;
-  each takes `--cache DIR`.
+  each takes `--cache DIR`. `jetlink models prepare` passes a PC's
+  `--tensorrt-libs` itself; `jetlink-server models prepare` on a PC needs it
+  ([the server command](installation-reference.md#the-server-command)).
 - `REF_OR_SHA256` is a ref, or the SHA-256 of a model whose ref was resolved
   on this machine before.
 - Output a script reads goes to standard output; progress and warnings go to
@@ -51,7 +53,7 @@ jetlink models prepare   REF_OR_SHA256 [--backend auto|trt|ort] [--device D]
 | `import` | Hashes and copies an ONNX file you already have into `<cache>/models/`, records its name, and prints the SHA-256 and path. |
 | `inventory` | Downloaded models, prepared engines with backend and device, and disk use. `*` marks the engine a server started here would load. `--json` prints the `inventory` event fields. |
 | `rm` | `--model` deletes the download, `--artifacts` every prepared engine; name at least one. A prepared engine keeps working after its download is removed. |
-| `prepare` | Fetches the model if needed, then builds an engine, as `jetlink-server build` does. If no model is recorded as last loaded, the server loads this one at its next start. |
+| `prepare` | Fetches the model if needed, then builds an engine and loads it once, as `jetlink-server build` does. That makes it the model loaded last, which a server started on this cache preloads. |
 
 **Do not run `prepare` while a server uses the same cache.** Concurrent builds
 are unsupported and can exhaust memory. On a Jetson or PC, `jetlink models

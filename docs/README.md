@@ -26,7 +26,9 @@ then your platform guide's troubleshooting.
 | Task | Reference |
 | --- | --- |
 | Install manually or customize USB | [Installation reference](installation-reference.md) |
+| Run `jetlink-server` by hand: commands, options, `server.env` | [The server command](installation-reference.md#the-server-command) |
 | Use the model CLI | [Commands, identifiers, and cache files](model-cli.md) |
+| Understand how the comma and the server talk | [Link protocol](transport.md#link-protocol) |
 | Understand how the apps and the status page talk to the server | [Control protocol](control-protocol.md) |
 | Choose or investigate an inference backend | [Backends and measurements](backends.md) |
 | Mac benchmarks and implementation | [Mac performance](mac-performance.md) |

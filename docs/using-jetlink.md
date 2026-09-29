@@ -20,8 +20,8 @@ to the comma.
 
 ## What to expect when driving
 
-- The small model drives while the server starts (switched-power Jetson with a
-  cached engine: 65 to 96 seconds).
+- The small model drives while the server starts (a switched-power Jetson has
+  its prepared model ready about 30 seconds after power-on).
 - The large model takes over only when nothing is steering: **at a stop with
   cruise off, or with lateral control off**. Until then the icon is dimmed and
   the comma says **Big Model Available** at every stop. With lateral control

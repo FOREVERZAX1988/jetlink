@@ -10,9 +10,12 @@ runs the server in its own process and uses `ServerController` (in
 | Android app | Each command as a JSON object through JNI (`Native.command`), a JSON reply back; the screens draw a snapshot built from the events |
 | Status page (Jetson, PC) | Listens only, never sends a command; relays events to browsers as Server-Sent Events |
 
-Version 1 (`Pinned.controlProtocol`). The JSON below is what
+It has no version number: every caller is built with the server it talks to.
+The JSON below is what
 `ControlEvent.jsonLine()` writes and the page streams: one object per line,
-snake_case keys, absent optional fields `null`, never missing.
+snake_case keys, sorted. An optional field with no value is left out, and a
+reader takes a missing key as `null`; the examples below show such fields as
+`<value>|null`.
 
 ## The status page
 
@@ -73,7 +76,7 @@ angle brackets.
 // loads, downloads, imports, forget, and the inventory command.
 
 {"event":"catalog","t":0,"fetched_at":1757440000.0,"url":"<catalog url>",
- "default_ref":"<ref>","error":null,
+ "default_ref":"<ref>","error":"<why>|null",
  "models":[{"name":"Cinque Terre V3 Model","short_name":"CTV3M","ref":"<ref>",
             "build_time":"<ISO 8601>","index":13,"sha256":"<sha256>|null","bytes":765953504}]}
 // Newest first. sha256 and bytes are null until that ref's pointer is
@@ -83,19 +86,19 @@ angle brackets.
  "frac":0.42,"bytes":321000000,"total":765953504,"rate_bps":41000000.0,"detail":"","source":"<url>"}
 // state: "started" | "progress" (at most 4 a second) | "done" | "failed" | "cancelled".
 
-{"event":"import","t":0,"path":"<file>","state":"hashing","frac":0.3,"sha256":null,"detail":""}
+{"event":"import","t":0,"path":"<file>","state":"hashing","frac":0.3,"sha256":"<sha256>|null","detail":""}
 // state: "hashing" | "copying" | "done" | "failed".
 
 {"event":"benchmark","t":0,"state":"running","elapsed":12.0,"total":60.0,"frames":240,
- "frame":{...},"report":null,"detail":""}
+ "frame":{...},"report":{...}|null,"detail":""}
 // state: "running" | "done" | "cancelled" | "failed"; report when done.
 
 {"event":"shutdown_request","t":0,"reason":"<why>"}
 // The comma asked a phone or Mac to power off; the apps refuse and say so.
 
-{"event":"hello","t":0,"protocol":1,"pid":4242,"version":"0.7.0","python":"",
- "platform":"linux","cache":"/mnt/data/jetlink","transport":"usb","port":null}
-// The status page's first event.
+{"event":"hello","t":0,"version":"0.7.0"}
+// The status page's first event: the server's version, as
+// `jetlink-server --version` prints it.
 ```
 
 ## Commands

@@ -6,15 +6,16 @@ Jetlink v0.7.0
 
 **One Swift engine everywhere**
 * Jetsons, Linux PCs, the Mac, iPhone/iPad and Android all run the same Swift server.
+* On a Jetson it gives v0.6.0's output bit for bit, with half the CPU.
 * **No Docker:** Jetsons and PCs run it natively. `jetlink update` moves your install over, keeping settings, models and engines.
 * **Update the comma and Jetlink together:** New link protocol; zoompilot's `jetson-trt` branch pins Jetlink v0.7.0. A comma on an older build stays on the small model.
 
 **General Updates & Fixes**
-* **Faster Link:** USB 3 power saving off on Linux: 3.7 ms of transport a frame on the bench Jetson (was 7.6). Replies are 8 KB (was 74 KB): the hidden state stays on the server.
+* **Faster Link:** Big-model frames 3 to 5 ms quicker on the bench Jetson: 2.2 ms of USB transport (was 8.5). Replies are 8 KB (was 74 KB): the hidden state stays on the server. USB 3 power saving is off only while the comma is connected.
 * **Status Page:** Watch the server from your phone at `http://<name>.local:5600`.
 * **Stay Awake:** `jetlink caffeinate` keeps a Jetson awake while you work on it.
 * **iPhone:** Neural Engine + GPU is the default (14 ms a frame on an iPhone 18 Pro).
-* **Linux PCs:** TensorRT 11.3 from NVIDIA's packages; each model may prepare once more.
+* **Linux PCs:** The installer puts NVIDIA's TensorRT 11.3 in `/opt/jetlink`; no system TensorRT.
 * **Tested:** JetPack 7.2.1. JetPack 6.2, Linux PCs and WSL2 are untested.
 
 **Removed**

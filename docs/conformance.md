@@ -17,7 +17,7 @@ Python:
 
 | What | Written by | Read by the Swift in |
 | --- | --- | --- |
-| Constants: the wire's magic, versions, sizes, message, flag and status numbers; USB ids and packet sizes; USB speeds; model constants; the product version; the onnxruntime release | `make_pins.py` writes `JetlinkKit/Sources/JetlinkKit/Pinned.swift` | the Swift code uses `Pinned`; `ConformanceTests` checks every Swift constant against it |
+| Constants: the wire's magic, version, sizes, message, flag and status numbers; USB ids and packet sizes; USB speeds; model constants; the product version; the onnxruntime release | `make_pins.py` writes `JetlinkKit/Sources/JetlinkKit/Pinned.swift` | the Swift code uses `Pinned`; `ConformanceTests` checks every Swift constant against it |
 | Wire bytes: headers and INFER bodies; the byte streams of TCP, a USB host and the gadget's 16 KB bursts; the reads a USB host posts | `make_conformance_fixtures.py wire` | `JetlinkServerTests/ConformanceTests.swift` |
 | Tensors the queues stage each frame at frame_skip 1, 2 and 4, each frame's hidden state fed into the next, with a reset, a hello, a non-finite frame and desires with NaNs, signed zeros and infinities | `make_conformance_fixtures.py staging` | the same file |
 | LFS pointers, model identities, catalog parsing and merging | `make_conformance_fixtures.py registry` | `JetlinkRegistryTests/ConformanceTests.swift` |
@@ -44,8 +44,9 @@ on its next load.
 `tests/test_swift_server.py` serves `tests/tiny_model.py`'s graphs from a real
 `jetlink-server` (`--backend ort --device cpu --listen`) and drives it through
 `jetlink.client`, as a comma does: upload and build, inference, the hidden
-state, resets, NOT_FINITE, telemetry, NOT_READY, deadlines, shutdown as a dry
-run and the stateful graph. The binary comes from `JETLINK_SERVER_BIN`, else
+state, resets, NOT_FINITE, telemetry, NOT_READY, deadlines, a shutdown request
+without `--poweroff` (answered, and the server stays up) and the stateful
+graph. The binary comes from `JETLINK_SERVER_BIN`, else
 the newest build in `JetlinkKit/.build`; `JETLINK_SERVER_BUILD=1` builds it
 first. Without one it skips.
 
