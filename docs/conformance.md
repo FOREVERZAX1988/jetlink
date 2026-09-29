@@ -30,7 +30,6 @@ their own checkout, whatever the environment has installed.
 | What | Where | Changed by |
 | --- | --- | --- |
 | The `stats` event from fixed samples | `JetlinkServerTests/Fixtures/conformance/stats.json` | editing the file |
-| Every control event the Mac app and the status page read | `JetlinkKitTests/Fixtures/control_events_golden.jsonl` | editing the file |
 | One cache directory's catalog and inventory payloads | the `cache` block of `tests/fixtures/conformance/registry.json` | editing the file; the generator copies the block through |
 | Whole-server runs: driving output of the tiny queued and stateful graphs | `JetlinkServerTests/Fixtures/tiny_*` | editing the files |
 | ONNX preparation for every layout, byte for byte | `JetlinkONNXTests/Fixtures/*.expected.onnx` | editing the files |
