@@ -180,11 +180,27 @@ PRESENCE_HOLD = 5.0
 
 def write_record(path: Path, record) -> None:
   """Replace a JSON record whole: a reader gets the old one or the new one,
-  never half of either. Raises OSError, for the writer to say once."""
+  never half of either. Raises OSError, for the writer to say once; the
+  temporary goes with a failure (a SIGKILL between the two leaves it for
+  the next owner to clear, clear_leftovers)."""
   path.parent.mkdir(parents=True, exist_ok=True)
   tmp = path.with_name(f".{path.name}.{os.getpid()}")
-  tmp.write_text(json.dumps(record))
-  os.replace(tmp, path)
+  try:
+    tmp.write_text(json.dumps(record))
+    os.replace(tmp, path)
+  except BaseException:
+    tmp.unlink(missing_ok=True)
+    raise
+
+
+def clear_leftovers(directory: Path) -> None:
+  """The temporaries a writer killed between its write and its rename left
+  in `directory`. For the owner's start, when nothing else writes there."""
+  try:
+    for leftover in directory.glob('.*.json.*'):
+      leftover.unlink(missing_ok=True)
+  except OSError:
+    pass
 
 
 def owner_status() -> dict | None:

@@ -534,6 +534,10 @@ class Owner:
     try:
       gadget.write_record(gadget.STATUS, self.status_record())
     except Exception as e:
+      # the last record would go stale under a live owner and read as
+      # "accelerator service stopped"; without one the readers go back to
+      # the gadget's files, which are still right
+      self.forget_status()
       error = f"{type(e).__name__}: {e}"
       if error != self.status_error:
         self.status_error = error
@@ -775,6 +779,7 @@ class Owner:
     gadget.clear_link()
     gadget.set_dormant(False)
     gadget.note_lender_error(None)
+    gadget.clear_leftovers(gadget.STATUS.parent)
     if self.server is None:
       try:
         heard = json.loads(gadget.SERVER.read_text())

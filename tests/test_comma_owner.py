@@ -1106,17 +1106,37 @@ class TestTheStatusRecord(OwnerTest):
       o.stop_worker()
     worker.kill.assert_called_once()
 
-  def test_a_record_that_cannot_be_written_is_said_once(self):
+  def test_a_record_that_cannot_be_written_is_said_once_and_not_left_stale(self):
+    # a stale record under a live owner reads as "accelerator service stopped"
     o = self.owner()
+    o.publish_status()
+    published = o.published
     with mock.patch.object(gadget, 'write_record', side_effect=OSError(28, 'No space left on device')), \
          mock.patch.object(gadget, 'log') as log:
       for _ in range(3):
         o.publish_status()
     self.assertEqual(log.error.call_count, 1)
-    self.assertEqual(o.published, 0.0)
+    self.assertEqual(o.published, published)
+    self.assertIsNone(gadget.owner_status(), 'the last record was left to go stale')
     o.publish_status()
     self.assertIsNone(o.status_error)
-    self.assertGreater(o.published, 0.0)
+    self.assertIsNotNone(gadget.owner_status())
+
+  def test_a_failed_write_leaves_no_temporary(self):
+    o = self.owner()
+    with mock.patch.object(gadget.os, 'replace', side_effect=OSError(28, 'No space left on device')), \
+         mock.patch.object(gadget, 'log'):
+      o.publish_status()
+    self.assertEqual([n for n in os.listdir(gadget.STATUS.parent) if n.startswith('.')], [])
+
+  def test_a_start_clears_what_a_killed_writer_left(self):
+    gadget.STATUS.parent.mkdir(parents=True, exist_ok=True)
+    (gadget.STATUS.parent / '.status.json.4242').write_text('{"half')
+    (gadget.STATUS.parent / '.server.json.4242').write_text('{')
+    o = self.make()
+    self.addCleanup(o.cable.close)
+    o.adopt()
+    self.assertEqual([n for n in os.listdir(gadget.STATUS.parent) if n.startswith('.')], [])
 
 
 class TestACrashLoop(OwnerTest):
