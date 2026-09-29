@@ -206,6 +206,9 @@ final class GadgetClient: CommaClient {
     self.pipes = pipes
   }
 
+  /// Messages sent so far, each with the next seq.
+  var sent: Int { Int(seq) }
+
   func sendMessage(_ type: Wire.Msg, _ payload: Data, flags: Wire.Flag, seq explicit: UInt32?) throws -> UInt32 {
     if explicit == nil { seq += 1 }
     let seq = explicit ?? self.seq
@@ -301,8 +304,9 @@ struct ServerUSBTests {
   }
 
   /// Linux keeps USB 3 link power management off only while the comma talks.
-  @Test("The gadget hears a session start, each message before it is answered, and the end")
+  @Test("The gadget hears a session start, each message before it is answered, a finished build's push, and the end")
   func gadgetHearsTheSession() throws {
+    let golden = try Golden("tiny_stateful")
     let cache = try TemporaryDirectory()
     let comma = FakeUsbfs()
     let gadget = ListeningGadget([comma])
@@ -315,9 +319,12 @@ struct ServerUSBTests {
     try client.send(.ping)
     _ = try client.recv(.pong)
     #expect(gadget.heard.all == ["started", "message", "message"])
+    // a comma waiting on a build says nothing; the server's ready push counts
+    _ = try client.ensureEngine(model: golden.model, sha256: golden.sha256)
+    #expect(gadget.heard.all.filter { $0 == "message" }.count == client.sent + 1)
     comma.unplug()
     #expect(gadget.heard.wait { $0.last == "ended" })
-    #expect(gadget.heard.all == ["started", "message", "message", "ended"])
+    #expect(gadget.heard.all.filter { $0 == "started" || $0 == "ended" } == ["started", "ended"])
   }
 
   @Test("A comma that left and came back is opened again a poll after a stale open fails, not the quiet retry later")

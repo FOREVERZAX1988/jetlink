@@ -213,8 +213,9 @@
       }
     }
 
-    /// On the session's thread, for every message: a clock read and a lock,
-    /// and a queued write only for the first message after a quiet spell.
+    /// For every message, on the session's thread, and for a finished
+    /// build's push, on the job's: a clock read and a lock, and a queued
+    /// write only for the first after a quiet spell.
     public func sessionHeard() {
       let now = DispatchTime.now().uptimeNanoseconds
       let woke = heardLock.withLock {

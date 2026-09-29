@@ -27,7 +27,8 @@ final class Session: @unchecked Sendable {
   /// Hears the link event when the session announces it (`first`), and
   /// again when a later hello changes its medium.
   var onLink: ((_ event: LinkEvent, _ first: Bool) -> Void)?
-  /// Hears every message that arrives, before it is handled.
+  /// Hears every message that arrives, before it is handled, and the push of
+  /// a finished build (on the job's thread).
   var onMessage: (() -> Void)?
 
   /// The reply's float32 outputs, reused every frame.
@@ -81,7 +82,10 @@ final class Session: @unchecked Sendable {
   }
 
   /// The worker finished. Tell the client that is here now, whoever it is.
+  /// A comma waiting on a build sends nothing for minutes, so the push counts
+  /// as hearing from it: its link is not back at stock for the swap it waits for.
   func engineUpdate() {
+    onMessage?()
     try? respondEngine(0)
   }
 
