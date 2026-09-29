@@ -594,7 +594,9 @@ load_previous() {
 
 # --ref, else the saved choice, else latest. Installers before 0.5.0 saved
 # main, their default, without asking, and no JETLINK_VERSION: such an
-# install follows releases now.
+# install follows releases now. So does one pinned to a release that ran in
+# Docker (a rollback, `--ref v0.6.0`) that --binary moves to the native
+# server: kept, the pin would hold every later update to that release.
 choose_ref() {
   # a checkout installs what is in it, so a ref there would do nothing
   if [ "$SOURCE" = local ] && [ -n "$OPT_REF" ]; then
@@ -609,6 +611,9 @@ choose_ref() {
     if [ "$SOURCE" != local ]; then
       note "Jetlink now follows releases; for development builds, use --ref main."
     fi
+  elif [ -n "$OPT_BINARY" ] && docker_release "$REF"; then
+    note "Jetlink follows releases again: it was pinned to $REF, which runs the server in Docker."
+    REF=latest
   fi
   REF="${REF:-latest}"
 }

@@ -1339,8 +1339,10 @@ expect_in "$UNITS/jetlink-server.service" "/opt/jetlink/current/bin/jetlink-serv
 expect_in /usr/local/bin/jetlink "SERVER=/opt/jetlink/current/bin/jetlink-server"
 expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=120"
 expect_ran "jetlink-server started: native, sleep 120"
-# the release it went back to stays pinned, and an update does not follow it into Docker
-expect_in /etc/jetlink/install.conf "JETLINK_REF=v0.6.0"
+# the way back pinned v0.6.0; kept, the pin would hold every later update there
+expect_out "Jetlink follows releases again: it was pinned to v0.6.0, which runs the server in Docker."
+expect_in /etc/jetlink/install.conf "JETLINK_REF=latest"
+# while the newest release runs in Docker, an update does not follow it there
 : >"$FAKE_LOG"
 FAKE_LATEST=v0.6.0 cli update
 expect_rc 0
@@ -1351,6 +1353,15 @@ expect_link /opt/jetlink/current /opt/jetlink/0.12.0-dev
 jetlink status >/tmp/status.txt 2>&1
 expect_in /tmp/status.txt "0.12.0-dev (a build between releases)"
 expect_not_in /tmp/status.txt "v0.6.0 ("
+# and once the newest release runs natively, the install follows it
+FAKE_LATEST=v0.10.0 cli update
+expect_rc 0
+expect_out "v0.10.0, the release this install follows, is older than the server here (0.12.0-dev)."
+# a --ref given with --binary still wins
+bash /opt/jetlink/src/install.sh --update --binary /tmp/dev/jetlink-server-0.12.0-dev-linux-aarch64.tar.gz --ref v0.6.0 >"$OUT" 2>&1; RC=$?
+expect_rc 0
+expect_no_out "follows releases again"
+expect_in /etc/jetlink/install.conf "JETLINK_REF=v0.6.0"
 
 scenario "uninstall after a move removes the Docker leftovers too"
 echo "jetlink:local-cuda" >>"$FAKE_STATE/images"
