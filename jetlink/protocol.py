@@ -29,13 +29,16 @@ VERSION = 3
 
 # A bulk transfer ends on a short packet, so a message that is an exact multiple
 # of the packet size never terminates the peer's read and arrives a frame late;
-# the sender appends a pad byte and sets Flag.PADDED. 1024 divides all the rest.
-PACKET_MULTIPLE = 1024
+# the sender appends a pad byte and sets Flag.PADDED. 512 is a high-speed packet
+# and divides a SuperSpeed one, so every message ends short on a USB 2 link too:
+# an Android phone, or a cable that fell back to high speed. A reader takes the
+# pad byte whenever the flag says so, at any length.
+PACKET_MULTIPLE = 512
 
 # The gadget pads every message to a burst so it never ends on a short packet:
 # dwc3 flushed its TX FIFO past one about once in 400 frames, and the host read
 # those bytes as the next header. Host to device keeps the PADDED byte instead.
-GADGET_TX_ALIGN = 16 * PACKET_MULTIPLE
+GADGET_TX_ALIGN = 16 * 1024
 
 # The comma's gadget as a USB host finds it: these IDs (pid.codes' test
 # allocation; get a real PID before distributing this), which

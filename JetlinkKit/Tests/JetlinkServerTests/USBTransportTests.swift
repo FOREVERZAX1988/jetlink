@@ -53,6 +53,16 @@ struct USBTransportTests {
     #expect(kernel.written.count == Wire.headerSize + Wire.headerSize + exact.count + 1)
   }
 
+  @Test("A message that fills whole high-speed packets is padded, so a USB 2 link ends it short too")
+  func padsForHighSpeed() {
+    for total in [512, 1024, 1536, 1024 * 5 + 512, 16384] {
+      #expect(Wire.needsPad(total - Wire.headerSize), "\(total)")
+    }
+    for total in [Wire.headerSize, 511, 513, 1023, 1025, 1537] {
+      #expect(!Wire.needsPad(total - Wire.headerSize), "\(total)")
+    }
+  }
+
   @Test("A write the bus takes in pieces still sends the message once, whole")
   func partialWrites() throws {
     kernel.writeLimit = 1000

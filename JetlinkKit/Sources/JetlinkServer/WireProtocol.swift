@@ -17,8 +17,10 @@ public enum Wire {
   public static let version = Pinned.protocolVersion
   public static let headerSize = Pinned.headerSize
   /// A bulk transfer ends on a short packet, so a message that is an exact
-  /// multiple of the packet size gets a pad byte and Flag.padded. TCP keeps
-  /// the rule so one client speaks to every transport the same way.
+  /// multiple of the packet size gets a pad byte and Flag.padded. 512, a
+  /// high-speed packet, which divides a SuperSpeed one: a USB 2 link (every
+  /// Android phone, a cable that fell back) must end each message short too.
+  /// TCP keeps the rule so one client speaks to every transport the same way.
   public static let packetMultiple = Pinned.packetMultiple
   /// The gadget pads every message it sends to a whole burst, so none ends on
   /// a short packet: dwc3 flushed its TX FIFO past one about once in 400

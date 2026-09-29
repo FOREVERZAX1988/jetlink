@@ -64,8 +64,8 @@ def payload(seq: int, n: int) -> bytes:
 
 
 # (type, seq, flags, parts) with parts a list of lengths, or a JSON text. The
-# lengths put header plus payload on each side of the 1024 byte packet and the
-# 16 KB burst, where the PADDED byte and the gadget's padding change.
+# lengths put header plus payload on each side of the 512 and 1024 byte packets
+# and the 16 KB burst, where the PADDED byte and the gadget's padding change.
 WIRE_MESSAGES = [
   ('HELLO_REQ', 1, 0, '{"client":{"name":"modeld","nonce":7}}'),
   ('HELLO_RESP', 1, 0, '{"protocol":3,"engine_state":"none","sleep_after":0.0}'),
@@ -76,6 +76,9 @@ WIRE_MESSAGES = [
   ('INFER_RESP', 4, 0, [20, 971]),          # 1023
   ('UPLOAD_CHUNK', 5, 0, [8, 985]),         # 1025
   ('UPLOAD_CHUNK', 6, 0, [8, 2008]),        # 2048: padded
+  ('INFER_RESP', 12, 0, [20, 460]),         # 512, a high-speed packet: padded
+  ('UPLOAD_CHUNK', 13, 0, [8, 1496]),       # 1536: padded
+  ('INFER_RESP', 14, 0, [20, 461]),         # 513
   ('STATE_RESP', 7, 0, [16352]),            # 16384: padded, and a whole burst
   ('ERROR', 8, 0, [16353]),                 # 16385
   ('INFER_RESP', 9, 0, [20, 2066 * 4, 2 * 4, 64]),  # the big models' outputs either side of hidden_state, telemetry
