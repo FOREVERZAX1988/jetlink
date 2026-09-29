@@ -15,10 +15,9 @@ final class PhoneSettings {
     didSet { defaults.set(Int(port), forKey: Keys.port) }
   }
 
-  /// The trunk on the Neural Engine and the rest on the GPU, the default: on an
-  /// iPhone 18 Pro it runs a frame in 14 ms, where the whole model on the Neural
-  /// Engine took 100 ms or failed. The whole model on the Neural Engine, or on
-  /// the GPU for when something else holds the Neural Engine, stay a choice.
+  /// The trunk on the Neural Engine and the rest on the GPU (14 ms a frame on an
+  /// iPhone 18 Pro; the whole model on the Neural Engine took 100 ms or failed),
+  /// or the whole model on the GPU for when something else holds the Neural Engine.
   var device: OrtProfile {
     didSet { defaults.set(device.rawValue, forKey: Keys.device) }
   }
@@ -69,12 +68,11 @@ final class PhoneSettings {
 extension OrtProfile {
   var title: String {
     switch self {
-    case .aneWhole: "Neural Engine"
     case .ane: "Neural Engine + GPU"
     case .coreml: "GPU"
     case .cpu: "CPU"
-    // Android's, never offered here
-    case .htp, .htpWhole, .gpu: rawValue
+    // the Mac's and Android's, never offered here
+    case .aneWhole, .htp, .htpWhole, .gpu: rawValue
     }
   }
 }
