@@ -32,7 +32,7 @@ public enum Wire {
     (headerSize + length) % packetMultiple == 0
   }
   /// Stops a corrupt length field making the receive buffer allocate
-  /// gigabytes. A frame is about 460 KB.
+  /// gigabytes. A big model's request is 393 KB.
   public static let maxMessage = Pinned.maxMessage
   public static let defaultPort = Pinned.defaultPort
 
