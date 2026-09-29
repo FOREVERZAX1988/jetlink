@@ -6,80 +6,164 @@ import JetlinkKit
 #endif
 
 /// The comma's bulk pair through usbdevfs, Linux's user-space USB, on a file
-/// descriptor someone else opened: on Android the app, through
-/// UsbDeviceConnection. The Swift form of what libusb does for the Jetson's
-/// Python server, and the Android counterpart of `IOUSBHostPipes`.
+/// descriptor someone else opened: the Linux server's, or on Android the
+/// app's, through UsbDeviceConnection. The Android and Linux counterpart of
+/// `IOUSBHostPipes`.
+///
+/// Reads come from a `ReadRing` of 16 KB URBs kept posted on the IN endpoint;
+/// a write is one URB, sent and reaped before it returns. Every URB is made
+/// once, with the pipes, and submitted again and again: the steady state
+/// allocates nothing.
 ///
 /// usbfs has one completion queue per file descriptor, and the kernel writes
 /// a URB's status, length and any IN data only when the URB is reaped. So one
 /// `UsbfsDevice` per descriptor owns the reaping: whichever transfer is
-/// waiting polls the descriptor and reaps for everyone, and a transfer returns
-/// only once its own URB is reaped. Nothing the kernel will write is freed
-/// before then, and a session's pipes can close without leaving a URB behind
-/// that a later session would reap into a freed buffer.
+/// waiting polls the descriptor and reaps for everyone. The pipes free their
+/// URBs and buffers only once the kernel is done with them (`close`), so a
+/// later reap never writes into freed memory.
 ///
 /// The kernel side is `UsbfsKernel`, so the tests run this against a fake on
 /// any platform; `LinuxUsbfs` is the real one.
-final class UsbfsPipes: BulkPipes, @unchecked Sendable {
+final class UsbfsPipes: BulkPipes, ReadRingPipe, @unchecked Sendable {
   let device: UsbfsDevice
   let inEndpoint: UInt8
   let outEndpoint: UInt8
+  /// One URB per ring slot, each over its own 16 KB of `slotMemory`.
+  private let slots: [UsbfsURB]
+  private let slotMemory: UnsafeMutableRawPointer
+  /// Writes go out one at a time, under the transport's send lock.
+  private let outURB: UsbfsURB
+  private var ring: ReadRing!
+  /// Under the device's lock.
+  private var closed = false
+  private var released = false
+  /// Slots were discarded to realign the ring; waits for them poll again as
+  /// a discarded write's does.
+  private var discarding = false
 
-  init(device: UsbfsDevice, inEndpoint: UInt8, outEndpoint: UInt8) {
+  /// `depth` and `aligned` are the ring's (see `ReadRing.init`).
+  init(device: UsbfsDevice, inEndpoint: UInt8, outEndpoint: UInt8, depth: Int = ReadRing.depth, aligned: Bool = true) {
     self.device = device
     self.inEndpoint = inEndpoint
     self.outEndpoint = outEndpoint
+    let size = ReadRing.slotSize
+    let memory = UnsafeMutableRawPointer.allocate(byteCount: depth * size, alignment: 4096)
+    slotMemory = memory
+    slots = (0..<depth).map { UsbfsURB(endpoint: inEndpoint, buffer: memory + $0 * size, slot: $0) }
+    outURB = UsbfsURB(endpoint: outEndpoint, buffer: memory, slot: -1)
+    ring = ReadRing(lock: device.condition, pipe: self, depth: depth, aligned: aligned)
+    let owner = ObjectIdentifier(self)
+    for urb in slots {
+      urb.owner = owner
+      urb.ring = ring
+    }
+    outURB.owner = owner
+    device.register(slots + [outURB])
   }
 
+  private var owner: ObjectIdentifier { ObjectIdentifier(self) }
+
+  /// What the ring holds or has next, up to `count` bytes. A timeout leaves
+  /// the ring posted, so what arrives later is kept for the next read.
   func read(into buffer: UnsafeMutableRawPointer, count: Int, timeout: TimeInterval) throws -> Int {
-    try device.transfer(endpoint: inEndpoint, buffer: buffer, count: count, timeout: timeout > 0 ? timeout : nil, owner: self)
+    let deadline = timeout > 0 ? Date().addingTimeInterval(timeout) : nil
+    return try device.use(owner: owner) {
+      try ring.read(into: buffer, count: count, deadline: deadline)
+    }
   }
 
   func write(from buffer: UnsafeRawPointer, count: Int, timeout: TimeInterval) throws -> Int {
-    try device.transfer(
-      endpoint: outEndpoint, buffer: UnsafeMutableRawPointer(mutating: buffer), count: count, timeout: timeout > 0 ? timeout : nil, owner: self)
+    try device.transfer(outURB, buffer: UnsafeMutableRawPointer(mutating: buffer), count: count, timeout: timeout > 0 ? timeout : nil)
   }
 
   func abort() {
-    device.cancel(owner: self)
+    device.cancel(owner: owner)
   }
 
-  /// Every transfer returns only once its URB is reaped, so closing is
-  /// ending the ones in flight; the descriptor is the app's to close.
+  /// Ends every URB in flight and waits for the kernel to give each back.
+  /// The descriptor is the host's to close.
   func close() {
-    abort()
+    let first = device.condition.withLock {
+      defer { closed = true }
+      return !closed
+    }
+    guard first else { return }
+    released = device.retire(slots + [outURB], owner: owner, timeout: 2)
   }
 
   deinit {
-    device.forget(owner: self)
+    close()
+    device.forget(owner: owner)
+    if released {
+      slotMemory.deallocate()
+    } else {
+      // The kernel may still write these at a reap: keep them for good
+      // rather than hand their memory to something else.
+      for urb in slots + [outURB] {
+        _ = Unmanaged.passRetained(urb)
+      }
+    }
+  }
+
+  // MARK: ReadRingPipe, under the device's lock
+
+  func post(_ slot: Int, size: Int) throws {
+    try device.submit(slots[slot], count: size)
+  }
+
+  func discardPosted() {
+    discarding = true
+    device.discard(slots)
+  }
+
+  func awaitCompletion(until deadline: Date?) throws {
+    try device.awaitCompletion(owner: owner, until: deadline, cap: discarding ? UsbfsDevice.discardPoll : nil)
+  }
+
+  func bytes(_ slot: Int) -> UnsafeRawPointer {
+    UnsafeRawPointer(slots[slot].buffer)
   }
 }
 
-/// One bulk transfer, from submit to reap.
+/// One bulk URB, made with its pipes and submitted over and over. On Linux
+/// the kernel's `usbdevfs_urb` (`handle`) lives as long as this does, and its
+/// user context points back here unretained: the pipes keep it alive.
 final class UsbfsURB: @unchecked Sendable {
   let endpoint: UInt8
-  let buffer: UnsafeMutableRawPointer
-  let count: Int
-  let owner: ObjectIdentifier
+  var buffer: UnsafeMutableRawPointer
+  var count = 0
+  var owner = ObjectIdentifier(UsbfsURB.self)
+  /// Its slot in the owner's ring, which hears of its completions; -1 for
+  /// the write URB.
+  let slot: Int
+  weak var ring: ReadRing?
+  /// Submitted and not reaped yet.
+  var inFlight = false
+  /// Ended early from this end since its last submit.
+  var discarded = false
   /// Once reaped: 0, or the kernel's negative errno.
   var status: Int32 = 0
   var actual = 0
-  var done = false
-  /// The real kernel's URB while it is in flight.
+  /// The real kernel's URB, made at the first submit.
   var handle: OpaquePointer?
 
-  init(endpoint: UInt8, buffer: UnsafeMutableRawPointer, count: Int, owner: ObjectIdentifier) {
+  init(endpoint: UInt8, buffer: UnsafeMutableRawPointer, slot: Int) {
     self.endpoint = endpoint
     self.buffer = buffer
-    self.count = count
-    self.owner = owner
+    self.slot = slot
+  }
+
+  deinit {
+    #if canImport(CUsbfs)
+      if let handle { jl_urb_free(handle) }
+    #endif
   }
 }
 
 /// usbfs as `UsbfsDevice` drives it. Calls come under the device's lock,
 /// except `wait`, which one thread at a time makes without it, and `wake`.
 protocol UsbfsKernel: AnyObject, Sendable {
-  /// Queues `urb`: 0, or an errno.
+  /// Queues `urb` for its `count` bytes: 0, or an errno.
   func submit(_ urb: UsbfsURB) -> Int32
   /// Ends `urb` early; it still has to be reaped.
   func discard(_ urb: UsbfsURB)
@@ -121,101 +205,161 @@ enum LinuxErrno {
 /// One file descriptor's transfers, however many sessions' pipes use it.
 final class UsbfsDevice: @unchecked Sendable {
   let kernel: any UsbfsKernel
-  private let condition = NSCondition()
+  /// Guards all of this, and the rings of the pipes on this descriptor.
+  let condition = NSCondition()
   /// A thread is in `kernel.wait` and reaps for everyone when it returns.
   private var polling = false
   private var gone = false
-  private var inflight: [ObjectIdentifier: UsbfsURB] = [:]
+  /// Every URB of every open pipes, added and removed with the pipes.
+  private var registered: [UsbfsURB] = []
   private var cancelled = Set<ObjectIdentifier>()
-  /// Transfers between their first and last touch of the kernel.
+  /// Calls between their first and last touch of the kernel.
   private var active = 0
   /// How long a discarded URB may take to come back before the wait for it
   /// polls again.
   static let discardPoll: TimeInterval = 0.05
+  static let goneMessage = "the comma's USB device is gone"
+  static let interruptedMessage = "the USB link was interrupted"
 
   init(kernel: any UsbfsKernel) {
     self.kernel = kernel
   }
 
   var isGone: Bool {
-    condition.lock()
-    defer { condition.unlock() }
-    return gone
+    condition.withLock { gone }
   }
 
-  /// Runs one transfer to its end and returns the bytes moved: all of them,
-  /// or what arrived before `timeout` (nil: none) ended it, which is not an
-  /// error. Throws when `cancel` ended it, the device went away, or the bus
-  /// failed it.
-  func transfer(endpoint: UInt8, buffer: UnsafeMutableRawPointer, count: Int, timeout: TimeInterval?, owner: AnyObject) throws -> Int {
-    let id = ObjectIdentifier(owner)
+  func register(_ urbs: [UsbfsURB]) {
+    condition.withLock { registered += urbs }
+  }
+
+  /// Runs `body` under the lock as a call that may touch the kernel, once
+  /// `owner`'s pipes may still move data.
+  func use<T>(owner: ObjectIdentifier, _ body: () throws -> T) throws -> T {
     condition.lock()
     defer { condition.unlock() }
-    if gone { throw LinkError.closed("the comma's USB device is gone") }
-    if cancelled.contains(id) { throw LinkError.closed("the USB link was interrupted") }
-    let urb = UsbfsURB(endpoint: endpoint, buffer: buffer, count: count, owner: id)
-    let error = kernel.submit(urb)
-    if error != 0 {
-      throw LinkError.closed("could not queue a USB transfer: \(LinuxErrno.describe(error))")
-    }
-    inflight[ObjectIdentifier(urb)] = urb
+    try check(owner)
     active += 1
     defer {
       active -= 1
       condition.broadcast()
     }
-    let deadline = timeout.map { Date().addingTimeInterval($0) }
-    var discarded = false
-    while !urb.done {
-      if gone {
-        // Left in `inflight`, never freed: nothing reaps after this, so the
-        // kernel never writes it, and the app's close of the descriptor ends it.
-        throw LinkError.closed("the comma's USB device is gone")
-      }
-      if !discarded && (cancelled.contains(id) || deadline.map { Date() >= $0 } == true) {
-        kernel.discard(urb)
-        discarded = true
-      }
-      if polling {
-        // Another transfer is in the kernel's wait and reaps for this one.
-        if discarded {
-          _ = condition.wait(until: Date().addingTimeInterval(UsbfsDevice.discardPoll))
-        } else if let deadline {
-          _ = condition.wait(until: deadline)
-        } else {
-          condition.wait()
-        }
-        continue
-      }
-      polling = true
-      let limit: TimeInterval? = discarded ? UsbfsDevice.discardPoll : deadline.map { max(0, $0.timeIntervalSinceNow) }
-      condition.unlock()
-      let alive = kernel.wait(timeout: limit)
-      condition.lock()
-      polling = false
-      reapAll()
-      if !alive {
-        gone = true
-      }
-      condition.broadcast()
-    }
-    if urb.status == 0 {
-      return urb.actual
-    }
-    if urb.status == -LinuxErrno.noent || urb.status == -LinuxErrno.connreset {
-      if cancelled.contains(id) {
-        throw LinkError.closed("the USB link was interrupted")
-      }
-      if gone {
-        throw LinkError.closed("the comma's USB device is gone")
-      }
-      // The deadline passed: what arrived is the caller's, as the pipes promise.
-      return urb.actual
-    }
-    throw LinkError.closed("USB transfer on endpoint \(String(format: "%02x", endpoint)) failed: \(LinuxErrno.describe(urb.status))")
+    return try body()
   }
 
-  /// Under the lock: every finished URB marked done.
+  private func check(_ owner: ObjectIdentifier) throws {
+    if gone { throw LinkError.closed(UsbfsDevice.goneMessage) }
+    if cancelled.contains(owner) { throw LinkError.closed(UsbfsDevice.interruptedMessage) }
+  }
+
+  /// Runs one transfer on `urb` to its end and returns the bytes moved: all
+  /// of them, or what arrived before `timeout` (nil: none) ended it, which is
+  /// not an error. Throws when `cancel` ended it, the device went away, or
+  /// the bus failed it.
+  func transfer(_ urb: UsbfsURB, buffer: UnsafeMutableRawPointer, count: Int, timeout: TimeInterval?) throws -> Int {
+    try use(owner: urb.owner) {
+      urb.buffer = buffer
+      try submit(urb, count: count)
+      let deadline = timeout.map { Date().addingTimeInterval($0) }
+      while urb.inFlight {
+        if gone {
+          // Never reaped now: its pipes free it once no thread polls.
+          throw LinkError.closed(UsbfsDevice.goneMessage)
+        }
+        if !urb.discarded && (cancelled.contains(urb.owner) || deadline.map { Date() >= $0 } == true) {
+          discard(urb)
+        }
+        waitOnce(until: urb.discarded ? nil : deadline, cap: urb.discarded ? UsbfsDevice.discardPoll : nil)
+      }
+      if urb.status == 0 {
+        return urb.actual
+      }
+      if urb.status == -LinuxErrno.noent || urb.status == -LinuxErrno.connreset {
+        if cancelled.contains(urb.owner) {
+          throw LinkError.closed(UsbfsDevice.interruptedMessage)
+        }
+        if gone {
+          throw LinkError.closed(UsbfsDevice.goneMessage)
+        }
+        // The deadline passed: what arrived is the caller's, as the pipes promise.
+        return urb.actual
+      }
+      throw UsbfsDevice.failure(urb)
+    }
+  }
+
+  private static func failure(_ urb: UsbfsURB) -> LinkError {
+    .closed("USB transfer on endpoint \(String(format: "%02x", urb.endpoint)) failed: \(LinuxErrno.describe(urb.status))")
+  }
+
+  /// Under the lock: queues `urb` for `count` bytes.
+  func submit(_ urb: UsbfsURB, count: Int) throws {
+    if gone { throw LinkError.closed(UsbfsDevice.goneMessage) }
+    urb.count = count
+    urb.status = 0
+    urb.actual = 0
+    urb.discarded = false
+    let error = kernel.submit(urb)
+    if error != 0 {
+      throw LinkError.closed("could not queue a USB transfer: \(LinuxErrno.describe(error))")
+    }
+    urb.inFlight = true
+  }
+
+  /// Under the lock: ends those of `urbs` still in flight.
+  func discard(_ urbs: [UsbfsURB]) {
+    for urb in urbs where urb.inFlight {
+      discard(urb)
+    }
+  }
+
+  private func discard(_ urb: UsbfsURB) {
+    guard !gone, !urb.discarded else { return }
+    urb.discarded = true
+    kernel.discard(urb)
+  }
+
+  /// Under the lock: waits once for a completion, until `deadline` (nil:
+  /// none) and for at most `cap`.
+  func awaitCompletion(owner: ObjectIdentifier, until deadline: Date?, cap: TimeInterval?) throws {
+    try check(owner)
+    waitOnce(until: deadline, cap: cap)
+  }
+
+  /// Under the lock. Polls the descriptor and reaps for everyone if no other
+  /// thread is, else waits for that one's broadcast. Never polls once the
+  /// device is gone: the host may already have closed the descriptor.
+  private func waitOnce(until deadline: Date?, cap: TimeInterval?) {
+    var until = deadline
+    if let cap {
+      let capped = Date().addingTimeInterval(cap)
+      if until.map({ capped < $0 }) ?? true {
+        until = capped
+      }
+    }
+    if polling || gone {
+      if let until {
+        _ = condition.wait(until: until)
+      } else {
+        condition.wait()
+      }
+      return
+    }
+    polling = true
+    condition.unlock()
+    let alive = kernel.wait(timeout: until.map { max(0, $0.timeIntervalSinceNow) })
+    condition.lock()
+    polling = false
+    if !gone {
+      reapAll()
+    }
+    if !alive {
+      gone = true
+    }
+    condition.broadcast()
+  }
+
+  /// Under the lock: every finished URB marked, and its ring told.
   private func reapAll() {
     while true {
       let urb: UsbfsURB?
@@ -226,41 +370,74 @@ final class UsbfsDevice: @unchecked Sendable {
         return
       }
       guard let urb else { return }
-      urb.done = true
-      inflight[ObjectIdentifier(urb)] = nil
+      urb.inFlight = false
+      urb.ring?.complete(urb.slot, completion(of: urb), count: urb.actual)
     }
   }
 
-  /// Ends `owner`'s transfers, and any it starts later, with an error.
-  func cancel(owner: AnyObject) {
-    let id = ObjectIdentifier(owner)
-    condition.lock()
-    cancelled.insert(id)
-    for urb in inflight.values where urb.owner == id {
-      kernel.discard(urb)
+  private func completion(of urb: UsbfsURB) -> ReadRing.Completion {
+    if urb.status == 0 {
+      return .data
     }
-    condition.unlock()
+    if urb.discarded && (urb.status == -LinuxErrno.noent || urb.status == -LinuxErrno.connreset) {
+      return cancelled.contains(urb.owner) ? .failed(.closed(UsbfsDevice.interruptedMessage)) : .discarded
+    }
+    return .failed(UsbfsDevice.failure(urb))
+  }
+
+  /// Ends `owner`'s transfers, and any it starts later, with an error.
+  func cancel(owner: ObjectIdentifier) {
+    condition.withLock {
+      cancelled.insert(owner)
+      for urb in registered where urb.owner == owner && urb.inFlight {
+        discard(urb)
+      }
+    }
     kernel.wake()
   }
 
   /// Forgets a closed owner, so a later one at the same address starts clean.
-  func forget(owner: AnyObject) {
+  func forget(owner: ObjectIdentifier) {
+    condition.withLock { _ = cancelled.remove(owner) }
+  }
+
+  /// Cancels `owner` and waits up to `timeout` for the kernel to let go of
+  /// `urbs`: until none is in flight, or the device is gone and no thread is
+  /// left that could reap one. True when it has, and the owner may free them
+  /// and their buffers.
+  func retire(_ urbs: [UsbfsURB], owner: ObjectIdentifier, timeout: TimeInterval) -> Bool {
     condition.lock()
-    cancelled.remove(ObjectIdentifier(owner))
-    condition.unlock()
+    defer { condition.unlock() }
+    cancelled.insert(owner)
+    active += 1
+    defer {
+      active -= 1
+      condition.broadcast()
+    }
+    discard(urbs)
+    let deadline = Date().addingTimeInterval(timeout)
+    while urbs.contains(where: { $0.inFlight }) {
+      if gone && !polling {
+        break
+      }
+      if Date() >= deadline {
+        return false
+      }
+      waitOnce(until: deadline, cap: UsbfsDevice.discardPoll)
+    }
+    registered.removeAll { $0.owner == owner }
+    return true
   }
 
   /// The device is going: every transfer ends with an error, and this waits
-  /// up to `timeout` for them to leave the kernel alone, so the app can close
+  /// up to `timeout` for them to leave the kernel alone, so the host can close
   /// the descriptor after. True when they all did.
   @discardableResult
   func invalidate(timeout: TimeInterval = 1.0) -> Bool {
     condition.lock()
     defer { condition.unlock() }
+    discard(registered)
     gone = true
-    for urb in inflight.values {
-      kernel.discard(urb)
-    }
     kernel.wake()
     condition.broadcast()
     let deadline = Date().addingTimeInterval(timeout)
@@ -297,20 +474,15 @@ final class UsbfsDevice: @unchecked Sendable {
     }
 
     func submit(_ urb: UsbfsURB) -> Int32 {
-      // The kernel keeps the URB alive until it is reaped.
-      let context = Unmanaged.passRetained(urb).toOpaque()
-      guard let handle = jl_urb_create(urb.endpoint, urb.buffer, Int32(urb.count), context) else {
-        Unmanaged<UsbfsURB>.fromOpaque(context).release()
-        return LinuxErrno.nomem
+      if let handle = urb.handle {
+        jl_urb_set(handle, urb.buffer, Int32(urb.count))
+      } else {
+        guard let handle = jl_urb_create(urb.endpoint, urb.buffer, Int32(urb.count), Unmanaged.passUnretained(urb).toOpaque()) else {
+          return LinuxErrno.nomem
+        }
+        urb.handle = handle
       }
-      let error = jl_usbfs_submit(fd, handle)
-      if error != 0 {
-        Unmanaged<UsbfsURB>.fromOpaque(context).release()
-        jl_urb_free(handle)
-        return error
-      }
-      urb.handle = handle
-      return 0
+      return jl_usbfs_submit(fd, urb.handle)
     }
 
     func discard(_ urb: UsbfsURB) {
@@ -326,11 +498,9 @@ final class UsbfsDevice: @unchecked Sendable {
       guard error == 0, let done, let context = jl_urb_context(done) else {
         throw LinkError.closed("USB reap failed: \(LinuxErrno.describe(error))")
       }
-      let urb = Unmanaged<UsbfsURB>.fromOpaque(context).takeRetainedValue()
+      let urb = Unmanaged<UsbfsURB>.fromOpaque(context).takeUnretainedValue()
       urb.status = jl_urb_status(done)
       urb.actual = Int(jl_urb_actual(done))
-      urb.handle = nil
-      jl_urb_free(done)
       return urb
     }
 

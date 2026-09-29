@@ -24,6 +24,9 @@ typedef struct jl_urb jl_urb;
 // A bulk URB on `endpoint` (its address, 0x80 set for IN) over `buffer`.
 // `context` comes back from jl_urb_context once reaped. NULL when out of memory.
 jl_urb *jl_urb_create(uint8_t endpoint, void *buffer, int length, void *context);
+// Points a reaped URB at `buffer` again and clears its last result, so one
+// URB serves transfer after transfer without an allocation each.
+void jl_urb_set(jl_urb *urb, void *buffer, int length);
 void jl_urb_free(jl_urb *urb);
 void *jl_urb_context(const jl_urb *urb);
 // After the reap: 0, or a negative errno (-ENOENT or -ECONNRESET when discarded).
