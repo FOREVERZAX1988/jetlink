@@ -96,12 +96,6 @@ class JetlinkClient:
   # -- construction ---------------------------------------------------------
 
   @classmethod
-  def open_usb(cls, **kw) -> JetlinkClient:
-    """This end is the USB host (libusb)."""
-    from jetlink.transport.usbbulk import UsbBulkTransport
-    return cls(UsbBulkTransport.open(), **kw)
-
-  @classmethod
   def open_ffs(cls, mount: str = '/dev/ffs-jetlink', gadget: str | None = None,
                udc: str | None = None, **kw) -> JetlinkClient:
     """This end is the USB gadget (FunctionFS).
@@ -125,9 +119,30 @@ class JetlinkClient:
     return cls(FfsTransport.borrowed(mount, udc, bounce=bounce, owner_gadget=owner_gadget), **kw)
 
   @classmethod
+  def open_loan(cls, loan, **kw) -> JetlinkClient:
+    """Over what the comma's gadget owner lent (jetlink.comma.lending.Loan):
+    the phone's dial when it lent one, else the endpoint files."""
+    if loan.sock is not None:
+      return cls.open_socket(loan.sock, **kw)
+    return cls.open_borrowed_ffs(loan.mount, loan.udc, bounce=loan.bounce, **kw)
+
+  @classmethod
   def open_tcp(cls, host: str, port: int = 5599, **kw) -> JetlinkClient:
     from jetlink.transport.tcp import TcpTransport
     return cls(TcpTransport.connect(host, port), **kw)
+
+  @classmethod
+  def open_listen(cls, address: str, timeout: float | None = None, **kw) -> JetlinkClient:
+    """Wait for one peer to dial `address`, '[HOST:]PORT' (every interface by
+    default), and run the session over that connection, as the comma takes a
+    phone's dial (docs/transport.md). For the bench and parity scripts."""
+    from jetlink.transport.tcp import TcpTransport
+    host, _, port = address.rpartition(':')
+    if not port.isdigit():
+      raise ValueError(f'listen on [HOST:]PORT, not {address!r}')
+    transport, peer = TcpTransport.listen_once(host or '0.0.0.0', int(port), timeout)
+    log.info('peer dialed in from %s:%d', peer[0], peer[1])
+    return cls(transport, **kw)
 
   @classmethod
   def open_socket(cls, sock, **kw) -> JetlinkClient:
@@ -185,7 +200,7 @@ class JetlinkClient:
   def hello(self, timeout: float = 5.0) -> dict:
     """Introduce this client. The server starts its session over on a hello,
     so this is also how a new owner of the gadget takes over one the server
-    never saw end; see Session._greet."""
+    never saw end; see Session.greet in JetlinkServer."""
     seq = self._next_seq()
     client = {'nonce': self.nonce, 'name': self.name}
     try:

@@ -5,15 +5,15 @@ Copyright (c) 2026-, Zeph Leggett.
 This file is part of jetlink and is licensed under the MIT License.
 See the LICENSE file in the root directory for more details.
 
-Writes JetlinkKit/Sources/JetlinkKit/Pinned.swift: the constants the Swift and
-Python implementations must agree on, as the Python defines them.
+Writes JetlinkKit/Sources/JetlinkKit/Pinned.swift: the constants the Swift
+server must share with the comma's Python, as the Python defines them.
 
   .venv/bin/python JetlinkKit/Scripts/make_pins.py [--out FILE]
 
-Python is the source. The Swift constants (Wire.version, Wire.maxMessage,
-CoreMLBackend.prepareVersion and the rest) are tested against Pinned in the
-Swift suites, and tests/test_conformance.py fails when the committed file is
-not what this script writes now. docs/conformance.md has the whole story.
+Python is the source for those. The Swift constants (Wire.version,
+Wire.maxMessage and the rest) are tested against Pinned in the Swift suites,
+and tests/test_conformance.py fails when the committed file is not what this
+script writes now. docs/conformance.md has the whole story.
 """
 from __future__ import annotations
 
@@ -45,9 +45,6 @@ def values() -> list[tuple[str, str, str, str]]:
   """(swift name, swift type, swift literal, where it is kept)."""
   from jetlink import __version__
   from jetlink import protocol as P
-  from jetlink.server import control
-  from jetlink.server import session
-  from jetlink.server.backends import ort
   from jetlink.spec import CHUNK, DEFAULT_FRAME_SKIP, MODEL_CONTEXT_FREQ, MODEL_RUN_FREQ
   from jetlink.transport import base, tcp
 
@@ -78,7 +75,6 @@ def values() -> list[tuple[str, str, str, str]]:
     ('usbVendorClass', '[UInt8]', '[' + ', '.join(f'0x{v:02X}' for v in P.USB_VENDOR_CLASS) + ']',
      'jetlink.protocol.USB_VENDOR_CLASS'),
     ('usbMaxPacket', 'Int', str(P.USB_MAX_PACKET), 'jetlink.protocol.USB_MAX_PACKET'),
-    ('linkMedia', '[String]', '[' + ', '.join(f'"{m}"' for m in base.LINK_MEDIA) + ']', 'jetlink.transport.base.LINK_MEDIA'),
     ('usbSpeedMedia', '[String: String]',
      '[\n' + ''.join(f'    "{k}": "{v}",\n' for k, v in base.USB_MEDIA.items()) + '  ]', 'jetlink.transport.base.USB_MEDIA'),
     ('cableAddress', 'String', f'"{tcp.CABLE_ADDRESS}"', 'jetlink.transport.tcp.CABLE_ADDRESS'),
@@ -87,9 +83,6 @@ def values() -> list[tuple[str, str, str, str]]:
     ('modelContextFrequency', 'Int', str(MODEL_CONTEXT_FREQ), 'jetlink.spec.MODEL_CONTEXT_FREQ'),
     ('defaultFrameSkip', 'Int', str(DEFAULT_FRAME_SKIP), 'jetlink.spec.DEFAULT_FRAME_SKIP'),
     ('uploadChunk', 'Int', str(CHUNK), 'jetlink.spec.CHUNK'),
-    ('slowFrameUs', 'Int', str(session.SLOW_FRAME_US), 'jetlink.server.session.SLOW_FRAME_US'),
-    ('controlProtocol', 'Int', str(control.PROTOCOL), 'jetlink.server.control.PROTOCOL'),
-    ('prepareVersion', 'Int', str(ort.PREPARE_VERSION), 'jetlink.server.backends.ort.PREPARE_VERSION'),
     ('onnxruntimeVersion', 'String', f'"{fixture_pins()["onnxruntime"]}"',
      f'{FIXTURE_PINS.relative_to(ROOT)}: onnxruntime'),
   ]
@@ -101,9 +94,9 @@ def render() -> str:
     '// checkout. Do not edit: change the Python, run the script, commit both.',
     '// docs/conformance.md says what each value pins and how.',
     '',
-    '/// The constants the Swift and the Python implementations have to agree on,',
-    '/// as the Python defines them. Each Swift constant that means the same thing',
-    '/// is tested against these, and the Python tests that this file is current.',
+    "/// The constants the Swift server shares with the comma's Python, as the",
+    '/// Python defines them. Each Swift constant that means the same thing is',
+    '/// tested against these, and the Python tests that this file is current.',
     'public enum Pinned {',
   ]
   for name, kind, literal, source in values():

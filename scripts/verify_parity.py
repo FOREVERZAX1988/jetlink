@@ -9,8 +9,8 @@ Does the link return the same numbers the model would?
 
 Compares what comes back over the cable against onnxruntime on the unmodified
 ONNX, per output slice and per column, so a regression lands on a named head
-rather than in an 18452-wide vector. That covers onnx_patch's UINT8->FP16
-surgery, the TensorRT build, the wire format and the output slicing. For a
+rather than in an 18452-wide vector. That covers the server's UINT8->FP16
+preparation, the TensorRT build, the wire format and the output slicing. For a
 queued graph, not the queues: reference() runs the same PolicyQueues, so a queue
 bug cancels out on both sides, and tests/test_queues.py is the queue check. For
 a stateful graph (openpilot #38916, Cinque Terre V3 on) reference() feeds each
@@ -19,8 +19,7 @@ next_state_ output back itself, so the server's state loop is checked too.
 The graph is float16 end to end, so this is two float16 implementations
 differing in accumulation order, not half against full precision: expect an
 absolute 0.005 to 0.03 across the head values. MIN_SAMPLES and
-CONSTANT_FRACTION say what a correlation can judge from that, and
-`verify_engine.py --capture` rules the transport out bit for bit.
+CONSTANT_FRACTION say what a correlation can judge from that.
 
     # 1. on the comma, over the cable (stop jetlinkd first, it owns the link).
     #    the server returns the spec of a model it already has, so only the
@@ -75,16 +74,12 @@ MDN_LAYOUTS = {
 }
 
 
-def load_spec_file(path: str | Path) -> ModelSpec:
-  return ModelSpec.from_dict(json.loads(Path(path).read_text()))
-
-
 def load_spec(args) -> ModelSpec | None:
   """--spec wins; otherwise the copy capture wrote next to the frames."""
   if args.spec:
-    return load_spec_file(args.spec)
+    return ModelSpec.load(args.spec)
   path = Path(args.dir) / 'spec.json'
-  return load_spec_file(path) if path.exists() else None
+  return ModelSpec.load(path) if path.exists() else None
 
 
 def make_inputs(spec: ModelSpec, n: int, seed: int = 0) -> list[tuple[np.ndarray, np.ndarray]]:
@@ -125,31 +120,10 @@ def make_inputs(spec: ModelSpec, n: int, seed: int = 0) -> list[tuple[np.ndarray
 
 # -- capture: what actually comes back over the link -------------------------
 
-def parse_listen(spec: str, default_host: str = '0.0.0.0') -> tuple[str, int]:
-  """'[HOST:]PORT' for --listen."""
-  host, _, port = spec.rpartition(':')
-  try:
-    return host or default_host, int(port)
-  except ValueError:
-    raise SystemExit(f"--listen wants [HOST:]PORT, not {spec!r}") from None
-
-
-def open_listen(spec: str, timeout: float):
-  """Take one incoming dial and capture over it, the way the comma takes a
-  phone's; see docs/transport.md."""
-  from jetlink.client import JetlinkClient
-  from jetlink.transport.tcp import TcpTransport
-  host, port = parse_listen(spec)
-  print(f"waiting up to {timeout:.0f}s for a peer to dial {host}:{port}...")
-  transport, addr = TcpTransport.listen_once(host, port, timeout)
-  print(f"peer dialed in from {addr[0]}:{addr[1]}")
-  return JetlinkClient(transport, want_hidden=True)
-
-
 def capture(args) -> int:
   from jetlink.client import JetlinkClient
 
-  spec = load_spec_file(args.spec) if args.spec else None
+  spec = ModelSpec.load(args.spec) if args.spec else None
   if spec is not None:
     sha256, nbytes = spec.sha256, spec.nbytes
   elif args.sha256 and args.nbytes:
@@ -165,10 +139,9 @@ def capture(args) -> int:
     client = JetlinkClient.open_ffs(args.ffs_mount, gadget=args.gadget, want_hidden=True)
   elif args.host:
     client = JetlinkClient.open_tcp(args.host, args.port, want_hidden=True)
-  elif args.listen:
-    client = open_listen(args.listen, args.listen_timeout)
   else:
-    client = JetlinkClient.open_usb(want_hidden=True)
+    print(f"waiting up to {args.listen_timeout:.0f}s for a peer to dial {args.listen}...")
+    client = JetlinkClient.open_listen(args.listen, args.listen_timeout, want_hidden=True)
 
   try:
     hello = client.hello(timeout=60.0)  # the jetson may still be re-enumerating
@@ -254,7 +227,7 @@ def reference(args) -> int:
     print(f"  frame {i}: {out.shape[0]} values, finite={bool(np.all(np.isfinite(out)))}")
     # the hidden state fed back is our own previous output, as the server's
     # is its own; the link's would hide the drift this is looking for
-    queues.after_run({DRIVING_OUTPUT: out}, feed)
+    queues.after_run({DRIVING_OUTPUT: out})
   return 0
 
 
@@ -437,17 +410,17 @@ def main() -> int:
   p.add_argument('--ffs', action='store_true', help='capture mode: this end is the gadget')
   p.add_argument('--ffs-mount', default='/dev/ffs-jetlink')
   p.add_argument('--gadget', default='/sys/kernel/config/usb_gadget/jetlink')
-  p.add_argument('--host', help='capture mode: TCP host instead of USB')
+  p.add_argument('--host', help='capture mode: the server over TCP')
   p.add_argument('--port', type=int, default=5599)
   p.add_argument('--listen', metavar='[HOST:]PORT',
                  help='capture mode: accept one incoming dial (a phone over the cable network '
-                      'dials the comma; from a Mac this stands in for it) instead of USB or --host')
+                      'dials the comma; from a Mac this stands in for it)')
   p.add_argument('--listen-timeout', type=float, default=120.0, metavar='SECONDS',
                  help='--listen: how long to wait for the dial')
   args = p.parse_args()
 
-  if args.listen and (args.host or args.ffs):
-    p.error('--listen takes the place of --host and --ffs')
+  if args.mode == 'capture' and sum(map(bool, (args.ffs, args.host, args.listen))) != 1:
+    p.error('capture takes one of --ffs, --host and --listen')
 
   if args.mode == 'reference' and not args.onnx:
     raise SystemExit('reference mode needs --onnx')

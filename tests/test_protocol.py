@@ -9,6 +9,8 @@ Framing and transport tests. No Jetson, no CUDA - these run anywhere.
 from __future__ import annotations
 
 import errno
+import json
+import struct
 import threading
 from types import SimpleNamespace
 
@@ -16,9 +18,9 @@ import numpy as np
 import pytest
 
 from jetlink import protocol as P
-from jetlink.transport.base import StreamTransport
+from jetlink.client import JetlinkClient
 from jetlink.spec import ModelSpec
-from jetlink.transport.base import LinkError, LinkTimeout
+from jetlink.transport.base import LinkError, LinkTimeout, StreamTransport
 from jetlink.transport.tcp import TcpTransport
 
 
@@ -186,6 +188,16 @@ def _spec(**kw) -> ModelSpec:
   return ModelSpec(**base)
 
 
+# Cinque Terre V3's, as the fork's tests read them off its ONNX
+STATEFUL = {'new_img': (2, 6, 128, 256), 'desire': (8,), 'traffic_convention': (1, 2), 'action_t': (1, 2),
+            'state_img_q': (2, 5, 6, 128, 256), 'state_desire_q': (132, 1, 8), 'state_feat_q': (128, 1, 16384)}
+
+
+def _stateful_spec() -> ModelSpec:
+  states = {f'next_{n}': s for n, s in STATEFUL.items() if n.startswith('state_')}
+  return _spec(input_shapes=STATEFUL, output_shapes={'outputs': (1, 18452), **states})
+
+
 def test_spec_matches_the_shipped_big_model():
   """Guards the numbers the whole design is sized against."""
   s = _spec()
@@ -202,9 +214,17 @@ def test_spec_matches_the_shipped_big_model():
   assert s.feat_q_shape == (128, 1, 16_384)
   assert s.desire_q_shape == (132, 1, 8)
   # the messages with their 32-byte headers: 393,304 B up (409,600 once the
-  # gadget pads it to 16 KB) and 8,324 B down, one 16 KB read on the comma
+  # gadget pads it to 16 KB) and 8,324 B down, one 16 KB read on the comma;
+  # 73,860 B, five reads, with the hidden state (WANT_HIDDEN)
   assert P.HEADER_SIZE + s.infer_req_nbytes == 393_304
   assert P.HEADER_SIZE + s.infer_resp_nbytes == 8_324
+  assert P.HEADER_SIZE + P.INFER_RESP_SIZE + s.output_nbytes == 73_860
+
+
+def test_a_stateful_model_sends_and_gets_what_a_queued_one_does():
+  stateful, queued = _stateful_spec(), _spec()
+  assert stateful.stateful and not queued.stateful
+  assert (stateful.infer_req_nbytes, stateful.infer_resp_nbytes) == (queued.infer_req_nbytes, queued.infer_resp_nbytes)
 
 
 def test_spec_handles_the_older_3d_features_buffer():
@@ -248,20 +268,25 @@ def test_rx_buffer_grows_for_an_oversized_message():
   assert bytes(rx.view[:32]) == bytes(range(32))
 
 
-def test_desync_is_a_link_error_not_a_process_killer():
+@pytest.mark.parametrize('garbage', [
+  b'\xde\xad\xbe\xef' + bytes(60),
+  struct.pack(P.HEADER_FMT, P.MAGIC, P.VERSION - 1, P.Msg.HELLO_RESP, 1, 0, 2, 0) + b'{}',
+], ids=['bad_magic', 'another_version'])
+def test_desync_is_a_link_error_not_a_process_killer(garbage):
   """Garbage on the wire must surface as LinkError so callers reconnect.
 
   ProtocolError is not a LinkError, and the server's accept loop only catches
   LinkError - so letting it escape would unwind out of main() and exit the
-  process instead of dropping one connection.
+  process instead of dropping one connection. A header of another version is
+  no special case: the caller reopens the link.
   """
   a, b = make_pair()
   try:
-    a.sock.sendall(b'\xde\xad\xbe\xef' + bytes(60))
-    with pytest.raises(LinkError):
+    a.sock.sendall(garbage)
+    with pytest.raises(LinkError, match='protocol error'):
       b.recv(timeout=5)
     # And it stays failed rather than re-reading the same bad bytes forever.
-    with pytest.raises(LinkError):
+    with pytest.raises(LinkError, match='desynced'):
       b.recv(timeout=5)
   finally:
     a.close()
@@ -288,8 +313,6 @@ def test_frame_timeout_is_a_link_failure():
   gone, so modeld falls back as it does for a chestnut. LinkError and not
   LinkTimeout, latched, so nothing upstream treats it as recoverable.
   """
-  from jetlink.client import JetlinkClient
-
   a, b = make_pair()
   spec = _spec()
   client = JetlinkClient(a, deadline=0.02)
@@ -306,8 +329,6 @@ def test_frame_timeout_is_a_link_failure():
 
 def test_send_rejects_a_wrongly_sized_buffer():
   """Catch a model/spec skew here, not as a misparse on the far end."""
-  from jetlink.client import JetlinkClient
-
   a, b = make_pair()
   spec = _spec()
   client = JetlinkClient(a, deadline=0.05)
@@ -319,6 +340,91 @@ def test_send_rejects_a_wrongly_sized_buffer():
   finally:
     client.close()
     b.close()
+
+
+# -- the reply -----------------------------------------------------------------
+
+def reply(floats: np.ndarray, tail: bytes = b'', frame_id: int = 1) -> bytes:
+  return P.pack_infer_resp(frame_id, P.Status.OK, 0, 0, 0) + np.asarray(floats, np.float32).tobytes() + tail
+
+
+def replying(spec: ModelSpec, payload: bytes) -> JetlinkClient:
+  """A client whose transport answers every frame with `payload`."""
+  transport = SimpleNamespace(send=lambda *a, **kw: None, recv=lambda **kw: SimpleNamespace(
+    msg_type=P.Msg.INFER_RESP, seq=1, payload=memoryview(payload)))
+  client = JetlinkClient(transport, want_hidden=False)
+  client.spec = spec
+  return client
+
+
+def frame(client: JetlinkClient, **kw) -> np.ndarray:
+  spec = client.spec
+  return client.infer(bytes(spec.warped_nbytes), bytes(spec.packed_nbytes), frame_id=1, **kw)
+
+
+@pytest.mark.parametrize('kind', ['wrong_frame', 'short_header', 'short_output'])
+def test_invalid_inference_response_abandons_the_stream(kind):
+  spec = _spec()
+  payload = reply(np.zeros(spec.reply_nelem), frame_id=42 if kind == 'wrong_frame' else 7)
+  if kind == 'short_header':
+    payload = payload[:P.INFER_RESP_SIZE - 1]
+  elif kind == 'short_output':
+    payload = payload[:-1]
+  client = replying(spec, payload)
+  seq = client.infer_begin(bytes(spec.warped_nbytes), bytes(spec.packed_nbytes), frame_id=7)
+  with pytest.raises(LinkError):
+    client.infer_end(seq)
+  assert client.dead
+  with pytest.raises(LinkError, match='previously failed'):
+    client.infer_begin(bytes(spec.warped_nbytes), bytes(spec.packed_nbytes), frame_id=8)
+
+
+def test_the_output_keeps_its_layout_with_the_hidden_state_left_out():
+  """The glue slices by the spec's output_slices, as when the whole vector
+  crossed: the reply is expanded back, hidden_state reading as zeros."""
+  spec = _spec()
+  sent = np.arange(spec.reply_nelem, dtype=np.float32) + 1
+  out = frame(replying(spec, reply(sent)))
+  assert out.shape == (18_452,)
+  np.testing.assert_array_equal(out[:2066], sent[:2066])
+  assert not out[2066:18450].any()
+  np.testing.assert_array_equal(out[18450:], sent[2066:])
+
+
+def test_want_hidden_returns_the_whole_vector_as_sent():
+  spec = _stateful_spec()
+  whole = np.arange(spec.output_nelem, dtype=np.float32)
+  sent = []
+  client = replying(spec, reply(whole))
+  client.t.send = lambda *a, **kw: sent.append(a)
+  client.want_hidden = True
+  np.testing.assert_array_equal(frame(client), whole)
+  _, flags = P.unpack_infer_req(sent[0][2][0])
+  assert flags & P.Flag.WANT_HIDDEN
+
+
+def test_openpilots_raw_predictions_switch_asks_for_the_hidden_state(monkeypatch):
+  monkeypatch.delenv('SEND_RAW_PRED', raising=False)
+  assert not JetlinkClient(SimpleNamespace()).want_hidden
+  monkeypatch.setenv('SEND_RAW_PRED', '1')
+  assert JetlinkClient(SimpleNamespace()).want_hidden
+
+
+def test_a_reply_with_the_hidden_state_left_in_is_refused():
+  """A server that says 3 and answers like 2 would have every float after
+  hidden_state misread: refused, not guessed at."""
+  spec = _spec()
+  client = replying(spec, reply(np.zeros(spec.output_nelem)))
+  with pytest.raises(LinkError, match='73828 bytes, expected 8292'):
+    frame(client)
+  assert client.dead
+
+
+def test_telemetry_follows_the_outputs():
+  spec = _spec()
+  client = replying(spec, reply(np.zeros(spec.reply_nelem), json.dumps({'temp_c': 50}).encode()))
+  frame(client, want_state=True)
+  assert client.last_state == {'temp_c': 50}
 
 
 class _CappedTransport(StreamTransport):
@@ -457,16 +563,10 @@ class TestOversizeMessageDoesNotStall:
     with pytest.raises(LinkError, match="read_slack too small"):
       t.recv(timeout=None)
 
-  def test_the_real_host_transport_has_slack(self):
-    from jetlink.transport.usbbulk import MAX_PACKET, UsbBulkTransport
-    assert UsbBulkTransport.read_slack >= MAX_PACKET
-
 
 def test_a_closed_client_is_dead():
   """Whoever still holds a closed client must open a new one: a big model
   retired after a link loss closes its client, and modeld's link reused it."""
-  from jetlink.client import JetlinkClient
-
   a, b = make_pair()
   client = JetlinkClient(a)
   assert not client.dead

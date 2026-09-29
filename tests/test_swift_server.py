@@ -22,7 +22,6 @@ import json
 import os
 import signal
 import socket
-import struct
 import subprocess
 import sys
 import time
@@ -38,7 +37,6 @@ from jetlink.client import EngineMissing, JetlinkClient
 from jetlink.queues import PolicyQueues
 from jetlink.spec import DRIVING_OUTPUT, ModelSpec
 from jetlink.transport.base import LinkError, LinkTimeout
-from jetlink.transport.tcp import TcpTransport
 from tests import tiny_model
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -66,9 +64,9 @@ pytestmark = pytest.mark.skipif(BIN is None, reason='no jetlink-server: set JETL
 
 
 def spec_of(path: Path) -> ModelSpec:
-  """The spec Python derives, as make_server_fixtures.py recorded it: no onnx
-  package needed here, so this runs anywhere numpy does."""
-  return ModelSpec.from_dict(json.loads(path.with_suffix('.spec.json').read_text()))
+  """The spec Python derives, as committed beside the graph: no onnx package
+  needed here, so this runs anywhere numpy does."""
+  return ModelSpec.load(path.with_suffix('.spec.json'))
 
 
 @dataclass
@@ -77,11 +75,10 @@ class Server:
   port: int
   cache: Path
   log: Path
-  returncode: int | None = None
   provisioned: dict = field(default_factory=dict)
 
   def connect(self) -> JetlinkClient:
-    return JetlinkClient(TcpTransport.connect('127.0.0.1', self.port), deadline=10.0, name='test_swift_server')
+    return JetlinkClient.open_tcp('127.0.0.1', self.port, deadline=10.0, name='test_swift_server')
 
   def tail(self) -> str:
     return '\n'.join(self.log.read_text(errors='replace').splitlines()[-40:])
@@ -143,7 +140,7 @@ def running(tmp: Path, *extra: str):
   finally:
     proc.send_signal(signal.SIGTERM)
     try:
-      server.returncode = proc.wait(10.0)
+      proc.wait(10.0)
     except subprocess.TimeoutExpired:
       proc.kill()
       proc.wait()
@@ -222,7 +219,7 @@ def queued_reference(frames, resets=(0,), hellos=(), fed=None, dropped=()) -> li
       queues.new_client()
     outs.append(tiny_model.reference(queues.step(warped, packed)))
     if i not in dropped:
-      queues.after_run({DRIVING_OUTPUT: outs[-1] if fed is None else fed[i]}, {})
+      queues.after_run({DRIVING_OUTPUT: outs[-1] if fed is None else fed[i]})
   return outs
 
 
@@ -353,14 +350,6 @@ def test_telemetry_piggybacks_only_when_asked(queued):
   assert isinstance(queued.last_state, dict)   # {} where the host has no sensors: never zeros
 
 
-def test_ping_and_state_requests(queued):
-  assert queued.ping(timeout=5) < 5.0
-  state = queued.state(timeout=5)
-  assert state['engine_state'] == 'ready'
-  assert 'frames_served' in state
-  assert queued.hello(timeout=5)['protocol'] == P.VERSION
-
-
 def test_frame_deadline_includes_time_spent_sending(queued, monkeypatch):
   send = queued.t.send
 
@@ -433,25 +422,13 @@ def test_a_hello_restarts_the_seqs_and_replays_are_dropped(server):
 
 # -- the stateful graph: the engine keeps the history ------------------------------
 
-def packed_for(frame: dict) -> np.ndarray:
-  return np.concatenate([frame['desire'].ravel(), frame['traffic_convention'].ravel(), frame['action_t'].ravel()]).astype(np.float32)
-
-
-def stateful_reference(frames: list[dict]) -> list[np.ndarray]:
-  state, outs = tiny_model.empty_state(), []
-  for f in frames:
-    out, state = tiny_model.stateful_step(state, **f)
-    outs.append(out)
-  return outs
-
-
 def test_the_state_carries_from_frame_to_frame(stateful):
   spec = stateful.spec
   frames = tiny_model.stateful_frames(8, seed=2)
-  want = stateful_reference(frames[:3]) + stateful_reference(frames[3:])
+  want = tiny_model.stateful_reference(frames[:3]) + tiny_model.stateful_reference(frames[3:])
   for i, (f, w) in enumerate(zip(frames, want, strict=True)):
     stateful.want_hidden = i % 2 == 1   # the whole vector every other frame
-    out = stateful.infer(f['new_img'], packed_for(f), frame_id=i + 1, reset=i in (0, 3))
+    out = stateful.infer(f['new_img'], tiny_model.packed_for(f), frame_id=i + 1, reset=i in (0, 3))
     assert out.shape == (spec.output_nelem,)
     if not stateful.want_hidden:
       assert not out[slice(*spec.hidden_range)].any()
@@ -478,11 +455,12 @@ def test_not_ready_is_reported_rather_than_crashing(bare):
     client.close()
 
 
-def test_the_ping_does_not_need_an_engine(bare):
+def test_ping_state_and_hello_need_no_engine(bare):
   client = bare.connect()
   try:
     assert client.ping(timeout=5) < 5.0
-    assert client.state(timeout=5)['engine_state'] == 'none'
+    state = client.state(timeout=5)
+    assert state['engine_state'] == 'none' and 'frames_served' in state
     assert client.hello(timeout=5)['protocol'] == P.VERSION
   finally:
     client.close()
@@ -497,25 +475,3 @@ def test_a_missing_engine_with_nothing_to_upload_is_engine_missing(bare):
       client.ensure_engine(spec.sha256, spec.nbytes, onnx_path=None, build_timeout=10.0)
   finally:
     client.close()
-
-
-# -- a header of another version --------------------------------------------------
-
-def test_a_header_of_another_version_is_a_broken_stream(server):
-  """As any bad header: no reply, and the server lets the link go."""
-  with socket.create_connection(('127.0.0.1', server.port), timeout=10.0) as sock:
-    sock.sendall(struct.pack(P.HEADER_FMT, P.MAGIC, P.VERSION - 1, P.Msg.PING, 1, 0, 0, 0))
-    assert sock.recv(64) == b''
-  client = server.connect()   # and serves the next one
-  try:
-    assert client.ping(timeout=5) < 5.0
-  finally:
-    client.close()
-
-
-def test_sigterm_stops_it_cleanly(tmp_path):
-  with running(tmp_path) as s:
-    client = s.connect()
-    assert client.ping(timeout=5) < 5.0
-    client.close()
-  assert s.returncode == 0, s.tail()

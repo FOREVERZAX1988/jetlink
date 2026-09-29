@@ -28,8 +28,7 @@ import time
 from collections import deque
 
 from jetlink import protocol as P
-from jetlink.transport.base import (UDC_SYSFS, LinkError, LinkTimeout, StreamTransport, take, medium_from_usb_speed,
-                                    udc_speed, usb_link_info)
+from jetlink.transport.base import UDC_SYSFS, LinkError, LinkTimeout, StreamTransport, take, udc_speed, usb_link_info
 from jetlink.transport.priority import background_thread, widen_affinity
 from jetlink.transport.watchdog import WriteWatchdog
 
@@ -50,12 +49,11 @@ USB_ENDPOINT_XFER_BULK = 0x02
 EP_OUT = 0x01  # host -> device
 EP_IN = 0x82   # device -> host
 
-SS_MAX_PACKET = 1024
 # FunctionFS kmallocs a contiguous buffer per read: order-5 and order-6 failures
 # in ffs_epfile_read_iter stalled replies 100-300 ms, and order-2 does not fail.
 # Do not go smaller to dodge the rare slow success: one page per read is ~19
 # syscalls for a 74 KB reply and cost ~6 ms a frame.
-READ_CHUNK = 16 * SS_MAX_PACKET
+READ_CHUNK = 16 * P.USB_MAX_PACKET
 # How much the reader may queue before it stops. Only bounds memory if the
 # consumer stalls: inference never needs more than one response.
 MAX_QUEUED = 8 << 20
@@ -102,7 +100,7 @@ _IO_SIGNALS = signal.valid_signals()
 
 def _interface_desc(n_endpoints: int = 2, i_interface: int = 1) -> bytes:
   return struct.pack('<BBBBBBBBB', 9, USB_DT_INTERFACE, 0, 0, n_endpoints,
-                     0xFF, 0xFF, 0xFF, i_interface)
+                     *P.USB_VENDOR_CLASS, i_interface)
 
 
 def _endpoint_desc(addr: int, max_packet: int) -> bytes:
@@ -122,8 +120,8 @@ def build_descriptors() -> bytes:
   fs = _interface_desc() + _endpoint_desc(EP_OUT, 64) + _endpoint_desc(EP_IN, 64)
   hs = _interface_desc() + _endpoint_desc(EP_OUT, 512) + _endpoint_desc(EP_IN, 512)
   ss = (_interface_desc()
-        + _endpoint_desc(EP_OUT, SS_MAX_PACKET) + _ss_companion()
-        + _endpoint_desc(EP_IN, SS_MAX_PACKET) + _ss_companion())
+        + _endpoint_desc(EP_OUT, P.USB_MAX_PACKET) + _ss_companion()
+        + _endpoint_desc(EP_IN, P.USB_MAX_PACKET) + _ss_companion())
 
   # struct usb_functionfs_descs_head_v2: magic, length, flags, then ALL the
   # per-speed counts together (one __le32 per flag set, in flag order), and only
@@ -153,7 +151,7 @@ class FfsTransport(StreamTransport):
   # is replayed whole and the receiver drops it by seq; split across two writes
   # the replay lands mid-stream and the link is lost. The largest inference
   # request is 400 KB padded, and only uploads, which sha256 covers, are bigger.
-  write_chunk = 512 * SS_MAX_PACKET
+  write_chunk = 512 * P.USB_MAX_PACKET
   tx_align = P.GADGET_TX_ALIGN
 
   def __init__(self, mount: str = MOUNT, gadget: str | None = None,
@@ -175,10 +173,6 @@ class FfsTransport(StreamTransport):
 
   def link_info(self) -> dict:
     return usb_link_info('usb', udc_speed(self.bound_udc))
-
-  @property
-  def medium(self) -> str:
-    return medium_from_usb_speed(udc_speed(self.bound_udc))
 
   @classmethod
   def borrowed(cls, mount: str, udc: str, bounce=None, owner_gadget: str | None = None) -> FfsTransport:
@@ -442,7 +436,7 @@ class FfsTransport(StreamTransport):
     worked at boot can fail an hour in, which is what a 1.7 GB model does to a
     comma. Slow beats broken, and both directions need it.
     """
-    floor = (self.packet_size or SS_MAX_PACKET) * 16
+    floor = (self.packet_size or P.USB_MAX_PACKET) * 16
     current = getattr(self, attr)
     if current <= floor:
       return False

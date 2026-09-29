@@ -2,9 +2,9 @@
 // checkout. Do not edit: change the Python, run the script, commit both.
 // docs/conformance.md says what each value pins and how.
 
-/// The constants the Swift and the Python implementations have to agree on,
-/// as the Python defines them. Each Swift constant that means the same thing
-/// is tested against these, and the Python tests that this file is current.
+/// The constants the Swift server shares with the comma's Python, as the
+/// Python defines them. Each Swift constant that means the same thing is
+/// tested against these, and the Python tests that this file is current.
 public enum Pinned {
   /// jetlink.__version__
   public static let productVersion: String = "0.6.0"
@@ -68,8 +68,6 @@ public enum Pinned {
   public static let usbVendorClass: [UInt8] = [0xFF, 0xFF, 0xFF]
   /// jetlink.protocol.USB_MAX_PACKET
   public static let usbMaxPacket: Int = 1024
-  /// jetlink.transport.base.LINK_MEDIA
-  public static let linkMedia: [String] = ["usb3", "usb2", "usb1", "usb", "tcp"]
   /// jetlink.transport.base.USB_MEDIA
   public static let usbSpeedMedia: [String: String] = [
     "super-speed-plus": "usb3",
@@ -90,12 +88,6 @@ public enum Pinned {
   public static let defaultFrameSkip: Int = 4
   /// jetlink.spec.CHUNK
   public static let uploadChunk: Int = 4194304
-  /// jetlink.server.session.SLOW_FRAME_US
-  public static let slowFrameUs: Int = 60000
-  /// jetlink.server.control.PROTOCOL
-  public static let controlProtocol: Int = 1
-  /// jetlink.server.backends.ort.PREPARE_VERSION
-  public static let prepareVersion: Int = 5
   /// JetlinkKit/Scripts/fixture-pins.txt: onnxruntime
   public static let onnxruntimeVersion: String = "1.29.0"
 }

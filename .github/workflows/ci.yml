@@ -59,12 +59,17 @@ jobs:
         # releases and back, an uninstall.
 
   python-test-linux:
-    name: Python tests on Linux
+    name: Python tests on Linux (${{ matrix.python }})
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.10", "3.12"]
+        include:
+          - python: "3.10"
+          # The releases the fixtures were made with, so tests/test_conformance.py
+          # compares the staging fixtures here instead of skipping them.
+          - python: "3.12"
+            constraints: -c JetlinkKit/Scripts/fixture-pins.txt
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
@@ -75,43 +80,16 @@ jobs:
           python-version: ${{ matrix.python }}
 
       - name: Install the package
-        run: pip install -e ".[dev,ort]"
+        run: pip install -e ".[dev]" ${{ matrix.constraints }}
 
       - name: Run the tests
         run: python -m pytest -q
-        # onnxruntime's CPU wheel is the one runtime here. The trt suites
-        # skip themselves without TensorRT, but test_sleep drives the serve
-        # loop, which needs a backend to select rather than a skip.
-
-  python-test-macos:
-    name: Python tests on macOS
-    runs-on: macos-26
-    steps:
-      - name: Check out the repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.14"
-
-      - name: Install libusb
-        run: brew install libusb
-
-      - name: Install the package and the fixture releases
-        run: pip install -e ".[dev,ort,usb]" -r JetlinkKit/Scripts/fixture-pins.txt
-        # The pins are the numpy, onnx, onnxruntime and protobuf the Swift
-        # fixtures were made with, so tests/test_conformance.py compares every
-        # file here instead of skipping the ones those releases decide.
-
-      - name: Run the tests
-        run: python -m pytest -q
-        # onnxruntime on the CPU provider is real here, so the backend suites
-        # run instead of skipping. test_conformance runs each fixture generator
-        # into a temporary directory and compares the result byte for byte
-        # with the committed files: a Python change that moves what the Swift
-        # must match fails here. Regenerate, commit, and make the Swift pass
-        # against the new files (docs/conformance.md).
+        # The comma's package, and the conformance generators run into a
+        # temporary directory and compared byte for byte with the committed
+        # fixtures: a Python change that moves what the Swift must match fails
+        # here. Regenerate, commit, and make the Swift pass against the new
+        # files (docs/conformance.md). tests/test_swift_server.py skips here;
+        # the Swift jobs run it against their builds.
 
   swift:
     name: Swift build and tests

@@ -30,6 +30,7 @@ from __future__ import annotations
 import errno
 import json
 import os
+import select
 import socket
 import threading
 import time
@@ -335,19 +336,10 @@ class CableListener:
     return self.peer
 
   def _drop_if_dead(self) -> None:
-    """A phone that closed its end. It sends nothing until a hello, so a
-    readable idle socket is EOF."""
+    """A phone that closed its end. It sends nothing until a hello."""
     with self._lock:
       sock = self._sock
-      if sock is None:
-        return
-      try:
-        alive = sock.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT) != b''
-      except (BlockingIOError, InterruptedError):
-        return
-      except OSError:
-        alive = False
-      if alive:
+      if sock is None or not hung_up(sock):
         return
       self._sock, self.peer = None, None
     gadget.log.warning("jetlink: the phone hung up")
@@ -388,6 +380,21 @@ def _close(sock: socket.socket | None) -> None:
       sock.close()
     except OSError:
       pass
+
+
+def hung_up(sock: socket.socket, wait: float = 0.0) -> bool:
+  """Whether the far end closed `sock`, waiting up to `wait` s to see. Bytes
+  waiting read as alive, and the peek leaves them for whoever shares the socket;
+  a peer that sends nothing unasked is readable only at EOF."""
+  try:
+    # select first: a socket with a timeout would wait that long in recv
+    if not select.select([sock], [], [], wait)[0]:
+      return False
+    return sock.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT) == b''
+  except (BlockingIOError, InterruptedError, TimeoutError):
+    return False   # a sharer took the bytes between the two
+  except OSError:
+    return True
 
 
 class Lender:

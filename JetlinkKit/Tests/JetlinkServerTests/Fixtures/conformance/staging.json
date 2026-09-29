@@ -172,6 +172,7 @@
       "staged": "staging.fs4.staged.bin"
     }
   ],
+  "desire_edges": "frames 0 to 3 and 8 to 11 carry desires with NaNs, signed zeros and infinities",
   "dtype": "float16",
   "feedback": "the output's hidden_state is fed back after the frame when every value is finite",
   "frame_layout": "warped uint8, packed float32, then the driving output float32 the frame returned, per frame",

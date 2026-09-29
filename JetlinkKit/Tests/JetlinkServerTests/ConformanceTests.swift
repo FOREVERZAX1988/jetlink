@@ -111,18 +111,16 @@ struct PinnedConstantTests {
     #expect((0...UInt32(255)).compactMap(Wire.Status.init(rawValue:)).count == Pinned.statuses.count)
   }
 
-  @Test("The model constants, the USB sizes and the slow frame are the Python's")
+  @Test("The model constants are the Python's")
   func model() {
     #expect(ModelConstants.runFrequency == Pinned.modelRunFrequency)
     #expect(ModelConstants.contextFrequency == Pinned.modelContextFrequency)
     #expect(ModelConstants.defaultFrameSkip == Pinned.defaultFrameSkip)
     #expect(ModelConstants.chunk == Pinned.uploadChunk)
-    #expect(Int(FrameStats.slowUs) == Pinned.slowFrameUs)
   }
 
-  @Test("Builds carry the Python's prepare version, on the Python's onnxruntime")
-  func preparation() {
-    #expect(OrtBackend.prepareVersion == Pinned.prepareVersion)
+  @Test("Builds run on the onnxruntime the fixtures pin")
+  func onnxruntime() {
     #expect(OrtRuntime.version == Pinned.onnxruntimeVersion)
   }
 }

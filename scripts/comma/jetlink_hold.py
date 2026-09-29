@@ -23,9 +23,7 @@ from __future__ import annotations
 
 import argparse
 import logging
-import select
 import signal
-import socket
 import subprocess
 import sys
 import time
@@ -47,15 +45,6 @@ def say(msg: str) -> None:
   print(f'jetlink_hold: {msg}', flush=True)
 
 
-def owner_gone(loan: lending.Loan) -> bool:
-  """The owner closed the loan's socket: it exited or restarted, and the loan went with it."""
-  try:
-    readable, _, _ = select.select([loan.conn], [], [], 0)
-    return bool(readable) and loan.conn.recv(1, socket.MSG_PEEK) == b''
-  except OSError:
-    return True
-
-
 def status(returncode: int) -> int:
   """A child's exit status as a shell reports it: 128 + N for signal N."""
   return returncode if returncode >= 0 else 128 - returncode
@@ -67,17 +56,18 @@ def hold(loan: lending.Loan, seconds: float | None, command: list[str]) -> int:
   lost = False
   try:
     while True:
-      wait = POLL if end is None else min(POLL, end - time.monotonic())
+      wait = POLL if end is None else max(min(POLL, end - time.monotonic()), 0)
       if child is not None:
         try:
-          return status(child.wait(timeout=max(wait, 0)))
+          return status(child.wait(timeout=wait))
         except subprocess.TimeoutExpired:
           pass
-      elif wait > 0:
-        time.sleep(wait)
+      # the owner closing the loan's socket: it exited or restarted, and the
+      # loan went with it. Without a child, this is the wait
+      gone = not lost and lending.hung_up(loan.conn, 0 if child is not None else wait)
       if end is not None and time.monotonic() >= end:
         return 0
-      if not lost and owner_gone(loan):
+      if gone:
         lost = True
         say('the owner went away, and the loan with it')
         if child is None:
