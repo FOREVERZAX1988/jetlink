@@ -16,10 +16,10 @@ struct DeviceError: FatalEngineError, CustomStringConvertible {
 /// unplugs, recording when the USB loop looked.
 final class ComingAndGoingGadget: GadgetSource, @unchecked Sendable {
   private let lock = NSLock()
-  private var pipes: FakePipes?
+  private var pipes: FakeUsbfs?
   private var looked: [TimeInterval] = []
 
-  func plug(_ pipes: FakePipes) {
+  func plug(_ pipes: FakeUsbfs) {
     lock.withLock { self.pipes = pipes }
   }
 
@@ -41,7 +41,7 @@ final class ComingAndGoingGadget: GadgetSource, @unchecked Sendable {
 
   func open() throws -> any MessageLink {
     guard let pipes = lock.withLock({ pipes }) else { throw LinkError.closed("no gadget") }
-    return USBTransport(pipes: pipes, medium: .usb3)
+    return USBTransport(pipes: UsbfsPipes(device: UsbfsDevice(kernel: pipes), inEndpoint: 0x81, outEndpoint: 0x01), medium: .usb3)
   }
 }
 
@@ -146,7 +146,7 @@ struct ServerHooksTests {
     let next = try #require(gadget.looks.first { $0 > woke })
     #expect(next - woke < Server.usbPoll / 2, "looked again \(next - woke) s after waking")
 
-    let comma = FakePipes()
+    let comma = FakeUsbfs()
     gadget.plug(comma)
     let client = GadgetClient(comma)
     _ = try client.hello(name: "modeld")
@@ -194,7 +194,7 @@ struct ServerHooksTests {
 
   @Test("A shutdown hook that accepts gets its reply ok:true written before its action runs")
   func shutdownAccepted() throws {
-    let comma = FakePipes()
+    let comma = FakeUsbfs()
     let reasons = Recorded<String>()
     let repliedFirst = Recorded<Bool>()
     let hooks = ServerHooks(shutdown: { reason in
@@ -207,7 +207,7 @@ struct ServerHooksTests {
     let cache = try TemporaryDirectory()
     let server = try Server(
       configuration: Server.Configuration(host: "127.0.0.1", port: 0, cacheRoot: cache.url, preload: false, listen: false, usb: true),
-      backend: cpuBackend(), gadget: FakeGadget([comma], then: unservedPipes), hooks: hooks)
+      backend: cpuBackend(), gadget: FakeGadget([comma]), hooks: hooks)
     try server.start()
     defer { server.shutdown() }
     let client = GadgetClient(comma)
