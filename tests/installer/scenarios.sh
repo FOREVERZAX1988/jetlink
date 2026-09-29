@@ -78,7 +78,7 @@ reset_box() {
   done
   unset FAKE_ARCH FAKE_SMI FAKE_PUBLISHED FAKE_PM_REBOOT FAKE_SERVER_BROKEN FAKE_GPU_BROKEN \
     FAKE_TRT10 FAKE_NO_CURL FAKE_ROOT_FREE_GB FAKE_IMAGE_GB FAKE_DOWNLOAD_FAILS FAKE_BAD_SUM FAKE_NO_PLUGIN \
-    FAKE_DOCKER_STUCK FAKE_TRT11_BUILDS
+    FAKE_DOCKER_STUCK FAKE_BAD_WHEEL
   export JETLINK_REPO_URL=file:///tmp/repo FAKE_LATEST=v0.10.0 JETLINK_TEST_SYSTEMD_RUN=/tmp
 }
 
@@ -223,12 +223,21 @@ tar -czf /tmp/dev/jetlink-server-0.12.0-dev-linux-aarch64.tar.gz -C /tmp/dev jet
 # shellcheck disable=SC1091
 . /etc/os-release
 echo "installer scenarios on $PRETTY_NAME"
-# NVIDIA's package source for this Ubuntu, as the installer picks it
-DIST="ubuntu${VERSION_ID//./}"
-# the TensorRT build a PC gets, which has to be the one build-linux.sh
-# compiles the x86_64 server against
+# NVIDIA's TensorRT wheel for PCs, as the fake index hands it out: stand-ins
+# where the real libraries are, and its sha256 in place of the pinned one
 PC_TRT="$(sed -n 's/^PC_TRT=//p' "$SRC/install.sh")"
-PC_TRT_INSTALL="$(apt_install "libnvinfer11=$PC_TRT libnvonnxparsers11=$PC_TRT libnvinfer-plugin11=$PC_TRT")"
+PC_TRT_WHEEL="$(sed -n 's/^PC_TRT_WHEEL=//p' "$SRC/install.sh")"
+PC_TRT_DIR=/opt/jetlink/tensorrt/$PC_TRT
+rm -rf /tmp/pypi /tmp/wheel
+mkdir -p /tmp/pypi /tmp/wheel/tensorrt_libs "/tmp/wheel/tensorrt_cu13_libs-$PC_TRT.dist-info/licenses"
+for f in __init__.py libnvinfer.so.11 libnvonnxparser.so.11 libnvinfer_plugin.so.11 libnvinfer_builder_resource_sm89.so.11.3.0 \
+    libnvinfer_builder_resource_ptx.so.11.3.0 libnvinfer_builder_resource_win_sm89.so.11.3.0; do
+  echo "stand-in $f" >"/tmp/wheel/tensorrt_libs/$f"
+done
+echo "NVIDIA's license" >"/tmp/wheel/tensorrt_cu13_libs-$PC_TRT.dist-info/licenses/LICENSE.txt"
+(cd /tmp/wheel && zip -q -r "/tmp/pypi/${PC_TRT_WHEEL##*/}" .)
+JETLINK_TEST_TRT_SHA256="$(sha256sum "/tmp/pypi/${PC_TRT_WHEEL##*/}" | cut -d' ' -f1)"
+export JETLINK_TEST_TRT_SHA256
 
 scenario "JetPack 7.2 Jetson, always-on power, fresh install"
 reset_box; jetson 39 2.1
@@ -262,7 +271,10 @@ expect_in /etc/jetlink/server.env "JETLINK_STATUS_PORT=5600"
 expect_in /etc/jetlink/server.env "JETLINK_JETSON=1"
 expect_in /etc/jetlink/server.env "JETLINK_FLAVOR=linux-aarch64"
 expect_in /etc/jetlink/server.env "JETLINK_SERVER_VERSION=0.10.0"
-expect_in /etc/jetlink/server.env "JETLINK_POWEROFF=--poweroff"
+expect_in /etc/jetlink/server.env 'JETLINK_POWEROFF="--poweroff"'
+# JetPack's TensorRT, on the loader path
+expect_in /etc/jetlink/server.env 'JETLINK_TENSORRT=""'
+expect_not_ran "pypi.nvidia.com"
 expect_not_in /etc/jetlink/server.env "JETLINK_IMAGE"
 expect_in /etc/jetlink/install.conf "JETLINK_POWER=always"
 expect_in /etc/jetlink/install.conf "JETLINK_POWEROFF_WITH_COMMA=1"
@@ -557,7 +569,7 @@ expect_ran "nvpmodel -m 2"
 expect_in /etc/fstab "/mnt/data/jetlink-swapfile none swap sw 0 0"
 expect_no_file /etc/udev/rules.d/99-jetlink-usb-wakeup.rules
 expect_file "$UNITS/jetlink-server.service.d/20-jetson-clocks.conf"
-expect_in /etc/jetlink/server.env "JETLINK_POWEROFF=''"
+expect_in /etc/jetlink/server.env 'JETLINK_POWEROFF=""'
 
 scenario "jetlink setup changes the answers: power, and the status page off"
 # questions: power (1 = always on), the comma may shut it down, port 0, go ahead
@@ -570,7 +582,7 @@ expect_no_out "Status page:"
 expect_in /etc/jetlink/install.conf "JETLINK_POWER=always"
 expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=120"
 expect_in /etc/jetlink/server.env "JETLINK_STATUS_PORT=0"
-expect_in /etc/jetlink/server.env "JETLINK_POWEROFF=--poweroff"
+expect_in /etc/jetlink/server.env 'JETLINK_POWEROFF="--poweroff"'
 expect_file /etc/udev/rules.d/99-jetlink-usb-wakeup.rules
 jetlink status >/tmp/status.txt 2>&1
 expect_not_in /tmp/status.txt "status page"
@@ -607,17 +619,24 @@ run_installer curl 'y\n\ny\n'
 expect_rc 0
 expect_out "NVIDIA driver 580.95.05"
 expect_no_out "How is the Jetson powered"
-expect_out "Install NVIDIA TensorRT ${PC_TRT%%-*} from NVIDIA's package source"
+expect_out "Download NVIDIA TensorRT $PC_TRT into $PC_TRT_DIR"
 check "install.sh's PC_TRT $PC_TRT is not the build build-linux.sh compiles against" \
-  grep -qF "libnvinfer-headers-dev_${PC_TRT}_amd64.deb" "$SRC/scripts/build-linux.sh"
+  grep -qF "libnvinfer-headers-dev_${PC_TRT}-" "$SRC/scripts/build-linux.sh"
 check "never installed libcurl4" grep -qE '^apt-get .* install --no-install-recommends .*libcurl4' "$FAKE_LOG"
-expect_ran "https://developer.download.nvidia.com/compute/cuda/repos/$DIST/x86_64/cuda-keyring_1.1-1_all.deb"
-expect_ran "dpkg -i"
-# the CUDA 13 build, by its exact version, and never the meta packages
-expect_ran "$PC_TRT_INSTALL"
-refute "installed a TensorRT meta package" grep -qE 'install .*(tensorrt|cuda12\.9)' "$FAKE_LOG"
-# for libcurl4, then again for NVIDIA's new package source
-check "wanted the package list fetched twice" test "$(grep -c "apt-get .* update" "$FAKE_LOG")" = 2
+# TensorRT is NVIDIA's wheel, unpacked: the libraries and the Linux builder
+# resources, and nothing of NVIDIA's from apt
+expect_ran "$PC_TRT_WHEEL"
+for f in libnvinfer.so.11 libnvonnxparser.so.11 libnvinfer_plugin.so.11 libnvinfer_builder_resource_sm89.so.11.3.0 \
+    libnvinfer_builder_resource_ptx.so.11.3.0 LICENSE.txt; do
+  expect_file "$PC_TRT_DIR/$f"
+done
+expect_no_file "$PC_TRT_DIR/libnvinfer_builder_resource_win_sm89.so.11.3.0"
+expect_no_file "$PC_TRT_DIR/__init__.py"
+expect_no_file /opt/jetlink/tensorrt/.new
+refute "installed TensorRT or CUDA from apt" grep -qE 'install .*(libnvinfer|libnvonnx|tensorrt|cuda)|^dpkg -i' "$FAKE_LOG"
+check "wanted the package list fetched once" test "$(grep -c "apt-get .* update" "$FAKE_LOG")" = 1
+expect_ran "jetlink-server backends --backend trt --tensorrt-libs $PC_TRT_DIR"
+expect_in /etc/jetlink/server.env "JETLINK_TENSORRT=\"--tensorrt-libs $PC_TRT_DIR\""
 expect_ran "releases/download/v0.10.0/jetlink-server-0.10.0-linux-x86_64.tar.gz"
 expect_in /etc/jetlink/server.env "JETLINK_JETSON=0"
 expect_in /etc/jetlink/server.env "JETLINK_CACHE_DIR=/var/lib/jetlink"
@@ -625,23 +644,37 @@ expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=0"
 expect_in /etc/jetlink/server.env "JETLINK_FLAVOR=linux-x86_64"
 expect_no_file /etc/systemd/journald.conf.d/60-jetlink.conf
 expect_no_file "$UNITS/jetlink-server.service.d/20-jetson-clocks.conf"
-expect_in /etc/jetlink/server.env "JETLINK_POWEROFF=''"
+expect_in /etc/jetlink/server.env 'JETLINK_POWEROFF=""'
 expect_out "Keep this computer plugged in and awake"
-# a server that never sleeps serves until the new one is downloaded and checked
+jetlink status >/tmp/status.txt 2>&1
+expect_in /tmp/status.txt "server         0.10.0 (TensorRT $PC_TRT)"
+# the unit's command line, and a prepare, with the PC's TensorRT
+jetlink run >/dev/null 2>&1
+expect_ran "jetlink-server --usb --backend trt --cache /var/lib/jetlink --sleep-after 0 --status-port 5600 --tensorrt-libs $PC_TRT_DIR"
+jetlink models prepare some-model >/dev/null 2>&1
+expect_ran "jetlink-server models prepare --cache /var/lib/jetlink --tensorrt-libs $PC_TRT_DIR some-model"
+systemctl start jetlink-server
+# a server that never sleeps serves until the new one is downloaded and
+# checked; TensorRT's directory is kept, and one from before it goes
+mkdir -p /opt/jetlink/tensorrt/11.2.0.0 && echo old >/opt/jetlink/tensorrt/11.2.0.0/libnvinfer.so.11
 : >"$FAKE_LOG"
 cli update
 expect_rc 0
 expect_before "releases/download/v0.10.0" "systemctl stop jetlink-server"
 expect_before "jetlink-server backends" "systemctl stop jetlink-server"
+expect_not_ran "pypi.nvidia.com"
+expect_file "$PC_TRT_DIR/libnvinfer.so.11"
+expect_no_file /opt/jetlink/tensorrt/11.2.0.0
 
-scenario "uninstall removes it, keeps the models, and says how to remove TensorRT"
+scenario "uninstall removes it and the PC's TensorRT, and keeps the models"
 mkdir -p /var/lib/jetlink/models && echo x >/var/lib/jetlink/models/m.onnx
 # questions: remove?, delete the models?
 run_installer checkout 'y\nn\n' --uninstall
 expect_rc 0
 expect_out "Jetlink is removed."
-expect_out "TensorRT stays installed; to remove it: sudo apt remove libnvinfer11 libnvonnxparsers11 libnvinfer-plugin11"
+expect_no_out "sudo apt remove"
 expect_no_file /etc/jetlink
+expect_no_file "$PC_TRT_DIR"
 expect_no_file /opt/jetlink
 expect_no_file /usr/local/bin/jetlink
 expect_no_file "$UNITS/jetlink-server.service"
@@ -654,9 +687,12 @@ run_installer curl '' --yes
 expect_rc 0
 expect_out "Windows (WSL) support is untested."
 expect_out "usbipd"
-expect_ran "$PC_TRT_INSTALL"
-# a Linux driver or CUDA package inside WSL breaks the Windows driver's
-refute "installed CUDA or a driver in WSL" grep -qE 'install .*(cuda |cuda-drivers|cuda-toolkit|nvidia-driver)' "$FAKE_LOG"
+# TensorRT as on any PC; a Linux driver, CUDA or TensorRT package inside WSL
+# breaks the Windows driver's
+expect_ran "$PC_TRT_WHEEL"
+expect_file "$PC_TRT_DIR/libnvinfer.so.11"
+expect_in /etc/jetlink/server.env "JETLINK_TENSORRT=\"--tensorrt-libs $PC_TRT_DIR\""
+refute "installed CUDA, TensorRT or a driver in WSL" grep -qE 'install .*(cuda|libnvinfer|tensorrt|nvidia-driver)|^dpkg -i' "$FAKE_LOG"
 expect_in /etc/jetlink/install.conf "WSL"
 reset_box; pc 575.64.03; wsl
 run_installer curl '' --yes
@@ -668,13 +704,35 @@ JETLINK_TEST_SYSTEMD_RUN=/nonexistent run_installer curl '' --yes
 expect_rc 1
 expect_out "systemd=true"
 
-scenario "a PC whose package source lacks the server's TensorRT build stops"
+scenario "a damaged TensorRT download is refused, and nothing of it is left"
 reset_box; pc 580.95.05
-FAKE_TRT11_BUILDS="11.3.0.99-1+cuda12.9 11.2.1.2-1+cuda13.3" run_installer curl '' --yes
+FAKE_BAD_WHEEL=1 run_installer curl '' --yes
 expect_rc 1
-expect_out "NVIDIA's package source has no TensorRT $PC_TRT."
-expect_not_ran "libnvinfer11="
+expect_out "The TensorRT download is damaged: its checksum does not match."
+expect_no_file /opt/jetlink/tensorrt/.new
+expect_no_file "$PC_TRT_DIR"
 expect_no_file "$UNITS/jetlink-server.service"
+
+scenario "a PC short of room for TensorRT stops before downloading it"
+reset_box; pc 580.95.05
+FAKE_ROOT_FREE_GB=5 run_installer curl '' --yes
+expect_rc 1
+expect_out "Not enough free space for TensorRT: 5 GB on /opt/jetlink/tensorrt, and it needs 7 GB."
+expect_not_ran "pypi.nvidia.com"
+expect_no_file "$UNITS/jetlink-server.service"
+
+scenario "a PC's TensorRT from apt, which an earlier installer put in, stays unused"
+reset_box; pc 580.95.05
+with_trt 11.3.0.99-1+cuda13.4 11
+run_installer curl '' --yes
+expect_rc 0
+expect_out "TensorRT from apt is no longer used here; to remove it: sudo apt remove libnvinfer11 libnvonnxparsers11"
+expect_ran "$PC_TRT_WHEEL"
+expect_in /etc/jetlink/server.env "JETLINK_TENSORRT=\"--tensorrt-libs $PC_TRT_DIR\""
+refute "removed a package" grep -qE '^apt-get .* (remove|purge)' "$FAKE_LOG"
+run_installer checkout 'y\nn\n' --uninstall
+expect_rc 0
+expect_out "TensorRT from apt stays installed; to remove it: sudo apt remove libnvinfer11 libnvonnxparsers11"
 
 scenario "dry run changes nothing"
 reset_box; jetson 39 2.1
@@ -825,7 +883,7 @@ expect_in /etc/jetlink/server.env.prev "JETLINK_IMAGE="
 # the answers, all kept
 expect_in /etc/jetlink/install.conf "JETLINK_POWER=always"
 expect_in /etc/jetlink/install.conf "JETLINK_POWEROFF_WITH_COMMA=1"
-expect_in /etc/jetlink/server.env "JETLINK_POWEROFF=--poweroff"
+expect_in /etc/jetlink/server.env 'JETLINK_POWEROFF="--poweroff"'
 expect_in /etc/jetlink/install.conf "JETLINK_AUTOSTART=1"
 expect_in /etc/jetlink/install.conf "JETLINK_SWAP_FILE=/mnt/data/jetlink-swapfile"
 expect_in /etc/jetlink/install.conf "JETLINK_MASKED_UNITS=systemd-networkd-wait-online.service"
@@ -890,7 +948,7 @@ reset_box; jetson 39 2.1; with_docker
 old_install v0.5.0
 FAKE_ROOT_FREE_GB=0 FAKE_IMAGE_GB=1 cli update
 expect_rc 1
-expect_out "Not enough free space on / for TensorRT"
+expect_out "Not enough free space for TensorRT: 1 GB on /, and it needs 6 GB."
 expect_out "jetlink update --ref v0.6.0"
 expect_not_ran "$(apt_install "libnvinfer10")"
 expect_in "$UNITS/jetlink-server.service" "run-server"
@@ -903,7 +961,8 @@ old_install v0.6.0
 cli update
 expect_rc 0
 expect_out "Jetlink is installed and running"
-expect_ran "$PC_TRT_INSTALL"
+expect_ran "$PC_TRT_WHEEL"
+expect_in /etc/jetlink/server.env "JETLINK_TENSORRT=\"--tensorrt-libs $PC_TRT_DIR\""
 expect_ran "releases/download/v0.10.0/jetlink-server-0.10.0-linux-x86_64.tar.gz"
 expect_ran "docker rmi ghcr.io/zoompilot/jetlink:0.6.0-cuda"
 refute "removed the toolkit" grep -qE '^apt-get .* (remove|purge)' "$FAKE_LOG"
@@ -913,7 +972,7 @@ expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=0"
 expect_in /etc/jetlink/server.env "JETLINK_FLAVOR=linux-x86_64"
 expect_in /etc/jetlink/install.conf "JETLINK_AUTOSTART=1"
 expect_no_file "$UNITS/jetlink-server.service.d/20-jetson-clocks.conf"
-expect_in /etc/jetlink/server.env "JETLINK_POWEROFF=''"
+expect_in /etc/jetlink/server.env 'JETLINK_POWEROFF=""'
 
 scenario "a failed move puts the Docker server back, and the next update finishes it"
 reset_box; jetson 39 2.1; with_docker

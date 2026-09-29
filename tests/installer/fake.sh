@@ -54,18 +54,11 @@ case "$name" in
   apt-cache)
     case "${1:-}" in
       policy) printf '%s:\n  Installed: %s\n  Candidate: %s\n' "$2" "$(pkg "$2" || echo '(none)')" "$TRT10" ;;
-      madison)
-        # NVIDIA's CUDA repository (both Ubuntu releases): 11.3.0.99 for CUDA
-        # 13.4 and 12.9 under one number, and the release before
-        for v in ${FAKE_TRT11_BUILDS:-11.3.0.99-1+cuda13.4 11.3.0.99-1+cuda12.9 11.2.1.2-1+cuda13.3}; do
-          printf ' %s | %s | https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64  Packages\n' "$2" "$v"
-        done ;;
     esac ;;
 
   dpkg)
     case "${1:-}" in
       --print-architecture) if [ "${FAKE_ARCH:-aarch64}" = x86_64 ]; then echo amd64; else echo arm64; fi ;;
-      -i) echo 1.1-1 >"$state/pkg-cuda-keyring" ;;
     esac ;;
 
   dpkg-query)
@@ -251,8 +244,11 @@ case "$name" in
             fi ;;
         esac
         cp "$file" "$out" ;;
-      https://developer.download.nvidia.com/compute/cuda/repos/*/x86_64/cuda-keyring_1.1-1_all.deb)
-        echo "fake deb" >"$out" ;;
+      https://pypi.nvidia.com/*.whl)
+        # NVIDIA's wheel index: the stand-in scenarios.sh made, or a damaged one
+        file="/tmp/pypi/${url##*/}"
+        [ -f "$file" ] || { echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; }
+        if [ "${FAKE_BAD_WHEEL:-0}" = 1 ]; then echo "not the wheel" >"$out"; else cp "$file" "$out"; fi ;;
       *download.docker.com*|*nvidia.github.io*) echo "deb https://example.invalid/fake stable main" ;;
       *) echo "fake curl: no route for $url" >&2; exit 22 ;;
     esac ;;

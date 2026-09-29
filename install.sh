@@ -53,17 +53,24 @@ MIN_CC=75
 MIN_DISK_GB=15
 SWAP_GB=8
 # JetPack 7.2 runs the newest TensorRT the Jetson repository has, and nothing
-# older than this. PCs get the exact build the x86_64 server is compiled
-# against, as NVIDIA's package index spells it.
+# older than this.
 JP7_MIN_TRT=10.16.2.10
-PC_TRT=11.3.0.99-1+cuda13.4
-# free space on / that installing TensorRT takes, the download and the files
-# together; NVIDIA's package indexes give libnvinfer, its ONNX parser and its
-# plugins as 2.33 GB + 3.05 GB on JetPack 7.2, 0.11 + 0.40 on 6.2, and
-# 1.91 + 2.62 on a PC
+# PCs get no TensorRT package: NVIDIA's x86_64 runtime wheel of the build the
+# server is compiled against (what pip's tensorrt-cu13==11.3.0.99 fetches from
+# NVIDIA's index) is unpacked into a directory of its own, which every server
+# version shares and the unit names with --tensorrt-libs
+PC_TRT=11.3.0.99
+PC_TRT_WHEEL=https://pypi.nvidia.com/tensorrt-cu13-libs/tensorrt_cu13_libs-11.3.0.99-py3-none-manylinux_2_28_x86_64.whl
+PC_TRT_SHA256="${JETLINK_TEST_TRT_SHA256:-cef957e0b48a525f2bcc8849742de06883cedcc6b96185b9cf0b17c9c75a858a}"
+TRT_ROOT="$SRC_ROOT/tensorrt"
+PC_TRT_DIR="$TRT_ROOT/$PC_TRT"
+# free space that installing TensorRT takes, the download and the files
+# together: NVIDIA's package indexes give libnvinfer, its ONNX parser and its
+# plugins as 2.33 GB + 3.05 GB on JetPack 7.2 and 0.11 + 0.40 on 6.2; a PC's
+# wheel is 3.81 GB, and the libraries unpacked from it 2.69 GB
 TRT_GB_JP7=6
 TRT_GB_JP6=1
-TRT_GB_PC=6
+TRT_GB_PC=7
 # units that hold up boot waiting for a network the car does not have
 WAIT_ONLINE_UNITS="systemd-networkd-wait-online.service NetworkManager-wait-online.service"
 # where detection looks; the installer's tests point these at fakes
@@ -353,19 +360,24 @@ pkg_version() {
   dpkg-query -W -f '${Version}' "$1" 2>/dev/null || true
 }
 
+# on the filesystem that holds $1, or will once it is made
 free_gb() {
-  df -Pk "$1" 2>/dev/null | awk 'NR == 2 {printf "%d", $4 / 1048576}'
+  local where=$1
+  while [ ! -d "$where" ]; do where="$(dirname "$where")"; done
+  df -Pk "$where" 2>/dev/null | awk 'NR == 2 {printf "%d", $4 / 1048576}'
 }
 
 # ---------------------------------------------------------------------------
 # What this computer is
 
-ARCH='' OS_ID='' OS_CODENAME='' OS_NAME=''
+ARCH='' OS_ID='' OS_NAME=''
 JETSON=0 L4T='' L4T_MAJOR=0 L4T_MINOR=0 JETPACK='' JP_MAJOR=0 MODEL='' WSL=0
 GPU_NAME='' DRIVER='' DRIVER_MAJOR=0 GPU_CC=0 GPU_PRESENT=0
 # FLAVOR names the server build: linux-aarch64 (Jetson) or linux-x86_64 (PC)
 FLAVOR='' PLATFORM_NAME=''
-TRT_MAJOR=0 TRT_GB=0 TRT_PRESENT=0 TRT_VERSION=''
+TRT_GB=0 TRT_PRESENT=0 TRT_VERSION=''
+# the flags that point the server at a PC's TensorRT; none on a Jetson
+TRT_ARGS=()
 DISK_GB=0
 DEEP_SLEEP=0
 PM_BEST_ID='' PM_BEST_NAME='' PM_CURRENT=''
@@ -379,7 +391,6 @@ detect() {
     # shellcheck disable=SC1091
     . /etc/os-release
     OS_ID="${ID:-}" OS_NAME="${PRETTY_NAME:-Linux}"
-    OS_CODENAME="${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}"
   fi
   command -v apt-get >/dev/null 2>&1 || die "This installer needs Ubuntu or Debian (apt)." \
     "See https://github.com/zoompilot/jetlink/blob/main/docs/platforms.md for other systems."
@@ -387,12 +398,14 @@ detect() {
   if [ -f /etc/nv_tegra_release ] || grep -qa tegra /proc/device-tree/compatible 2>/dev/null; then
     JETSON=1
     detect_jetson
+    if has_lib libnvinfer.so.10 && has_lib libnvonnxparser.so.10; then
+      TRT_PRESENT=1 TRT_VERSION="$(pkg_version libnvinfer10)"
+    fi
   else
     detect_pc
-  fi
-  if has_lib "libnvinfer.so.$TRT_MAJOR" && has_lib "libnvonnxparser.so.$TRT_MAJOR"; then
-    TRT_PRESENT=1
-    TRT_VERSION="$(pkg_version "libnvinfer$TRT_MAJOR")"
+    if [ -f "$PC_TRT_DIR/libnvinfer.so.11" ] && [ -f "$PC_TRT_DIR/libnvonnxparser.so.11" ]; then
+      TRT_PRESENT=1 TRT_VERSION=$PC_TRT
+    fi
   fi
 }
 
@@ -434,7 +447,7 @@ detect_jetson() {
   esac
   [ "$ARCH" = aarch64 ] || die "Unexpected: a Jetson that is not aarch64 ($ARCH)."
   # TensorRT 10 from JetPack's own package source, on both JetPacks
-  FLAVOR=linux-aarch64 TRT_MAJOR=10
+  FLAVOR=linux-aarch64
   PLATFORM_NAME="$MODEL, $JETPACK (Jetson Linux $L4T)"
 
   if grep -qw deep "$MEM_SLEEP" 2>/dev/null; then DEEP_SLEEP=1; fi
@@ -470,7 +483,7 @@ power_mode_now() {
 detect_pc() {
   [ "$ARCH" = x86_64 ] || die "On an Arm computer, Jetlink supports NVIDIA Jetson only." \
     "This one is $ARCH and does not look like a Jetson."
-  FLAVOR=linux-x86_64 TRT_MAJOR=11 TRT_GB=$TRT_GB_PC
+  FLAVOR=linux-x86_64 TRT_GB=$TRT_GB_PC TRT_ARGS=(--tensorrt-libs "$PC_TRT_DIR")
   local q smi=nvidia-smi
   # WSL keeps the Windows driver's tools here, not always on the PATH
   if ! command -v nvidia-smi >/dev/null 2>&1 && [ -x /usr/lib/wsl/lib/nvidia-smi ]; then smi=/usr/lib/wsl/lib/nvidia-smi; fi
@@ -754,7 +767,7 @@ show_plan() {
     elif [ "$JETSON" = 1 ]; then
       say "  • Install NVIDIA TensorRT from JetPack's package source"
     else
-      say "  • Install NVIDIA TensorRT ${PC_TRT%%-*} from NVIDIA's package source ${D}(about 1.9 GB)${N}"
+      say "  • Download NVIDIA TensorRT $PC_TRT into $PC_TRT_DIR ${D}(3.8 GB, 2.7 GB once unpacked)${N}"
     fi
   fi
   if [ -n "$OPT_BINARY" ]; then
@@ -930,8 +943,10 @@ hand_over() {
 }
 
 install_base_packages() {
-  local missing=() p
-  for p in curl git ca-certificates libcurl4; do
+  local missing=() p wanted=(curl git ca-certificates libcurl4)
+  # a PC unpacks TensorRT's wheel
+  [ "$JETSON" = 1 ] || wanted+=(unzip)
+  for p in "${wanted[@]}"; do
     case "$p" in
       ca-certificates) [ -d /etc/ssl/certs ] || missing+=("$p") ;;
       # the server's one library beyond the C and C++ runtimes
@@ -1025,6 +1040,7 @@ stop_running_server() {
 # After a failed update: the previous files and settings, and the previous
 # server running if it was.
 restore_previous_server() {
+  if [ -n "$TRT_STAGE" ]; then as_root rm -rf "$TRT_STAGE" >>"$LOG" 2>&1 || true; fi
   [ "$CHANGED" = 1 ] || [ "$SERVER_STOPPED" = 1 ] || [ "$SLEEP_HELD" = 1 ] || return 0
   local changed=$CHANGED was_running=$SERVER_STOPPED held=$SLEEP_HELD
   CHANGED=0 SERVER_STOPPED=0 SLEEP_HELD=0
@@ -1080,27 +1096,42 @@ restore_docker_era() {
 # ---------------------------------------------------------------------------
 # The runtime: TensorRT on the host, where the Docker era had it in the image
 
-# TensorRT's library, ONNX parser and plugins for major $1, at build $2 if given
+# TensorRT's library, ONNX parser and plugins for major $1, as apt names them
 trt_packages() {
-  printf '%s ' "libnvinfer$1${2:+=$2}" "libnvonnxparsers$1${2:+=$2}" "libnvinfer-plugin$1${2:+=$2}"
+  printf '%s ' "libnvinfer$1" "libnvonnxparsers$1" "libnvinfer-plugin$1"
+}
+
+# which of those, for each major given, apt has installed
+apt_trt_packages() {
+  local m p
+  for m in "$@"; do
+    for p in $(trt_packages "$m"); do
+      if [ -n "$(pkg_version "$p")" ]; then printf ' %s' "$p"; fi
+    done
+  done
 }
 
 ensure_runtime() {
-  if [ "$JETSON" = 1 ]; then jetson_trt; else pc_trt; fi
+  if [ "$JETSON" = 0 ]; then
+    pc_trt
+    good "TensorRT $PC_TRT"
+    return 0
+  fi
+  jetson_trt
   trt_plugins
   # what apt downloaded is as big again as what it installed
   if [ "$APT_UPDATED" = 1 ]; then apt_get clean >>"$LOG" 2>&1 || true; fi
-  if ! { has_lib "libnvinfer.so.$TRT_MAJOR" && has_lib "libnvonnxparser.so.$TRT_MAJOR"; }; then
-    die "TensorRT $TRT_MAJOR is not where the server can load it." \
-      "Check that libnvinfer.so.$TRT_MAJOR appears in: ldconfig -p"
+  if ! { has_lib libnvinfer.so.10 && has_lib libnvonnxparser.so.10; }; then
+    die "TensorRT 10 is not where the server can load it." \
+      "Check that libnvinfer.so.10 appears in: ldconfig -p"
   fi
-  TRT_VERSION="$(pkg_version "libnvinfer$TRT_MAJOR")"
+  TRT_VERSION="$(pkg_version libnvinfer10)"
   printf '\n==> TensorRT %s\n' "${TRT_VERSION:-from outside the package manager}" >>"$LOG"
   if [ "$JP_MAJOR" = 7 ] && [ -n "$TRT_VERSION" ] && ! version_ge "${TRT_VERSION%%-*}" "$JP7_MIN_TRT"; then
     die "This Jetson has TensorRT ${TRT_VERSION%%-*}, and Jetlink needs $JP7_MIN_TRT or newer." \
       "Update JetPack (sudo apt update && sudo apt upgrade) and run the installer again."
   fi
-  if [ -n "$TRT_VERSION" ]; then good "TensorRT ${TRT_VERSION%%-*}"; else good "TensorRT $TRT_MAJOR"; fi
+  if [ -n "$TRT_VERSION" ]; then good "TensorRT ${TRT_VERSION%%-*}"; else good "TensorRT 10"; fi
 }
 
 jetson_trt() {
@@ -1134,32 +1165,31 @@ newest_jetson_trt() {
   fi
 }
 
-# TensorRT 11.3 from NVIDIA's CUDA repository for the Ubuntu release (WSL uses
-# the same: its own repository has no TensorRT). Only the libraries, at
-# the exact build the server is compiled against: 11.3.0.99 is built for CUDA
-# 12.9 and 13.4 under one version number, which apt's resolver mixes up, and
-# the tensorrt meta packages bring 1.6 GB of builder resources and the
-# headers. Nothing named cuda-* but the keyring: a driver package would break
-# WSL's.
+# A PC's TensorRT: the wheel's libraries (libnvinfer, its ONNX parser and
+# plugins, and the Linux builder resources, not the ones for building Windows
+# plans) into $PC_TRT_DIR, which later versions reuse. It downloads beside
+# that directory, whose filesystem the space check was for, and appears whole
+# or not at all. A TensorRT an earlier installer put in with apt stays, unused.
+TRT_STAGE=''
 pc_trt() {
+  local old wheel
+  old="$(apt_trt_packages 11)"
+  [ -z "$old" ] || note "TensorRT from apt is no longer used here; to remove it: sudo apt remove$old"
   [ "$TRT_PRESENT" = 1 ] && return 0
-  local dist builds
-  case "$OS_CODENAME" in
-    jammy) dist=ubuntu2204 ;;
-    noble) dist=ubuntu2404 ;;
-    *) die "TensorRT for a PC comes from NVIDIA's packages for Ubuntu 22.04 and 24.04, and this is $OS_NAME." ;;
-  esac
   make_room_for_trt
-  if [ -z "$(pkg_version cuda-keyring)" ]; then
-    step "Adding NVIDIA's package source" add_cuda_repo "$dist"
-    APT_UPDATED=0
-  fi
-  apt_update
-  builds="$(apt-cache madison libnvinfer11 2>/dev/null | awk -F'|' '{gsub(/ /, "", $2); print $2}' || true)"
-  grep -qxF "$PC_TRT" <<<"$builds" || die "NVIDIA's package source has no TensorRT $PC_TRT." \
-    "Run the installer again later; if it keeps failing, open an issue."
-  # shellcheck disable=SC2046
-  step "Installing TensorRT ${PC_TRT%%-*} (about 1.9 GB)" apt_get install --no-install-recommends $(trt_packages 11 "$PC_TRT")
+  # owned by the user, who downloads into it; a failure removes it
+  TRT_STAGE="$TRT_ROOT/.new" wheel="$TRT_ROOT/.new/${PC_TRT_WHEEL##*/}"
+  as_root rm -rf "$TRT_STAGE"
+  as_root install -d -m 755 -o "$(id -u)" -g "$(id -g)" "$TRT_STAGE"
+  step "Downloading TensorRT $PC_TRT (3.8 GB)" download "$PC_TRT_WHEEL" "$wheel"
+  printf '%s  %s\n' "$PC_TRT_SHA256" "$wheel" | sha256sum -c --status \
+    || die "The TensorRT download is damaged: its checksum does not match." "Run the installer again."
+  step "Unpacking TensorRT" as_root unzip -q -j -o "$wheel" 'tensorrt_libs/lib*.so*' '*/LICENSE.txt' \
+    -x '*_win_*' -d "$TRT_STAGE/lib"
+  as_root rm -rf "$PC_TRT_DIR"
+  as_root mv -T "$TRT_STAGE/lib" "$PC_TRT_DIR"
+  as_root rm -rf "$TRT_STAGE"
+  TRT_STAGE=''
 }
 
 # TensorRT's plugin library, where TensorRT came without it: the servers in
@@ -1168,41 +1198,33 @@ pc_trt() {
 # plugin, so doing without is not an error.
 trt_plugins() {
   local have
-  has_lib "libnvinfer_plugin.so.$TRT_MAJOR" && return 0
-  have="$(pkg_version "libnvinfer$TRT_MAJOR")"
+  has_lib libnvinfer_plugin.so.10 && return 0
+  have="$(pkg_version libnvinfer10)"
   # a TensorRT from outside the package manager brings its own, or none
   [ -n "$have" ] || return 0
   apt_update
   if ! run_step "Installing TensorRT's plugins" \
-      apt_get install --no-install-recommends "libnvinfer-plugin$TRT_MAJOR=$have"; then
+      apt_get install --no-install-recommends "libnvinfer-plugin10=$have"; then
     note "Could not install TensorRT's plugins; Jetlink's models do not need them."
   fi
 }
 
-add_cuda_repo() {
-  local tmp
-  tmp="$(mktemp -d)"
-  curl -fsSL -o "$tmp/cuda-keyring.deb" \
-    "https://developer.download.nvidia.com/compute/cuda/repos/$1/x86_64/cuda-keyring_1.1-1_all.deb"
-  as_root dpkg -i "$tmp/cuda-keyring.deb"
-  rm -rf "$tmp"
-}
-
-# TensorRT goes on /. When the Docker era's images are what fills it they go
-# first, which stops the old server now rather than at the switch; going back
-# to it downloads them again.
+# TensorRT goes on / (a PC's under /opt/jetlink). When the Docker era's images
+# are what fills it they go first, which stops the old server now rather than
+# at the switch; going back to it downloads them again.
 make_room_for_trt() {
-  local free
-  free="$(free_gb /)"
+  local where=/ free
+  [ "$JETSON" = 1 ] || where=$TRT_ROOT
+  free="$(free_gb "$where")"
   [ "$free" -ge "$TRT_GB" ] && return 0
   if [ "$DOCKER_ERA" = 1 ] && [ -n "$(docker_images)" ]; then
-    note "$free GB free on /, and TensorRT needs $TRT_GB GB: deleting Jetlink's Docker images first."
+    note "$free GB free for TensorRT, which needs $TRT_GB GB: deleting Jetlink's Docker images first."
     stop_running_server
     remove_docker_images
-    free="$(free_gb /)"
+    free="$(free_gb "$where")"
     [ "$free" -ge "$TRT_GB" ] && return 0
   fi
-  die "Not enough free space on / for TensorRT: $free GB, and it needs $TRT_GB GB." \
+  die "Not enough free space for TensorRT: $free GB on $where, and it needs $TRT_GB GB." \
     "Free some space and run the installer again."
 }
 
@@ -1307,7 +1329,7 @@ unpack_server() {
   if [ -z "$ver" ]; then
     ver="$(basename "$tarball" | sed -n 's/^jetlink-server-\(.*\)-linux-[a-z0-9_]*\.tar\.gz$/\1/p')"
   fi
-  if ! [[ $ver =~ ^[0-9A-Za-z][0-9A-Za-z._+-]*$ ]] || [ "$ver" = current ] || [ "$ver" = previous ] || [ "$ver" = src ]; then
+  if ! [[ $ver =~ ^[0-9A-Za-z][0-9A-Za-z._+-]*$ ]] || [ "$ver" = current ] || [ "$ver" = previous ] || [ "$ver" = src ] || [ "$ver" = tensorrt ]; then
     as_root rm -rf "$stage"
     die "Cannot tell which version $(basename "$tarball") is."
   fi
@@ -1322,8 +1344,8 @@ unpack_server() {
 # never replaces one that does.
 check_gpu() {
   local out rc=0 trt
-  printf '\n==> %s/bin/jetlink-server backends --backend trt\n' "$NEW_DIR" >>"$LOG"
-  out="$(as_root "$NEW_DIR/bin/jetlink-server" backends --backend trt 2>&1)" || rc=$?
+  printf '\n==> %s/bin/jetlink-server backends --backend trt %s\n' "$NEW_DIR" "${TRT_ARGS[*]}" >>"$LOG"
+  out="$(as_root "$NEW_DIR/bin/jetlink-server" backends --backend trt "${TRT_ARGS[@]}" 2>&1)" || rc=$?
   printf '%s\n' "$out" >>"$LOG"
   # "trt: usable: TensorRT 10.16.2.10 on Orin-sm87", or "trt: not usable: why"
   trt="$(printf '%s\n' "$out" | sed -n 's/^trt: //p' | head -n 1)"
@@ -1369,6 +1391,10 @@ keep_previous() {
     fi
     as_root rm -rf "$d"
     printf '\n==> removed the old server %s\n' "$d" >>"$LOG"
+  done
+  # a PC's TensorRT from before the one this server uses
+  for d in "$TRT_ROOT"/*; do
+    if [ -d "$d" ] && [ "$d" != "$PC_TRT_DIR" ]; then as_root rm -rf "$d"; fi
   done
 }
 
@@ -1507,7 +1533,9 @@ write_env() {
     printf 'JETLINK_CACHE_DIR=%q\n' "$CACHE_DIR"
     printf 'JETLINK_SLEEP_AFTER=%q\n' "$SLEEP_AFTER"
     printf 'JETLINK_STATUS_PORT=%q\n' "$STATUS_PORT"
-    printf 'JETLINK_POWEROFF=%q\n' "$poweroff"
+    # flags the unit passes as they are, or nothing when empty
+    printf 'JETLINK_POWEROFF="%s"\n' "$poweroff"
+    printf 'JETLINK_TENSORRT="%s"\n' "${TRT_ARGS[*]}"
     printf 'JETLINK_JETSON=%q\n' "$JETSON"
     printf 'JETLINK_FLAVOR=%q\n' "$FLAVOR"
     printf 'JETLINK_SERVER_VERSION=%q\n' "$SERVER_VERSION"
@@ -1626,7 +1654,7 @@ uninstall() {
   fi
   local go
   ask_yn go n "Remove Jetlink from this computer?" \
-    "TensorRT stays installed, and so does Docker if you have it."
+    "TensorRT from apt stays installed, and so does Docker if you have it."
   [ "$go" = y ] || { say "  Nothing changed."; exit 0; }
   [ "$OPT_DRY_RUN" = 1 ] && { say "  (dry run: nothing changed)"; exit 0; }
   get_root
@@ -1671,11 +1699,9 @@ uninstall() {
   fi
   as_root rm -rf "$ETC_DIR" "$SRC_ROOT"
   heading "Jetlink is removed."
-  local p trt=''
-  for p in $(trt_packages 10) $(trt_packages 11); do
-    [ -n "$(pkg_version "$p")" ] && trt="$trt $p"
-  done
-  [ -z "$trt" ] || say "  TensorRT stays installed; to remove it: sudo apt remove$trt"
+  local trt
+  trt="$(apt_trt_packages 10 11)"
+  [ -z "$trt" ] || say "  TensorRT from apt stays installed; to remove it: sudo apt remove$trt"
   say ""
   exit 0
 }
@@ -1734,9 +1760,7 @@ main() {
     CACHE_DIR=/var/lib/jetlink
     [ "$JETSON" = 1 ] && CACHE_DIR=/mnt/data/jetlink
   fi
-  local where="$CACHE_DIR"
-  while [ ! -d "$where" ]; do where="$(dirname "$where")"; done
-  DISK_GB="${JETLINK_TEST_FREE_GB:-$(free_gb "$where")}"
+  DISK_GB="${JETLINK_TEST_FREE_GB:-$(free_gb "$CACHE_DIR")}"
   check_binary
   show_found
   preflight

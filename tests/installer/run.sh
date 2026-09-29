@@ -31,14 +31,15 @@ for tag in $OLD_RELEASES; do
 done
 
 # The containers share only read-only mounts, so they run at once, each into
-# its own log, printed whole when it is done.
+# its own log, printed whole when it is done. An image is named for its
+# Dockerfile, so a changed one is built afresh.
 pids=()
 for release in "$@"; do
   (
-    image="jetlink-installer-test:$release"
+    dockerfile="$(printf 'FROM ubuntu:%s\nRUN apt-get update && apt-get install -y --no-install-recommends git zip unzip && rm -rf /var/lib/apt/lists/*\n' "$release")"
+    image="jetlink-installer-test:$release-$(printf '%s' "$dockerfile" | cksum | cut -d' ' -f1)"
     if ! docker image inspect "$image" >/dev/null 2>&1; then
-      printf 'FROM ubuntu:%s\nRUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*\n' \
-        "$release" | docker build -q -t "$image" - >/dev/null
+      printf '%s\n' "$dockerfile" | docker build -q -t "$image" - >/dev/null
     fi
     docker run --rm -e SHOW_OUTPUT -v "$tree:/src:ro" -v "$old:/releases:ro" "$image" bash /src/tests/installer/scenarios.sh
   ) >"$logs/$release" 2>&1 &

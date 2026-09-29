@@ -88,11 +88,12 @@ version_line() {
   fi
 }
 
-# The binary's own version, and the TensorRT it loads.
+# The binary's own version, and the TensorRT it loads: a PC's copy, whose
+# directory is named for its version, else JetPack's package.
 server_line() {
-  local version trt
+  local version trt="${JETLINK_TENSORRT##*/}"
   version="$("$SERVER" --version 2>/dev/null | head -n 1 || true)"
-  trt="$(dpkg-query -W -f '${Version}\n' libnvinfer10 libnvinfer11 2>/dev/null | head -n 1 || true)"
+  [ -n "$trt" ] || trt="$(dpkg-query -W -f '${Version}\n' libnvinfer10 2>/dev/null | head -n 1 || true)"
   echo "${version:-missing from $SERVER}${trt:+ ${D}(TensorRT ${trt%%-*})${N}}"
 }
 
@@ -159,10 +160,13 @@ cmd_models() {
     echo "supported: run ${B}jetlink stop${N} first, and ${B}jetlink start${N} afterwards."
     exit 1
   fi
-  # --cache is each subcommand's option, so it follows the subcommand's name
+  # --cache is each subcommand's option, so it follows the subcommand's name,
+  # and prepare builds with a PC's own TensorRT as the server does
+  local trt=()
+  [ "${1:-}" != prepare ] || read -ra trt <<<"${JETLINK_TENSORRT:-}"
   case "${1:--}" in
     -*) exec "$SERVER" models "$@" ;;
-    *) exec "$SERVER" models "$1" --cache "$JETLINK_CACHE_DIR" "${@:2}" ;;
+    *) exec "$SERVER" models "$1" --cache "$JETLINK_CACHE_DIR" "${trt[@]}" "${@:2}" ;;
   esac
 }
 

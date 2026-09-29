@@ -27,10 +27,12 @@ Environment=JETLINK_SLEEP_AFTER=0 JETLINK_STATUS_PORT=0
 EnvironmentFile=/etc/jetlink/server.env
 # TensorRT or nothing: a server that cannot load it exits, so the failure shows
 # in the journal and in `jetlink status` instead of the car being served from
-# the CPU. JETLINK_POWEROFF is --poweroff on a Jetson whose user lets the comma
-# power it off, else empty. `jetlink run` runs this line through bash, so it
-# has no systemd prefixes or specifiers.
-ExecStart=/opt/jetlink/current/bin/jetlink-server --usb --backend trt --cache ${JETLINK_CACHE_DIR} --sleep-after ${JETLINK_SLEEP_AFTER} --status-port ${JETLINK_STATUS_PORT} $JETLINK_POWEROFF
+# the CPU. Two settings are flags or nothing: JETLINK_POWEROFF is --poweroff
+# on a Jetson whose user lets the comma power it off, and JETLINK_TENSORRT is
+# --tensorrt-libs DIR on a PC, whose TensorRT is its own copy (a Jetson's is
+# JetPack's, on the loader path). `jetlink run` runs this line through bash,
+# so it has no systemd prefixes or specifiers.
+ExecStart=/opt/jetlink/current/bin/jetlink-server --usb --backend trt --cache ${JETLINK_CACHE_DIR} --sleep-after ${JETLINK_SLEEP_AFTER} --status-port ${JETLINK_STATUS_PORT} $JETLINK_POWEROFF $JETLINK_TENSORRT
 Restart=always
 RestartSec=2
 
