@@ -12,6 +12,7 @@ import errno
 import json
 import struct
 import threading
+import time
 from types import SimpleNamespace
 
 import numpy as np
@@ -573,3 +574,59 @@ def test_a_closed_client_is_dead():
   client.close()
   b.close()
   assert client.dead
+
+
+# -- provisioning --------------------------------------------------------------
+
+class _ScriptedServer:
+  """The server's side of ensure_engine, one reply per request: ENGINE_REQ is
+  answered `building` while another model's preload holds the device, and
+  then, unasked, `need_upload` once it is free; UPLOAD_DONE is `ready`."""
+
+  def __init__(self, spec: ModelSpec):
+    self.spec = spec
+    self.inbox: list[SimpleNamespace] = []
+    self.sent: list[int] = []
+
+  def _push(self, seq: int, **state) -> None:
+    state.update(sha256=self.spec.sha256, chunk=1 << 20)
+    self.inbox.append(SimpleNamespace(msg_type=P.Msg.ENGINE_RESP, seq=seq, payload=memoryview(json.dumps(state).encode())))
+
+  def send(self, msg_type, seq, parts=(), flags=0, timeout=None):
+    self.sent.append(msg_type)
+    if msg_type == P.Msg.ENGINE_REQ:
+      self._push(seq, state='building', detail='another build is in progress (preloaded)')
+      self._push(0, state='need_upload', detail='have 0 of the model')
+    elif msg_type == P.Msg.UPLOAD_DONE:
+      self._push(seq, state='ready', detail='', spec=self.spec.to_dict())
+
+  def send_json(self, msg_type, seq, obj, flags=0):
+    self.send(msg_type, seq, (json.dumps(obj).encode(),), flags)
+
+  def recv(self, timeout=None):
+    if not self.inbox:
+      raise LinkTimeout('nothing more from the scripted server')
+    return self.inbox.pop(0)
+
+
+def test_need_upload_pushed_after_a_preload_is_engine_missing_without_a_file():
+  """modeld and provisioning's first ask carry no file: a need_upload that
+  comes after `building` must end the wait at once (provision.ensure then asks
+  again with the file), not after build_timeout, 1800 s in provisioning."""
+  from jetlink.client import EngineMissing
+  spec = _spec()
+  client = JetlinkClient(_ScriptedServer(spec))
+  started = time.monotonic()
+  with pytest.raises(EngineMissing, match='have 0 of the model'):
+    client.ensure_engine(spec.sha256, spec.nbytes, onnx_path=None, build_timeout=30.0)
+  assert time.monotonic() - started < 5.0
+
+
+def test_need_upload_pushed_after_a_preload_uploads_when_the_caller_has_the_file(tmp_path):
+  spec = _spec(nbytes=3000)
+  model = tmp_path / 'model.onnx'
+  model.write_bytes(bytes(3000))
+  server = _ScriptedServer(spec)
+  client = JetlinkClient(server)
+  assert client.ensure_engine(spec.sha256, spec.nbytes, onnx_path=model, build_timeout=30.0) == spec
+  assert server.sent == [P.Msg.ENGINE_REQ, P.Msg.UPLOAD_CHUNK, P.Msg.UPLOAD_DONE]
