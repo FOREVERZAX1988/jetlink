@@ -20,12 +20,16 @@ public protocol PageHardwareSource: AnyObject, Sendable {
 ///
 /// A server thread only hands an event over: `publish` queues it and
 /// returns, so no thread of the server's ever waits on a lock a page's
-/// low-priority thread holds. Encoding and writing happen on the pages' own
-/// threads.
+/// low-priority thread holds. Each event is encoded once, off the server's
+/// threads, and every page is given the same bytes.
 final class PageFeed: @unchecked Sendable {
   struct Limits: Sendable {
+    /// Event streams at once; each holds a thread.
     var streams = 8
+    /// Stats kept for a page that opens mid-drive: the chart's two minutes.
     var history: TimeInterval = 120
+    /// Hardware sampling outlives the last page by this much: a reload, a
+    /// phone waking.
     var grace: TimeInterval = 60
     var period: TimeInterval = 1
     /// How far a page may fall behind before it is dropped. It reconnects
@@ -33,14 +37,9 @@ final class PageFeed: @unchecked Sendable {
     var behind = 1024
   }
 
-  enum Item {
-    case event(ControlEvent, Date)
-    case frame(Data)
-  }
-
-  /// One open page's queue.
+  /// One open page's queue of server-sent events.
   final class Stream: @unchecked Sendable {
-    fileprivate var items: [Item] = []
+    fileprivate var frames: [Data] = []
     fileprivate var dropped = false
   }
 
@@ -55,8 +54,8 @@ final class PageFeed: @unchecked Sendable {
   static let uptime: @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
   private let handoff = DispatchQueue(label: "jetlink-page-feed", qos: .background)
   private let condition = NSCondition()
-  private var latest: [String: (event: ControlEvent, date: Date)] = [:]
-  private var stats: [(event: ControlEvent, date: Date, at: TimeInterval)] = []
+  private var latest: [String: (event: ControlEvent, frame: Data)] = [:]
+  private var stats: [(frame: Data, at: TimeInterval)] = []
   private var streams: [Stream] = []
   private var hostFrame: Data?
   private var hwFrame: Data?
@@ -106,27 +105,30 @@ final class PageFeed: @unchecked Sendable {
     handoff.sync {}
   }
 
+  /// On `handoff`.
   private func accept(_ event: ControlEvent, date: Date, at: TimeInterval, onlyNew: Bool) {
+    let isStats = if case .stats = event { true } else { false }
+    if onlyNew && isStats { return }
+    let frame = PageFeed.sse(event.jsonLine(at: date))
     condition.lock()
     defer { condition.unlock() }
-    if case .stats = event {
-      if onlyNew { return }
-      stats.append((event, date, at))
+    if isStats {
+      stats.append((frame, at))
       trimHistory(now: at)
     } else {
       if onlyNew && latest[event.name] != nil { return }
-      latest[event.name] = (event, date)
+      latest[event.name] = (event, frame)
     }
-    push(.event(event, date))
+    push(frame)
   }
 
   /// Under `condition`.
-  private func push(_ item: Item) {
+  private func push(_ frame: Data) {
     for stream in streams where !stream.dropped {
-      stream.items.append(item)
-      if stream.items.count > limits.behind {
+      stream.frames.append(frame)
+      if stream.frames.count > limits.behind {
         stream.dropped = true
-        stream.items = []
+        stream.frames = []
       }
     }
     condition.broadcast()
@@ -150,12 +152,10 @@ final class PageFeed: @unchecked Sendable {
     }
     let stream = Stream()
     trimHistory(now: clock())
-    if let hostFrame { stream.items.append(.frame(hostFrame)) }
-    for name in PageFeed.order {
-      if let (event, date) = latest[name] { stream.items.append(.event(event, date)) }
-    }
-    stream.items += stats.map { .event($0.event, $0.date) }
-    if let hwFrame { stream.items.append(.frame(hwFrame)) }
+    if let hostFrame { stream.frames.append(hostFrame) }
+    stream.frames += PageFeed.order.compactMap { latest[$0]?.frame }
+    stream.frames += stats.map(\.frame)
+    if let hwFrame { stream.frames.append(hwFrame) }
     streams.append(stream)
     let start = hardware != nil && !sampling
     if start { sampling = true }
@@ -175,25 +175,21 @@ final class PageFeed: @unchecked Sendable {
 
   /// What `stream` has to send: waits up to `timeout` and gives [] when
   /// nothing came (time for a keepalive), nil when the stream is over.
-  func next(_ stream: Stream, timeout: TimeInterval) -> [Item]? {
+  func next(_ stream: Stream, timeout: TimeInterval) -> [Data]? {
     let deadline = Date(timeIntervalSinceNow: timeout)
     condition.lock()
     defer { condition.unlock() }
-    while stream.items.isEmpty && !stream.dropped && !stopped {
+    while stream.frames.isEmpty && !stream.dropped && !stopped {
       if !condition.wait(until: deadline) { break }
     }
-    if stream.dropped || stream.items.isEmpty && stopped { return nil }
-    let items = stream.items
-    stream.items = []
-    return items
+    if stream.dropped || stream.frames.isEmpty && stopped { return nil }
+    let frames = stream.frames
+    stream.frames = []
+    return frames
   }
 
-  var openStreams: Int {
-    condition.lock()
-    defer { condition.unlock() }
-    return streams.count
-  }
-
+  /// Whether the hardware sampler runs: the one thing a test cannot see from
+  /// outside without racing it.
   var isSampling: Bool {
     condition.lock()
     defer { condition.unlock() }
@@ -206,8 +202,9 @@ final class PageFeed: @unchecked Sendable {
     condition.lock()
     if !stopped, case .server(let server)? = latest["server"]?.event {
       let stopping = ServerEvent(state: "stopping", detail: "", backend: server.backend, runtimeVersion: server.runtimeVersion, device: server.device)
-      latest["server"] = (.server(stopping), Date())
-      push(.event(.server(stopping), Date()))
+      let frame = PageFeed.sse(ControlEvent.server(stopping).jsonLine())
+      latest["server"] = (.server(stopping), frame)
+      push(frame)
     }
     stopped = true
     condition.broadcast()
@@ -226,7 +223,7 @@ final class PageFeed: @unchecked Sendable {
       let frame = PageFeed.frame("host", hardware.host())
       condition.lock()
       hostFrame = frame
-      push(.frame(frame))
+      push(frame)
       condition.unlock()
     }
     hardware.reset()
@@ -243,7 +240,7 @@ final class PageFeed: @unchecked Sendable {
       let frame = PageFeed.frame("hw", hardware.sample())
       condition.lock()
       hwFrame = frame
-      push(.frame(frame))
+      push(frame)
       let next = Date(timeIntervalSinceNow: limits.period)
       while !stopped && Date() < next {
         _ = condition.wait(until: next)
@@ -261,13 +258,6 @@ final class PageFeed: @unchecked Sendable {
     out.append(line.last == 0x0A ? line.dropLast() : line)
     out.append(contentsOf: [0x0A, 0x0A])
     return out
-  }
-
-  static func encode(_ item: Item) -> Data {
-    switch item {
-    case .event(let event, let date): sse(event.jsonLine(at: date))
-    case .frame(let frame): frame
-    }
   }
 
   /// A host-made event, keys sorted as `jsonLine()` sorts them.

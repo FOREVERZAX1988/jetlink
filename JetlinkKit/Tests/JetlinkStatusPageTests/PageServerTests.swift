@@ -3,6 +3,7 @@
   import Foundation
   import JetlinkKit
   import JetlinkLog
+  import JetlinkTestSupport
   import Testing
 
   @testable import JetlinkServer
@@ -53,9 +54,7 @@
 
     @Test("A request that never ends its headers is answered 408 after the header timeout")
     func headerTimeout() throws {
-      var limits = PageServer.Limits()
-      limits.headerTimeout = 0.3
-      let page = try RunningPage(limits: limits)
+      let page = try RunningPage(headerTimeout: 0.3)
       let client = try Client(port: page.port)
       client.send("GET / HTTP/1.1\r\nHost: jetlink.local\r\n")
       let started = Date()
@@ -78,9 +77,7 @@
 
     @Test("An event stream: its headers, then data lines, then a comment when quiet")
     func stream() throws {
-      var limits = PageServer.Limits()
-      limits.keepalive = 0.2
-      let page = try RunningPage(limits: limits)
+      let page = try RunningPage(keepalive: 0.2)
       let link = ControlEvent.link(LinkEvent(state: .connected, detail: "", peer: "usb", medium: "usb3"))
       page.feed.publish(link)
       let client = try Client(port: page.port)
@@ -108,9 +105,7 @@
 
     @Test("At most eight event streams; a ninth page is told to wait, and a closed one frees its place")
     func streamCap() throws {
-      var limits = PageServer.Limits()
-      limits.keepalive = 0.1
-      let page = try RunningPage(limits: limits)
+      let page = try RunningPage(keepalive: 0.1)
       var clients: [Client] = []
       for _ in 0..<8 {
         let client = try Client(port: page.port)
@@ -118,32 +113,33 @@
         #expect(client.read { $0.contains("retry: 2000\n\n") }.hasPrefix("HTTP/1.1 200 OK\r\n"))
         clients.append(client)
       }
-      #expect(page.feed.openStreams == 8)
       let ninth = try Client(port: page.port)
       ninth.send("GET /events HTTP/1.1\r\n\r\n")
       #expect(ninth.read().hasPrefix("HTTP/1.1 503 Service Unavailable\r\n"))
       // The page and the log still load while the streams are full.
       #expect(try Client.get(page.port, "/").hasPrefix("HTTP/1.1 200 OK\r\n"))
 
+      // Its thread sees the page gone at its next keepalive.
       clients.removeFirst()
-      #expect(eventually { page.feed.openStreams == 7 })
-      let tenth = try Client(port: page.port)
-      tenth.send("GET /events HTTP/1.1\r\n\r\n")
-      #expect(tenth.read { $0.contains("retry: 2000\n\n") }.hasPrefix("HTTP/1.1 200 OK\r\n"))
+      #expect(
+        eventually(timeout: 5) {
+          guard let tenth = try? Client(port: page.port) else { return false }
+          tenth.send("GET /events HTTP/1.1\r\n\r\n")
+          return tenth.read { $0.contains("\r\n\r\n") }.hasPrefix("HTTP/1.1 200 OK\r\n")
+        })
     }
 
     @Test("A page's socket gives up on a vanished phone in about half a minute")
     func keepalive() throws {
+      let fd = socket(AF_INET, Sys.stream, 0)
       #if canImport(Glibc)
-        let fd = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
         let idle = TCP_KEEPIDLE
       #else
-        let fd = socket(AF_INET, SOCK_STREAM, 0)
         let idle = TCP_KEEPALIVE
       #endif
       try #require(fd >= 0)
       defer { close(fd) }
-      PageServer.tune(fd, writeTimeout: 10)
+      PageServer.tune(fd)
       func option(_ level: Int32, _ name: Int32) -> Int32 {
         var value: Int32 = -1
         var length = socklen_t(MemoryLayout<Int32>.size)
@@ -174,9 +170,9 @@
 
     @Test("The page only watches the controller: no catalog fetch, no download, no build")
     func readOnly() async throws {
-      let scratch = try Scratch()
+      let scratch = try TemporaryDirectory()
       let server = try Server(
-        configuration: Server.Configuration(host: "127.0.0.1", port: 0, cacheRoot: scratch.url, preload: false, listen: true), backend: NamesOnly())
+        configuration: Server.Configuration(host: "127.0.0.1", port: 0, cacheRoot: scratch.url, preload: false, listen: true), backend: NamingBackend())
       let registry = CountingRegistry()
       let controller = ServerController(server: server, registry: registry, streaming: false)
       let page = try RunningPage()

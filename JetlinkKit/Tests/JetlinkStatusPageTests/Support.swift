@@ -1,6 +1,7 @@
 import Foundation
 import JetlinkKit
 import JetlinkServer
+import JetlinkTestSupport
 
 @testable import JetlinkStatusPage
 
@@ -9,41 +10,6 @@ import JetlinkServer
 #elseif canImport(Darwin)
   import Darwin
 #endif
-
-struct PageTestError: Error, CustomStringConvertible {
-  let description: String
-
-  init(_ description: String) {
-    self.description = description
-  }
-}
-
-/// Polls `condition` until it holds or `timeout` passes.
-func eventually(_ timeout: TimeInterval = 5, _ condition: () -> Bool) -> Bool {
-  let deadline = Date(timeIntervalSinceNow: timeout)
-  while Date() < deadline {
-    if condition() { return true }
-    Thread.sleep(forTimeInterval: 0.01)
-  }
-  return condition()
-}
-
-/// A monotonic clock the test moves.
-final class ManualClock: @unchecked Sendable {
-  private let lock = NSLock()
-  private var value: TimeInterval
-
-  init(_ start: TimeInterval = 0) {
-    value = start
-  }
-
-  var now: TimeInterval {
-    get { lock.withLock { value } }
-    set { lock.withLock { value = newValue } }
-  }
-
-  var read: @Sendable () -> TimeInterval { { self.now } }
-}
 
 /// Hardware that counts what the page asks of it.
 final class FakeHardware: PageHardwareSource, @unchecked Sendable {
@@ -69,29 +35,6 @@ final class FakeHardware: PageHardwareSource, @unchecked Sendable {
 
   func reset() {
     lock.withLock { counts.resets += 1 }
-  }
-}
-
-/// A backend that is only its names: what a server and its controller ask
-/// of one before any model.
-final class NamesOnly: EngineBackend {
-  let name = "ort"
-  let suffix = ".ortcache"
-  let artifactKind = ArtifactKind.directory
-  let runtimeVersion = "1.29.0"
-
-  func deviceTag() -> String { "cpu" }
-
-  func deriveSpec(model: URL, sha256: String, nbytes: Int64, frameSkip: Int) throws -> ModelSpec {
-    throw PageTestError("names only")
-  }
-
-  func build(model: URL, artifact: URL, report: @escaping ProgressFn, metaExtra: [String: Any]) throws {
-    throw PageTestError("names only")
-  }
-
-  func load(artifact: URL, report: @escaping ProgressFn) throws -> any Engine {
-    throw PageTestError("names only")
   }
 }
 
@@ -123,7 +66,7 @@ final class CountingRegistry: ModelRegistry, @unchecked Sendable {
 
   func resolvePointer(ref: String) async throws -> (sha256: String, size: Int64) {
     called("resolvePointer")
-    throw PageTestError("no network here")
+    throw TestError("no network here")
   }
 
   func ref(for sha256: String) -> String? {
@@ -133,12 +76,12 @@ final class CountingRegistry: ModelRegistry, @unchecked Sendable {
 
   func fetch(_ refOrSHA256: String, progress: @escaping @Sendable (Double) -> Void, shouldStop: @escaping @Sendable () -> Bool) async throws -> URL {
     called("fetch")
-    throw PageTestError("no network here")
+    throw TestError("no network here")
   }
 
   func importModelFile(at url: URL, name: String?, progress: @escaping @Sendable (Double) -> Void) async throws -> String {
     called("import")
-    throw PageTestError("no imports here")
+    throw TestError("no imports here")
   }
 
   func inventory(artifactTag: String?, artifactSuffix: String, loaded: String?) -> InventoryEvent {
@@ -150,20 +93,6 @@ final class CountingRegistry: ModelRegistry, @unchecked Sendable {
   func remove(sha256: String, artifacts: Bool, model: Bool) throws { called("remove") }
 }
 
-/// A temporary directory, removed with the value.
-final class Scratch {
-  let url: URL
-
-  init() throws {
-    url = FileManager.default.temporaryDirectory.appendingPathComponent("jetlink-page-\(UUID().uuidString)", isDirectory: true)
-    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-  }
-
-  deinit {
-    try? FileManager.default.removeItem(at: url)
-  }
-}
-
 // Where PageServer is: Linux and macOS, not Android.
 #if canImport(Darwin) || canImport(Glibc)
   /// A page server on a free port of its own, stopped with the value.
@@ -171,14 +100,10 @@ final class Scratch {
     let feed: PageFeed
     let server: PageServer
 
-    init(
-      limits: PageServer.Limits = PageServer.Limits(), hardware: (any PageHardwareSource)? = nil,
-      clock: @escaping @Sendable () -> TimeInterval = {
-        ProcessInfo.processInfo.systemUptime
-      }, logs: @escaping @Sendable () -> [String] = { [] }
-    ) throws {
-      feed = PageFeed(hardware: hardware, limits: limits.feed, clock: clock)
-      server = try PageServer(port: 0, page: Data("<!doctype html><p>page</p>".utf8), feed: feed, limits: limits, logs: logs)
+    init(headerTimeout: TimeInterval = 30, keepalive: TimeInterval = 15, logs: @escaping @Sendable () -> [String] = { [] }) throws {
+      feed = PageFeed(hardware: nil)
+      server = try PageServer(
+        port: 0, page: Data("<!doctype html><p>page</p>".utf8), feed: feed, headerTimeout: headerTimeout, keepalive: keepalive, logs: logs)
     }
 
     var port: UInt16 { server.port }
@@ -195,15 +120,10 @@ final class Scratch {
     private(set) var closed = false
 
     init(port: UInt16) throws {
-      #if canImport(Glibc)
-        fd = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
-      #else
-        fd = socket(AF_INET, SOCK_STREAM, 0)
-      #endif
-      guard fd >= 0 else { throw PageTestError("socket failed") }
+      fd = socket(AF_INET, Sys.stream, 0)
+      guard fd >= 0 else { throw TestError("socket failed") }
       #if canImport(Darwin)
-        var on: Int32 = 1
-        _ = setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+        Sys.set(fd, SOL_SOCKET, SO_NOSIGPIPE, 1)
       #endif
       var address = sockaddr_in()
       #if canImport(Darwin)
@@ -217,7 +137,7 @@ final class Scratch {
       }
       guard connected == 0 else {
         close(fd)
-        throw PageTestError("cannot connect to port \(port): \(String(cString: strerror(errno)))")
+        throw TestError("cannot connect to port \(port): \(String(cString: strerror(errno)))")
       }
     }
 
@@ -232,9 +152,9 @@ final class Scratch {
       var offset = 0
       while offset < bytes.count {
         #if canImport(Glibc)
-          let n = bytes[offset...].withUnsafeBytes { Glibc.send(fd, $0.baseAddress, $0.count, Int32(MSG_NOSIGNAL)) }
+          let n = bytes[offset...].withUnsafeBytes { Glibc.send(fd, $0.baseAddress, $0.count, Sys.sendFlags) }
         #else
-          let n = bytes[offset...].withUnsafeBytes { Darwin.send(fd, $0.baseAddress, $0.count, 0) }
+          let n = bytes[offset...].withUnsafeBytes { Darwin.send(fd, $0.baseAddress, $0.count, Sys.sendFlags) }
         #endif
         if n <= 0 { return }
         offset += n
