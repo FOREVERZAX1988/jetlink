@@ -172,6 +172,23 @@ class Jetlink:
     self._prepared = True
     return True
 
+  def attach(self, small, cam_w: int, cam_h: int):
+    """Join the link to modeld, once the camera is up and `small` is built:
+    the joining model, which drives as `small` until the Jetson is there.
+
+    None unless prepare() said yes in this process: without it the GPU's
+    thread would start on modeld's realtime core. If the joining model cannot
+    be built, `small`, and the failure is logged.
+    """
+    if not self._prepared:
+      return None
+    from jetlink.openpilot.joining import join
+    try:
+      return join(self, cam_w, cam_h, small)
+    except Exception:
+      self.log.exception("jetlink load failed")
+      return small
+
   def shutdown(self, reason: str = '', timeout: float = SHUTDOWN_TIMEOUT) -> None:
     """The device is powering off for good. Tell the Jetson, within `timeout`.
 

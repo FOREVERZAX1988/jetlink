@@ -25,6 +25,8 @@ from unittest import mock
 
 import jetlink.openpilot as jo
 from jetlink.comma import gadget
+from jetlink.openpilot import joining
+from jetlink.spec import ModelSpec
 from tests.openpilot import fakes
 from tests.openpilot.fakes import OpenpilotTest
 
@@ -34,6 +36,7 @@ JETLINK = {
   'enabled': '()',
   'status': '()',
   'prepare': '()',
+  'attach': '(small, cam_w, cam_h)',
   'shutdown': "(reason='', timeout=25.0)",
   'extends_catalog': '()',
   'extend_catalog': '(catalog)',
@@ -135,8 +138,97 @@ class LoadTest(OpenpilotTest):
       self.assertFalse(self.jl.prepare())
     link_configured.assert_not_called()
 
-  def test_yes_brings_the_gpu_up_first(self):
+  def test_nothing_joins_without_prepare(self):
+    # the GPU's thread would start on modeld's realtime core
+    with mock.patch.object(joining, 'join') as join:
+      self.assertIsNone(self.jl.attach(self.small, 1928, 1208))
+    join.assert_not_called()
+
+  def test_a_later_no_takes_the_yes_back(self):
     self.prepared()
+    with mock.patch.object(self.jl, 'enabled', return_value=False):
+      self.assertFalse(self.jl.prepare())
+    with mock.patch.object(joining, 'join') as join:
+      self.assertIsNone(self.jl.attach(self.small, 1928, 1208))
+    join.assert_not_called()
+
+  def test_prepared_joins_modeld(self):
+    self.prepared()
+    joined = SimpleNamespace(client=object())
+    with mock.patch.object(joining, 'join', return_value=joined) as join:
+      model = self.jl.attach(self.small, 1928, 1208)
+    join.assert_called_once_with(self.jl, 1928, 1208, self.small)
+    self.assertIs(model, joined)
+
+  def test_a_failed_build_drives_the_small_model_and_says_so(self):
+    self.prepared()
+    with mock.patch.object(joining, 'join', side_effect=RuntimeError('no warp')):
+      model = self.jl.attach(self.small, 1928, 1208)
+    self.assertEqual(self.op.log.lines('exception'), ["jetlink load failed"])
+    self.assertIs(model, self.small)
+
+
+def spec(model_hw=(128, 256)) -> ModelSpec:
+  inputs = {'new_img': (2, 6, *model_hw), 'desire': (8,), 'traffic_convention': (1, 2), 'action_t': (1, 2)}
+  return ModelSpec(sha256='a' * 64, nbytes=1, frame_skip=4, input_shapes=inputs, output_shapes={'outputs': (1, 16)},
+                   output_slices={'plan': slice(0, 16)}, checkpoint=None)
+
+
+class TestTheJoinFactory(OpenpilotTest):
+  """What attach() builds: the joining model over the small one, with the warp
+  loaded and warm before the frame loop exists."""
+
+  def setUp(self):
+    super().setUp()
+    self.small = SimpleNamespace(name='small')
+    p = mock.patch.dict(sys.modules, fakes.fake_tinygrad())
+    p.start()
+    self.addCleanup(p.stop)
+    from jetlink.openpilot import link, warp
+    self.present = self.patch(link, 'present_early')
+    self.reset = self.patch(warp, 'prepare_reset')
+    self.warm = self.patch(warp, 'warm')
+    self.loaded = self.patch(self.jl.warps, 'load')
+    # the join thread and the watcher are the joining state's; not here
+    self.patch(joining.JoiningModelState, '_join_loop', lambda s: None)
+    self.patch(joining.JoiningModelState, '_watch_engagement', lambda s: None)
+
+  def join(self):
+    s = joining.join(self.jl, 1928, 1208, self.small)
+    self.addCleanup(s.close)
+    return s
+
+  def test_the_warp_is_sized_from_the_record(self):
+    self.jl.spec.store(spec(model_hw=(64, 128)))
+    self.join()
+    self.loaded.assert_called_once_with(1928, 1208, 256, 128)
+    self.warm.assert_called_once_with(self.loaded.return_value, fakes.nv12_info(1928, 1208)[3])
+    self.reset.assert_called_once_with(self.small)
+    self.present.assert_called_once()
+
+  def test_without_a_record_it_is_this_devices_geometry(self):
+    self.join()
+    self.loaded.assert_called_once_with(1928, 1208, 512, 256)
+
+  def test_a_warp_that_will_not_load_lets_the_link_go_and_raises(self):
+    self.loaded.side_effect = RuntimeError('stale warp')
+    with self.assertRaisesRegex(RuntimeError, 'stale warp'):
+      joining.join(self.jl, 1928, 1208, self.small)
+
+  def test_it_runs_the_adapters_face_and_reports_through_jetlink(self):
+    s = self.join()
+    self.assertIs(s._progress, self.jl.progress)
+    self.assertEqual(s._engagement, self.op.engagement)
+    client = mock.Mock()
+    client.t.link_info.return_value = {'kind': 'usb'}
+    big = s._build(client, spec())
+    self.assertIs(big.face, self.op.face)
+    self.assertIs(big.warp, self.loaded.return_value)
+
+  def test_a_server_model_of_another_geometry_is_refused(self):
+    s = self.join()
+    with self.assertRaisesRegex(RuntimeError, 'no prepared warp'):
+      s._build(mock.Mock(), spec(model_hw=(64, 128)))
 
 
 class TestShutdown(OpenpilotTest):

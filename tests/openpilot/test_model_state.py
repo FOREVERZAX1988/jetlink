@@ -1,0 +1,231 @@
+"""
+Copyright (c) 2026-, Zeph Leggett.
+
+This file is part of jetlink and is licensed under the MIT License.
+See the LICENSE file in the root directory for more details.
+
+What the comma puts on the wire for each kind of big model, and what modeld
+reads off the model.
+
+Both kinds get the frame and the scalars only. A stateful graph (openpilot
+#38916, Cinque Terre V3 on) keeps its hidden state inside itself, and the
+Jetson feeds a queued one's (up to Cinque Terre V2) back (jetlink protocol 3).
+The warp and the link are faked, and tinygrad is numpy; the packing is the
+code that drives.
+"""
+from __future__ import annotations
+
+import sys
+import unittest
+from types import SimpleNamespace
+from unittest import mock
+
+import numpy as np
+
+from jetlink.openpilot import model_state
+from jetlink.spec import ModelSpec
+from tests.openpilot import fakes
+
+# Cinque Terre V3's output layout, read off its ONNX
+SLICES = {'lane_lines': (0, 528), 'lane_lines_prob': (528, 536), 'road_edges': (536, 800), 'meta': (800, 855),
+          'desire_pred': (855, 887), 'pose': (887, 899), 'wide_from_device_euler': (899, 905),
+          'road_transform': (905, 917), 'plan': (917, 1907), 'lead': (1907, 2051), 'lead_prob': (2051, 2054),
+          'desire_state': (2054, 2062), 'action': (2062, 2066), 'hidden_state': (2066, 18450), 'pad': (18450, 18452)}
+STATEFUL = {
+  'new_img': (2, 6, 128, 256), 'desire': (8,), 'traffic_convention': (1, 2), 'action_t': (1, 2),
+  'state_img_q': (2, 5, 6, 128, 256), 'state_desire_q': (132, 1, 8), 'state_feat_q': (128, 1, 16384),
+}
+QUEUED = {
+  'img': (1, 12, 128, 256), 'big_img': (1, 12, 128, 256), 'desire_pulse': (1, 25, 8),
+  'traffic_convention': (1, 2), 'action_t': (1, 2), 'features_buffer': (1, 32, 32, 512),
+}
+
+
+def spec_for(inputs: dict) -> ModelSpec:
+  outputs = {'outputs': (1, 18452)}
+  outputs.update({f'next_{n}': s for n, s in inputs.items() if n.startswith('state_')})
+  return ModelSpec(sha256='a' * 64, nbytes=1, frame_skip=4, input_shapes=inputs, output_shapes=outputs,
+                   output_slices={k: slice(*v) for k, v in SLICES.items()}, checkpoint=None)
+
+
+class FakeClient:
+  def __init__(self, kind: str = 'usb'):
+    self.sent = []
+    self.asked = []
+    self.last_timings = (0, 0, 0)
+    self.last_state = None
+    self.dead = False
+    # what the transport tells the server's hello: 'usb', or 'cable' for a phone
+    self.t = SimpleNamespace(link_info=lambda: {'kind': kind})
+    self.output = np.zeros(18452, np.float32)
+    self.output[slice(*SLICES['hidden_state'])] = 0.5
+
+  def infer_begin(self, data, packed, frame_id, reset=False, want_state=False):
+    self.sent.append((np.frombuffer(bytes(data), np.uint8).copy(), np.array(packed, copy=True), frame_id, reset))
+    self.asked.append(want_state)
+    return frame_id
+
+  def infer_end(self, seq):
+    return self.output
+
+
+class ModelStateTest(unittest.TestCase):
+  def setUp(self):
+    p = mock.patch.dict(sys.modules, fakes.fake_tinygrad())
+    p.start()
+    self.addCleanup(p.stop)
+    self.log = fakes.RecordingLog()
+    self.events = []
+
+  def make(self, spec, client, face=fakes.FACE):
+    return model_state.JetlinkModelState(1928, 1208, client, spec, object(), face=face, log=self.log,
+                                         event=lambda name, **fields: self.events.append((name, fields)))
+
+  def run_frames(self, inputs: dict, n: int = 3, client=None, warp_output=None, after_enqueue=None):
+    spec = spec_for(inputs)
+    client = client or FakeClient()
+    warped = np.arange(np.prod(spec.warped_shape), dtype=np.uint64).astype(np.uint8)
+    warp_output = warp_output or SimpleNamespace(data=lambda: warped)
+    with mock.patch.object(model_state, 'call_warp', return_value=warp_output):
+      state = self.make(spec, client)
+      bufs = {k: SimpleNamespace(data=np.zeros(8, np.uint8)) for k in ('img', 'big_img')}
+      for i in range(n):
+        desire = np.zeros(8, np.float32)
+        desire[3] = 1.0 if i >= 1 else 0.0   # held from frame 1: a pulse on 1 only
+        state.run(bufs, {'img': np.eye(3), 'big_img': np.eye(3)},
+                  {'desire_pulse': desire, 'traffic_convention': np.array([1, 0], np.float32),
+                   'action_t': np.array([0.1, 0.2], np.float32)}, after_enqueue)
+    return spec, state, client, warped
+
+
+class TestWire(ModelStateTest):
+  def test_a_stateful_model_gets_the_frame_and_twelve_floats(self):
+    spec, state, client, warped = self.run_frames(STATEFUL)
+    self.assertEqual(state.vision_input_names, ['img', 'big_img'])
+    self.assertNotIn('prev_feat', state.npy)
+    for i, (data, packed, frame_id, reset) in enumerate(client.sent):
+      self.assertEqual(frame_id, i + 1)
+      self.assertEqual(reset, i == 0)
+      np.testing.assert_array_equal(data, warped)
+      self.assertEqual(packed.shape, (12,))
+      np.testing.assert_array_equal(packed[8:], np.array([1, 0, 0.1, 0.2], np.float32))
+    # the desire pulse is the rising edge, as openpilot's own ModelState sends it
+    self.assertEqual([p[3] for _, p, _, _ in client.sent], [0.0, 1.0, 0.0])
+
+  def test_over_the_cable_the_frame_goes_out_of_the_gpu_mapping(self):
+    # the socket copies the mapping while the first segments are on the wire;
+    # no host copy first
+    client = FakeClient('cable')
+    spec = spec_for(STATEFUL)
+    frame = np.arange(np.prod(spec.warped_shape), dtype=np.uint64).astype(np.uint8)
+    mapping = SimpleNamespace(as_memoryview=mock.Mock(return_value=memoryview(frame)))
+    warp_output = SimpleNamespace(data=mock.Mock(side_effect=AssertionError('copied on the host')),
+                                  _buffer=lambda: mapping)
+    _, state, client, _ = self.run_frames(STATEFUL, client=client, warp_output=warp_output)
+    self.assertTrue(state.send_from_gpu)
+    mapping.as_memoryview.assert_called_with(allow_zero_copy=True)
+    for data, *_ in client.sent:
+      np.testing.assert_array_equal(data, frame)
+
+  def test_usb_keeps_the_host_copy(self):
+    _, state, _, _ = self.run_frames(STATEFUL)
+    self.assertFalse(state.send_from_gpu)
+
+  def test_the_cable_is_a_phone_s_socket_as_the_transport_says(self):
+    from jetlink.transport.tcp import CABLE_ADDRESS, TcpTransport
+    sock = mock.Mock()
+    sock.getsockname.return_value = (CABLE_ADDRESS, 5599)
+    sock.getpeername.return_value = ('192.168.60.3', 50000)
+    client = FakeClient()
+    client.t = TcpTransport(sock)
+    state = self.make(spec_for(STATEFUL), client)
+    self.assertTrue(state.send_from_gpu)
+
+  def test_a_queued_model_gets_the_frame_and_twelve_floats_too(self):
+    spec, state, client, warped = self.run_frames(QUEUED)
+    self.assertNotIn('prev_feat', state.npy)
+    for data, packed, _, _ in client.sent:
+      np.testing.assert_array_equal(data, warped)
+      self.assertEqual(packed.shape, (12,))
+      np.testing.assert_array_equal(packed[8:], np.array([1, 0, 0.1, 0.2], np.float32))
+
+  def test_the_warp_is_sized_from_either_layout(self):
+    for inputs in (STATEFUL, QUEUED):
+      self.assertEqual(spec_for(inputs).model_hw, (128, 256))
+
+  def test_the_first_frames_and_slow_ones_are_timed_in_the_log(self):
+    self.run_frames(STATEFUL, n=4)
+    timed = [line for line in self.log.lines('warning') if ' warp ' in line]
+    self.assertEqual([line.split()[2] for line in timed], ['1', '2', '3'])
+
+
+class TestTheFace(ModelStateTest):
+  """What modeld reads off the model is comma's, as the adapter hands it over."""
+
+  def test_it_carries_the_adapters_face(self):
+    state = self.make(spec_for(STATEFUL), FakeClient())
+    face = fakes.FACE
+    self.assertIs(state.constants, face.constants)
+    self.assertEqual((state.LAT_SMOOTH_SECONDS, state.LONG_SMOOTH_SECONDS), (0.0, 0.3))
+    self.assertEqual(state.PLANPLUS_CONTROL, 1.0)
+    # the module function, not bound to the model
+    self.assertEqual(state.get_action_from_model('out', 'prev'), ('action', ('out', 'prev')))
+    self.assertEqual(state.lat_delay, 0.2)
+    self.assertIsInstance(state.parser, fakes.FakeParser)
+    self.assertEqual(state.prev_desire.shape, (face.desire_len,))
+    self.assertEqual(state.frame_buf_params['img'], face.nv12_info(1928, 1208))
+    self.assertIs(state.chestnut, True)
+
+  def test_outputs_go_through_the_parser_sliced(self):
+    spec = spec_for(STATEFUL)
+    client = FakeClient()
+    client.output[slice(*SLICES['plan'])] = 2.0
+    state = self.make(spec, client)
+    warped = SimpleNamespace(data=lambda: np.zeros(np.prod(spec.warped_shape), np.uint8))
+    bufs = {k: SimpleNamespace(data=np.zeros(8, np.uint8)) for k in ('img', 'big_img')}
+    with mock.patch.object(model_state, 'call_warp', return_value=warped):
+      out = state.run(bufs, {'img': np.eye(3), 'big_img': np.eye(3)},
+                      {'desire': np.zeros(8, np.float32), 'traffic_convention': np.zeros(2, np.float32),
+                       'action_t': np.zeros(2, np.float32)})
+    self.assertEqual(set(out), set(SLICES))
+    self.assertEqual(out['plan'].shape, (1, 990))
+    self.assertTrue((out['plan'] == 2.0).all())
+
+  def test_closing_it_closes_its_link(self):
+    client = mock.Mock()
+    client.t.link_info.return_value = {'kind': 'usb'}
+    self.make(spec_for(STATEFUL), client).close()
+    client.close.assert_called_once_with()
+
+
+class TestTelemetry(ModelStateTest):
+  """The server's health rides on the response to a frame that asked for it.
+  modeld asked by passing a callback every second frame; with none, the model
+  asks as often itself and logs what came back at 1 Hz."""
+
+  def test_without_a_callback_every_second_frame_asks(self):
+    _, _, client, _ = self.run_frames(STATEFUL, n=6)
+    self.assertEqual(client.asked, [False, True, False, True, False, True])
+
+  def test_what_came_back_is_logged_at_one_hertz(self):
+    client = FakeClient()
+    client.last_state = {'gpu_temp': 51.0}
+    self.run_frames(STATEFUL, n=6, client=client)
+    self.assertEqual(self.events, [('jetlinkTelemetry', {'dead': False, 'gpu_temp': 51.0})])
+
+  def test_nothing_back_yet_is_nothing_logged(self):
+    self.run_frames(STATEFUL, n=4)
+    self.assertEqual(self.events, [])
+
+  def test_a_callback_asks_and_is_called_instead(self):
+    client = FakeClient()
+    client.last_state = {'gpu_temp': 51.0}
+    callback = mock.Mock()
+    self.run_frames(STATEFUL, n=3, client=client, after_enqueue=callback)
+    self.assertEqual(client.asked, [True, True, True])
+    self.assertEqual(callback.call_count, 3)
+    self.assertEqual(self.events, [], "the callback's to log")
+
+
+if __name__ == '__main__':
+  unittest.main()

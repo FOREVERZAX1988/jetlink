@@ -197,7 +197,7 @@ class TestCallConvention(unittest.TestCase):
   def test_every_call_site_goes_through_the_helper(self):
     # a second direct call site would diverge again. Read the sources
     pkg = Path(warp.__file__).parent
-    for name in ('warp.py',):
+    for name in ('warp.py', 'model_state.py', 'joining.py'):
       for line in (pkg / name).read_text().splitlines():
         stripped = line.strip()
         if ('warp_jit(' in stripped or 'self.warp(' in stripped or 'warp(tfm' in stripped) \
