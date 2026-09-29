@@ -36,6 +36,21 @@
       #expect(self.hooks(Tree.jetsonCopy(), sleepAfter: 0).sleepAfter == 0)
     }
 
+    @Test("The gadget hears the sessions through the hooks, with no sleeper too")
+    func gadgetHears() throws {
+      let bus = Bus()
+      try bus.claimed()
+      let hooks = LinuxHost.hooks(
+        cache: bus.tree.url, sleepAfter: 0, gpu: 0, gadget: bus.gadget, root: bus.tree.root,
+        nvml: { _ in .failure(NvmlUnavailable(reason: "no driver")) }, log: Lines().log)
+      #expect(hooks.sleepAfter == 0)
+      #expect(hooks.gadgetIdle?(.connected) == false)
+      #expect(bus.permit == "0")
+      #expect(hooks.gadgetIdle?(.absent) == false)
+      _ = hooks.gadgetIdle?(.disconnected)
+      #expect(bus.permit == "u1_u2")
+    }
+
     @Test("Every shutdown is accepted, so the comma hears ok")
     func shutdown() {
       let tree = Tree()
@@ -52,11 +67,6 @@
       let none = hooks(Tree(), sleepAfter: 0)
       Thread.sleep(forTimeInterval: 0.05)
       #expect(none.telemetry().isEmpty)
-    }
-
-    @Test("The gadget is the sysfs one")
-    func gadget() {
-      #expect(LinuxHost.gadget() is SysfsGadget)
     }
   }
 

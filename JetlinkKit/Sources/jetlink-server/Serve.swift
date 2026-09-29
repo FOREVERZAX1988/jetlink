@@ -72,13 +72,18 @@
 
       var hooks = ServerHooks()
       var gadget: (any GadgetSource)?
+      let closeGadget: (@Sendable () -> Void)?
       #if os(macOS)
         gadget = USBGadget()
+        closeGadget = nil
       #elseif os(Linux)
         // The gadget through sysfs, and telemetry, the sleeper and poweroff
-        // as hooks; NVML reads the GPU TensorRT runs on.
-        hooks = LinuxHost.hooks(cache: root, sleepAfter: sleepAfter, gpu: Int(chosen.options().device ?? "") ?? 0)
-        gadget = LinuxHost.gadget()
+        // as hooks; NVML reads the GPU TensorRT runs on. The gadget hears the
+        // sessions, and puts the link's power management back when it closes.
+        let sysfs = LinuxHost.gadget()
+        hooks = LinuxHost.hooks(cache: root, sleepAfter: sleepAfter, gpu: Int(chosen.options().device ?? "") ?? 0, gadget: sysfs)
+        gadget = sysfs
+        closeGadget = { sysfs.close() }
       #endif
       hooks.fatal = exitOnFatal
 
@@ -103,6 +108,7 @@
       stopOnSignals { signal in
         log.info("stopping on \(signal)")
         var steps: [(name: String, stop: () -> Void)] = [("the server", server.shutdown)]
+        if let closeGadget { steps.append(("the comma's link", closeGadget)) }
         if let page { steps.append(("the status page", page.stop)) }
         shutDown(steps, log: log)
       }

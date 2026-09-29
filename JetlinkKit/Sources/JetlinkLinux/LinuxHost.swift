@@ -8,14 +8,15 @@
   public enum LinuxHost {
     /// The server's hooks on this machine. `sleepAfter` is what was asked
     /// for; the hooks say what the host will do: 0 when it cannot suspend.
-    /// `gpu` is the CUDA device index NVML reports on (a PC's).
-    public static func hooks(cache: URL, sleepAfter: Double, gpu: Int = 0) -> ServerHooks {
-      hooks(cache: cache, sleepAfter: sleepAfter, gpu: gpu, root: .system)
+    /// `gpu` is the CUDA device index NVML reports on (a PC's). `gadget`
+    /// hears when sessions start and end, for the link's power management.
+    public static func hooks(cache: URL, sleepAfter: Double, gpu: Int = 0, gadget: SysfsGadget? = nil) -> ServerHooks {
+      hooks(cache: cache, sleepAfter: sleepAfter, gpu: gpu, gadget: gadget, root: .system)
     }
 
     static func hooks(
-      cache: URL, sleepAfter: Double, gpu: Int, root: HostRoot, nvml: (Int) -> Result<NvmlTelemetry, NvmlUnavailable> = NvmlTelemetry.open,
-      log: @escaping LinuxLog = serverLog("linux")
+      cache: URL, sleepAfter: Double, gpu: Int, gadget: SysfsGadget? = nil, root: HostRoot,
+      nvml: (Int) -> Result<NvmlTelemetry, NvmlUnavailable> = NvmlTelemetry.open, log: @escaping LinuxLog = serverLog("linux")
     ) -> ServerHooks {
       var hooks = ServerHooks()
       let tegra = Platform.isTegra(root)
@@ -33,15 +34,21 @@
       } catch {
         lockError = error
       }
+      var sleeper: Sleeper?
       if sleepAfter > 0 {
         if Platform.canSuspend(root) {
-          let sleeper = Sleeper(after: sleepAfter, root: root, lockPath: lockPath)
+          sleeper = Sleeper(after: sleepAfter, root: root, lockPath: lockPath)
           hooks.sleepAfter = sleepAfter
-          hooks.gadgetIdle = { sleeper.handle($0) }
           log(.info, "will suspend after \(Int(sleepAfter)) s without a gadget")
           if let lockError { log(.warning, "jetlink caffeinate cannot hold this box awake: \(lockError)") }
         } else {
           log(.warning, "--sleep-after needs /sys/power/state, which this host has not got: not suspending")
+        }
+      }
+      if sleeper != nil || gadget != nil {
+        hooks.gadgetIdle = { [sleeper] event in
+          gadget?.hear(event)
+          return sleeper?.handle(event) ?? false
         }
       }
 
@@ -70,7 +77,8 @@
     }
 
     /// The comma's gadget, found through sysfs and claimed through usbfs.
-    public static func gadget() -> (any GadgetSource)? {
+    /// Pass it to `hooks`, and `close()` it when the server stops.
+    public static func gadget() -> SysfsGadget {
       SysfsGadget()
     }
   }
