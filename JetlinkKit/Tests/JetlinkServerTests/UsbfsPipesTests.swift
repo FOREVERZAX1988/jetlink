@@ -1,5 +1,6 @@
 import Foundation
 import JetlinkKit
+import JetlinkTestSupport
 import Testing
 
 @testable import JetlinkServer
@@ -8,9 +9,9 @@ import Testing
 /// What the comma writes arrives in 1024-byte packets. An IN URB fills with
 /// them and completes when it is full or when a short packet (or a
 /// zero-length one) ends one of the comma's writes; until then it waits,
-/// holding what it has. OUT URBs complete at once. A discarded URB comes back
-/// with -ENOENT and whatever it got. Every finished URB waits in one
-/// completion queue until it is reaped.
+/// holding what it has. OUT URBs complete at once, with at most `writeLimit`
+/// bytes taken. A discarded URB comes back with -ENOENT and whatever it got.
+/// Every finished URB waits in one completion queue until it is reaped.
 final class FakeUsbfs: UsbfsKernel, @unchecked Sendable {
   static let packet = Pinned.usbMaxPacket
   private let condition = NSCondition()
@@ -36,6 +37,29 @@ final class FakeUsbfs: UsbfsKernel, @unchecked Sendable {
   var failNext: Int32 = 0
   /// Reaps hand finished URBs back in any order.
   var shuffleReaps = false
+  /// The most an OUT URB takes; 0 is a comma that stopped reading.
+  var writeLimit = Int.max
+  private(set) var writes = 0
+
+  /// One message as the gadget frames it: header, payload, and zeros to the
+  /// next 16 KB, never the PADDED flag (`FfsTransport`, `tx_align`).
+  static func gadgetFrame(_ type: Wire.Msg, seq: UInt32, payload: Data = Data(), flags: Wire.Flag = []) -> [UInt8] {
+    var bytes = [UInt8](repeating: 0, count: Wire.headerSize)
+    bytes.withUnsafeMutableBytes {
+      Wire.packHeader(Wire.Header(msgType: type.rawValue, seq: seq, flags: flags.rawValue, length: UInt32(payload.count)), into: $0.baseAddress!)
+    }
+    bytes += payload
+    bytes += [UInt8](repeating: 0, count: USBTransport.gadgetPad(bytes.count))
+    return bytes
+  }
+
+  /// A gadget on the bus that nothing on the comma serves yet: every read
+  /// fails at once, as the endpoints do before a run borrows the link.
+  static func unserved() -> FakeUsbfs {
+    let kernel = FakeUsbfs()
+    kernel.unplug()
+    return kernel
+  }
 
   /// The comma writes `bytes`: whole packets, then a short one when the
   /// length is not a multiple of a packet, or a zero-length one when empty.
@@ -48,43 +72,6 @@ final class FakeUsbfs: UsbfsKernel, @unchecked Sendable {
       serve()
       condition.broadcast()
     }
-  }
-
-  /// The comma writes `bytes` as the bus carries them: a packet moves only
-  /// into a posted IN URB, at `rate` bytes a second, as a device the host has
-  /// not asked is NAKed. Returns when the first byte went on the wire, by
-  /// `DispatchTime.now().uptimeNanoseconds`.
-  func transmit(_ bytes: UnsafeRawBufferPointer, rate: Double) -> UInt64 {
-    var sent = 0
-    var first: UInt64 = 0
-    while sent < bytes.count {
-      condition.lock()
-      while alive && !pending.contains(where: { $0.endpoint & 0x80 != 0 }) {
-        condition.wait()
-      }
-      guard alive, let index = pending.firstIndex(where: { $0.endpoint & 0x80 != 0 }) else {
-        condition.unlock()
-        break
-      }
-      let urb = pending[index]
-      let n = min(urb.count - urb.actual, bytes.count - sent, 16 * 1024)
-      condition.unlock()
-      // The bytes are on the wire for n / rate before the URB has them.
-      let start = DispatchTime.now().uptimeNanoseconds
-      if first == 0 { first = start }
-      let end = start + UInt64(Double(n) / rate * 1e9)
-      while DispatchTime.now().uptimeNanoseconds < end {}
-      condition.lock()
-      (urb.buffer + urb.actual).copyMemory(from: bytes.baseAddress! + sent, byteCount: n)
-      urb.actual += n
-      sent += n
-      if urb.actual == urb.count, let index = pending.firstIndex(where: { $0 === urb }) {
-        finish(pending.remove(at: index))
-      }
-      condition.broadcast()
-      condition.unlock()
-    }
-    return first
   }
 
   /// The cable comes out: pending URBs die with -ESHUTDOWN, and the
@@ -160,8 +147,9 @@ final class FakeUsbfs: UsbfsKernel, @unchecked Sendable {
     submits += 1
     urbs.insert(ObjectIdentifier(urb))
     if urb.endpoint & 0x80 == 0 {
-      outbound.append(urb.buffer.assumingMemoryBound(to: UInt8.self), count: urb.count)
-      urb.actual = urb.count
+      writes += 1
+      urb.actual = min(urb.count, writeLimit)
+      outbound.append(urb.buffer.assumingMemoryBound(to: UInt8.self), count: urb.actual)
       completed.append(urb)
     } else {
       if pending.count >= maxPending { return LinuxErrno.nomem }
@@ -217,12 +205,6 @@ final class FakeUsbfs: UsbfsKernel, @unchecked Sendable {
   }
 }
 
-extension FakeUsbfs: FakeGadgetEnd {
-  func push(_ bytes: [UInt8]) {
-    feed(bytes)
-  }
-}
-
 /// Runs `body` on a thread of its own; `join` waits for its result.
 final class Background<T>: @unchecked Sendable {
   private let done = DispatchSemaphore(value: 0)
@@ -272,8 +254,8 @@ struct UsbfsPipesTests {
   var device: UsbfsDevice { UsbfsDevice(kernel: kernel) }
   let slot = ReadRing.slotSize
 
-  func pipes(_ device: UsbfsDevice, depth: Int = ReadRing.depth) -> UsbfsPipes {
-    UsbfsPipes(device: device, inEndpoint: 0x81, outEndpoint: 0x01, depth: depth)
+  func pipes(_ device: UsbfsDevice) -> UsbfsPipes {
+    UsbfsPipes(device: device, inEndpoint: 0x81, outEndpoint: 0x01)
   }
 
   /// Reads until `count` bytes arrived.
@@ -314,22 +296,10 @@ struct UsbfsPipesTests {
     #expect(kernel.discards == 0)
   }
 
-  @Test("A read that times out returns 0 and leaves the ring posted, so what comes later is kept")
-  func timeoutKeepsRing() throws {
-    let pipes = pipes(device)
-    let scratch = Scratch(slot)
-    #expect(try pipes.read(into: scratch.pointer, count: slot, timeout: 0.05) == 0)
-    #expect(kernel.discards == 0)
-    #expect(kernel.pendingCount == ReadRing.depth)
-    let sent = pattern(slot, seed: 3)
-    kernel.feed(sent)
-    #expect(try readAll(pipes, slot) == sent)
-  }
-
   @Test("Bytes come out in the order the reads were posted, however the reaps are ordered, around the ring many times")
   func outOfOrderReaps() throws {
     kernel.shuffleReaps = true
-    let pipes = pipes(device, depth: 4)
+    let pipes = pipes(device)
     var expected: [UInt8] = []
     var got: [UInt8] = []
     for i in 0..<40 {
@@ -343,29 +313,15 @@ struct UsbfsPipesTests {
     #expect(kernel.discards == 0)
   }
 
-  @Test("After a short packet the ring ends the reads posted behind it, keeps their bytes in order, and posts only what is asked")
-  func shortPacketRealigns() throws {
+  @Test("A short packet takes the stream off the grid: the reads before it are delivered, then the link fails")
+  func shortPacketFails() throws {
     let pipes = pipes(device)
-    let scratch = Scratch(slot)
-    #expect(try pipes.read(into: scratch.pointer, count: slot, timeout: 0.01) == 0)
-    // A whole slot, then a write that ends on a short packet, then two and a
-    // half slots with no end yet: the last of them would sit there, holding
-    // its half, until the comma wrote again.
     let first = pattern(slot, seed: 1)
-    let short = pattern(5000, seed: 2)
-    let rest = pattern(slot * 5 / 2, seed: 3)
     kernel.feed(first)
-    kernel.feed(short)
-    kernel.feed(rest)
-    let all = first + short + rest
-    #expect(try readAll(pipes, all.count) == all)
-    #expect(kernel.discards == ReadRing.depth - 4, "the half-full slot and the empty ones behind it")
-    // Off the grid, only what the reader asks for is posted.
-    let reader = Background { [self] in try readAll(pipes, 3072) }
-    #expect(eventually { kernel.pendingSizes == [3072] })
-    let next = pattern(3072, seed: 4)
-    kernel.feed(next)
-    #expect(try #require(reader.join()).get() == next)
+    kernel.feed(pattern(5000, seed: 2))
+    #expect(try readAll(pipes, slot) == first)
+    let scratch = Scratch(slot)
+    #expect(throws: LinkError.self) { try pipes.read(into: scratch.pointer, count: slot, timeout: 0) }
   }
 
   @Test("A zero-length packet keeps the ring on the grid")
@@ -434,8 +390,8 @@ struct UsbfsPipesTests {
     let bytes = [UInt8](repeating: 9, count: 100)
     let writer = Background { try bytes.withUnsafeBytes { try pipes.write(from: $0.baseAddress!, count: 100, timeout: 2) } }
     #expect(try #require(writer.join()).get() == 100)
-    kernel.feed([1, 2, 3])
-    #expect(try #require(reader.join()).get() == 3)
+    kernel.feed(pattern(slot))
+    #expect(try #require(reader.join()).get() == 1024)
   }
 
   @Test("Closing ends the ring's reads and waits for the kernel to give them back")
@@ -456,26 +412,10 @@ struct UsbfsPipesTests {
     first.abort()
     first.close()
     let second = pipes(device)
-    kernel.feed([4, 5])
+    kernel.feed(pattern(slot))
     let buffer = UnsafeMutableRawPointer.allocate(byteCount: 1024, alignment: 16)
     defer { buffer.deallocate() }
-    #expect(try second.read(into: buffer, count: 1024, timeout: 0) == 2)
-  }
-
-  @Test("Unplugging fails a blocked read, and the device stays gone")
-  func unplugFails() throws {
-    let device = device
-    let pipes = pipes(device)
-    let reader = Background {
-      let buffer = UnsafeMutableRawPointer.allocate(byteCount: 1024, alignment: 16)
-      defer { buffer.deallocate() }
-      return try pipes.read(into: buffer, count: 1024, timeout: 0)
-    }
-    Thread.sleep(forTimeInterval: 0.05)
-    kernel.unplug()
-    let result = try #require(reader.join())
-    #expect(throws: LinkError.self) { try result.get() }
-    #expect(device.isGone)
+    #expect(try second.read(into: buffer, count: 1024, timeout: 0) == 1024)
   }
 
   @Test("Unplugging with a message half in the ring fails the read, and closing does not wait on the dead device")
@@ -483,7 +423,7 @@ struct UsbfsPipesTests {
     let device = device
     let pipes = pipes(device)
     let transport = USBTransport(pipes: pipes)
-    kernel.feed(Array(FakePipes.gadgetFrame(.inferReq, seq: 1, payload: Data(pattern(200_000))).prefix(slot * 5)))
+    kernel.feed(Array(FakeUsbfs.gadgetFrame(.inferReq, seq: 1, payload: Data(pattern(200_000))).prefix(slot * 5)))
     let reader = Background { try transport.recv() }
     // Five slots emptied and posted again: the reader waits for the rest.
     #expect(eventually { kernel.submits == ReadRing.depth + 5 })
@@ -524,27 +464,13 @@ struct UsbfsPipesTests {
     #expect(throws: LinkError.self) { try pipes.read(into: buffer, count: 16, timeout: 0) }
   }
 
-  @Test("USBTransport frames messages over usbfs as it does over IOUSBHost")
-  func transportOverUsbfs() throws {
-    let transport = USBTransport(pipes: pipes(device))
-    let payload = Data((0..<100_000).map { UInt8(truncatingIfNeeded: $0 &* 13) })
-    kernel.feed(FakePipes.gadgetFrame(.inferReq, seq: 5, payload: payload))
-    let message = try transport.recv()
-    #expect(message.msgType == Wire.Msg.inferReq.rawValue)
-    #expect(message.seq == 5)
-    #expect(Data(message.payload) == payload)
-    try transport.send(.pong, seq: 6)
-    let frames = try HostFrames.parse(kernel.written)
-    #expect(frames.count == 1 && frames[0].type == Wire.Msg.pong.rawValue && frames[0].seq == 6)
-  }
-
   @Test("Messages queued back to back come out one at a time, each at the start of the buffer")
   func backToBack() throws {
     kernel.shuffleReaps = true
     let transport = USBTransport(pipes: pipes(device))
     let payloads = [0, 1, 16_352, 16_353, 475_104, 300_000, 4].map { Data(pattern($0, seed: $0)) }
     for (i, payload) in payloads.enumerated() {
-      kernel.feed(FakePipes.gadgetFrame(.inferReq, seq: UInt32(i + 1), payload: payload))
+      kernel.feed(FakeUsbfs.gadgetFrame(.inferReq, seq: UInt32(i + 1), payload: payload))
     }
     var starts = Set<UnsafeRawPointer>()
     for (i, payload) in payloads.enumerated() {
@@ -556,6 +482,7 @@ struct UsbfsPipesTests {
     }
     #expect(starts.count == 1, "a message did not land at the start of the buffer")
     #expect(kernel.discards == 0)
+    #expect(USBTransport.gadgetPad(32) == 16_352 && USBTransport.gadgetPad(16_384) == 0 && USBTransport.gadgetPad(16_385) == 16_383)
   }
 
   @Test("A corrupt header latches the link desynced, drain empties what the comma still sends, and the next session reads cleanly")
@@ -573,7 +500,7 @@ struct UsbfsPipesTests {
     first.close()
     #expect(kernel.pendingCount == 0)
     let second = USBTransport(pipes: pipes(device))
-    kernel.feed(FakePipes.gadgetFrame(.ping, seq: 1, payload: Data()))
+    kernel.feed(FakeUsbfs.gadgetFrame(.ping, seq: 1, payload: Data()))
     #expect(try second.recv().msgType == Wire.Msg.ping.rawValue)
   }
 
@@ -584,7 +511,7 @@ struct UsbfsPipesTests {
     let payload = Data(pattern(475_104))
     let reply = Data(pattern(73_860))
     for seq in 1...100 {
-      kernel.feed(FakePipes.gadgetFrame(.inferReq, seq: UInt32(seq), payload: payload))
+      kernel.feed(FakeUsbfs.gadgetFrame(.inferReq, seq: UInt32(seq), payload: payload))
       #expect(try transport.recv().seq == UInt32(seq))
       try reply.withUnsafeBytes { try transport.send(.inferResp, seq: UInt32(seq), parts: [$0]) }
     }

@@ -129,10 +129,9 @@ public final class OrtEngine: EngineCore, @unchecked Sendable {
   }
 
   /// The state_ inputs double-buffered, the bindings made again to swap them.
-  public override func bindLoop(_ pairs: [(input: String, output: String)]) throws -> Bool {
+  public override func bindLoop(_ pairs: [(input: String, output: String)]) throws {
     try doubleBuffer(pairs.map(\.input))
     try rebind(pairs)
-    return true
   }
 
   /// One binding per session, or two with a loop: parity 0 reads state_ from

@@ -120,8 +120,9 @@
     private var closing = false
     private var gone = false
     private var destroyed = false
-    /// What the ring's reads land in, one per slot.
-    private let slots = (0..<ReadRing.depth).map { _ in SlotData(NSMutableData(length: ReadRing.slotSize)!) }
+    /// What the ring's reads land in, and their completion handlers, one per
+    /// slot: made once, so a post allocates no closure.
+    private var slots: [(data: NSMutableData, handler: IOUSBHostCompletionHandler)] = []
     /// Guards the ring, which completions reach on IOUSBHost's queue.
     private let ringLock = NSCondition()
     private var ring: ReadRing!
@@ -169,6 +170,17 @@
         throw LinkError.closed("could not open the gadget's endpoints: \(IOUSBHostPipes.describe(error))")
       }
       ring = ReadRing(lock: ringLock, pipe: self)
+      slots = (0..<ReadRing.depth).map { slot in
+        let data = NSMutableData(length: ReadRing.slotSize)!
+        // The request's buffer outlives it even if these pipes do not.
+        return (
+          data,
+          { [weak self] status, transferred in
+            withExtendedLifetime(data) {}
+            self?.completed(slot, status, transferred)
+          }
+        )
+      }
       flag.notify { [weak self] in self?.lost() }
     }
 
@@ -188,26 +200,13 @@
 
     // MARK: ReadRingPipe, under ringLock
 
+    /// The stop flags are checked where the reader waits, not per post.
     func post(_ slot: Int, size: Int) throws {
-      try checkRunning()
-      let held = slots[slot]
-      if held.data.length != size {
-        held.data.length = size
-      }
       do {
-        try input.enqueueIORequest(with: held.data, completionTimeout: 0) { [weak self] status, transferred in
-          // The request's buffer outlives it even if these pipes do not.
-          withExtendedLifetime(held) {}
-          self?.completed(slot, status, transferred)
-        }
+        try input.enqueueIORequest(with: slots[slot].data, completionTimeout: 0, completionHandler: slots[slot].handler)
       } catch {
         throw LinkError.closed("usb bulk read could not start: \(IOUSBHostPipes.describe(error))")
       }
-    }
-
-    /// Aborts every request on the IN pipe: only the ring's are ever there.
-    func discardPosted() {
-      try? input.__abort(with: .asynchronous)
     }
 
     func awaitCompletion(until deadline: Date?) throws {
@@ -231,7 +230,7 @@
         // A short packet ends a request; it is not an error.
         completion = .data
       case IOUSBHostPipes.aborted:
-        completion = stopReason.map { .failed(.closed($0)) } ?? .discarded
+        completion = .failed(.closed(stopReason ?? "usb bulk read aborted"))
       default:
         completion = .failed(failure(status, "read"))
       }
@@ -347,15 +346,6 @@
         return describe(IOReturn(truncatingIfNeeded: ns.code))
       }
       return ns.localizedDescription
-    }
-  }
-
-  /// A ring slot's buffer, held by its request's completion handler.
-  private final class SlotData: @unchecked Sendable {
-    let data: NSMutableData
-
-    init(_ data: NSMutableData) {
-      self.data = data
     }
   }
 

@@ -118,8 +118,6 @@ struct PinnedConstantTests {
     #expect(ModelConstants.defaultFrameSkip == Pinned.defaultFrameSkip)
     #expect(ModelConstants.chunk == Pinned.uploadChunk)
     #expect(Int(FrameStats.slowUs) == Pinned.slowFrameUs)
-    #expect(USBTransport.packetSize == Pinned.usbMaxPacket)
-    #expect(USBTransport.readChunk == Pinned.usbReadChunk)
   }
 
   @Test("Builds carry the Python's prepare version, on the Python's onnxruntime")
@@ -211,28 +209,24 @@ struct WireConformanceTests {
 
   @Test("A USB host sends what UsbBulkTransport sends")
   func usbHostSends() throws {
-    let pipes = FakePipes()
-    let transport = USBTransport(pipes: pipes)
+    let kernel = FakeUsbfs()
+    let transport = USBTransport(pipes: UsbfsPipes(device: UsbfsDevice(kernel: kernel), inEndpoint: 0x81, outEndpoint: 0x01))
     for message in try WireMessage.all() {
       try message.send(over: transport)
     }
-    #expect(pipes.written == (try Conformance.data("wire.usb_host.bin")))
+    #expect(kernel.written == (try Conformance.data("wire.usb_host.bin")))
   }
 
-  @Test("A USB host reads the gadget's bursts with the reads UsbBulkTransport posts")
+  @Test("A USB host reads the gadget's padded stream")
   func usbHostReads() throws {
-    let stream = try Conformance.data("wire.usb_gadget.bin")
-    let pipes = FakePipes()
-    pipes.push([UInt8](stream))
-    let transport = USBTransport(pipes: pipes)
+    let kernel = FakeUsbfs()
+    kernel.feed([UInt8](try Conformance.data("wire.usb_gadget.bin")))
+    let transport = USBTransport(pipes: UsbfsPipes(device: UsbfsDevice(kernel: kernel), inEndpoint: 0x81, outEndpoint: 0x01))
     for message in try WireMessage.all() {
       let got = try transport.recv()
       #expect(message.matches(got), "\(message.type) seq \(message.seq)")
     }
-    let streams = try Conformance.json("wire.json")["streams"] as! [String: [String: Any]]
-    let reads = (streams["usb_gadget"]!["reads"] as! [NSNumber]).map(\.intValue)
-    #expect(pipes.readSizes == reads)
-    #expect(pipes.drained)
+    #expect(kernel.buffered == 0)
   }
 }
 
@@ -296,7 +290,7 @@ final class StagingEngine: Engine {
 
   func hostInput(_ name: String) -> UnsafeMutableRawPointer? { buffers[name] }
   func output(_ name: String) -> UnsafeRawPointer? { nil }
-  func loopState(_ pairs: [(input: String, output: String)]) throws -> Bool { false }
+  func loopState(_ pairs: [(input: String, output: String)]) throws {}
   func resetState() {}
   func run() throws {}
   func warm() throws -> String { "" }

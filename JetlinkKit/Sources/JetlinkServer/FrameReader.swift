@@ -13,16 +13,12 @@ final class FrameReader {
   private var capacity: Int
   private var start = 0
   private var end = 0
-  /// Room kept past a message, for transports whose reads come in whole
-  /// packets (USB).
-  private let slack: Int
   /// Nothing resynchronises a byte stream mid-message, so one protocol error
   /// is the end of the link.
   private(set) var desynced = false
 
-  init(capacity: Int, slack: Int = 0) {
+  init(capacity: Int) {
     self.capacity = capacity
-    self.slack = slack
     rx = UnsafeMutableRawPointer.allocate(byteCount: capacity, alignment: 64)
   }
 
@@ -31,12 +27,9 @@ final class FrameReader {
   }
 
   /// The next message, its payload a view valid until the next call. `pad`
-  /// is how many bytes follow a message's payload; `read` reads into its
-  /// pointer toward `missing` more bytes, with `room` bytes free there, and
-  /// returns how many arrived.
-  func recv(
-    pad: (Wire.Header) -> Int, read: (_ into: UnsafeMutableRawPointer, _ missing: Int, _ room: Int) throws -> Int
-  ) throws -> Message {
+  /// is how many bytes follow a message's payload; `read` reads at most
+  /// `missing` bytes into its pointer, and returns how many arrived.
+  func recv(pad: (Wire.Header) -> Int, read: (_ into: UnsafeMutableRawPointer, _ missing: Int) throws -> Int) throws -> Message {
     if desynced {
       throw LinkError.desynced("stream desynced; the link must be reopened")
     }
@@ -63,10 +56,10 @@ final class FrameReader {
   }
 
   /// Reads until `need` bytes of the current message are buffered.
-  private func fill(_ need: Int, _ read: (UnsafeMutableRawPointer, Int, Int) throws -> Int) throws {
-    reserve(need + slack)
+  private func fill(_ need: Int, _ read: (UnsafeMutableRawPointer, Int) throws -> Int) throws {
+    reserve(need)
     while end - start < need {
-      end += try read(rx + end, need - (end - start), capacity - end)
+      end += try read(rx + end, need - (end - start))
     }
   }
 

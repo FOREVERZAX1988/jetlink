@@ -6,7 +6,7 @@ import Testing
 
 /// tests/test_registry.py's catalog section: parsing, merging, probing and the payload.
 struct CatalogParseTests {
-  private var catalog: JSON { Fixture.json("catalog_chestnut_v25.json") }
+  private var catalog: JSON { RegistryFixture.json("catalog_chestnut_v25.json") }
 
   private func mutated(_ change: (inout JSONObject) -> Void) -> JSON {
     guard var data = catalog.object, var bundles = data["bundles"]?.array, var first = bundles[0].object else { return .null }
@@ -19,7 +19,7 @@ struct CatalogParseTests {
   @Test func keepsTheBigModelsNewestFirst() {
     let models = Catalog.parse(catalog)
     #expect(models.count == 13)
-    #expect(models[0].ref == newestRef)
+    #expect(models[0].ref == RegistryFixture.newestRef)
     #expect(models[0].shortName == "CTMV2")
     #expect(models.map(\.index) == models.map(\.index).sorted(by: >))
   }
@@ -38,7 +38,7 @@ struct CatalogParseTests {
   @Test func survivesRubbish() {
     #expect(Catalog.parse([:]).isEmpty)
     #expect(Catalog.parse(["bundles": "nope"]).isEmpty)
-    #expect(Catalog.parse(["bundles": [nil, 5, ["ref": .string(fixtureRef), "minimum_selector_version": "x", "is_big": true]]]).isEmpty)
+    #expect(Catalog.parse(["bundles": [nil, 5, ["ref": .string(RegistryFixture.ref), "minimum_selector_version": "x", "is_big": true]]]).isEmpty)
   }
 
   @Test func aDuplicateRefIsListedOnce() {
@@ -107,8 +107,7 @@ struct NewerCatalogTests {
       catalogURL(v + 2): .body(Data(#"{"bundles": []}"#.utf8)),
       catalogURL(v + 3): .status(404),
     ])
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let tmp = try TemporaryDirectory()
     let found = try await Registry(layout: tmp.layout, session: net.session).newerCatalogs(after: Catalog.url)
     #expect(found.count == 2)
     #expect(net.urls == [catalogURL(v + 1), catalogURL(v + 2), catalogURL(v + 3)])
@@ -119,8 +118,7 @@ struct NewerCatalogTests {
       catalogURL(Catalog.version + 1): .body(Data(#"{"bundles": []}"#.utf8)),
       catalogURL(Catalog.version + 2): .failure,
     ])
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let tmp = try TemporaryDirectory()
     await #expect(throws: RegistryError.self) {
       try await Registry(layout: tmp.layout, session: net.session).newerCatalogs(after: Catalog.url)
     }
@@ -153,9 +151,8 @@ struct NewerCatalogTests {
   @Test func theRegistryListsAModelOnlyANewerCatalogHas() async throws {
     let fresh = String(repeating: "e", count: 40)
     let newer: JSON = ["bundles": [bundle(fresh, 99, selector: "20", name: "Cinque Terre V4")]]
-    let net = MockNet(catalogRoutes([catalogURL(Catalog.version + 1): .body(newer.data())]))
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let net = MockNet(RegistryFixture.catalogRoutes([catalogURL(Catalog.version + 1): .body(newer.data())]))
+    let tmp = try TemporaryDirectory()
     let models = await Registry(layout: tmp.layout, session: net.session).catalog().models
     #expect(models.first?.ref == fresh)
     #expect(models.first?.name == "Cinque Terre V4")
@@ -165,9 +162,8 @@ struct NewerCatalogTests {
 
 struct CatalogPayloadTests {
   @Test func isCachedUntilItGoesStale() async throws {
-    let net = MockNet(catalogRoutes())
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let net = MockNet(RegistryFixture.catalogRoutes())
+    let tmp = try TemporaryDirectory()
     let registry = Registry(layout: tmp.layout, session: net.session)
 
     let payload = await registry.catalog()
@@ -188,9 +184,8 @@ struct CatalogPayloadTests {
   }
 
   @Test func aFailedRefreshKeepsThePreviousList() async throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
-    _ = await Registry(layout: tmp.layout, session: MockNet(catalogRoutes()).session).catalog()
+    let tmp = try TemporaryDirectory()
+    _ = await Registry(layout: tmp.layout, session: MockNet(RegistryFixture.catalogRoutes()).session).catalog()
 
     let payload = await Registry(layout: tmp.layout, session: MockNet().session).catalog(refresh: true)
 
@@ -200,8 +195,7 @@ struct CatalogPayloadTests {
   }
 
   @Test func anEmptyCacheAndNoNetworkIsAnEmptyList() async throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let tmp = try TemporaryDirectory()
     let payload = await Registry(layout: tmp.layout, session: MockNet().session).catalog()
     #expect(payload.models.isEmpty)
     #expect(payload.fetchedAt == nil)
@@ -209,8 +203,7 @@ struct CatalogPayloadTests {
   }
 
   @Test func aCatalogThatIsNotAnObjectIsANetworkError() async throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let tmp = try TemporaryDirectory()
     let net = MockNet([Catalog.url: .body(Data("[1, 2]".utf8))])
     let payload = await Registry(layout: tmp.layout, session: net.session).catalog()
     #expect(payload.error == "\(Catalog.url) did not serve a JSON dict")
@@ -219,9 +212,8 @@ struct CatalogPayloadTests {
   }
 
   @Test func theCachedCatalogNeverTouchesTheNetwork() async throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
-    let net = MockNet(catalogRoutes())
+    let tmp = try TemporaryDirectory()
+    let net = MockNet(RegistryFixture.catalogRoutes())
     let registry = Registry(layout: tmp.layout, session: net.session)
     #expect(registry.cachedCatalog() == nil)
     #expect(net.calls.isEmpty)
@@ -238,38 +230,35 @@ struct CatalogPayloadTests {
   }
 
   @Test func theCatalogCarriesAResolvedPointer() async throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
-    let net = MockNet(catalogRoutes([LFS.pointerURL(ref: fixtureRef): .body(Fixture.data("pointer_f877d7a0.txt"))]))
+    let tmp = try TemporaryDirectory()
+    let net = MockNet(RegistryFixture.catalogRoutes([LFS.pointerURL(ref: RegistryFixture.ref): .body(RegistryFixture.data("pointer_f877d7a0.txt"))]))
     let registry = Registry(layout: tmp.layout, session: net.session)
-    _ = try await registry.resolve(ref: fixtureRef)
+    _ = try await registry.resolve(ref: RegistryFixture.ref)
     let payload = await registry.catalog()
-    let entry = payload.models.first { $0.ref == fixtureRef }
-    #expect(entry?.sha256 == fixtureOID)
-    #expect(entry?.bytes == fixtureSize)
-    #expect(payload.models.first { $0.ref == newestRef }?.sha256 == nil)
+    let entry = payload.models.first { $0.ref == RegistryFixture.ref }
+    #expect(entry?.sha256 == RegistryFixture.oid)
+    #expect(entry?.bytes == RegistryFixture.size)
+    #expect(payload.models.first { $0.ref == RegistryFixture.newestRef }?.sha256 == nil)
   }
 
   @Test func nameForFindsTheCatalogName() async throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
-    let net = MockNet(catalogRoutes([LFS.pointerURL(ref: fixtureRef): .body(Fixture.data("pointer_f877d7a0.txt"))]))
+    let tmp = try TemporaryDirectory()
+    let net = MockNet(RegistryFixture.catalogRoutes([LFS.pointerURL(ref: RegistryFixture.ref): .body(RegistryFixture.data("pointer_f877d7a0.txt"))]))
     let registry = Registry(layout: tmp.layout, session: net.session)
     _ = await registry.catalog()
-    _ = try await registry.resolve(ref: fixtureRef)
-    #expect(registry.name(for: fixtureOID) == ("BMRLNAP Model v4 (August 30, 2026)", fixtureRef))
+    _ = try await registry.resolve(ref: RegistryFixture.ref)
+    #expect(registry.name(for: RegistryFixture.oid) == ("BMRLNAP Model v4 (August 30, 2026)", RegistryFixture.ref))
     #expect(registry.name(for: String(repeating: "b", count: 64)) == (nil, nil))
-    #expect(registry.ref(for: fixtureOID) == fixtureRef)
+    #expect(registry.ref(for: RegistryFixture.oid) == RegistryFixture.ref)
     #expect(registry.ref(for: String(repeating: "b", count: 64)) == nil)
   }
 
   @Test func stateFilesAreWrittenAtomically() async throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
-    let net = MockNet(catalogRoutes([LFS.pointerURL(ref: fixtureRef): .body(Fixture.data("pointer_f877d7a0.txt"))]))
+    let tmp = try TemporaryDirectory()
+    let net = MockNet(RegistryFixture.catalogRoutes([LFS.pointerURL(ref: RegistryFixture.ref): .body(RegistryFixture.data("pointer_f877d7a0.txt"))]))
     let registry = Registry(layout: tmp.layout, session: net.session)
     _ = await registry.catalog()
-    _ = try await registry.resolve(ref: fixtureRef)
+    _ = try await registry.resolve(ref: RegistryFixture.ref)
     #expect(tmp.names("registry") == ["catalog.json", "pointers.json"])
     let cached = Files.readJSON(tmp.layout.catalogURL)
     #expect(cached?["url"]?.string == Catalog.url)

@@ -126,8 +126,8 @@ let package = Package(
         .product(name: "ArgumentParser", package: "swift-argument-parser", condition: .when(platforms: [.macOS, .linux])),
       ]),
     .executableTarget(name: "jetlink-onnx", dependencies: ["JetlinkONNX"]),
-    // Helpers more than one test target uses: JSON comparison, hex, the source tree.
-    .target(name: "JetlinkTestSupport", path: "Tests/JetlinkTestSupport"),
+    // Helpers more than one test target uses: fixtures, scratch directories, waits, a fake network.
+    .target(name: "JetlinkTestSupport", dependencies: ["JetlinkRegistry", "JetlinkServer"], path: "Tests/JetlinkTestSupport"),
     .testTarget(name: "JetlinkKitTests", dependencies: ["JetlinkKit", "JetlinkUI", "JetlinkTestSupport"], resources: [.copy("Fixtures")]),
     // The fixtures are read in place through #filePath, so they are not resources.
     .testTarget(name: "JetlinkONNXTests", dependencies: ["JetlinkONNX", "JetlinkTestSupport", crypto], exclude: ["Fixtures"]),

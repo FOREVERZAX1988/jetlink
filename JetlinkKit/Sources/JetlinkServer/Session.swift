@@ -21,9 +21,9 @@ final class Session: @unchecked Sendable {
   /// How the link is carried: the transport's view until the comma's hello
   /// says better.
   private(set) var medium: LinkMedium?
-  /// Hears the link event when the session announces it, and again when the
-  /// hello changes its medium.
-  var onLink: ((LinkEvent) -> Void)?
+  /// Hears the link event when the session announces it (`first`), and
+  /// again when the hello changes its medium.
+  var onLink: ((_ event: LinkEvent, _ first: Bool) -> Void)?
 
   /// The reply's float32 outputs, reused every frame.
   private var outputBuffer: UnsafeMutablePointer<Float>
@@ -103,8 +103,7 @@ final class Session: @unchecked Sendable {
 
   private func announce() {
     announced = true
-    onLink?(linkEvent)
-    _ = host.hooks.gadgetIdle?(.connected)
+    onLink?(linkEvent, true)
   }
 
   /// Serves until the link fails, and returns why.
@@ -186,7 +185,7 @@ final class Session: @unchecked Sendable {
     }
     if let said, said != medium {
       medium = said
-      if announced { onLink?(linkEvent) }
+      if announced { onLink?(linkEvent, false) }
     }
     if !client.isEmpty && who != client {
       log.info("session handed from \(client) to \(who.isEmpty ? "an unnamed client" : who)")
@@ -209,7 +208,7 @@ final class Session: @unchecked Sendable {
       "loaded": host.loadedSHA() ?? NSNull(),
       "frames_served": frames,
       "cached_models": host.cache.inventory(),
-      "telemetry": host.hooks.telemetry(),
+      "telemetry": host.telemetry.read(),
       // 0 unless the host really suspends: the comma then holds the gadget
       // for the whole park instead of letting go for a box that never sleeps.
       "sleep_after": host.hooks.sleepAfter,
@@ -306,7 +305,7 @@ final class Session: @unchecked Sendable {
     let reply = infer(loaded, message)
     host.lock.unlock()
 
-    let state: Data? = reply.wantsState ? JSONLine.encode(host.hooks.telemetry()) : nil
+    let state: Data? = reply.wantsState ? host.telemetry.json() : nil
     let sendStarted = DispatchTime.now().uptimeNanoseconds
     try respond(message.seq, reply, state: state)
     if let failure = reply.failure, (failure as? any FatalEngineError)?.isFatal == true {
@@ -452,7 +451,7 @@ final class Session: @unchecked Sendable {
   private func onState(_ message: Message) throws {
     let (sha, skip) = wanted()
     let status = host.status(sha, frameSkip: skip)
-    var response = host.hooks.telemetry()
+    var response = host.telemetry.read()
     response["engine_state"] = status["state"] ?? "none"
     response["detail"] = status["detail"] ?? ""
     response["loaded"] = host.loadedSHA() ?? NSNull()

@@ -1,5 +1,7 @@
 import Foundation
 import JetlinkKit
+import JetlinkORT
+import JetlinkTestSupport
 import Testing
 
 @testable import JetlinkServer
@@ -10,17 +12,6 @@ import Testing
 /// compute for the same frames (bit for bit on Apple; see `CommaClient.replay`).
 @Suite("Server", .serialized)
 struct ServerTests {
-  func serve(_ body: (Server, TestClient) throws -> Void) throws {
-    let cache = try TemporaryDirectory()
-    let server = try Server(
-      configuration: Server.Configuration(host: "127.0.0.1", port: 0, cacheRoot: cache.url, preload: false), backend: cpuBackend())
-    try server.start()
-    defer { server.stop() }
-    let client = try TestClient(port: server.port!)
-    defer { client.close() }
-    try body(server, client)
-  }
-
   @Test("A comma is served the outputs the Python server computes", arguments: ["tiny_queued", "tiny_stateful"])
   func servesGoldenFrames(_ name: String) throws {
     let golden = try Golden(name)
@@ -28,14 +19,27 @@ struct ServerTests {
       let (hello, count) = try client.replay(golden)
       #expect(hello["protocol"] as? Int == Int(Wire.version))
       #expect(hello["backend"] as? String == "ort")
+      #expect((hello["device"] as? String)?.hasPrefix("cpu-") == true)
       #expect(count == 8)
       #expect(eventually { server.framesServed == count })
+
+      // onnxruntime's artifact: a manifest naming the session and its unit, and a sidecar.
+      let engines = server.cache.layout.engines
+      let artifacts = try FileManager.default.contentsOfDirectory(atPath: engines.path).filter { $0.hasSuffix(".ortcache") }
+      #expect(artifacts.count == 1)
+      let artifact = engines.appending(path: artifacts[0])
+      let manifest = try JSONSerialization.jsonObject(with: Data(contentsOf: artifact.appending(path: "sessions.json"))) as? [[String: Any]]
+      #expect(manifest?.map { $0["unit"] as? String } == ["cpu"])
+      let meta = Artifact.sidecar(artifact)
+      #expect(meta["prepare"] as? Int == OrtBackend.prepareVersion)
+      #expect(meta["preparer"] as? String == "swift")
+      #expect(((meta["artifact_bytes"] as? NSNumber)?.int64Value ?? 0) > 0)
     }
   }
 
   @Test("The link names its medium: TCP until the comma's hello says it is a USB cable")
   func linkMedium() throws {
-    let links = LockedLinks()
+    let links = Recorded<LinkEvent>()
     try serve { server, client in
       server.host.subscribe { if case .link(let link) = $0 { links.append(link) } }
       try client.send(.ping)
@@ -52,7 +56,7 @@ struct ServerTests {
   @Test("Progress is throttled within a stage, never across one")
   func progressStages() throws {
     try serve { server, _ in
-      let seen = LockedLines()
+      let seen = Recorded<String>()
       server.host.subscribe { if case .progress(let stage, _, let msg) = $0 { seen.append("\(stage) \(msg)") } }
       server.host.progress("patch", 0, "preparing")
       server.host.progress("patch", 0.5, "halfway")
@@ -127,7 +131,7 @@ struct ServerTests {
       while server.host.lock.withLock({ server.host.session != nil }) && Date() < deadline {
         Thread.sleep(forTimeInterval: 0.02)
       }
-      let events = LockedEvents()
+      let events = Recorded<BenchmarkEvent>()
       server.host.subscribe { event in
         if case .benchmark(let value) = event { events.append(value) }
       }
@@ -213,7 +217,7 @@ struct ServerLifecycleTests {
 
   @Test("The log sink hears what the server logs")
   func logSink() throws {
-    let lines = LockedLines()
+    let lines = Recorded<String>()
     Log.sink = { level, category, message in lines.append("\(level.rawValue) \(category): \(message)") }
     defer { Log.sink = nil }
     let cache = try TemporaryDirectory()
@@ -292,26 +296,4 @@ struct ServerLifecycleTests {
     #expect(try transport.recv().msgType == Wire.Msg.pong.rawValue)
     transport.close()
   }
-}
-
-final class LockedEvents: @unchecked Sendable {
-  private let lock = NSLock()
-  private var events: [BenchmarkEvent] = []
-
-  func append(_ event: BenchmarkEvent) {
-    lock.withLock { events.append(event) }
-  }
-
-  var all: [BenchmarkEvent] { lock.withLock { events } }
-}
-
-final class LockedLines: @unchecked Sendable {
-  private let lock = NSLock()
-  private var lines: [String] = []
-
-  func append(_ line: String) {
-    lock.withLock { lines.append(line) }
-  }
-
-  var all: [String] { lock.withLock { lines } }
 }

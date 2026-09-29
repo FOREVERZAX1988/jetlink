@@ -12,39 +12,36 @@ import Testing
 /// progress by whole percent, a real socket, and no .part left on any failure.
 struct FetchTests {
   @Test func fallsThroughToTheServerThatHasIt() async throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
-    let net = MockNet(smallRoutes())
+    let tmp = try TemporaryDirectory()
+    let net = MockNet(RegistryFixture.smallRoutes())
     let registry = Registry(layout: tmp.layout, session: net.session)
     let seen = ProgressLog()
 
-    let path = try await registry.fetch(smallRef, progress: seen.callback)
+    let path = try await registry.fetch(RegistryFixture.smallRef, progress: seen.callback)
 
-    #expect(path == (try registry.modelPath(sha256: fixtureBlobSHA)))
-    #expect(try Data(contentsOf: path) == fixtureBlob)
-    #expect(tmp.names("models") == ["\(fixtureBlobSHA.prefix(16)).onnx"])
+    #expect(path == (try registry.modelPath(sha256: RegistryFixture.blobSHA)))
+    #expect(try Data(contentsOf: path) == RegistryFixture.blob)
+    #expect(tmp.names("models") == ["\(RegistryFixture.blobSHA.prefix(16)).onnx"])
     #expect(seen.all.last == 1.0)
     #expect(net.urls.contains("\(LFS.endpoints[0])/objects/batch"))
     #expect(!net.urls.contains("\(LFS.endpoints[2])/objects/batch"), "the first server with the object serves it")
   }
 
   @Test func aModelAlreadyOnDiskTouchesNoNetwork() async throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
-    _ = try await Registry(layout: tmp.layout, session: MockNet(smallRoutes()).session).fetch(smallRef)
-    let offline = MockNet([LFS.pointerURL(ref: smallRef): .body(smallPointerText())])
-    let path = try await Registry(layout: tmp.layout, session: offline.session).fetch(smallRef)
-    #expect(try Data(contentsOf: path) == fixtureBlob)
+    let tmp = try TemporaryDirectory()
+    _ = try await Registry(layout: tmp.layout, session: MockNet(RegistryFixture.smallRoutes()).session).fetch(RegistryFixture.smallRef)
+    let offline = MockNet([LFS.pointerURL(ref: RegistryFixture.smallRef): .body(RegistryFixture.pointerText())])
+    let path = try await Registry(layout: tmp.layout, session: offline.session).fetch(RegistryFixture.smallRef)
+    #expect(try Data(contentsOf: path) == RegistryFixture.blob)
     // the pointer was kept, so even that is not asked for again
     #expect(offline.calls.isEmpty)
   }
 
   @Test func aWrongHashLeavesNothingBehind() async throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
-    let net = MockNet(smallRoutes(oid: String(repeating: "b", count: 64)))
+    let tmp = try TemporaryDirectory()
+    let net = MockNet(RegistryFixture.smallRoutes(oid: String(repeating: "b", count: 64)))
     let error = await #expect(throws: RegistryError.self) {
-      try await Registry(layout: tmp.layout, session: net.session).fetch(smallRef)
+      try await Registry(layout: tmp.layout, session: net.session).fetch(RegistryFixture.smallRef)
     }
     #expect(error?.kind == .verify)
     #expect(error?.message.contains("hash") == true)
@@ -52,11 +49,10 @@ struct FetchTests {
   }
 
   @Test func aShortDownloadLeavesNothingBehind() async throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
-    let net = MockNet(smallRoutes(size: Int64(fixtureBlob.count) + 99))
+    let tmp = try TemporaryDirectory()
+    let net = MockNet(RegistryFixture.smallRoutes(size: Int64(RegistryFixture.blob.count) + 99))
     let error = await #expect(throws: RegistryError.self) {
-      try await Registry(layout: tmp.layout, session: net.session).fetch(smallRef)
+      try await Registry(layout: tmp.layout, session: net.session).fetch(RegistryFixture.smallRef)
     }
     #expect(error?.kind == .verify)
     #expect(error?.message.contains("bytes") == true)
@@ -64,11 +60,11 @@ struct FetchTests {
   }
 
   @Test func aCancelledDownloadLeavesNothingBehind() async throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let tmp = try TemporaryDirectory()
     let stops = StopScript([false, true, true])
     let error = await #expect(throws: RegistryError.self) {
-      try await Registry(layout: tmp.layout, session: MockNet(smallRoutes()).session).fetch(smallRef, shouldStop: stops.callback)
+      try await Registry(layout: tmp.layout, session: MockNet(RegistryFixture.smallRoutes()).session).fetch(
+        RegistryFixture.smallRef, shouldStop: stops.callback)
     }
     #expect(error?.kind == .cancelled)
     #expect(error?.message.contains("cancelled") == true)
@@ -78,8 +74,7 @@ struct FetchTests {
   // LocalServer speaks Darwin's and Glibc's sockets.
   #if canImport(Darwin) || canImport(Glibc)
     @Test func aCancelledTaskStopsTheDownload() async throws {
-      let tmp = try TempDir()
-      defer { tmp.remove() }
+      let tmp = try TemporaryDirectory()
       let server = try LocalServer(total: 64 << 20)
       defer { server.stop() }
       let pointer = Pointer(oid: String(repeating: "c", count: 64), size: server.total)
@@ -96,61 +91,56 @@ struct FetchTests {
   #endif
 
   @Test func noServerHasIt() async throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
-    var routes = smallRoutes()
-    routes["\(LFS.endpoints[1])/objects/batch"] = .body(batch(oid: fixtureBlobSHA, size: Int64(fixtureBlob.count), href: nil))
+    let tmp = try TemporaryDirectory()
+    var routes = RegistryFixture.smallRoutes()
+    routes["\(LFS.endpoints[1])/objects/batch"] = .body(RegistryFixture.batch(oid: RegistryFixture.blobSHA, size: Int64(RegistryFixture.blob.count), href: nil))
     let error = await #expect(throws: RegistryError.self) {
-      try await Registry(layout: tmp.layout, session: MockNet(routes).session).fetch(smallRef)
+      try await Registry(layout: tmp.layout, session: MockNet(routes).session).fetch(RegistryFixture.smallRef)
     }
     #expect(error?.isNetwork == true)
     #expect(error?.message.contains("no LFS server") == true)
   }
 
   @Test func anHrefThatFailsIsANetworkErrorAndLeavesNothing() async throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
-    var routes = smallRoutes()
+    let tmp = try TemporaryDirectory()
+    var routes = RegistryFixture.smallRoutes()
     routes["https://blob.example/object"] = .status(403)
     let error = await #expect(throws: RegistryError.self) {
-      try await Registry(layout: tmp.layout, session: MockNet(routes).session).fetch(smallRef)
+      try await Registry(layout: tmp.layout, session: MockNet(routes).session).fetch(RegistryFixture.smallRef)
     }
     #expect(error?.kind == .network)
-    #expect(error?.message.hasPrefix("could not download \(fixtureBlobSHA.prefix(16)): HTTP Error 403") == true)
+    #expect(error?.message.hasPrefix("could not download \(RegistryFixture.blobSHA.prefix(16)): HTTP Error 403") == true)
     #expect(tmp.names("models").isEmpty)
 
     routes["https://blob.example/object"] = .failure
     let dropped = await #expect(throws: RegistryError.self) {
-      try await Registry(layout: tmp.layout, session: MockNet(routes).session).fetch(smallRef)
+      try await Registry(layout: tmp.layout, session: MockNet(routes).session).fetch(RegistryFixture.smallRef)
     }
     #expect(dropped?.kind == .network)
     #expect(tmp.names("models").isEmpty)
   }
 
   @Test func fetchingBySHA256NeedsAKnownSize() async throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let tmp = try TemporaryDirectory()
     let registry = Registry(layout: tmp.layout, session: MockNet().session)
-    let unknown = await #expect(throws: RegistryError.self) { try await registry.fetch(fixtureBlobSHA) }
+    let unknown = await #expect(throws: RegistryError.self) { try await registry.fetch(RegistryFixture.blobSHA) }
     #expect(unknown?.message.contains("fetch by catalog ref") == true)
     let neither = await #expect(throws: RegistryError.self) { try await registry.fetch("nothex") }
     #expect(neither?.message == "'nothex' is neither a 40 character ref nor a 64 character sha256")
   }
 
   @Test func aKnownSHA256IsFetchedByItsPointer() async throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
-    let net = MockNet(smallRoutes())
+    let tmp = try TemporaryDirectory()
+    let net = MockNet(RegistryFixture.smallRoutes())
     let registry = Registry(layout: tmp.layout, session: net.session)
-    _ = try await registry.resolve(ref: smallRef)
-    let path = try await registry.fetch(fixtureBlobSHA)
-    #expect(try Data(contentsOf: path) == fixtureBlob)
+    _ = try await registry.resolve(ref: RegistryFixture.smallRef)
+    let path = try await registry.fetch(RegistryFixture.blobSHA)
+    #expect(try Data(contentsOf: path) == RegistryFixture.blob)
   }
 
   @Test func tooLittleDiskIsRefusedBeforeAnyBytes() async throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
-    let huge = Pointer(oid: fixtureBlobSHA, size: 1 << 60)
+    let tmp = try TemporaryDirectory()
+    let huge = Pointer(oid: RegistryFixture.blobSHA, size: 1 << 60)
     let error = await #expect(throws: RegistryError.self) {
       try await LFS.download(
         href: "https://blob.example/object", pointer: huge, dest: tmp.url.appending(path: "models/x.onnx"),
@@ -161,15 +151,14 @@ struct FetchTests {
   }
 
   @Test func progressIsReportedByWholePercent() async throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let tmp = try TemporaryDirectory()
     let blob = Data((0..<(1 << 20)).map { UInt8(truncatingIfNeeded: $0 &* 31) })
     let pieces = stride(from: 0, to: blob.count, by: 1000).map { blob.subdata(in: $0..<min($0 + 1000, blob.count)) }
-    var routes = smallRoutes(oid: sha256Hex(blob), size: Int64(blob.count), blob: blob)
+    var routes = RegistryFixture.smallRoutes(blob, oid: sha256Hex(blob))
     routes["https://blob.example/object"] = .chunks(pieces)
     let seen = ProgressLog()
 
-    _ = try await Registry(layout: tmp.layout, session: MockNet(routes).session).fetch(smallRef, progress: seen.callback)
+    _ = try await Registry(layout: tmp.layout, session: MockNet(routes).session).fetch(RegistryFixture.smallRef, progress: seen.callback)
 
     let values = seen.all
     #expect(values.last == 1.0)
@@ -186,8 +175,7 @@ struct FetchTests {
     static let benchmark = ProcessInfo.processInfo.environment["JETLINK_BENCH"] == "1"
 
     private func download(megabytes: Int64, session: URLSession) async throws -> (seconds: Double, progress: [Double]) {
-      let tmp = try TempDir()
-      defer { tmp.remove() }
+      let tmp = try TemporaryDirectory()
       let server = try LocalServer(total: megabytes << 20)
       defer { server.stop() }
       let pointer = Pointer(oid: server.sha256, size: server.total)

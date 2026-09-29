@@ -512,7 +512,7 @@ public final class ServerController: @unchecked Sendable {
   private func runImport(_ url: URL) async {
     let path = url.path
     importEvent(path, "hashing")
-    let seen = LockedDouble(-1)
+    let seen = Locked(-1.0)
     do {
       let sha = try await registry.importModelFile(at: url, name: nil) { [weak self] frac in
         // hashing over the first half, copying over the second, as in Python
@@ -612,20 +612,5 @@ public final class ServerController: @unchecked Sendable {
       server.cache.forgetLastLoaded()
     }
     publishInventory()
-  }
-}
-
-/// A Double one closure writes and reads from any thread.
-final class LockedDouble: @unchecked Sendable {
-  private let lock = NSLock()
-  private var stored: Double
-
-  init(_ value: Double) {
-    stored = value
-  }
-
-  var value: Double {
-    get { lock.lock(); defer { lock.unlock() }; return stored }
-    set { lock.lock(); stored = newValue; lock.unlock() }
   }
 }

@@ -119,7 +119,7 @@ public final class TCPTransport: @unchecked Sendable {
   // MARK: receiving
 
   public func recv() throws -> Message {
-    try reader.recv(pad: { Wire.Flag(rawValue: $0.flags).contains(.padded) ? 1 : 0 }) { into, missing, _ in
+    try reader.recv(pad: { Wire.Flag(rawValue: $0.flags).contains(.padded) ? 1 : 0 }) { into, missing in
       while true {
         let n = Sys.read(fd, into, missing)
         if n > 0 { return n }
@@ -218,65 +218,69 @@ public final class TCPTransport: @unchecked Sendable {
   /// otherwise leaves the session blocked in recv for hours, and the comma's
   /// reconnect waiting behind it.
   private static func tune(_ fd: Int32) {
-    func set(_ level: Int32, _ option: Int32, _ value: Int32) {
-      var value = value
-      _ = setsockopt(fd, level, option, &value, socklen_t(MemoryLayout<Int32>.size))
-    }
-    set(Int32(IPPROTO_TCP), TCP_NODELAY, 1)
-    set(SOL_SOCKET, SO_SNDBUF, 4 << 20)
-    set(SOL_SOCKET, SO_RCVBUF, 4 << 20)
-    #if canImport(Darwin)
-      // Linux has no such option; Sys.writev sends with MSG_NOSIGNAL there.
-      set(SOL_SOCKET, SO_NOSIGPIPE, 1)
-    #endif
-    set(SOL_SOCKET, SO_KEEPALIVE, 1)
-    set(Int32(IPPROTO_TCP), Sys.keepIdle, 5)
-    set(Int32(IPPROTO_TCP), TCP_KEEPINTVL, 2)
-    set(Int32(IPPROTO_TCP), TCP_KEEPCNT, 3)
-    var timeout = timeval(tv_sec: 10, tv_usec: 0)
-    _ = setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+    Sys.tune(fd, keepalive: (idle: 5, interval: 2, count: 3), sendTimeout: 10)
+    Sys.set(fd, SOL_SOCKET, SO_SNDBUF, 4 << 20)
+    Sys.set(fd, SOL_SOCKET, SO_RCVBUF, 4 << 20)
   }
 }
 
-/// A listening TCP socket. `accept` polls so `close` can stop it from another thread.
+/// A listening TCP socket. `accept` polls so `close` can stop it from another
+/// thread, and frees the port at once.
 public final class TCPListener: @unchecked Sendable {
   public let port: UInt16
   private let fd: Int32
   private let lock = NSLock()
   private var closed = false
 
-  public init(host: String = "0.0.0.0", port: UInt16 = Wire.defaultPort) throws {
-    let fd = socket(AF_INET, Sys.stream, 0)
-    guard fd >= 0 else { throw LinkError.closed("socket: \(String(cString: strerror(errno)))") }
-    var yes: Int32 = 1
-    _ = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout<Int32>.size))
+  /// Listens on `host`, or with `dualStack` on every address: IPv6 with IPv4
+  /// mapped in, since a phone may resolve a name to either, else IPv4 on `host`.
+  public init(host: String = "0.0.0.0", port: UInt16 = Wire.defaultPort, dualStack: Bool = false) throws {
+    var six = sockaddr_in6()
     #if canImport(Darwin)
-      _ = setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &yes, socklen_t(MemoryLayout<Int32>.size))
+      six.sin6_len = UInt8(MemoryLayout<sockaddr_in6>.size)
     #endif
-    var address = sockaddr_in()
+    six.sin6_family = sa_family_t(AF_INET6)
+    six.sin6_port = port.bigEndian
+    var four = sockaddr_in()
     #if canImport(Darwin)
-      address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+      four.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
     #endif
-    address.sin_family = sa_family_t(AF_INET)
-    address.sin_port = port.bigEndian
-    address.sin_addr.s_addr = inet_addr(host)
-    let bound = withUnsafePointer(to: &address) {
-      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
-    }
-    guard bound == 0, listen(fd, 4) == 0 else {
-      let reason = String(cString: strerror(errno))
-      Sys.close(fd)
-      throw LinkError.closed("could not listen on \(host):\(port): \(reason)")
+    four.sin_family = sa_family_t(AF_INET)
+    four.sin_port = port.bigEndian
+    four.sin_addr.s_addr = inet_addr(host)
+    let bound = (dualStack ? TCPListener.listen(&six, AF_INET6) : nil) ?? TCPListener.listen(&four, AF_INET)
+    guard let bound else {
+      throw LinkError.closed("could not listen on \(dualStack ? "port" : "\(host):")\(port): \(String(cString: strerror(errno)))")
     }
     // `accept` runs under the lock, so it must never wait there.
-    _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
-    var actual = sockaddr_in()
-    var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+    _ = fcntl(bound, F_SETFL, fcntl(bound, F_GETFL) | O_NONBLOCK)
+    var actual = sockaddr_storage()
+    var length = socklen_t(MemoryLayout<sockaddr_storage>.size)
     _ = withUnsafeMutablePointer(to: &actual) {
-      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &length) }
+      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(bound, $0, &length) }
     }
-    self.fd = fd
-    self.port = UInt16(bigEndian: actual.sin_port)
+    fd = bound
+    self.port = TCPListener.peer(actual).port
+  }
+
+  /// A socket bound to `address` and listening, or nil with errno set.
+  private static func listen<Address>(_ address: inout Address, _ family: Int32) -> Int32? {
+    let fd = socket(family, Sys.stream, 0)
+    guard fd >= 0 else { return nil }
+    Sys.set(fd, SOL_SOCKET, SO_REUSEADDR, 1)
+    if family == AF_INET6 {
+      Sys.set(fd, Int32(IPPROTO_IPV6), IPV6_V6ONLY, 0)
+    }
+    let bound = withUnsafePointer(to: &address) {
+      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<Address>.size)) }
+    }
+    guard bound == 0, Sys.listen(fd, 16) == 0 else {
+      let failure = errno
+      Sys.close(fd)
+      errno = failure
+      return nil
+    }
+    return fd
   }
 
   deinit {
@@ -285,6 +289,12 @@ public final class TCPListener: @unchecked Sendable {
 
   /// The next client, or nil once the listener is closed. Blocks.
   public func accept() -> TCPTransport? {
+    acceptConnection().map { TCPTransport(fd: $0.fd, peer: $0.peer) }
+  }
+
+  /// The next client's descriptor, blocking, and its address; the caller
+  /// closes the descriptor. Nil once the listener is closed.
+  package func acceptConnection() -> (fd: Int32, peer: String)? {
     while true {
       lock.lock()
       let isClosed = closed
@@ -296,8 +306,8 @@ public final class TCPListener: @unchecked Sendable {
       if ready <= 0 { continue }
       // iOS reclaims a suspended app's listening sockets; this one is gone.
       if poller.revents & Int16(POLLERR | POLLHUP | POLLNVAL) != 0 { return nil }
-      var address = sockaddr_in()
-      var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+      var address = sockaddr_storage()
+      var length = socklen_t(MemoryLayout<sockaddr_storage>.size)
       // Under the lock, and only while open: a `close` during the poll frees
       // the descriptor, and the next listener can get its number, whose
       // clients this one would otherwise take.
@@ -315,14 +325,25 @@ public final class TCPListener: @unchecked Sendable {
         if failure == EINTR || failure == ECONNABORTED || failure == EAGAIN || failure == EWOULDBLOCK { continue }
         return nil
       }
-      // BSD hands the listener's O_NONBLOCK on to what it accepts; the
-      // transport blocks.
+      // BSD hands the listener's O_NONBLOCK on to what it accepts.
       _ = fcntl(client, F_SETFL, fcntl(client, F_GETFL) & ~O_NONBLOCK)
-      var text = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
-      inet_ntop(AF_INET, &address.sin_addr, &text, socklen_t(INET_ADDRSTRLEN))
-      let peer = "\(String(decoding: text.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)):\(UInt16(bigEndian: address.sin_port))"
-      return TCPTransport(fd: client, peer: peer)
+      let (host, port) = TCPListener.peer(address)
+      return (client, "\(host):\(port)")
     }
+  }
+
+  /// A socket address's numeric host and port.
+  private static func peer(_ address: sockaddr_storage) -> (host: String, port: UInt16) {
+    var address = address
+    var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+    var service = [CChar](repeating: 0, count: Int(NI_MAXSERV))
+    let length = socklen_t(Int32(address.ss_family) == AF_INET6 ? MemoryLayout<sockaddr_in6>.size : MemoryLayout<sockaddr_in>.size)
+    _ = withUnsafePointer(to: &address) {
+      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+        getnameinfo($0, length, &host, socklen_t(host.count), &service, socklen_t(service.count), NI_NUMERICHOST | NI_NUMERICSERV)
+      }
+    }
+    return (String(cString: host), UInt16(String(cString: service)) ?? 0)
   }
 
   public func close() {
@@ -354,24 +375,61 @@ enum JSONLine {
 
 /// The socket calls whose names the transports' own methods shadow, and the
 /// few constants that differ between Darwin, glibc (Linux) and Bionic
-/// (Android).
-enum Sys {
+/// (Android). The status page's server uses them too.
+package enum Sys {
   #if canImport(Darwin)
-    static let stream = SOCK_STREAM
+    package static let stream = SOCK_STREAM
     static let keepIdle = TCP_KEEPALIVE
     static let iovMax = Int(IOV_MAX)
+    /// For `send`: Darwin sockets have SO_NOSIGPIPE set instead.
+    package static let sendFlags: Int32 = 0
   #elseif canImport(Glibc)
-    static let stream = Int32(SOCK_STREAM.rawValue)
+    package static let stream = Int32(SOCK_STREAM.rawValue)
     static let keepIdle = TCP_KEEPIDLE
     static let iovMax = 1024
+    package static let sendFlags = Int32(MSG_NOSIGNAL)
   #else
-    static let stream = SOCK_STREAM
+    package static let stream = SOCK_STREAM
     static let keepIdle = TCP_KEEPIDLE
     static let iovMax = 1024
+    package static let sendFlags = Int32(MSG_NOSIGNAL)
   #endif
 
+  /// An integer socket option.
+  package static func set(_ fd: Int32, _ level: Int32, _ option: Int32, _ value: Int32) {
+    var value = value
+    _ = setsockopt(fd, level, option, &value, socklen_t(MemoryLayout<Int32>.size))
+  }
+
+  /// A connected socket: NODELAY, keepalive probes after `idle` seconds of
+  /// silence, `interval` apart, `count` of them, a send that gives up after
+  /// `sendTimeout` without progress, and no SIGPIPE.
+  package static func tune(_ fd: Int32, keepalive: (idle: Int32, interval: Int32, count: Int32), sendTimeout: TimeInterval) {
+    set(fd, Int32(IPPROTO_TCP), TCP_NODELAY, 1)
+    #if canImport(Darwin)
+      // Linux has no such option; `writev` and `sendFlags` say MSG_NOSIGNAL there.
+      set(fd, SOL_SOCKET, SO_NOSIGPIPE, 1)
+    #endif
+    set(fd, SOL_SOCKET, SO_KEEPALIVE, 1)
+    set(fd, Int32(IPPROTO_TCP), keepIdle, keepalive.idle)
+    set(fd, Int32(IPPROTO_TCP), TCP_KEEPINTVL, keepalive.interval)
+    set(fd, Int32(IPPROTO_TCP), TCP_KEEPCNT, keepalive.count)
+    var timeout = timeval(tv_sec: .init(sendTimeout), tv_usec: .init((sendTimeout - sendTimeout.rounded(.down)) * 1_000_000))
+    _ = setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+  }
+
+  static func listen(_ fd: Int32, _ backlog: Int32) -> Int32 {
+    #if canImport(Darwin)
+      Darwin.listen(fd, backlog)
+    #elseif canImport(Glibc)
+      Glibc.listen(fd, backlog)
+    #else
+      Android.listen(fd, backlog)
+    #endif
+  }
+
   @discardableResult
-  static func close(_ fd: Int32) -> Int32 {
+  package static func close(_ fd: Int32) -> Int32 {
     #if canImport(Darwin)
       Darwin.close(fd)
     #elseif canImport(Glibc)
@@ -382,7 +440,7 @@ enum Sys {
   }
 
   @discardableResult
-  static func shutdown(_ fd: Int32) -> Int32 {
+  package static func shutdown(_ fd: Int32) -> Int32 {
     #if canImport(Darwin)
       Darwin.shutdown(fd, SHUT_RDWR)
     #elseif canImport(Glibc)

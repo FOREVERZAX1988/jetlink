@@ -1,34 +1,8 @@
 import Foundation
+import JetlinkTestSupport
 import Testing
 
 @testable import JetlinkServer
-
-/// A backend that is only its names: all the cache asks of one.
-final class NamingBackend: EngineBackend {
-  let name: String
-  let suffix: String
-  let artifactKind: ArtifactKind
-  let runtimeVersion = "10.3.0"
-
-  init(kind: ArtifactKind) {
-    artifactKind = kind
-    (name, suffix) = kind == .file ? ("trt", ".plan") : ("ort", ".ortcache")
-  }
-
-  func deviceTag() -> String { "Orin-sm87" }
-
-  func deriveSpec(model: URL, sha256: String, nbytes: Int64, frameSkip: Int) throws -> ModelSpec {
-    throw HostError.failed("names only")
-  }
-
-  func build(model: URL, artifact: URL, report: @escaping ProgressFn, metaExtra: [String: Any]) throws {
-    throw HostError.failed("names only")
-  }
-
-  func load(artifact: URL, report: @escaping ProgressFn) throws -> any Engine {
-    throw HostError.failed("names only")
-  }
-}
 
 @Suite("Server cache")
 struct ServerCacheTests {
@@ -100,20 +74,13 @@ struct ServerCacheTests {
 
 @Suite("Artifacts")
 struct ArtifactTests {
-  final class Reports: @unchecked Sendable {
-    private let lock = NSLock()
-    private var seen: [String] = []
-    var all: [String] { lock.withLock { seen } }
-    var fn: ProgressFn { { [self] stage, frac, msg in lock.withLock { seen.append("\(stage) \(frac) \(msg)") } } }
-  }
-
   @Test("A file artifact is staged beside the cache, moved into place, and described")
   func buildsAFile() throws {
     let tmp = try TemporaryDirectory()
     let backend = NamingBackend(kind: .file)
     let plan = tmp.url.appending(path: "engines/m.trt10.3.0.Orin-sm87.plan")
-    let reports = Reports()
-    try Artifact.build(plan, kind: .file, metaExtra: ["spec": ["sha256": "x"]], report: reports.fn) { staged in
+    let reports = Recorded<String>()
+    try Artifact.build(plan, kind: .file, metaExtra: ["spec": ["sha256": "x"]], report: { reports.append("\($0) \($1) \($2)") }) { staged in
       #expect(staged.deletingLastPathComponent().lastPathComponent.hasPrefix("tmp"))
       #expect(!FileManager.default.fileExists(atPath: staged.path))
       try Data("plan".utf8).write(to: staged)

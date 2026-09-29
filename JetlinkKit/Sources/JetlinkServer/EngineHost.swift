@@ -102,10 +102,17 @@ public final class EngineHost: @unchecked Sendable {
 
   /// The host's telemetry, thermal state, sleep and power: `ServerHooks`.
   let hooks: ServerHooks
+  /// `hooks.telemetry`, sampled off the frame path.
+  let telemetry: TelemetrySampler
 
   public init(cache: ServerCache, hooks: ServerHooks = ServerHooks()) {
     self.cache = cache
     self.hooks = hooks
+    telemetry = TelemetrySampler(source: hooks.telemetry)
+  }
+
+  deinit {
+    telemetry.close()
   }
 
   var backend: any EngineBackend { cache.backend }
@@ -432,6 +439,7 @@ public final class EngineHost: @unchecked Sendable {
 
   public func close() {
     unload()
+    telemetry.close()
   }
 
   // MARK: talking back

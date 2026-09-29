@@ -37,21 +37,17 @@ final class UsbfsPipes: BulkPipes, ReadRingPipe, @unchecked Sendable {
   /// Under the device's lock.
   private var closed = false
   private var released = false
-  /// Slots were discarded to realign the ring; waits for them poll again as
-  /// a discarded write's does.
-  private var discarding = false
 
-  /// `depth` and `aligned` are the ring's (see `ReadRing.init`).
-  init(device: UsbfsDevice, inEndpoint: UInt8, outEndpoint: UInt8, depth: Int = ReadRing.depth, aligned: Bool = true) {
+  init(device: UsbfsDevice, inEndpoint: UInt8, outEndpoint: UInt8) {
     self.device = device
     self.inEndpoint = inEndpoint
     self.outEndpoint = outEndpoint
     let size = ReadRing.slotSize
-    let memory = UnsafeMutableRawPointer.allocate(byteCount: depth * size, alignment: 4096)
+    let memory = UnsafeMutableRawPointer.allocate(byteCount: ReadRing.depth * size, alignment: 4096)
     slotMemory = memory
-    slots = (0..<depth).map { UsbfsURB(endpoint: inEndpoint, buffer: memory + $0 * size, slot: $0) }
+    slots = (0..<ReadRing.depth).map { UsbfsURB(endpoint: inEndpoint, buffer: memory + $0 * size, slot: $0) }
     outURB = UsbfsURB(endpoint: outEndpoint, buffer: memory, slot: -1)
-    ring = ReadRing(lock: device.condition, pipe: self, depth: depth, aligned: aligned)
+    ring = ReadRing(lock: device.condition, pipe: self)
     let owner = ObjectIdentifier(self)
     for urb in slots {
       urb.owner = owner
@@ -112,13 +108,8 @@ final class UsbfsPipes: BulkPipes, ReadRingPipe, @unchecked Sendable {
     try device.submit(slots[slot], count: size)
   }
 
-  func discardPosted() {
-    discarding = true
-    device.discard(slots)
-  }
-
   func awaitCompletion(until deadline: Date?) throws {
-    try device.awaitCompletion(owner: owner, until: deadline, cap: discarding ? UsbfsDevice.discardPoll : nil)
+    try device.awaitCompletion(owner: owner, until: deadline)
   }
 
   func bytes(_ slot: Int) -> UnsafeRawPointer {
@@ -308,7 +299,7 @@ final class UsbfsDevice: @unchecked Sendable {
   }
 
   /// Under the lock: ends those of `urbs` still in flight.
-  func discard(_ urbs: [UsbfsURB]) {
+  private func discard(_ urbs: [UsbfsURB]) {
     for urb in urbs where urb.inFlight {
       discard(urb)
     }
@@ -320,11 +311,10 @@ final class UsbfsDevice: @unchecked Sendable {
     kernel.discard(urb)
   }
 
-  /// Under the lock: waits once for a completion, until `deadline` (nil:
-  /// none) and for at most `cap`.
-  func awaitCompletion(owner: ObjectIdentifier, until deadline: Date?, cap: TimeInterval?) throws {
+  /// Under the lock: waits once for a completion, until `deadline` (nil: none).
+  func awaitCompletion(owner: ObjectIdentifier, until deadline: Date?) throws {
     try check(owner)
-    waitOnce(until: deadline, cap: cap)
+    waitOnce(until: deadline, cap: nil)
   }
 
   /// Under the lock. Polls the descriptor and reaps for everyone if no other
@@ -381,7 +371,7 @@ final class UsbfsDevice: @unchecked Sendable {
       return .data
     }
     if urb.discarded && (urb.status == -LinuxErrno.noent || urb.status == -LinuxErrno.connreset) {
-      return cancelled.contains(urb.owner) ? .failed(.closed(UsbfsDevice.interruptedMessage)) : .discarded
+      return .failed(.closed(gone ? UsbfsDevice.goneMessage : UsbfsDevice.interruptedMessage))
     }
     return .failed(UsbfsDevice.failure(urb))
   }

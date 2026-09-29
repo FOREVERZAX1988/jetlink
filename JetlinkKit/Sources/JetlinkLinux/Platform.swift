@@ -191,12 +191,6 @@
 
   func serverLog(_ category: String) -> LinuxLog {
     let log = ServerLog(category: category)
-    return { level, message in
-      switch level {
-      case .info: log.info(message)
-      case .warning: log.warning(message)
-      case .error: log.error(message)
-      }
-    }
+    return { level, message in log.write(level, message) }
   }
 #endif

@@ -7,32 +7,30 @@ import Testing
 /// tests/test_registry.py's importing, inventory and removal sections.
 struct ImportTests {
   @Test func hashesCopiesAndRecords() async throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let tmp = try TemporaryDirectory()
     let registry = Registry(layout: tmp.layout)
     let source = tmp.url.appending(path: "big_driving_supercombo.onnx")
-    try fixtureBlob.write(to: source)
+    try RegistryFixture.blob.write(to: source)
     let seen = ProgressLog()
 
     let local = try await registry.importModel(at: source, progress: seen.callback)
 
-    #expect(local.sha256 == fixtureBlobSHA && local.bytes == Int64(fixtureBlob.count))
+    #expect(local.sha256 == RegistryFixture.blobSHA && local.bytes == Int64(RegistryFixture.blob.count))
     #expect(local.name == "big_driving_supercombo")
-    #expect(try Data(contentsOf: registry.modelPath(sha256: fixtureBlobSHA)) == fixtureBlob)
+    #expect(try Data(contentsOf: registry.modelPath(sha256: RegistryFixture.blobSHA)) == RegistryFixture.blob)
     #expect(seen.all.last == 1.0)
     #expect(seen.all.contains(0.5), "the hash is the first half")
-    #expect(tmp.names("models") == ["\(fixtureBlobSHA.prefix(16)).onnx"], "no .part is left")
+    #expect(tmp.names("models") == ["\(RegistryFixture.blobSHA.prefix(16)).onnx"], "no .part is left")
 
     _ = try await registry.importModel(at: source, name: "again")
     #expect(registry.localModels().map(\.name) == ["again"])
-    #expect(registry.name(for: fixtureBlobSHA) == ("again", nil))
+    #expect(registry.name(for: RegistryFixture.blobSHA) == ("again", nil))
   }
 
   @Test func refusesAFileThatIsNotAnONNX() async throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let tmp = try TemporaryDirectory()
     let source = tmp.url.appending(path: "model.bin")
-    try fixtureBlob.write(to: source)
+    try RegistryFixture.blob.write(to: source)
     let error = await #expect(throws: RegistryError.self) {
       try await Registry(layout: tmp.layout).importModel(at: source)
     }
@@ -45,8 +43,7 @@ struct ImportTests {
   }
 
   @Test func aCancelledImportLeavesNothingBehind() async throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let tmp = try TemporaryDirectory()
     let source = tmp.url.appending(path: "mine.onnx")
     try Data(count: 6 << 20).write(to: source)
     // six 1 MB hash chunks, then the first 4 MB copy chunk, then stop
@@ -60,8 +57,7 @@ struct ImportTests {
   }
 
   @Test func concurrentImportsKeepEveryRecord() async throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let tmp = try TemporaryDirectory()
     let registry = Registry(layout: tmp.layout)
     var sources: [URL] = []
     for i in 0..<12 {
@@ -81,7 +77,7 @@ struct ImportTests {
 
 /// A cache with one fake artifact, one ort artifact (a directory), a sidecar
 /// with no spec, a model and a .part.
-private func buildCache(_ tmp: TempDir) throws -> (fake: String, ort: String) {
+private func buildCache(_ tmp: TemporaryDirectory) throws -> (fake: String, ort: String) {
   let fakeSHA = String(repeating: "b", count: 64)
   let ortSHA = String(repeating: "c", count: 64)
   let cache = EngineCache(layout: tmp.layout, tag: "fake0.1.test", suffix: ".fake", backend: "fake")
@@ -109,8 +105,7 @@ private func buildCache(_ tmp: TempDir) throws -> (fake: String, ort: String) {
 
 struct InventoryTests {
   @Test func listsBothBackendsAndMarksTheCurrentOne() throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let tmp = try TemporaryDirectory()
     let (fakeSHA, ortSHA) = try buildCache(tmp)
 
     let payload = Registry(layout: tmp.layout).inventory(artifactTag: "fake0.1.test", artifactSuffix: ".fake", loaded: nil)
@@ -139,8 +134,7 @@ struct InventoryTests {
   }
 
   @Test func theOrtcacheOfThisDeviceIsCurrent() throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let tmp = try TemporaryDirectory()
     let (fakeSHA, ortSHA) = try buildCache(tmp)
     let payload = Registry(layout: tmp.layout).inventory(artifactTag: "ort1.29.0.coreml-Apple_M1_Pro", artifactSuffix: ".ortcache", loaded: ortSHA)
     #expect(payload.artifacts.filter(\.current).map(\.sha256) == [ortSHA])
@@ -152,8 +146,7 @@ struct InventoryTests {
   }
 
   @Test func withoutABackendNothingIsCurrent() throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let tmp = try TemporaryDirectory()
     _ = try buildCache(tmp)
     let payload = Registry(layout: tmp.layout).inventory(artifactTag: nil, artifactSuffix: ".ortcache", loaded: nil)
     #expect(payload.artifacts.count == 2)
@@ -161,8 +154,7 @@ struct InventoryTests {
   }
 
   @Test func aModelOfUnknownIdentityIsListedByItsPrefix() throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let tmp = try TemporaryDirectory()
     let registry = Registry(layout: tmp.layout)
     try Data("x".utf8).write(to: tmp.layout.models.appending(path: "\(String(repeating: "d", count: 16)).onnx"))
     try Data("x".utf8).write(to: tmp.layout.models.appending(path: "not-a-model.onnx"))
@@ -172,30 +164,27 @@ struct InventoryTests {
   }
 
   @Test func aDownloadedModelIsNamedFromTheCatalog() async throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
-    let net = MockNet(catalogRoutes([LFS.pointerURL(ref: fixtureRef): .body(Fixture.data("pointer_f877d7a0.txt"))]))
+    let tmp = try TemporaryDirectory()
+    let net = MockNet(RegistryFixture.catalogRoutes([LFS.pointerURL(ref: RegistryFixture.ref): .body(RegistryFixture.data("pointer_f877d7a0.txt"))]))
     let registry = Registry(layout: tmp.layout, session: net.session)
     _ = await registry.catalog()
-    _ = try await registry.resolve(ref: fixtureRef)
-    try Data("x".utf8).write(to: registry.modelPath(sha256: fixtureOID))
+    _ = try await registry.resolve(ref: RegistryFixture.ref)
+    try Data("x".utf8).write(to: registry.modelPath(sha256: RegistryFixture.oid))
     let model = registry.inventory(artifactTag: nil, artifactSuffix: ".ortcache", loaded: nil).models.first
-    #expect(model?.sha256 == fixtureOID)
+    #expect(model?.sha256 == RegistryFixture.oid)
     #expect(model?.name == "BMRLNAP Model v4 (August 30, 2026)")
-    #expect(model?.ref == fixtureRef)
+    #expect(model?.ref == RegistryFixture.ref)
   }
 
   @Test func lastLoadedComesFromTheMarker() throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let tmp = try TemporaryDirectory()
     let (fakeSHA, _) = try buildCache(tmp)
     EngineCache(layout: tmp.layout, tag: "fake0.1.test", suffix: ".fake", backend: "fake").rememberLoaded(sha256: fakeSHA, frameSkip: 4)
     #expect(Registry(layout: tmp.layout).inventory(artifactTag: nil, artifactSuffix: ".fake", loaded: nil).lastLoaded == fakeSHA)
   }
 
   @Test func theEventEncodesAsThePythonPayload() throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let tmp = try TemporaryDirectory()
     _ = try buildCache(tmp)
     let payload = Registry(layout: tmp.layout).inventory(artifactTag: "fake0.1.test", artifactSuffix: ".fake", loaded: nil)
     let encoder = JSONEncoder()
@@ -213,8 +202,7 @@ struct InventoryTests {
 
 struct RemoveTests {
   @Test func takesEveryBackendTheModelAndTheMarker() throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let tmp = try TemporaryDirectory()
     let (fakeSHA, _) = try buildCache(tmp)
     let cache = EngineCache(layout: tmp.layout, tag: "fake0.1.test", suffix: ".fake", backend: "fake")
     let other = tmp.layout.engines.appending(path: "\(fakeSHA.prefix(16)).trt10.3.orin.plan")
@@ -232,8 +220,7 @@ struct RemoveTests {
   }
 
   @Test func ofTheModelOnlyKeepsTheEngines() throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let tmp = try TemporaryDirectory()
     let (fakeSHA, _) = try buildCache(tmp)
     let registry = Registry(layout: tmp.layout)
     try registry.remove(sha256: fakeSHA, artifacts: false, model: true)
@@ -242,45 +229,41 @@ struct RemoveTests {
   }
 
   @Test func removingAnImportedModelDropsItsLocalRecord() async throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let tmp = try TemporaryDirectory()
     let registry = Registry(layout: tmp.layout)
     let source = tmp.url.appending(path: "mine.onnx")
-    try fixtureBlob.write(to: source)
+    try RegistryFixture.blob.write(to: source)
     _ = try await registry.importModel(at: source, name: "mine")
     let keeper = tmp.url.appending(path: "other.onnx")
     try Data("other bytes".utf8).write(to: keeper)
     let other = try await registry.importModel(at: keeper, name: "other")
 
-    try registry.remove(sha256: fixtureBlobSHA, artifacts: false, model: true)
+    try registry.remove(sha256: RegistryFixture.blobSHA, artifacts: false, model: true)
 
     #expect(registry.localModels().map(\.sha256) == [other.sha256])
-    #expect(registry.name(for: fixtureBlobSHA) == (nil, nil))
+    #expect(registry.name(for: RegistryFixture.blobSHA) == (nil, nil))
     #expect(registry.inventory(artifactTag: nil, artifactSuffix: ".ortcache", loaded: nil).models.map(\.sha256) == [other.sha256])
   }
 
   @Test func removingTheArtifactsOnlyKeepsTheLocalRecord() async throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let tmp = try TemporaryDirectory()
     let registry = Registry(layout: tmp.layout)
     let source = tmp.url.appending(path: "mine.onnx")
-    try fixtureBlob.write(to: source)
+    try RegistryFixture.blob.write(to: source)
     _ = try await registry.importModel(at: source, name: "mine")
-    try registry.remove(sha256: fixtureBlobSHA, artifacts: true, model: false)
+    try registry.remove(sha256: RegistryFixture.blobSHA, artifacts: true, model: false)
     #expect(registry.localModels().map(\.name) == ["mine"])
   }
 
   @Test func ofADirectoryArtifact() throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let tmp = try TemporaryDirectory()
     let (_, ortSHA) = try buildCache(tmp)
     try Registry(layout: tmp.layout).remove(sha256: ortSHA, artifacts: true, model: false)
     #expect(!tmp.names("engines").contains { $0.hasPrefix("\(ortSHA.prefix(16)).") })
   }
 
   @Test func refusesAnIdentityThatIsNotADigest() throws {
-    let tmp = try TempDir()
-    defer { tmp.remove() }
+    let tmp = try TemporaryDirectory()
     let error = #expect(throws: RegistryError.self) {
       try Registry(layout: tmp.layout).remove(sha256: "../escape", artifacts: true, model: true)
     }
