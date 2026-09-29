@@ -114,6 +114,10 @@ public final class Server: @unchecked Sendable {
   var listener: TCPListener?
   /// The session being served, and the latch its end releases.
   private var current: (session: Session, done: Latch)?
+  /// Held by `takeover` across the whole swap, the wait for the old session
+  /// to end included: that session's `serve` takes only `lock`, so the wait
+  /// always ends.
+  private let takeoverLock = NSLock()
   private var link: LinkEvent = .waiting
   private var ticker: Ticker?
   private var started = false
@@ -289,9 +293,15 @@ public final class Server: @unchecked Sendable {
 
   /// Serves `transport` on a thread of its own, after the session being
   /// served, if any, has been interrupted and has ended. Returns the latch
-  /// the new session's end releases, and the session.
+  /// the new session's end releases, and the session. Internal so a test can
+  /// race two.
   @discardableResult
-  private func takeover(_ transport: any MessageLink) -> (done: Latch, session: Session) {
+  func takeover(_ transport: any MessageLink) -> (done: Latch, session: Session) {
+    // One swap at a time, from reading `current` to replacing it: the accept,
+    // dial and USB loops each take over, and two that saw the same session
+    // would each serve one of their own on the engine's one set of queues.
+    takeoverLock.lock()
+    defer { takeoverLock.unlock() }
     lock.lock()
     let previous = current
     lock.unlock()
@@ -461,8 +471,13 @@ public final class Server: @unchecked Sendable {
       do {
         transport = try gadget.open()
       } catch {
+        // Retried as an unserved gadget is: after a handover, a bounce or a
+        // glitch the device's URBs die before its sysfs entry goes, so the
+        // first opens claim the stale device and fail, and the comma is back
+        // a poll later, not two seconds.
+        quiet += 1
         waiting.say("could not open the gadget: \(String(describing: error))")
-        Thread.sleep(forTimeInterval: Server.usbQuietRetry)
+        Thread.sleep(forTimeInterval: quiet <= Server.usbQuickRetries ? Server.usbPoll : Server.usbQuietRetry)
         continue
       }
       let (done, session) = takeover(transport)

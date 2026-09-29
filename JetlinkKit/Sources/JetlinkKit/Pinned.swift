@@ -15,7 +15,7 @@ public enum Pinned {
   /// jetlink.protocol.HEADER_SIZE
   public static let headerSize: Int = 32
   /// jetlink.protocol.PACKET_MULTIPLE
-  public static let packetMultiple: Int = 1024
+  public static let packetMultiple: Int = 512
   /// jetlink.protocol.GADGET_TX_ALIGN
   public static let gadgetTxAlign: Int = 16384
   /// jetlink.protocol.INFER_REQ_SIZE
@@ -78,8 +78,6 @@ public enum Pinned {
   ]
   /// jetlink.transport.tcp.CABLE_ADDRESS
   public static let cableAddress: String = "192.168.60.1"
-  /// jetlink.protocol.USB_READ_CHUNK
-  public static let usbReadChunk: Int = 262144
   /// jetlink.spec.MODEL_RUN_FREQ
   public static let modelRunFrequency: Int = 20
   /// jetlink.spec.MODEL_CONTEXT_FREQ

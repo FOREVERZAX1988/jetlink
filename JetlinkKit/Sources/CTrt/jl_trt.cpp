@@ -643,10 +643,20 @@ int jl_trt_engine_deserialize(jl_trt *t, const void *plan, size_t size, jl_trt_e
   *out = nullptr;
   JL_ENTER(t);
   auto *runtime = static_cast<nvinfer1::IRuntime *>(t->create_runtime(trt_logger(), NV_TENSORRT_VERSION));
-  nvinfer1::ICudaEngine *engine = runtime != nullptr ? runtime->deserializeCudaEngine(plan, size) : nullptr;
+  if (runtime == nullptr) {
+    // No plan was read: a driver or a libnvinfer this process cannot run,
+    // which would otherwise delete every plan asked for.
+    int rc = refused(t, "createInferRuntime", "TensorRT returned no runtime", nullptr, err, errlen);
+    return rc == JL_TRT_ERROR ? JL_TRT_CUDA_ERROR : rc;
+  }
+  nvinfer1::ICudaEngine *engine = runtime->deserializeCudaEngine(plan, size);
   if (engine == nullptr) {
+    int rc = refused(t, "deserializeCudaEngine", "TensorRT could not deserialize the plan", nullptr, err, errlen);
+    // A plan that does not fit in the device memory left is still a good
+    // plan: read before the runtime goes, which may log again.
+    bool memory = rc == JL_TRT_ERROR && is_allocation_failure(last_error);
     delete runtime;
-    return refused(t, "deserializeCudaEngine", "TensorRT could not deserialize the plan", nullptr, err, errlen);
+    return memory ? JL_TRT_CUDA_ERROR : rc;
   }
   *out = new jl_trt_engine{t, runtime, engine};
   return JL_TRT_OK;

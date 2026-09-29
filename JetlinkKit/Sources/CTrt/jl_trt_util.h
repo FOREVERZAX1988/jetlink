@@ -23,6 +23,27 @@ static inline int say(char *err, size_t errlen, int code, const char *fmt, ...) 
   return code;
 }
 
+// Nonzero when TensorRT's reason for a refusal is memory it could not get
+// ("out of memory", "OutOfMemory", "could not be allocated"), in any case: a
+// deserialize that fails so says nothing about the plan, which must not be
+// deleted for it.
+static inline int is_allocation_failure(const char *reason) {
+  static const char *const needles[] = {"out of memory", "outofmemory", "allocat"};
+  char lower[1024];
+  size_t n = 0;
+  for (; reason != NULL && reason[n] != '\0' && n + 1 < sizeof lower; n++) {
+    char c = reason[n];
+    lower[n] = c >= 'A' && c <= 'Z' ? (char)(c - 'A' + 'a') : c;
+  }
+  lower[n] = '\0';
+  for (size_t i = 0; i < sizeof needles / sizeof needles[0]; i++) {
+    if (strstr(lower, needles[i]) != NULL) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
 // Nonzero once all of data is in path and the file closed cleanly.
 static inline int write_file(const char *path, const void *data, size_t size) {
   FILE *f = fopen(path, "wb");

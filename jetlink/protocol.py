@@ -29,13 +29,16 @@ VERSION = 3
 
 # A bulk transfer ends on a short packet, so a message that is an exact multiple
 # of the packet size never terminates the peer's read and arrives a frame late;
-# the sender appends a pad byte and sets Flag.PADDED. 1024 divides all the rest.
-PACKET_MULTIPLE = 1024
+# the sender appends a pad byte and sets Flag.PADDED. 512 is a high-speed packet
+# and divides a SuperSpeed one, so every message ends short on a USB 2 link too:
+# an Android phone, or a cable that fell back to high speed. A reader takes the
+# pad byte whenever the flag says so, at any length.
+PACKET_MULTIPLE = 512
 
 # The gadget pads every message to a burst so it never ends on a short packet:
 # dwc3 flushed its TX FIFO past one about once in 400 frames, and the host read
 # those bytes as the next header. Host to device keeps the PADDED byte instead.
-GADGET_TX_ALIGN = 16 * PACKET_MULTIPLE
+GADGET_TX_ALIGN = 16 * 1024
 
 # The comma's gadget as a USB host finds it: these IDs (pid.codes' test
 # allocation; get a real PID before distributing this), which
@@ -47,8 +50,6 @@ USB_VID = 0x1209
 USB_PID = 0x0001
 USB_VENDOR_CLASS = (0xFF, 0xFF, 0xFF)
 USB_MAX_PACKET = 1024   # SuperSpeed bulk
-# What a host asks for in one bulk IN read.
-USB_READ_CHUNK = 256 * USB_MAX_PACKET
 
 # magic, version, msg_type, seq, flags, length, reserved, 4 pad
 HEADER_FMT = '<IHHIIIQ4x'
@@ -72,7 +73,7 @@ class Msg(IntEnum):
   STATE_REQ = 12       # telemetry
   STATE_RESP = 13      # json
   ERROR = 14           # json: {error, detail}
-  PING = 15
+  PING = 15            # on a connection with no hello and no ENGINE_REQ: ERROR no_hello
   PONG = 16
   SHUTDOWN_REQ = 17    # json: {reason} -> power the Jetson off for good; see JetlinkClient.shutdown
   SHUTDOWN_RESP = 18   # json: {ok, detail}

@@ -12,6 +12,19 @@ struct DeviceError: FatalEngineError, CustomStringConvertible {
   var description: String { sticky ? "CUDA_ERROR_ILLEGAL_ADDRESS" : "CUDA_ERROR_OUT_OF_MEMORY" }
 }
 
+/// A link whose frame replies cannot be written: the comma already hung up.
+final class HungUpLink: MessageLink, @unchecked Sendable {
+  var peer: String { "hung-up" }
+  var medium: LinkMedium? { .tcp }
+  var connectsOnOpen: Bool { true }
+  func recv() throws -> Message { throw LinkError.closed("nothing to read") }
+  func sendParts(_ type: Wire.Msg, seq: UInt32, parts: UnsafeBufferPointer<UnsafeRawBufferPointer>, flags: Wire.Flag) throws {
+    if type == .inferResp { throw LinkError.closed("peer went away during send") }
+  }
+  func shutdown() {}
+  func close() {}
+}
+
 /// A gadget that is off the bus until `plug` and back off after the comma
 /// unplugs, recording when the USB loop looked.
 final class ComingAndGoingGadget: GadgetSource, @unchecked Sendable {
@@ -170,6 +183,7 @@ struct ServerHooksTests {
       return false
     })
     try serve(hooks: hooks, gadget: gadget) { _, client in
+      _ = try client.hello()
       try client.send(.ping)
       _ = try client.recv(.pong)
       #expect(events.wait { $0.contains(.connected) })
@@ -256,5 +270,31 @@ struct ServerHooksTests {
       #expect(throws: TestError.self) { try client.ensureEngine(model: golden.model, sha256: golden.sha256) }
       #expect(fatal.wait { $0 == ["CUDA_ERROR_ILLEGAL_ADDRESS"] })
     }
+  }
+
+  @Test("A fatal engine error is handed to the host even when its INFER_FAILED cannot be written")
+  func fatalWhenTheReplyFails() throws {
+    let golden = try Golden("tiny_stateful")
+    let backend = FlakyBackend()
+    let fatal = Recorded<String>()
+    let tmp = try TemporaryDirectory()
+    let cache = try ServerCache(root: tmp.url, backend: backend)
+    let host = EngineHost(cache: cache, hooks: ServerHooks(fatal: { fatal.append(String(describing: $0)) }))
+    defer { host.close() }
+    let model = try Data(contentsOf: golden.model)
+    try model.write(to: cache.modelPath(golden.sha256))
+    let session = Session(transport: HungUpLink(), host: host)
+    func handle(_ type: Wire.Msg, seq: UInt32, _ payload: Data) throws {
+      try payload.withUnsafeBytes { try session.handle(Message(msgType: type.rawValue, seq: seq, flags: 0, payload: $0)) }
+    }
+    let ask: [String: Any] = ["sha256": golden.sha256, "nbytes": model.count, "frame_skip": 4]
+    try handle(.engineReq, seq: 1, JSONSerialization.data(withJSONObject: ask))
+    #expect(host.settles() && host.snapshot().state == .ready)
+    let spec = try ModelSpec.from(golden.spec)
+    backend.failRuns(with: DeviceError(sticky: true))
+    #expect(throws: LinkError.self) {
+      try handle(.inferReq, seq: 2, Data(count: Wire.inferReqSize + spec.warpedBytes + spec.packedBytes))
+    }
+    #expect(fatal.all == ["CUDA_ERROR_ILLEGAL_ADDRESS"])
   }
 }

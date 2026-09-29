@@ -78,7 +78,6 @@ def values() -> list[tuple[str, str, str, str]]:
     ('usbSpeedMedia', '[String: String]',
      '[\n' + ''.join(f'    "{k}": "{v}",\n' for k, v in base.USB_MEDIA.items()) + '  ]', 'jetlink.transport.base.USB_MEDIA'),
     ('cableAddress', 'String', f'"{tcp.CABLE_ADDRESS}"', 'jetlink.transport.tcp.CABLE_ADDRESS'),
-    ('usbReadChunk', 'Int', str(P.USB_READ_CHUNK), 'jetlink.protocol.USB_READ_CHUNK'),
     ('modelRunFrequency', 'Int', str(MODEL_RUN_FREQ), 'jetlink.spec.MODEL_RUN_FREQ'),
     ('modelContextFrequency', 'Int', str(MODEL_CONTEXT_FREQ), 'jetlink.spec.MODEL_CONTEXT_FREQ'),
     ('defaultFrameSkip', 'Int', str(DEFAULT_FRAME_SKIP), 'jetlink.spec.DEFAULT_FRAME_SKIP'),

@@ -53,6 +53,16 @@ struct USBTransportTests {
     #expect(kernel.written.count == Wire.headerSize + Wire.headerSize + exact.count + 1)
   }
 
+  @Test("A message that fills whole high-speed packets is padded, so a USB 2 link ends it short too")
+  func padsForHighSpeed() {
+    for total in [512, 1024, 1536, 1024 * 5 + 512, 16384] {
+      #expect(Wire.needsPad(total - Wire.headerSize), "\(total)")
+    }
+    for total in [Wire.headerSize, 511, 513, 1023, 1025, 1537] {
+      #expect(!Wire.needsPad(total - Wire.headerSize), "\(total)")
+    }
+  }
+
   @Test("A write the bus takes in pieces still sends the message once, whole")
   func partialWrites() throws {
     kernel.writeLimit = 1000
@@ -119,6 +129,35 @@ final class FakeGadget: GadgetSource, @unchecked Sendable {
       opened += 1
       return pending.isEmpty ? make() : pending.removeFirst()
     }
+    return USBTransport(pipes: UsbfsPipes(device: UsbfsDevice(kernel: end), inEndpoint: 0x81, outEndpoint: 0x01), medium: .usb3)
+  }
+}
+
+/// The comma's gadget as the kernel shows one that left and came back: its
+/// URBs die before its sysfs entry goes, so it stays present and the next
+/// opens claim the stale device and fail. `script` is one comma end per open,
+/// nil for an open that fails; an unserved end once it runs out.
+final class StaleGadget: GadgetSource, @unchecked Sendable {
+  private let lock = NSLock()
+  private var script: [FakeUsbfs?]
+  private var tries: [(at: TimeInterval, opened: Bool)] = []
+
+  init(_ script: [FakeUsbfs?]) {
+    self.script = script
+  }
+
+  /// Every open, when it came and whether it opened.
+  var attempts: [(at: TimeInterval, opened: Bool)] { lock.withLock { tries } }
+
+  func present() -> Bool { true }
+
+  func open() throws -> any MessageLink {
+    let end: FakeUsbfs? = lock.withLock {
+      let next = script.isEmpty ? FakeUsbfs.unserved() : script.removeFirst()
+      tries.append((ProcessInfo.processInfo.systemUptime, next != nil))
+      return next
+    }
+    guard let end else { throw LinkError.closed("claiming the gadget: ENODEV: the device is gone") }
     return USBTransport(pipes: UsbfsPipes(device: UsbfsDevice(kernel: end), inEndpoint: 0x81, outEndpoint: 0x01), medium: .usb3)
   }
 }
@@ -227,6 +266,27 @@ struct ServerUSBTests {
     #expect(links.all.contains { $0.state == .disconnected })
   }
 
+  @Test("A comma that left and came back is opened again a poll after a stale open fails, not the quiet retry later")
+  func rejoinsAfterAStaleOpen() throws {
+    let cache = try TemporaryDirectory()
+    let before = FakeUsbfs()
+    let after = FakeUsbfs()
+    let gadget = StaleGadget([before, nil, nil, after])
+    let server = try makeServer(cache, gadget: gadget)
+    try server.start()
+    defer { server.shutdown() }
+    _ = try GadgetClient(before).hello(name: "modeld")
+    before.unplug()
+    _ = try GadgetClient(after).hello(name: "modeld")
+    let tries = gadget.attempts
+    try #require(tries.count >= 4)
+    #expect(tries.prefix(4).map { $0.opened } == [true, false, false, true])
+    for failed in 1...2 {
+      let gap = tries[failed + 1].at - tries[failed].at
+      #expect(gap < Server.usbQuietRetry * 0.75, "the open after failure \(failed) came \(gap) s later")
+    }
+  }
+
   @Test("The golden frames through usbfs and its read ring, as a Jetson or a phone serves them", arguments: ["tiny_queued", "tiny_stateful"])
   func servesGoldenFramesOverUsbfs(_ name: String) throws {
     let golden = try Golden(name)
@@ -239,5 +299,35 @@ struct ServerUSBTests {
     let (_, count) = try GadgetClient(gadget.kernel).replay(golden)
     #expect(eventually { server.framesServed == count })
     #expect(gadget.kernel.discards == 0, "the ring left the grid")
+  }
+
+  /// The comma's keep-alive between its join and the swap is a ping, over
+  /// endpoints that outlive a server restart. Its next ping reaches a session
+  /// with no hello and no model request, and must fail there, not at the swap.
+  @Test("A comma still pinging a server that restarted under it is told to say hello again, and rejoins")
+  func restartedServerRefusesThePing() throws {
+    let golden = try Golden("tiny_stateful")
+    let cache = try TemporaryDirectory()
+    let gadget = UsbfsFakeGadget()
+    let client = GadgetClient(gadget.kernel)
+    let before = try makeServer(cache, gadget: gadget)
+    try before.start()
+    _ = try client.hello(name: "modeld")
+    _ = try client.ensureEngine(model: golden.model, sha256: golden.sha256)
+    try client.send(.ping)
+    _ = try client.recv(.pong)
+    before.shutdown()
+
+    let after = try makeServer(cache, gadget: gadget)
+    try after.start()
+    defer { after.shutdown() }
+    let ping = try client.send(.ping)
+    let refused = try client.recv()
+    #expect(refused.type == Wire.Msg.error.rawValue && refused.seq == ping, "\(refused.type)")
+    #expect(refused.json["error"] as? String == "no_hello")
+    _ = try client.hello(name: "modeld")
+    _ = try client.ensureEngine(model: golden.model, sha256: golden.sha256)
+    try client.send(.ping)
+    _ = try client.recv(.pong)
   }
 }

@@ -303,8 +303,9 @@ private struct Parts {
 /// The plan mapped read-only for the call, so a 1.7 GB plan is never read
 /// into the heap. A plan TensorRT will not take is `ArtifactInvalid` (D21):
 /// plans are valid for one TensorRT build only, and a JetPack update that
-/// keeps the tag strands them, so the host rebuilds it once. A sticky error
-/// behind the refusal is the context, not the plan.
+/// keeps the tag strands them, so the host deletes it and rebuilds once.
+/// Only JL_TRT_ERROR is the plan's fault: device memory that ran out, no
+/// runtime or a sticky error fails the job and leaves the plan for the next.
 private func deserialize(_ plan: URL, _ trt: TensorRT) throws -> OpaquePointer {
   let name = plan.lastPathComponent
   let fd = open(plan.path, O_RDONLY | O_CLOEXEC)
@@ -325,7 +326,7 @@ private func deserialize(_ plan: URL, _ trt: TensorRT) throws -> OpaquePointer {
   let rc = jl_trt_engine_deserialize(trt.handle, base, size, &engine, &err, err.count)
   guard rc == JL_TRT_OK, let engine else {
     let error = TrtError(code: rc, string(err))
-    throw error.isFatal ? error as any Error : ArtifactInvalid("\(name): \(error.description)")
+    throw rc == JL_TRT_ERROR ? ArtifactInvalid("\(name): \(error.description)") : error as any Error
   }
   return engine
 }

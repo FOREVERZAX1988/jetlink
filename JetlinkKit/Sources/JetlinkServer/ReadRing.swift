@@ -10,7 +10,7 @@ protocol ReadRingPipe: AnyObject {
   /// Waits until a read may have completed or `deadline` (nil: none) passes,
   /// releasing the ring's lock meanwhile. Throws once the link is gone or
   /// closed.
-  func awaitCompletion(until deadline: Date?) throws
+  func awaitCompletion(until deadline: MonotonicDeadline?) throws
   /// Where `slot`'s bytes are.
   func bytes(_ slot: Int) -> UnsafeRawPointer
 }
@@ -76,7 +76,7 @@ final class ReadRing: @unchecked Sendable {
   /// (nil: none) passes first, leaving the reads posted, so nothing that
   /// arrives later is lost. Throws the first failed read's error, and again
   /// on every call after.
-  func read(into buffer: UnsafeMutableRawPointer, count: Int, deadline: Date?) throws -> Int {
+  func read(into buffer: UnsafeMutableRawPointer, count: Int, deadline: MonotonicDeadline?) throws -> Int {
     guard count > 0 else { return 0 }
     while true {
       let copied = try take(into: buffer, count: count)
@@ -86,7 +86,7 @@ final class ReadRing: @unchecked Sendable {
       // Emptied slots go back only now, when the reader would wait: the
       // read that ends a message returns without posting on its way out.
       try refill()
-      if let deadline, Date() >= deadline {
+      if let deadline, deadline.passed() {
         return 0
       }
       try pipe.awaitCompletion(until: deadline)

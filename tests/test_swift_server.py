@@ -409,7 +409,7 @@ def test_a_hello_restarts_the_seqs_and_replays_are_dropped(server):
   client = server.connect()
   try:
     client.seq = 5000
-    client.ping(timeout=5)
+    client.state(timeout=5)
     client.seq = 0                  # a new process on the same link starts at 1
     client.hello(timeout=5)         # seq 1: answered, whatever came before
     client.t.send(P.Msg.PING, 1)    # the hello's own seq is a replay
@@ -455,13 +455,28 @@ def test_not_ready_is_reported_rather_than_crashing(bare):
     client.close()
 
 
-def test_ping_state_and_hello_need_no_engine(bare):
+def test_state_hello_and_ping_need_no_engine(bare):
   client = bare.connect()
   try:
-    assert client.ping(timeout=5) < 5.0
     state = client.state(timeout=5)
     assert state['engine_state'] == 'none' and 'frames_served' in state
     assert client.hello(timeout=5)['protocol'] == P.VERSION
+    assert client.ping(timeout=5) < 5.0
+  finally:
+    client.close()
+
+
+def test_a_ping_where_the_server_knows_no_client_raises(bare):
+  # Between its join and the swap the comma only pings, over a link that can
+  # outlive a server restart or a USB session the server reopened. The ping
+  # must fail there, so the keep-alive rejoins, rather than the swap's first
+  # frame come back NOT_READY.
+  client = bare.connect()
+  try:
+    with pytest.raises(LinkError, match='no_hello'):
+      client.ping(timeout=5)
+    client.hello(timeout=5)
+    assert client.ping(timeout=5) < 5.0
   finally:
     client.close()
 

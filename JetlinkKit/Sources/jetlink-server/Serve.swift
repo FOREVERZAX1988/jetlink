@@ -155,7 +155,17 @@
   /// engine.
   @Sendable func exitOnFatal(_ error: any Error) {
     ServerLog(category: "main").error("exiting on an engine error nothing recovers from: \(error)")
-    exit(3)
+    exitNow(3)
+  }
+
+  /// Flushes every output stream, then ends the process without exit()'s
+  /// atexit handlers and C++ static destructors: a TensorRT build may still
+  /// be running on its own thread, and tearing TensorRT's statics down under
+  /// it aborts or faults, a crash in the journal after a stop. fflush(nil)
+  /// rather than stdout and stderr, which Swift 6 on Linux will not touch.
+  func exitNow(_ code: Int32) -> Never {
+    fflush(nil)
+    _exit(code)
   }
 
   let stopSignals = [(SIGINT, "SIGINT"), (SIGTERM, "SIGTERM")]
@@ -175,8 +185,8 @@
     #endif
   }
 
-  /// Runs `stop` on the main queue at SIGINT or SIGTERM, then exits 0. Never
-  /// returns.
+  /// Runs `stop` on the main queue at SIGINT or SIGTERM, then exits 0 by
+  /// `exitNow`. Never returns.
   func stopOnSignals(_ stop: @escaping @Sendable (String) -> Void) -> Never {
     let sources = stopSignals.map { number, name in
       #if os(macOS)
@@ -189,7 +199,7 @@
       let source = DispatchSource.makeSignalSource(signal: number, queue: .main)
       source.setEventHandler {
         stop(name)
-        exit(0)
+        exitNow(0)
       }
       source.resume()
       return source

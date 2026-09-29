@@ -11,8 +11,7 @@ Every file comes from the code the comma runs, on fixed inputs:
   wire      JetlinkKit/Tests/JetlinkServerTests/Fixtures/conformance/wire*
             headers and INFER bodies from protocol.py, and the byte streams
             StreamTransport frames for TCP, for a USB host and for the gadget
-            (FfsTransport's 16 KB bursts), with the reads a USB host posts to
-            take the gadget's stream in
+            (FfsTransport's 16 KB bursts)
   staging   .../conformance/staging*: the tensors PolicyQueues.step feeds for
             the tiny queued graph at frame_skip 1, 2 and 4, with the hidden
             state each frame's output feeds back, a hello, a non-finite frame,
@@ -64,8 +63,8 @@ def payload(seq: int, n: int) -> bytes:
 
 
 # (type, seq, flags, parts) with parts a list of lengths, or a JSON text. The
-# lengths put header plus payload on each side of the 1024 byte packet and the
-# 16 KB burst, where the PADDED byte and the gadget's padding change.
+# lengths put header plus payload on each side of the 512 and 1024 byte packets
+# and the 16 KB burst, where the PADDED byte and the gadget's padding change.
 WIRE_MESSAGES = [
   ('HELLO_REQ', 1, 0, '{"client":{"name":"modeld","nonce":7}}'),
   ('HELLO_RESP', 1, 0, '{"protocol":3,"engine_state":"none","sleep_after":0.0}'),
@@ -76,6 +75,9 @@ WIRE_MESSAGES = [
   ('INFER_RESP', 4, 0, [20, 971]),          # 1023
   ('UPLOAD_CHUNK', 5, 0, [8, 985]),         # 1025
   ('UPLOAD_CHUNK', 6, 0, [8, 2008]),        # 2048: padded
+  ('INFER_RESP', 12, 0, [20, 460]),         # 512, a high-speed packet: padded
+  ('UPLOAD_CHUNK', 13, 0, [8, 1496]),       # 1536: padded
+  ('INFER_RESP', 14, 0, [20, 461]),         # 513
   ('STATE_RESP', 7, 0, [16352]),            # 16384: padded, and a whole burst
   ('ERROR', 8, 0, [16353]),                 # 16385
   ('INFER_RESP', 9, 0, [20, 2066 * 4, 2 * 4, 64]),  # the big models' outputs either side of hidden_state, telemetry
@@ -93,13 +95,13 @@ def _framing(cls) -> dict:
 
 def _usb_host() -> dict:
   """The USB host's framing, as the comma's gadget expects it: whole-packet
-  reads of up to USB_READ_CHUNK with a packet of slack, the gadget's 16 KB
-  bursts stripped, and the PADDED byte on what it sends. The server is the only
-  USB host now; this is the framing it is held to."""
+  reads with a packet of slack, the gadget's 16 KB bursts stripped, and the
+  PADDED byte on what it sends. The server is the only USB host now; this is
+  the framing it is held to."""
   from jetlink import protocol as P
   from jetlink.transport.base import StreamTransport
-  return {**_framing(StreamTransport), 'packet_size': P.USB_MAX_PACKET, 'read_chunk': P.USB_READ_CHUNK,
-          'rx_align': P.GADGET_TX_ALIGN, 'read_slack': P.USB_MAX_PACKET}
+  return {**_framing(StreamTransport), 'packet_size': P.USB_MAX_PACKET, 'rx_align': P.GADGET_TX_ALIGN,
+          'read_slack': P.USB_MAX_PACKET}
 
 
 def _memory(framing: dict, rx_size: int = 1 << 20):
@@ -112,7 +114,6 @@ def _memory(framing: dict, rx_size: int = 1 << 20):
       self.sent = bytearray()
       self.incoming = memoryview(incoming)
       self.pos = 0
-      self.reads: list[int] = []
 
     def _write(self, bufs) -> int:
       n = 0
@@ -124,7 +125,6 @@ def _memory(framing: dict, rx_size: int = 1 << 20):
     def _read_into(self, dest, timeout) -> int:
       # a USB host clamps to whole packets before it reads, TCP does not
       n = self._clamp_read(dest) if self.packet_size else dest.nbytes
-      self.reads.append(n)
       left = self.incoming.nbytes - self.pos
       if left <= 0:
         raise LinkError('end of the fixture stream')
@@ -198,8 +198,7 @@ def wire(root: Path) -> None:
       assert (m.msg_type, m.seq, bytes(m.payload)) == (P.Msg[spec[0]], spec[1], body), (name, spec[0])
       offsets.append(receiver.pos)
     assert receiver.pos == len(stream), name
-    streams[name] = {'file': f'wire.{name}.bin', 'bytes': len(stream), 'ends': offsets,
-                     'reads': receiver.reads if name == 'usb_gadget' else None}
+    streams[name] = {'file': f'wire.{name}.bin', 'bytes': len(stream), 'ends': offsets}
 
   messages = [{'type': P.Msg[t].value, 'name': t, 'seq': s, 'flags': f,
                'parts': p if isinstance(p, list) else None, 'json': p if isinstance(p, str) else None}

@@ -143,6 +143,29 @@
       #expect(trt.live.allSatisfy { $0 == 0 }, "\(trt.live)")
     }
 
+    @Test("A deserialize refused for want of device memory or of a runtime is a plain error, not the plan's fault")
+    func notThePlan() throws {
+      let refusals: [(code: Int32, message: String)] = [
+        (Int32(JL_TRT_ERROR), "[runtime.cpp::allocate::415] Error Code 1: Cuda Runtime (out of memory)"),
+        (Int32(JL_TRT_ERROR), "Requested amount of GPU memory (1718548480 bytes) could not be ALLOCATED"),
+        (Int32(JL_TRT_ERROR), "std::exception: OutOfMemory"),
+        (Int32(JL_TRT_CUDA_ERROR), "createInferRuntime: TensorRT returned no runtime"),
+      ]
+      for refusal in refusals {
+        trt.fail("engine_deserialize", code: refusal.code, refusal.message)
+        #expect {
+          _ = try load()
+        } throws: {
+          guard let error = $0 as? TrtError else { return false }
+          return error.code == JL_TRT_CUDA_ERROR && !error.isFatal && error.description.contains(refusal.message)
+        }
+      }
+      trt.fail("engine_deserialize", code: Int32(JL_TRT_ERROR), "Serialization assertion stdVersionRead == kSERIALIZATION_VERSION failed")
+      #expect(throws: ArtifactInvalid.self) { try load() }
+      #expect(!trt.isSticky)
+      #expect(trt.live.allSatisfy { $0 == 0 }, "\(trt.live)")
+    }
+
     @Test("A deserialize refused behind a sticky error is fatal, not the plan's fault")
     func stickyDeserialize() throws {
       trt.fail("engine_deserialize", code: Int32(JL_TRT_CUDA_STICKY), "CUDA_ERROR_ILLEGAL_ADDRESS: an illegal memory access was encountered")

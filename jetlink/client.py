@@ -267,7 +267,15 @@ class JetlinkClient:
         raise EngineMissing(f"server has no engine for {sha256[:16]} ({resp.get('detail', '')})")
       self._upload(Path(onnx_path), nbytes, int(resp.get('chunk') or CHUNK))
 
-    self._await_ready(build_timeout)
+    try:
+      self._await_ready(build_timeout)
+    except EngineMissing:
+      # need_upload came later, once the job holding the device (a preload
+      # of another model) was done. A caller with the file sends it now.
+      if onnx_path is None:
+        raise
+      self._upload(Path(onnx_path), nbytes, int(self._engine_state.get('chunk') or CHUNK))
+      self._await_ready(build_timeout)
     spec = ModelSpec.from_dict(self._engine_state['spec'])
     if spec.sha256 != sha256:
       raise LinkError(f"server answered for {spec.sha256[:16]}, we asked for {sha256[:16]}")
@@ -309,6 +317,11 @@ class JetlinkClient:
         return
       if st == 'failed':
         raise LinkError(f"engine build failed: {self._engine_state.get('detail')}")
+      if st == 'need_upload':
+        # pushed when the device came free: without this the wait ran to
+        # build_timeout, a whole drive for provisioning's 1800 s
+        sha = str(self._engine_state.get('sha256'))
+        raise EngineMissing(f"server has no engine for {sha[:16]} ({self._engine_state.get('detail', '')})")
       if time.monotonic() > end:
         raise LinkTimeout(f"engine not ready after {timeout:.0f}s (state={st})")
       self._stopped()

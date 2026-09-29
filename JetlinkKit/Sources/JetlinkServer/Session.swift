@@ -11,6 +11,9 @@ final class Session: @unchecked Sendable {
   private let host: EngineHost
   private let log = ServerLog(category: "session")
   private var client = ""
+  /// Has a client said hello on this connection? A comma pinging a session
+  /// with neither a hello nor a model request joined an earlier one.
+  private var greeted = false
   private var lastSeq: UInt32 = 0
   private(set) var request: Request?
   private(set) var frames = 0
@@ -159,7 +162,7 @@ final class Session: @unchecked Sendable {
     lastSeq = message.seq
     switch type {
     case .inferReq: try onInfer(message)
-    case .ping: try send(.pong, seq: message.seq)
+    case .ping: try onPing(message)
     case .engineReq: try onEngineReq(message)
     case .uploadChunk: try onUploadChunk(message)
     case .uploadDone: try onUploadDone(message)
@@ -191,6 +194,7 @@ final class Session: @unchecked Sendable {
       log.info("session handed from \(client) to \(who.isEmpty ? "an unnamed client" : who)")
     }
     client = who
+    greeted = true
     lastSeq = message.seq
     request = nil
     frames = 0
@@ -217,6 +221,20 @@ final class Session: @unchecked Sendable {
       response[key] = value
     }
     try sendJSON(.helloResp, seq: message.seq, response)
+  }
+
+  /// PONG to a client this session knows: one that said hello here or asked
+  /// for a model. A comma waiting for a window to swap only pings, so after a
+  /// server restart, or a USB session the server reopened under it, a PONG
+  /// would say all is well until its first frame came back NOT_READY and
+  /// cost a demotion. The error makes it rejoin now: a hello, then its model
+  /// request.
+  private func onPing(_ message: Message) throws {
+    guard greeted || request != nil else {
+      try error(message.seq, "no_hello", "no hello on this connection; the server restarted or reopened the link since, so say hello again")
+      return
+    }
+    try send(.pong, seq: message.seq)
   }
 
   private func onEngineReq(_ message: Message) throws {
@@ -304,11 +322,17 @@ final class Session: @unchecked Sendable {
 
     let state: Data? = reply.wantsState ? host.telemetry.json() : nil
     let sendStarted = DispatchTime.now().uptimeNanoseconds
-    try respond(message.seq, reply, state: state)
-    if let failure = reply.failure, (failure as? any FatalEngineError)?.isFatal == true {
-      // After the reply, so the comma hears INFER_FAILED rather than a timeout.
-      log.error("the engine cannot recover from this: \(String(describing: failure))")
-      host.hooks.fatal?(failure)
+    do {
+      // After the reply, so the comma hears INFER_FAILED rather than a
+      // timeout, and after a reply that could not be written too (the comma
+      // already gave up): the device stays broken for the next session.
+      defer {
+        if let failure = reply.failure, (failure as? any FatalEngineError)?.isFatal == true {
+          log.error("the engine cannot recover from this: \(String(describing: failure))")
+          host.hooks.fatal?(failure)
+        }
+      }
+      try respond(message.seq, reply, state: state)
     }
     guard reply.ran else { return }
     let sendUs = microseconds(since: sendStarted)
