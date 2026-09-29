@@ -28,8 +28,9 @@ from __future__ import annotations
 import hashlib
 import math
 from dataclasses import dataclass
+from functools import cached_property
 
-from jetlink.onnx_meta import OnnxMeta, parse_file
+from jetlink.onnx_meta import parse_file
 from jetlink.protocol import INFER_REQ_SIZE, INFER_RESP_SIZE
 
 # openpilot ModelConstants; duplicated so the server needs no openpilot import
@@ -165,7 +166,9 @@ class ModelSpec:
   def output_nbytes(self) -> int:
     return self.output_nelem * 4  # we return float32, as openpilot's JIT does
 
-  @property
+  # cached: the client reads these on every frame, and a frozen dataclass
+  # without slots has a __dict__ to keep them in
+  @cached_property
   def hidden_range(self) -> tuple[int, int] | None:
     """[start, stop) of hidden_state in the output: what the reply leaves out.
     None when the model names no such slice, and then the reply is whole."""
@@ -174,7 +177,7 @@ class ModelSpec:
       return None
     return (s.start, s.stop) if 0 <= s.start < s.stop <= self.output_nelem else None
 
-  @property
+  @cached_property
   def reply_nelem(self) -> int:
     """The floats an INFER_RESP carries: the output less hidden_state."""
     h = self.hidden_range
@@ -229,20 +232,8 @@ def sha256_file(path: str, bufsize: int = 1 << 20) -> tuple[str, int]:
 
 def spec_from_onnx(path: str, frame_skip: int = DEFAULT_FRAME_SKIP,
                    sha256: str | None = None, nbytes: int | None = None) -> ModelSpec:
-  meta: OnnxMeta = parse_file(path)
+  meta = parse_file(path)
   if sha256 is None or nbytes is None:
     sha256, nbytes = sha256_file(path)
-  return spec_from_meta(meta, sha256, nbytes, frame_skip)
-
-
-def spec_from_meta(meta: OnnxMeta, sha256: str, nbytes: int,
-                   frame_skip: int = DEFAULT_FRAME_SKIP) -> ModelSpec:
-  return ModelSpec(
-    sha256=sha256,
-    nbytes=nbytes,
-    frame_skip=frame_skip,
-    input_shapes=dict(meta.inputs),
-    output_shapes=dict(meta.outputs),
-    output_slices=meta.output_slices,
-    checkpoint=meta.model_checkpoint,
-  )
+  return ModelSpec(sha256=sha256, nbytes=nbytes, frame_skip=frame_skip, input_shapes=dict(meta.inputs),
+                   output_shapes=dict(meta.outputs), output_slices=meta.output_slices, checkpoint=meta.model_checkpoint)
