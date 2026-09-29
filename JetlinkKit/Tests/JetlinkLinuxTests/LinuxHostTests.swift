@@ -33,6 +33,18 @@
       #expect(lines.has(.warning, "needs /sys/power/state"))
       #expect(self.hooks(Tree.jetsonCopy(), sleepAfter: 0).sleepAfter == 0)
     }
+
+    @Test("The benchmark's thermal state comes from the GPU's temperature")
+    func thermal() {
+      let bench = LinuxHost.hooks(
+        sleepAfter: 0, poweroff: false, telemetry: GPUTelemetry(read: { TegraTelemetry(root: jetson).read() }, name: nil, tegra: true), root: Tree().root)
+      // tj-thermal reads 58.9 °C
+      #expect(bench.thermal() == "nominal")
+      for (celsius, state) in [(0.0, "unknown"), (79.9, "nominal"), (80, "fair"), (90, "serious"), (99, "critical")] {
+        #expect(LinuxHost.thermal(GPUTelemetry(read: { ["temp_c": celsius] }, name: nil, tegra: true))() == state, "\(celsius)")
+      }
+      #expect(LinuxHost.thermal(nil)() == "unknown")
+    }
   }
 
   @Suite("Platform")

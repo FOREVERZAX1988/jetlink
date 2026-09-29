@@ -24,7 +24,11 @@ package enum Artifact {
 
   static func write(_ meta: [String: Any], to url: URL) throws {
     let data = try JSONSerialization.data(withJSONObject: meta, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
-    try data.write(to: url, options: .atomic)
+    // The seconds are Python's round(x, 1) floats, which keep their ".0";
+    // JSONSerialization writes a whole 36.0 as 36.
+    let text = String(decoding: data, as: UTF8.self).replacingOccurrences(
+      of: #"("(?:build|load)_seconds"\s*:\s*-?\d+)(?=\s*[,}\n])"#, with: "$1.0", options: .regularExpression)
+    try Data(text.utf8).write(to: url, options: .atomic)
   }
 
   /// The keys every build's sidecar has, as the Python backends name them.

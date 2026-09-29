@@ -18,6 +18,7 @@
       var hooks = ServerHooks()
       if let telemetry {
         hooks.telemetry = telemetry.read
+        hooks.thermal = thermal(telemetry)
       }
 
       // Made whether or not this server sleeps, so `jetlink caffeinate`
@@ -42,6 +43,21 @@
       }
       hooks.shutdown = PowerOff.hook(enabled: poweroff)
       return hooks
+    }
+
+    /// The benchmark's thermal state from the GPU's temperature, a Jetson's
+    /// junction: nominal below 80 °C, fair from 80, serious from 90, and
+    /// critical from 99, where an Orin starts throttling.
+    public static func thermal(_ telemetry: GPUTelemetry?) -> @Sendable () -> String {
+      {
+        guard let celsius = telemetry?.read()["temp_c"] as? Double, celsius > 0 else { return "unknown" }
+        switch celsius {
+        case ..<80: return "nominal"
+        case ..<90: return "fair"
+        case ..<99: return "serious"
+        default: return "critical"
+        }
+      }
     }
 
     /// Tegra sysfs on a Jetson, else NVML for CUDA device `gpu` where the

@@ -4,6 +4,10 @@
   import JetlinkKit
   import JetlinkRegistry
   import JetlinkServer
+  #if os(Linux)
+    import JetlinkLinux
+    import JetlinkTRT
+  #endif
 
   /// `jetlink-server build ONNX`: the engine a comma would get, built ahead
   /// of the drive (Python's --build).
@@ -162,8 +166,13 @@
       let log = ServerLog(category: "main")
       let backend = try chosen.pick()
       do {
+        var hooks = ServerHooks()
+        #if os(Linux)
+          // The report's temperature, from the GPU's
+          hooks.thermal = LinuxHost.thermal(LinuxHost.telemetry(gpu: (backend as? TrtBackend)?.trt.device ?? 0))
+        #endif
         let server = try Server(
-          configuration: Server.Configuration(cacheRoot: cache.root, preload: false, listen: false), backend: backend)
+          configuration: Server.Configuration(cacheRoot: cache.root, preload: false, listen: false), backend: backend, hooks: hooks)
         defer { server.shutdown() }
         let last = server.cache.lastLoaded()
         guard let wanted = sha256 ?? last?.sha256 else {

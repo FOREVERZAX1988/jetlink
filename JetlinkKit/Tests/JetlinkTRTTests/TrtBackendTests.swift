@@ -132,6 +132,8 @@ extension Recorded<Event> {
         ] + phases)
 
       let meta = Artifact.sidecar(artifact)
+      // a float, as Python writes round(x, 1): "0.0" rather than "0"
+      #expect(try text(Artifact.sidecarURL(artifact)).range(of: #""build_seconds" ?: ?\d+\.\d"#, options: .regularExpression) != nil)
       #expect(
         Set(meta.keys) == [
           "backend", "trt_version", "device", "fp16", "strongly_typed", "optimization_level", "build_seconds", "onnx", "built_at", "spec",

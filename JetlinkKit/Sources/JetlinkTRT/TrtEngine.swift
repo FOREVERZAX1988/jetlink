@@ -123,6 +123,9 @@ public final class TrtEngine: EngineCore, @unchecked Sendable {
       }
       zeroState = false
     }
+    // The warm-up's runs pay for lazy CUDA state and the capture, so the
+    // timing starts after them.
+    let timing = warmed ? self.timing : nil
     try timing?.begin(trt, stream: stream, log: log)
     if let graph {
       try trt.check { jl_trt_graph_launch(h, graph, stream, $0, $1) }
