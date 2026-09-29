@@ -234,6 +234,18 @@ class JoiningModelState:
     # swaps and demotes happen inside run(), so this is the model whose output it is
     return self._active.get_action_from_model(*args, **kwargs)
 
+  def __getattr__(self, name):
+    # Only for names this class does not define: whatever else modeld starts
+    # reading follows the model that is driving, as the properties above do.
+    # Without it, a comma or sunnypilot sync that adds one read was an
+    # AttributeError on the frame thread, which modeld re-raises: modeld dead
+    # for the drive, on jetlink devices only. Reads only; a new write lands
+    # here and nowhere else, so each one modeld makes has its own setter above
+    if name.startswith('_'):
+      # also what keeps __init__ from recursing before _active exists
+      raise AttributeError(name)
+    return getattr(self._active, name)
+
   # -- the frame path ---------------------------------------------------------
 
   def run(self, bufs, transforms, inputs, after_enqueue=None):

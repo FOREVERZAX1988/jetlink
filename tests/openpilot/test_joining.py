@@ -484,6 +484,45 @@ class JoiningTest(JoiningBase):
     with self.assertRaises(RuntimeError):
       self._run(s)
 
+  def test_a_read_it_does_not_know_follows_the_model_that_drives(self):
+    # modeld reads attributes off the model every frame; one a sync adds must
+    # not be an AttributeError on the frame thread
+    self.small.new_constant, self.big.new_constant = 'small', 'big'
+    s = self._state()
+    self.assertEqual(s.new_constant, 'small')
+    self._wait_joined(s)
+    s._engaged = False
+    self._run(s)
+    self.assertEqual(s.new_constant, 'big')
+    self.big.raises = RuntimeError('link gone')
+    self._run(s)
+    self.assertEqual(s.new_constant, 'small')
+
+  def test_a_name_neither_model_has_is_still_an_error(self):
+    s = self._state()
+    with self.assertRaises(AttributeError):
+      _ = s.no_such_thing
+    self.assertFalse(hasattr(s, 'no_such_thing'))
+
+  def test_private_names_are_its_own(self):
+    self.small._private = 1
+    s = self._state()
+    with self.assertRaises(AttributeError):
+      _ = s._private
+
+  def test_a_write_it_does_not_know_stays_on_it(self):
+    # only reads are delegated: each write modeld makes has a setter that
+    # reaches both models (lat_delay, PLANPLUS_CONTROL)
+    s = self._state()
+    s.something_new = 5
+    self.assertFalse(hasattr(self.small, 'something_new'))
+
+  def test_it_is_not_consulted_while_it_is_being_built(self):
+    # a read before _active exists must not recurse
+    s = JoiningModelState.__new__(JoiningModelState)
+    with self.assertRaises(AttributeError):
+      _ = s.anything
+
   def test_lat_delay_reaches_both_models(self):
     s = self._state()
     s.lat_delay = 0.25
