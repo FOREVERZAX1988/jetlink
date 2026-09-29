@@ -394,7 +394,21 @@ class PoweringOffWithoutWaiting(OpenpilotTest):
     self.jl.request_shutdown('car battery')
     gadget.finish_shutdown()   # what the owner's run does, whatever the jetson answered
     self.assertFalse(self.jl.shutdown_pending())
-    self.assertTrue(self.op.log.has('shutdown request handed to the jetson after'))
+    self.assertTrue(self.op.log.has('the owner took the shutdown request after'))
+    self.assertFalse(self.jl.shutdown_pending())
+    self.assertEqual(len(self.op.log.lines('warning')), 2)   # asked, taken: said once
+
+  def test_nobody_taking_it_by_the_deadline_withdraws_it(self):
+    # a comma that outlives its DoShutdown must not have the Jetson powered
+    # off later by an owner that finds the request still there
+    self.jl.request_shutdown('car battery')
+    later = time.monotonic() + jo.SHUTDOWN_TIMEOUT - 1.0
+    with mock.patch.object(jo.time, 'monotonic', return_value=later):
+      self.assertTrue(self.jl.shutdown_pending())
+    with mock.patch.object(jo.time, 'monotonic', return_value=later + 1.0):
+      self.assertFalse(self.jl.shutdown_pending())
+    self.assertFalse(gadget.SHUTDOWN_REQUEST.exists())
+    self.assertTrue(self.op.log.has('nobody took the shutdown request within 25 s'))
     self.assertFalse(self.jl.shutdown_pending())
 
   def test_nothing_to_ask_is_nothing_to_wait_for(self):

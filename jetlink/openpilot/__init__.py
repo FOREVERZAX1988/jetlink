@@ -171,14 +171,27 @@ class Jetlink:
 
   def shutdown_pending(self) -> bool:
     """Has the owner still to take the power-off request? A stat, for a
-    caller's loop. Never raises."""
+    caller's loop. Never raises.
+
+    Once SHUTDOWN_TIMEOUT has passed since this process asked, the request is
+    withdrawn and False: a comma that outlives its DoShutdown must not have
+    the Jetson powered off later, when nobody wants it off, and the log says
+    the request went unanswered."""
     try:
       pending = gadget.SHUTDOWN_REQUEST.exists()
     except Exception:
       return False
-    if not pending and self._shutdown_asked is not None:
-      self._log.warning("jetlink: shutdown request handed to the jetson after %.1f s",
-                        time.monotonic() - self._shutdown_asked)
+    asked, now = self._shutdown_asked, time.monotonic()
+    if asked is None:
+      return pending
+    if not pending:
+      # the run removes it whether or not the Jetson answered; its log says which
+      self._log.warning("jetlink: the owner took the shutdown request after %.1f s", now - asked)
+    elif now - asked >= SHUTDOWN_TIMEOUT:
+      self._log.warning("jetlink: nobody took the shutdown request within %.0f s", SHUTDOWN_TIMEOUT)
+      gadget.finish_shutdown()
+      pending = False
+    if not pending:
       self._shutdown_asked = None
     return pending
 
