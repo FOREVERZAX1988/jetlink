@@ -5,21 +5,29 @@ This file is part of jetlink and is licensed under the MIT License.
 See the LICENSE file in the root directory for more details.
 
 The process that holds the gadget: what it keeps, what it lets go of, and when
-it starts the heavy half.
+it starts the heavy half. Its settings are jetlink.openpilot's Settings over
+the directory and keys the fork's adapter names, as jetlink.openpilot.owner
+hands them over.
 """
+import errno
 import json
 import logging
 import os
 import select
 import socket
+import subprocess
+import sys
 import tempfile
 import time
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from jetlink.comma import gadget, owner, root
+from jetlink.comma import gadget, lending, owner, root
+from jetlink.openpilot import owner as openpilot_owner
+from jetlink.openpilot.settings import FileParams, Settings
 from tests import comma_fakes
+from tests.openpilot.fakes import CHESTNUT_IDS, KEYS
 
 
 class OwnerTest(unittest.TestCase):
@@ -31,10 +39,13 @@ class OwnerTest(unittest.TestCase):
     self.write('IsOffroad', b'1')
     for name, value in (('DORMANT', self.tmp / 'dormant'),
                         ('SHUTDOWN_REQUEST', self.tmp / 'shutdown'),
-                        ('STATE', self.tmp / 'state'),
                         ('GADGET_STATUS', self.tmp / 'gadget-status'),
                         ('LENDER_STATUS', self.tmp / 'lender-status'),
-                        ('params_dir', mock.Mock(return_value=self.params)),
+                        ('STATUS', self.tmp / 'run' / 'status.json'),
+                        ('STARTS', self.tmp / 'run' / 'starts.json'),
+                        ('OWNER_LOCK', self.tmp / 'run' / 'owner.lock'),
+                        ('SERVER', self.tmp / 'run' / 'server.json'),
+                        ('CC_ORIENTATION', self.tmp / 'cc'),
                         ('link_configured', mock.Mock(return_value=True)),
                         ('host_attached', mock.Mock(return_value=True)),
                         ('udc_state', mock.Mock(return_value='configured')),
@@ -48,9 +59,6 @@ class OwnerTest(unittest.TestCase):
       p = mock.patch.object(gadget, name, value)
       self.addCleanup(p.stop)
       p.start()
-    p = mock.patch.object(owner, 'LOG', self.tmp / 'owner.log')
-    self.addCleanup(p.stop)
-    p.start()
     # every root step: the real one is sudo on a comma
     p = mock.patch.object(root, 'run', mock.Mock(return_value=True))
     self.addCleanup(p.stop)
@@ -68,15 +76,23 @@ class OwnerTest(unittest.TestCase):
     self.stamp = max(getattr(self, 'stamp', 0), time.time_ns()) + 10_000_000
     os.utime(path, ns=(self.stamp, self.stamp))
 
+  def make(self, *args, **kwargs) -> owner.Owner:
+    """An owner over jetlink.openpilot's Settings, as jetlink.openpilot.owner
+    hands it over, on this test's params."""
+    kwargs.setdefault('settings', Settings(FileParams(self.params), KEYS))
+    kwargs.setdefault('chestnut_ids', CHESTNUT_IDS)
+    return owner.Owner(*(args or ((),)), **kwargs)
+
   def vm_calls(self) -> list[str]:
     """What the owner asked jetlink-root.sh vm to do, in order."""
     return [c.args[1] for c in self.root_run.call_args_list if c.args[0] == 'vm']
 
-  def note_state(self, **kw) -> None:
-    gadget.STATE.write_text(json.dumps(kw))
+  def heard(self, o, sleep_after=1.0) -> None:
+    """A borrower passed on the server's hello (lending.Loan.note_server)."""
+    o.note_server('modeld', {'device': 'orin', 'sleep_after': sleep_after})
 
   def owner(self, presented=True, lendable=False):
-    o = owner.Owner()
+    o = self.make()
     o.lender = mock.Mock(lent=False, listening=True)
     o.transport = mock.Mock(lendable=lendable) if presented else None
     for name in ('open_link', 'spawn_worker'):
@@ -87,9 +103,9 @@ class OwnerTest(unittest.TestCase):
     self.addCleanup(p.stop)
     p.start()
     self.addCleanup(o.cable.close)
-    # a run has already reported, so nothing is outstanding and the far end sleeps
-    self.note_state(sleep_after=1.0, unfinished=False)
-    o.seen = o.marks()
+    # a hello has been passed on, and nothing is outstanding: the far end sleeps
+    self.heard(o, sleep_after=1.0)
+    o.seen = o.settings.marks()
     o.had_host = True
     return o
 
@@ -178,15 +194,15 @@ class TestParked(OwnerTest):
     # on ignition power the Jetson stays up, and letting go would leave a
     # powered awake box unenumerated for the whole parked period
     o = self.owner()
-    self.note_state(sleep_after=0.0, unfinished=False)
+    self.heard(o, sleep_after=0.0)
     o.idle_since = time.monotonic() - owner.DORMANT_HOLD
     o.step()
     self.assertFalse(o.dormant)
     o.close_link.assert_not_called()
 
   def test_a_far_end_too_old_to_say_keeps_the_release_it_always_had(self):
-    gadget.STATE.unlink(missing_ok=True)
     o = self.owner()
+    o.server = None
     o.idle_since = time.monotonic() - owner.DORMANT_HOLD
     o.step()
     self.assertTrue(o.dormant)
@@ -247,7 +263,7 @@ class TestStartingTheHeavyHalf(OwnerTest):
 
   def test_an_unfinished_run_is_tried_again_on_its_own_timer(self):
     o = self.owner()
-    self.note_state(sleep_after=1.0, unfinished=True)
+    o.unfinished = True
     o.next_worker = time.monotonic() + owner.WORKER_BACKOFF
     o.step()
     o.spawn_worker.assert_not_called()
@@ -304,13 +320,121 @@ class TestTheRunThatFinishes(OwnerTest):
     o.worker = mock.Mock(**{'poll.return_value': None})
     o.step()
     self.write('ModelManager_ActiveBundleChestnut', b'{"ref": "c"}')
-    o.worker.poll.return_value = 0
+    o.worker.poll.return_value = o.worker.returncode = 0
     o.step()
     # the mark is retaken when the run exits, so this looks unchanged...
     o.spawn_worker.assert_not_called()
     self.write('ModelManager_ActiveBundleChestnut', b'{"ref": "d"}')
     o.step()
     o.spawn_worker.assert_called_once()   # ...and a later pick still starts one
+
+
+class TestWhatItIsTold(OwnerTest):
+  """What the owner never speaks the protocol to learn: the server's hello, as
+  every borrower passes it on after every hello, and whether a run left work,
+  which is the run's exit status."""
+
+  def test_every_hello_passed_on_refreshes_the_far_end(self):
+    # memory reinstalled-jetson-not-reprovisioned: the record was refreshed
+    # only by a run that had work, so a Jetson moved to always-on power was
+    # still let go, drive after drive
+    o = self.owner()
+    self.heard(o, sleep_after=0.0)
+    o.idle_since = time.monotonic() - owner.DORMANT_HOLD
+    o.step()
+    self.assertFalse(o.dormant, 'let an always-on jetson go')
+    self.heard(o, sleep_after=60.0)   # the next drive's hello, with no model change
+    o.step()
+    self.assertTrue(o.dormant)
+
+  def test_a_server_that_does_not_say_sleeps(self):
+    for said in ({}, {'sleep_after': None}, {'sleep_after': 'soon'}, {'sleep_after': 120}):
+      self.assertTrue(owner.server_sleeps(said), said)
+    self.assertTrue(owner.server_sleeps(None))
+    self.assertFalse(owner.server_sleeps({'sleep_after': 0}))
+
+  def test_it_is_in_the_record_and_said_when_it_changes(self):
+    o = self.owner()
+    with mock.patch.object(gadget, 'log') as log:
+      for _ in range(3):
+        o.note_server('modeld', {'device': 'orin', 'sleep_after': 0.0, 'protocol': 3})
+      o.note_server('provision', {'device': 'orin', 'sleep_after': 60.0, 'protocol': 3})
+    self.assertEqual(log.warning.call_count, 2)
+    self.assertIn('stays up', log.warning.call_args_list[0].args[3])
+    o.publish_status()
+    self.assertEqual(gadget.owner_status()['server'], {'device': 'orin', 'sleep_after': 60.0, 'protocol': 3})
+
+  def test_an_owner_started_again_keeps_what_the_last_one_heard(self):
+    # parked, with nobody to say hello again until the next drive: after a
+    # crash, and after the link turned Off and On, whose clean stop removes
+    # the status record
+    for clean in (False, True):
+      first = self.owner()
+      self.heard(first, sleep_after=0.0)
+      if clean:
+        first.stop = True
+        first.run()
+        self.assertFalse(gadget.STATUS.exists())
+      second = self.make()   # not self.owner(), which passes on a hello of its own
+      self.addCleanup(second.cable.close)
+      second.adopt()
+      self.assertFalse(second.far_end_sleeps(), 'clean' if clean else 'crash')
+      gadget.SERVER.unlink()
+
+  def test_what_it_heard_is_kept_when_it_changes(self):
+    o = self.owner()   # heard sleep_after 1.0 already
+    with mock.patch.object(gadget, 'write_record', wraps=gadget.write_record) as write:
+      self.heard(o, sleep_after=1.0)
+      write.assert_not_called()
+      self.heard(o, sleep_after=0.0)
+    write.assert_called_once_with(gadget.SERVER, {'device': 'orin', 'sleep_after': 0.0})
+    self.assertEqual(json.loads(gadget.SERVER.read_text()), {'device': 'orin', 'sleep_after': 0.0})
+
+  def test_a_server_record_that_is_not_one_is_none(self):
+    gadget.SERVER.parent.mkdir(parents=True, exist_ok=True)
+    for text in ('', 'nope', '[0]'):
+      gadget.SERVER.write_text(text)
+      o = self.make()
+      self.addCleanup(o.cable.close)
+      o.adopt()
+      self.assertIsNone(o.server, text)
+
+  def test_the_runs_exit_status_says_whether_it_left_work(self):
+    o = self.owner()
+    for code, unfinished in ((0, False), (1, True), (-9, True), (0, False)):
+      o.worker = mock.Mock(**{'poll.return_value': code, 'returncode': code})
+      self.assertFalse(o.worker_running())
+      self.assertEqual(o.unfinished, unfinished, code)
+    o.publish_status()
+    self.assertIs(gadget.owner_status()['unfinished'], False)
+
+  def test_a_run_stopped_on_the_way_says_so_too(self):
+    o = self.owner()
+    o.worker = mock.Mock(**{'wait.return_value': 1})
+    o.stop_worker()
+    self.assertTrue(o.unfinished)
+    o.worker = mock.Mock(**{'wait.return_value': 0})
+    o.stop_worker()
+    self.assertFalse(o.unfinished, 'a run that finished its round as it was stopped')
+    o.worker = mock.Mock(**{'wait.side_effect': subprocess.TimeoutExpired('run', owner.POLL)})
+    with mock.patch.object(owner, 'WORKER_GRACE', 0.0):
+      o.stop_worker()
+    self.assertTrue(o.unfinished, 'killed')
+
+  def test_a_borrowers_note_reaches_it_through_the_lender(self):
+    o = self.make()
+    self.addCleanup(o.cable.close)
+    with mock.patch.object(lending, 'SOCKET', self.tmp / 'lend.sock'):
+      o.lender = lending.Lender(o.lendable, o.bounce_gadget, server=o.note_server)
+      self.assertTrue(o.lender.start())
+      self.addCleanup(o.lender.stop)
+      conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+      conn.settimeout(lending.POLL)
+      conn.connect(str(o.lender.path))
+      loan = lending.Loan(conn, bytearray(), '', '', name='modeld')
+      self.addCleanup(loan.close)
+      self.assertTrue(loan.note_server({'device': 'orin', 'sleep_after': 0.0, 'loaded': 'x' * 64, 'engine_state': 'ready'}))
+    self.assertEqual(o.server, {'device': 'orin', 'sleep_after': 0.0})
 
 
 class TestShutdown(OwnerTest):
@@ -549,7 +673,10 @@ class IosTest(OwnerTest):
 
   def owner(self, **kw):
     o = super().owner(**kw)
+    # built for iOS and said so, as the first step of a real owner does:
+    # without the record a reader falls back to the setting it was handed
     o.built_ios = True
+    o.publish()
     return o
 
 
@@ -667,7 +794,7 @@ class TestCable(IosTest):
     o.spawn_worker.assert_called_once()
 
   def test_closing_the_link_takes_the_listener_and_the_record_with_it(self):
-    o = owner.Owner()
+    o = self.make()
     o.lender = mock.Mock(lent=False, listening=True)
     o.transport = mock.Mock()
     self.assertTrue(o.cable.open())
@@ -755,6 +882,29 @@ class TestSwitchingMode(OwnerTest):
     self.setup_gadget.assert_called_once()
     self.assertTrue(o.built_ios)
     o.step()
+    self.setup_gadget.assert_called_once()
+
+  def test_a_dead_owners_borrower_holds_the_rebuild_back(self):
+    # the owner died parked during a run, and the run is still on the
+    # endpoints of the gadget the dead owner bound; the rebuild's unbind
+    # would pull it out from under the run
+    o = self.switched(presented=False)
+    with mock.patch.object(gadget, 'bound_udc', return_value='a600000.dwc3'), mock.patch.object(gadget, 'log') as log:
+      o.step()
+      o.step()
+    self.setup_gadget.assert_not_called()
+    self.assertFalse(o.built_ios)
+    self.assertEqual(sum('rebuilding it once that lets go' in c.args[0] for c in log.warning.call_args_list), 1)
+    # the run exits, its files close, the kernel unbinds
+    with mock.patch.object(gadget, 'bound_udc', return_value=None):
+      o.step()
+    self.setup_gadget.assert_called_once()
+    self.assertTrue(o.built_ios)
+
+  def test_our_own_bind_is_no_reason_to_wait(self):
+    o = self.switched()   # presented: the bind is ours
+    with mock.patch.object(gadget, 'bound_udc', return_value='a600000.dwc3'):
+      o.step()
     self.setup_gadget.assert_called_once()
 
   def test_onroad_it_waits_for_the_car_to_park(self):
@@ -862,6 +1012,436 @@ class TestTheLoop(OwnerTest):
     self.assertFalse(gadget.LINK.exists())
 
 
+class TestTheStatusRecord(OwnerTest):
+  """What the owner writes down for the UI and hardwared every step, whole,
+  which is its heartbeat too (jetlink.openpilot.status reads it)."""
+
+  def record(self, o) -> dict:
+    o.publish_status()
+    return gadget.owner_status()
+
+  def test_it_is_written_before_the_first_step(self):
+    # the first step builds the gadget, which can take a while
+    o = self.owner()
+    seen = []
+
+    def step():
+      seen.append(gadget.owner_status())
+      o.stop = True
+    with mock.patch.object(owner, 'POLL', 0.0), mock.patch.object(o, 'step', side_effect=step):
+      o.run()
+    self.assertEqual(seen[0]['pid'], os.getpid())
+    self.assertTrue(gadget.owner_alive(seen[0]))
+
+  def test_it_holds_what_the_readers_need(self):
+    o = self.owner()
+    o.step()
+    r = self.record(o)
+    self.assertEqual({k: r[k] for k in ('mode', 'link', 'peer', 'error', 'dormant', 'udc', 'speed', 'present', 'worker')},
+                     {'mode': 'usb', 'link': 'usb', 'peer': None, 'error': None, 'dormant': False, 'udc': 'configured',
+                      'speed': 'super-speed', 'present': True, 'worker': False})
+    # a whole record replaced, never a half written one beside it
+    self.assertEqual([n for n in os.listdir(gadget.STATUS.parent) if n.startswith('.')], [])
+
+  def test_a_step_is_followed_by_a_record(self):
+    o = self.owner()
+    stamps = []
+
+    def step():
+      stamps.append(o.published)
+      if len(stamps) == 2:
+        o.stop = True
+    with mock.patch.object(owner, 'POLL', 0.0), mock.patch.object(o, 'step', side_effect=step):
+      o.run()
+    self.assertLess(stamps[0], stamps[1], 'no record between the two steps')
+
+  def test_a_clean_stop_leaves_none(self):
+    # only an owner that died leaves a heartbeat behind to go stale
+    o = self.owner()
+    self.record(o)
+    o.stop = True
+    o.run()
+    self.assertIsNone(gadget.owner_status())
+    self.assertFalse(gadget.STATUS.exists())
+
+  def test_presence_and_its_hold_are_worked_out_here(self):
+    o = self.owner()
+    self.assertTrue(self.record(o)['present'])
+    gadget.udc_state.return_value = 'addressed'   # a USB3 link recovery passes through it
+    self.assertTrue(self.record(o)['present'])
+    self.assertIsNone(self.record(o)['speed'])
+    o.last_configured -= gadget.PRESENCE_HOLD
+    self.assertFalse(self.record(o)['present'])
+
+  def test_a_sleeping_host_is_present_while_the_cable_says_so(self):
+    o = self.owner(presented=False)
+    o.dormant = True
+    gadget.udc_state.return_value = None
+    gadget.CC_ORIENTATION.write_text('1')
+    r = self.record(o)
+    self.assertEqual((r['present'], r['dormant']), (True, True))
+    gadget.CC_ORIENTATION.write_text('0')
+    self.assertFalse(self.record(o)['present'])
+
+  def test_the_gadgets_files_are_folded_in(self):
+    o = self.owner()
+    o.built_ios, o._peer = True, '192.168.60.3'
+    gadget.GADGET_STATUS.write_text('error: no configfs here\n')
+    o.worker = mock.Mock(**{'poll.return_value': None})
+    r = self.record(o)
+    self.assertEqual((r['error'], r['net'], r['link'], r['peer'], r['worker']),
+                     ('no configfs here', 'ok 192.168.60.1', 'cable', '192.168.60.3', True))
+    gadget.GADGET_STATUS.unlink()
+    gadget.note_lender_error('address in use')
+    self.assertEqual(self.record(o)['error'], 'the lender could not listen: address in use')
+
+  def test_a_wait_inside_a_step_keeps_the_heartbeat(self):
+    o = self.owner()
+    o.published = time.monotonic() - owner.POLL
+    with mock.patch.object(o, 'publish_status') as publish:
+      self.assertFalse(o.waiting())
+      o.stop = True
+      o.published = time.monotonic()
+      self.assertTrue(o.waiting())
+    publish.assert_called_once()   # at most once a POLL
+
+  def test_settling_waits_with_the_heartbeat(self):
+    o = self.owner(lendable=False)
+    o.transport.release_endpoints.return_value = True
+    o.settle()
+    self.assertEqual(gadget.wait_for_host.call_args.kwargs['should_stop'], o.waiting)
+
+  def test_stopping_a_slow_run_keeps_the_heartbeat(self):
+    o = self.owner()
+    worker = o.worker = mock.Mock()
+    worker.wait.side_effect = [subprocess.TimeoutExpired('run', owner.POLL)] * 2 + [0]
+    with mock.patch.object(o, 'beat') as beat:
+      o.stop_worker()
+    self.assertEqual(beat.call_count, 2)
+    worker.kill.assert_not_called()
+    self.assertIsNone(o.worker)
+
+  def test_a_run_that_outlasts_the_grace_is_killed(self):
+    o = self.owner()
+    worker = o.worker = mock.Mock()
+    worker.wait.side_effect = subprocess.TimeoutExpired('run', owner.POLL)
+    with mock.patch.object(owner, 'WORKER_GRACE', 0.0):
+      o.stop_worker()
+    worker.kill.assert_called_once()
+
+  def test_a_record_that_cannot_be_written_is_said_once_and_not_left_stale(self):
+    # a stale record under a live owner reads as "accelerator service stopped"
+    o = self.owner()
+    o.publish_status()
+    published = o.published
+    with mock.patch.object(gadget, 'write_record', side_effect=OSError(28, 'No space left on device')), \
+         mock.patch.object(gadget, 'log') as log:
+      for _ in range(3):
+        o.publish_status()
+    self.assertEqual(log.error.call_count, 1)
+    self.assertEqual(o.published, published)
+    self.assertIsNone(gadget.owner_status(), 'the last record was left to go stale')
+    o.publish_status()
+    self.assertIsNone(o.status_error)
+    self.assertIsNotNone(gadget.owner_status())
+
+  def test_a_failed_write_leaves_no_temporary(self):
+    o = self.owner()
+    with mock.patch.object(gadget.os, 'replace', side_effect=OSError(28, 'No space left on device')), \
+         mock.patch.object(gadget, 'log'):
+      o.publish_status()
+    self.assertEqual([n for n in os.listdir(gadget.STATUS.parent) if n.startswith('.')], [])
+
+  def test_a_start_clears_what_a_killed_writer_left(self):
+    gadget.STATUS.parent.mkdir(parents=True, exist_ok=True)
+    (gadget.STATUS.parent / '.status.json.4242').write_text('{"half')
+    (gadget.STATUS.parent / '.server.json.4242').write_text('{')
+    o = self.make()
+    self.addCleanup(o.cable.close)
+    o.adopt()
+    self.assertEqual([n for n in os.listdir(gadget.STATUS.parent) if n.startswith('.')], [])
+
+
+class TestACrashLoop(OwnerTest):
+  """manager starts a dead owner again, and every start re-enumerates the
+  Jetson. Starts are written down and a clean stop takes its own back, so
+  only owners that died count, and past CRASH_FREE of them a start waits."""
+
+  def test_only_owners_that_died_lately_count(self):
+    t = 1000.0
+    for n in range(owner.CRASH_FREE):
+      self.assertEqual(owner.note_start(t + n), (0.0, n))
+    self.assertEqual(owner.note_start(t + 3), (owner.CRASH_BACKOFF, 3))
+    self.assertEqual(owner.note_start(t + 4), (2 * owner.CRASH_BACKOFF, 4))
+    for n in range(5, 15):
+      wait, _ = owner.note_start(t + n)
+    self.assertEqual(wait, owner.CRASH_BACKOFF_MAX)
+    # a window later, none of them count
+    self.assertEqual(owner.note_start(t + 15 + owner.CRASH_WINDOW), (0.0, 0))
+
+  def run_two_steps(self) -> None:
+    """An owner that steps twice and is stopped, as manager stops it."""
+    o = self.owner()
+    steps = []
+
+    def step():
+      steps.append(1)
+      o.stop = len(steps) == 2
+    with mock.patch.object(owner, 'POLL', 0.0), mock.patch.object(o, 'step', side_effect=step):
+      o.run()
+    self.assertEqual(len(steps), 2)
+
+  def test_owners_that_stop_cleanly_never_wait(self):
+    # the bench turns the link off and on again as often as it likes
+    for _ in range(owner.CRASH_FREE + 3):
+      self.run_two_steps()
+      self.assertEqual(owner._starts(), [], 'a clean stop was counted as a death')
+    self.assertEqual(owner.note_start(time.monotonic())[0], 0.0)
+
+  def test_a_record_that_cannot_be_read_counts_nothing(self):
+    gadget.STARTS.parent.mkdir(parents=True, exist_ok=True)
+    for text in ('', 'garbage', '{"a": 1}', '["x", null]'):
+      gadget.STARTS.write_text(text)
+      self.assertEqual(owner.note_start(1000.0), (0.0, 0), text)
+      gadget.STARTS.unlink()
+
+  def test_the_wait_holds_nothing_and_says_why(self):
+    now = time.monotonic()
+    gadget.write_record(gadget.STARTS, [now - 30.0, now - 20.0, now - 10.0])   # three owners that died
+    o = self.owner(presented=False)
+    seen = []
+
+    def sleep(seconds):
+      seen.append(gadget.owner_status())
+      o.stop = True   # manager stops it mid-wait
+    with mock.patch.object(owner.time, 'sleep', side_effect=sleep), mock.patch.object(o, 'step') as step:
+      o.run()
+    step.assert_not_called()
+    o.open_link.assert_not_called()
+    o.port.update.assert_not_called()
+    self.assertTrue(gadget.owner_alive(seen[0]))
+    self.assertIn('keeps stopping (3 times in 10 min), waiting 10 s before starting it again', seen[0]['error'])
+    # manager's stop is a clean one: it does not count against the next start
+    self.assertEqual(len(owner._starts()), 3)
+
+  def test_after_the_wait_it_starts_as_any_owner_does(self):
+    now = time.monotonic()
+    gadget.write_record(gadget.STARTS, [now - 30.0, now - 20.0, now - 10.0])
+    o = self.owner()
+    with mock.patch.object(owner, 'CRASH_BACKOFF', 0.05), mock.patch.object(owner, 'POLL', 0.01), \
+         mock.patch.object(o, 'step', side_effect=lambda: setattr(o, 'stop', True)) as step:
+      started = time.monotonic()
+      o.run()
+    step.assert_called_once()
+    self.assertGreaterEqual(time.monotonic() - started, 0.05)
+    self.assertIsNone(o.backing_off)
+
+  def test_a_power_off_request_ends_the_wait(self):
+    # hardwared waits 25 s for the owner; a wait of up to 5 min would leave
+    # the Jetson on its own supply running
+    now = time.monotonic()
+    gadget.write_record(gadget.STARTS, [now - 30.0, now - 20.0, now - 10.0])
+    gadget.SHUTDOWN_REQUEST.write_text(json.dumps({'reason': 'car battery'}))
+    o = self.owner()
+    with mock.patch.object(owner, 'CRASH_BACKOFF', 60.0), \
+         mock.patch.object(o, 'step', side_effect=lambda: setattr(o, 'stop', True)) as step:
+      started = time.monotonic()
+      o.run()
+    self.assertLess(time.monotonic() - started, 1.0)
+    step.assert_called_once()
+
+  def test_an_owner_that_dies_is_counted(self):
+    o = self.owner()
+    with mock.patch.object(o, 'step', side_effect=SystemExit('nothing catches this')), \
+         mock.patch.object(o, 'forget_status', side_effect=SystemExit('killed in the teardown')), \
+         self.assertRaises(SystemExit):
+      o.run()
+    self.assertEqual(len(owner._starts()), 1)
+
+  def test_a_stop_asked_for_is_clean_however_long_its_teardown(self):
+    # link Off with a run in a hello: stop_worker's grace is 10 s, and manager
+    # SIGKILLs 5 s after its SIGINT, before any finally
+    o = self.owner()
+    o.born = time.monotonic()
+    owner.note_start(o.born)
+    seen = []
+
+    def wait(timeout):
+      seen.append(list(owner._starts()))
+      if len(seen) < 3:
+        raise subprocess.TimeoutExpired('run', timeout)
+      return 0
+    o.worker = mock.Mock(**{'wait.side_effect': wait})
+    o.request_stop()
+    o.published = 0.0
+    with mock.patch.object(owner, 'POLL', 0.0):
+      o.stop_worker()
+    self.assertEqual(seen[1], [], 'still counted while the teardown waited: a SIGKILL there was a death')
+    self.assertIs(gadget.owner_status()['stopping'], True)
+
+  def test_a_stopping_owner_killed_in_its_teardown_leaves_no_alert(self):
+    from jetlink.openpilot import status
+    o = self.owner()
+    o.request_stop()
+    o.publish_status()
+    record = gadget.owner_status()
+    self.assertIs(record['stopping'], True)
+    with mock.patch.object(gadget.time, 'monotonic', return_value=record['at'] + 60.0):
+      self.assertEqual(status.owner_record(), (None, None))
+    record['stopping'] = False
+    gadget.write_record(gadget.STATUS, record)
+    with mock.patch.object(gadget.time, 'monotonic', return_value=record['at'] + 60.0):
+      self.assertEqual(status.owner_record(), (record, None))
+
+
+class TestStartingAgain(OwnerTest):
+  """An owner started after one that died finds its gadget and its records."""
+
+  def test_its_records_are_cleared_and_its_gadget_used_as_it_is(self):
+    gadget.note_link('cable', '192.168.60.3')
+    gadget.DORMANT.write_text('999999')
+    gadget.note_lender_error('address in use')
+    o = self.owner()
+    with mock.patch.object(gadget, 'setup_gadget') as setup:
+      o.adopt()
+      self.assertFalse(gadget.DORMANT.exists())
+      self.assertIsNone(gadget.gadget_error())
+      self.assertIsNone(gadget.link_peer())
+      o.step()
+    setup.assert_not_called()   # the configfs gadget is there, so nothing is rebuilt
+    self.assertEqual(gadget.link_kind(), 'usb')
+
+  def test_a_shutdown_request_waiting_for_it_is_kept(self):
+    # hardwared's, not the dead owner's: the new owner still takes it
+    gadget.SHUTDOWN_REQUEST.write_text(json.dumps({'reason': 'car battery'}))
+    o = self.owner()
+    o.adopt()
+    o.step()
+    o.spawn_worker.assert_called_once()
+    self.assertIn('shut down', o.spawn_worker.call_args.args[0])
+
+
+class TestOneOwnerAtATime(OwnerTest):
+  """A manager SIGKILLed without its cleanup starts jetlinkd again while the
+  orphaned owner still holds the gadget. The second one must leave it alone."""
+
+  def test_a_second_owner_touches_nothing_and_exits(self):
+    live = self.owner()
+    self.assertTrue(live.take_lock())
+    self.addCleanup(lambda: live.lock_fd is not None and os.close(live.lock_fd))
+    self.assertFalse(os.get_inheritable(live.lock_fd), 'a provisioning run would inherit the lock')
+    # the live owner's records
+    gadget.note_link('cable', '192.168.60.3')
+    gadget.DORMANT.write_text(str(os.getpid()))
+    gadget.note_lender_error('address in use')
+    second = self.owner()
+    with mock.patch.object(second, 'step') as step, mock.patch.object(gadget, 'log') as log:
+      second.run()
+    step.assert_not_called()
+    self.assertIn('another owner (pid %s) holds the gadget', log.error.call_args.args[0])
+    self.assertEqual(log.error.call_args.args[1], str(os.getpid()))
+    self.assertEqual(gadget.link_peer(), '192.168.60.3')
+    self.assertTrue(gadget.DORMANT.exists())
+    self.assertEqual(gadget.gadget_error(), 'the lender could not listen: address in use')
+    self.assertFalse(gadget.STATUS.exists())
+    self.assertEqual(owner._starts(), [])
+    second.port.off.assert_not_called()
+    second.lender.stop.assert_not_called()
+
+  def test_the_lock_goes_with_the_owner(self):
+    first = self.owner()
+    first.stop = True
+    first.run()
+    self.assertIsNone(first.lock_fd)
+    second = self.owner()
+    second.stop = True
+    with mock.patch.object(second, 'hold_the_gadget') as held:
+      second.run()
+    held.assert_called_once()
+
+  def test_without_a_place_to_lock_it_runs_as_before(self):
+    o = self.owner()
+    o.stop = True
+    with mock.patch.object(gadget, 'OWNER_LOCK', Path('/nonexistent-root/jetlink/owner.lock')), \
+         mock.patch.object(o, 'hold_the_gadget') as held, mock.patch.object(gadget, 'log'):
+      o.run()
+    held.assert_called_once()
+
+
+class TestABusyEp0(OwnerTest):
+  """An owner started while a borrower from before it still has ep1 and ep2:
+  modeld mid-drive, or the dead owner's own run. FunctionFS refuses ep0 until
+  they are closed, and the borrower's link has to carry on meanwhile."""
+
+  def setUp(self):
+    super().setUp()
+    self.configfs = self.tmp / 'configfs'
+    self.configfs.mkdir()
+    (self.configfs / 'UDC').write_text('a600000.dwc3\n')   # bound, by the owner that died
+    for name, value in (('GADGET_PATH', self.configfs), ('FFS_MOUNT', self.tmp / 'ffs')):
+      p = mock.patch.object(gadget, name, value)
+      self.addCleanup(p.stop)
+      p.start()
+
+  def fresh(self):
+    o = self.make()
+    self.addCleanup(o.cable.close)
+    o.lender = mock.Mock(lent=False, listening=True)
+    return o
+
+  def refused(self):
+    """os.open as FunctionFS answers while somebody else has an endpoint file open."""
+    real = os.open
+
+    def refuse(path, *args, **kwargs):
+      if os.path.basename(os.fsdecode(path)) == 'ep0':
+        raise OSError(errno.EBUSY, os.strerror(errno.EBUSY), os.fsdecode(path))
+      return real(path, *args, **kwargs)
+    return mock.patch('jetlink.transport.ffs.os.open', side_effect=refuse)
+
+  def test_the_borrowers_gadget_is_left_bound(self):
+    o = self.fresh()
+    with self.refused(), mock.patch.object(gadget, 'log') as log:
+      self.assertFalse(o.open_link())
+      self.assertFalse(o.open_link())
+    self.assertEqual((self.configfs / 'UDC').read_text(), 'a600000.dwc3\n', 'the refused open unbound the gadget')
+    self.assertIsNone(o.transport)
+    log.warning.assert_called_once()   # said once, and no traceback
+    log.exception.assert_not_called()
+    self.assertAlmostEqual(o.next_attempt - time.monotonic(), owner.EP0_BUSY_RETRY, delta=0.25)
+
+  def test_it_is_presented_once_the_borrower_lets_go(self):
+    o = self.fresh()
+    with self.refused():
+      o.open_link()
+    self.assertTrue(o.ep0_busy)
+    with mock.patch('jetlink.transport.ffs.FfsTransport') as made:
+      self.assertTrue(o.open_link())
+    made.assert_called_once()
+    self.assertFalse(o.ep0_busy)
+
+  def test_onroad_it_is_asked_once_a_second_not_every_step(self):
+    self.write('IsOffroad', b'0')
+    o = self.fresh()
+    busy = OSError(errno.EBUSY, 'Device or resource busy', str(self.tmp / 'ffs' / 'ep0'))
+    with mock.patch('jetlink.transport.ffs.FfsTransport', side_effect=busy) as made:
+      for _ in range(3):
+        o.step()
+      made.assert_called_once()
+      o.next_attempt = 0.0
+      o.step()
+      self.assertEqual(made.call_count, 2)
+
+  def test_a_busy_udc_is_not_a_busy_ep0(self):
+    o = self.fresh()
+    busy = OSError(errno.EBUSY, 'Device or resource busy', str(self.configfs / 'UDC'))
+    with mock.patch('jetlink.transport.ffs.FfsTransport', side_effect=busy), mock.patch.object(gadget, 'log') as log:
+      self.assertFalse(o.open_link())
+    log.exception.assert_called_once()
+    self.assertFalse(o.ep0_busy)
+    self.assertAlmostEqual(o.next_attempt - time.monotonic(), owner.RECONNECT_BACKOFF, delta=0.25)
+
+
 class TestSetup(OwnerTest):
   def test_the_owner_creates_the_gadget_when_there_is_none(self):
     # nothing sets it up at boot any more
@@ -885,7 +1465,7 @@ class TestTheWorker(OwnerTest):
   """The caller names the provisioning run; the owner knows no openpilot module."""
 
   def test_the_run_is_the_callers_argv_cwd_and_env(self):
-    o = owner.Owner(['python3', '-m', 'the.worker'], cwd='/data/openpilot', env={'PYTHONPATH': '/data/openpilot'})
+    o = self.make(['python3', '-m', 'the.worker'], cwd='/data/openpilot', env={'PYTHONPATH': '/data/openpilot'})
     with mock.patch.object(owner.subprocess, 'Popen') as popen:
       o.spawn_worker('nothing has been checked since boot')
     (argv,), kwargs = popen.call_args
@@ -895,23 +1475,56 @@ class TestTheWorker(OwnerTest):
     self.assertIs(o.worker, popen.return_value)
 
   def test_a_run_that_will_not_start_is_not_an_error(self):
-    o = owner.Owner()
+    o = self.make()
     with mock.patch.object(owner.subprocess, 'Popen', side_effect=OSError('no such file')):
       o.spawn_worker('nothing has been checked since boot')
     self.assertIsNone(o.worker)
 
-  def test_main_hands_the_worker_to_the_owner_and_logs_to_the_file(self):
-    log = self.tmp / 'owner-main.log'
-    with mock.patch.object(owner, 'Owner') as made, mock.patch.object(owner.signal, 'signal'), \
+
+
+class TestTheOpenpilotEntry(OwnerTest):
+  """jetlink.openpilot.owner.main: the owner as the fork's adapter starts it."""
+
+  def config(self):
+    from tests.openpilot.fakes import FakeOpenpilot
+    op = FakeOpenpilot(self.tmp / 'op')
+    return op.owner_config()
+
+  def test_it_runs_an_owner_over_the_whole_config(self):
+    config = self.config()
+    with mock.patch.object(owner, 'Owner') as made, mock.patch.object(openpilot_owner.signal, 'signal') as handle, \
          mock.patch.object(gadget, 'set_logger') as set_logger:
-      owner.main(['python3', '-m', 'the.worker'], cwd='/x', env={'A': 'b'}, log_file=log)
-    made.assert_called_once_with(['python3', '-m', 'the.worker'], cwd='/x', env={'A': 'b'})
+      openpilot_owner.main(config)
+    (worker,), kwargs = made.call_args
+    # the run is jetlink's to name, over the adapter the fork names
+    self.assertEqual(worker, [sys.executable, '-m', 'jetlink.openpilot.provision', '--adapter', 'tests.openpilot.fakes'])
+    self.assertEqual((kwargs['cwd'], kwargs['env']), (str(config.cwd), dict(config.env)))
+    self.assertEqual(kwargs['chestnut_ids'], config.chestnut_ids)
     made.return_value.run.assert_called_once()
+    self.assertEqual(handle.call_args_list, [mock.call(openpilot_owner.signal.SIGTERM, made.return_value.request_stop),
+                                             mock.call(openpilot_owner.signal.SIGINT, made.return_value.request_stop)])
+    # its settings are read off the directory the config names
+    s = kwargs['settings']
+    self.assertEqual((s.mode(), s.offroad()), ('off', True))
+    (config.params_dir / 'JetlinkLink').write_bytes(b'2')
+    (config.params_dir / 'IsOffroad').write_bytes(b'0')
+    self.assertEqual((s.mode(), s.offroad()), ('ios', False))
+    # and it logs to the file the config names
     logger = set_logger.call_args.args[0]
     self.addCleanup(lambda: [logger.removeHandler(h) or h.close() for h in list(logger.handlers)])
     logger.warning('jetlink: a line for the file')
-    self.assertIn('a line for the file', log.read_text())
+    self.assertIn('a line for the file', config.log_file.read_text())
     self.assertIsInstance(logger, logging.Logger)
+
+  def test_the_port_takes_the_ids_the_owner_was_given(self):
+    self.make(chestnut_ids={(1, 2)})
+    owner.port.Port.assert_called_with({(1, 2)})
+
+  def test_the_owner_knows_no_settings_or_ids_of_its_own(self):
+    # the fork's adapter names both; a caller that forgets them fails at once
+    # rather than running on a guess
+    with self.assertRaises(TypeError):
+      owner.Owner(())
 
 
 class TestLending(OwnerTest):

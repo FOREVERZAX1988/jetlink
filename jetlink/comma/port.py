@@ -43,11 +43,6 @@ from jetlink.comma import gadget, root
 
 POWER_ROLE = Path('/sys/class/usbpd/usbpd0/current_pr')
 USB_DEVICES = Path('/sys/bus/usb/devices')
-# CHESTNUT_USB_IDS and CHESTNUT_ROM_USB_IDS in openpilot's common/hardware/usb.py,
-# which the owner cannot import: the hardware package brings cereal and capnp
-# with it. The fork's tests check the two agree. The ROM ones too, so a
-# chestnut being flashed is never taken for a host
-CHESTNUT_IDS = frozenset({(0xADD1, 0x0001), (0x3801, 0x0001), (0x174C, 0x2464), (0x174C, 0x2463)})
 # how long the comma hosts the far end before judging it. A chestnut enumerates
 # well inside this
 SWAP_AFTER = 3.0
@@ -67,7 +62,7 @@ def power_role() -> str | None:
     return None
 
 
-def chestnut_attached() -> bool:
+def chestnut_attached(chestnut_ids: frozenset[tuple[int, int]]) -> bool:
   """Is a chestnut enumerated, running or in its ROM? It can only be on this port."""
   try:
     names = os.listdir(USB_DEVICES)
@@ -80,7 +75,7 @@ def chestnut_attached() -> bool:
       ids = tuple(int((USB_DEVICES / name / f).read_text(), 16) for f in ('idVendor', 'idProduct'))
     except (OSError, ValueError):
       continue   # a device going away
-    if ids in CHESTNUT_IDS:
+    if ids in chestnut_ids:
       return True
   return False
 
@@ -97,11 +92,17 @@ class Port:
   """Called once a cycle by the owner. A cycle reads one sysfs file; sudo only
   runs on a change."""
 
-  def __init__(self):
+  def __init__(self, chestnut_ids):
+    # what a chestnut enumerates as, running or in its ROM: openpilot's
+    # CHESTNUT_USB_IDS and CHESTNUT_ROM_USB_IDS, as the fork's adapter hands
+    # them over (OwnerConfig.chestnut_ids), so a chestnut being flashed is
+    # never taken for a host
+    self.chestnut_ids = frozenset(chestnut_ids)
     self._reset()
 
   def _reset(self) -> None:
     self.cleared = False   # the port put back as AGNOS boots it, once a session
+    self.deferred = False  # that waits for a host an owner before this one had
     self.held = False      # the voter is forced to sink
     # this plug has been judged, so leave it until it comes out. Also set for
     # the length of a hold until a host comes back
@@ -111,9 +112,18 @@ class Port:
 
   def update(self, now: float | None = None) -> None:
     if not self.cleared:
-      # whatever an owner killed mid-hold left behind
-      run_script('off')
-      self.cleared = True
+      # whatever an owner killed mid-hold left behind. Not under a live link:
+      # an owner started after one that died can find a borrower still on the
+      # gadget the dead one presented, through a hold it made, and back at
+      # dual role the port may toss the roles again. Once no host has us
+      # configured the link has gone anyway, and the hold goes then
+      if gadget.host_attached():
+        if not self.deferred:
+          gadget.log.warning("jetlink: a host is still on the gadget; leaving the USB-C port as it is until it goes")
+          self.deferred = True
+      else:
+        run_script('off')
+        self.cleared = True
     now = time.monotonic() if now is None else now
     role = power_role()
     if role != self.role:
@@ -127,7 +137,7 @@ class Port:
         self.role_since = now  # the accessory reattaches in a moment; time the gap afresh
     elif role == 'source':
       if not self.settled and lasted >= SWAP_AFTER:
-        if chestnut_attached():
+        if chestnut_attached(self.chestnut_ids):
           self.settled = True
         else:
           self._hold(lasted)

@@ -8,19 +8,20 @@ The comma's USB gadget, and how to look at it, using nothing but the
 standard library and jetlink's own transport.
 
 Kept apart from openpilot so the process that owns the gadget can be small.
-Holding ep0 needs sysfs, a few params and a unix socket;
-`openpilot.common.swaglog` costs 28 MB because it drags numpy, capnp and zmq
-in to publish a log line, and `openpilot.common.params` imports swaglog, so a
-module that touches either prices the owner out of being minimal. Measured on
-the comma: python plus this plus the FunctionFS transport is 10.4 MB against
-47.5 MB for the daemon that imported the world.
+Holding ep0 needs sysfs and a unix socket; `openpilot.common.swaglog` costs
+28 MB because it drags numpy, capnp and zmq in to publish a log line, and
+`openpilot.common.params` imports swaglog, so a module that touches either
+prices the owner out of being minimal. Measured on the comma: python plus this
+plus the FunctionFS transport is 10.4 MB against 47.5 MB for the daemon that
+imported the world.
 
-Nothing in jetlink.comma may import openpilot; openpilot's params are read
-here as files, by name. tests/test_comma_gadget.py holds the line.
+Nothing in jetlink.comma may import openpilot or knows a param: the settings
+come from jetlink.openpilot.settings, over the directory and the keys the
+fork's adapter names. tests/test_comma_gadget.py holds the line.
 
-The fork's heavy processes import it directly, and its helpers module points
-`log` at cloudlog (set_logger), so their lines still reach swaglog while the
-owner's go to a file.
+jetlink.openpilot's heavy processes import it too, and bind() points `log` at
+the fork's cloudlog (set_logger), so their lines still reach the drive's log
+while the owner's go to a file.
 """
 from __future__ import annotations
 
@@ -43,96 +44,10 @@ log = logging.getLogger('jetlink.comma.gadget')
 
 def set_logger(logger) -> None:
   """Send this module's lines somewhere else, and the root script's failures
-  with them; the fork's helpers points it at cloudlog."""
+  with them: jetlink.openpilot.bind points it at the fork's cloudlog."""
   global log
   log = logger
   root.log = logger
-
-
-# -- params ---------------------------------------------------------------
-# openpilot's params, read straight off the filesystem. params.cc writes a
-# value to a temp file, fsyncs it, renames it over the key and fsyncs the
-# directory, so a plain read gets the old value or the new one and never a torn
-# one. The path rule is params.cc's: PARAMS_ROOT or /data/params, plus "/" and
-# OPENPILOT_PREFIX, which defaults to "d".
-#
-# Every key the comma layer reads is named here and nowhere else in it, and
-# none is written. openpilot declares them all (params_keys.h).
-P_SPEC = "JetlinkSpec"              # the spec and readiness a provisioning run recorded; the owner only stats it
-P_LINK = "JetlinkLink"              # Accelerator Link, an index into LINK_MODES
-P_OFFROAD = "IsOffroad"             # manager's: is the car parked
-P_BIG_MODEL = "ModelManager_ActiveBundleChestnut"  # the model manager's big-model pick
-LINK_MODES = ('off', 'usb', 'ios')  # off; a Jetson or a Mac on USB; an iPhone on the cable
-
-
-_dirs: dict[tuple[str, str], Path] = {}
-
-
-def params_dir() -> Path:
-  """Where the params live, by params.cc's rule. Memoised on the two variables
-  it depends on: this is on the path of every param read in the process."""
-  prefix = os.environ.get('OPENPILOT_PREFIX', 'd')
-  base = os.environ.get('PARAMS_ROOT', '')
-  key = (base, prefix)
-  found = _dirs.get(key)
-  if found is None:
-    # hw.h: PARAMS_ROOT, else /data/params on device. comma_home carries the
-    # prefix off-device, so a bench under its own store lands where Params does
-    home = base or ('/data/params' if root.AGNOS
-                    else os.path.join(os.path.expanduser('~'),
-                                      '.comma' + ('' if prefix == 'd' else prefix), 'params'))
-    found = _dirs[key] = Path(home) / prefix
-  return found
-
-
-def raw_param(key: str) -> bytes | None:
-  """A param's bytes, or None if it is unset or unreadable."""
-  try:
-    return (params_dir() / key).read_bytes()
-  except OSError:
-    return None
-
-
-def param_bool(key: str) -> bool | None:
-  """A param openpilot stores with put_bool. None when it is unset."""
-  value = raw_param(key)
-  if value is None:
-    return None
-  return value.strip() in (b'1', b'true', b'True')
-
-
-def link_mode() -> str:
-  """Accelerator Link: 'off', 'usb' or 'ios'. Unset or unreadable is 'off';
-  manager writes the default before anything runs."""
-  raw = raw_param(P_LINK)
-  try:
-    return LINK_MODES[int(raw)]
-  except (TypeError, ValueError, IndexError):
-    return 'off'
-
-
-def enabled() -> bool:
-  """Is the link on, for either host? Not "absent means auto": the gadget comes
-  up at boot with the package installed, so auto turned installation into
-  enablement."""
-  return link_mode() != 'off'
-
-
-def ios() -> bool:
-  """Is the link set to iOS, an iPhone on the cable?"""
-  return link_mode() == 'ios'
-
-
-
-def offroad() -> bool:
-  """Is the car parked?
-
-  The owner runs onroad too, to keep hold of the gadget, and everything else
-  jetlink does belongs to a parked car: a download, an upload, an engine build.
-  A missing param is manager not having written one yet, which reads as parked.
-  """
-  value = param_bool(P_OFFROAD)
-  return True if value is None else value
 
 
 # -- what carries the link ------------------------------------------------
@@ -152,21 +67,40 @@ NET_STATUS = Path("/dev/shm/jetlink-net")   # jetlink-root.sh: "ok 192.168.60.1 
 CABLE_ADDR = (CABLE_ADDRESS, DEFAULT_PORT)
 
 
-def _link_record() -> list[str]:
+def _read(path: Path) -> str:
+  """A record's text, stripped; '' when it is missing or unreadable."""
   try:
-    return LINK.read_text().split()
+    return path.read_text().strip()
   except OSError:
-    return []
+    return ''
 
 
-def link_kind() -> str:
+def _write(path: Path, text: str | None, what: str) -> bool:
+  """Write a record, or remove it with None. False, and logged, when that fails."""
+  try:
+    if text is None:
+      path.unlink(missing_ok=True)
+    else:
+      path.write_text(text)
+    return True
+  except OSError:
+    log.exception("jetlink: could not %s", what)
+    return False
+
+
+def _link_record() -> list[str]:
+  return _read(LINK).split()
+
+
+def link_kind(mode: str | None = None) -> str:
   """The gadget the owner built and published: 'cable' for iOS (the phone's
-  network interface on the gadget) or 'usb'. The setting stands in only until
-  the owner has said: it may have moved and be waiting for the car to park."""
+  network interface on the gadget) or 'usb'. `mode`, the Accelerator Link
+  setting as the caller read it, stands in only until the owner has said: it
+  may have moved and be waiting for the car to park. Without either, 'usb'."""
   record = _link_record()
   if record[:1] in (['cable'], ['usb']):
     return record[0]
-  return 'cable' if ios() else 'usb'
+  return 'cable' if mode == 'ios' else 'usb'
 
 
 def link_peer() -> str | None:
@@ -178,26 +112,16 @@ def link_peer() -> str | None:
 def note_link(kind: str, peer: str | None = None) -> None:
   """The owner's record of the gadget it built, 'usb' or 'cable', and on the
   cable the phone that dialed in; see link_kind and link_peer."""
-  try:
-    LINK.write_text(f"{kind} {peer}".strip() if peer else kind)
-  except OSError:
-    log.exception("jetlink: could not record the link")
+  _write(LINK, f"{kind} {peer}".strip() if peer else kind, "record the link")
 
 
 def clear_link() -> None:
-  try:
-    LINK.unlink(missing_ok=True)
-  except OSError:
-    log.exception("jetlink: could not clear the link record")
-
+  _write(LINK, None, "clear the link record")
 
 
 def net_status() -> str | None:
   """What jetlink-root.sh said about the gadget's network interface, if it ran."""
-  try:
-    return NET_STATUS.read_text().strip() or None
-  except OSError:
-    return None
+  return _read(NET_STATUS) or None
 
 
 def usb_speed() -> str | None:
@@ -232,34 +156,75 @@ CC_ORIENTATION = Path('/sys/class/power_supply/usb/typec_cc_orientation')
 DORMANT = Path("/dev/shm/jetlink-dormant")
 # hardwared's request to power the Jetson off; see backend.shutdown
 SHUTDOWN_REQUEST = Path("/dev/shm/jetlink-shutdown")
-# what a provisioning run leaves for the owner: whether the far end suspends
-# when the gadget goes, and whether the run left anything undone. The owner
-# never speaks the protocol, so it cannot learn either for itself
-STATE = Path("/dev/shm/jetlink-owner-state")
+# the owner's status record: everything the readers used to take from the
+# files above one by one, rewritten whole every step, which makes it the
+# owner's heartbeat too. A clean stop removes it
+STATUS = Path("/dev/shm/jetlink/status.json")
+# how old that record may be before a reader takes its owner for gone: six of
+# its 0.5 s steps. A wait inside a step renews it (Owner.beat)
+HEARTBEAT_TIMEOUT = 3.0
+# the owner's start times, for its crash-loop backoff (see the owner)
+STARTS = Path("/dev/shm/jetlink/starts.json")
+# held with flock by the owner for its whole life, so there is only ever one
+OWNER_LOCK = Path("/dev/shm/jetlink/owner.lock")
+# what the server's last hello said (lending.SERVER_FIELDS), kept apart from
+# the status record so a clean stop leaves it for the next owner
+SERVER = Path("/dev/shm/jetlink/server.json")
+# how long a host that stopped reading configured still counts as there. The
+# owner holds the gadget for as long as the link is enabled, so presence no
+# longer blinks at every handover; what is left to bridge is a USB3 link
+# recovery passing through "addressed", and a bounce made on purpose when a
+# host will not enumerate (wait_for_host)
+PRESENCE_HOLD = 5.0
 
 
-def owner_state() -> dict:
-  """What the provisioning runs left for the owner, or {}."""
+def write_record(path: Path, record) -> None:
+  """Replace a JSON record whole: a reader gets the old one or the new one,
+  never half of either. Raises OSError, for the writer to say once; the
+  temporary goes with a failure (a SIGKILL between the two leaves it for
+  the next owner to clear, clear_leftovers)."""
+  path.parent.mkdir(parents=True, exist_ok=True)
+  tmp = path.with_name(f".{path.name}.{os.getpid()}")
   try:
-    value = json.loads(STATE.read_text())
-  except (OSError, ValueError):
-    return {}
-  return value if isinstance(value, dict) else {}
+    tmp.write_text(json.dumps(record))
+    os.replace(tmp, path)
+  except BaseException:
+    tmp.unlink(missing_ok=True)
+    raise
 
 
-def far_end_sleeps(state: dict | None = None) -> bool:
-  """Does the far end suspend when the gadget goes, as the runs recorded it?
-  No record means it does: letting go of one that does not only costs a rebind."""
-  return (owner_state() if state is None else state).get('sleep_after', 1.0) > 0
+def clear_leftovers(directory: Path) -> None:
+  """The temporaries a writer killed between its write and its rename left
+  in `directory`. For the owner's start, when nothing else writes there."""
+  try:
+    for leftover in directory.glob('.*.json.*'):
+      leftover.unlink(missing_ok=True)
+  except OSError:
+    pass
+
+
+def owner_status() -> dict | None:
+  """The owner's status record, or None without one: no owner has run since
+  boot, the last one stopped cleanly, or it is one too old to write it."""
+  try:
+    record = json.loads(_read(STATUS))
+  except ValueError:
+    return None
+  return record if isinstance(record, dict) else None
+
+
+def owner_alive(record: dict) -> bool:
+  """Was this record written within HEARTBEAT_TIMEOUT? time.monotonic is the
+  system's CLOCK_MONOTONIC, the same in every process on the device, and
+  unlike the wall clock it does not jump when the comma sets its time."""
+  at = record.get('at')
+  return isinstance(at, (int, float)) and time.monotonic() - at < HEARTBEAT_TIMEOUT
 
 
 def _status_error(path: Path) -> str | None:
   """The reason in an "ok" or "error: <reason>" file. A missing file is not an
   error: whatever writes it has not run."""
-  try:
-    reason = path.read_text().strip()
-  except OSError:
-    return None
+  reason = _read(path)
   if not reason or reason == 'ok':
     return None
   return reason.removeprefix('error:').strip() or None
@@ -282,21 +247,13 @@ def gadget_error() -> str | None:
 
 def note_lender_error(reason: str | None) -> None:
   """The owner's record of a lender that cannot listen, or None once it can."""
-  try:
-    if reason is None:
-      LENDER_STATUS.unlink(missing_ok=True)
-    else:
-      LENDER_STATUS.write_text(f"error: the lender could not listen: {reason}\n")
-  except OSError:
-    log.exception("jetlink: could not record the lender's state")
+  _write(LENDER_STATUS, None if reason is None else f"error: the lender could not listen: {reason}\n",
+         "record the lender's state")
 
 
 def bound_udc() -> str | None:
   """The device controller our gadget is attached to, if it is attached."""
-  try:
-    return (GADGET_PATH / "UDC").read_text().strip() or None
-  except OSError:
-    return None
+  return _read(GADGET_PATH / "UDC") or None
 
 
 def udc_state() -> str | None:
@@ -307,12 +264,7 @@ def udc_state() -> str | None:
   bind as a wake and did not finish waking looks like.
   """
   udc = bound_udc()
-  if udc is None:
-    return None
-  try:
-    return (UDC_PATH / udc / "state").read_text().strip() or None
-  except OSError:
-    return None
+  return None if udc is None else _read(UDC_PATH / udc / "state") or None
 
 
 def host_attached() -> bool:
@@ -320,17 +272,21 @@ def host_attached() -> bool:
   return udc_state() == "configured"
 
 
-def port_has_host() -> bool:
-  """Does the USB-C port controller see a host on the cable?
-
-  The CC pin, so it is electrically true whether or not anything enumerated:
-  0 is a port with nothing on it, 1 or 2 a cable with a live host. A legacy
-  A-to-C cable's pull-up rides on the host's VBUS and reads the same.
-  """
+def cc_orientation() -> int | None:
+  """What the USB-C port controller reads on the CC pin, so electrically true
+  whether or not anything enumerated: 0 is a port with nothing on it, 1 or 2 a
+  cable with a live host behind it (it cannot say what kind). A legacy A-to-C
+  cable's pull-up rides on the host's VBUS and reads the same. None where the
+  kernel does not say."""
   try:
-    return int(CC_ORIENTATION.read_text()) != 0
-  except (OSError, ValueError):
-    return False
+    return int(_read(CC_ORIENTATION))
+  except ValueError:
+    return None
+
+
+def port_has_host() -> bool:
+  """Does the USB-C port controller see a host on the cable?"""
+  return bool(cc_orientation())
 
 
 # how long the UDC may sit half enumerated with a host on the cable before the
@@ -342,7 +298,7 @@ STALLED_STATES = ('default', 'addressed')
 HOST_POLL = 0.5
 
 
-def wait_for_host(timeout: float, bounce=None, should_stop=None, report=None) -> bool:
+def wait_for_host(timeout: float, bounce=None, should_stop=None, report=None, mode: str | None = None) -> bool:
   """Wait for the Jetson to enumerate us, bouncing a bus that stalled.
 
   The gadget stays bound throughout. An unbind is an unplug as the far end sees
@@ -356,9 +312,10 @@ def wait_for_host(timeout: float, bounce=None, should_stop=None, report=None) ->
 
   On the cable there is nothing to wait for: the connect that made the client
   already reached the phone. The UDC is configured too, but by the phone, and
-  it is the dial that proved it is there.
+  it is the dial that proved it is there. `mode` is the link setting, for
+  before the owner has recorded which gadget it built (link_kind).
   """
-  if link_kind() == 'cable':
+  if link_kind(mode) == 'cable':
     return True
   deadline = time.monotonic() + timeout
   stalled_since = None
@@ -440,20 +397,14 @@ def link_configured() -> bool:
 
 
 def set_dormant(on: bool) -> None:
-  try:
-    if on:
-      DORMANT.write_text(str(os.getpid()))
-    else:
-      DORMANT.unlink(missing_ok=True)
-  except OSError:
-    log.exception("jetlink: could not update the dormant marker")
+  _write(DORMANT, str(os.getpid()) if on else None, "update the dormant marker")
 
 
 def dormant() -> bool:
   """Has a live owner released the gadget on purpose?"""
   try:
-    pid = int(DORMANT.read_text())
-  except (OSError, ValueError):
+    pid = int(_read(DORMANT))
+  except ValueError:
     return False
   try:
     os.kill(pid, 0)
@@ -465,12 +416,7 @@ def dormant() -> bool:
 
 
 def request_shutdown(reason: str) -> bool:
-  try:
-    SHUTDOWN_REQUEST.write_text(json.dumps({'reason': reason}))
-    return True
-  except OSError:
-    log.exception("jetlink: could not write the shutdown request")
-    return False
+  return _write(SHUTDOWN_REQUEST, json.dumps({'reason': reason}), "write the shutdown request")
 
 
 def pending_shutdown() -> str | None:
@@ -482,13 +428,22 @@ def pending_shutdown() -> str | None:
   if not SHUTDOWN_REQUEST.exists():
     return None
   try:
-    return str(json.loads(SHUTDOWN_REQUEST.read_text()).get('reason', ''))
-  except (OSError, ValueError):
+    return str(json.loads(_read(SHUTDOWN_REQUEST)).get('reason', ''))
+  except ValueError:
     return None
 
 
+def await_shutdown(timeout: float, poll: float = 0.25) -> bool:
+  """Wait for the owner's run to take a shutdown request. False if nobody did
+  within `timeout`, and then the request is withdrawn."""
+  deadline = time.monotonic() + timeout
+  while time.monotonic() < deadline:
+    if not SHUTDOWN_REQUEST.exists():
+      return True
+    time.sleep(poll)
+  finish_shutdown()
+  return False
+
+
 def finish_shutdown() -> None:
-  try:
-    SHUTDOWN_REQUEST.unlink(missing_ok=True)
-  except OSError:
-    log.exception("jetlink: could not remove the shutdown request")
+  _write(SHUTDOWN_REQUEST, None, "remove the shutdown request")

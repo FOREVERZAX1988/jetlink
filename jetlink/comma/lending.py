@@ -6,11 +6,9 @@ See the LICENSE file in the root directory for more details.
 
 Who may do endpoint IO on the gadget, while one process owns it throughout.
 
-The comma is the USB device: the link exists only while some process holds ep0
-with the UDC bound. Two processes used to take turns at that, and every change
-of owner was an unplug and a replug as the Jetson saw it, a fresh libusb open
-and a fresh server session. The owner (owner.py) holds ep0 for as long as the
-link is enabled now, and nothing else ever does, so none of that happens.
+The owner (owner.py) holds ep0 for as long as the link is on, and nothing else
+ever does: when two processes took turns at it, every change of owner was an
+unplug, a fresh libusb open and a fresh server session as the Jetson saw it.
 
 What still has to change hands is the right to read the endpoint files.
 FunctionFS keeps a queued read queued until something completes it, so a second
@@ -46,8 +44,14 @@ SOCKET = Path('/dev/shm/jetlink-lend.sock')
 BORROW_TIMEOUT = 8.0
 # a stuck write is already 15 s old by the time this is asked for
 BOUNCE_TIMEOUT = 10.0
+# the owner records a note at once; this only bounds one that is wedged
+NOTE_TIMEOUT = 5.0
 RETRY = 0.25
 POLL = 0.5
+# what a borrower passes on of the server's hello (Loan.note_server): the owner
+# never speaks the protocol, and sleep_after is how it knows whether letting
+# go of the gadget lets the Jetson sleep. The rest is for its status record
+SERVER_FIELDS = ('protocol', 'device', 'backend', 'runtime_version', 'trt_version', 'sleep_after')
 
 
 def _send(conn: socket.socket, msg: dict) -> None:
@@ -131,16 +135,44 @@ class Loan:
         return False
       return bool(reply and reply.get('ok'))
 
+  def note_server(self, hello: dict) -> bool:
+    """Tell the owner what the server said in its hello, which the owner
+    cannot ask for itself. Every borrower sends it after every hello, so
+    modeld's join refreshes it each drive and a Jetson moved to another
+    power supply is known by the next one. False when the owner did not
+    take it: an older owner answers "unknown op", which is not an error.
+
+    An answer that does not come within NOTE_TIMEOUT, or is not one, closes
+    the loan. The exchange has no ids, so an answer that came later would be
+    read as the answer to the next request on it, a renewal's or a bounce's,
+    and every one after that would be one behind."""
+    fields = {k: hello[k] for k in SERVER_FIELDS if k in hello}
+    with self._lock:
+      if self._closed:
+        return False
+      try:
+        _send(self.conn, {'op': 'server', **fields})
+        reply = _recv_line(self.conn, self._buf, time.monotonic() + NOTE_TIMEOUT)
+      except (OSError, ValueError) as e:
+        reply, why = None, str(e) or type(e).__name__
+      else:
+        why = 'no answer' if reply is None else f'the answer {reply!r}'
+      if not isinstance(reply, dict):
+        gadget.log.warning("jetlink: the owner did not take what the server said (%s), letting the loan go", why)
+        self._closed = True
+        _shut(self.conn)
+        return False
+    return bool(reply.get('ok'))
+
   def renew(self, timeout: float = BORROW_TIMEOUT) -> bool:
     """Ask again which link this loan is for, before another attempt at a join.
 
-    The owner answers as it would a new borrower: the phone's dial if it holds
-    one, "retry" while it waits for a phone, else the endpoint files. The loan lasts the
-    drive and the answer changes under it: a phone that dialed after the first
-    answer was never used, and a dial whose session ended with the last
-    attempt is spent. Without this a borrower that took the endpoint files
-    once wrote a hello to a phone every attempt, 15 s and a bounce each, and
-    every bounce took the phone's network interface down before it could dial.
+    The owner answers as it would a new borrower. The loan lasts the drive and
+    the answer changes under it: a phone that dialed after the first answer was
+    never used, and a dial whose session ended with the last attempt is spent.
+    Without this a borrower that took the endpoint files once wrote a hello to
+    a phone every attempt, 15 s and a bounce each, and every bounce took the
+    phone's network interface down before it could dial.
 
     False when the owner gave no link in time or refused; the loan is closed
     only when the owner is gone.
@@ -177,29 +209,23 @@ class Loan:
     # not behind the lock: a renewal holds it through a whole hold, and the
     # shutdown is what wakes that renewal
     self._closed = True
-    try:
-      self.conn.shutdown(socket.SHUT_RDWR)
-    except OSError:
-      pass
+    _shut(self.conn)
     with self._lock:
       _close(self.conn)
       _close(self.sock)
 
 
-def borrow(name: str = 'modeld', timeout: float = BORROW_TIMEOUT, path: Path = SOCKET) -> Loan | None:
-  """Ask the owner for the endpoints, or None if there is nobody to ask.
-
-  None while the link was only just turned on, or with an owner that died or
-  cannot listen, which then says so in gadget.gadget_error(). There is no link
-  without a loan: only the owner ever holds ep0, so the caller asks again
-  later rather than opening the gadget itself.
-
-  Over the cable the answer carries the phone's socket.
+def borrow(name: str = 'modeld', timeout: float = BORROW_TIMEOUT, path: Path | None = None) -> Loan | None:
+  """Ask the owner for the link, or None if there is nobody to ask: the link
+  was only just turned on, or the owner died or cannot listen, which it says
+  in gadget.gadget_error(). The caller asks again later; only the owner ever
+  holds ep0. `path` defaults to SOCKET as it is when called, so a test that
+  points SOCKET elsewhere is never lent the real owner's link.
   """
   try:
     conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     conn.settimeout(POLL)
-    conn.connect(str(path))
+    conn.connect(str(SOCKET if path is None else path))
   except OSError:
     return None   # no owner listening
   loan = Loan(conn, bytearray(), '', '', name=name)
@@ -382,6 +408,14 @@ def _close(sock: socket.socket | None) -> None:
       pass
 
 
+def _shut(sock: socket.socket) -> None:
+  """End the connection for both ends, so the owner sees the lease end."""
+  try:
+    sock.shutdown(socket.SHUT_RDWR)
+  except OSError:
+    pass
+
+
 def hung_up(sock: socket.socket, wait: float = 0.0) -> bool:
   """Whether the far end closed `sock`, waiting up to `wait` s to see. Bytes
   waiting read as alive, and the peek leaves them for whoever shares the socket;
@@ -405,20 +439,24 @@ class Lender:
   answered "retry" and the daemon's own loop puts it there. `holding` says the
   host is a phone (Accelerator Link iOS): "retry" until it dials, so nobody
   writes a hello over FunctionFS to a phone. With `cable` holding a dial, the
-  loan carries the phone's socket instead of the endpoint files.
+  loan carries the phone's socket instead of the endpoint files. `server`
+  takes what a borrower passes on of the server's hello (Loan.note_server),
+  with the borrower's name, on this thread.
   """
 
   def __init__(self, lendable: Callable[[], bool], bounce: Callable[[], bool],
-               path: Path = SOCKET, holding: Callable[[], bool] | None = None,
-               cable: CableListener | None = None):
+               path: Path | None = None, holding: Callable[[], bool] | None = None,
+               cable: CableListener | None = None, server: Callable[[str, dict], None] | None = None):
     self._lendable = lendable
     self._bounce = bounce
     self._holding = holding or (lambda: False)
     self._cable = cable
+    self._server = server
     self._cable_lent = False
     # what this borrower was last told it has, so each change is logged once
     self._told = ''
-    self.path = path
+    # as it is when made, for the same reason as borrow's
+    self.path = SOCKET if path is None else path
     self.borrower = ''
     self._sock: socket.socket | None = None
     self._thread: threading.Thread | None = None
@@ -567,5 +605,13 @@ class Lender:
     elif op == 'bounce':
       gadget.log.warning("jetlink: %s asked for a gadget bounce", self.borrower)
       _send(conn, {'ok': bool(self._bounce())})
+    elif op == 'server' and self._server is not None:
+      try:
+        self._server(self.borrower or 'a borrower', {k: msg[k] for k in SERVER_FIELDS if k in msg})
+      except Exception:
+        # a note is never worth the lease: a raise here would end the loan
+        # under a borrower that is using the endpoints
+        gadget.log.exception("jetlink: could not record what the server said")
+      _send(conn, {'ok': True})
     else:
       _send(conn, {'ok': False, 'detail': f'unknown op {op!r}'})

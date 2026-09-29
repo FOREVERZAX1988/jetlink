@@ -21,13 +21,19 @@ since every unbind drops the phone's network interface with it.
 
 It is deliberately small. Everything heavy jetlink does is episodic, so none of
 it lives here: a download, an upload and a TensorRT build all belong to the
-provisioning run (the fork's worker), which this spawns when there is
+provisioning run (jetlink.openpilot.provision), which this spawns when there is
 something to do and which exits when there is not. That keeps a parked car and
 a drive alike at one resident jetlink process of about 13 MB rather than
 47.5 MB, and it is why nothing in this module may import swaglog, Params,
 numpy, capnp or zmq; see gadget.py and tests/test_comma_gadget.py. The caller
-names the worker: the fork's accelerators/jetlink/owner.py runs main() with
-the provisioning run's argv, so nothing here knows an openpilot module.
+names the worker and hands over the settings: jetlink.openpilot.owner makes
+and runs the Owner from what the fork's adapter says (OwnerConfig), so nothing
+here knows an openpilot module or a param name.
+
+What it knows, it writes down whole every step in its status record
+(gadget.STATUS): the gadget, the host, presence with its hold, the errors. The
+UI and hardwared read that one file rather than the gadget's own files one by
+one, and its timestamp is the heartbeat that tells them the owner is gone.
 
 manager stops this on shutdown with SIGINT and SIGKILLs it 5 s later, so every
 long wait polls `stop`: a FunctionFS owner killed mid-transfer leaves the
@@ -35,9 +41,11 @@ gadget in a state only a reboot clears.
 """
 from __future__ import annotations
 
+import errno
+import fcntl
+import json
 import logging
 import os
-import signal
 import subprocess
 import time
 from collections.abc import Mapping, Sequence
@@ -67,19 +75,30 @@ LENDER_BACKOFF = 30.0
 WORKER_BACKOFF = 300.0
 SHUTDOWN_RETRY = 2.0      # a shutdown run that exited with the request still there
 WORKER_GRACE = 10.0
+# between opens of an ep0 that answered EBUSY: a borrower from before this
+# owner started still has the endpoint files, and the open succeeds the moment
+# it lets go. A refused open changes nothing in the kernel, so it is safe to
+# repeat; only a read of an endpoint no host has enabled is not (_ensure_epfiles)
+EP0_BUSY_RETRY = 1.0
 
-# under /data/log rather than /dev/shm: this is the one jetlink process alive
-# for a whole drive, and a bench session wants its lines afterwards. Rotated,
-# because the loop below logs a traceback per cycle if something stays broken
-LOG = Path('/data/log/jetlink-owner.log')
+# A crash loop re-enumerates the Jetson at every start, since the gadget goes
+# with the owner that held it. Each start is written down and a clean stop
+# takes its own back out, so what is left is owners that died or were killed.
+# With CRASH_FREE of those inside CRASH_WINDOW the next start waits, holding
+# nothing, CRASH_BACKOFF doubling up to CRASH_BACKOFF_MAX
+CRASH_WINDOW = 600.0
+CRASH_FREE = 3
+CRASH_BACKOFF = 10.0
+CRASH_BACKOFF_MAX = 300.0
+
+# the log is rotated: the loop below logs a traceback per cycle if something stays broken
 LOG_BYTES = 1 << 20
-# params whose change is a reason to look again: the pick and what is built
-WATCHED = (gadget.P_BIG_MODEL, gadget.P_SPEC)
 
 
-def _own_logger(path: Path) -> logging.Logger:
-  """swaglog costs 28 MB, so the owner keeps its own. The worker's lines go to
-  the drive as they always did; these are for a bench session."""
+def logger(path: Path) -> logging.Logger:
+  """The owner's log, to stderr and `path`: swaglog costs 28 MB, so the owner
+  keeps its own. The worker's lines go to the drive; these are for a bench
+  session, which wants them after the drive."""
   log = logging.getLogger('jetlink.owner')
   log.setLevel(logging.INFO)
   handlers: list[logging.Handler] = [logging.StreamHandler()]
@@ -94,13 +113,59 @@ def _own_logger(path: Path) -> logging.Logger:
   return log
 
 
+def server_sleeps(server: dict | None) -> bool:
+  """Does the far end suspend when the gadget goes, by its hello's
+  sleep_after? No hello yet, or a server too old to say, is a yes: letting go
+  of one that stays up only costs a rebind, and holding on to one that sleeps
+  keeps it awake all night."""
+  try:
+    return float((server or {}).get('sleep_after', 1.0)) > 0
+  except (TypeError, ValueError):
+    return True
+
+
+def _starts() -> list[float]:
+  try:
+    starts = json.loads(gadget.STARTS.read_text())
+  except (OSError, ValueError):
+    return []
+  return [t for t in starts if isinstance(t, (int, float))] if isinstance(starts, list) else []
+
+
+def _write_starts(starts: list[float]) -> None:
+  try:
+    gadget.write_record(gadget.STARTS, starts)
+  except OSError:
+    gadget.log.exception("jetlink: could not record the owner's starts")
+
+
+def note_start(now: float) -> tuple[float, int]:
+  """Write this start down. How long it should wait before taking the
+  gadget, and how many owners inside CRASH_WINDOW never stopped cleanly."""
+  starts = [t for t in _starts() if 0.0 <= now - t < CRASH_WINDOW]
+  _write_starts([*starts, now])
+  died = len(starts)
+  if died < CRASH_FREE:
+    return 0.0, died
+  return min(CRASH_BACKOFF_MAX, CRASH_BACKOFF * 2 ** (died - CRASH_FREE)), died
+
+
+def forget_start(started: float) -> None:
+  """A clean stop: this start no longer counts against the next one."""
+  _write_starts([t for t in _starts() if t != started])
+
+
 class Owner:
-  def __init__(self, worker: Sequence[str] = (), cwd: str | None = None, env: Mapping[str, str] | None = None):
+  def __init__(self, worker: Sequence[str], cwd: str | None = None, env: Mapping[str, str] | None = None, *,
+               settings, chestnut_ids):
     # the provisioning run: its argv, its working directory, and what it gets
     # over this process's environment
     self.worker_argv = list(worker)
     self.worker_cwd = cwd
     self.worker_env = dict(env or {})
+    # mode(), offroad() and marks(): the link setting, whether the car is
+    # parked, and when the pick and the built model last changed
+    self.settings = settings
     self.transport = None
     self.stop = False
     self.dormant = False
@@ -128,11 +193,31 @@ class Owner:
     self.next_lender = 0.0
     self.worker: subprocess.Popen | None = None
     self.seen: dict[str, int] = {}      # watched param -> mtime when last looked
-    self._watched: dict[str, str] | None = None
     self.had_host = False
-    self.port = port.Port()
+    # the status record every other process reads (gadget.STATUS): the setting
+    # the last step acted on, when a host last had us configured (presence's
+    # hold), when the record was last written, and a failure writing it, said once
+    self.mode: str | None = None
+    self.last_configured = 0.0
+    self.published = 0.0
+    self.status_error: str | None = None
+    # what this process never speaks the protocol to learn: the fields of the
+    # server's last hello, which every borrower passes on over its loan
+    # (lending.SERVER_FIELDS), and whether the last run left work undone, from
+    # its exit status
+    self.server: dict | None = None
+    self.unfinished = False
+    self.ep0_busy = False               # said once, until an open works
+    self.switch_waiting = False         # a rebuild held off by a borrower of a dead owner, said once
+    # why a crash loop's backoff holds this start back, for the status record
+    self.backing_off: str | None = None
+    self.lock_fd: int | None = None      # gadget.OWNER_LOCK, held for the life of run()
+    # this owner's entry in gadget.STARTS, until a stop that was asked for takes it back
+    self.born: float | None = None
+    self.port = port.Port(chestnut_ids)
     self.cable = lending.CableListener()
-    self.lender = lending.Lender(self.lendable, self.bounce_gadget, holding=self.holding, cable=self.cable)
+    self.lender = lending.Lender(self.lendable, self.bounce_gadget, holding=self.holding, cable=self.cable,
+                                 server=self.note_server)
 
   # -- the gadget -----------------------------------------------------------
 
@@ -204,11 +289,28 @@ class Owner:
       gadget.log.warning("jetlink: gadget presented, waiting for a jetson")
       self.net_ready = False
       self.next_net_attempt = 0.0
+      self.ep0_busy = False
       return True
+    except OSError as e:
+      if e.errno == errno.EBUSY and os.path.basename(os.fsdecode(e.filename or '')) == 'ep0':
+        # an owner started after one that died: its borrower (modeld mid-drive,
+        # or the dead owner's own run) still has ep1 and ep2, and FunctionFS
+        # refuses ep0 until they are closed. Nothing was opened, and the UDC
+        # was never touched, so the borrower's link carries on meanwhile
+        if not self.ep0_busy:
+          gadget.log.warning("jetlink: ep0 is busy, something still has the gadget's endpoint files open "
+                             "(most likely a borrower from before this owner); presenting it once they are closed")
+          self.ep0_busy = True
+        self.next_attempt = time.monotonic() + EP0_BUSY_RETRY
+        return False
+      return self._open_failed()
     except Exception:
-      gadget.log.exception("jetlink: could not present the gadget")
-      self.next_attempt = time.monotonic() + RECONNECT_BACKOFF
-      return False
+      return self._open_failed()
+
+  def _open_failed(self) -> bool:
+    gadget.log.exception("jetlink: could not present the gadget")
+    self.next_attempt = time.monotonic() + RECONNECT_BACKOFF
+    return False
 
   def ensure_gadget(self, ios: bool) -> bool:
     """Is there a gadget to present? Create it, for iOS or USB, if there is
@@ -257,8 +359,7 @@ class Owner:
     gadget.log.warning("jetlink: putting the endpoints down, keeping the gadget bound")
     if not self.transport.release_endpoints():
       return
-    gadget.wait_for_host(SETTLE_TIMEOUT, bounce=self.bounce_gadget,
-                         should_stop=lambda: self.stop)
+    gadget.wait_for_host(SETTLE_TIMEOUT, bounce=self.bounce_gadget, should_stop=self.waiting)
 
   def hold(self, ios: bool) -> None:
     """Everything this process does once the car is moving, or once somebody
@@ -270,7 +371,9 @@ class Owner:
     self.wake()
     if self.transport is not None:
       return self.settle()
-    if self.ensure_gadget(ios):
+    # a failed open waits its backoff here too: a busy ep0 is asked once a
+    # second, not every step, and a broken one is not a traceback a step
+    if time.monotonic() >= self.next_attempt and self.ensure_gadget(ios):
       self.open_link()
 
   # -- the parked car -------------------------------------------------------
@@ -293,20 +396,29 @@ class Owner:
     self.dormant = False
     self.idle_since = time.monotonic()
 
-  # -- the worker -----------------------------------------------------------
-
-  def marks(self) -> dict[str, int]:
-    """When each watched param last changed. A stat, not a read: the owner does
-    not parse the catalog or the spec, it only notices they moved."""
-    if self._watched is None:
-      self._watched = {k: str(gadget.params_dir() / k) for k in WATCHED}
-    out = {}
-    for key, path in self._watched.items():
+  def note_server(self, borrower: str, fields: dict) -> None:
+    """What a borrower passed on of the server's hello (lending.Loan.note_server),
+    on the lender's thread. Said when it changes, which is how a server moved
+    to --sleep-after 0 or back shows in this log, and kept in gadget.SERVER,
+    which outlives this owner: a run with nothing to do never says hello, so
+    the next owner would otherwise take an always-on Jetson for one that
+    sleeps and let the gadget go until the next drive."""
+    known, self.server = self.server or {}, dict(fields)
+    if any(known.get(k) != fields.get(k) for k in ('device', 'sleep_after')) or not known:
+      gadget.log.warning("jetlink: %s says the server on %s %s when the gadget goes (sleep_after %s)", borrower,
+                         fields.get('device') or 'the far end', 'sleeps' if server_sleeps(fields) else 'stays up',
+                         fields.get('sleep_after'))
+    if fields != known:
       try:
-        out[key] = os.stat(path).st_mtime_ns
-      except OSError:
-        out[key] = 0
-    return out
+        gadget.write_record(gadget.SERVER, self.server)
+      except OSError as e:
+        gadget.log.warning("jetlink: could not keep what the server said (%s)", e)
+
+  def far_end_sleeps(self) -> bool:
+    """Does the far end suspend when the gadget goes, as its last hello said?"""
+    return server_sleeps(self.server)
+
+  # -- the worker -----------------------------------------------------------
 
   def worker_running(self) -> bool:
     if self.worker is None:
@@ -314,6 +426,9 @@ class Owner:
     if self.worker.poll() is None:
       return True
     gadget.log.warning("jetlink: the provisioning run finished (%s)", self.worker.returncode)
+    # 0 is a run with nothing left to do; anything else, a crash included, is
+    # tried again once WORKER_BACKOFF has passed
+    self.unfinished = self.worker.returncode != 0
     self.worker = None
     self.shutting_down = False
     # the far end may still be waking; give it the hold before letting go
@@ -325,23 +440,23 @@ class Owner:
     return False
 
   def note_marks(self) -> None:
-    self.seen = self.marks()
+    self.seen = self.settings.marks()
     self.had_host = gadget.host_attached()
 
-  def wanted(self, state: dict) -> str | None:
+  def wanted(self) -> str | None:
     """Why the worker should run, or None. Everything that decides whether
     there is work needs the catalog, the spec and the Jetson, so the worker
     decides; this only notices the things that could have changed the answer."""
     if not self.seen:
       return 'nothing has been checked since boot'
-    changed = [k for k, v in self.marks().items() if self.seen.get(k) != v]
+    changed = [k for k, v in self.settings.marks().items() if self.seen.get(k) != v]
     if changed:
       return f"{', '.join(changed)} changed"
     if self.dialed:
       return 'a phone dialed in'
     if self.attached and not self.had_host:
       return 'a jetson turned up'
-    if time.monotonic() >= self.next_worker and state.get('unfinished'):
+    if time.monotonic() >= self.next_worker and self.unfinished:
       return 'the last run left something to do'
     return None
 
@@ -361,21 +476,116 @@ class Owner:
     if self.worker is None:
       return
     self.worker.terminate()
-    try:
-      self.worker.wait(WORKER_GRACE)
-    except subprocess.TimeoutExpired:
-      self.worker.kill()
+    deadline = time.monotonic() + WORKER_GRACE
+    while True:
+      try:
+        # a run that finished its round on the way out says so like any other
+        self.unfinished = self.worker.wait(POLL) != 0
+        break
+      except subprocess.TimeoutExpired:
+        if time.monotonic() >= deadline:
+          self.worker.kill()
+          self.unfinished = True
+          break
+        self.beat()   # a run inside a hello can take the whole grace
     self.worker = None
     self.shutting_down = False
+
+  # -- the status record ------------------------------------------------------
+
+  def status_record(self) -> dict:
+    """What every other process reads instead of the gadget's files one by one
+    (jetlink.openpilot.status), presence and its hold worked out once, here."""
+    now = time.monotonic()
+    state = gadget.udc_state()
+    configured = state == 'configured'
+    if configured:
+      self.last_configured = now
+    if self.dormant:
+      # no enumeration during suspend; the CC line still tells a sleeping host from an unplugged one
+      present = gadget.port_has_host()
+    else:
+      present = configured or now - self.last_configured < gadget.PRESENCE_HOLD
+    return {
+      'pid': os.getpid(),
+      'at': now,
+      'mode': self.mode,
+      'link': None if self.built_ios is None else ('cable' if self.built_ios else 'usb'),
+      'peer': self._peer,
+      # root's jetlink-gadget and the lender's error, as gadget_error() puts
+      # them together, or why a crash loop's backoff is holding this start
+      'error': self.backing_off or gadget.gadget_error(),
+      'net': gadget.net_status(),
+      'dormant': self.dormant,
+      'udc': state,
+      'speed': gadget.usb_speed() if configured else None,
+      'present': present,
+      'server': self.server,
+      'worker': self.worker is not None and self.worker.poll() is None,
+      'unfinished': self.unfinished,
+      # asked to stop: a record a SIGKILL during the teardown leaves behind is
+      # an owner that was stopped, not one that died, and readers take it for none
+      'stopping': self.stop,
+    }
+
+  def publish_status(self) -> None:
+    """Rewrite the status record, which is the heartbeat as well. Never
+    raises; a failure is logged once, until a write works again."""
+    self.stopping_cleanly()
+    try:
+      gadget.write_record(gadget.STATUS, self.status_record())
+    except Exception as e:
+      # the last record would go stale under a live owner and read as
+      # "accelerator service stopped"; without one the readers go back to
+      # the gadget's files, which are still right
+      self.forget_status()
+      error = f"{type(e).__name__}: {e}"
+      if error != self.status_error:
+        self.status_error = error
+        gadget.log.error("jetlink: could not write the status record (%s); readers read the gadget's files", error)
+      return
+    self.status_error = None
+    self.published = time.monotonic()
+
+  def beat(self) -> None:
+    """Renew the record from inside a wait that can outlast the readers'
+    HEARTBEAT_TIMEOUT, at most once a POLL."""
+    if time.monotonic() - self.published >= POLL:
+      self.publish_status()
+
+  def waiting(self) -> bool:
+    """should_stop for a wait inside a step: keeps the heartbeat going."""
+    self.beat()
+    return self.stop
+
+  def forget_status(self) -> None:
+    """A clean stop leaves no record, so only an owner that died leaves a
+    heartbeat behind to go stale; the readers go back to the files."""
+    try:
+      gadget.STATUS.unlink(missing_ok=True)
+    except OSError:
+      pass
 
   # -- the loop -------------------------------------------------------------
 
   def request_stop(self, *_) -> None:
     self.stop = True
 
+  def stopping_cleanly(self) -> None:
+    """A stop that was asked for is clean however long its teardown takes:
+    manager SIGKILLs an owner still in stop_worker's 10 s grace 5 s after its
+    SIGINT, and a start left in gadget.STARTS would count as a death, three of
+    them a crash loop. So the start is taken back as soon as the main thread
+    sees the request, at the next record (within 0.5 s), not in the finally
+    a SIGKILL never reaches. Not in the signal handler: it can land inside
+    a write of the same file."""
+    if self.stop and self.born is not None:
+      forget_start(self.born)
+      self.born = None
+
   def step(self) -> None:
     # each read is a file; take them once and pass them down
-    mode = gadget.link_mode()
+    mode = self.mode = self.settings.mode()
     if mode == 'off':
       if self.transport is not None:
         gadget.log.warning("jetlink: disabled, releasing the link")
@@ -428,7 +638,7 @@ class Owner:
     # before anything is presented: a C-to-C host has to find a device here
     self.port.update()
 
-    offroad = gadget.offroad()
+    offroad = self.settings.offroad()
     if self.switch_mode(offroad, ios):
       return
     self.attached = gadget.host_attached()
@@ -475,8 +685,7 @@ class Owner:
     if time.monotonic() < max(self.next_attempt, self.lease_settled):
       return
 
-    state = gadget.owner_state()
-    why = self.wanted(state)
+    why = self.wanted()
     if why is not None:
       if not self.ensure_gadget(ios):
         return
@@ -487,7 +696,7 @@ class Owner:
 
     # a phone never sleeps, and letting go takes the network interface it
     # dials over: for iOS the gadget stays up whatever the record says
-    sleeps = gadget.far_end_sleeps(state) and not self.built_ios
+    sleeps = self.far_end_sleeps() and not self.built_ios
     if self.transport is None:
       # nothing to do and nothing presented: only worth a bind if the far end
       # stays awake for it
@@ -547,6 +756,17 @@ class Owner:
       return False
     if ios == self.built_ios:
       return False
+    if self.transport is None and gadget.bound_udc():
+      # bound, and not by us: the borrower of an owner that died (its run) is
+      # still on the endpoints. The rebuild's unbind would pull the gadget
+      # from under it, so it waits for the borrower to let go, when the
+      # kernel unbinds
+      if not self.switch_waiting:
+        gadget.log.warning("jetlink: Accelerator Link is now %s; the gadget is still bound for a borrower from "
+                           "before this owner, rebuilding it once that lets go", 'iOS' if ios else 'USB')
+        self.switch_waiting = True
+      return False
+    self.switch_waiting = False
     if time.monotonic() < self.next_gadget_attempt:
       return True   # the last rebuild failed; build() says when to try again
     gadget.log.warning("jetlink: Accelerator Link is now %s, rebuilding the gadget", 'iOS' if ios else 'USB')
@@ -555,9 +775,100 @@ class Owner:
     self.build(ios)
     return True
 
-  def run(self) -> None:
-    gadget.clear_link()   # ours to write, and a record from a previous owner is stale
+  def adopt(self) -> None:
+    """Start from whatever an owner before this one left, dead or alive.
+
+    The configfs gadget is used as it is: ensure_gadget and switch_mode look
+    at it before building anything, and the first bind presents it again.
+    What the last owner heard of the server still holds (gadget.SERVER, which
+    a clean stop leaves); without it an owner started again while parked took
+    an always-on Jetson for one that sleeps, and let the gadget go until the
+    next drive's hello. The last owner's own
+    records do not hold: the link it published, its dormant marker and its
+    lender's error. The lender clears the socket it left once a connect
+    proves it dead, and the port's first update lets go of its hold.
+    """
+    gadget.clear_link()
+    gadget.set_dormant(False)
+    gadget.note_lender_error(None)
+    gadget.clear_leftovers(gadget.STATUS.parent)
+    if self.server is None:
+      try:
+        heard = json.loads(gadget.SERVER.read_text())
+      except (OSError, ValueError):
+        heard = None
+      self.server = heard if isinstance(heard, dict) else None
+
+  def sit_out(self, until: float, died: int) -> None:
+    """A crash loop's backoff: hold nothing, not the gadget, the lender or
+    the port, until `until` or a stop. The status record says why, and that
+    is the offroad alert while the link is on.
+
+    A power-off request ends it: hardwared waits 25 s for the owner to take
+    one, and the Jetson on its own supply stays on otherwise."""
+    self.backing_off = (f"the accelerator service keeps stopping ({died} times in {CRASH_WINDOW / 60:.0f} min), "
+                        f"waiting {until - time.monotonic():.0f} s before starting it again")
+    gadget.log.warning("jetlink: %s", self.backing_off)
+    self.publish_status()
     try:
+      while not self.stop and time.monotonic() < until:
+        if gadget.SHUTDOWN_REQUEST.exists():
+          gadget.log.warning("jetlink: a power-off request ends the wait")
+          break
+        time.sleep(min(POLL, max(0.0, until - time.monotonic())))
+        self.beat()
+    finally:
+      self.backing_off = None
+
+  def take_lock(self) -> bool:
+    """One owner at a time. A second owner beside a live one (a manager that
+    was SIGKILLed without its cleanup starts jetlinkd again while the orphan
+    still holds the gadget) would clear that owner's records, overwrite its
+    status record and release its port hold. The kernel lets an flock go with
+    the process however it dies, and the fd is not inherited by a run.
+    Without a /dev/shm to lock in, the owner runs as it did before."""
+    try:
+      gadget.OWNER_LOCK.parent.mkdir(parents=True, exist_ok=True)
+      fd = os.open(gadget.OWNER_LOCK, os.O_RDWR | os.O_CREAT, 0o644)
+    except OSError as e:
+      gadget.log.error("jetlink: could not open the owner's lock (%s), running without it", e)
+      return True
+    try:
+      fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+      try:
+        holder = os.pread(fd, 32, 0).decode(errors='replace').strip() or 'unknown'
+      except OSError:
+        holder = 'unknown'
+      os.close(fd)
+      gadget.log.error("jetlink: another owner (pid %s) holds the gadget, exiting", holder)
+      return False
+    os.ftruncate(fd, 0)
+    os.pwrite(fd, str(os.getpid()).encode(), 0)
+    self.lock_fd = fd
+    return True
+
+  def run(self) -> None:
+    """Hold the gadget until stopped. Returns at once, touching nothing, when
+    another owner is alive."""
+    if not self.take_lock():
+      return
+    try:
+      self.hold_the_gadget()
+    finally:
+      fd, self.lock_fd = self.lock_fd, None
+      if fd is not None:
+        os.close(fd)
+
+  def hold_the_gadget(self) -> None:
+    born = self.born = time.monotonic()
+    wait, died = note_start(born)
+    self.adopt()
+    # the heartbeat from the start: the first step builds the gadget
+    self.publish_status()
+    try:
+      if wait:
+        self.sit_out(born + wait, died)
       while not self.stop:
         started = time.monotonic()
         try:
@@ -567,6 +878,7 @@ class Owner:
           gadget.log.exception("jetlink: unhandled error")
           self.close_link()
           self.next_attempt = time.monotonic() + RECONNECT_BACKOFF
+        self.publish_status()
         time.sleep(max(0.0, POLL - (time.monotonic() - started)))
     finally:
       # first, inside manager's 5 s: it stops this when a chestnut turns up,
@@ -580,16 +892,11 @@ class Owner:
       self.stop_worker()
       self.close_link()
       gadget.set_dormant(False)
+      self.forget_status()
+      # an owner killed before it got this far without being asked to stop
+      # counts as one that died; one that was asked took it back already
+      if self.born is not None:
+        forget_start(born)
+        self.born = None
     gadget.log.warning("jetlink: stopped")
 
-
-def main(worker: Sequence[str], cwd: str | None = None, env: Mapping[str, str] | None = None,
-         log_file: Path | None = None) -> None:
-  """Hold the gadget until SIGTERM or SIGINT. `worker` is the provisioning
-  run's argv, started in `cwd` with `env` over this process's environment;
-  `log_file` defaults to LOG."""
-  gadget.set_logger(_own_logger(LOG if log_file is None else log_file))
-  owner = Owner(worker, cwd=cwd, env=env)
-  signal.signal(signal.SIGTERM, owner.request_stop)
-  signal.signal(signal.SIGINT, owner.request_stop)
-  owner.run()

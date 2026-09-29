@@ -15,6 +15,7 @@ from pathlib import Path
 from unittest import mock
 
 from jetlink.comma import port, root
+from tests.openpilot.fakes import CHESTNUT_IDS
 
 SWAP = port.SWAP_AFTER
 RELEASE = port.RELEASE_AFTER
@@ -39,7 +40,8 @@ class PortTest(unittest.TestCase):
               mock.patch.object(port, 'run_script', self.script)):
       self.addCleanup(p.stop)
       p.start()
-    self.port = port.Port()
+    # openpilot's chestnut ids, as the fork's adapter hands them over
+    self.port = port.Port(CHESTNUT_IDS)
     self.now = 100.0
     # what is always there: the root hub, and the modem on the other controller
     self.enumerate('usb1', (0x1D6B, 0x0002))
@@ -65,6 +67,28 @@ class PortTest(unittest.TestCase):
 
   def commands(self) -> list[str]:
     return [c.args[0] for c in self.script.call_args_list]
+
+
+class TestAfterAnOwnerDied(PortTest):
+  """An owner started after one that died can find a borrower still on the
+  gadget the dead one presented, maybe through a hold it made. The first
+  update leaves the port alone under that link, and clears it once it goes."""
+
+  def test_a_live_link_keeps_the_port_as_it_is_until_it_goes(self):
+    self.plug('sink')
+    with mock.patch.object(port.gadget, 'host_attached', return_value=True), \
+         mock.patch.object(port.gadget, 'log') as log:
+      self.run_for(3)
+    self.assertEqual(self.commands(), [])
+    log.warning.assert_called_once()
+    with mock.patch.object(port.gadget, 'host_attached', return_value=False):
+      self.run_for(3)
+    self.assertEqual(self.commands(), ['off'])
+
+  def test_a_boot_with_nothing_on_the_gadget_clears_at_once(self):
+    with mock.patch.object(port.gadget, 'host_attached', return_value=False):
+      self.run_for(1)
+    self.assertEqual(self.commands(), ['off'])
 
 
 class TestHosts(PortTest):
@@ -138,6 +162,18 @@ class TestAccessories(PortTest):
 
   def test_a_chestnut_being_flashed_is_left_alone(self):
     self.left_alone(CHESTNUT_ROM)
+
+  def test_the_ids_the_caller_names_are_the_chestnut(self):
+    # the fork's adapter hands over openpilot's own; nothing else is one then
+    self.port = port.Port(chestnut_ids={JETSON_GADGET})
+    self.left_alone(JETSON_GADGET)
+
+  def test_ids_the_caller_did_not_name_are_not_a_chestnut(self):
+    self.port = port.Port(chestnut_ids={JETSON_GADGET})
+    self.plug('source')
+    self.enumerate('2-1', CHESTNUT)
+    self.run_for(SWAP + 1)
+    self.assertEqual(self.commands(), ['off', 'hold'])
 
   def test_a_sink_that_cannot_host_is_not_cycled(self):
     self.plug('source')

@@ -19,6 +19,17 @@ HOST="${1:?usage: deploy_to_comma.sh user@host [dest]}"
 DEST="${2:-/data/openpilot/jetlink_repo}"
 
 here="$(cd "$(dirname "$0")/.." && pwd)"
+root="$(dirname "$DEST")"
+
+# This jetlink keeps none of the names a fork from before its jetlink adapter
+# (openpilot/sunnypilot/accelerators) calls: there, manager's should_run for
+# jetlinkd raises and manager exits on every boot, link on or off.
+if ! ssh "$HOST" "test -f '$root/openpilot/sunnypilot/jetlink_adapter/__init__.py'"; then
+  echo "!! $HOST:$root has no openpilot/sunnypilot/jetlink_adapter: that fork predates the adapter," >&2
+  echo "   and this jetlink would stop its manager. Update the fork first, or deploy an older jetlink." >&2
+  exit 1
+fi
+
 echo "==> syncing $here -> $HOST:$DEST"
 rsync -a --delete \
   --exclude '.git' --exclude '__pycache__' --exclude '.pytest_cache' \
@@ -27,7 +38,6 @@ rsync -a --delete \
   --exclude '.build' --exclude 'build' --exclude '*.egg-info' \
   "$here/" "$HOST:$DEST/"
 
-root="$(dirname "$DEST")"
 echo "==> linking $root/jetlink -> $(basename "$DEST")/jetlink"
 # ln -sfn refuses to replace a real directory, so clear one an older install left
 ssh "$HOST" "[ -d '$root/jetlink' ] && [ ! -L '$root/jetlink' ] && rm -rf '$root/jetlink'; \
@@ -35,7 +45,7 @@ ssh "$HOST" "[ -d '$root/jetlink' ] && [ ! -L '$root/jetlink' ] && rm -rf '$root
 
 echo "==> checking the package imports under the AGNOS venv"
 ssh "$HOST" "cd '$root' && PYTHONPATH='$root' /usr/local/venv/bin/python3 -c '
-import jetlink, jetlink.client, jetlink.transport.ffs, jetlink.queues, jetlink.comma.owner
+import jetlink, jetlink.client, jetlink.transport.ffs, jetlink.queues, jetlink.openpilot.owner
 print(\"jetlink\", jetlink.__version__, \"ok\")'"
 
 cat <<'NEXT'
@@ -46,11 +56,13 @@ cat <<'NEXT'
     that exits.
 
     An owner or modeld that was already running still has the OLD package
-    imported, and manager never respawns a process that exited on its own.
-    Reboot the comma, or restart them yourself (get the pid first: pkill -f
-    over ssh matches your own ssh command line and kills the session):
+    imported. Reboot the comma, or kill the owner: a fork with jetlinkd's
+    restart wrapper starts it again on manager's next loop (an older fork
+    leaves it dead until a reboot), and three kills in 10 min make its next
+    start wait. Get the pid first: pkill -f over ssh matches your own ssh
+    command line and kills the session:
 
-      pgrep -f "^openpilot.sunnypilot.accelerators.jetlink.owner$"
+      pgrep -f "^openpilot.sunnypilot.jetlink_adapter$"
 
     Sanity check with the Jetson cabled up and its server running
     (the jetlink-server service, or jetlink run):

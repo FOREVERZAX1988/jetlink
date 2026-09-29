@@ -4,9 +4,10 @@ Copyright (c) 2026-, Zeph Leggett.
 This file is part of jetlink and is licensed under the MIT License.
 See the LICENSE file in the root directory for more details.
 
-The comma's gadget: openpilot's params read as files, what carries the link,
-the gadget built and brought up through the root script, the wait for a host,
-and the files the owner and the root script leave in /dev/shm.
+The comma's gadget: what carries the link, the gadget built and brought up
+through the root script, the wait for a host, and the files the owner and the
+root script leave in /dev/shm. The settings it is told are
+jetlink.openpilot.settings' (tests/openpilot/test_interface.py).
 """
 import json
 import os
@@ -45,54 +46,14 @@ class TestNothingHeavyIsReachable(unittest.TestCase):
                      'everything the owner imports runs for the whole drive; see the gadget docstring')
 
 
-class TestParamsOffTheFilesystem(unittest.TestCase):
-  """params.cc writes a value to a temp file, fsyncs it, renames it over the key
-  and fsyncs the directory, so a plain read never sees a torn value."""
-
-  def setUp(self):
-    self.tmp = Path(tempfile.mkdtemp())
-    (self.tmp / 'd').mkdir()
-    env = unittest.mock.patch.dict(os.environ, {'PARAMS_ROOT': str(self.tmp)})
-    env.start()
-    self.addCleanup(env.stop)
-    os.environ.pop('OPENPILOT_PREFIX', None)
-
-  def write(self, key: str, value: bytes) -> None:
-    (self.tmp / 'd' / key).write_bytes(value)
-
-  def test_the_path_follows_the_prefix(self):
-    self.assertEqual(gadget.params_dir(), self.tmp / 'd')
-    with unittest.mock.patch.dict(os.environ, {'OPENPILOT_PREFIX': 'abc123'}):
-      self.assertEqual(gadget.params_dir(), self.tmp / 'abc123')
-
-  def test_a_missing_param_is_not_a_false(self):
-    # None and False are different answers: offroad treats an unwritten param
-    # as parked, and enabled treats it as off
-    self.assertIsNone(gadget.param_bool(gadget.P_OFFROAD))
-    self.assertFalse(gadget.enabled())
-    self.assertTrue(gadget.offroad())
-
-  def test_a_bool_is_true_and_nothing_else(self):
-    for raw, expected in ((b'1', True), (b'0', False), (b'', False), (b'true', True)):
-      self.write(gadget.P_OFFROAD, raw)
-      self.assertIs(gadget.param_bool(gadget.P_OFFROAD), expected, raw)
-      self.assertIs(gadget.offroad(), expected, raw)
-
-  def test_an_unreadable_store_is_not_an_error(self):
-    with unittest.mock.patch.dict(os.environ, {'PARAMS_ROOT': '/nonexistent'}):
-      self.assertIsNone(gadget.raw_param(gadget.P_LINK))
-      self.assertFalse(gadget.enabled())
-
-
 class TestLinkKind(unittest.TestCase):
   """What carries the link: the gadget the owner built, 'cable' for iOS and
-  'usb' otherwise, with the setting standing in until the owner has said."""
+  'usb' otherwise, with the caller's setting standing in until the owner has said."""
 
   def setUp(self):
     self.tmp = Path(tempfile.mkdtemp())
     for name, value in (('LINK', self.tmp / 'link'), ('UDC_PATH', self.tmp / 'udc'),
-                        ('NET_STATUS', self.tmp / 'net'),
-                        ('ios', unittest.mock.Mock(return_value=False))):
+                        ('NET_STATUS', self.tmp / 'net')):
       p = unittest.mock.patch.object(gadget, name, value)
       self.addCleanup(p.stop)
       p.start()
@@ -102,21 +63,38 @@ class TestLinkKind(unittest.TestCase):
     self.assertIsNone(gadget.link_peer())
 
   def test_ios_is_the_cable_before_any_dial(self):
-    gadget.ios.return_value = True
-    self.assertEqual(gadget.link_kind(), 'cable')
+    self.assertEqual(gadget.link_kind('ios'), 'cable')
     self.assertIsNone(gadget.link_peer())
 
   def test_the_owners_record_decides_over_the_setting(self):
     # a setting moved while somebody borrowed waits for the car to park; until
     # the owner rebuilds, the gadget is what it built
-    gadget.ios.return_value = True
     gadget.note_link('usb')
-    self.assertEqual(gadget.link_kind(), 'usb')
-    gadget.ios.return_value = False
+    self.assertEqual(gadget.link_kind('ios'), 'usb')
     gadget.note_link('cable', '192.168.60.3')
-    self.assertEqual(gadget.link_kind(), 'cable')
+    self.assertEqual(gadget.link_kind('usb'), 'cable')
     gadget.clear_link()
-    self.assertEqual(gadget.link_kind(), 'usb', 'no owner yet: the setting')
+    self.assertEqual(gadget.link_kind('usb'), 'usb', 'no owner yet: the setting')
+    self.assertEqual(gadget.link_kind('ios'), 'cable', 'no owner yet: the setting')
+
+  def test_a_caller_that_read_the_setting_hands_it_over(self):
+    # jetlink.openpilot reads the setting once, off the directory the fork's
+    # adapter names, and passes it; this module knows no param
+    self.assertEqual(gadget.link_kind('ios'), 'cable')
+    self.assertEqual(gadget.link_kind('usb'), 'usb')
+    self.assertEqual(gadget.link_kind('off'), 'usb')
+    gadget.note_link('usb')
+    self.assertEqual(gadget.link_kind('ios'), 'usb', "the owner's record still decides")
+
+  def test_the_cc_pin_is_one_reading_for_every_reader(self):
+    cc = self.tmp / 'cc'
+    with unittest.mock.patch.object(gadget, 'CC_ORIENTATION', cc):
+      self.assertIsNone(gadget.cc_orientation(), 'a kernel that does not say')
+      self.assertFalse(gadget.port_has_host())
+      for raw, value in (('0\n', 0), ('1', 1), ('2\n', 2), ('junk', None)):
+        cc.write_text(raw)
+        self.assertEqual(gadget.cc_orientation(), value, raw)
+        self.assertEqual(gadget.port_has_host(), bool(value), raw)
 
   def test_a_dial_is_recorded_with_the_phone_and_cleared(self):
     gadget.note_link('cable', '192.168.60.3')
@@ -130,9 +108,8 @@ class TestLinkKind(unittest.TestCase):
     # it is the dial that proved it
     with unittest.mock.patch.object(gadget, 'udc_state', return_value='powered'), \
          unittest.mock.patch.object(gadget.time, 'sleep', side_effect=AssertionError('waited')):
-      gadget.ios.return_value = True
-      self.assertTrue(gadget.wait_for_host(5.0, report=lambda: self.fail('reported a wait')))
-      gadget.ios.return_value = False
+      self.assertTrue(gadget.wait_for_host(5.0, report=lambda: self.fail('reported a wait'), mode='ios'))
+      self.assertFalse(gadget.wait_for_host(0.0, mode='usb'))
       self.assertFalse(gadget.wait_for_host(0.0))
 
   def test_the_cable_needs_the_gadget_too(self):
@@ -227,28 +204,6 @@ class TestTheLogger(unittest.TestCase):
     self.assertIs(root.log, logger)
 
 
-class TestLinkMode(unittest.TestCase):
-  """Accelerator Link is one param, JetlinkLink: 0 off, 1 USB, 2 iOS."""
-
-  def setUp(self):
-    self.dir = Path(tempfile.mkdtemp())
-    p = unittest.mock.patch.object(gadget, 'params_dir', return_value=self.dir)
-    self.addCleanup(p.stop)
-    p.start()
-
-  def write(self, key: str, value: str) -> None:
-    (self.dir / key).write_text(value)
-
-  def test_the_three_modes(self):
-    self.assertEqual(gadget.link_mode(), 'off', 'unset')
-    self.assertEqual(list(self.dir.iterdir()), [], 'wrote a param')
-    for raw, mode in (('0', 'off'), ('1', 'usb'), ('2', 'ios'), ('7', 'off'), ('x', 'off'), ('', 'off')):
-      self.write('JetlinkLink', raw)
-      self.assertEqual(gadget.link_mode(), mode, raw)
-    self.write('JetlinkLink', '2')
-    self.assertTrue(gadget.enabled() and gadget.ios())
-
-
 class FakeClock:
   """monotonic and sleep, so a 45 s wait costs no wall clock."""
 
@@ -276,9 +231,8 @@ class TestWaitForHost(unittest.TestCase):
   def setUp(self):
     self.clock = FakeClock()
     self.bounced = []
-    # USB, whatever the machine's params or a previous owner's record hold
-    for name, value in (('time', self.clock), ('LINK', Path(tempfile.mkdtemp()) / 'link'),
-                        ('ios', unittest.mock.Mock(return_value=False))):
+    # USB: no owner's record, and no setting handed over
+    for name, value in (('time', self.clock), ('LINK', Path(tempfile.mkdtemp()) / 'link')):
       p = unittest.mock.patch.object(gadget, name, value)
       self.addCleanup(p.stop)
       p.start()
@@ -429,3 +383,14 @@ class TestDormant(unittest.TestCase):
     self.assertEqual(gadget.pending_shutdown(), 'car battery')
     gadget.finish_shutdown()
     self.assertIsNone(gadget.pending_shutdown())
+
+  def test_a_request_nobody_takes_is_withdrawn(self):
+    # hardwared waits on it, and then goes on without it
+    gadget.request_shutdown('car battery')
+    self.assertFalse(gadget.await_shutdown(0.05, poll=0.01))
+    self.assertIsNone(gadget.pending_shutdown())
+
+  def test_a_request_taken_ends_the_wait(self):
+    gadget.request_shutdown('car battery')
+    gadget.finish_shutdown()
+    self.assertTrue(gadget.await_shutdown(0.05, poll=0.01))

@@ -241,15 +241,18 @@ The owner holds the gadget while the link is on; openpilot lists it as
 
 | File | Role |
 | --- | --- |
-| `gadget.py` | the gadget, and the openpilot params it reads by name |
+| `gadget.py` | the gadget, and what carries the link |
 | `owner.py` | the owner |
 | `lending.py` | the lease modeld borrows the endpoints, or a phone's dial, on |
 | `port.py` | the USB-C port |
 | `root.py` | runs `jetlink-root.sh` under `sudo -n`, on AGNOS only |
 
-The zoompilot fork starts it from a shim,
-`openpilot/sunnypilot/accelerators/jetlink/owner.py`, with the fork's
-provisioning worker.
+The zoompilot fork's manager runs it as its adapter module,
+`openpilot/sunnypilot/jetlink_adapter`, whose `main()` hands
+`jetlink.openpilot.owner` the params directory and keys, the chestnut's USB
+ids and the adapter's name; the owner starts `python -m
+jetlink.openpilot.provision --adapter openpilot.sunnypilot.jetlink_adapter`
+when there is provisioning to do.
 
 | Descriptor | Value |
 | --- | --- |
