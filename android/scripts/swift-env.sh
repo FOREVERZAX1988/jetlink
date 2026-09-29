@@ -37,9 +37,13 @@ fi
 "$SWIFT" --version 2>&1 | grep -q "Swift version ${SWIFT_VERSION%.0}" ||
   fail "$SWIFT is not Swift $SWIFT_VERSION (the SDK for Android must match the toolchain exactly)"
 
-# The SDK, and its link to the NDK.
+# The SDK, and its link to the NDK. swiftpm on Linux keeps SDKs under the
+# account's home from the password file, not $HOME, which differs in CI
+# containers (GitHub sets HOME=/github/home for root).
 BUNDLE=""
-for root in "$HOME/Library/org.swift.swiftpm/swift-sdks" "$HOME/.swiftpm/swift-sdks" "${XDG_CONFIG_HOME:-$HOME/.config}/swiftpm/swift-sdks"; do
+ACCOUNT_HOME="$(getent passwd "$(id -u)" 2>/dev/null | cut -d: -f6 || true)"
+for root in "$HOME/Library/org.swift.swiftpm/swift-sdks" "$HOME/.swiftpm/swift-sdks" \
+  "${XDG_CONFIG_HOME:-$HOME/.config}/swiftpm/swift-sdks" ${ACCOUNT_HOME:+"$ACCOUNT_HOME/.swiftpm/swift-sdks"}; do
   if [[ -d "$root/$SDK_NAME.artifactbundle" ]]; then
     BUNDLE="$root/$SDK_NAME.artifactbundle/swift-android"
     break
