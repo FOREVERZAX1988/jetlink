@@ -1,8 +1,8 @@
 # Installation reference
 
 Normal setup: [Jetson guide](jetson.md), [Mac app](macos-app.md),
-[PC guide](platforms.md). This page: what the installer does, manual installs
-and custom integrations.
+[PC guide](platforms.md). This page: what the installer does, manual installs,
+the [server command](#the-server-command) and custom integrations.
 
 <a id="jetson-installation"></a>
 
