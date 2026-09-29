@@ -66,6 +66,68 @@ struct ProtocolTests {
     #expect(link.last?.json["ok"] is Bool)
   }
 
+  /// A message as the comma's gadget sends it, 16 KB-padded, with the
+  /// header version given.
+  func gadgetFrame(_ type: Wire.Msg, seq: UInt32, payload: Data = Data(), version: UInt16) -> [UInt8] {
+    var bytes = [UInt8](repeating: 0, count: Wire.headerSize)
+    bytes.withUnsafeMutableBytes {
+      Wire.packHeader(
+        Wire.Header(msgType: type.rawValue, seq: seq, flags: 0, length: UInt32(payload.count), version: version), into: $0.baseAddress!)
+    }
+    bytes += payload
+    bytes += [UInt8](repeating: 0, count: USBTransport.gadgetPad(bytes.count))
+    return bytes
+  }
+
+  /// A 766 MB model's protocol-3 request is 409,600 bytes as the gadget pads
+  /// it: 25 of the ring's reads, all posted before it came, none posted while
+  /// it was read. A protocol-2 comma's messages come through the ring with
+  /// their version, and the answer goes back in the envelope.
+  @Test("Protocol 3 through the host's read ring")
+  func throughTheRing() throws {
+    let kernel = FakeUsbfs()
+    let pipes = UsbfsPipes(device: UsbfsDevice(kernel: kernel), inEndpoint: 0x81, outEndpoint: 0x01, depth: ReadRing.depth)
+    let scratch = Scratch(64)
+    #expect(try pipes.read(into: scratch.pointer, count: 64, timeout: 0.01) == 0)
+    #expect(kernel.pendingCount == ReadRing.depth)
+    let transport = USBTransport(pipes: pipes)
+
+    let request = Data(pattern(Wire.inferReqSize + 2 * 6 * 128 * 256 + 12 * 4))
+    let frame = gadgetFrame(.inferReq, seq: 1, payload: request, version: Wire.version)
+    #expect(frame.count == 409_600 && frame.count == 25 * ReadRing.slotSize)
+    kernel.feed(frame)
+    let message = try transport.recv()
+    #expect(message.version == Wire.version && message.msgType == Wire.Msg.inferReq.rawValue)
+    #expect(Data(message.payload) == request)
+    #expect(kernel.pendingCount == ReadRing.depth - 25)
+    #expect(kernel.discards == 0)
+
+    let cache = try TemporaryDirectory()
+    let session = Session(transport: transport, host: EngineHost(cache: try ServerCache(root: cache.url, backend: cpuBackend())))
+    let hello = try JSONSerialization.data(withJSONObject: ["client": ["name": "modeld", "nonce": "ab12"]])
+    kernel.feed(gadgetFrame(.helloReq, seq: 2, payload: hello, version: 2))
+    kernel.feed(gadgetFrame(.ping, seq: 3, version: 2))
+    for (type, seq) in [(Wire.Msg.helloReq, UInt32(2)), (.ping, 3)] {
+      let old = try transport.recv()
+      #expect(old.version == 2 && old.msgType == type.rawValue && old.seq == seq)
+      try session.handle(old)
+    }
+    let replies = try [0, 1].map { index in
+      try Data(kernel.written).withUnsafeBytes { raw -> Wire.Header in
+        var at = 0
+        var header = try Wire.unpackHeader(raw.baseAddress!)
+        for _ in 0..<index {
+          at += Wire.headerSize + Int(header.length) + (Wire.Flag(rawValue: header.flags).contains(.padded) ? 1 : 0)
+          header = try Wire.unpackHeader(raw.baseAddress! + at)
+        }
+        return header
+      }
+    }
+    #expect(replies.map(\.msgType) == [Wire.Msg.error.rawValue, Wire.Msg.error.rawValue])
+    #expect(replies.map(\.version) == [2, 2])
+    #expect(replies.map(\.seq) == [2, 3])
+  }
+
   /// The queued golden frames carry a prev_feat of their own, as protocol 2
   /// sent it. Taken in through the server's own feedback path, as a hidden
   /// state kept from the frame before, they give protocol 2's outputs: the
