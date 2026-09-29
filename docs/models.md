@@ -62,10 +62,11 @@ The same commands on a built `jetlink-server`: `jetlink-server models list
 | PC installer | `/var/lib/jetlink` |
 | Mac app | `~/Library/Application Support/Jetlink/cache` |
 | `jetlink-server` on a Mac | `~/Library/Caches/jetlink` |
-| `jetlink-server` on Linux | `/mnt/data/jetlink` on a Jetson, else `~/.cache/jetlink` |
+| `jetlink-server` on Linux | `/mnt/data/jetlink` on a Jetson, else `/var/lib/jetlink` as root, else `~/.cache/jetlink` |
 
 - Mac app: choose a cache folder in Settings.
-- `jetlink-server`: `JETLINK_CACHE` or `--cache DIR`.
+- `jetlink-server`: `JETLINK_CACHE` or `--cache DIR`
+  ([the rule](installation-reference.md#cache-folder-and-environment)).
 - The installer's `jetlink models` uses the server's cache.
 
 Disk use: `jetlink models inventory` (installer), `jetlink-server models

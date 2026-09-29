@@ -9,7 +9,7 @@ server: TensorRT on a Jetson or NVIDIA PC, ONNX Runtime everywhere else. Setup:
 
 | Backend | Where | Prepared files | Runtime |
 | --- | --- | --- | --- |
-| `trt` | Jetson, NVIDIA PC | `.plan` | TensorRT 10 on a Jetson (10.16 on JetPack 7.2, 10.3 on 6.2), 11.3 on a PC; the host's own libraries, loaded at run time |
+| `trt` | Jetson, NVIDIA PC | `.plan` | TensorRT 10 on a Jetson (10.16 on JetPack 7.2, 10.3 on 6.2), JetPack's own; 11.3.0.99 on a PC, the installer's copy in `/opt/jetlink/tensorrt` (`--tensorrt-libs`). Loaded at run time |
 | `ort` | Mac, iPhone and iPad (CoreML); Android (QNN); Linux without a GPU (CPU) | `.ortcache/` | ONNX Runtime 1.29.0 |
 
 - `--backend auto`: TensorRT if it loads, else ONNX Runtime. The installed
@@ -17,6 +17,8 @@ server: TensorRT on a Jetson or NVIDIA PC, ONNX Runtime everywhere else. Setup:
   instead of serving from the CPU.
 - Prepared files are cached per runtime version and device. A TensorRT plan
   that no longer loads (after a TensorRT update) is prepared again, once.
+- Options: [the server command](installation-reference.md#the-server-command).
+  Jetson measurements: [performance](status.md#measured-performance).
 
 `--device` picks the ONNX Runtime profile (`OrtProfile`), where it runs the
 model. On a Mac:

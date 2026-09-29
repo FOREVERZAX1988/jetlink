@@ -52,6 +52,7 @@ JetlinkKit/.build/release/jetlink-server --usb --device coreml
 JetlinkKit/.build/release/jetlink-server build /path/to/big_driving_supercombo.onnx
 ```
 
+Every command and option: [the server command](installation-reference.md#the-server-command).
 Performance: [backends](backends.md#mac-measured).
 
 ## Linux (NVIDIA GPU)
@@ -65,7 +66,12 @@ curl -fsSL https://raw.githubusercontent.com/zoompilot/jetlink/main/install.sh |
 
 - Needs NVIDIA driver 580 or newer. On Ubuntu the installer can install it;
   restart and rerun the installer when it says so.
-- Installs TensorRT 11.3 from NVIDIA's package source (about 1.9 GB).
+- Puts NVIDIA's TensorRT 11.3.0.99 in `/opt/jetlink/tensorrt` (a 3.8 GB
+  download, 2.7 GB on disk) rather than installing a system package; only the
+  driver comes from the system. Models and engines go in `/var/lib/jetlink`.
+- An install from Jetlink 0.6.0 or earlier moves out of Docker on its next
+  `jetlink update`. It keeps the same TensorRT build, so its engines should
+  load; one that does not is prepared again, once.
 - Asks whether to start Jetlink with the computer.
 - Check it with `jetlink status`. Logs, updates, uninstalling:
   [everyday commands](jetson.md#everyday-use).
@@ -106,19 +112,27 @@ scripts/build-linux.sh linux-x86_64       # linux-aarch64 for a Jetson
 sudo ./install.sh --binary dist/jetlink-server-<version>-linux-x86_64.tar.gz
 ```
 
-Or run it in a terminal without installing. The host needs TensorRT (the
-installer's packages) and the udev rule, which grants USB access without root;
-replug the comma after installing the rule:
+Or run it in a terminal without installing. The host needs:
+
+- `libcurl4`, which the server links;
+- TensorRT: JetPack's on a Jetson; on a PC, TensorRT 11.3.0.99's libraries
+  named with `--tensorrt-libs` (an installed PC has them in
+  `/opt/jetlink/tensorrt/11.3.0.99`; otherwise see
+  [installing by hand](installation-reference.md#installing-by-hand));
+- the udev rule, which grants USB access without root. Replug the comma after
+  installing it.
 
 ```bash
 sudo install -m 644 scripts/99-jetlink-host.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules
 tar -xzf dist/jetlink-server-<version>-linux-x86_64.tar.gz
-jetlink-server-<version>-linux-x86_64/bin/jetlink-server --usb --backend trt
+jetlink-server-<version>-linux-x86_64/bin/jetlink-server --usb --backend trt \
+  --tensorrt-libs /opt/jetlink/tensorrt/11.3.0.99
 ```
 
-Without root it cannot turn off USB 3 link power management on the comma's
-port, which costs about 4 ms a frame; the log says so.
+On a Jetson, leave out `--tensorrt-libs`. Without root the server cannot turn
+off USB 3 link power management on the comma's port, which costs about 2 ms a
+frame; the log says so.
 
 ## CPU only
 
@@ -158,7 +172,7 @@ python3 scripts/bench_link.py --host 127.0.0.1 --onnx /path/to/big_model.onnx --
 | Problem | Check |
 | --- | --- |
 | Installer says the GPU is too old or has no driver | A GeForce RTX 20 series or newer, and driver 580 or newer. |
-| `jetlink status` says the server stopped | `jetlink logs`. `sudo /opt/jetlink/current/bin/jetlink-server backends --backend trt` says whether TensorRT loads. |
+| `jetlink status` says the server stopped | `jetlink logs`. `sudo /opt/jetlink/current/bin/jetlink-server backends --backend trt --tensorrt-libs /opt/jetlink/tensorrt/11.3.0.99` says whether TensorRT loads (on a Jetson, without `--tensorrt-libs`). |
 | USB permission error | Install the udev rule, then replug the comma. |
 | TCP connection refused | Start the server with `--listen`. Check the IP and allow port 5599 through the firewall. |
 | Mac looks stuck loading | On an M1 Pro, CoreML prepares in about 20 seconds and loads in up to 10. If loading takes minutes, remove the prepared engine and prepare again. |
