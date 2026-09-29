@@ -42,7 +42,10 @@ struct PageServerTests {
       ring.append("INFO jetlink.server: \(n)", at: Date(timeIntervalSince1970: 1_790_000_000 + Double(n)))
     }
     let lines = ring.lines()
-    #expect(lines.map { $0.split(separator: " ", maxSplits: 2).last.map(String.init) } == ["INFO jetlink.server: 3", "INFO jetlink.server: 4", "INFO jetlink.server: 5"])
+    #expect(
+      lines.map { $0.split(separator: " ", maxSplits: 2).last.map(String.init) } == [
+        "INFO jetlink.server: 3", "INFO jetlink.server: 4", "INFO jetlink.server: 5",
+      ])
     #expect(lines.allSatisfy { $0.range(of: #"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3} "#, options: .regularExpression) != nil })
   }
 
@@ -160,7 +163,9 @@ struct PageServerTests {
 
     // What the server's host says reaches the page through the controller.
     server.host.emit(.link(LinkEvent(state: .connected, detail: "", peer: "usb", medium: "usb3")))
-    server.host.emit(.stats(StatsEvent(frames: 3, fps: 20, servedMs: .init(mean: 1, p99: 2, max: 3), stagesMs: .init(queue: 0, gpu: 1, other: 0, send: 0), slow: 0, windowS: 1)))
+    server.host.emit(
+      .stats(
+        StatsEvent(frames: 3, fps: 20, servedMs: .init(mean: 1, p99: 2, max: 3), stagesMs: .init(queue: 0, gpu: 1, other: 0, send: 0), slow: 0, windowS: 1)))
     let live = dataEvents(client.read { names($0).count >= 7 })
     #expect(live.suffix(2).compactMap { $0["event"] as? String } == ["link", "stats"])
     #expect(live.last?["frames"] as? Int == 3)

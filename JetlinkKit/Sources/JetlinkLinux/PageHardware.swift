@@ -77,10 +77,9 @@
       let model = Sysfs.read(root.path("/proc/device-tree/model"))?.trimmingCharacters(in: CharacterSet(charactersIn: "\0"))
         .replacingOccurrences(of: " Engineering Reference Developer Kit", with: "")
       host["board"] = model.flatMap { $0.isEmpty ? nil : $0 } ?? PageHardware.field("model name", in: Sysfs.read(root.path("/proc/cpuinfo")), separator: ":")
-      let os = found.tegra ? PageHardware.jetpack(Sysfs.read(root.path("/etc/nv_tegra_release"))) : nil
-      host["os"] =
-        os
-        ?? PageHardware.field("PRETTY_NAME", in: Sysfs.read(root.path("/etc/os-release")), separator: "=")?.trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+      let jetpack = found.tegra ? PageHardware.jetpack(Sysfs.read(root.path("/etc/nv_tegra_release"))) : nil
+      let pretty = PageHardware.field("PRETTY_NAME", in: Sysfs.read(root.path("/etc/os-release")), separator: "=")
+      host["os"] = jetpack ?? pretty?.trimmingCharacters(in: CharacterSet(charactersIn: "\""))
       host["gpu"] = found.nvml?.name ?? (found.tegra ? PageHardware.tegraGPU(Sysfs.read(root.path("/proc/device-tree/compatible"))) : nil)
       return host
     }

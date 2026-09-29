@@ -143,7 +143,8 @@ final class CountingRegistry: ModelRegistry, @unchecked Sendable {
 
   func inventory(artifactTag: String?, artifactSuffix: String, loaded: String?) -> InventoryEvent {
     called("inventory")
-    return InventoryEvent(loaded: loaded, lastLoaded: nil, models: [], artifacts: [], disk: InventoryDisk(modelsBytes: 0, enginesBytes: 0, freeBytes: 1_000_000_000))
+    return InventoryEvent(
+      loaded: loaded, lastLoaded: nil, models: [], artifacts: [], disk: InventoryDisk(modelsBytes: 0, enginesBytes: 0, freeBytes: 1_000_000_000))
   }
 
   func remove(sha256: String, artifacts: Bool, model: Bool) throws { called("remove") }
@@ -169,7 +170,8 @@ final class RunningPage {
   let server: PageServer
 
   init(
-    limits: PageServer.Limits = PageServer.Limits(), hardware: (any PageHardwareSource)? = nil, clock: @escaping @Sendable () -> TimeInterval = {
+    limits: PageServer.Limits = PageServer.Limits(), hardware: (any PageHardwareSource)? = nil,
+    clock: @escaping @Sendable () -> TimeInterval = {
       ProcessInfo.processInfo.systemUptime
     }, logs: @escaping @Sendable () -> [String] = { [] }
   ) throws {

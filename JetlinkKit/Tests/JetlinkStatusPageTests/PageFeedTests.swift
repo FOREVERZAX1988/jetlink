@@ -35,7 +35,8 @@ struct PageFeedTests {
     feed.publish(.server(ServerEvent(state: "serving", detail: "", backend: "trt", runtimeVersion: "10.16.2.10", device: "Orin")))
     feed.publish(.link(.waiting))
     feed.publish(.engine(.none))
-    feed.publish(.inventory(InventoryEvent(loaded: nil, lastLoaded: nil, models: [], artifacts: [], disk: InventoryDisk(modelsBytes: 0, enginesBytes: 0, freeBytes: 0))))
+    feed.publish(
+      .inventory(InventoryEvent(loaded: nil, lastLoaded: nil, models: [], artifacts: [], disk: InventoryDisk(modelsBytes: 0, enginesBytes: 0, freeBytes: 0))))
     feed.publish(.catalog(CatalogEvent(fetchedAt: nil, url: "", defaultRef: "", error: nil, models: [])))
     feed.publish(.download(DownloadEvent(sha256: "a", ref: nil, state: "started", frac: 0, bytes: 0, total: 1, rateBps: 0, detail: "", source: nil)))
     feed.publish(stats(frames: 1))

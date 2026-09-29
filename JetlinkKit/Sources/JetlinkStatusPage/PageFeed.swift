@@ -52,6 +52,7 @@ final class PageFeed: @unchecked Sendable {
   private let hardware: (any PageHardwareSource)?
   /// Monotonic seconds, for the history and the grace; `t` is wall time.
   private let clock: @Sendable () -> TimeInterval
+  static let uptime: @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
   private let handoff = DispatchQueue(label: "jetlink-page-feed", qos: .background)
   private let condition = NSCondition()
   private var latest: [String: (event: ControlEvent, date: Date)] = [:]
@@ -63,7 +64,7 @@ final class PageFeed: @unchecked Sendable {
   private var lastLeft = -TimeInterval.infinity
   private var stopped = false
 
-  init(hardware: (any PageHardwareSource)?, limits: Limits = Limits(), clock: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
+  init(hardware: (any PageHardwareSource)?, limits: Limits = Limits(), clock: @escaping @Sendable () -> TimeInterval = PageFeed.uptime) {
     self.hardware = hardware
     self.limits = limits
     self.clock = clock

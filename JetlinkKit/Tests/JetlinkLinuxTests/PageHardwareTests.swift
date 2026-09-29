@@ -14,7 +14,11 @@
 
     @Test("The bench Jetson as the host event names it")
     func jetsonHost() {
-      let hardware = PageHardware(root: jetson, cache: nil, nvml: { _ in Issue.record("NVML on a Tegra"); return noNVML(0) })
+      let never: (Int) -> Result<NvmlTelemetry, NvmlUnavailable> = { _ in
+        Issue.record("NVML on a Tegra")
+        return .failure(NvmlUnavailable(reason: "never asked"))
+      }
+      let hardware = PageHardware(root: jetson, cache: nil, nvml: never)
       let host = hardware.host()
       #expect(host["hostname"] as? String == "jetlink")
       #expect(host["board"] as? String == "NVIDIA Jetson Orin Nano Super")
