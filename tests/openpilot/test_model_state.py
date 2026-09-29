@@ -16,7 +16,9 @@ code that drives.
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -71,6 +73,8 @@ class FakeClient:
 
 class ModelStateTest(unittest.TestCase):
   def setUp(self):
+    # a phone's transport asks the UDC how fast the cable is
+    fakes.isolate(self, Path(tempfile.mkdtemp()))
     p = mock.patch.dict(sys.modules, fakes.fake_tinygrad())
     p.start()
     self.addCleanup(p.stop)

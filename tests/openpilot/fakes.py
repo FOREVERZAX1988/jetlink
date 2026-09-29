@@ -212,13 +212,52 @@ def owner_config() -> OwnerConfig:
   return adapter().owner()
 
 
+# every file of the comma layer's that a jetlink.openpilot test could reach:
+# its records in /dev/shm, the gadget in configfs and FunctionFS, the UDC and
+# the USB-C port in sysfs, and the lend socket
+GADGET_FILES = ('LINK', 'NET_STATUS', 'GADGET_STATUS', 'LENDER_STATUS', 'DORMANT', 'SHUTDOWN_REQUEST', 'STATE',
+                'CC_ORIENTATION')
+
+
+def isolate(test: unittest.TestCase, root: Path) -> None:
+  """Point everything jetlink could read or write outside the fake under
+  `root`, for the length of `test`: openpilot's params store by gadget's own
+  rule (PARAMS_ROOT and the prefix, so it lands on FakeOpenpilot's params_dir),
+  and the comma layer's device files. conftest.py fails a test that still
+  reaches the real ones."""
+  from jetlink.comma import gadget, lending, port
+  from jetlink.transport import base
+
+  def patch(target, name, value):
+    p = mock.patch.object(target, name, value)
+    p.start()
+    test.addCleanup(p.stop)
+
+  env = mock.patch.dict(os.environ, {'PARAMS_ROOT': str(root / 'params'), 'OPENPILOT_PREFIX': 'd'})
+  env.start()
+  test.addCleanup(env.stop)
+  dev = root / 'dev'
+  dev.mkdir(parents=True, exist_ok=True)
+  for name in GADGET_FILES:
+    patch(gadget, name, dev / name.lower())
+  patch(gadget, 'GADGET_PATH', root / 'configfs' / 'jetlink')
+  patch(gadget, 'FFS_MOUNT', root / 'ffs-jetlink')
+  patch(gadget, 'UDC_PATH', root / 'udc')
+  patch(base, 'UDC_SYSFS', str(root / 'udc'))
+  patch(lending, 'SOCKET', dev / 'jetlink-lend.sock')
+  patch(port, 'POWER_ROLE', root / 'current_pr')
+  patch(port, 'USB_DEVICES', root / 'usb-devices')
+
+
 class OpenpilotTest(unittest.TestCase):
-  """A test with a fresh fake adapter and jetlink bound to it."""
+  """A test with a fresh fake adapter and jetlink bound to it, and nothing of
+  the machine's own in reach."""
 
   def setUp(self):
     from jetlink.comma import gadget
     from jetlink.openpilot import bind
     self.tmp = Path(tempfile.mkdtemp())
+    isolate(self, self.tmp)
     self.op = FakeOpenpilot(self.tmp)
     # bind points jetlink.comma's log at the fake's; put it back after
     p = mock.patch.object(gadget, 'log', gadget.log)

@@ -11,14 +11,16 @@ is pinned: modeld gets a working model immediately, a swap never lands on an
 engaged frame, a large model that dies mid-drive falls back without losing the
 frame, and a small-model failure still belongs to modeld.
 """
+import tempfile
 import threading
 import time
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from jetlink.openpilot import joining
 from jetlink.openpilot.joining import REJOIN_DELAY_QUICK, STABLE_SECONDS, JoiningModelState
-from tests.openpilot.fakes import RecordingLog
+from tests.openpilot.fakes import RecordingLog, isolate
 
 
 class FakeModel:
@@ -51,6 +53,8 @@ class JoiningBase(unittest.TestCase):
   here, so each face below runs only its own."""
 
   def setUp(self):
+    # a lost link reads the USB-C port's CC pin
+    isolate(self, Path(tempfile.mkdtemp()))
     # The engagement watcher runs the adapter's poller, which EngagementTest
     # below covers. Drive the flag by hand instead
     patcher = mock.patch.object(JoiningModelState, '_watch_engagement', lambda self: None)
@@ -557,6 +561,7 @@ class EngagementTest(unittest.TestCase):
   adapter's, and tested there."""
 
   def setUp(self):
+    isolate(self, Path(tempfile.mkdtemp()))
     self.answers = []
     self.made_on = []
     self.engaged = True
