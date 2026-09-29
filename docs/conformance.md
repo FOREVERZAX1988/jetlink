@@ -1,144 +1,132 @@
-# Keeping the Swift and Python servers in step
+# Keeping the server in step with the comma
 
-A comma must not be able to tell the two servers apart, and one model cache
-must serve both.
+The comma runs this repo's Python (`jetlink/`); every server is the Swift one
+(`JetlinkKit`): the Jetson, a Linux PC, the Mac, iPhone and Android apps. The
+comma must work with it unchanged, so what crosses between them is held to the
+Python:
 
-| Server | Code | Runs |
-| --- | --- | --- |
-| Python | `jetlink/server` | Jetson, Linux PC, and the Mac app until the Swift one takes over |
-| Swift | `JetlinkKit/Sources/JetlinkServer` | the iPhone app, the Android app, the Mac app behind a setting, `jetlink-serve` |
+- **Comma-facing contracts are Python-sourced.** Constants, wire bytes, queue
+  staging and the registry's pointers and catalog are generated from the
+  Python, committed, and read by the Swift tests. The Python tests check the
+  Python still writes exactly those files.
+- **The server's own behaviour is Swift-owned.** Goldens the Python server
+  wrote before it was deleted are frozen; nothing regenerates them.
+- **A live test runs the comma's client against the Swift server.**
 
-Python is the source: what the two must agree on is generated from it,
-committed, and read by the Swift tests; the Python tests check the Python still
-writes exactly those files.
-
-## What is pinned
+## Python-sourced
 
 | What | Written by | Read by the Swift in |
 | --- | --- | --- |
-| Constants: the wire's magic, version, sizes, message, flag and status numbers; USB ids and packet sizes; model constants; control protocol version; `PREPARE_VERSION`; the onnxruntime release the Apple builds link | `make_pins.py` writes `JetlinkKit/Sources/JetlinkKit/Pinned.swift` | the Swift code uses `Pinned`; `ConformanceTests` checks every Swift constant against it |
+| Constants: the wire's magic, versions, sizes, message, flag and status numbers; USB ids and packet sizes; link media; model constants; the product version; the onnxruntime release | `make_pins.py` writes `JetlinkKit/Sources/JetlinkKit/Pinned.swift` | the Swift code uses `Pinned`; `ConformanceTests` checks every Swift constant against it |
 | Wire bytes: headers and INFER bodies; the byte streams of TCP, a USB host and the gadget's 16 KB bursts; the reads a USB host posts | `make_conformance_fixtures.py wire` | `JetlinkServerTests/ConformanceTests.swift` |
-| Tensors the queues stage each frame at frame_skip 1, 2 and 4, each frame's hidden state fed into the next, with a reset, a hello and a non-finite frame; the generator also checks them against protocol 2's staging | `make_conformance_fixtures.py staging` | the same file |
-| The `stats` event from fixed samples | `make_conformance_fixtures.py stats` | the same file |
-| Every control-channel event a real `ControlServer` writes over a real registry and cache | `make_conformance_fixtures.py control` | `JetlinkKitTests/PythonControlEventsTests.swift` |
-| LFS pointers, model identities, catalog parsing and merging, one cache directory's catalog and inventory payloads | `make_conformance_fixtures.py registry` | `JetlinkRegistryTests/ConformanceTests.swift` |
-| ONNX preparation for the split, whole and ane-whole layouts, byte for byte, on graphs that take every branch | `make_onnx_fixtures.py` | `JetlinkONNXTests/PreparationTests.swift` |
-| Whole-server runs: driving output of the tiny queued and stateful graphs, bit for bit, over TCP and USB; protocol 2's outputs again through the server's feedback path | `make_server_fixtures.py` | `JetlinkServerTests/ServerTests.swift`, `USBTransportTests.swift` and `ProtocolTests.swift` |
+| Tensors the queues stage each frame at frame_skip 1, 2 and 4, each frame's hidden state fed into the next, with a reset, a hello, a non-finite frame and desires with NaNs, signed zeros and infinities; the generator also checks them against protocol 2's staging | `make_conformance_fixtures.py staging` | the same file |
+| LFS pointers, model identities, catalog parsing and merging | `make_conformance_fixtures.py registry` | `JetlinkRegistryTests/ConformanceTests.swift` |
 
-The Android app draws what the Swift server hands it as JSON, so there the
-Swift is the source: `JetlinkKitTests/AppSnapshotTests.swift` checks the
-snapshot against `Fixtures/android_snapshot.json` (`JETLINK_WRITE_FIXTURES=1`
-rewrites it), and the app's `SnapshotTest.kt` parses the same file. The app's
-`PinnedTest.kt` checks its USB ids, port, frame skip and onnxruntime release
-against `Pinned.swift`.
+Generators live in `JetlinkKit/Scripts` and import the `jetlink` package of
+their own checkout, whatever the environment has installed.
 
-The Swift suites also run on Android (`android/scripts/swift-test-device.sh`),
-reading the same fixtures through `JETLINK_TEST_ROOT`. There the golden frames
-of an fp16 graph are held to a 0.999 correlation rather than bit for bit:
-onnxruntime's Android build computes fp16 MatMul in fp16.
+## Swift-owned
 
-- Generators live in `JetlinkKit/Scripts`. Each imports the `jetlink` package
-  of its own checkout, whatever the environment has installed.
-- Published numbers round as Python's `round()` does (half to even on the exact
-  binary value), through `pythonRound` in JetlinkKit.
+| What | Where | Changed by |
+| --- | --- | --- |
+| `slowFrameUs`, `controlProtocol`, `prepareVersion` | the Swift-owned section at the end of `Pinned.swift` | editing it there; `make_pins.py` copies the section through |
+| The `stats` event from fixed samples | `JetlinkServerTests/Fixtures/conformance/stats.json` | editing the file |
+| Every control event the Mac app and the status page read | `JetlinkKitTests/Fixtures/control_events_golden.jsonl` | editing the file |
+| One cache directory's catalog and inventory payloads | the `cache` block of `tests/fixtures/conformance/registry.json` | editing the file; the generator copies the block through |
+| Whole-server runs: driving output of the tiny queued and stateful graphs | `JetlinkServerTests/Fixtures/tiny_*` | editing the files |
+| ONNX preparation for every layout, byte for byte | `JetlinkONNXTests/Fixtures/*.expected.onnx` | editing the files |
+| The Android app's snapshot | `JetlinkKitTests/Fixtures/android_snapshot.json` | `JETLINK_WRITE_FIXTURES=1` on its test |
+
+A change to one of these is a change to what the server does: say why in the
+commit. A bump of `prepareVersion` rebuilds every cached onnxruntime artifact
+on its next load.
+
+## The live test
+
+`tests/test_swift_server.py` serves `tests/tiny_model.py`'s graphs from a real
+`jetlink-server` (`--backend ort --device cpu --listen`) and drives it through
+`jetlink.client`, as a comma does: upload and build, inference, the hidden
+state, resets, NOT_FINITE, telemetry, NOT_READY, deadlines, shutdown as a dry
+run, the stateful graph, and a comma of the protocol before, played from its
+bytes. The binary comes from `JETLINK_SERVER_BIN`, else the newest build in
+`JetlinkKit/.build`; `JETLINK_SERVER_BUILD=1` builds it first. Without one it
+skips.
 
 ## How it runs
 
-- `tests/test_conformance.py` reruns every generator into a temporary directory
+- `tests/test_conformance.py` reruns each generator into a temporary directory
   and compares byte for byte with the committed files. It also checks that
-  `Pinned.swift` is current, the Swift package links the pinned onnxruntime,
-  and CI regenerates with the pinned releases.
-- `swift test --package-path JetlinkKit` reads the fixtures on macOS (`swift`
-  CI job) and Linux (`swift-linux`, below).
-- `python-test-macos` runs that test on an Apple arm64 runner with the pinned
-  releases installed, so no comparison skips.
+  `Pinned.swift` is current, that the Swift package links the pinned
+  onnxruntime, and that CI installs with the pinned releases.
+- The staging spec comes from a graph onnx shape-infers, so the staging files
+  are compared only under the onnx in `JetlinkKit/Scripts/fixture-pins.txt`.
+  CI's Python 3.12 job installs with those releases (`pip install -c`), so
+  nothing skips there.
+- `swift test --package-path JetlinkKit` reads the fixtures on macOS and Linux
+  (arm64 and x86_64), and on Android through `JETLINK_TEST_ROOT`
+  (`android/scripts/swift-test-device.sh`).
+- The live test runs in CI against the macOS build and both Linux builds.
+- Published numbers round as Python's `round()` does (half to even on the
+  exact binary value), through `pythonRound` in JetlinkKit.
 
-Tool-dependent files:
+## Linux and Android
 
-| Files | Made by | Compared only |
-| --- | --- | --- |
-| ONNX graphs | onnx's serialiser | under the onnx release that made them |
-| Golden outputs | onnxruntime's CPU provider | on Apple arm64, under the release the Swift package links |
+The whole package builds on Linux. onnxruntime is opened at run time from the
+official `onnxruntime-linux-*` tarball of the release `Pinned` names: the build
+needs its headers, and the tests that run a model need its library.
 
-Both releases, with the numpy and protobuf they ran with, are in
-`JetlinkKit/Scripts/fixture-pins.txt`, which the test, `make_pins.py` and CI
-read. Elsewhere those comparisons skip.
+- The golden frames of an fp16 graph are held to a 0.999 correlation rather than
+  bit for bit: onnxruntime's Linux and Android builds compute fp16 MatMul and
+  ReduceMean in fp16, where the Apple build does not. The fp32 stateful graph
+  still matches bit for bit.
+- The registry's network tests run on Linux too: each mock network has its own
+  URLProtocol class, and `LocalServer` serves over Glibc sockets.
+- Stand-ins: swift-crypto for CryptoKit; `JetlinkLog` takes `os.Logger`'s
+  calls; element loops instead of vImage; the capped HTTP read fetches the
+  whole body and cuts it (Linux URLSession has no byte stream).
+- Not on Linux: JetlinkUI, the IOUSBHost gadget, CoreML and Metal.
 
-Real models are too big for fixtures. `JetlinkKit/Scripts/check_onnx_prep.py`
-compares the two preparations on any ONNX, in any layout
-(`--layout split|whole|ane-whole`, or `--all`), and runs both chains on
-onnxruntime for graphs under 64 MB. The three models in the Mac app's cache,
-the comma's (a086d5249fc3) among them, came out byte-identical in ane-whole.
+Locally, from the checkout root, in the image CI and the release builds use.
+`scripts/build-linux.sh <flavor> ort` fetches the pinned tarball and prints its
+directory (`linux-aarch64` on Apple silicon):
+
+```bash
+ORT=$(scripts/build-linux.sh linux-aarch64 ort)
+docker run --rm -v "$PWD":/src:ro -v "$ORT":/ort:ro --tmpfs /work:exec,size=6g swift:6.3.3-jammy bash -c '
+  tar -C /src --exclude=.build -cf - JetlinkKit jetlink tests | tar -C /work -xf - && cd /work &&
+  LD_LIBRARY_PATH=/ort/lib swift test --package-path JetlinkKit -Xcc -I/ort/include &&
+  apt-get update -qq && apt-get install -y -qq python3-pip && python3 -m pip install -q numpy pytest &&
+  LD_LIBRARY_PATH=/ort/lib JETLINK_SERVER_BIN=JetlinkKit/.build/debug/jetlink-server python3 -m pytest -q tests/test_swift_server.py'
+```
 
 ## When a change is intentional
 
-1. Change the Python.
+1. Change the Python, or the Swift-owned golden.
 2. Regenerate what moved, from the checkout root:
 
    ```bash
    .venv/bin/python JetlinkKit/Scripts/make_pins.py
-   .venv/bin/python JetlinkKit/Scripts/make_conformance_fixtures.py   # or one part: wire, staging, stats, control, registry
-   .venv/bin/python JetlinkKit/Scripts/make_server_fixtures.py
-   .venv/bin/python JetlinkKit/Scripts/make_onnx_fixtures.py
+   .venv/bin/python JetlinkKit/Scripts/make_conformance_fixtures.py   # or one part: wire, staging, registry
    ```
 
-   The venv needs the pinned onnx, onnxruntime, numpy and protobuf
-   (`pip install -r JetlinkKit/Scripts/fixture-pins.txt`) for the ONNX and
-   output files to match.
+   The staging files match only under the pinned onnx
+   (`pip install -r JetlinkKit/Scripts/fixture-pins.txt`). A version bump in
+   `jetlink/__init__.py` needs `make_pins.py` too: it writes
+   `Pinned.productVersion`.
 3. Change the Swift until `swift test --package-path JetlinkKit` passes.
 4. Commit the Python, fixtures and Swift together.
 
-A change to what a CoreML build writes bumps `PREPARE_VERSION` in
-`jetlink/server/backends/ort/__init__.py`, which both servers read. An artifact
-prepared under another version rebuilds on its next load.
+## What the Swift preparation refuses on purpose
 
-## One cache for both servers
-
-- Both write the same artifact under the same name: the model's identity, the
-  onnxruntime release and the CoreML device in the tag; the prepared ONNX and
-  onnxruntime's compiled model inside.
-- ane-whole has its own device tag, so it never collides with split.
-- The Swift reads the prepare version (5) from `Pinned`. Diverging versions
-  invalidate nothing, but a Mac switching servers would rebuild every engine on
-  every switch.
-- Artifacts are interchangeable: the Python server loaded a Swift-built engine
-  (relabelled to prepare 5, without the MLProgram `Data` directories Swift drops
-  after compiling) and served the comma's model at 29.7 ms p50, 0 of 390 frames
-  over 50 ms.
-
-## Linux
-
-The Jetson stays on the Python server (the Swift one has no TensorRT backend).
-The whole Swift package builds on Linux, the server included. onnxruntime is
-opened at run time, as on Android, from the official `onnxruntime-linux-*`
-tarball of the release `Pinned` names: the build needs its headers, and the
-tests that run a model need its library.
-
-| | |
-| --- | --- |
-| Stand-ins | swift-crypto for CryptoKit; `JetlinkLog` takes `os.Logger`'s calls; element loops instead of vImage; the capped HTTP read fetches the whole body and cuts it (Linux URLSession has no byte stream) |
-| Not on Linux | JetlinkUI, the IOUSBHost gadget, CoreML and Metal; the registry tests that fake the network (swift-corelibs-foundation adds a session's headers only as it sends, so `MockProtocol` cannot tell its requests from real ones) and the two that serve over Darwin sockets |
-
-Locally, from the checkout root, with the tarball's `include` in
-`$ORT/include/onnxruntime` and its `lib` in `$ORT/lib`, building in memory
-rather than in Docker's disk image:
-
-```bash
-docker run --rm -v "$PWD":/src:ro -v "$ORT":/ort:ro --tmpfs /work:exec,size=6g swift:6.3-jammy bash -c \
-  'tar -C /src --exclude=.build -cf - JetlinkKit tests/fixtures | tar -C /work -xf - &&
-   LD_LIBRARY_PATH=/ort/lib swift test --package-path /work/JetlinkKit -Xcc -I/ort/include'
-```
-
-## What the Swift refuses on purpose
-
-The Swift preparation has no shape or type inferrer. Where an export omits a
-shape or type, Python infers it and Swift does not:
+It has no shape or type inferrer. Where an export omits a shape or type, the
+Python preparation inferred it and the Swift does not. The frozen fixtures
+record that:
 
 | Fixture | Layout | Swift |
 | --- | --- | --- |
 | `noshape.onnx` | split | refuses the layout, saying what is missing |
 | `notype.onnx`, `noentry.onnx` | ane-whole | refuses the layout, saying what is missing |
-| `unrecorded.onnx` | whole, ane-whole | leaves a Gather index Python rewrites, so the files differ |
+| `unrecorded.onnx` | whole, ane-whole | leaves a Gather index Python rewrote, so the files differ |
 
-The Swift tests hold each to the Swift behaviour. The driving models checked so
-far record every shape and type these passes read.
+The driving models checked so far record every shape and type these passes
+read.
