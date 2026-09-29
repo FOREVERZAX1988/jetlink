@@ -44,17 +44,10 @@ extension GadgetSource {
 /// Framing over USB bulk transfers, the host's end: the Swift form of
 /// `UsbBulkTransport` on `StreamTransport`, with the rules the bench taught.
 ///
-/// - The gadget pads every message to `Wire.gadgetTxAlign` (16 KB), so the
-///   pipes keep 16 KB reads posted ahead of this end (`ReadRing`): each ends
-///   at a message's end or inside it, never past it, and a message streams
-///   in without the host asking for it piece by piece. A read left
-///   outstanding past a message's end desynced about once in 400 frames.
-/// - This end takes no more from the pipes than the rest of the current
-///   message, in whole packets (a bulk IN whose buffer is not a packet
-///   multiple can overflow; pipes that post only what is asked, after a short
-///   packet, post that) and at most `readChunk` at a time, with a packet of
-///   slack past the message so a grown buffer never ends with room for zero
-///   packets.
+/// - The gadget pads every message to `Wire.gadgetTxAlign` (16 KB), and the
+///   pipes keep 16 KB reads posted ahead of this end (`ReadRing` says why
+///   that is safe), so a message streams in without the host asking for it
+///   piece by piece.
 /// - What this end sends keeps the one-byte PADDED rule, and goes out as one
 ///   transfer: libusb and IOUSBHost have no vectored bulk write, and several
 ///   writes let the host scheduler interleave them.
@@ -69,9 +62,6 @@ extension GadgetSource {
 /// Every message lands at the start of the receive buffer, so the float32
 /// arrays inside an INFER stay aligned, and the steady state allocates nothing.
 final class USBTransport: MessageLink, @unchecked Sendable {
-  static let packetSize = Pinned.usbMaxPacket
-  static let readChunk = Pinned.usbReadChunk
-  static let readSlack = packetSize
   static let writeTimeout: TimeInterval = 2
 
   let peer: String
@@ -83,7 +73,7 @@ final class USBTransport: MessageLink, @unchecked Sendable {
   static let drainTimeout: TimeInterval = 5.0
   private var interrupted = false
   private let pipes: any BulkPipes
-  private let reader = FrameReader(capacity: 2 << 20, slack: USBTransport.readSlack)
+  private let reader = FrameReader(capacity: 2 << 20)
   var desynced: Bool { reader.desynced }
   private let sendLock = NSLock()
   private var tx: UnsafeMutableRawPointer
@@ -105,14 +95,8 @@ final class USBTransport: MessageLink, @unchecked Sendable {
   // MARK: receiving
 
   func recv() throws -> Message {
-    try reader.recv(pad: { USBTransport.gadgetPad(Wire.headerSize + Int($0.length)) }) { into, missing, room in
-      let size = USBTransport.readSize(missing: missing, room: room)
-      if size == 0 {
-        // Every read would return nothing and the loop would spin while the
-        // comma blocks. Say so rather than hang.
-        throw LinkError.closed("no room to read the rest of a message (\(missing) bytes to come)")
-      }
-      return try pipes.read(into: into, count: size, timeout: 0)
+    try reader.recv(pad: { USBTransport.gadgetPad(Wire.headerSize + Int($0.length)) }) { into, missing in
+      try pipes.read(into: into, count: missing, timeout: 0)
     }
   }
 
@@ -121,23 +105,17 @@ final class USBTransport: MessageLink, @unchecked Sendable {
     (Wire.gadgetTxAlign - body % Wire.gadgetTxAlign) % Wire.gadgetTxAlign
   }
 
-  /// The bytes to ask for when `missing` of the current message are still to
-  /// come: whole packets, capped by the room left and by `readChunk`.
-  static func readSize(missing: Int, room: Int) -> Int {
-    let wanted = (missing + packetSize - 1) / packetSize * packetSize
-    return min(wanted, room, readChunk) / packetSize * packetSize
-  }
-
   /// After a desync, reads and drops what the comma is still sending until it
   /// goes quiet for `timeout` or the link drops. Reopening instead would
   /// drain a packet per session, and the comma's frame timeout would never
   /// fire. The Python server waits 5 s, longer than the client's own timeout.
   func drain(_ timeout: TimeInterval) {
-    let scratch = UnsafeMutableRawPointer.allocate(byteCount: USBTransport.readChunk, alignment: 64)
+    let size = ReadRing.depth * ReadRing.slotSize
+    let scratch = UnsafeMutableRawPointer.allocate(byteCount: size, alignment: 64)
     defer { scratch.deallocate() }
     var last = ProcessInfo.processInfo.systemUptime
     while ProcessInfo.processInfo.systemUptime - last < timeout {
-      guard let n = try? pipes.read(into: scratch, count: USBTransport.readChunk, timeout: timeout) else { return }
+      guard let n = try? pipes.read(into: scratch, count: size, timeout: timeout) else { return }
       if n > 0 {
         last = ProcessInfo.processInfo.systemUptime
       }

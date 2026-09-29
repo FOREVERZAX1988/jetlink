@@ -119,7 +119,7 @@ public final class TCPTransport: @unchecked Sendable {
   // MARK: receiving
 
   public func recv() throws -> Message {
-    try reader.recv(pad: { Wire.Flag(rawValue: $0.flags).contains(.padded) ? 1 : 0 }) { into, missing, _ in
+    try reader.recv(pad: { Wire.Flag(rawValue: $0.flags).contains(.padded) ? 1 : 0 }) { into, missing in
       while true {
         let n = Sys.read(fd, into, missing)
         if n > 0 { return n }
