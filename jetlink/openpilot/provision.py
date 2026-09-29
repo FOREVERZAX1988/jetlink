@@ -175,6 +175,11 @@ class ProvisioningRun:
         raise RuntimeError("could not open the link")
       if not self.wait_for_jetson():
         raise TimeoutError(f"no jetson attached within {WAKE_TIMEOUT:.0f} s")
+      # a hello first: the gadget can have stayed bound since the last
+      # borrower, and the server's session with it. This client's seqs start
+      # at 1 again, and the session drops anything at or below the last seq
+      # it saw as a replay; only a hello starts it over
+      self.client.hello(timeout=10.0)
       resp = self.client.shutdown(reason, timeout=5.0)
       self.log.warning("jetlink: jetson answered the shutdown request: %s", resp)
     except Exception:
