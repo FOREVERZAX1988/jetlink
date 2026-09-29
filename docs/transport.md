@@ -101,7 +101,9 @@ bench tools). There is one version: update the comma and Jetlink together.
   on its small model.
 - **Session.** The comma says hello, asks for its model's engine (uploading
   the model if the server lacks it), waits until it is ready, then sends one
-  INFER_REQ per model frame, 20 a second.
+  INFER_REQ per model frame, 20 a second. While it waits it pings; a server
+  that has not heard this comma's hello (it restarted meanwhile) answers with
+  an error, and the comma says hello again.
 - **INFER_REQ.** The comma's warped camera images (uint8) and 12 floats
   (`desire`, `traffic_convention`, `action_t`): 393,304 bytes with the header,
   409,600 over USB with the comma's padding.
@@ -120,8 +122,9 @@ bench tools). There is one version: update the comma and Jetlink together.
 - **Padding.** A bulk transfer ends on a short packet. Over USB the comma pads
   every message it sends to a multiple of 16 KB, so none ends on a short
   packet. Everything else (messages to the comma, and TCP both ways) gets one
-  pad byte when a message's length is an exact multiple of the packet size, so
-  a client speaks to every transport the same way.
+  pad byte when a message's length is an exact multiple of 512 bytes (the
+  USB 2 packet, which divides USB 3's), so a client speaks to every transport
+  the same way and a link that fell back to USB 2 still ends every message.
 - **Host reads.** Every USB host (usbfs on Linux and Android, IOKit on a Mac)
   keeps 32 reads of 16 KB posted on the comma's pipe, so a whole request
   streams without the server asking for the next piece, and hands the bytes
