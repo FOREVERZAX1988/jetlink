@@ -11,9 +11,10 @@ import JetlinkKit
 /// `IOUSBHostPipes`.
 ///
 /// Reads come from a `ReadRing` of 16 KB URBs kept posted on the IN endpoint;
-/// a write is one URB, sent and reaped before it returns. Every URB is made
-/// once, with the pipes, and submitted again and again: the steady state
-/// allocates nothing.
+/// a write is one URB, sent and reaped before it returns. The URBs and their
+/// memory are made once per descriptor and handed from one session's pipes to
+/// the next (`UsbfsDevice.take`), so neither the steady state nor a reopen
+/// allocates.
 ///
 /// usbfs has one completion queue per file descriptor, and the kernel writes
 /// a URB's status, length and any IN data only when the URB is reaped. So one
@@ -26,13 +27,10 @@ import JetlinkKit
 /// any platform; `LinuxUsbfs` is the real one.
 final class UsbfsPipes: BulkPipes, ReadRingPipe, @unchecked Sendable {
   let device: UsbfsDevice
-  let inEndpoint: UInt8
-  let outEndpoint: UInt8
-  /// One URB per ring slot, each over its own 16 KB of `slotMemory`.
-  private let slots: [UsbfsURB]
-  private let slotMemory: UnsafeMutableRawPointer
+  private let urbs: UsbfsURBs
+  private var slots: [UsbfsURB] { urbs.slots }
   /// Writes go out one at a time, under the transport's send lock.
-  private let outURB: UsbfsURB
+  private var outURB: UsbfsURB { urbs.out }
   private var ring: ReadRing!
   /// Under the device's lock.
   private var closed = false
@@ -40,13 +38,7 @@ final class UsbfsPipes: BulkPipes, ReadRingPipe, @unchecked Sendable {
 
   init(device: UsbfsDevice, inEndpoint: UInt8, outEndpoint: UInt8) {
     self.device = device
-    self.inEndpoint = inEndpoint
-    self.outEndpoint = outEndpoint
-    let size = ReadRing.slotSize
-    let memory = UnsafeMutableRawPointer.allocate(byteCount: ReadRing.depth * size, alignment: 4096)
-    slotMemory = memory
-    slots = (0..<ReadRing.depth).map { UsbfsURB(endpoint: inEndpoint, buffer: memory + $0 * size, slot: $0) }
-    outURB = UsbfsURB(endpoint: outEndpoint, buffer: memory, slot: -1)
+    urbs = device.take(inEndpoint: inEndpoint, outEndpoint: outEndpoint)
     ring = ReadRing(lock: device.condition, pipe: self)
     let owner = ObjectIdentifier(self)
     for urb in slots {
@@ -54,7 +46,7 @@ final class UsbfsPipes: BulkPipes, ReadRingPipe, @unchecked Sendable {
       urb.ring = ring
     }
     outURB.owner = owner
-    device.register(slots + [outURB])
+    device.register(urbs.all)
   }
 
   private var owner: ObjectIdentifier { ObjectIdentifier(self) }
@@ -84,21 +76,20 @@ final class UsbfsPipes: BulkPipes, ReadRingPipe, @unchecked Sendable {
       return !closed
     }
     guard first else { return }
-    released = device.retire(slots + [outURB], owner: owner, timeout: 2)
+    released = device.retire(urbs.all, owner: owner, timeout: 2)
+    if released {
+      device.keep(urbs)
+    }
   }
 
   deinit {
     close()
     device.forget(owner: owner)
-    if released {
-      slotMemory.deallocate()
-    } else {
+    if !released {
       // The kernel may still write these at a reap: keep them for good
       // rather than hand their memory to something else.
       ServerLog(category: "usb").warning("the kernel kept this link's USB reads past its close; keeping their \(slots.count * ReadRing.slotSize >> 10) KB")
-      for urb in slots + [outURB] {
-        _ = Unmanaged.passRetained(urb)
-      }
+      _ = Unmanaged.passRetained(urbs)
     }
   }
 
@@ -117,9 +108,30 @@ final class UsbfsPipes: BulkPipes, ReadRingPipe, @unchecked Sendable {
   }
 }
 
-/// One bulk URB, made with its pipes and submitted over and over. On Linux
-/// the kernel's `usbdevfs_urb` (`handle`) lives as long as this does, and its
-/// user context points back here unretained: the pipes keep it alive.
+/// A ring's URBs over 16 KB each of `memory`, and the write URB. Freed only
+/// once the kernel has given every one back.
+final class UsbfsURBs: @unchecked Sendable {
+  let memory: UnsafeMutableRawPointer
+  let slots: [UsbfsURB]
+  let out: UsbfsURB
+
+  init(inEndpoint: UInt8, outEndpoint: UInt8) {
+    let size = ReadRing.slotSize
+    memory = .allocate(byteCount: ReadRing.depth * size, alignment: 4096)
+    slots = (0..<ReadRing.depth).map { [memory] in UsbfsURB(endpoint: inEndpoint, buffer: memory + $0 * size, slot: $0) }
+    out = UsbfsURB(endpoint: outEndpoint, buffer: memory, slot: -1)
+  }
+
+  deinit {
+    memory.deallocate()
+  }
+
+  var all: [UsbfsURB] { slots + [out] }
+}
+
+/// One bulk URB, made once per descriptor and submitted over and over. On
+/// Linux the kernel's `usbdevfs_urb` (`handle`) lives as long as this does,
+/// and its user context points back here unretained: the pipes keep it alive.
 final class UsbfsURB: @unchecked Sendable {
   let endpoint: UInt8
   var buffer: UnsafeMutableRawPointer
@@ -207,6 +219,8 @@ final class UsbfsDevice: @unchecked Sendable {
   private var cancelled = Set<ObjectIdentifier>()
   /// Calls between their first and last touch of the kernel.
   private var active = 0
+  /// The last pipes' URBs, which the kernel gave back, for the next pipes.
+  private var spare: UsbfsURBs?
   /// How long a discarded URB may take to come back before the wait for it
   /// polls again.
   static let discardPoll: TimeInterval = 0.05
@@ -219,6 +233,23 @@ final class UsbfsDevice: @unchecked Sendable {
 
   var isGone: Bool {
     condition.withLock { gone }
+  }
+
+  /// URBs for new pipes on `inEndpoint` and `outEndpoint`: the last pipes'
+  /// when they match, else new ones.
+  func take(inEndpoint: UInt8, outEndpoint: UInt8) -> UsbfsURBs {
+    condition.withLock {
+      let urbs =
+        spare.flatMap { $0.slots[0].endpoint == inEndpoint && $0.out.endpoint == outEndpoint ? $0 : nil }
+        ?? UsbfsURBs(inEndpoint: inEndpoint, outEndpoint: outEndpoint)
+      spare = nil
+      return urbs
+    }
+  }
+
+  /// Keeps closed pipes' URBs, every one back from the kernel, for the next.
+  func keep(_ urbs: UsbfsURBs) {
+    condition.withLock { spare = urbs }
   }
 
   func register(_ urbs: [UsbfsURB]) {

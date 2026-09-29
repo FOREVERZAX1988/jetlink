@@ -15,6 +15,7 @@
       let inEndpoint: UInt8
       let outEndpoint: UInt8
       let medium: LinkMedium?
+      let buffers = LinkBuffers()
     }
 
     private let lock = NSLock()
@@ -60,7 +61,7 @@
     public func open() throws -> any MessageLink {
       guard let current else { throw LinkError.closed("no jetlink gadget is attached") }
       let pipes = UsbfsPipes(device: current.device, inEndpoint: current.inEndpoint, outEndpoint: current.outEndpoint)
-      return USBTransport(pipes: pipes, medium: current.medium ?? .usb)
+      return USBTransport(pipes: pipes, medium: current.medium ?? .usb, buffers: current.buffers)
     }
   }
 #endif
