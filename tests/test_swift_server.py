@@ -435,25 +435,13 @@ def test_a_hello_restarts_the_seqs_and_replays_are_dropped(server):
 
 # -- the stateful graph: the engine keeps the history ------------------------------
 
-def packed_for(frame: dict) -> np.ndarray:
-  return np.concatenate([frame['desire'].ravel(), frame['traffic_convention'].ravel(), frame['action_t'].ravel()]).astype(np.float32)
-
-
-def stateful_reference(frames: list[dict]) -> list[np.ndarray]:
-  state, outs = tiny_model.empty_state(), []
-  for f in frames:
-    out, state = tiny_model.stateful_step(state, **f)
-    outs.append(out)
-  return outs
-
-
 def test_the_state_carries_from_frame_to_frame(stateful):
   spec = stateful.spec
   frames = tiny_model.stateful_frames(8, seed=2)
-  want = stateful_reference(frames[:3]) + stateful_reference(frames[3:])
+  want = tiny_model.stateful_reference(frames[:3]) + tiny_model.stateful_reference(frames[3:])
   for i, (f, w) in enumerate(zip(frames, want, strict=True)):
     stateful.want_hidden = i % 2 == 1   # the whole vector every other frame
-    out = stateful.infer(f['new_img'], packed_for(f), frame_id=i + 1, reset=i in (0, 3))
+    out = stateful.infer(f['new_img'], tiny_model.packed_for(f), frame_id=i + 1, reset=i in (0, 3))
     assert out.shape == (spec.output_nelem,)
     if not stateful.want_hidden:
       assert not out[slice(*spec.hidden_range)].any()

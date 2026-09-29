@@ -11,7 +11,6 @@ mu and again for std; euler is 3 and 3; lead_prob is three logits. The noise is
 float16 sized, ~0.01 absolute. The gate must ride through that on columns too
 small or too flat to correlate, and still fail a column that is wired wrong.
 """
-import importlib.util
 import io
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -19,10 +18,9 @@ from types import SimpleNamespace
 
 import numpy as np
 
-SCRIPT = Path(__file__).resolve().parents[1] / 'scripts/verify_parity.py'
-spec_ = importlib.util.spec_from_file_location('verify_parity', SCRIPT)
-vp = importlib.util.module_from_spec(spec_)
-spec_.loader.exec_module(vp)
+from tests import load_script
+
+vp = load_script(Path(__file__).resolve().parents[1] / 'scripts' / 'verify_parity.py')
 
 PLAN = slice(0, 990)
 EULER = slice(990, 996)

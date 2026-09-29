@@ -223,6 +223,21 @@ def stateful_step(state: dict[str, np.ndarray], new_img: np.ndarray, desire: np.
   return out.reshape(-1), {'state_img_q': img_q, 'state_desire_q': desire_q, 'state_feat_q': feat_q}
 
 
+def stateful_reference(frames: list[dict[str, np.ndarray]]) -> list[np.ndarray]:
+  """The graph's outputs over `frames`, from empty state."""
+  state, outs = empty_state(), []
+  for f in frames:
+    out, state = stateful_step(state, **f)
+    outs.append(out)
+  return outs
+
+
+def packed_for(frame: dict[str, np.ndarray]) -> np.ndarray:
+  """The frame's scalars as the comma packs them."""
+  return np.concatenate([frame['desire'].ravel(), frame['traffic_convention'].ravel(),
+                         frame['action_t'].ravel()]).astype(np.float32)
+
+
 def stateful_frames(n: int, seed: int = 0) -> list[dict[str, np.ndarray]]:
   """Per-frame inputs: a frame pair, a desire pulse now and then, the scalars."""
   rng = np.random.default_rng(seed)

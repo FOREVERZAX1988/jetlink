@@ -24,7 +24,6 @@ only under the onnx release that made them
 from __future__ import annotations
 
 import importlib.metadata
-import importlib.util
 import os
 import subprocess
 import sys
@@ -32,24 +31,17 @@ from pathlib import Path
 
 import pytest
 
+from tests import load_script
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / 'JetlinkKit' / 'Scripts'
 
-
-def _script(name: str):
-  """A generator, imported, for where it writes by default. Their top level is
-  light: numpy at most."""
-  spec = importlib.util.spec_from_file_location(name, SCRIPTS / f'{name}.py')
-  module = importlib.util.module_from_spec(spec)
-  spec.loader.exec_module(module)
-  return module
-
-
-# where each generator writes by default, relative to the checkout
-CONFORMANCE_SCRIPT = _script('make_conformance_fixtures')
+# where each generator writes by default, relative to the checkout; their top
+# level is light, numpy at most
+CONFORMANCE_SCRIPT = load_script(SCRIPTS / 'make_conformance_fixtures.py')
 CONFORMANCE = CONFORMANCE_SCRIPT.SERVER
 REGISTRY = CONFORMANCE_SCRIPT.REGISTRY
-PINS_SCRIPT = _script('make_pins')
+PINS_SCRIPT = load_script(SCRIPTS / 'make_pins.py')
 PINNED = PINS_SCRIPT.OUT.relative_to(ROOT)
 # the releases the committed fixtures were made with
 FIXTURE_PINS = PINS_SCRIPT.FIXTURE_PINS.relative_to(ROOT)

@@ -11,7 +11,6 @@ over the link in tests/test_swift_server.py.
 """
 from __future__ import annotations
 
-import importlib.util
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,7 +21,7 @@ import pytest
 pytest.importorskip('onnx')
 
 from jetlink.spec import ModelSpec, spec_from_onnx
-from tests import tiny_model
+from tests import load_script, tiny_model
 
 IMAGES = tiny_model.STATEFUL_IMAGES
 
@@ -35,19 +34,6 @@ def model_path(tmp_path_factory):
 @pytest.fixture(scope='module')
 def spec(model_path):
   return spec_from_onnx(str(model_path))
-
-
-def packed_for(frame: dict) -> np.ndarray:
-  return np.concatenate([frame['desire'].ravel(), frame['traffic_convention'].ravel(),
-                         frame['action_t'].ravel()]).astype(np.float32)
-
-
-def reference(frames: list[dict]) -> list[np.ndarray]:
-  state, outs = tiny_model.empty_state(), []
-  for f in frames:
-    out, state = tiny_model.stateful_step(state, **f)
-    outs.append(out)
-  return outs
 
 
 class TestSpec:
@@ -77,10 +63,7 @@ class TestSpec:
 def test_the_parity_reference_loops_the_state_itself(spec, tmp_path):
   """verify_parity's reference on a stateful graph, with a stand-in session
   running the tiny graph so onnxruntime is not needed here."""
-  scripts = Path(__file__).resolve().parents[1] / 'scripts'
-  spec_ = importlib.util.spec_from_file_location('verify_parity', scripts / 'verify_parity.py')
-  vp = importlib.util.module_from_spec(spec_)
-  spec_.loader.exec_module(vp)
+  vp = load_script(Path(__file__).resolve().parents[1] / 'scripts' / 'verify_parity.py')
 
   class Session:
     def get_inputs(self):
@@ -98,11 +81,11 @@ def test_the_parity_reference_loops_the_state_itself(spec, tmp_path):
 
   # what a capture writes: the frames sent, and what the link returned
   frames = tiny_model.stateful_frames(6, seed=9)
-  want = reference(frames)
+  want = tiny_model.stateful_reference(frames)
   (tmp_path / 'spec.json').write_text(json.dumps(spec.to_dict()))
   for i, (f, out) in enumerate(zip(frames, want, strict=True)):
     np.save(tmp_path / f'in_warped_{i}.npy', f['new_img'])
-    np.save(tmp_path / f'in_packed_{i}.npy', packed_for(f))
+    np.save(tmp_path / f'in_packed_{i}.npy', tiny_model.packed_for(f))
     np.save(tmp_path / f'out_link_{i}.npy', out)
 
   assert vp.reference_stateful(spec, Session(), tmp_path, len(frames)) == 0

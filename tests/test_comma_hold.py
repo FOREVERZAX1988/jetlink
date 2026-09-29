@@ -11,7 +11,6 @@ the owner runs it, on a socket of the test's own.
 from __future__ import annotations
 
 import contextlib
-import importlib.util
 import io
 import sys
 import threading
@@ -19,19 +18,11 @@ from pathlib import Path
 from unittest import mock
 
 from jetlink.comma import lending
+from tests import load_script
 from tests.test_comma_lending import LendingTest
 
 SCRIPTS = Path(__file__).resolve().parents[1] / 'scripts'
-
-
-def script(path: Path):
-  spec = importlib.util.spec_from_file_location(path.stem, path)
-  mod = importlib.util.module_from_spec(spec)
-  spec.loader.exec_module(mod)
-  return mod
-
-
-hold = script(SCRIPTS / 'comma' / 'jetlink_hold.py')
+hold = load_script(SCRIPTS / 'comma' / 'jetlink_hold.py')
 
 
 class HoldTest(LendingTest):
@@ -110,7 +101,7 @@ class NoLoan(HoldTest):
 
 class BenchLoan(HoldTest):
   def test_bench_link_opens_the_client_over_the_loan(self):
-    bench = script(SCRIPTS / 'bench_link.py')
+    bench = load_script(SCRIPTS / 'bench_link.py')
     lender = self.lender()
     borrow, opened = lending.borrow, []
     with mock.patch.object(lending, 'borrow', lambda name, timeout: borrow(name, timeout=timeout, path=self.path)), \
