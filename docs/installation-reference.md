@@ -17,7 +17,8 @@ and custom integrations.
 - Unpacks the release's server to `/opt/jetlink/<version>`, with
   `/opt/jetlink/current` pointing at it and `previous` at the one before, and
   checks it can use the GPU before it replaces the running one.
-- Installs the `jetlink-server` service (runs as root) and the `jetlink`
+- Installs the `jetlink-server` service (runs as root) and its udev rules from
+  the server's tarball, so they always match the binary, and the `jetlink`
   command. Settings: `/etc/jetlink/server.env`; your answers:
   `/etc/jetlink/install.conf`.
 - Serves the read-only status page on port 5600 (a question; 0 turns it off).
@@ -41,17 +42,25 @@ The installer is the supported path. Its pieces, from a release tarball:
 1. TensorRT, as above.
 2. The tarball unpacked to `/opt/jetlink/<version>`, and
    `sudo ln -sfn /opt/jetlink/<version> /opt/jetlink/current`.
-3. `share/jetlink/systemd/jetlink-server.service` in `/etc/systemd/system`,
-   and `/etc/jetlink/server.env` with `JETLINK_CACHE_DIR`,
-   `JETLINK_SLEEP_AFTER` and `JETLINK_STATUS_PORT` (the unit's defaults:
-   `/var/lib/jetlink`, `0`, `5600`). Then
-   `sudo systemctl enable --now jetlink-server`.
-4. Jetson: a drop-in for the service with `ExecStartPre=-/usr/bin/jetson_clocks`.
-5. Always-on supply only (lets the comma wake the Jetson):
+3. `/etc/jetlink/server.env`, which the service needs, with at least the
+   cache folder. `JETLINK_SLEEP_AFTER` and `JETLINK_STATUS_PORT` default to 0
+   (off):
+
+   ```bash
+   sudo mkdir -p /etc/jetlink
+   echo JETLINK_CACHE_DIR=/var/lib/jetlink | sudo tee /etc/jetlink/server.env
+   ```
+
+4. `share/jetlink/systemd/jetlink-server.service` from the tarball in
+   `/etc/systemd/system`, then
+   `sudo systemctl daemon-reload && sudo systemctl enable --now jetlink-server`.
+5. Jetson: a drop-in for the service with `ExecStartPre=-/usr/bin/jetson_clocks`.
+6. Always-on supply only (lets the comma wake the Jetson):
    `share/jetlink/udev/99-jetlink-usb-wakeup.rules` in `/etc/udev/rules.d`.
 
-`jetlink run` runs the server in the terminal instead of the service (Ctrl-C
-stops it); extra flags pass through, such as `--listen` for a TCP bench.
+`jetlink run` runs the installed service's command line, with its settings, in
+the terminal instead (Ctrl-C stops it); extra flags go on the end, such as
+`--listen` for a TCP bench.
 
 ## Custom USB integrations
 
@@ -163,12 +172,10 @@ the Jetson, sets `--sleep-after 120`, and checks for `deep` in
 
 ## Battery-protection shutdown
 
-- When enabled, the comma requests shutdown at 11.8 V or after 30 hours parked.
-- The server answers, syncs and powers the Jetson off (`systemctl poweroff`). A
-  PC stays up.
-- A file named `poweroff-dry-run` in the models folder keeps it up. The
-  installer writes it when you answer No; `touch
-  /mnt/data/jetlink/poweroff-dry-run` does it by hand, and removing the file
-  restores shutdown.
+- The comma requests shutdown at 11.8 V or after 30 hours parked.
+- The Jetson powers off (`systemctl poweroff`) only if you answered Yes to the
+  installer's battery question: it then writes `JETLINK_POWEROFF=--poweroff` in
+  `/etc/jetlink/server.env`. Otherwise it stays up; so does a PC.
+  `jetlink setup` changes the answer.
 - Restart after full shutdown needs hardware that cycles DC power or triggers
   the J14 power-button input; the devkit boots when DC power returns.

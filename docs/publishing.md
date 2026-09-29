@@ -3,8 +3,8 @@
 Updating an installed server: [updates and rollback](releasing.md). This page:
 publishing a release.
 
-A pushed `v*` tag runs the Release workflow: the macOS app, the Linux server for
-Jetsons and PCs, and the Python sdist and wheel (the comma-side package).
+A pushed `v*` tag runs the Release workflow: the macOS app and the Linux server
+for Jetsons and PCs.
 
 1. Set `__version__` in `jetlink/__init__.py` (`pyproject.toml` reads it), run
    `.venv/bin/python JetlinkKit/Scripts/make_pins.py` so `Pinned.swift` carries
@@ -26,8 +26,8 @@ git push origin v0.7.0
    with `scripts/build-linux.sh`.
 4. Check the release page: `Jetlink-0.7.0-macOS.dmg`, `SHA256SUMS`,
    `jetlink-server-0.7.0-linux-aarch64.tar.gz` and `-linux-x86_64.tar.gz`
-   with their `.sha256`, the sdist, the wheel, and notes made of the changelog
-   section and the install commands.
+   with their `.sha256`, and notes made of the changelog section and the
+   install commands.
 
 - The release waits for both Linux servers: the installer takes the newest
   release, so one without them would stop every install and update.
@@ -36,8 +36,7 @@ git push origin v0.7.0
   takes with `--ref main`.
 - Prereleases: a hyphen (`v0.7.0-rc1`) or a PEP 440 suffix (`v0.7.0a1`,
   `v0.7.0b2`, `v0.7.0rc1`) publishes as a prerelease. Use the same version in
-  `jetlink/__init__.py` and the tag, minus the leading `v`. Prefer PEP 440
-  suffixes to avoid wheel filename normalization.
+  `jetlink/__init__.py` and the tag, minus the leading `v`.
 
 ## Installing the app
 
