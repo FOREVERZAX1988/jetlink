@@ -119,10 +119,10 @@ enum OrtUnit: Equatable {
 /// Nothing QNN has run on a Snapdragon yet: its options follow onnxruntime
 /// 1.29's QNN documentation and source.
 public final class OrtBackend: EngineBackend {
-  /// What a build writes, the Python's PREPARE_VERSION: 5 is every graph
-  /// split on `ane` and Expand as Tile on both. Every profile prepares the
-  /// same way, so one number; `Pinned` carries it from the Python.
-  public static let prepareVersion = Pinned.prepareVersion
+  /// What a build writes: 5 is every graph split on `ane` and Expand as Tile
+  /// on both. Every profile prepares the same way, so one number; an artifact
+  /// prepared under another rebuilds.
+  public static let prepareVersion = 5
   /// A first NPU compile with no earlier build to go by. The QNN graph
   /// finalization of a big model is minutes on a phone (unmeasured).
   static let expectedCompileSeconds = 180.0

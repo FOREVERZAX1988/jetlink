@@ -28,7 +28,6 @@ takes ~21 ms of it. Sends real-sized payloads at the real rate and reports the t
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 import time
 from pathlib import Path
@@ -47,7 +46,7 @@ LOAN_TIMEOUT = 60.0
 def load_spec(args) -> ModelSpec | None:
   """Take the spec from a file or the model itself; None leaves it to the server."""
   if args.spec:
-    return ModelSpec.from_dict(json.loads(Path(args.spec).read_text()))
+    return ModelSpec.load(args.spec)
   if args.onnx:
     return spec_from_onnx(args.onnx)
   return None
@@ -81,31 +80,9 @@ def pct(a: np.ndarray, q: float) -> float:
   return float(np.percentile(a, q))
 
 
-def parse_listen(spec: str, default_host: str = '0.0.0.0') -> tuple[str, int]:
-  """'[HOST:]PORT' for --listen."""
-  host, _, port = spec.rpartition(':')
-  try:
-    return host or default_host, int(port)
-  except ValueError:
-    raise SystemExit(f"--listen wants [HOST:]PORT, not {spec!r}") from None
-
-
-def open_listen(spec: str, timeout: float):
-  """Take one incoming dial and run the session over it, the way the comma
-  takes a phone's; see docs/transport.md."""
-  from jetlink.transport.tcp import TcpTransport
-  host, port = parse_listen(spec)
-  print(f"waiting up to {timeout:.0f}s for a peer to dial {host}:{port}...")
-  transport, addr = TcpTransport.listen_once(host, port, timeout)
-  print(f"peer dialed in from {addr[0]}:{addr[1]}")
-  return JetlinkClient(transport)
-
-
 def open_loan(timeout: float = LOAN_TIMEOUT):
-  """Borrow the link from the comma's gadget owner and open it as modeld does
-  (openpilot's jetlink helpers.connect): over the phone's dial if the owner
-  lent one, else over the endpoint files. (loan, client); close the client,
-  then the loan."""
+  """Borrow the link from the comma's gadget owner and open it as modeld
+  does. (loan, client); close the client, then the loan."""
   from jetlink.comma import lending
   loan = lending.borrow('bench', timeout=timeout)
   if loan is None:
@@ -113,9 +90,7 @@ def open_loan(timeout: float = LOAN_TIMEOUT):
                      "and is modeld or jetlink_hold.py holding it?")
   print(f"borrowed the {'cable link' if loan.sock is not None else 'gadget'}: udc {loan.udc}, mount {loan.mount}")
   try:
-    if loan.sock is not None:
-      return loan, JetlinkClient.open_socket(loan.sock)
-    return loan, JetlinkClient.open_borrowed_ffs(loan.mount, loan.udc, bounce=loan.bounce)
+    return loan, JetlinkClient.open_loan(loan)
   except BaseException:
     loan.close()
     raise
@@ -125,8 +100,6 @@ def main() -> int:
   p = argparse.ArgumentParser()
   g = p.add_mutually_exclusive_group(required=True)
   g.add_argument('--host', help='TCP host of the Jetson')
-  g.add_argument('--usb', action='store_true',
-                 help='this end is the USB host (libusb)')
   g.add_argument('--ffs', action='store_true',
                  help='this end is the USB gadget (FunctionFS) - use this on a comma')
   g.add_argument('--listen', metavar='[HOST:]PORT',
@@ -153,15 +126,14 @@ def main() -> int:
     p.error('--loan goes with --ffs')
 
   loan = None
-  if args.usb:
-    client = JetlinkClient.open_usb()
-  elif args.loan:
+  if args.loan:
     loan, client = open_loan()
   elif args.ffs:
     # opening this writes the descriptors and binds the UDC, so the Jetson can enumerate us
     client = JetlinkClient.open_ffs(args.ffs_mount, gadget=args.gadget)
   elif args.listen:
-    client = open_listen(args.listen, args.listen_timeout)
+    print(f"waiting up to {args.listen_timeout:.0f}s for a peer to dial {args.listen}...")
+    client = JetlinkClient.open_listen(args.listen, args.listen_timeout)
   else:
     client = JetlinkClient.open_tcp(args.host, args.port)
   try:

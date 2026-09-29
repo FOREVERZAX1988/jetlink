@@ -1,13 +1,12 @@
-# The releases the committed conformance fixtures were made with, and the one
-# file that names them (docs/conformance.md). CI installs this with
-# `pip install -r` on macOS; tests/test_conformance.py compares only under
-# these releases, and make_pins.py writes the onnxruntime line into
-# Pinned.swift.
+# The releases the Python-made conformance fixtures were made with, and the one
+# file that names them (docs/conformance.md). CI constrains its Python install
+# with this (`pip install -c`); tests/test_conformance.py compares the staging
+# fixtures only under this onnx, which shape-infers the graph they come from.
+# numpy and protobuf are what it ran with.
 #
-# onnx serialises and shape-infers the ONNX fixtures. onnxruntime is the
-# release the Apple builds run: the Swift package links its xcframework
-# (JetlinkKit/Package.swift), and its CPU provider on Apple arm64 computes the
-# golden outputs. numpy and protobuf are what those ran with.
+# onnxruntime is the release the Swift server runs: the package links its
+# xcframework on Apple platforms (JetlinkKit/Package.swift), and make_pins.py
+# writes it into Pinned.swift. No Python here needs it.
 numpy==2.5.3
 onnx==1.22.0
 onnxruntime==1.29.0

@@ -11,7 +11,6 @@ jetlink.client over TCP against a real `jetlink-server` on onnxruntime's CPU
 provider, serving tests/tiny_model.py's graphs (the committed copies the Swift
 golden frames use). Outputs are held to Python's own staging (jetlink.queues)
 and a numpy run of the graph, the hidden state fed back as the server feeds it.
-A comma on the protocol before is played from its bytes on the wire.
 
 The binary comes from JETLINK_SERVER_BIN, else the newest SwiftPM build in
 JetlinkKit/.build; JETLINK_SERVER_BUILD=1 builds it first. Without one this
@@ -23,7 +22,6 @@ import json
 import os
 import signal
 import socket
-import struct
 import subprocess
 import sys
 import time
@@ -39,7 +37,6 @@ from jetlink.client import EngineMissing, JetlinkClient
 from jetlink.queues import PolicyQueues
 from jetlink.spec import DRIVING_OUTPUT, ModelSpec
 from jetlink.transport.base import LinkError, LinkTimeout
-from jetlink.transport.tcp import TcpTransport
 from tests import tiny_model
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -69,9 +66,9 @@ pytestmark = pytest.mark.skipif(BIN is None, reason='no jetlink-server: set JETL
 
 
 def spec_of(path: Path) -> ModelSpec:
-  """The spec Python derives, as make_server_fixtures.py recorded it: no onnx
-  package needed here, so this runs anywhere numpy does."""
-  return ModelSpec.from_dict(json.loads(path.with_suffix('.spec.json').read_text()))
+  """The spec Python derives, as committed beside the graph: no onnx package
+  needed here, so this runs anywhere numpy does."""
+  return ModelSpec.load(path.with_suffix('.spec.json'))
 
 
 @dataclass
@@ -80,11 +77,10 @@ class Server:
   port: int
   cache: Path
   log: Path
-  returncode: int | None = None
   provisioned: dict = field(default_factory=dict)
 
   def connect(self) -> JetlinkClient:
-    return JetlinkClient(TcpTransport.connect('127.0.0.1', self.port), deadline=10.0, name='test_swift_server')
+    return JetlinkClient.open_tcp('127.0.0.1', self.port, deadline=10.0, name='test_swift_server')
 
   def tail(self) -> str:
     return '\n'.join(self.log.read_text(errors='replace').splitlines()[-40:])
@@ -146,7 +142,7 @@ def running(tmp: Path, *extra: str):
   finally:
     proc.send_signal(signal.SIGTERM)
     try:
-      server.returncode = proc.wait(10.0)
+      proc.wait(10.0)
     except subprocess.TimeoutExpired:
       proc.kill()
       proc.wait()
@@ -225,7 +221,7 @@ def queued_reference(frames, resets=(0,), hellos=(), fed=None, dropped=()) -> li
       queues.new_client()
     outs.append(tiny_model.reference(queues.step(warped, packed)))
     if i not in dropped:
-      queues.after_run({DRIVING_OUTPUT: outs[-1] if fed is None else fed[i]}, {})
+      queues.after_run({DRIVING_OUTPUT: outs[-1] if fed is None else fed[i]})
   return outs
 
 
@@ -356,14 +352,6 @@ def test_telemetry_piggybacks_only_when_asked(queued):
   assert isinstance(queued.last_state, dict)   # {} where the host has no sensors: never zeros
 
 
-def test_ping_and_state_requests(queued):
-  assert queued.ping(timeout=5) < 5.0
-  state = queued.state(timeout=5)
-  assert state['engine_state'] == 'ready'
-  assert 'frames_served' in state
-  assert queued.hello(timeout=5)['protocol'] == P.VERSION
-
-
 def test_frame_deadline_includes_time_spent_sending(queued, monkeypatch):
   send = queued.t.send
 
@@ -437,25 +425,13 @@ def test_a_hello_restarts_the_seqs_and_replays_are_dropped(server):
 
 # -- the stateful graph: the engine keeps the history ------------------------------
 
-def packed_for(frame: dict) -> np.ndarray:
-  return np.concatenate([frame['desire'].ravel(), frame['traffic_convention'].ravel(), frame['action_t'].ravel()]).astype(np.float32)
-
-
-def stateful_reference(frames: list[dict]) -> list[np.ndarray]:
-  state, outs = tiny_model.empty_state(), []
-  for f in frames:
-    out, state = tiny_model.stateful_step(state, **f)
-    outs.append(out)
-  return outs
-
-
 def test_the_state_carries_from_frame_to_frame(stateful):
   spec = stateful.spec
   frames = tiny_model.stateful_frames(8, seed=2)
-  want = stateful_reference(frames[:3]) + stateful_reference(frames[3:])
+  want = tiny_model.stateful_reference(frames[:3]) + tiny_model.stateful_reference(frames[3:])
   for i, (f, w) in enumerate(zip(frames, want, strict=True)):
     stateful.want_hidden = i % 2 == 1   # the whole vector every other frame
-    out = stateful.infer(f['new_img'], packed_for(f), frame_id=i + 1, reset=i in (0, 3))
+    out = stateful.infer(f['new_img'], tiny_model.packed_for(f), frame_id=i + 1, reset=i in (0, 3))
     assert out.shape == (spec.output_nelem,)
     if not stateful.want_hidden:
       assert not out[slice(*spec.hidden_range)].any()
@@ -482,11 +458,12 @@ def test_not_ready_is_reported_rather_than_crashing(bare):
     client.close()
 
 
-def test_the_ping_does_not_need_an_engine(bare):
+def test_ping_state_and_hello_need_no_engine(bare):
   client = bare.connect()
   try:
     assert client.ping(timeout=5) < 5.0
-    assert client.state(timeout=5)['engine_state'] == 'none'
+    state = client.state(timeout=5)
+    assert state['engine_state'] == 'none' and 'frames_served' in state
     assert client.hello(timeout=5)['protocol'] == P.VERSION
   finally:
     client.close()
@@ -501,93 +478,3 @@ def test_a_missing_engine_with_nothing_to_upload_is_engine_missing(bare):
       client.ensure_engine(spec.sha256, spec.nbytes, onnx_path=None, build_timeout=10.0)
   finally:
     client.close()
-
-
-# -- a comma on the protocol before -------------------------------------------------
-
-def old_comma(server: Server) -> socket.socket:
-  return socket.create_connection(('127.0.0.1', server.port), timeout=10.0)
-
-
-def send_v2(sock: socket.socket, msg_type: int, seq: int, payload: bytes = b'') -> None:
-  """A message as a protocol-2 comma frames it: version 2 in every header."""
-  flags = 0
-  if (P.HEADER_SIZE + len(payload)) % P.PACKET_MULTIPLE == 0:
-    flags, payload = P.Flag.PADDED, payload + b'\0'
-    sock.sendall(struct.pack(P.HEADER_FMT, P.MAGIC, 2, msg_type, seq, flags, len(payload) - 1, 0) + payload)
-    return
-  sock.sendall(struct.pack(P.HEADER_FMT, P.MAGIC, 2, msg_type, seq, flags, len(payload), 0) + payload)
-
-
-def recv_raw(sock: socket.socket) -> tuple[int, int, int, bytes]:
-  """(version, type, seq, payload) of the next message, as a protocol-2 comma
-  reads it: it latches any version but 2 as a desync."""
-  def exactly(n):
-    out = b''
-    while len(out) < n:
-      chunk = sock.recv(n - len(out))
-      assert chunk, 'the server closed the link'
-      out += chunk
-    return out
-  _, version, msg_type, seq, flags, length, _ = struct.unpack(P.HEADER_FMT, exactly(P.HEADER_SIZE))
-  payload = exactly(length)
-  if flags & P.Flag.PADDED:
-    exactly(1)
-  return version, msg_type, seq, payload
-
-
-def test_an_old_comma_is_told_to_update_its_package_in_one_round_trip(server):
-  """The hello protocol 2's client sends (no protocol key), answered with an
-  ERROR it reads: its client raises `server error: protocol: ...`."""
-  with old_comma(server) as sock:
-    send_v2(sock, P.Msg.HELLO_REQ, 1, json.dumps({'client': {'nonce': 'ab12', 'name': 'modeld'}}).encode())
-    version, msg_type, seq, payload = recv_raw(sock)
-    assert (version, msg_type, seq) == (2, P.Msg.ERROR, 1)
-    error = json.loads(payload)
-    assert error['error'] == 'protocol'
-    assert "update the comma's jetlink package" in error['detail']
-    # and the link is still in sync: its next try is answered the same way at once
-    send_v2(sock, P.Msg.HELLO_REQ, 2, json.dumps({'client': {'nonce': 'ab12', 'name': 'modeld'}}).encode())
-    assert recv_raw(sock)[:3] == (2, P.Msg.ERROR, 2)
-
-
-def test_an_old_comma_that_skips_the_hello_is_refused_without_a_desync(server):
-  with old_comma(server) as sock:
-    send_v2(sock, P.Msg.PING, 1)
-    version, msg_type, seq, payload = recv_raw(sock)
-    assert (version, msg_type, seq) == (2, P.Msg.ERROR, 1)
-    assert "update the comma's jetlink package" in json.loads(payload)['detail']
-    # a protocol-3 message on the same link: the stream was never lost
-    sock.sendall(P.pack_header(P.Msg.PING, 2, 0))
-    assert recv_raw(sock)[:3] == (P.VERSION, P.Msg.PONG, 2)
-
-
-@pytest.mark.skipif(_may_power_off(), reason='a real systemd host; JETLINK_TEST_SHUTDOWN=1 runs it anyway')
-def test_an_old_comma_can_still_power_the_jetson_off(server):
-  """The low-battery shutdown goes without a hello, so it is in the envelope:
-  protocol 2's SHUTDOWN_REQ is answered as ever (a dry run here)."""
-  with old_comma(server) as sock:
-    send_v2(sock, P.Msg.SHUTDOWN_REQ, 1, json.dumps({'reason': 'car battery'}).encode())
-    version, msg_type, seq, payload = recv_raw(sock)
-    assert (version, msg_type, seq) == (2, P.Msg.SHUTDOWN_RESP, 1)
-    assert isinstance(json.loads(payload).get('ok'), bool)
-  assert server.proc.poll() is None, server.tail()
-
-
-def test_a_newer_comma_is_told_to_update_the_server(server):
-  client = server.connect()
-  try:
-    seq = client._next_seq()
-    client.t.send_json(P.Msg.HELLO_REQ, seq, {'client': {'name': 'modeld', 'nonce': '1', 'protocol': P.VERSION + 1}})
-    with pytest.raises(LinkError, match='update jetlink on this server'):
-      client._expect(P.Msg.HELLO_RESP, seq, 5.0)
-  finally:
-    client.close()
-
-
-def test_sigterm_stops_it_cleanly(tmp_path):
-  with running(tmp_path) as s:
-    client = s.connect()
-    assert client.ping(timeout=5) < 5.0
-    client.close()
-  assert s.returncode == 0, s.tail()

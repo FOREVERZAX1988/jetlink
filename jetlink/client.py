@@ -96,12 +96,6 @@ class JetlinkClient:
   # -- construction ---------------------------------------------------------
 
   @classmethod
-  def open_usb(cls, **kw) -> JetlinkClient:
-    """This end is the USB host (libusb)."""
-    from jetlink.transport.usbbulk import UsbBulkTransport
-    return cls(UsbBulkTransport.open(), **kw)
-
-  @classmethod
   def open_ffs(cls, mount: str = '/dev/ffs-jetlink', gadget: str | None = None,
                udc: str | None = None, **kw) -> JetlinkClient:
     """This end is the USB gadget (FunctionFS).
@@ -125,9 +119,30 @@ class JetlinkClient:
     return cls(FfsTransport.borrowed(mount, udc, bounce=bounce, owner_gadget=owner_gadget), **kw)
 
   @classmethod
+  def open_loan(cls, loan, **kw) -> JetlinkClient:
+    """Over what the comma's gadget owner lent (jetlink.comma.lending.Loan):
+    the phone's dial when it lent one, else the endpoint files."""
+    if loan.sock is not None:
+      return cls.open_socket(loan.sock, **kw)
+    return cls.open_borrowed_ffs(loan.mount, loan.udc, bounce=loan.bounce, **kw)
+
+  @classmethod
   def open_tcp(cls, host: str, port: int = 5599, **kw) -> JetlinkClient:
     from jetlink.transport.tcp import TcpTransport
     return cls(TcpTransport.connect(host, port), **kw)
+
+  @classmethod
+  def open_listen(cls, address: str, timeout: float | None = None, **kw) -> JetlinkClient:
+    """Wait for one peer to dial `address`, '[HOST:]PORT' (every interface by
+    default), and run the session over that connection, as the comma takes a
+    phone's dial (docs/transport.md). For the bench and parity scripts."""
+    from jetlink.transport.tcp import TcpTransport
+    host, _, port = address.rpartition(':')
+    if not port.isdigit():
+      raise ValueError(f'listen on [HOST:]PORT, not {address!r}')
+    transport, peer = TcpTransport.listen_once(host or '0.0.0.0', int(port), timeout)
+    log.info('peer dialed in from %s:%d', peer[0], peer[1])
+    return cls(transport, **kw)
 
   @classmethod
   def open_socket(cls, sock, **kw) -> JetlinkClient:
@@ -163,18 +178,6 @@ class JetlinkClient:
       e = json.loads(bytes(msg.payload))
       raise LinkError(f"server error: {e.get('error')}: {e.get('detail')}")
 
-  def _recv(self, timeout: float | None) -> Message:
-    """The next message, from a server on this protocol.
-
-    An older server frames its messages as this one does, so one of those is
-    read whole and refused by name, and the stream stays in sync.
-    """
-    msg = self.t.recv(timeout=timeout)
-    if not P.same_protocol(msg.version, msg.msg_type):
-      self.dead = True
-      raise LinkError(P.update_hint(P.VERSION, msg.version))
-    return msg
-
   def _expect(self, msg_type: int, seq: int, timeout: float | None) -> Message:
     """Wait for one specific reply, servicing anything unsolicited on the way."""
     end = None if timeout is None else time.monotonic() + timeout
@@ -182,7 +185,7 @@ class JetlinkClient:
       remaining = None if end is None else end - time.monotonic()
       if remaining is not None and remaining <= 0:
         raise LinkTimeout(f'timed out waiting for message type={msg_type} seq={seq}')
-      msg = self._recv(remaining)
+      msg = self.t.recv(timeout=remaining)
       if msg.msg_type == msg_type and msg.seq == seq:
         return msg
       if msg.msg_type in (P.Msg.PROGRESS, P.Msg.ENGINE_RESP, P.Msg.ERROR):
@@ -197,15 +200,9 @@ class JetlinkClient:
   def hello(self, timeout: float = 5.0) -> dict:
     """Introduce this client. The server starts its session over on a hello,
     so this is also how a new owner of the gadget takes over one the server
-    never saw end; see Session._greet.
-
-    Also where a version mismatch ends, in one round trip and naming the side
-    to update: the hello travels in the envelope every version reads, a server
-    on another protocol says which in its answer (or, from protocol 3 on,
-    answers ERROR), and nothing else is sent to it.
-    """
+    never saw end; see Session.greet in JetlinkServer."""
     seq = self._next_seq()
-    client = {'nonce': self.nonce, 'name': self.name, 'protocol': P.VERSION}
+    client = {'nonce': self.nonce, 'name': self.name}
     try:
       link = self.t.link_info()
     except Exception:
@@ -215,13 +212,7 @@ class JetlinkClient:
       # TCP), and only this end always knows. See Transport.link_info.
       client['link'] = link
     self.t.send_json(P.Msg.HELLO_REQ, seq, {'client': client})
-    resp = json.loads(bytes(self._expect(P.Msg.HELLO_RESP, seq, timeout).payload))
-    theirs = resp.get('protocol')
-    if theirs != P.VERSION:
-      self.dead = True
-      raise LinkError(P.update_hint(P.VERSION, theirs) if isinstance(theirs, int)
-                      else f"the Jetson names no jetlink protocol (this comma speaks {P.VERSION})")
-    return resp
+    return json.loads(bytes(self._expect(P.Msg.HELLO_RESP, seq, timeout).payload))
 
   def state(self, timeout: float = 2.0) -> dict:
     seq = self._next_seq()
@@ -322,7 +313,7 @@ class JetlinkClient:
         raise LinkTimeout(f"engine not ready after {timeout:.0f}s (state={st})")
       self._stopped()
       try:
-        self._dispatch(self._recv(min(1.0, max(0.1, end - time.monotonic()))))
+        self._dispatch(self.t.recv(timeout=min(1.0, max(0.1, end - time.monotonic()))))
       except LinkTimeout:
         continue
 

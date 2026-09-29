@@ -398,7 +398,7 @@
         let platform = "darwin"
       #endif
       return HelloEvent(
-        protocolVersion: Pinned.controlProtocol, pid: getpid(), version: version, python: "", platform: platform,
+        protocolVersion: 1, pid: getpid(), version: version, python: "", platform: platform,
         cache: configuration.cacheRoot.path, transport: transport, port: configuration.listen ? Int(configuration.port) : nil)
     }
   }

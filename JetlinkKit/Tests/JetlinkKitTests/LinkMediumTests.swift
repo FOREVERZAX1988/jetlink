@@ -4,11 +4,6 @@ import Testing
 
 /// How the comma's link is carried, as the apps show it.
 struct LinkMediumTests {
-  @Test("The names are the Python's")
-  func namesArePinned() {
-    #expect(LinkMedium.allCases.map(\.rawValue) == Pinned.linkMedia)
-  }
-
   @Test(
     "A USB speed as Linux names it gives its generation",
     arguments: [

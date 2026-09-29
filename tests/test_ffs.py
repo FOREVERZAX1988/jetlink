@@ -128,7 +128,7 @@ def test_inference_reply_spans_bounded_kernel_reads(mount, monkeypatch):
       assert msg.seq == 7
       assert len(reads) >= 5
       assert max(reads) <= 16 * 1024
-      assert all(n % ffs.SS_MAX_PACKET == 0 for n in reads)
+      assert all(n % P.USB_MAX_PACKET == 0 for n in reads)
     finally:
       real_os.close(host)
   finally:
@@ -205,7 +205,7 @@ def test_a_failure_names_the_controller_state_it_found(tmp_path, monkeypatch):
   every one a USB drop) said nothing about which; the UDC state does.
   """
   t = _bare_transport(bound_udc='udc0', _had_host=True, _closing=False, _queued=0,
-                      _reader_error=None, _read_size=ffs.SS_MAX_PACKET, _free=deque(),
+                      _reader_error=None, _read_size=P.USB_MAX_PACKET, _free=deque(),
                       _cv=threading.Condition())
   monkeypatch.setattr(ffs, 'UDC_SYSFS', str(tmp_path))
   monkeypatch.setattr(t, '_widen_affinity', lambda: None)
@@ -381,7 +381,7 @@ def test_send_resets_the_write_quantum_each_message(monkeypatch):
   double-TRB replay, so each message starts at the full quantum again and only
   the frames under memory pressure are ever split."""
   t = _bare_transport()
-  t.write_chunk = 256 * ffs.SS_MAX_PACKET   # as if _shrink_write had halved it once
+  t.write_chunk = 256 * P.USB_MAX_PACKET   # as if _shrink_write had halved it once
   monkeypatch.setattr(ffs.StreamTransport, 'send', lambda self, *a, **k: None)
   t.send(P.Msg.INFER_REQ, 1, ())
   assert t.write_chunk == FfsTransport.write_chunk, "write quantum not reset for the next message"

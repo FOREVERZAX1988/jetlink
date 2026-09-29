@@ -42,12 +42,6 @@ class TcpTransport(StreamTransport):
     except OSError:
       return False
 
-  @property
-  def medium(self) -> str:
-    """What a server names this link before a hello says more: the cable is
-    USB of unknown speed until the comma says which."""
-    return 'usb' if self.on_the_cable() else 'tcp'
-
   def link_info(self) -> dict:
     return usb_link_info('cable', udc_speed()) if self.on_the_cable() else {'kind': 'tcp'}
 
@@ -92,7 +86,7 @@ class TcpTransport(StreamTransport):
       self._timeout = timeout
 
   def _write(self, bufs: list[memoryview]) -> int:
-    # sendmsg keeps the header and a 460 KB body in one syscall, so with NODELAY
+    # sendmsg keeps the header and a 393 KB body in one syscall, so with NODELAY
     # they go out as one segment train.
     self._set_timeout(self._write_timeout())
     try:

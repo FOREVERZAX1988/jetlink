@@ -41,7 +41,7 @@ def weights(seed: int = 7) -> tuple[np.ndarray, np.ndarray]:
   return w, b
 
 
-def write(path: Path, with_contiguous: bool = True, shapes: bool = False) -> Path:
+def write(path: Path, shapes: bool = False) -> Path:
   from onnx import TensorProto, helper, numpy_helper
 
   w, b = weights()
@@ -56,22 +56,15 @@ def write(path: Path, with_contiguous: bool = True, shapes: bool = False) -> Pat
     helper.make_node('Flatten', ['features_buffer'], ['feat_flat'], axis=1),
     helper.make_node('Concat', ['img_mean', 'desire_flat', 'traffic_convention', 'action_t', 'feat_flat'],
                      ['features'], axis=1),
-  ]
-  matmul_in = 'features'
-  if with_contiguous:
-    nodes.append(helper.make_node('Contiguous', ['features'], ['features_c'], domain='org.tinygrad'))
-    matmul_in = 'features_c'
-  nodes += [
-    helper.make_node('MatMul', [matmul_in, 'W'], ['mm']),
+    helper.make_node('Contiguous', ['features'], ['features_c'], domain='org.tinygrad'),
+    helper.make_node('MatMul', ['features_c', 'W'], ['mm']),
     helper.make_node('Add', ['mm', 'B'], ['outputs']),
   ]
   graph = helper.make_graph(
     nodes, 'tiny_driving', inputs,
     [helper.make_tensor_value_info('outputs', TensorProto.FLOAT16, (1, N_OUT))],
     initializer=[numpy_helper.from_array(w, 'W'), numpy_helper.from_array(b, 'B')])
-  opsets = [helper.make_opsetid('', 17)]
-  if with_contiguous:
-    opsets.append(helper.make_opsetid('org.tinygrad', 1))
+  opsets = [helper.make_opsetid('', 17), helper.make_opsetid('org.tinygrad', 1)]
   return _with_shapes(_save(graph, opsets, SLICES, 'tiny-test', path), shapes)
 
 
@@ -82,7 +75,9 @@ def _save(graph, opsets, slices: dict, checkpoint: str, path: Path) -> Path:
 
   model = helper.make_model(graph, opset_imports=opsets)
   model.ir_version = 8
-  model.metadata_props.add(key='output_slices', value=codecs.encode(pickle.dumps(slices), 'base64').decode())
+  # protocol 5, Python 3.14's default, that the committed graphs and fixtures
+  # were made with: 3.10 to 3.13 default to 4, and the model's sha256 with it
+  model.metadata_props.add(key='output_slices', value=codecs.encode(pickle.dumps(slices, protocol=5), 'base64').decode())
   model.metadata_props.add(key='model_checkpoint', value=checkpoint)
   onnx.save(model, str(path))
   return path
@@ -99,17 +94,6 @@ def reference(inputs: dict[str, np.ndarray]) -> np.ndarray:
            inputs['features_buffer'].astype(np.float32).reshape(1, -1)]
   feats = np.concatenate(parts, axis=1)
   return (feats @ w.astype(np.float32) + b.astype(np.float32)).reshape(-1)
-
-
-def random_inputs(seed: int = 0) -> dict[str, np.ndarray]:
-  rng = np.random.default_rng(seed)
-  out = {}
-  for name, shape in SHAPES.items():
-    if name.endswith('img'):
-      out[name] = rng.integers(0, 256, shape, dtype=np.uint8)
-    else:
-      out[name] = (rng.standard_normal(shape) * 0.5).astype(np.float16)
-  return out
 
 
 # -- the stateful layout (openpilot #38916) ----------------------------------
@@ -219,6 +203,21 @@ def stateful_step(state: dict[str, np.ndarray], new_img: np.ndarray, desire: np.
   out = feats @ w + b
   feat_q = np.concatenate([state['state_feat_q'][1:], out[:, 32:48].reshape(1, 1, 16)], axis=0)
   return out.reshape(-1), {'state_img_q': img_q, 'state_desire_q': desire_q, 'state_feat_q': feat_q}
+
+
+def stateful_reference(frames: list[dict[str, np.ndarray]]) -> list[np.ndarray]:
+  """The graph's outputs over `frames`, from empty state."""
+  state, outs = empty_state(), []
+  for f in frames:
+    out, state = stateful_step(state, **f)
+    outs.append(out)
+  return outs
+
+
+def packed_for(frame: dict[str, np.ndarray]) -> np.ndarray:
+  """The frame's scalars as the comma packs them."""
+  return np.concatenate([frame['desire'].ravel(), frame['traffic_convention'].ravel(),
+                         frame['action_t'].ravel()]).astype(np.float32)
 
 
 def stateful_frames(n: int, seed: int = 0) -> list[dict[str, np.ndarray]]:

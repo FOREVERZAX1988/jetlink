@@ -4,36 +4,22 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jetlink"
-# jetlink.__version__, so the comma, which runs from a checkout, reports the
-# same version an installed server does
+# jetlink.__version__: the comma runs from a checkout and reads it there, and
+# the Swift server has it from Pinned.swift
 dynamic = ["version"]
-description = "Run openpilot's large driving models on an attached NVIDIA Jetson"
+description = "The comma side of jetlink: openpilot's large driving models on an attached Jetson, Mac or phone"
 readme = "README.md"
 license = { file = "LICENSE" }
 authors = [{ name = "Zeph Leggett" }]
 requires-python = ">=3.10"
-# numpy only. The client additionally needs `usb1` for the USB transport; the
-# server needs one inference runtime, chosen by the extras below.
+# numpy only: this is what the comma runs, from a checkout. The server is the
+# Swift jetlink-server (JetlinkKit).
 dependencies = ["numpy>=1.24"]
 
 [project.optional-dependencies]
-usb = ["libusb1>=3.0"]
-# The JetPack 6 image: TensorRT and CUDA 12 come with JetPack, so only their neighbours.
-server = ["onnx>=1.16", "cuda-python>=12.6,<13"]
-# The CUDA 13 image (docker/Dockerfile): TensorRT goes in first, from PyPI on
-# amd64 and from JetPack's apt repository on a Jetson, so again only its neighbours.
-server-cu13 = ["onnx>=1.16", "cuda-python>=13,<14"]
-# A desktop or laptop NVIDIA GPU: TensorRT from PyPI, 11.x at the time of writing.
-trt = ["onnx>=1.16", "tensorrt-cu12>=10.3", "cuda-python>=12.6,<13"]
-# Apple silicon (CoreML) and a fallback anywhere else (CUDA or CPU providers).
-ort = ["onnx>=1.16", "onnxruntime>=1.22"]
-# Telemetry from a desktop NVIDIA GPU.
-nvml = ["nvidia-ml-py>=12"]
+# The tests, and the conformance generators (onnx builds and reads the tiny
+# graphs; JetlinkKit/Scripts/fixture-pins.txt names the releases).
 dev = ["pytest>=7", "ruff", "onnx>=1.16"]
-
-[project.scripts]
-jetlink-server = "jetlink.server.main:main"
-jetlink-models = "jetlink.registry.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["jetlink*"]
@@ -66,8 +52,8 @@ lint.select = [
 lint.ignore = [
   "E741",
   "B027",
-  # An OSError the server expects (EBUSY refusing a suspend, EROFS on
-  # /sys/power) is logged with its errno; a traceback there is noise.
+  # A failure the comma expects (the root script timing out or not running)
+  # is logged with its message; a traceback there is noise.
   "TRY400",
 ]
 

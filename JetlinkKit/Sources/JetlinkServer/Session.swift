@@ -141,25 +141,13 @@ final class Session: @unchecked Sendable {
   }
 
   func handle(_ message: Message) throws {
-    guard Wire.sameProtocol(version: message.version, msgType: message.msgType) else {
-      // An older comma that skipped the hello. The frame was read whole, so
-      // the stream is still in sync: refuse it by name and read on.
-      try error(message.seq, "protocol", Wire.updateHint(comma: Int(message.version)))
-      return
-    }
     guard let type = Wire.Msg(rawValue: message.msgType) else {
       try error(message.seq, "unknown_message", "type \(message.msgType)")
       return
     }
     if type == .helloReq {
       // A hello means "a new client process", answered whatever the seq says.
-      let comma = greet(message)
-      guard comma == Int(Wire.version) else {
-        // In the envelope, so every version reads it: the comma stops here
-        // and says which side to update. Every comma before 3 was 2.
-        try error(message.seq, "protocol", Wire.updateHint(comma: comma ?? 2))
-        return
-      }
+      greet(message)
       try onHello(message)
       return
     }
@@ -187,18 +175,14 @@ final class Session: @unchecked Sendable {
     return (request.sha256, request.frameSkip)
   }
 
-  /// Starts the session over for whoever said hello, and returns the
-  /// protocol its hello names, if any.
-  private func greet(_ message: Message) -> Int? {
+  private func greet(_ message: Message) {
     var who = ""
     var said: LinkMedium?
-    var comma: Int?
     if let object = JSONLine.decode(message.payload), let d = object["client"] as? [String: Any] {
       let name = (d["name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "client"
       let nonce = d["nonce"].map { "\($0)" } ?? "?"
       who = "\(name)/\(nonce)"
       said = LinkMedium(link: d["link"] as? [String: Any])
-      comma = (d["protocol"] as? NSNumber)?.intValue
     }
     if let said, said != medium {
       medium = said
@@ -215,7 +199,6 @@ final class Session: @unchecked Sendable {
     host.loaded?.staging.newClient()
     host.lock.unlock()
     log.info("hello from \(who.isEmpty ? "an unnamed client" : who) (seq \(message.seq))")
-    return comma
   }
 
   private func onHello(_ message: Message) throws {
