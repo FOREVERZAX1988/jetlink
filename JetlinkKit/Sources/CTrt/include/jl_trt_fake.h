@@ -5,19 +5,13 @@
 // that shipped it by mistake could never serve with it. Tests get a handle
 // from jl_trt_fake_open instead.
 //
-// Device memory is host memory, so a jl_trt_dptr is a host address; copies
-// are memcpy; streams, events and graphs run synchronously; a capture records
-// what is queued and a launch replays it. New memory is filled with 0xff, so
-// a float read before anything wrote it is NaN.
-//
-// It keeps the rules the real stack keeps, so a Swift path that breaks one
-// fails here first: nothing that synchronizes or allocates on the capturing
-// thread (the capture is invalidated), a context's first enqueue is not
-// captured, every IO tensor has an address before an enqueue, copies stay
-// inside live allocations and move pinned host memory, a graph never replays
-// into freed memory (a sticky illegal address, as on a GPU). A rule broken in
-// a call that returns nothing (a destroy out of order, a double free) latches
-// the sticky flag, so the next call fails with a "fake:" message saying why.
+// Device memory is host memory filled with 0xff (a float read before anything
+// wrote it is NaN), so a jl_trt_dptr is a host address; streams, events and
+// graphs run synchronously; a capture records what is queued and a launch
+// replays it. It keeps CUDA's and TensorRT's rules, so a Swift path that
+// breaks one fails here first; a rule broken in a call that returns nothing
+// (a destroy out of order, a double free) latches the sticky flag, and the
+// next call fails with a "fake:" message saying why.
 //
 // A plan is text:
 //
@@ -29,15 +23,13 @@
 //   output next_state float16 1 8 from state
 //
 // `built` is optional: a plan that has it loads only on a fake of that exact
-// version, as TensorRT refuses a plan from another build. Types are float32,
-// float16, uint8, int8, int32, int64, bool, and `other` for a type jetlink
-// does not stage (jl_trt_engine_io reports 0); a dim of -1 is dynamic. An
-// enqueue computes, in double, output[j] = input[j] + 1 for an output `from`
-// an input (a next_state), and otherwise output[j] = the sum over every input
-// k of input_k[j mod count_k]; then converts to the output's type (float16
-// rounds to nearest even). So a looped state that is never copied back still
-// shows in the other outputs: after a reset, y = x, then x + 1, x + 2...
-// Each enqueue adds config.enqueue_ms to the clock timing events read.
+// version, as TensorRT refuses a plan from another build. Types are float32
+// and float16; a dim of -1 is dynamic. An enqueue computes, in double,
+// output[j] = input[j] + 1 for an output `from` an input (a next_state), and
+// otherwise output[j] = the sum over every input k of input_k[j mod count_k];
+// then converts to the output's type. So a looped state that is never copied
+// back still shows in the other outputs: after a reset, y = x, then x + 1,
+// x + 2... Each enqueue adds 1 ms to the clock timing events read.
 //
 // A build writes the plan set by jl_trt_fake_set_build (by default the one
 // above, which is also jl_trt_selftest's model), with `built` and a
@@ -59,25 +51,15 @@ extern "C" {
 typedef struct {
   // What jl_trt_get_info reports.
   int major, minor, patch, build;
-  int header_major, header_minor, header_patch, header_build;
   int strongly_typed;
   int cuda_driver;
   int plugins;
-  int device;
   const char *device_name;
   int cc_major, cc_minor;
-  // What jl_trt_mem_info reports as total; free is total less what is
-  // allocated.
-  size_t total_memory;
-  // jl_trt_build_create returns JL_TRT_UNAVAILABLE, as without
-  // libnvonnxparser.
-  int no_parser;
-  // What each enqueue adds to the fake GPU clock.
-  float enqueue_ms;
 } jl_trt_fake_config;
 
 // TensorRT 10.3.0.30 on an "Orin", sm87, 8 GB, CUDA 12.6, weakly typed, with
-// plugins and a parser; 1 ms an enqueue.
+// plugins.
 void jl_trt_fake_defaults(jl_trt_fake_config *config);
 
 // A fake jl_trt; config NULL takes the defaults. device_name is copied.

@@ -1,16 +1,20 @@
-// jl_trt.h over TensorRT and the CUDA driver API, both opened at run time.
+// jl_trt.h over TensorRT and the CUDA driver API, both opened at run time, so
+// a build needs headers only and a machine without TensorRT still starts and
+// can say why.
 //
 // From TensorRT only the extern "C" factories and version getters are looked
 // up; every method called on what they return is an inline forwarder in the
 // headers to a virtual inside the library, so nothing links against
-// libnvinfer. CUDA is the driver API alone, each entry point asked of
-// cuGetProcAddress at the version its signature here matches: a shim built on
-// CUDA 12 headers then gets the same functions from a CUDA 13 driver.
+// libnvinfer. CUDA is the driver API alone, whose handles are the runtime's
+// too (a stream here is the cudaStream_t enqueueV3 takes), each entry point
+// asked of cuGetProcAddress at the version its signature here matches: a shim
+// built on CUDA 12 headers then gets the same functions from a CUDA 13 driver.
 //
-// One source for both builds: TensorRT 10 (Jetson, the 10.3 headers) and 11
-// (PCs); the only difference the server sees is the network's typing and
-// whether there is an FP16 flag.
+// One source for TensorRT 10 (Jetson, the 10.3 headers) and 11 (PCs). The
+// libraries stay loaded for the life of the process: TensorRT's process-wide
+// logger points into this one.
 #include "jl_trt.h"
+#include "jl_trt_util.h"
 
 #include <NvInfer.h>
 #include <NvOnnxParser.h>
@@ -19,7 +23,6 @@
 
 #include <atomic>
 #include <cerrno>
-#include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <mutex>
@@ -56,7 +59,6 @@
   X(EventCreate, 2000, (CUevent *, unsigned))                                      \
   X(EventRecordWithFlags, 11010, (CUevent, CUstream, unsigned))                    \
   X(EventSynchronize, 2000, (CUevent))                                             \
-  X(EventQuery, 2000, (CUevent))                                                   \
   X(EventElapsedTime, 2000, (float *, CUevent, CUevent))                           \
   X(EventDestroy, 4000, (CUevent))                                                 \
   X(StreamBeginCapture, 10010, (CUstream, CUstreamCaptureMode))                    \
@@ -75,16 +77,6 @@ struct Cuda {
   JL_DRIVER(JL_MEMBER)
 #undef JL_MEMBER
 };
-
-int say(char *err, size_t errlen, int code, const char *fmt, ...) {
-  if (err != nullptr && errlen > 0) {
-    va_list args;
-    va_start(args, fmt);
-    vsnprintf(err, errlen, fmt, args);
-    va_end(args);
-  }
-  return code;
-}
 
 // What TensorRT last logged as an error on this thread: the only reason it
 // gives when a call returns NULL or false. Cleared before each such call.
@@ -176,12 +168,6 @@ struct Current {
 };
 thread_local Current current = {nullptr, 0};
 std::atomic<uint64_t> generations{0};
-
-bool write_file(const char *path, const void *data, size_t size) {
-  FILE *f = fopen(path, "wb");
-  bool ok = f != nullptr && fwrite(data, 1, size, f) == size;
-  return f != nullptr && fclose(f) == 0 && ok;
-}
 
 const char *or_empty(const char *s) {
   return s != nullptr ? s : "";
@@ -346,7 +332,6 @@ int open_cuda(jl_trt *t, int device, char *err, size_t errlen) {
     return JL_TRT_UNAVAILABLE;
   }
   jl_trt_info &info = t->info;
-  info.device = device;
   CUresult setup[] = {
       t->cu.DriverGetVersion(&info.cuda_driver),
       t->cu.DeviceGetName(t->device_name, static_cast<int>(sizeof t->device_name), t->device),
@@ -442,7 +427,7 @@ int jl_trt_open(int device, jl_trt **out, char *err, size_t errlen) {
   if (t == nullptr) {
     return say(err, errlen, JL_TRT_ERROR, "out of memory");
   }
-  jl_trt_get_info(nullptr, &t->info);
+  t->info.strongly_typed = NV_TENSORRT_MAJOR >= 11 ? 1 : 0;
   int rc = open_cuda(t, device, err, errlen);
   if (rc == JL_TRT_OK) {
     rc = open_tensorrt(t, err, errlen);
@@ -466,22 +451,11 @@ void jl_trt_close(jl_trt *t) {
   if (current.ctx == t->ctx) {
     current = {nullptr, 0};
   }
-  // the libraries stay loaded: TensorRT's process-wide logger points here
   delete t;
 }
 
 void jl_trt_get_info(const jl_trt *t, jl_trt_info *out) {
-  if (t != nullptr) {
-    *out = t->info;
-    return;
-  }
-  *out = jl_trt_info{};
-  out->header_major = NV_TENSORRT_MAJOR;
-  out->header_minor = NV_TENSORRT_MINOR;
-  out->header_patch = NV_TENSORRT_PATCH;
-  out->header_build = NV_TENSORRT_BUILD;
-  out->strongly_typed = NV_TENSORRT_MAJOR >= 11 ? 1 : 0;
-  out->device_name = "";
+  *out = t->info;
 }
 
 int jl_trt_mem_info(jl_trt *t, size_t *free_bytes, size_t *total_bytes, char *err, size_t errlen) {
@@ -585,16 +559,6 @@ int jl_trt_event_record(jl_trt *t, jl_trt_event *event, jl_trt_stream *stream, u
 
 int jl_trt_event_sync(jl_trt *t, jl_trt_event *event, char *err, size_t errlen) {
   return call(t, "cuEventSynchronize", err, errlen, [&] { return t->cu.EventSynchronize(cu(event)); });
-}
-
-int jl_trt_event_query(jl_trt *t, jl_trt_event *event, char *err, size_t errlen) {
-  bool pending = false;
-  int rc = call(t, "cuEventQuery", err, errlen, [&] {
-    CUresult r = t->cu.EventQuery(cu(event));
-    pending = r == CUDA_ERROR_NOT_READY;
-    return pending ? CUDA_SUCCESS : r;
-  });
-  return rc == JL_TRT_OK && pending ? JL_TRT_NOT_READY : rc;
 }
 
 int jl_trt_event_elapsed(jl_trt *t, jl_trt_event *start, jl_trt_event *end, float *ms, char *err, size_t errlen) {
@@ -745,9 +709,7 @@ int jl_trt_build_create(jl_trt *t, jl_trt_build **out, char *err, size_t errlen)
   jl_trt_build *b = new jl_trt_build();
   b->trt = t;
   b->builder = static_cast<nvinfer1::IBuilder *>(t->create_builder(trt_logger(), NV_TENSORRT_VERSION));
-  // 0 on TensorRT 10 is a weakly typed network, precision then picked by the
-  // FP16 flag: the build the car was validated on. On 11 every network is
-  // strongly typed and the flag that asked for it is deprecated and ignored.
+  // 0: weakly typed on TensorRT 10 (TrtBackend says why); 11 ignores it
   b->network = b->builder != nullptr ? b->builder->createNetworkV2(0) : nullptr;
   b->parser = b->network != nullptr
                   ? static_cast<nvonnxparser::IParser *>(t->create_parser(b->network, trt_logger(), NV_ONNX_PARSER_VERSION))
@@ -782,7 +744,7 @@ int jl_trt_build_parse(jl_trt_build *b, const char *onnx_path, char *err, size_t
   if (b->parser->parseFromFile(onnx_path, 0)) {
     return JL_TRT_OK;
   }
-  // str(ParserError) in TensorRT's Python bindings, one per line
+  // one per line, as str(ParserError) prints them in TensorRT's Python
   say(err, errlen, JL_TRT_ERROR, "%s", last_error[0] ? last_error : "the ONNX parser failed without an error");
   for (int i = 0, used = 0; i < b->parser->getNbErrors() && err != nullptr && static_cast<size_t>(used) + 1 < errlen;
        i++) {

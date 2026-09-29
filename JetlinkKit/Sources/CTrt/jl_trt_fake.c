@@ -7,16 +7,18 @@
 
 #include "jl_trt.h"
 #include "jl_trt_fake.h"
+#include "jl_trt_util.h"
 
 #include <math.h>
 #include <pthread.h>
-#include <stdarg.h>
-#include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 #define MAX_TENSORS 32
 #define MAX_FAILS 16
+// What each enqueue adds to the clock timing events read, and what
+// jl_trt_mem_info reports.
+#define ENQUEUE_MS 1.0
+#define TOTAL_MEMORY ((size_t)8 << 30)
 
 enum { OBJ_DEVICE, OBJ_HOST, OBJ_STREAM, OBJ_EVENT, OBJ_GRAPH, OBJ_EXEC, OBJ_ENGINE, OBJ_CONTEXT, OBJ_BUILD };
 
@@ -130,16 +132,6 @@ static const char *const default_tensors = "input x float16 1 8\n"
                                            "output next_state float16 1 8 from state\n";
 
 // --- errors, the lock, injected failures -------------------------------------
-
-static int say(char *err, size_t errlen, int code, const char *fmt, ...) {
-  if (err != NULL && errlen > 0) {
-    va_list args;
-    va_start(args, fmt);
-    vsnprintf(err, errlen, fmt, args);
-    va_end(args);
-  }
-  return code;
-}
 
 static int leave(jl_trt *t, int code) {
   pthread_mutex_unlock(&t->lock);
@@ -305,54 +297,15 @@ static void destroy(jl_trt *t, int kind, void *ptr, const char *what) {
 
 // --- element types -----------------------------------------------------------
 
-// The engine computes in the types jetlink's models use; the others parse,
-// for IO enumeration, but refuse to run.
-static const struct {
-  const char *name;
-  int type;
-  size_t size;
-} types[] = {
-    {"float32", JL_TRT_FLOAT, 4}, {"float16", JL_TRT_FLOAT16, 2}, {"uint8", JL_TRT_UINT8, 1}, {"int8", JL_TRT_INT8, 0},
-    {"int32", JL_TRT_INT32, 0},   {"int64", JL_TRT_INT64, 0},     {"bool", JL_TRT_BOOL, 0},   {"other", 0, 0},
-};
-
+// The two types jetlink's engines take and give.
 static size_t type_size(int type) {
-  for (size_t i = 0; i < sizeof types / sizeof types[0]; i++) {
-    if (types[i].type == type) {
-      return types[i].size;
-    }
-  }
-  return 0;
+  return type == JL_TRT_FLOAT ? 4 : 2;
 }
 
 static float half_to_float(uint16_t h) {
   int exp = (h >> 10) & 0x1f, mant = h & 0x3ff;
   float f = exp == 31 ? (mant ? NAN : INFINITY) : ldexpf((float)(exp ? mant | 0x400 : mant), (exp ? exp : 1) - 25);
   return (h & 0x8000u) ? -f : f;
-}
-
-// Round to nearest even, as a GPU converts.
-static uint16_t float_to_half(float value) {
-  uint32_t x;
-  memcpy(&x, &value, sizeof x);
-  uint32_t sign = (x >> 16) & 0x8000u, mag = x & 0x7fffffffu;
-  if (mag >= 0x7f800000u) {
-    return (uint16_t)(sign | 0x7c00u | (mag > 0x7f800000u ? 0x200u : 0));
-  }
-  if (mag >= 0x477ff000u) {
-    return (uint16_t)(sign | 0x7c00u);
-  }
-  if (mag < 0x33000000u) {
-    return (uint16_t)sign;
-  }
-  // a normal half drops 13 mantissa bits; a subnormal one drops more
-  uint32_t shift = mag >= 0x38800000u ? 13 : 126u - (mag >> 23);
-  uint32_t m = mag >= 0x38800000u ? mag - 0x38000000u : (mag & 0x7fffffu) | 0x800000u;
-  uint32_t h = m >> shift, rest = m & ((1u << shift) - 1u), half = 1u << (shift - 1u);
-  if (rest > half || (rest == half && (h & 1u))) {
-    h++;
-  }
-  return (uint16_t)(sign | h);
 }
 
 static double load(int type, const void *base, size_t index) {
@@ -363,20 +316,14 @@ static double load(int type, const void *base, size_t index) {
     memcpy(&f, p, sizeof f);
     return f;
   }
-  if (type == JL_TRT_FLOAT16) {
-    memcpy(&h, p, sizeof h);
-    return half_to_float(h);
-  }
-  return *p;
+  memcpy(&h, p, sizeof h);
+  return half_to_float(h);
 }
 
 static void store(int type, void *base, size_t index, double value) {
   float f = (float)value;
   uint16_t h = float_to_half(f);
-  // NaN, which unwritten 0xff memory reads as, and anything out of range: 0
-  uint8_t u = value >= 0 && value < 256 ? (uint8_t)value : 0;
-  const void *v = type == JL_TRT_FLOAT ? (const void *)&f : type == JL_TRT_FLOAT16 ? (const void *)&h : &u;
-  memcpy((uint8_t *)base + index * type_size(type), v, type_size(type));
+  memcpy((uint8_t *)base + index * type_size(type), type == JL_TRT_FLOAT ? (const void *)&f : (const void *)&h, type_size(type));
 }
 
 static size_t tensor_count(const tensor *x) {
@@ -389,16 +336,12 @@ static size_t tensor_count(const tensor *x) {
 
 // --- running the engine and the work on a stream ------------------------------
 
-// Whether every tensor has an address and the engine can run at all.
+// Whether every tensor has an address.
 static int check_bound(jl_trt *t, jl_trt_context *c, char *err, size_t errlen) {
   jl_trt_engine *e = c->engine;
   for (int i = 0; i < e->n; i++) {
-    const char *why = type_size(e->tensors[i].type) == 0 || tensor_count(&e->tensors[i]) == 0
-                          ? "has a type or shape the fake cannot run"
-                      : c->address[i] == 0 ? "has no address"
-                                           : NULL;
-    if (why != NULL) {
-      return trt_log(t, JL_TRT_LOG_ERROR, err, errlen, "IExecutionContext::enqueueV3: tensor %s %s", e->tensors[i].name, why);
+    if (c->address[i] == 0) {
+      return trt_log(t, JL_TRT_LOG_ERROR, err, errlen, "IExecutionContext::enqueueV3: tensor %s has no address", e->tensors[i].name);
     }
   }
   return JL_TRT_OK;
@@ -433,7 +376,7 @@ static int run_engine(jl_trt *t, jl_trt_context *c, char *err, size_t errlen) {
     }
   }
   c->ran = 1;
-  t->clock_ms += t->config.enqueue_ms;
+  t->clock_ms += ENQUEUE_MS;
   t->stats.enqueues++;
   return JL_TRT_OK;
 }
@@ -497,9 +440,8 @@ static int submit(jl_trt *t, jl_trt_stream *s, op o, char *err, size_t errlen) {
 // --- library --------------------------------------------------------------------
 
 void jl_trt_fake_defaults(jl_trt_fake_config *c) {
-  *c = (jl_trt_fake_config){.major = 10, .minor = 3, .build = 30, .header_major = 10, .header_minor = 3,
-                            .header_build = 30, .cuda_driver = 12060, .plugins = 1, .device_name = "Orin",
-                            .cc_major = 8, .cc_minor = 7, .total_memory = (size_t)8 << 30, .enqueue_ms = 1.0f};
+  *c = (jl_trt_fake_config){
+      .major = 10, .minor = 3, .build = 30, .cuda_driver = 12060, .plugins = 1, .device_name = "Orin", .cc_major = 8, .cc_minor = 7};
 }
 
 int jl_trt_open(int device, jl_trt **out, char *err, size_t errlen) {
@@ -546,23 +488,14 @@ void jl_trt_close(jl_trt *t) {
 }
 
 void jl_trt_get_info(const jl_trt *t, jl_trt_info *out) {
-  jl_trt_fake_config c;
-  jl_trt_fake_defaults(&c);
-  if (t == NULL) {
-    // only what the shim was compiled for
-    *out = (jl_trt_info){.header_major = c.header_major, .header_minor = c.header_minor, .header_patch = c.header_patch,
-                         .header_build = c.header_build, .strongly_typed = c.strongly_typed, .device_name = ""};
-    return;
-  }
-  c = t->config;
-  *out = (jl_trt_info){c.major,          c.minor,       c.patch,   c.build,  c.header_major, c.header_minor,
-                       c.header_patch,   c.header_build, c.strongly_typed, c.cuda_driver, c.plugins, c.device,
-                       t->device_name,   c.cc_major,    c.cc_minor};
+  const jl_trt_fake_config *c = &t->config;
+  *out = (jl_trt_info){c->major,  c->minor,       c->patch,    c->build, c->strongly_typed, c->cuda_driver,
+                       c->plugins, t->device_name, c->cc_major, c->cc_minor};
 }
 
 int jl_trt_mem_info(jl_trt *t, size_t *free_bytes, size_t *total_bytes, char *err, size_t errlen) {
   ENTER(t, "mem_info");
-  *free_bytes = *total_bytes = t->config.total_memory;
+  *free_bytes = *total_bytes = TOTAL_MEMORY;
   return leave(t, JL_TRT_OK);
 }
 
@@ -746,11 +679,6 @@ int jl_trt_event_sync(jl_trt *t, jl_trt_event *event, char *err, size_t errlen) 
   return leave(t, host_wait(t, "cuEventSynchronize", event, err, errlen));
 }
 
-int jl_trt_event_query(jl_trt *t, jl_trt_event *event, char *err, size_t errlen) {
-  ENTER(t, "event_query");
-  return leave(t, host_wait(t, "cuEventQuery", event, err, errlen));
-}
-
 int jl_trt_event_elapsed(jl_trt *t, jl_trt_event *start, jl_trt_event *end, float *ms, char *err, size_t errlen) {
   ENTER(t, "event_elapsed");
   if (!live(t, OBJ_EVENT, start) || !live(t, OBJ_EVENT, end) ||
@@ -851,7 +779,7 @@ static int parse_plan(jl_trt *t, char *text, jl_trt_engine *e, char *err, size_t
       }
       w[n++] = word;
     }
-    if (n == 0 || w[0][0] == '#' || (magic && strcmp(w[0], "settings") == 0)) {
+    if (n == 0 || (magic && strcmp(w[0], "settings") == 0)) {
       continue;
     }
     if (!magic) {
@@ -873,11 +801,11 @@ static int parse_plan(jl_trt *t, char *text, jl_trt_engine *e, char *err, size_t
       return trt_log(t, JL_TRT_LOG_ERROR, err, errlen, "fake: plan line %d is not understood", line_no);
     }
     tensor *x = &e->tensors[e->n];
-    *x = (tensor){.is_input = w[0][0] == 'i', .type = -1, .from = -1};
+    *x = (tensor){.is_input = w[0][0] == 'i', .type = strcmp(w[2], "float32") == 0   ? JL_TRT_FLOAT
+                                                     : strcmp(w[2], "float16") == 0 ? JL_TRT_FLOAT16
+                                                                                    : -1,
+                  .from = -1};
     snprintf(x->name, sizeof x->name, "%s", w[1]);
-    for (size_t i = 0; i < sizeof types / sizeof types[0]; i++) {
-      x->type = strcmp(w[2], types[i].name) == 0 ? types[i].type : x->type;
-    }
     int k = 3;
     for (; k < n && strcmp(w[k], "from") != 0 && x->rank < JL_TRT_MAX_DIMS; k++) {
       x->dims[x->rank++] = strtoll(w[k], NULL, 10);
@@ -1001,9 +929,6 @@ int jl_trt_context_enqueue(jl_trt_context *c, jl_trt_stream *s, char *err, size_
 int jl_trt_build_create(jl_trt *t, jl_trt_build **out, char *err, size_t errlen) {
   *out = NULL;
   ENTER(t, "build_create");
-  if (t->config.no_parser) {
-    return leave(t, say(err, errlen, JL_TRT_UNAVAILABLE, "libnvonnxparser.so.%d: cannot open shared object file", t->config.major));
-  }
   int rc = make(t, OBJ_BUILD, sizeof(jl_trt_build), (void **)out, err, errlen);
   if (rc == JL_TRT_OK) {
     **out = (jl_trt_build){.trt = t, .optimization_level = 3, .cache_builds = -1};
@@ -1083,12 +1008,8 @@ static void progress(jl_trt_build *b, int event, const char *phase, const char *
   }
 }
 
-static int write_file(const char *path, const char *text, char *err, size_t errlen) {
-  FILE *f = fopen(path, "wb");
-  size_t n = strlen(text);
-  int ok = f != NULL && fwrite(text, 1, n, f) == n;
-  ok = f != NULL && fclose(f) == 0 && ok;
-  return ok ? JL_TRT_OK : say(err, errlen, JL_TRT_ERROR, "cannot write %s", path);
+static int write_text(const char *path, const char *text, char *err, size_t errlen) {
+  return write_file(path, text, strlen(text)) ? JL_TRT_OK : say(err, errlen, JL_TRT_ERROR, "cannot write %s", path);
 }
 
 int jl_trt_build_write_plan(jl_trt_build *b, const char *path, char *err, size_t errlen) {
@@ -1119,7 +1040,7 @@ int jl_trt_build_write_plan(jl_trt_build *b, const char *path, char *err, size_t
            "jl_trt_fake_plan 1\nbuilt %d.%d.%d.%d\nsettings fp16=%d optimization_level=%d workspace=%zu timing_cache=%s\n%s",
            t->config.major, t->config.minor, t->config.patch, t->config.build, b->fp16, b->optimization_level,
            b->workspace, cache, tensors);
-  int rc = write_file(path, text, err, errlen);
+  int rc = write_text(path, text, err, errlen);
   free(text);
   b->cache_builds += rc == JL_TRT_OK && b->cache_builds >= 0;
   return leave(t, rc);
@@ -1134,5 +1055,5 @@ int jl_trt_build_write_timing_cache(jl_trt_build *b, const char *path, char *err
   char text[128];
   snprintf(text, sizeof text, "jl_trt_fake_timing %d.%d.%d.%d %d\n", t->config.major, t->config.minor, t->config.patch,
            t->config.build, b->cache_builds);
-  return leave(t, write_file(path, text, err, errlen));
+  return leave(t, write_text(path, text, err, errlen));
 }
