@@ -42,7 +42,6 @@ let package = Package(
     .library(name: "JetlinkORT", targets: ["JetlinkORT"]),
     .library(name: "jetlink", type: .dynamic, targets: ["JetlinkAndroid"]),
     .executable(name: "jetlink-server", targets: ["jetlink-server"]),
-    .executable(name: "jetlink-onnx", targets: ["jetlink-onnx"]),
   ],
   dependencies: [
     .package(url: "https://github.com/apple/swift-crypto.git", "3.0.0"..<"5.0.0"),
@@ -106,7 +105,6 @@ let package = Package(
         .target(name: "JetlinkLinux", condition: .when(platforms: [.linux])),
         .product(name: "ArgumentParser", package: "swift-argument-parser", condition: .when(platforms: [.macOS, .linux])),
       ]),
-    .executableTarget(name: "jetlink-onnx", dependencies: ["JetlinkONNX"]),
     // Helpers more than one test target uses: fixtures, scratch directories, waits, a fake network.
     .target(name: "JetlinkTestSupport", dependencies: ["JetlinkRegistry", "JetlinkServer"], path: "Tests/JetlinkTestSupport"),
     .testTarget(name: "JetlinkKitTests", dependencies: ["JetlinkKit", "JetlinkUI", "JetlinkTestSupport"], resources: [.copy("Fixtures")]),

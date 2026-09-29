@@ -14,7 +14,7 @@ dist/
 /notes/
 /plans/
 
-# The Mac script's engine cache (scripts/run-mac.sh); 5.5 GB per CoreML model
+# An old engine cache from the removed scripts/run-mac.sh; 5.5 GB per CoreML model
 /models_cache/
 
 # Your team and bundle identifier for the iPhone app (ios/Config/Local.xcconfig.example)

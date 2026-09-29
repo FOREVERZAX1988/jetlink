@@ -9,7 +9,7 @@
 # a DMG of it would only invite people to install something Gatekeeper refuses,
 # so the release workflow ships that zip alone, labelled unsigned.
 #
-# "-macOS" tells them apart from the Python wheel and sdist on a release page.
+# "-macOS" tells it apart from the Linux server tarballs on a release page.
 #
 # No third party tooling: hdiutil and ditto only.
 set -euo pipefail
