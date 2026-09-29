@@ -116,11 +116,10 @@ final class FailingEngine: Engine {
 
   var inputs: [String: TensorSpec] { inner.inputs }
   var outputs: [String: TensorSpec] { inner.outputs }
-  var hostOutputs: [String] { inner.hostOutputs }
   var lastGpuUs: UInt32 { inner.lastGpuUs }
   func hostInput(_ name: String) -> UnsafeMutableRawPointer? { inner.hostInput(name) }
   func output(_ name: String) -> UnsafeRawPointer? { inner.output(name) }
-  func loopState(_ pairs: [(input: String, output: String)]) throws -> Bool { try inner.loopState(pairs) }
+  func loopState(_ pairs: [(input: String, output: String)]) throws { try inner.loopState(pairs) }
   func resetState() { inner.resetState() }
   func warm() throws -> String { try inner.warm() }
   func close() { inner.close() }

@@ -290,7 +290,7 @@ final class StagingEngine: Engine {
 
   func hostInput(_ name: String) -> UnsafeMutableRawPointer? { buffers[name] }
   func output(_ name: String) -> UnsafeRawPointer? { nil }
-  func loopState(_ pairs: [(input: String, output: String)]) throws -> Bool { false }
+  func loopState(_ pairs: [(input: String, output: String)]) throws {}
   func resetState() {}
   func run() throws {}
   func warm() throws -> String { "" }

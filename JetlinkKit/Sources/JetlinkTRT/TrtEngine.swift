@@ -73,21 +73,20 @@ public final class TrtEngine: EngineCore, @unchecked Sendable {
     }
   }
 
-  /// Takes each pair onto the device, when every one matches in size and
-  /// type; otherwise the host copies them (StateLoop). Only before the graph
-  /// is captured, since it changes what the graph does.
-  public override func bindLoop(_ pairs: [(input: String, output: String)]) throws -> Bool {
+  /// Takes each pair onto the device; a pair that differs in size or type
+  /// cannot loop. Only before the graph is captured, since it changes what
+  /// the graph does.
+  public override func bindLoop(_ pairs: [(input: String, output: String)]) throws {
     guard graph == nil else { throw TrtError("loopState after the cuda graph was captured") }
     for pair in pairs {
       guard let a = inputs[pair.input], let b = outputs[pair.output], a.byteCount == b.byteCount, a.type == b.type else {
-        return false
+        throw TrtError("state \(pair.input) cannot loop from \(pair.output): sizes or types differ")
       }
     }
     // never copied again: 24 MB of page-locked memory on a board that
     // shares it with the GPU
     releaseHostBuffers(pairs.flatMap { [$0.input, $0.output] })
     copies = nil
-    return true
   }
 
   /// Zero the looped state before the next run: empty queues.

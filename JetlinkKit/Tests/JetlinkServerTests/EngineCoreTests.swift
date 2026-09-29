@@ -66,17 +66,15 @@ class StepEngine: EngineCore, @unchecked Sendable {
 
 /// onnxruntime's way: two host copies of the state, swapped each run.
 final class DoubleBufferedEngine: StepEngine, @unchecked Sendable {
-  override func bindLoop(_ pairs: [(input: String, output: String)]) throws -> Bool {
+  override func bindLoop(_ pairs: [(input: String, output: String)]) throws {
     try doubleBuffer(pairs.map(\.input))
-    return true
   }
 }
 
 /// TensorRT's way: the state stays on the device, so the host keeps none.
 final class DeviceLoopEngine: StepEngine, @unchecked Sendable {
-  override func bindLoop(_ pairs: [(input: String, output: String)]) throws -> Bool {
+  override func bindLoop(_ pairs: [(input: String, output: String)]) throws {
     releaseHostBuffers(pairs.flatMap { [$0.input, $0.output] })
-    return true
   }
 
   override func execute() throws {
@@ -99,11 +97,11 @@ struct EngineCoreTests {
     #expect(throws: HostError.self) { try engine.run() }
   }
 
-  @Test("An engine that cannot loop leaves the pairs to the host")
+  @Test("An engine that cannot loop refuses the pairs and keeps them all")
   func noLoop() throws {
     let engine = try StepEngine(allocator: .heap)
     defer { engine.close() }
-    #expect(try !engine.loopState([StepEngine.pair]))
+    #expect(throws: HostError.self) { try engine.loopState([StepEngine.pair]) }
     #expect(engine.looped.isEmpty)
     #expect(engine.hostInputs == ["state_x", "x"])
     #expect(engine.hostOutputs == ["next_state_x", "out"])
@@ -115,7 +113,7 @@ struct EngineCoreTests {
   func doubleBuffered() throws {
     let allocator = CountingAllocator()
     let engine = try DoubleBufferedEngine(allocator: allocator.hook)
-    #expect(try engine.loopState([StepEngine.pair]))
+    try engine.loopState([StepEngine.pair])
     #expect(allocator.outstanding == 5)
     #expect(engine.hostInputs == ["x"] && engine.hostOutputs == ["out"])
     #expect(engine.output("next_state_x") == nil)
@@ -140,7 +138,7 @@ struct EngineCoreTests {
     let allocator = CountingAllocator()
     let engine = try DeviceLoopEngine(allocator: allocator.hook)
     defer { engine.close() }
-    #expect(try engine.loopState([StepEngine.pair]))
+    try engine.loopState([StepEngine.pair])
     #expect(allocator.outstanding == 2)
     #expect(engine.hostInput("state_x") == nil && engine.output("next_state_x") == nil)
     #expect(engine.hostOutputs == ["out"])
