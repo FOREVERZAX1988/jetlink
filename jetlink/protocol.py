@@ -20,15 +20,12 @@ from enum import IntEnum
 
 MAGIC = 0x4B4E4C4A  # b'JLNK'
 # The comma package and the server are updated together, so each speaks exactly
-# one version. 3 keeps the hidden state on the server: INFER_REQ has no
-# prev_feat and INFER_RESP no hidden_state slice, which takes the big models'
-# reply from 72 KB (five 16 KB reads on the comma) to 8 KB (one). Tensors are
-# unchanged, so existing plans still load.
+# one version, and a header of any other is a broken stream. 3 keeps the hidden
+# state on the server: INFER_REQ has no prev_feat and INFER_RESP no
+# hidden_state slice, which takes the big models' reply from 72 KB (five 16 KB
+# reads on the comma) to 8 KB (one). Tensors are unchanged, so existing plans
+# still load.
 VERSION = 3
-# The header version of the messages any two versions must still exchange; see
-# ENVELOPE. 2 because a server of that version latches any other as a desync and
-# never answers, so a newer comma's hello would hang instead of failing.
-ENVELOPE_VERSION = 2
 
 # A bulk transfer ends on a short packet, so a message that is an exact multiple
 # of the packet size never terminates the peer's read and arrives a frame late;
@@ -81,14 +78,6 @@ class Msg(IntEnum):
   SHUTDOWN_RESP = 18   # json: {ok, detail}
 
 
-# The hello, which is how a mismatch is found and named; the shutdown, which the
-# comma sends with no hello first when its battery runs low and which should
-# power the Jetson off whatever the versions; and the ERROR either may get
-# back. Always sent with ENVELOPE_VERSION. Their bodies are JSON and read the
-# same in every version.
-ENVELOPE = frozenset({Msg.HELLO_REQ, Msg.HELLO_RESP, Msg.SHUTDOWN_REQ, Msg.SHUTDOWN_RESP, Msg.ERROR})
-
-
 class Flag(IntEnum):
   RESET_QUEUES = 1 << 0   # on INFER_REQ: warm-start, clear history before this frame
   WANT_STATE = 1 << 1     # on INFER_REQ: append telemetry json to the response.
@@ -115,38 +104,17 @@ class ProtocolError(RuntimeError):
   pass
 
 
-def header_version(msg_type: int) -> int:
-  """The version a message of this type is sent with."""
-  return ENVELOPE_VERSION if msg_type in ENVELOPE else VERSION
-
-
 def pack_header(msg_type: int, seq: int, length: int, flags: int = 0, reserved: int = 0) -> bytes:
-  return _header.pack(MAGIC, header_version(msg_type), int(msg_type), seq, flags, length, reserved)
+  return _header.pack(MAGIC, VERSION, int(msg_type), seq, flags, length, reserved)
 
 
 def unpack_header(buf) -> tuple[int, int, int, int, int, int, int]:
-  """The header's fields. A version-2 header is accepted on any message: v2 and
-  v3 frame alike, so a v2 message is read whole and the stream stays in sync,
-  and the receiver refuses it by name (see ENVELOPE). Any other version is a
-  desync."""
   magic, version, msg_type, seq, flags, length, reserved = _header.unpack_from(buf)
   if magic != MAGIC:
     raise ProtocolError(f"bad magic 0x{magic:08x} (link desynced or not a jetlink peer)")
-  if version not in (VERSION, ENVELOPE_VERSION):
+  if version != VERSION:
     raise ProtocolError(f"peer speaks protocol v{version}, we speak v{VERSION}")
   return magic, version, msg_type, seq, flags, length, reserved
-
-
-def same_protocol(version: int, msg_type: int) -> bool:
-  """Did a peer on this protocol send this message? Only envelope
-  messages may carry ENVELOPE_VERSION."""
-  return version == VERSION or (version == ENVELOPE_VERSION and msg_type in ENVELOPE)
-
-
-def update_hint(comma: int, jetson: int) -> str:
-  """What the comma says of a mismatch, naming the side to update."""
-  side = "update the comma's jetlink package" if comma < jetson else "update jetlink on the Jetson"
-  return f"the Jetson runs jetlink protocol {jetson} and this comma {comma}: {side}"
 
 
 def pack_infer_req(frame_id: int, flags: int = 0) -> bytes:

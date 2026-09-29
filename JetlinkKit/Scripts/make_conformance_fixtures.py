@@ -69,7 +69,7 @@ def payload(seq: int, n: int) -> bytes:
 # lengths put header plus payload on each side of the 1024 byte packet and the
 # 16 KB burst, where the PADDED byte and the gadget's padding change.
 WIRE_MESSAGES = [
-  ('HELLO_REQ', 1, 0, '{"client":{"name":"modeld","nonce":7,"protocol":3}}'),
+  ('HELLO_REQ', 1, 0, '{"client":{"name":"modeld","nonce":7}}'),
   ('HELLO_RESP', 1, 0, '{"protocol":3,"engine_state":"none","sleep_after":0.0}'),
   ('PING', 2, 0, []),
   ('PONG', 2, 0, []),
@@ -219,7 +219,6 @@ def wire(root: Path) -> None:
               for t, s, f, p in WIRE_MESSAGES]
   (out / 'wire.json').write_text(dump({
     'payload': 'byte i of a binary payload is (seq * 31 + i * 7) % 251',
-    'version': P.VERSION, 'envelope_version': P.ENVELOPE_VERSION, 'envelope': sorted(int(m) for m in P.ENVELOPE),
     'headers': headers, 'infer_req': infer_req, 'infer_resp': infer_resp,
     'messages': messages, 'streams': streams,
   }))

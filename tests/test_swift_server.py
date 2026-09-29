@@ -11,7 +11,6 @@ jetlink.client over TCP against a real `jetlink-server` on onnxruntime's CPU
 provider, serving tests/tiny_model.py's graphs (the committed copies the Swift
 golden frames use). Outputs are held to Python's own staging (jetlink.queues)
 and a numpy run of the graph, the hidden state fed back as the server feeds it.
-A comma on the protocol before is played from its bytes on the wire.
 
 The binary comes from JETLINK_SERVER_BIN, else the newest SwiftPM build in
 JetlinkKit/.build; JETLINK_SERVER_BUILD=1 builds it first. Without one this
@@ -503,84 +502,16 @@ def test_a_missing_engine_with_nothing_to_upload_is_engine_missing(bare):
     client.close()
 
 
-# -- a comma on the protocol before -------------------------------------------------
+# -- a header of another version --------------------------------------------------
 
-def old_comma(server: Server) -> socket.socket:
-  return socket.create_connection(('127.0.0.1', server.port), timeout=10.0)
-
-
-def send_v2(sock: socket.socket, msg_type: int, seq: int, payload: bytes = b'') -> None:
-  """A message as a protocol-2 comma frames it: version 2 in every header."""
-  flags = 0
-  if (P.HEADER_SIZE + len(payload)) % P.PACKET_MULTIPLE == 0:
-    flags, payload = P.Flag.PADDED, payload + b'\0'
-    sock.sendall(struct.pack(P.HEADER_FMT, P.MAGIC, 2, msg_type, seq, flags, len(payload) - 1, 0) + payload)
-    return
-  sock.sendall(struct.pack(P.HEADER_FMT, P.MAGIC, 2, msg_type, seq, flags, len(payload), 0) + payload)
-
-
-def recv_raw(sock: socket.socket) -> tuple[int, int, int, bytes]:
-  """(version, type, seq, payload) of the next message, as a protocol-2 comma
-  reads it: it latches any version but 2 as a desync."""
-  def exactly(n):
-    out = b''
-    while len(out) < n:
-      chunk = sock.recv(n - len(out))
-      assert chunk, 'the server closed the link'
-      out += chunk
-    return out
-  _, version, msg_type, seq, flags, length, _ = struct.unpack(P.HEADER_FMT, exactly(P.HEADER_SIZE))
-  payload = exactly(length)
-  if flags & P.Flag.PADDED:
-    exactly(1)
-  return version, msg_type, seq, payload
-
-
-def test_an_old_comma_is_told_to_update_its_package_in_one_round_trip(server):
-  """The hello protocol 2's client sends (no protocol key), answered with an
-  ERROR it reads: its client raises `server error: protocol: ...`."""
-  with old_comma(server) as sock:
-    send_v2(sock, P.Msg.HELLO_REQ, 1, json.dumps({'client': {'nonce': 'ab12', 'name': 'modeld'}}).encode())
-    version, msg_type, seq, payload = recv_raw(sock)
-    assert (version, msg_type, seq) == (2, P.Msg.ERROR, 1)
-    error = json.loads(payload)
-    assert error['error'] == 'protocol'
-    assert "update the comma's jetlink package" in error['detail']
-    # and the link is still in sync: its next try is answered the same way at once
-    send_v2(sock, P.Msg.HELLO_REQ, 2, json.dumps({'client': {'nonce': 'ab12', 'name': 'modeld'}}).encode())
-    assert recv_raw(sock)[:3] == (2, P.Msg.ERROR, 2)
-
-
-def test_an_old_comma_that_skips_the_hello_is_refused_without_a_desync(server):
-  with old_comma(server) as sock:
-    send_v2(sock, P.Msg.PING, 1)
-    version, msg_type, seq, payload = recv_raw(sock)
-    assert (version, msg_type, seq) == (2, P.Msg.ERROR, 1)
-    assert "update the comma's jetlink package" in json.loads(payload)['detail']
-    # a protocol-3 message on the same link: the stream was never lost
-    sock.sendall(P.pack_header(P.Msg.PING, 2, 0))
-    assert recv_raw(sock)[:3] == (P.VERSION, P.Msg.PONG, 2)
-
-
-@pytest.mark.skipif(_may_power_off(), reason='a real systemd host; JETLINK_TEST_SHUTDOWN=1 runs it anyway')
-def test_an_old_comma_can_still_power_the_jetson_off(server):
-  """The low-battery shutdown goes without a hello, so it is in the envelope:
-  protocol 2's SHUTDOWN_REQ is answered as ever (a dry run here)."""
-  with old_comma(server) as sock:
-    send_v2(sock, P.Msg.SHUTDOWN_REQ, 1, json.dumps({'reason': 'car battery'}).encode())
-    version, msg_type, seq, payload = recv_raw(sock)
-    assert (version, msg_type, seq) == (2, P.Msg.SHUTDOWN_RESP, 1)
-    assert isinstance(json.loads(payload).get('ok'), bool)
-  assert server.proc.poll() is None, server.tail()
-
-
-def test_a_newer_comma_is_told_to_update_the_server(server):
-  client = server.connect()
+def test_a_header_of_another_version_is_a_broken_stream(server):
+  """As any bad header: no reply, and the server lets the link go."""
+  with socket.create_connection(('127.0.0.1', server.port), timeout=10.0) as sock:
+    sock.sendall(struct.pack(P.HEADER_FMT, P.MAGIC, P.VERSION - 1, P.Msg.PING, 1, 0, 0, 0))
+    assert sock.recv(64) == b''
+  client = server.connect()   # and serves the next one
   try:
-    seq = client._next_seq()
-    client.t.send_json(P.Msg.HELLO_REQ, seq, {'client': {'name': 'modeld', 'nonce': '1', 'protocol': P.VERSION + 1}})
-    with pytest.raises(LinkError, match='update jetlink on this server'):
-      client._expect(P.Msg.HELLO_RESP, seq, 5.0)
+    assert client.ping(timeout=5) < 5.0
   finally:
     client.close()
 

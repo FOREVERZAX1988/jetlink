@@ -85,7 +85,7 @@ def run(app_path: Path) -> None:
     try:
       transport = connect(port, app)
       try:
-        transport.send_json(P.Msg.HELLO_REQ, 1, {'client': {'name': 'smoke', 'nonce': os.getpid(), 'protocol': P.VERSION}})
+        transport.send_json(P.Msg.HELLO_REQ, 1, {'client': {'name': 'smoke', 'nonce': os.getpid()}})
         hello = json.loads(bytes(expect(transport, P.Msg.HELLO_RESP, 1).payload))
         if hello.get('protocol') != P.VERSION:
           raise SmokeError(f"the server speaks protocol {hello.get('protocol')}, this checkout {P.VERSION}")

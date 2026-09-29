@@ -10,12 +10,10 @@ server names the medium from that (LinkMediumTests in JetlinkKit).
 """
 from __future__ import annotations
 
-import json
 from types import SimpleNamespace
 
 import pytest
 
-from jetlink import protocol as P
 from jetlink.client import JetlinkClient
 from jetlink.transport import base
 from jetlink.transport.base import udc_speed
@@ -80,8 +78,7 @@ class FakeTransport:
 def test_the_hello_carries_the_link(link, expected):
   t = FakeTransport(link)
   client = JetlinkClient(t, name='modeld')
-  client._expect = lambda *a, **k: SimpleNamespace(payload=memoryview(json.dumps({'protocol': P.VERSION}).encode()))
+  client._expect = lambda *a, **k: SimpleNamespace(payload=memoryview(b'{}'))
   client.hello()
   assert t.sent[0]['client'].get('link') == expected
   assert t.sent[0]['client']['name'] == 'modeld'
-  assert t.sent[0]['client']['protocol'] == P.VERSION
