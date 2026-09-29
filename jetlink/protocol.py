@@ -50,8 +50,6 @@ USB_VID = 0x1209
 USB_PID = 0x0001
 USB_VENDOR_CLASS = (0xFF, 0xFF, 0xFF)
 USB_MAX_PACKET = 1024   # SuperSpeed bulk
-# What a host asks for in one bulk IN read.
-USB_READ_CHUNK = 256 * USB_MAX_PACKET
 
 # magic, version, msg_type, seq, flags, length, reserved, 4 pad
 HEADER_FMT = '<IHHIIIQ4x'

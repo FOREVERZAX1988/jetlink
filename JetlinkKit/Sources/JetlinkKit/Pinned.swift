@@ -78,8 +78,6 @@ public enum Pinned {
   ]
   /// jetlink.transport.tcp.CABLE_ADDRESS
   public static let cableAddress: String = "192.168.60.1"
-  /// jetlink.protocol.USB_READ_CHUNK
-  public static let usbReadChunk: Int = 262144
   /// jetlink.spec.MODEL_RUN_FREQ
   public static let modelRunFrequency: Int = 20
   /// jetlink.spec.MODEL_CONTEXT_FREQ

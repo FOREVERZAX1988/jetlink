@@ -11,8 +11,7 @@ Every file comes from the code the comma runs, on fixed inputs:
   wire      JetlinkKit/Tests/JetlinkServerTests/Fixtures/conformance/wire*
             headers and INFER bodies from protocol.py, and the byte streams
             StreamTransport frames for TCP, for a USB host and for the gadget
-            (FfsTransport's 16 KB bursts), with the reads a USB host posts to
-            take the gadget's stream in
+            (FfsTransport's 16 KB bursts)
   staging   .../conformance/staging*: the tensors PolicyQueues.step feeds for
             the tiny queued graph at frame_skip 1, 2 and 4, with the hidden
             state each frame's output feeds back, a hello, a non-finite frame,
@@ -96,13 +95,13 @@ def _framing(cls) -> dict:
 
 def _usb_host() -> dict:
   """The USB host's framing, as the comma's gadget expects it: whole-packet
-  reads of up to USB_READ_CHUNK with a packet of slack, the gadget's 16 KB
-  bursts stripped, and the PADDED byte on what it sends. The server is the only
-  USB host now; this is the framing it is held to."""
+  reads with a packet of slack, the gadget's 16 KB bursts stripped, and the
+  PADDED byte on what it sends. The server is the only USB host now; this is
+  the framing it is held to."""
   from jetlink import protocol as P
   from jetlink.transport.base import StreamTransport
-  return {**_framing(StreamTransport), 'packet_size': P.USB_MAX_PACKET, 'read_chunk': P.USB_READ_CHUNK,
-          'rx_align': P.GADGET_TX_ALIGN, 'read_slack': P.USB_MAX_PACKET}
+  return {**_framing(StreamTransport), 'packet_size': P.USB_MAX_PACKET, 'rx_align': P.GADGET_TX_ALIGN,
+          'read_slack': P.USB_MAX_PACKET}
 
 
 def _memory(framing: dict, rx_size: int = 1 << 20):
@@ -115,7 +114,6 @@ def _memory(framing: dict, rx_size: int = 1 << 20):
       self.sent = bytearray()
       self.incoming = memoryview(incoming)
       self.pos = 0
-      self.reads: list[int] = []
 
     def _write(self, bufs) -> int:
       n = 0
@@ -127,7 +125,6 @@ def _memory(framing: dict, rx_size: int = 1 << 20):
     def _read_into(self, dest, timeout) -> int:
       # a USB host clamps to whole packets before it reads, TCP does not
       n = self._clamp_read(dest) if self.packet_size else dest.nbytes
-      self.reads.append(n)
       left = self.incoming.nbytes - self.pos
       if left <= 0:
         raise LinkError('end of the fixture stream')
@@ -201,8 +198,7 @@ def wire(root: Path) -> None:
       assert (m.msg_type, m.seq, bytes(m.payload)) == (P.Msg[spec[0]], spec[1], body), (name, spec[0])
       offsets.append(receiver.pos)
     assert receiver.pos == len(stream), name
-    streams[name] = {'file': f'wire.{name}.bin', 'bytes': len(stream), 'ends': offsets,
-                     'reads': receiver.reads if name == 'usb_gadget' else None}
+    streams[name] = {'file': f'wire.{name}.bin', 'bytes': len(stream), 'ends': offsets}
 
   messages = [{'type': P.Msg[t].value, 'name': t, 'seq': s, 'flags': f,
                'parts': p if isinstance(p, list) else None, 'json': p if isinstance(p, str) else None}
