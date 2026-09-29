@@ -46,6 +46,8 @@
     private var retryAt: TimeInterval = 0
     private var backoff = Sleeper.retryMin
     private var held = false
+    /// The last poll found no gadget.
+    private var gone = false
 
     init(
       after: TimeInterval, root: HostRoot, lockPath: String, monotonic: @escaping @Sendable () -> TimeInterval = { Sleeper.now(CLOCK_MONOTONIC) },
@@ -70,10 +72,25 @@
     /// True when the box slept.
     public func handle(_ event: GadgetIdleEvent) -> Bool {
       switch event {
-      case .present, .connected, .disconnected:
+      case .present:
+        lock.withLock { gone = false }
+        touch()
+        return false
+      case .connected, .disconnected:
         touch()
         return false
       case .absent:
+        // The count starts when the gadget goes, as Python's did. A gadget
+        // held with no session is not polled, so without this one that
+        // leaves after `after` seconds of that suspends the box at once.
+        let leaving = lock.withLock {
+          defer { gone = true }
+          return !gone
+        }
+        if leaving {
+          touch()
+          return false
+        }
         return idle()
       }
     }
