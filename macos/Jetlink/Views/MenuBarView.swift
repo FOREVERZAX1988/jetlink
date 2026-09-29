@@ -37,7 +37,7 @@ struct MenuBarView: View {
   /// "Serving, waiting for comma", plus the frame rate once frames are flowing.
   private var statusLine: String {
     let (text, _) = StatusBadge.summary(runState: server.runState, link: server.link, engine: server.engine)
-    if server.link.state == .connected, let stats = server.stats, stats.fps > 0 {
+    if server.link.state == .connected, let stats = server.state.stats, stats.fps > 0 {
       let over = server.link.connectedMedium.map { " over \($0.title)" } ?? ""
       return "Comma connected\(over), \(stats.fps.formatted(.number.precision(.fractionLength(1)))) fps"
     }

@@ -16,11 +16,6 @@ final class PhoneServer: ServerControlling {
   let state = ServerViewState()
   var link: LinkEvent { state.link }
   var engine: EngineEvent { state.engine }
-  var info: ServerEvent? { state.server }
-  var statsHistory: [StatsSample] { state.statsHistory }
-  var benchmark: BenchmarkEvent? { state.benchmark }
-  var shutdownRequest: ShutdownRequestEvent? { state.shutdownRequest }
-  var shutdownRequests: Int { state.shutdownRequests }
   private(set) var port: UInt16?
   /// The last ten seconds of frames, refreshed once a second while serving.
   private(set) var recent: StatsEvent?
@@ -69,6 +64,7 @@ final class PhoneServer: ServerControlling {
   /// the phone's story in one place.
   func note(_ level: Log.Level, _ message: String) {
     switch level {
+    case .debug: log.debug("\(message, privacy: .public)")
     case .info: log.info("\(message, privacy: .public)")
     case .warning: log.warning("\(message, privacy: .public)")
     case .error: log.error("\(message, privacy: .public)")
