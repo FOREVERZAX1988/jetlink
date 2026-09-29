@@ -145,11 +145,10 @@ def usb_port() -> str | None:
   """What the comma's USB-C port controller sees on the CC pin: 'empty', or
   'host' for a cable with something live behind it (it cannot say what). None
   where the kernel does not expose it, rather than claiming an empty port."""
-  try:
-    raw = gadget.CC_ORIENTATION.read_text().strip()
-  except OSError:
+  cc = gadget.cc_orientation()
+  if cc is None:
     return None
-  return 'empty' if raw == '0' else 'host'
+  return 'host' if cc else 'empty'
 
 
 # -- whether the link can run --------------------------------------------------

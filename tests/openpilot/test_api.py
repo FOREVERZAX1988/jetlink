@@ -13,13 +13,10 @@ ready, and ready gets told, and that a request that hangs costs the large
 model and nothing else.
 """
 import inspect
-import json
 import sys
-import tempfile
 import threading
 import time
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -304,7 +301,7 @@ class ShuttingTheJetsonDown(OpenpilotTest):
     self.op.set_mode(mode)
     with mock.patch.object(status.Presence, 'present', return_value=present), \
          mock.patch.object(gadget, 'request_shutdown', return_value=requested) as request, \
-         mock.patch.object(self.jl, '_await_shutdown', return_value=taken) as wait:
+         mock.patch.object(gadget, 'await_shutdown', return_value=taken) as wait:
       self.jl._request_shutdown('car battery', 3.0)
     return request, wait
 
@@ -345,28 +342,6 @@ class ShuttingTheJetsonDown(OpenpilotTest):
   def test_nobody_taking_it_is_logged(self):
     self.shutdown(taken=False)
     self.assertTrue(self.op.log.has('nobody took the shutdown request within 3 s'))
-
-
-class TestAwaitingTheOwner(unittest.TestCase):
-  def setUp(self):
-    self.tmp = Path(tempfile.mkdtemp())
-    p = mock.patch.object(gadget, 'SHUTDOWN_REQUEST', self.tmp / 'shutdown')
-    p.start()
-    self.addCleanup(p.stop)
-
-  def test_it_gives_up_and_cleans_up(self):
-    gadget.request_shutdown('car battery')
-    self.assertFalse(jo.Jetlink._await_shutdown(0.3))
-    self.assertIsNone(gadget.pending_shutdown())
-
-  def test_it_returns_when_taken(self):
-    gadget.request_shutdown('car battery')
-    gadget.finish_shutdown()
-    self.assertTrue(jo.Jetlink._await_shutdown(0.3))
-
-  def test_the_request_carries_the_reason(self):
-    gadget.request_shutdown('car battery')
-    self.assertEqual(json.loads(gadget.SHUTDOWN_REQUEST.read_text()), {'reason': 'car battery'})
 
 
 class TestExtendsCatalog(OpenpilotTest):

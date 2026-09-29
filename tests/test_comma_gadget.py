@@ -128,6 +128,16 @@ class TestLinkKind(unittest.TestCase):
     gadget.note_link('usb')
     self.assertEqual(gadget.link_kind('ios'), 'usb', "the owner's record still decides")
 
+  def test_the_cc_pin_is_one_reading_for_every_reader(self):
+    cc = self.tmp / 'cc'
+    with unittest.mock.patch.object(gadget, 'CC_ORIENTATION', cc):
+      self.assertIsNone(gadget.cc_orientation(), 'a kernel that does not say')
+      self.assertFalse(gadget.port_has_host())
+      for raw, value in (('0\n', 0), ('1', 1), ('2\n', 2), ('junk', None)):
+        cc.write_text(raw)
+        self.assertEqual(gadget.cc_orientation(), value, raw)
+        self.assertEqual(gadget.port_has_host(), bool(value), raw)
+
   def test_a_dial_is_recorded_with_the_phone_and_cleared(self):
     gadget.note_link('cable', '192.168.60.3')
     self.assertEqual(gadget.link_peer(), '192.168.60.3')
@@ -439,3 +449,14 @@ class TestDormant(unittest.TestCase):
     self.assertEqual(gadget.pending_shutdown(), 'car battery')
     gadget.finish_shutdown()
     self.assertIsNone(gadget.pending_shutdown())
+
+  def test_a_request_nobody_takes_is_withdrawn(self):
+    # hardwared waits on it, and then goes on without it
+    gadget.request_shutdown('car battery')
+    self.assertFalse(gadget.await_shutdown(0.05, poll=0.01))
+    self.assertIsNone(gadget.pending_shutdown())
+
+  def test_a_request_taken_ends_the_wait(self):
+    gadget.request_shutdown('car battery')
+    gadget.finish_shutdown()
+    self.assertTrue(gadget.await_shutdown(0.05, poll=0.01))

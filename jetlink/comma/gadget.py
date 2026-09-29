@@ -322,17 +322,21 @@ def host_attached() -> bool:
   return udc_state() == "configured"
 
 
-def port_has_host() -> bool:
-  """Does the USB-C port controller see a host on the cable?
-
-  The CC pin, so it is electrically true whether or not anything enumerated:
-  0 is a port with nothing on it, 1 or 2 a cable with a live host. A legacy
-  A-to-C cable's pull-up rides on the host's VBUS and reads the same.
-  """
+def cc_orientation() -> int | None:
+  """What the USB-C port controller reads on the CC pin, so electrically true
+  whether or not anything enumerated: 0 is a port with nothing on it, 1 or 2 a
+  cable with a live host behind it (it cannot say what kind). A legacy A-to-C
+  cable's pull-up rides on the host's VBUS and reads the same. None where the
+  kernel does not say."""
   try:
-    return int(CC_ORIENTATION.read_text()) != 0
+    return int(CC_ORIENTATION.read_text())
   except (OSError, ValueError):
-    return False
+    return None
+
+
+def port_has_host() -> bool:
+  """Does the USB-C port controller see a host on the cable?"""
+  return bool(cc_orientation())
 
 
 # how long the UDC may sit half enumerated with a host on the cable before the
@@ -487,6 +491,18 @@ def pending_shutdown() -> str | None:
     return str(json.loads(SHUTDOWN_REQUEST.read_text()).get('reason', ''))
   except (OSError, ValueError):
     return None
+
+
+def await_shutdown(timeout: float, poll: float = 0.25) -> bool:
+  """Wait for the owner's run to take a shutdown request. False if nobody did
+  within `timeout`, and then the request is withdrawn."""
+  deadline = time.monotonic() + timeout
+  while time.monotonic() < deadline:
+    if not SHUTDOWN_REQUEST.exists():
+      return True
+    time.sleep(poll)
+  finish_shutdown()
+  return False
 
 
 def finish_shutdown() -> None:

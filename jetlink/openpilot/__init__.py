@@ -26,7 +26,6 @@ parts a heavy process uses are imported when it first uses them.
 from __future__ import annotations
 
 import threading
-import time
 
 from jetlink.comma import gadget
 from jetlink.openpilot.interface import MODES, STATES, Keys, ModelFace, Openpilot, OwnerConfig, conformance
@@ -209,21 +208,10 @@ class Jetlink:
     self._log.warning("jetlink: asking the jetson to power off: %s", reason)
     if not gadget.request_shutdown(reason):
       return
-    if self._await_shutdown(timeout):
+    if gadget.await_shutdown(timeout):
       self._log.warning("jetlink: shutdown request handed to the jetson")
     else:
       self._log.warning("jetlink: nobody took the shutdown request within %.0f s", timeout)
-
-  @staticmethod
-  def _await_shutdown(timeout: float) -> bool:
-    """Wait for the owner's run to take the request. False if nobody did in time."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-      if not gadget.SHUTDOWN_REQUEST.exists():
-        return True
-      time.sleep(0.25)
-    gadget.finish_shutdown()
-    return False
 
   def should_extend_catalog(self) -> bool:
     """Should the model manager's big-model catalog carry the newer catalogs'

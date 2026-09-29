@@ -365,11 +365,11 @@ class JoiningModelState:
     went. The kernel logs the same edge as a Type-C disconnect, in dmesg;
     this puts it next to the failure.
     """
-    try:
-      cc = int(gadget.CC_ORIENTATION.read_text())
-      port = f"port sees a host (cc {cc})" if cc else "port sees no host (cc 0)"
-    except (OSError, ValueError):
+    cc = gadget.cc_orientation()
+    if cc is None:
       port = "port state unknown"
+    else:
+      port = f"port sees a host (cc {cc})" if cc else "port sees no host (cc 0)"
     self._log.warning("jetlink: link lost, %s; drop %d this drive", port, self._drops)
     self._report('connect', 'lost the accelerator, reconnecting')
 
