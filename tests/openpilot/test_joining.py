@@ -772,8 +772,8 @@ class ReplugTest(JoiningBase):
 class EngagementTest(unittest.TestCase):
   """The swap window reads the adapter's poller, made on the watcher's own
   thread, and closes when the answers stop coming. What the poller answers
-  (the MADS rule over selfdriveState, carState and carControl) is the fork's
-  adapter's, and tested there."""
+  (openpilot or MADS engaged, over selfdriveState, selfdriveStateSP, carState
+  and carControl) is the fork's adapter's, and tested there."""
 
   def setUp(self):
     isolate(self, Path(tempfile.mkdtemp()))

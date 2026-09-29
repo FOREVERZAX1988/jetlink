@@ -81,7 +81,8 @@ def main():
         params.put(key, value, block=True)
     params.put('CarParams', saved['CarParamsPersistent'], block=True)
     params.put('JetlinkLink', 0 if args.small else 1, block=True)   # Accelerator Link off, or USB
-    pm = messaging.PubMaster(['selfdriveState', 'carState', 'carControl', 'deviceState', 'extrinsicsCalibration'])
+    pm = messaging.PubMaster(['selfdriveState', 'selfdriveStateSP', 'carState', 'carControl', 'deviceState',
+                              'extrinsicsCalibration'])
     sm = messaging.SubMaster(['modelV2', 'modelDataV2SP'])
     calibration = None
     if saved['CalibrationParams'] is not None:
@@ -112,14 +113,17 @@ def main():
           if tick % 100 == 0 and not live.get_bool('IsOffroad'):
             raise RuntimeError('real ignition changed: stopping bench')
           engaged = time.monotonic() - start < args.engaged_until
-          for service in ('selfdriveState', 'carState', 'carControl'):
+          for service in ('selfdriveState', 'selfdriveStateSP', 'carState', 'carControl'):
             message = messaging.new_message(service)
             message.valid = True
             if service == 'carState':
               message.carState.standstill = True
             elif service == 'selfdriveState':
-              # The promotion gate reads these three; faking them engaged holds the join back.
+              # The promotion gate reads these four; faking them engaged holds the join back.
               message.selfdriveState.enabled = engaged
+            elif service == 'selfdriveStateSP':
+              message.selfdriveStateSP.mads.enabled = engaged
+              message.selfdriveStateSP.mads.active = engaged
             elif service == 'carControl':
               message.carControl.latActive = engaged
               message.carControl.longActive = engaged

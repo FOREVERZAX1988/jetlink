@@ -26,8 +26,9 @@ to the comma.
   you drive engaged, it waits: the icon dims and the comma says **Big Model
   Ready: Re-engage to switch** once. To switch, turn cruise fully off (and
   lateral control, if it stays on without cruise), then engage again. You do
-  not need to stop or restart the car; a stop with only lateral control on
-  also switches. Connected while nothing is engaged, it takes over at once.
+  not need to stop or restart the car, and a stop does not switch while
+  lateral control is on. Connected while nothing is engaged, it takes over at
+  once.
 - **Big Model Ready** chime: it has taken over. For about a second after the
   switch the comma will not engage (**Big Model Loading**) while the large
   model builds its history.

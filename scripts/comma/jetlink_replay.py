@@ -71,6 +71,11 @@ def disengaged(m):
     b = m.as_builder()
     b.selfdriveState.enabled = False
     return b.as_reader()
+  if m.which() == 'selfdriveStateSP':
+    b = m.as_builder()
+    b.selfdriveStateSP.mads.enabled = False
+    b.selfdriveStateSP.mads.active = False
+    return b.as_reader()
   if m.which() == 'carControl':
     b = m.as_builder()
     b.carControl.latActive = False
@@ -259,7 +264,7 @@ def main() -> int:
   cfg = get_process_config('modeld')
   # the joining state swaps only on a disengaged frame and assumes engaged until told;
   # modeld never subscribes to selfdriveState, so process_replay would not deliver it
-  cfg = replace(cfg, pubs=list(dict.fromkeys([*cfg.pubs, 'selfdriveState', 'carState', 'carControl'])))
+  cfg = replace(cfg, pubs=list(dict.fromkeys([*cfg.pubs, 'selfdriveState', 'selfdriveStateSP', 'carState', 'carControl'])))
   out = replay_process(cfg, lr, frs, fingerprint=fingerprint, custom_params=custom)
   return summarise(out, args.dump)
 
