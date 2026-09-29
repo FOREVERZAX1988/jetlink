@@ -282,6 +282,24 @@ struct ServerUSBTests {
     #expect(links.all.contains { $0.state == .disconnected })
   }
 
+  /// Over USB the hello is the first message: the session is announced once,
+  /// with the medium settled. install.sh waits for the "client connected" line.
+  @Test("A USB session is announced once: the hello's speed, or the host's when the hello names none")
+  func announcedOnce() throws {
+    for (link, expected) in [(["kind": "usb"], LinkMedium.usb3), (["kind": "usb", "usb_speed": "high-speed"], .usb2)] {
+      let cache = try TemporaryDirectory()
+      let comma = FakeUsbfs()
+      let server = try makeServer(cache, gadget: FakeGadget([comma]))
+      let links = Recorded<LinkEvent>()
+      server.host.subscribe { if case .link(let link) = $0 { links.append(link) } }
+      try server.start()
+      defer { server.shutdown() }
+      _ = try GadgetClient(comma).hello(name: "modeld", link: link)
+      let connected = links.all.filter { $0.state == .connected }
+      #expect(connected.map(\.linkMedium) == [expected], "\(link)")
+    }
+  }
+
   /// Linux keeps USB 3 link power management off only while the comma talks.
   @Test("The gadget hears a session start, each message before it is answered, and the end")
   func gadgetHearsTheSession() throws {

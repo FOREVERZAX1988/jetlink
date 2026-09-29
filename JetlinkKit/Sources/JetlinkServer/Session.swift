@@ -25,7 +25,7 @@ final class Session: @unchecked Sendable {
   /// says better.
   private(set) var medium: LinkMedium?
   /// Hears the link event when the session announces it (`first`), and
-  /// again when the hello changes its medium.
+  /// again when a later hello changes its medium.
   var onLink: ((_ event: LinkEvent, _ first: Bool) -> Void)?
   /// Hears every message that arrives, before it is handled.
   var onMessage: (() -> Void)?
@@ -121,6 +121,11 @@ final class Session: @unchecked Sendable {
       do {
         message = try transport.recv()
         if !announced {
+          // Over USB the first message is the hello: the link is announced
+          // once, with what it says, rather than twice.
+          if message.msgType == Wire.Msg.helloReq.rawValue {
+            _ = adopt(helloMedium(message))
+          }
           announce()
         }
       } catch let error as LinkError {
@@ -180,18 +185,31 @@ final class Session: @unchecked Sendable {
     return (request.sha256, request.frameSkip)
   }
 
+  /// What a hello's `client.link` says the link is, if anything.
+  private func helloMedium(_ message: Message) -> LinkMedium? {
+    let client = JSONLine.decode(message.payload)?["client"] as? [String: Any]
+    return LinkMedium(link: client?["link"] as? [String: Any])
+  }
+
+  /// Takes the hello's word on the link where it says more: the cable's
+  /// speed over TCP, say. A USB speed the host read off the bus stands
+  /// against a hello that names none. Whether the medium changed.
+  private func adopt(_ said: LinkMedium?) -> Bool {
+    guard let said, said != medium else { return false }
+    if said == .usb, let medium, [.usb3, .usb2, .usb1].contains(medium) { return false }
+    medium = said
+    return true
+  }
+
   private func greet(_ message: Message) {
     var who = ""
-    var said: LinkMedium?
     if let object = JSONLine.decode(message.payload), let d = object["client"] as? [String: Any] {
       let name = (d["name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "client"
       let nonce = d["nonce"].map { "\($0)" } ?? "?"
       who = "\(name)/\(nonce)"
-      said = LinkMedium(link: d["link"] as? [String: Any])
     }
-    if let said, said != medium {
-      medium = said
-      if announced { onLink?(linkEvent, false) }
+    if adopt(helloMedium(message)), announced {
+      onLink?(linkEvent, false)
     }
     if !client.isEmpty && who != client {
       log.info("session handed from \(client) to \(who.isEmpty ? "an unnamed client" : who)")

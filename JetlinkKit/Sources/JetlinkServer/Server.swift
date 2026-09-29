@@ -313,7 +313,13 @@ public final class Server: @unchecked Sendable {
     let session = Session(transport: transport, host: host)
     session.onLink = { [weak self] event, first in
       guard let self else { return }
-      log.info("client connected from \(event.peer ?? "?") over \(event.linkMedium?.title ?? "an unknown link")")
+      let medium = event.linkMedium?.title ?? "an unknown link"
+      if first {
+        // install.sh waits for this line
+        log.info("client connected from \(event.peer ?? "?") over \(medium)")
+      } else {
+        log.info("the comma's hello says its link is \(medium)")
+      }
       setLink(event)
       if first {
         _ = hooks.gadgetIdle?(.connected)
