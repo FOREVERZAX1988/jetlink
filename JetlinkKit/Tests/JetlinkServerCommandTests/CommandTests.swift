@@ -24,6 +24,17 @@
       #expect(serve.cache.root.path == "/var/lib/jetlink")
       #expect(serve.sleepAfter == 900 && serve.statusPort == 5600)
       #expect(try #require(try root(["--device", "auto"]) as? Serve).chosen.options().device == nil, "auto is each backend's default")
+      let libs = try #require(try root(["bench", "--tensorrt-libs", "/opt/jetlink/tensorrt/11.3.0.99"]) as? Bench)
+      #expect(libs.chosen.options().tensorrtLibs == "/opt/jetlink/tensorrt/11.3.0.99")
+    }
+
+    @Test func tensorrtDefaultsToLibBesideBinWhenThere() throws {
+      let tmp = try TemporaryDirectory()
+      let binary = tmp.url.appending(path: "bin/jetlink-server")
+      #expect(bundledTensorRT(executable: binary) == nil, "none there: the loader path")
+      try FileManager.default.createDirectory(at: tmp.url.appending(path: "lib/tensorrt"), withIntermediateDirectories: true)
+      #expect(bundledTensorRT(executable: binary) == tmp.url.appending(path: "lib/tensorrt").path)
+      #expect(bundledTensorRT(executable: nil) == nil)
     }
 
     @Test func usageMistakesAreRefused() {

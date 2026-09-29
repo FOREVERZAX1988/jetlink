@@ -444,10 +444,12 @@ void jl_trt_fake_defaults(jl_trt_fake_config *c) {
       .major = 10, .minor = 3, .build = 30, .cuda_driver = 12060, .plugins = 1, .device_name = "Orin", .cc_major = 8, .cc_minor = 7};
 }
 
-int jl_trt_open(int device, jl_trt **out, char *err, size_t errlen) {
+int jl_trt_open(int device, const char *lib_dir, jl_trt **out, char *err, size_t errlen) {
   (void)device;
   *out = NULL;
-  return say(err, errlen, JL_TRT_UNAVAILABLE, "this is the fake shim, built without TensorRT");
+  // naming the directory, so a test sees it passed through
+  return say(err, errlen, JL_TRT_UNAVAILABLE, "this is the fake shim, built without TensorRT%s%s", lib_dir ? "; asked for it in " : "",
+             lib_dir ? lib_dir : "");
 }
 
 int jl_trt_fake_open(const jl_trt_fake_config *config, jl_trt **out, char *err, size_t errlen) {
@@ -490,7 +492,7 @@ void jl_trt_close(jl_trt *t) {
 void jl_trt_get_info(const jl_trt *t, jl_trt_info *out) {
   const jl_trt_fake_config *c = &t->config;
   *out = (jl_trt_info){c->major,  c->minor,       c->patch,    c->build, c->strongly_typed, c->cuda_driver,
-                       c->plugins, t->device_name, c->cc_major, c->cc_minor};
+                       c->plugins, t->device_name, c->cc_major, c->cc_minor, "the fake shim"};
 }
 
 int jl_trt_mem_info(jl_trt *t, size_t *free_bytes, size_t *total_bytes, char *err, size_t errlen) {

@@ -6,7 +6,9 @@
 // the fake's default plan is this model, so the program itself is tested
 // without a GPU.
 //
-//   jl_trt_selftest [--device N] [--keep DIR]
+//   jl_trt_selftest [--device N] [--libs DIR] [--keep DIR]
+//
+// --libs DIR loads TensorRT from DIR, as jetlink-server --tensorrt-libs does.
 #define _XOPEN_SOURCE 700
 // mkdtemp, which macOS hides from a strict POSIX build
 #define _DARWIN_C_SOURCE
@@ -132,14 +134,16 @@ static int y_is(const float *y, float base, float state) {
 
 int main(int argc, char **argv) {
   int device = 0;
-  const char *keep = NULL;
+  const char *keep = NULL, *libs = NULL;
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "--device") == 0 && i + 1 < argc) {
       device = atoi(argv[++i]);
     } else if (strcmp(argv[i], "--keep") == 0 && i + 1 < argc) {
       keep = argv[++i];
+    } else if (strcmp(argv[i], "--libs") == 0 && i + 1 < argc) {
+      libs = argv[++i];
     } else {
-      fprintf(stderr, "usage: %s [--device N] [--keep DIR]\n", argv[0]);
+      fprintf(stderr, "usage: %s [--device N] [--libs DIR] [--keep DIR]\n", argv[0]);
       return 2;
     }
   }
@@ -173,15 +177,16 @@ int main(int argc, char **argv) {
 
   // 1. open
 #ifdef JL_TRT_FAKE
+  (void)libs;
   REQUIRE(jl_trt_fake_open(NULL, &t, err, sizeof err), "open");
 #else
-  REQUIRE(jl_trt_open(device, &t, err, sizeof err), "open");
+  REQUIRE(jl_trt_open(device, libs, &t, err, sizeof err), "open");
 #endif
   jl_trt_set_logger(t, JL_TRT_LOG_WARNING, log_line, NULL);
   jl_trt_get_info(t, &info);
-  report(1, "open", "TensorRT %d.%d.%d.%d (%s), CUDA driver %d.%d, device %d %s sm%d%d, plugins %s", info.major, info.minor,
-         info.patch, info.build, info.strongly_typed ? "strongly typed" : "weakly typed + FP16", info.cuda_driver / 1000,
-         info.cuda_driver % 1000 / 10, device, info.device_name, info.cc_major, info.cc_minor,
+  report(1, "open", "TensorRT %d.%d.%d.%d (%s) from %s, CUDA driver %d.%d, device %d %s sm%d%d, plugins %s", info.major,
+         info.minor, info.patch, info.build, info.strongly_typed ? "strongly typed" : "weakly typed + FP16", info.library,
+         info.cuda_driver / 1000, info.cuda_driver % 1000 / 10, device, info.device_name, info.cc_major, info.cc_minor,
          info.plugins ? "registered" : "absent");
 
   // 2. build, as TrtBackend does

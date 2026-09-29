@@ -187,6 +187,7 @@ struct jl_trt {
   std::mutex sticky_lock;
   char sticky_message[512] = {0};
   char device_name[256] = {0};
+  char library[4096] = {0};
   jl_trt_info info = {};
 };
 
@@ -353,11 +354,23 @@ template <typename T> bool resolve(void *lib, const char *name, T *out) {
   return *out != nullptr;
 }
 
-int open_tensorrt(jl_trt *t, char *err, size_t errlen) {
+// A TensorRT library by name, from `dir` when there is one, else from the
+// loader path. The ones it needs itself resolve beside it: NVIDIA's copies
+// carry an $ORIGIN RPATH.
+void *open_library(const char *dir, const char *name) {
+  char path[4096];
+  if (dir != nullptr) {
+    snprintf(path, sizeof path, "%s/%s", dir, name);
+  }
+  return dlopen(dir != nullptr ? path : name, RTLD_NOW | RTLD_LOCAL);
+}
+
+int open_tensorrt(jl_trt *t, const char *dir, char *err, size_t errlen) {
   const char *name = "libnvinfer.so." JL_STR(NV_TENSORRT_MAJOR);
-  void *lib = dlopen(name, RTLD_NOW | RTLD_LOCAL);
+  void *lib = open_library(dir, name);
   if (lib == nullptr) {
-    return say(err, errlen, JL_TRT_UNAVAILABLE, "no TensorRT %d: %s", NV_TENSORRT_MAJOR, dlerror());
+    return dir != nullptr ? say(err, errlen, JL_TRT_UNAVAILABLE, "no TensorRT %d in %s: %s", NV_TENSORRT_MAJOR, dir, dlerror())
+                          : say(err, errlen, JL_TRT_UNAVAILABLE, "no TensorRT %d: %s", NV_TENSORRT_MAJOR, dlerror());
   }
   int32_t (*version[4])() = {};
   if (!resolve(lib, "createInferRuntime_INTERNAL", &t->create_runtime) ||
@@ -365,6 +378,10 @@ int open_tensorrt(jl_trt *t, char *err, size_t errlen) {
       !resolve(lib, "getInferLibMajorVersion", &version[0]) || !resolve(lib, "getInferLibMinorVersion", &version[1]) ||
       !resolve(lib, "getInferLibPatchVersion", &version[2]) || !resolve(lib, "getInferLibBuildVersion", &version[3])) {
     return say(err, errlen, JL_TRT_UNAVAILABLE, "%s lacks an entry point jetlink needs: %s", name, dlerror());
+  }
+  Dl_info where = {};
+  if (dladdr(reinterpret_cast<void *>(t->create_runtime), &where) != 0 && where.dli_fname != nullptr) {
+    snprintf(t->library, sizeof t->library, "%s", where.dli_fname);
   }
   jl_trt_info &info = t->info;
   info.major = version[0]();
@@ -380,14 +397,14 @@ int open_tensorrt(jl_trt *t, char *err, size_t errlen) {
                NV_TENSORRT_MINOR, NV_TENSORRT_PATCH);
   }
   // Needed only to build, so a missing parser is jl_trt_build_create's error.
-  void *parser = dlopen("libnvonnxparser.so." JL_STR(NV_TENSORRT_MAJOR), RTLD_NOW | RTLD_LOCAL);
+  void *parser = open_library(dir, "libnvonnxparser.so." JL_STR(NV_TENSORRT_MAJOR));
   if (parser != nullptr) {
     resolve(parser, "createNvOnnxParser_INTERNAL", &t->create_parser);
   }
   // Python registered the plugins whenever the library had them, so a plan
   // with a plugin layer must still load here. Absent is fine: jetlink's
   // models use none.
-  void *plugins = dlopen("libnvinfer_plugin.so." JL_STR(NV_TENSORRT_MAJOR), RTLD_NOW | RTLD_LOCAL);
+  void *plugins = open_library(dir, "libnvinfer_plugin.so." JL_STR(NV_TENSORRT_MAJOR));
   bool (*init_plugins)(void *, const char *) = nullptr;
   if (plugins != nullptr && resolve(plugins, "initLibNvInferPlugins", &init_plugins)) {
     info.plugins = init_plugins(trt_logger(), "") ? 1 : 0;
@@ -421,7 +438,7 @@ extern "C" {
 
 // --- library ---------------------------------------------------------------------
 
-int jl_trt_open(int device, jl_trt **out, char *err, size_t errlen) {
+int jl_trt_open(int device, const char *lib_dir, jl_trt **out, char *err, size_t errlen) {
   *out = nullptr;
   jl_trt *t = new (std::nothrow) jl_trt();
   if (t == nullptr) {
@@ -430,13 +447,14 @@ int jl_trt_open(int device, jl_trt **out, char *err, size_t errlen) {
   t->info.strongly_typed = NV_TENSORRT_MAJOR >= 11 ? 1 : 0;
   int rc = open_cuda(t, device, err, errlen);
   if (rc == JL_TRT_OK) {
-    rc = open_tensorrt(t, err, errlen);
+    rc = open_tensorrt(t, lib_dir, err, errlen);
   }
   if (rc != JL_TRT_OK) {
     jl_trt_close(t);
     return rc;
   }
   t->info.device_name = t->device_name;
+  t->info.library = t->library;
   *out = t;
   return JL_TRT_OK;
 }

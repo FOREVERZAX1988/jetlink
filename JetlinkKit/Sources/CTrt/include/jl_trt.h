@@ -124,13 +124,19 @@ typedef struct {
   // part of the cache tag. device_name lasts until jl_trt_close.
   const char *device_name;
   int cc_major, cc_minor;
+  // The libnvinfer loaded, as a path ("" when unknown); lasts until
+  // jl_trt_close.
+  const char *library;
 } jl_trt_info;
 
-// Opens CUDA and TensorRT and retains `device`'s primary context.
-// libnvonnxparser is needed by jl_trt_build_create alone, so a machine
-// without it still loads plans; libnvinfer_plugin is registered when present
-// and never required.
-int jl_trt_open(int device, jl_trt **out, char *err, size_t errlen);
+// Opens CUDA and TensorRT and retains `device`'s primary context. TensorRT's
+// libraries (libnvinfer, libnvonnxparser, libnvinfer_plugin, of the shim's
+// major) come from `lib_dir` when it is not NULL, a PC's self-contained copy,
+// else from the loader path, a Jetson's JetPack; libcuda.so.1 is the host's
+// driver, always from the loader path. libnvonnxparser is needed by
+// jl_trt_build_create alone, so a machine without it still loads plans;
+// libnvinfer_plugin is registered when present and never required.
+int jl_trt_open(int device, const char *lib_dir, jl_trt **out, char *err, size_t errlen);
 void jl_trt_close(jl_trt *trt);
 
 void jl_trt_get_info(const jl_trt *trt, jl_trt_info *out);
