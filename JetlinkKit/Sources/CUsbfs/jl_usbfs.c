@@ -35,6 +35,14 @@ jl_urb *jl_urb_create(uint8_t endpoint, void *buffer, int length, void *context)
   return u;
 }
 
+void jl_urb_set(jl_urb *urb, void *buffer, int length) {
+  urb->urb.buffer = buffer;
+  urb->urb.buffer_length = length;
+  urb->urb.status = 0;
+  urb->urb.actual_length = 0;
+  urb->urb.error_count = 0;
+}
+
 void jl_urb_free(jl_urb *urb) {
   free(urb);
 }

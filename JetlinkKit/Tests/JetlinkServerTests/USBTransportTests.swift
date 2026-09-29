@@ -4,10 +4,20 @@ import Testing
 
 @testable import JetlinkServer
 
+/// The comma's end of a fake USB link: what the gadget sends, and what the
+/// host wrote back.
+protocol FakeGadgetEnd: AnyObject, Sendable {
+  /// The gadget writes `bytes`.
+  func push(_ bytes: [UInt8])
+  var written: Data { get }
+  /// Waits until `written` holds at least `count` bytes.
+  func waitForWritten(_ count: Int, timeout: TimeInterval) -> Data?
+}
+
 /// The comma's end of the bulk pair, in memory: what the gadget sends waits in
 /// `inbound`, what the Mac writes lands in `written`. Reads return at most
 /// `burst` bytes, as the bus delivers a large message in pieces.
-final class FakePipes: BulkPipes, @unchecked Sendable {
+final class FakePipes: BulkPipes, FakeGadgetEnd, @unchecked Sendable {
   private let condition = NSCondition()
   private var inbound: [UInt8] = []
   private var ends: [Int] = []
@@ -294,6 +304,24 @@ final class FakeGadget: GadgetSource, @unchecked Sendable {
 
 }
 
+/// The comma's gadget on a fake usbfs descriptor: every open is a session's
+/// pipes, and their read ring, on the one device.
+final class UsbfsFakeGadget: GadgetSource, @unchecked Sendable {
+  let kernel: FakeUsbfs
+  let device: UsbfsDevice
+
+  init() {
+    kernel = FakeUsbfs()
+    device = UsbfsDevice(kernel: kernel)
+  }
+
+  func present() -> Bool { !device.isGone }
+
+  func open() throws -> any MessageLink {
+    USBTransport(pipes: UsbfsPipes(device: device, inEndpoint: 0x81, outEndpoint: 0x01), medium: .usb3)
+  }
+}
+
 /// A gadget on the bus that nothing on the comma serves yet: every read fails
 /// at once, as the endpoints do before a run borrows the link.
 func unservedPipes() -> FakePipes {
@@ -313,20 +341,20 @@ final class LockedLinks: @unchecked Sendable {
   var all: [LinkEvent] { lock.withLock { links } }
 }
 
-/// The comma over the fake USB pipes.
+/// The comma over a fake USB link.
 final class GadgetClient: CommaClient {
-  let pipes: FakePipes
+  let pipes: any FakeGadgetEnd
   private var seq: UInt32 = 0
   private var seen = 0
 
-  init(_ pipes: FakePipes) {
+  init(_ pipes: any FakeGadgetEnd) {
     self.pipes = pipes
   }
 
   func sendMessage(_ type: Wire.Msg, _ payload: Data, flags: Wire.Flag, seq explicit: UInt32?) throws -> UInt32 {
     if explicit == nil { seq += 1 }
     let seq = explicit ?? self.seq
-    pipes.push(type, seq: seq, payload: payload, flags: flags)
+    pipes.push(FakePipes.gadgetFrame(type, seq: seq, payload: payload, flags: flags))
     return seq
   }
 
@@ -348,7 +376,7 @@ final class GadgetClient: CommaClient {
 
 @Suite("Server over USB", .serialized)
 struct ServerUSBTests {
-  func makeServer(_ cache: TemporaryDirectory, gadget: FakeGadget) throws -> Server {
+  func makeServer(_ cache: TemporaryDirectory, gadget: any GadgetSource) throws -> Server {
     let server = try Server(
       configuration: Server.Configuration(host: "127.0.0.1", port: 0, cacheRoot: cache.url, preload: false, listen: false, usb: true),
       backend: cpuBackend())
@@ -412,5 +440,19 @@ struct ServerUSBTests {
     let (_, count) = try GadgetClient(comma).replay(golden)
     #expect(comma.crossed == 0)
     #expect(eventually { server.framesServed == count })
+  }
+
+  @Test("The golden frames through usbfs and its read ring, as a Jetson or a phone serves them", arguments: ["tiny_queued", "tiny_stateful"])
+  func servesGoldenFramesOverUsbfs(_ name: String) throws {
+    let golden = try Golden(name)
+    let cache = try TemporaryDirectory()
+    let gadget = UsbfsFakeGadget()
+    gadget.kernel.shuffleReaps = true
+    let server = try makeServer(cache, gadget: gadget)
+    try server.start()
+    defer { server.shutdown() }
+    let (_, count) = try GadgetClient(gadget.kernel).replay(golden)
+    #expect(eventually { server.framesServed == count })
+    #expect(gadget.kernel.discards == 0, "the ring left the grid")
   }
 }
