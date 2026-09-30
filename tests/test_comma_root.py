@@ -129,13 +129,17 @@ def test_the_script_passes_shellcheck():
   subprocess.run(['shellcheck', str(root.SCRIPT)], check=True)
 
 
+# what apply records for restore: stock AGNOS runs the dirty limits in ratio
+# mode and the kernel drops a 0 written to a *_bytes key, so their ratio keys
+# stand in for them
+RECORDED = ('vm.dirty_ratio', 'vm.dirty_background_ratio')
+
+
 def test_vm_apply_records_the_stock_values_once_and_applies_ours(tmp_path):
   proc_sys(tmp_path, STOCK)
   assert run_script(tmp_path, 'vm', 'apply').returncode == 0
-  # what restore writes back, a line each. Stock AGNOS runs the dirty limits in
-  # ratio mode and the kernel drops a 0 written to a *_bytes key, so their
-  # ratio keys stand in for them
-  stock = ''.join(f'{k}={STOCK[k]}\n' for k in ('vm.dirty_ratio', 'vm.dirty_background_ratio', 'vm.min_free_kbytes'))
+  # what restore writes back, a line each
+  stock = ''.join(f'{k}={STOCK[k]}\n' for k in RECORDED)
   assert record(tmp_path).read_text() == stock
   assert read_all(tmp_path, TUNED) == TUNED
   # a second apply keeps the first record, not our own values
@@ -148,7 +152,7 @@ def test_vm_restore_goes_back_to_ratio_mode_and_drops_the_record(tmp_path):
   assert run_script(tmp_path, 'vm', 'apply').returncode == 0
   assert run_script(tmp_path, 'vm', 'restore').returncode == 0
   # the fake /proc cannot zero the bytes keys as the kernel does
-  for key in ('vm.dirty_ratio', 'vm.dirty_background_ratio', 'vm.min_free_kbytes'):
+  for key in RECORDED:
     assert read_sys(tmp_path, key) == STOCK[key]
   assert not record(tmp_path).exists()
 
@@ -170,11 +174,11 @@ def test_vm_restore_without_a_record_changes_nothing(tmp_path):
 def test_restore_writes_only_vm_keys_and_numbers(tmp_path):
   # /dev/shm is anyone's to write, and restore runs as root
   proc_sys(tmp_path, TUNED)
-  record(tmp_path).write_text('garbage\nkernel.core_pattern=|/bin/sh\nvm.dirty_bytes=x\nvm.min_free_kbytes=22528\n')
+  record(tmp_path).write_text('garbage\nkernel.core_pattern=|/bin/sh\nvm.dirty_bytes=x\nvm.dirty_background_bytes=10\n')
   result = run_script(tmp_path, 'vm', 'restore')
   assert result.returncode == 1
   assert result.stderr.count('not restoring') == 3
-  assert read_sys(tmp_path, 'vm.min_free_kbytes') == '22528'
+  assert read_sys(tmp_path, 'vm.dirty_background_bytes') == '10'
   assert read_sys(tmp_path, 'vm.dirty_bytes') == TUNED['vm.dirty_bytes']
   assert not (tmp_path / 'sys' / 'kernel').exists()
   assert not record(tmp_path).exists()
@@ -182,12 +186,13 @@ def test_restore_writes_only_vm_keys_and_numbers(tmp_path):
 
 def test_vm_apply_fails_when_a_key_will_not_take(tmp_path):
   proc_sys(tmp_path, STOCK)
-  (tmp_path / 'sys' / 'vm' / 'min_free_kbytes').chmod(0o444)
-  if os.access(tmp_path / 'sys' / 'vm' / 'min_free_kbytes', os.W_OK):
+  last = tmp_path / 'sys' / 'vm' / 'dirty_background_bytes'
+  last.chmod(0o444)
+  if os.access(last, os.W_OK):
     pytest.skip('running as root')
   result = run_script(tmp_path, 'vm', 'apply')
   assert result.returncode == 1
-  assert result.stderr.strip().splitlines()[-1] == 'jetlink: could not set vm.min_free_kbytes=131072'
+  assert result.stderr.strip().splitlines()[-1] == f'jetlink: could not set vm.dirty_background_bytes={TUNED["vm.dirty_background_bytes"]}'
   # the others still took
   assert read_sys(tmp_path, 'vm.dirty_bytes') == TUNED['vm.dirty_bytes']
 

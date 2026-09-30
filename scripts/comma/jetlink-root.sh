@@ -72,9 +72,13 @@ USBPD=/sys/class/usbpd/usbpd0
 # vm: loggerd's dirty pages pile up until the kernel reclaims them
 # synchronously, right while a FunctionFS transfer allocates its buffer: gadget
 # reads stalled 200-350 ms and the big model fell back. Capping dirty memory
-# and holding a free-memory floor took the worst frame from 244 to 72 ms.
-# System-wide, since the gadget read shares the kernel with every writer.
-VM_SYSCTLS=(vm.dirty_bytes=16777216 vm.dirty_background_bytes=8388608 vm.min_free_kbytes=131072)
+# keeps that reclaim cheap. System-wide, since the gadget read shares the
+# kernel with every writer.
+# Not vm.min_free_kbytes: a 128 MB floor takes about three times that out of
+# MemAvailable, 360 MB on a 3.6 GB comma, and openpilot's LOW MEMORY alert
+# reads MemTotal-MemAvailable against 90 %. Drives at 80 % showed 90 and
+# alerted. The caps alone are not yet re-measured against the stall.
+VM_SYSCTLS=(vm.dirty_bytes=16777216 vm.dirty_background_bytes=8388608)
 PROC_SYS=${JETLINK_PROC_SYS:-/proc/sys}
 # the stock values to write back, one key=value a line, recorded by the first
 # apply and dropped by restore

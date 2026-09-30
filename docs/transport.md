@@ -55,6 +55,33 @@ Negotiated speed on the comma: `/sys/class/udc/*/current_speed`
 (`super-speed` is USB 3, `high-speed` USB 2), also printed with the built
 gadget by `sudo scripts/comma/jetlink-root.sh check`.
 
+### Open: the comma's write size, next bench with a Jetson
+
+The comma sends a frame in one `writev` of up to 512 KB
+(`FfsTransport.write_chunk`). On its 4.9 kernel FunctionFS copies each write
+into a freshly allocated contiguous buffer, and 512 KB is an order-7 page
+allocation, which the allocator treats as costly: with loggerd keeping the page
+cache full it can compact and reclaim inline, and that is the 200-350 ms gadget
+stall that made the big model fall back. `jetlink-root.sh vm apply` answered it
+with dirty-memory caps plus a 128 MB `vm.min_free_kbytes` floor, measured
+together (worst frame 244 to 72 ms). The floor is gone since 2026-09-30: it took
+about 360 MB out of MemAvailable and openpilot's LOW MEMORY alert fired at a real
+80 %. The caps alone are not yet measured against the stall.
+
+To settle it, with a Jetson on the bench and the comma parked offroad:
+
+1. `/data/jetlink-bench-20260906/bench.py --seconds 900 --record --output ...`
+   at the current 512 KB, then with `--write-chunk 32768` (order 3, below the
+   costly line; 16 KB is the read side already). Compare `exec` p99/max,
+   `over_50ms` and fallbacks; loggerd must be writing for the stall to show.
+2. If the smaller write wins, the blocker is the dwc3 replay noted above
+   `write_chunk`: a TRB resent about once in 400 frames is dropped by seq when
+   the message was one write, and lands mid-stream when it was several. A
+   smaller quantum needs framing that survives a mid-message replay before it
+   can ship.
+3. If 512 KB with the caps alone shows no fallbacks over the soak, leave the
+   quantum and close this.
+
 ### The network link on a Linux host
 
 The comma's kernel (4.9, Qualcomm's u_ether) sends NCM blocks slowly when the

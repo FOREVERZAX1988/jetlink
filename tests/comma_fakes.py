@@ -21,7 +21,6 @@ from jetlink.comma import root
 STOCK = {
   'vm.dirty_bytes': '0',
   'vm.dirty_background_bytes': '0',
-  'vm.min_free_kbytes': '22528',
   'vm.dirty_ratio': '20',
   'vm.dirty_background_ratio': '10',
 }
