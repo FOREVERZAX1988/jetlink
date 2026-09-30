@@ -1,3 +1,10 @@
+Jetlink v0.7.2
+==============
+**General Updates & Fixes**
+* **Cinque Terre V3 in sunnylink:** sunnylink's model selector now lists Cinque Terre V3 (zoompilot reads sunnypilot's newer big-model list).
+* **Model List:** A spotty connection no longer drops a newer model from the list. It could reset your pick and quietly switch the default to Cinque Terre V2.
+* **Update the comma:** zoompilot's `jetson-trt` branch pins Jetlink v0.7.2. All of this runs on the comma; the server needs no update.
+
 Jetlink v0.7.1
 ==============
 **Driving**
