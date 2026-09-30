@@ -479,6 +479,18 @@ class TestBigCatalog(ModelsTest):
     self.assertIs(out['bundles'][0], PINNED['bundles'][0])
     self.assertTrue(self.op.log.has('keeping 1 model(s) the last probe found'))
 
+  def test_a_failed_probe_keeps_a_model_a_newer_catalog_built_at_our_selector(self):
+    # the fork fetches v25 and v26 adds Cinque Terre V3 at selector 19, builds
+    # and all: one failed probe dropped it from the picker and reset the pick
+    newer = {'tinygrad_ref': 'pinned', 'bundles': [*PINNED['bundles'], full_bundle(NEW, 13, '19', 'Cinque Terre V4')]}
+    last, _ = self.merged(newer=newer)
+    self.assertEqual([b['ref'] for b in last['bundles']], [OLD, NEW])
+    self.op.put('ModelManager_ModelsCache_Chestnut', {**last, 'extended': True}, block=True)
+    out, _ = self.merged(newer=OSError('offline'))
+    self.assertEqual([b['ref'] for b in out['bundles']], [OLD, NEW])
+    self.assertEqual(out['bundles'][1], newer['bundles'][1])
+    self.assertTrue(self.op.log.has('keeping 1 model(s) the last probe found'))
+
   def test_the_selector_is_the_adapters(self):
     with mock.patch('jetlink.registry.catalog.fetch_catalogs', return_value=NEWER), \
          mock.patch('jetlink.registry.catalog.merge_catalogs', return_value=PINNED) as merge:

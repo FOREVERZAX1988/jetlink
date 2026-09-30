@@ -224,15 +224,18 @@ class Models:
 
   def _found_before(self, catalog: dict) -> dict:
     """The catalog with the models the last probe found folded in again, from the
-    model manager's cached copy: they are merge_catalogs' entries, the ones with no
-    artifacts. Dropped with a probe that failed, a pick only a newer catalog lists
-    would be reset at the manager's next start and the owner would provision the
-    default in its place; a refresh on a flaky network is enough."""
+    model manager's cached copy: every entry there the fetched catalog does not
+    list. Not only merge_catalogs' entries with no artifacts: a newer catalog at
+    the same selector version comes through with its builds (v26 lists Cinque
+    Terre V3 that way). Dropped with a probe that failed, a pick only a newer
+    catalog lists would be reset at the manager's next start and the owner would
+    provision the default in its place; a refresh on a flaky network is enough.
+    A model sunnypilot withdrew stays listed until a probe works."""
     try:
       listed = {b.get('ref') for b in catalog.get('bundles', [])}
       key = self.op.keys.catalog
       cached = ((self.op.get(key) if key else None) or {}).get('bundles', [])
-      kept = [b for b in cached if isinstance(b, dict) and b.get('models') == [] and b.get('ref') not in listed]
+      kept = [b for b in cached if isinstance(b, dict) and b.get('ref') not in listed]
     except Exception:
       return catalog
     if not kept:
