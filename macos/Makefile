@@ -16,8 +16,10 @@ APP := $(BUILD)/Jetlink.app
 
 # A tag like v0.2.0 becomes 0.2.0. An untagged tree makes `describe --always`
 # return a bare commit sha, which is not a legal CFBundleShortVersionString, so
-# anything that does not look like a dotted version becomes 0.0.0.
-JETLINK_VERSION ?= $(or $(shell git -C $(MACOS_DIR) describe --tags --always --dirty 2>/dev/null | sed -E -e 's/^v//' -e '/^[0-9]+\./!s/.*/0.0.0/'),0.0.0)
+# anything that does not look like a dotted version becomes 0.0.0. Only v*
+# tags count: the release workflow moves `edge` to main's tip, and on a release
+# commit describe would pick it over the version tag.
+JETLINK_VERSION ?= $(or $(shell git -C $(MACOS_DIR) describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null | sed -E -e 's/^v//' -e '/^[0-9]+\./!s/.*/0.0.0/'),0.0.0)
 JETLINK_BUILD ?= $(shell git -C $(MACOS_DIR) rev-list --count HEAD 2>/dev/null || echo 1)
 SIGN_IDENTITY ?= -
 export JETLINK_VERSION
