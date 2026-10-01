@@ -1,7 +1,9 @@
 # Everything a v* tag produces: the macOS app, the Linux server for Jetsons
 # and PCs, and the GitHub release that carries them.
 # A push to main builds the Linux server too and puts it on the edge
-# prerelease under fixed names, which is what `install.sh --ref main` installs.
+# prerelease under fixed names, which is what `install.sh --ref main` installs,
+# unless the push changed only the comma's side (ci.yml's filter, repeated
+# here): the server is the same, so edge keeps the build it has.
 #
 # Signing and notarizing need six secrets (docs/publishing.md lists them). With
 # none of them the build still runs and produces an ad hoc signed zip labelled
@@ -23,6 +25,42 @@ permissions:
   id-token: write
 
 jobs:
+  changes:
+    name: What changed
+    runs-on: ubuntu-24.04
+    outputs:
+      # a tag builds everything; main only what the server is built from
+      server: ${{ github.ref_type == 'tag' || steps.filter.outputs.apps == 'true' }}
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Sort the changed files
+        id: filter
+        if: github.ref_type == 'branch'
+        uses: dorny/paths-filter@v4
+        with:
+          # Everything rebuilds the apps and the servers except the comma's
+          # side, which the comma takes as a git pin and nothing builds: the
+          # comma and openpilot packages, their tests, the root script and
+          # the bench tools, the installer and the host CLI, and the docs.
+          # jetlink/transport and protocol.py are the wire and stay in.
+          filters: |
+            apps:
+              - '**'
+              - '!jetlink/comma/**'
+              - '!jetlink/openpilot/**'
+              - '!scripts/comma/**'
+              - '!scripts/deploy_to_comma.sh'
+              - '!scripts/jetlink'
+              - '!install.sh'
+              - '!tests/comma_fakes.py'
+              - '!tests/test_comma_*.py'
+              - '!tests/openpilot/**'
+              - '!tests/installer/**'
+              - '!docs/**'
+              - '!**/*.md'
+
   check:
     name: Check the tag
     # everything but the Linux server hangs off this, so a push to main builds
@@ -150,8 +188,9 @@ jobs:
 
   linux-server:
     name: Linux server (${{ matrix.flavor }})
+    needs: changes
     # a fork's main has no edge prerelease to fill
-    if: github.ref_type == 'tag' || github.repository == 'zoompilot/jetlink'
+    if: needs.changes.outputs.server == 'true' && (github.ref_type == 'tag' || github.repository == 'zoompilot/jetlink')
     strategy:
       fail-fast: false
       matrix:

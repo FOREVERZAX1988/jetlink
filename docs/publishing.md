@@ -33,7 +33,9 @@ git push origin v0.7.0
   release, so one without them would stop every install and update.
 - Each push to `main` refreshes the `edge` prerelease with
   `jetlink-server-edge-linux-aarch64.tar.gz` and `-x86_64`, which the installer
-  takes with `--ref main`.
+  takes with `--ref main`. A push that changes only the comma's side (the
+  `changes` job in `.github/workflows/ci.yml` lists the paths) builds nothing:
+  the comma takes jetlink as a git pin, and edge keeps the server it has.
 - Prereleases: a hyphen (`v0.7.0-rc1`) or a PEP 440 suffix (`v0.7.0a1`,
   `v0.7.0b2`, `v0.7.0rc1`) publishes as a prerelease. Use the same version in
   `jetlink/__init__.py` and the tag, minus the leading `v`.
