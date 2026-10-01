@@ -1,3 +1,9 @@
+Jetlink v0.7.3
+==============
+**General Updates & Fixes**
+* **No False LOW MEMORY Alert:** With the Accelerator Link on, the comma counted about 10% more memory as used than it was, and drives at a real 80% showed **LOW MEMORY** with a takeover warning. The free-memory floor Jetlink set on the comma is gone; the dirty-memory caps that keep the link smooth stay. Driven with no regression.
+* **Update the comma:** zoompilot's `develop`, `danger-unstable` and `jetson-trt` branches pin Jetlink v0.7.3. All of this runs on the comma; the server needs no update.
+
 Jetlink v0.7.2
 ==============
 **General Updates & Fixes**
