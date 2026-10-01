@@ -63,6 +63,15 @@ ENGAGEMENT_MAX_AGE = 0.25
 LATE_FRAME = 0.1
 SLOW_FRAME = 0.075
 LAG_WINDOW = 10.0
+# A host slower than the camera but never that slow (an iPhone that has warmed
+# up: 55 ms a frame drops one camera frame in ten) still has modeld skipping
+# frames, and selfdrived soft-disables on modeldLagging once modeld's filtered
+# share of them (frameDropPerc) passes 1 %: three drops close together. modeld
+# writes that share onto the model before every run(), and the large model
+# hands back past DROP_LIMIT, short of the line: one dropped frame is forgiven,
+# a second within about 6.5 s is not. modeld forgives the frame of a handover
+# too, so the drops that decided it never reach selfdrived
+DROP_LIMIT = 0.0075
 # the first frames after every swap are never counted as slow: they carry the
 # history reset, and a Mac's first after a join is ~100 ms of CoreML warm-up
 SETTLING_FRAMES = 3
@@ -138,6 +147,8 @@ class JoiningModelState:
     # _slow_at is when the last slow frame was, for the second strike
     self._lagging = False
     self._slow_at: float | None = None
+    # modeld's share of dropped camera frames, for the frame about to run
+    self._frame_drop_ratio = 0.0
     # frames each model has run: the small one's since start, the large one's
     # since it swapped in
     self._small_frames = 0
@@ -241,6 +252,17 @@ class JoiningModelState:
     if self._active is not self._small:
       self._active.PLANPLUS_CONTROL = value
 
+  @property
+  def frame_drop_ratio(self) -> float:
+    return self._frame_drop_ratio
+
+  @frame_drop_ratio.setter
+  def frame_drop_ratio(self, value):
+    # modeld's frameDropPerc / 100, written before every run(). Read here, by
+    # the lag rule; it lands on the small model too, as every write does
+    self._frame_drop_ratio = value
+    self._small.frame_drop_ratio = value
+
   def __getattr__(self, name):
     # Only for names this class does not define. Without it, a comma or
     # sunnypilot sync that adds one read was an AttributeError on the frame
@@ -258,6 +280,11 @@ class JoiningModelState:
     if self._lagging:
       # the last frame was the large model's last, published as it came
       self._lagging = False
+      self._demote(BEHIND)
+    elif self._active is not self._small and self._frame_drop_ratio > DROP_LIMIT:
+      # modeld is behind the large model; this frame is the small model's
+      self._log.warning("jetlink: modeld dropped %.2f %% of camera frames behind the large model, "
+                        "the small model drives from this one", self._frame_drop_ratio * 100)
       self._demote(BEHIND)
     self._maybe_swap()
     active = self._active

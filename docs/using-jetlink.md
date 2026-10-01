@@ -34,9 +34,11 @@ to the comma.
   Model Loading**) while the large model builds its history; lateral control
   turned on then comes on by itself when the second ends.
 - **TAKE CONTROL: Big model lost, small model driving** while engaged: the link
-  dropped, or the large model fell behind (one frame over 100 ms, or two over
-  75 ms within 10 seconds). openpilot stays engaged on the small model, which
-  starts without history: be ready to take over for the next few seconds.
+  dropped, or the large model fell behind: one frame over 100 ms, two over
+  75 ms within 10 seconds, or a second skipped camera frame within about
+  6 seconds (a slow phone skips them well before openpilot would disengage
+  for **Driving Model Lagging**). openpilot stays engaged on the small model,
+  which starts without history: be ready to take over for the next few seconds.
   Jetlink reconnects in the background, at once if you plug the cable back
   in; switch back the same way.
 

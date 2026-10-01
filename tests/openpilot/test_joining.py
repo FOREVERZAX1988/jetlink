@@ -589,6 +589,9 @@ class LagTest(JoiningBase):
     self.addCleanup(patcher.stop)
     self.reset = mock.Mock()
     self.took = 0.0
+    # modeld's filter of dropped camera frames, and its frames since a handover
+    self.drops = 0.0
+    self.run_count = 0
     run = self.big.run
 
     def slow_run(*args):
@@ -601,6 +604,7 @@ class LagTest(JoiningBase):
     self._wait_joined(self.s)
     self.s._engaged = False
     self.swap()
+    self.settle()
 
   def swap(self):
     # the first frames after a swap are never counted as slow: the first
@@ -609,16 +613,46 @@ class LagTest(JoiningBase):
       self.assertEqual(self.frame(took=0.3), {'from': 'big'})
       self.assertTrue(self.s.chestnut)
 
+  def settle(self):
+    # modeld forgives the dropped frames of the ten frames after a handover
+    for _ in range(10):
+      self.assert_big_drives()
+
+  def rejoin(self):
+    self.reset.reset_mock()
+    self.s._rejoin_at = 0.0
+    self.s._rejoin.set()
+    self._wait_joined(self.s)
+    self.swap()
+    self.settle()
+
   def _run(self, s):
     s._engagement_updated = joining.time.monotonic()
     return s.run({}, {}, {})
 
-  def frame(self, took=None):
+  def frame(self, took=None, skipped=0):
+    """One modeld frame, after `skipped` camera frames modeld dropped. Before
+    run() modeld writes its share of dropped frames onto the model, from the
+    filter both modelds run (10 s at 20 Hz), held at zero for the ten frames
+    after a handover. Kept here: jetlink cannot import it, and the fork's seam
+    test runs the real one against DROP_LIMIT."""
     if took is not None:
       self.took = took
+    self.drops += 0.05 / (10. + 0.05) * (min(skipped, 10) - self.drops)
+    if self.run_count < 10:
+      self.drops = 0.
+    self.run_count += 1
+    self.s.frame_drop_ratio = self.drops / (1 + self.drops)
+    handovers = self.s.handovers
     result = self._run(self.s)
+    if self.s.handovers != handovers:
+      self.run_count = 0
     self.took = 0.03
     return result
+
+  def hand_back(self):
+    self.frame(took=joining.LATE_FRAME + 0.01)
+    self.frame()
 
   def assert_big_drives(self):
     self.assertEqual(self.frame(), {'from': 'big'})
@@ -682,28 +716,96 @@ class LagTest(JoiningBase):
 
   def test_lag_never_blames_the_cable(self):
     for _ in range(joining.DROPS_TO_BLAME_CABLE):
-      self.frame(took=joining.LATE_FRAME + 0.01)
-      self.frame()
-      self.s._rejoin_at = 0.0
-      self.s._rejoin.set()
-      self._wait_joined(self.s)
-      self.swap()
+      self.hand_back()
+      self.rejoin()
     self._wait_reported(self.s, 'the accelerator fell behind, reconnecting')
     self.assertFalse(any('cable' in c.args[2] for c in self.progress.report.call_args_list))
 
   def test_the_next_large_model_starts_with_no_strike_and_settles_again(self):
     self.frame(took=joining.SLOW_FRAME + 0.005)
-    self.frame(took=joining.LATE_FRAME + 0.01)
-    self.frame()
+    self.hand_back()
     self.assertFalse(self.s.chestnut)
     self.assertIsNone(self.s._slow_at)
     # the join comes back and swaps: its first frames are slow and forgiven
-    self.s._rejoin_at = 0.0
-    self.s._rejoin.set()
-    self._wait_joined(self.s)
-    self.swap()
+    self.rejoin()
     self.frame(took=joining.SLOW_FRAME + 0.005)
     self.assert_big_drives()
+
+  # A host a little slower than the camera: no frame is slow enough for the
+  # rules above, but modeld skips camera frames, and selfdrived soft-disables
+  # past 1 % of them (modeldLagging)
+
+  def assert_handed_back(self, handovers):
+    # the small model's from this frame on, and the handover moved in this
+    # frame's run(), which is what has modeld forgive the drops it counted
+    self.assertEqual(self.s.handovers, handovers + 1)
+    self.reset.assert_called_once()
+    self.assertFalse(self.s.chestnut)
+    self.assertEqual(self.s._lags, 1)
+    self.assertEqual(self.s.big_model_state, 'retrying')
+    self.assertTrue(self.log.has('of camera frames behind the large model'))
+
+  def test_one_dropped_frame_is_forgiven(self):
+    handovers = self.s.handovers
+    self.assertEqual(self.frame(skipped=1), {'from': 'big'})
+    for _ in range(5):
+      self.assert_big_drives()
+    self.assertEqual(self.s.handovers, handovers)
+    self.reset.assert_not_called()
+
+  def test_a_second_dropped_frame_soon_after_hands_back(self):
+    self.frame(skipped=1)
+    for _ in range(100):   # 5 s
+      self.assert_big_drives()
+    handovers = self.s.handovers
+    self.assertEqual(self.frame(skipped=1), {'from': 'small'})
+    self.assert_handed_back(handovers)
+    self.assertEqual(self.frame(), {'from': 'small'})
+
+  def test_one_frame_that_drops_two_hands_back(self):
+    handovers = self.s.handovers
+    self.assertEqual(self.frame(skipped=2), {'from': 'small'})
+    self.assert_handed_back(handovers)
+
+  def test_drops_often_enough_for_selfdrived_hand_back_and_rare_ones_never(self):
+    # modeld's share passes selfdrived's 1 % at a steady drop every 136 frames
+    # (6.8 s) or closer; the large model goes at anything closer than about
+    # 11 s, and never further apart
+    for spacing, hands_back in ((1, True), (5, True), (60, True), (136, True), (200, True), (241, False), (400, False)):
+      with self.subTest(spacing=spacing):
+        handed_back = any(self.frame(skipped=1 if i % spacing == 0 else 0) == {'from': 'small'} for i in range(2000))
+        self.assertEqual(handed_back, hands_back)
+        # the next spacing starts from a swap, with modeld's filter empty
+        if not handed_back:
+          self.hand_back()
+        self.rejoin()
+
+  def test_a_host_slower_than_the_camera_hands_back(self):
+    # 55 ms a frame, never slow enough for the timing rules: modeld falls 5 ms
+    # further behind the camera each frame and skips one when it is a whole
+    # frame behind, so every tenth: an iPhone that has warmed up
+    behind, handed_back_at = 0, None
+    for i in range(1, 41):
+      skipped, behind = divmod(behind + 5, 50)
+      if self.frame(took=0.055, skipped=skipped) == {'from': 'small'}:
+        handed_back_at = i
+        break
+    # the second dropped frame, about a second in
+    self.assertEqual(handed_back_at, 20)
+    self.assertEqual(self.s._lags, 1)
+
+  def test_the_small_models_dropped_frames_are_its_own(self):
+    self.hand_back()
+    for _ in range(20):
+      self.assertEqual(self.frame(skipped=3), {'from': 'small'})
+    self.assertEqual(self.s._lags, 1)
+
+  def test_a_modeld_that_writes_no_share_leaves_the_timing_rules(self):
+    # a fork older than the write: the share stays at zero
+    for _ in range(20):
+      self.assertEqual(self._run(self.s), {'from': 'big'})
+    self.assertEqual(self.s.frame_drop_ratio, 0.)
+    self.reset.assert_not_called()
 
 
 class WarmupTest(JoiningBase):
