@@ -9,8 +9,10 @@ over. See [daily use](using-jetlink.md).
 
 Requirements: [Jetson](jetson.md), [Mac](macos-app.md),
 [iPhone](iphone-app.md), [Android](android-app.md), [PC](platforms.md).
-Tested on a Jetson with JetPack 7.2.1 and on a Mac; JetPack 6.2, Linux PCs and
-WSL2 are untested.
+Tested on a Jetson with JetPack 7.2.1, on a Mac, and by users on Ubuntu PCs;
+JetPack 6.2 and WSL2 are untested. The installer also supports Debian, Fedora,
+Arch and openSUSE PCs, untested on hardware: each release's server is only
+checked to load on them.
 
 ## Measured performance
 

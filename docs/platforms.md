@@ -7,7 +7,7 @@ Set up outside the car or in the car while offroad. Keep the comma and computer
 online, and the computer powered and awake.
 
 - [Mac app](macos-app.md): no terminal commands.
-- [Linux installer](#linux-nvidia-gpu): an NVIDIA PC. Untested on hardware.
+- [Linux installer](#linux-nvidia-gpu): an NVIDIA PC on Ubuntu.
 - [Windows WSL2](#windows-nvidia-gpu): untested.
 - [From a checkout](#from-a-checkout), [CPU only](#cpu-only),
   [test without a comma](#test-without-a-comma): development.
@@ -57,15 +57,27 @@ Performance: [backends](backends.md#mac-measured).
 
 ## Linux (NVIDIA GPU)
 
-Untested on hardware. For a GeForce RTX 20 series or newer GPU on Ubuntu 22.04
-or 24.04:
+For a GeForce RTX 20 series or newer GPU, on Ubuntu 22.04 or 24.04 (tested
+by users), or on Debian 12, Fedora, Arch or openSUSE Tumbleweed (the installer
+supports them; untested on hardware):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zoompilot/jetlink/main/install.sh | bash
 ```
 
-- Needs NVIDIA driver 580 or newer. On Ubuntu the installer can install it;
-  restart and rerun the installer when it says so.
+- Needs NVIDIA driver 580 or newer. On Ubuntu and Arch, and the derivatives
+  on their repositories (Mint, Pop!_OS, EndeavourOS, CachyOS), the installer
+  can install it; restart and rerun the installer when it says so. Elsewhere it
+  prints the distribution's own steps (NVIDIA's repository on Debian and RHEL,
+  RPM Fusion on Fedora, NVIDIA's on openSUSE) and stops until the driver is in.
+- Needs systemd, and glibc 2.35 or newer, Ubuntu 22.04's, which the server is
+  built on: Debian 11 and RHEL 9 are too old. Derivatives (Mint, Pop!_OS,
+  EndeavourOS, CachyOS, Rocky, Alma) work as their base does. Fedora Atomic
+  (Bazzite) has no dnf, so the installer takes the path for an unknown package
+  manager: it installs when curl, git, unzip and libcurl are already there,
+  which they are, and the driver is the image's. Untried.
+- Takes `curl`, `git`, `unzip` and libcurl from the distribution's package
+  manager (apt, dnf, pacman or zypper); with another, it says what is missing.
 - Puts NVIDIA's TensorRT 11.3.0.99 in `/opt/jetlink/tensorrt` (a 3.8 GB
   download, 2.7 GB on disk) rather than installing a system package; only the
   driver comes from the system. Models and engines go in `/var/lib/jetlink`.
@@ -173,6 +185,7 @@ python3 scripts/bench_link.py --host 127.0.0.1 --onnx /path/to/big_model.onnx --
 | --- | --- |
 | Installer says the GPU is too old or has no driver | A GeForce RTX 20 series or newer, and driver 580 or newer. |
 | `jetlink status` says the server stopped | `jetlink logs`. `sudo /opt/jetlink/current/bin/jetlink-server backends --backend trt --tensorrt-libs /opt/jetlink/tensorrt/11.3.0.99` says whether TensorRT loads (on a Jetson, without `--tensorrt-libs`). |
+| `libcurl.so.4: no version information available` in the log on Fedora or openSUSE | Harmless: the server is linked on Ubuntu, whose libcurl versions its symbols; theirs does not. |
 | USB permission error | Install the udev rule, then replug the comma. |
 | TCP connection refused | Start the server with `--listen`. Check the IP and allow port 5599 through the firewall. |
 | Mac looks stuck loading | On an M1 Pro, CoreML prepares in about 20 seconds and loads in up to 10. If loading takes minutes, remove the prepared engine and prepare again. |

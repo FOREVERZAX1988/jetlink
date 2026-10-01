@@ -16,6 +16,8 @@ FAKE_BIN=/tmp/fakebin
 export FAKE_BIN FAKE_LOG=/tmp/fake.log FAKE_STATE=/tmp/fake-state
 export JETLINK_TEST_DT_MODEL=/tmp/dt-model JETLINK_TEST_MEM_SLEEP=/tmp/mem-sleep
 export JETLINK_TEST_PROC_VERSION=/tmp/proc-version JETLINK_TEST_SYSTEMD_RUN=/tmp
+export JETLINK_TEST_OS_RELEASE=/tmp/os-release JETLINK_TEST_SECURE_BOOT=/tmp/secure-boot
+export JETLINK_TEST_PKG_PATH=$FAKE_BIN
 # the lock a native server makes to be held awake; none until a scenario says
 export JETLINK_TEST_AWAKE_LOCK=/tmp/jetlink-awake.lock
 LOCK=$JETLINK_TEST_AWAKE_LOCK
@@ -66,22 +68,51 @@ reset_box() {
     "$UNITS"/jetlink-* /etc/udev/rules.d/99-jetlink-usb-wakeup.rules \
     /etc/systemd/journald.conf.d/60-jetlink.conf "$FAKE_STATE" "$FAKE_LOG" "$FAKE_BIN" \
     /etc/nv_tegra_release /etc/nvpmodel.conf /tmp/dt-model /tmp/mem-sleep /etc/apt/sources.list.d/nvidia-container-toolkit.list \
-    "$LOCK"
+    "$LOCK" /tmp/secure-boot
   cp /tmp/fstab.orig /etc/fstab
   mkdir -p "$FAKE_STATE"
   echo "Linux version 6.8.0-fake (gcc) #1 SMP" >/tmp/proc-version
+  os_release ubuntu "Ubuntu 24.04.2 LTS" 24.04 debian
   mkdir -p "$FAKE_BIN" "$UNITS"
   local c
-  for c in uname apt-get apt-cache dpkg dpkg-query ldconfig df systemctl journalctl nvpmodel ubuntu-drivers \
+  for c in uname getconf apt-get apt-cache dpkg dpkg-query ldconfig df systemctl journalctl nvpmodel ubuntu-drivers \
       udevadm fallocate mkswap swapon swapoff jetson_clocks curl gpg; do
     ln -sf "$SRC/tests/installer/fake.sh" "$FAKE_BIN/$c"
   done
   unset FAKE_ARCH FAKE_SMI FAKE_PUBLISHED FAKE_PM_REBOOT FAKE_SERVER_BROKEN FAKE_GPU_BROKEN \
     FAKE_TRT10 FAKE_NO_CURL FAKE_ROOT_FREE_GB FAKE_IMAGE_GB FAKE_DOWNLOAD_FAILS FAKE_BAD_SUM FAKE_NO_PLUGIN \
     FAKE_DOCKER_STUCK FAKE_BAD_WHEEL FAKE_SERVER_CRASHLOOP FAKE_PRELOAD FAKE_SERVER_OLD FAKE_DOWNLOAD_HANG \
-    FAKE_DOCKER_ROOT FAKE_OTHER_FS JETLINK_TEST_PRELOAD_S
+    FAKE_DOCKER_ROOT FAKE_OTHER_FS FAKE_KERNEL FAKE_GLIBC FAKE_PACMAN_STALE JETLINK_TEST_PRELOAD_S
   export JETLINK_REPO_URL=file:///tmp/repo FAKE_LATEST=v0.10.0 JETLINK_TEST_SYSTEMD_RUN=/tmp
 }
+
+os_release() {  # os_release ID "PRETTY NAME" VERSION_ID [ID_LIKE]: what the installer reads
+  printf 'ID=%s\nPRETTY_NAME="%s"\nVERSION_ID="%s"\nID_LIKE="%s"\n' "$1" "$2" "$3" "${4:-}" >/tmp/os-release
+}
+
+# a distribution without apt: the installer looks for package managers in
+# $FAKE_BIN alone (JETLINK_TEST_PKG_PATH), so apt is there exactly when its
+# fake is, and with_pkg puts the distribution's own in its place
+without_apt() { rm -f "$FAKE_BIN/apt-get"; }
+with_pkg() { without_apt; ln -sf "$SRC/tests/installer/fake.sh" "$FAKE_BIN/$1"; }
+
+distro() {  # distro NAME: the computer's os-release, and its package manager
+  case "$1" in
+    fedora) with_pkg dnf; os_release fedora "Fedora Linux 42 (Workstation Edition)" 42 ;;
+    rocky) with_pkg dnf; os_release rocky "Rocky Linux 10.0 (Red Quartz)" 10.0 "rhel centos fedora" ;;
+    arch) with_pkg pacman; os_release arch "Arch Linux" "" ;;
+    cachyos) with_pkg pacman; os_release cachyos "CachyOS Linux" "" arch ;;
+    manjaro) with_pkg pacman; os_release manjaro "Manjaro Linux" "" arch ;;
+    tumbleweed) with_pkg zypper; os_release opensuse-tumbleweed "openSUSE Tumbleweed" 20260928 "opensuse suse" ;;
+    leap) with_pkg zypper; os_release opensuse-leap "openSUSE Leap 15.6" 15.6 "suse opensuse" ;;
+    debian) os_release debian "Debian GNU/Linux 12 (bookworm)" 12 ;;
+    mint) os_release linuxmint "Linux Mint 22.1" 22.1 ubuntu ;;
+    gentoo) without_apt; os_release gentoo "Gentoo Linux" "" ;;
+  esac
+}
+
+# the firmware's SecureBoot variable, on: 4 bytes of attributes, then 1
+secure_boot() { printf '\x06\x00\x00\x00\x01' >/tmp/secure-boot; }
 
 jetson() {  # jetson L4T_RELEASE REVISION
   printf '# R%s (release), REVISION: %s, GCID: 1, BOARD: generic, EABI: aarch64, DATE: now\n' "$1" "$2" \
@@ -207,6 +238,8 @@ make_release() {  # make_release TAG VERSION [ASSET]: a tarball per arch with it
 }
 
 cp /etc/fstab /tmp/fstab.orig 2>/dev/null || : >/tmp/fstab.orig
+# the certificates every computer with curl has; the container has none
+mkdir -p /etc/ssl/certs
 # what `curl | bash` clones: the tree under test, committed
 rm -rf /tmp/repo /tmp/releases /tmp/dev
 git init -q -b main /tmp/repo
@@ -799,6 +832,144 @@ refute "removed a package" grep -qE '^apt-get .* (remove|purge)' "$FAKE_LOG"
 run_installer checkout 'y\nn\n' --uninstall
 expect_rc 0
 expect_out "TensorRT from apt stays installed; to remove it: sudo apt remove libnvinfer11 libnvonnxparsers11"
+
+# The other distributions: their own package manager for the base packages,
+# NVIDIA's wheel for TensorRT as on Ubuntu, and the driver installed on
+# Ubuntu's and Arch's families, or printed as the distribution's
+# documentation gives it elsewhere.
+scenario "Fedora: base packages from dnf, and the driver's steps printed"
+reset_box; pc 575.64.03; distro fedora
+run_installer curl '' --yes
+expect_rc 1
+expect_out "has NVIDIA driver 575.64.03 and needs 580 or newer"
+expect_out "On Fedora Linux 42 (Workstation Edition):"
+expect_out "rpmfusion-nonfree-release-42.noarch.rpm"
+expect_out "sudo dnf install akmod-nvidia"
+expect_not_ran "ubuntu-drivers"
+expect_not_ran "dnf"
+reset_box; pc 580.95.05; distro fedora
+export FAKE_NO_CURL=1
+run_installer curl '' --yes
+expect_rc 0
+expect_out "Jetlink is untested on Fedora Linux 42 (Workstation Edition)"
+expect_ran "dnf -y install libcurl"
+expect_not_ran "apt-get"
+expect_ran "$PC_TRT_WHEEL"
+expect_in /etc/jetlink/server.env "JETLINK_TENSORRT=\"--tensorrt-libs $PC_TRT_DIR\""
+expect_in /etc/jetlink/install.conf "Fedora"
+run_installer checkout 'y\nn\n' --uninstall
+expect_rc 0
+expect_out "Jetlink is removed."
+expect_no_out "sudo apt remove"
+
+scenario "Arch and its derivatives: the driver from pacman, for the kernel that runs"
+reset_box; pc 575.64.03; distro arch
+FAKE_KERNEL=6.12.4-arch1-1 run_installer curl 'y\n'
+expect_rc 0
+expect_out "Install it now?"
+expect_ran "pacman -S --needed --noconfirm nvidia-open"
+expect_not_ran "nvidia-open-dkms"
+expect_out "Restart the computer, then run the installer again"
+expect_no_out "Secure Boot is on"
+expect_no_file /etc/jetlink/server.env
+reset_box; pc 575.64.03; distro arch
+FAKE_KERNEL=6.12.4-1-lts run_installer curl '' --yes
+expect_rc 0
+expect_ran "pacman -S --needed --noconfirm nvidia-open-lts"
+# another kernel builds the module itself, and Secure Boot would not load it
+reset_box; pc 575.64.03; distro arch; secure_boot
+FAKE_KERNEL=6.12.4-zen1-1-zen run_installer curl '' --yes
+expect_rc 0
+expect_ran "pacman -S --needed --noconfirm nvidia-open-dkms linux-zen-headers"
+expect_out "Secure Boot is on"
+# CachyOS runs its own kernel on Arch's repositories; Manjaro's driver comes
+# from its own tool
+reset_box; pc 575.64.03; distro cachyos
+FAKE_KERNEL=6.12.4-2-cachyos run_installer curl '' --yes
+expect_rc 0
+expect_ran "pacman -S --needed --noconfirm nvidia-open-dkms linux-cachyos-headers"
+reset_box; pc 575.64.03; distro manjaro
+run_installer curl '' --yes
+expect_rc 1
+expect_out "sudo mhwd -a pci nonfree 0300"
+expect_not_ran "pacman"
+# a package list behind the mirror: the install is tried again with a refresh
+reset_box; pc 580.95.05; distro arch
+export FAKE_NO_CURL=1 FAKE_PACMAN_STALE=1
+run_installer curl '' --yes
+expect_rc 0
+expect_ran "pacman -S --needed --noconfirm curl"
+expect_ran "pacman -Sy --needed --noconfirm curl"
+expect_ran "$PC_TRT_WHEEL"
+expect_in /etc/jetlink/server.env "JETLINK_TENSORRT=\"--tensorrt-libs $PC_TRT_DIR\""
+
+scenario "openSUSE: base packages from zypper, and NVIDIA's repository for the driver"
+reset_box; pc 575.64.03; distro tumbleweed
+run_installer curl '' --yes
+expect_rc 1
+expect_out "sudo zypper addrepo https://download.nvidia.com/opensuse/tumbleweed NVIDIA"
+expect_out "sudo zypper install-new-recommends --repo NVIDIA"
+reset_box; pc 575.64.03; distro leap
+run_installer curl '' --yes
+expect_rc 1
+expect_out "https://download.nvidia.com/opensuse/leap/15.6 NVIDIA"
+reset_box; pc 580.95.05; distro tumbleweed
+export FAKE_NO_CURL=1
+run_installer curl '' --yes
+expect_rc 0
+expect_ran "zypper --non-interactive install libcurl4"
+expect_not_ran "apt-get"
+expect_in /etc/jetlink/server.env "JETLINK_TENSORRT=\"--tensorrt-libs $PC_TRT_DIR\""
+
+scenario "Debian and RHEL: the driver by hand; Ubuntu's derivatives: Ubuntu's tool"
+reset_box; pc 575.64.03; distro debian
+run_installer curl '' --yes
+expect_rc 1
+expect_out "cuda/repos/debian12/x86_64/cuda-keyring_1.1-1_all.deb"
+expect_out "sudo apt update && sudo apt install linux-headers-amd64 nvidia-open"
+expect_not_ran "ubuntu-drivers"
+reset_box; pc 575.64.03; distro rocky
+run_installer curl '' --yes
+expect_rc 1
+expect_out "cuda/repos/rhel10/x86_64/cuda-rhel10.repo"
+expect_out "sudo dnf install nvidia-open"
+reset_box; pc 575.64.03; distro mint
+run_installer curl 'y\n'
+expect_rc 0
+expect_ran "ubuntu-drivers install nvidia:580-open"
+expect_out "Restart the computer, then run the installer again"
+reset_box; pc 580.95.05; distro debian
+export FAKE_NO_CURL=1
+run_installer curl '' --yes
+expect_rc 0
+expect_out "Jetlink is untested on Debian GNU/Linux 12 (bookworm)"
+expect_ran "$(apt_install libcurl4)"
+expect_in /etc/jetlink/server.env "JETLINK_TENSORRT=\"--tensorrt-libs $PC_TRT_DIR\""
+
+scenario "a PC whose package manager the installer does not know installs when nothing is missing"
+reset_box; pc 580.95.05; distro gentoo
+run_installer curl '' --yes
+expect_rc 0
+expect_not_ran "apt-get"
+expect_in /etc/jetlink/server.env "JETLINK_TENSORRT=\"--tensorrt-libs $PC_TRT_DIR\""
+reset_box; pc 580.95.05; distro gentoo
+export FAKE_NO_CURL=1
+run_installer curl '' --yes
+expect_rc 1
+expect_out "Jetlink needs libcurl4, and this system's package manager is not one the installer knows"
+expect_no_file /etc/jetlink
+
+scenario "an old glibc, or no systemd, stops before anything changes"
+reset_box; pc 580.95.05
+FAKE_GLIBC=2.31 run_installer curl '' --yes
+expect_rc 1
+expect_out "This system's glibc is 2.31, and the Jetlink server needs 2.35 or newer."
+expect_no_file /etc/jetlink
+reset_box; pc 580.95.05
+JETLINK_TEST_SYSTEMD_RUN=/nonexistent run_installer curl '' --yes
+expect_rc 1
+expect_out "this system does not run systemd"
+expect_no_out "systemd=true"
 
 scenario "dry run changes nothing"
 reset_box; jetson 39 2.1

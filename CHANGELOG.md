@@ -1,3 +1,8 @@
+Jetlink v0.7.4
+==============
+**General Updates & Fixes**
+* **Linux PCs:** The installer runs on Debian 12, Fedora, Arch and openSUSE as well as Ubuntu: the base packages come from apt, dnf, pacman or zypper, the NVIDIA driver is installed on Arch and on Ubuntu's and Arch's derivatives too (printed as the distribution's own steps elsewhere), and a system without systemd or with a glibc older than Ubuntu 22.04's is refused up front. Ubuntu is what users have tested; the others are untested on hardware.
+
 Jetlink v0.7.3
 ==============
 **General Updates & Fixes**

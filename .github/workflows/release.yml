@@ -233,6 +233,7 @@ jobs:
           (cd dist && sha256sum -c jetlink-server-*-"$FLAVOR".tar.gz.sha256)
           tar -xzf dist/jetlink-server-*-"$FLAVOR".tar.gz -C "$RUNNER_TEMP"
           cd "$RUNNER_TEMP"/jetlink-server-*-"$FLAVOR"
+          echo "SERVER_DIR=$PWD" >>"$GITHUB_ENV"
           [ -f bin/JetlinkKit_JetlinkStatusPage.resources/Resources/index.html ]
           [ "$(bin/jetlink-server --version)" = "$(cat VERSION)" ]
           bin/jetlink-server serve --help >/dev/null
@@ -241,6 +242,29 @@ jobs:
             echo "error: backends --backend trt passed on a runner without a GPU" >&2
             exit 1
           fi
+
+      - name: Check it loads on the other distributions
+        run: |
+          set -euo pipefail
+          # The binary against each distribution's glibc, libstdc++ and
+          # libcurl, which the installer supports untested on hardware. No GPU
+          # in a container, so TensorRT has to fail for want of a driver, not
+          # of a library. Debian's own image has no libcurl, so its buildpack
+          # one with curl stands in; Arch has no arm64 image.
+          images="buildpack-deps:bookworm-curl fedora:latest opensuse/tumbleweed"
+          [ "$FLAVOR" = linux-x86_64 ] && images="$images archlinux:latest"
+          for image in $images; do docker pull -q "$image" >/dev/null & done
+          wait
+          for image in $images; do
+            echo "==> $image"
+            rc=0
+            out="$(docker run --rm -v "$SERVER_DIR:/srv:ro" "$image" /srv/bin/jetlink-server backends --backend trt 2>&1)" || rc=$?
+            printf '%s\n' "$out"
+            if [ "$rc" != 1 ] || [[ $out != *"no CUDA driver"* ]]; then
+              echo "error: the server did not load on $image" >&2
+              exit 1
+            fi
+          done
 
       - name: Upload the tarball
         uses: actions/upload-artifact@v4

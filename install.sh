@@ -54,6 +54,8 @@ DOCKER_LAST=v0.6.0
 # CUDA 13 needs driver 580; TensorRT needs a Turing (7.5) or newer GPU
 MIN_DRIVER=580
 MIN_CC=75
+# the server is built on Ubuntu 22.04 (JetPack 6's), and runs on no older glibc
+GLIBC_MIN=2.35
 MIN_DISK_GB=15
 SWAP_GB=8
 # JetPack 7.2 runs the newest TensorRT the Jetson repository has, and nothing
@@ -78,8 +80,11 @@ TRT_GB_PC=7
 # units that hold up boot waiting for a network the car does not have
 WAIT_ONLINE_UNITS="systemd-networkd-wait-online.service NetworkManager-wait-online.service"
 # where detection looks; the installer's tests point these at fakes
+OS_RELEASE="${JETLINK_TEST_OS_RELEASE:-/etc/os-release}"
+PKG_PATH="${JETLINK_TEST_PKG_PATH:-$PATH}"
 DT_MODEL="${JETLINK_TEST_DT_MODEL:-/proc/device-tree/model}"
 MEM_SLEEP="${JETLINK_TEST_MEM_SLEEP:-/sys/power/mem_sleep}"
+SECURE_BOOT="${JETLINK_TEST_SECURE_BOOT:-/sys/firmware/efi/efivars/SecureBoot-8be4df61-93ca-11d2-aa0d-00e098032b8c}"
 SWAPS="${JETLINK_TEST_SWAPS:-/proc/swaps}"
 PROC_VERSION="${JETLINK_TEST_PROC_VERSION:-/proc/version}"
 SYSTEMD_RUN="${JETLINK_TEST_SYSTEMD_RUN:-/run/systemd/system}"
@@ -368,6 +373,33 @@ root_write() {
   rm -f "$tmp"
 }
 
+# ---------------------------------------------------------------------------
+# Packages. A Jetson's come from apt: JetPack's, TensorRT among them. A PC
+# takes only curl, git, unzip and libcurl from its own package manager (apt,
+# dnf, pacman or zypper), and TensorRT from NVIDIA's wheel, so a PC with none
+# of those four still installs when the packages are already there.
+
+PKG=''
+detect_pkg() {
+  local p
+  for p in apt-get dnf pacman zypper; do
+    if PATH="$PKG_PATH" command -v "$p" >/dev/null 2>&1; then
+      PKG="${p%-get}"
+      return 0
+    fi
+  done
+  return 0
+}
+
+# the package list, where the package manager keeps one apart from upgrades;
+# before a pkg_install, outside its step
+pkg_refresh() {
+  case "$PKG" in
+    apt) apt_update ;;
+  esac
+  return 0
+}
+
 apt_get() {
   # a fresh Jetson runs unattended-upgrades for a while after its first boot
   as_root env DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=900 -y "$@"
@@ -381,6 +413,19 @@ apt_update() {
   APT_UPDATED=1
 }
 
+# packages, named as this package manager names them
+pkg_install() {
+  case "$PKG" in
+    apt) apt_get install --no-install-recommends "$@" ;;
+    dnf) as_root dnf -y install "$@" ;;
+    # the package list is refreshed only when a stale one fails, since a
+    # refresh without a full upgrade is what Arch warns against
+    pacman) as_root pacman -S --needed --noconfirm "$@" || as_root pacman -Sy --needed --noconfirm "$@" ;;
+    zypper) as_root zypper --non-interactive install "$@" ;;
+    *) return 1 ;;
+  esac
+}
+
 # the loader's cache holds this library
 has_lib() {
   local libs
@@ -388,8 +433,14 @@ has_lib() {
   [[ $libs == *"$1 "* ]]
 }
 
+# an installed apt package's version; empty elsewhere
 pkg_version() {
   dpkg-query -W -f '${Version}' "$1" 2>/dev/null || true
+}
+
+# the firmware's SecureBoot variable: its fifth byte is the state
+secure_boot_on() {
+  [ "$(od -An -tu1 -j4 -N1 "$SECURE_BOOT" 2>/dev/null | tr -d ' ')" = 1 ]
 }
 
 # on the filesystem that holds $1, or will once it is made
@@ -402,7 +453,7 @@ free_gb() {
 # ---------------------------------------------------------------------------
 # What this computer is
 
-ARCH='' OS_ID='' OS_NAME=''
+ARCH='' OS_ID='' OS_LIKE='' OS_VERSION_ID='' OS_NAME='' OS_FAMILY=''
 JETSON=0 L4T='' L4T_MAJOR=0 L4T_MINOR=0 JETPACK='' JP_MAJOR=0 MODEL='' WSL=0
 GPU_NAME='' DRIVER='' DRIVER_MAJOR=0 GPU_CC=0 GPU_PRESENT=0
 # FLAVOR names the server build: linux-aarch64 (Jetson) or linux-x86_64 (PC)
@@ -419,13 +470,13 @@ detect() {
     "On a Mac, use the Jetlink app from https://github.com/zoompilot/jetlink/releases"
   if grep -qi microsoft "$PROC_VERSION" 2>/dev/null; then WSL=1; fi
   ARCH="$(uname -m)"
-  if [ -r /etc/os-release ]; then
-    # shellcheck disable=SC1091
-    . /etc/os-release
-    OS_ID="${ID:-}" OS_NAME="${PRETTY_NAME:-Linux}"
+  if [ -r "$OS_RELEASE" ]; then
+    # shellcheck disable=SC1090
+    . "$OS_RELEASE"
+    OS_ID="${ID:-}" OS_LIKE="${ID_LIKE:-}" OS_VERSION_ID="${VERSION_ID:-}" OS_NAME="${PRETTY_NAME:-Linux}"
   fi
-  command -v apt-get >/dev/null 2>&1 || die "This installer needs Ubuntu or Debian (apt)." \
-    "See https://github.com/zoompilot/jetlink/blob/main/docs/platforms.md for other systems."
+  OS_FAMILY="$(os_family)"
+  detect_pkg
 
   if [ -f /etc/nv_tegra_release ] || grep -qa tegra /proc/device-tree/compatible 2>/dev/null; then
     JETSON=1
@@ -439,6 +490,27 @@ detect() {
       TRT_PRESENT=1 TRT_VERSION=$PC_TRT
     fi
   fi
+}
+
+# the distribution's family, from os-release's ID and ID_LIKE: ubuntu (Mint
+# and Pop!_OS too), debian, fedora, rhel, arch or suse; empty for another
+os_family() {
+  local id
+  for id in $OS_ID $OS_LIKE; do
+    case "$id" in
+      ubuntu|debian|fedora|arch) echo "$id"; return ;;
+      rhel|centos) echo rhel; return ;;
+      suse|opensuse*|sles) echo suse; return ;;
+    esac
+  done
+}
+
+check_glibc() {
+  local v
+  v="$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}' || true)"
+  [ -n "$v" ] || return 0
+  version_ge "$v" "$GLIBC_MIN" || die "This system's glibc is $v, and the Jetlink server needs $GLIBC_MIN or newer." \
+    "Ubuntu 22.04, Debian 12, Fedora, Arch, openSUSE Tumbleweed and newer have it; Debian 11 and RHEL 9 do not."
 }
 
 detect_jetson() {
@@ -719,7 +791,11 @@ show_found() {
       bad "No NVIDIA driver installed"
     fi
     good "$OS_NAME"
-    [ "$WSL" = 1 ] && note "Windows (WSL) support is untested."
+    if [ "$WSL" = 1 ]; then
+      note "Windows (WSL) support is untested."
+    elif [ "$OS_ID" != ubuntu ]; then
+      note "Jetlink is untested on $OS_NAME (Ubuntu is tested); please report how it goes."
+    fi
   fi
   if [ "$TRT_PRESENT" = 1 ]; then good "TensorRT ${TRT_VERSION%%-*}"; fi
   if [ "$DISK_GB" -ge "$MIN_DISK_GB" ]; then
@@ -735,10 +811,21 @@ preflight() {
     die "Not enough free disk space: $DISK_GB GB, and Jetlink needs $MIN_DISK_GB GB." \
       "Free some space (or use a bigger drive) and run the installer again."
   fi
-  if [ "$WSL" = 1 ] && [ ! -d "$SYSTEMD_RUN" ]; then
-    die "Jetlink runs as a systemd service, and this WSL runs without systemd." \
-      "Add these two lines to /etc/wsl.conf, run 'wsl --shutdown' in Windows, and try again:" \
-      "  [boot]" "  systemd=true"
+  if [ ! -d "$SYSTEMD_RUN" ]; then
+    if [ "$WSL" = 1 ]; then
+      die "Jetlink runs as a systemd service, and this WSL runs without systemd." \
+        "Add these two lines to /etc/wsl.conf, run 'wsl --shutdown' in Windows, and try again:" \
+        "  [boot]" "  systemd=true"
+    fi
+    die "Jetlink runs as a systemd service, and this system does not run systemd." \
+      "Installing by hand: https://github.com/zoompilot/jetlink/blob/main/docs/installation-reference.md"
+  fi
+  check_glibc
+  if [ -z "$PKG" ]; then
+    local missing
+    mapfile -t missing < <(base_packages_missing)
+    [ ${#missing[@]} -eq 0 ] || die "Jetlink needs ${missing[*]}, and this system's package manager is not one the installer knows (apt, dnf, pacman, zypper)." \
+      "Install them and run the installer again."
   fi
   if [ "$OPT_DRY_RUN" != 1 ] && [ -z "$OPT_BINARY" ] \
       && ! curl -fsS --max-time 15 -o /dev/null https://github.com 2>/dev/null; then
@@ -758,19 +845,41 @@ offer_driver() {
     die "This computer $what $MIN_DRIVER or newer." \
       "Update the NVIDIA driver in Windows, then run the installer again."
   fi
-  if [ "$OS_ID" != ubuntu ]; then
-    die "This computer $what $MIN_DRIVER or newer." \
-      "Install it from your distribution or https://www.nvidia.com/drivers, restart," \
-      "and run the installer again."
+  # the installer puts it in where that is one package from a source the
+  # computer already has: Ubuntu's own tool on its family, Arch's nvidia-open
+  # on its (Manjaro's comes from its own tool). Anywhere else it is a
+  # repository, a key and a kernel module build of its own, so the
+  # distribution's documented steps are printed instead.
+  local how=''
+  case "$OS_FAMILY" in
+    ubuntu) how=install_driver_ubuntu ;;
+    arch) [ "$OS_ID" = manjaro ] || how=install_driver_arch ;;
+  esac
+  [ -n "$how" ] || driver_by_hand "$what"
+  local go lines=("A restart is needed afterwards.")
+  if [ "$how" = install_driver_ubuntu ]; then
+    lines+=("With Secure Boot on, you will be asked to choose a password now and confirm it" \
+      "on a blue screen when the computer restarts.")
   fi
-  local go
-  ask_yn go y "This computer $what $MIN_DRIVER or newer. Install it now?" \
-    "A restart is needed afterwards. With Secure Boot on, you will be asked to" \
-    "choose a password now and confirm it on a blue screen when the computer restarts."
+  ask_yn go y "This computer $what $MIN_DRIVER or newer. Install it now?" "${lines[@]}"
   [ "$go" = y ] || die "Jetlink cannot run without NVIDIA driver $MIN_DRIVER or newer." \
     "Install it, restart, and run the installer again."
   [ "$OPT_DRY_RUN" = 1 ] && { step "Install NVIDIA driver $MIN_DRIVER" true; return 0; }
   get_root
+  "$how"
+  heading "The NVIDIA driver is installed."
+  say "  Restart the computer, then run the installer again:"
+  if [ "$REF" = latest ]; then
+    say "    curl -fsSL $RAW_URL/main/install.sh | bash"
+  else
+    say "    curl -fsSL $RAW_URL/$REF/install.sh | bash -s -- --ref $REF"
+  fi
+  say ""
+  save_log
+  exit 0
+}
+
+install_driver_ubuntu() {
   step "Getting the driver list" apt_get update
   step "Installing Ubuntu's driver tool" apt_get install ubuntu-drivers-common
   # open kernel modules: what NVIDIA recommends for Turing and newer, and all
@@ -784,16 +893,70 @@ offer_driver() {
       "Install driver $MIN_DRIVER or newer yourself (Software & Updates > Additional Drivers)," \
       "restart, and run the installer again."
   fi
-  heading "The NVIDIA driver is installed."
-  say "  Restart the computer, then run the installer again:"
-  if [ "$REF" = latest ]; then
-    say "    curl -fsSL $RAW_URL/main/install.sh | bash"
-  else
-    say "    curl -fsSL $RAW_URL/$REF/install.sh | bash -s -- --ref $REF"
+}
+
+# Arch's open kernel modules, built for its own kernels (6.12.4-arch1-1,
+# 6.12.4-1-lts); another kernel (zen, cachyos) gets the DKMS build and its
+# headers. None of them is signed.
+install_driver_arch() {
+  local kernel pkgs
+  kernel="$(uname -r)"
+  case "$kernel" in
+    *-lts) pkgs=(nvidia-open-lts) ;;
+    *-arch*) pkgs=(nvidia-open) ;;
+    *) pkgs=(nvidia-open-dkms "linux-${kernel##*-}-headers") ;;
+  esac
+  pkg_refresh
+  if ! run_step "Installing ${pkgs[*]}" pkg_install "${pkgs[@]}"; then
+    die "Installing the NVIDIA driver failed." \
+      "Install driver $MIN_DRIVER or newer yourself (https://wiki.archlinux.org/title/NVIDIA)," \
+      "restart, and run the installer again."
   fi
-  say ""
-  save_log
-  exit 0
+  if secure_boot_on; then
+    note "Secure Boot is on, and these kernel modules are not signed: sign them, or turn Secure"
+    note "Boot off in the firmware, or the driver will not load after the restart."
+  fi
+}
+
+driver_by_hand() {
+  local lines
+  mapfile -t lines < <(driver_steps)
+  if secure_boot_on; then
+    lines+=("Secure Boot is on: the driver's kernel modules have to be signed, or Secure Boot turned off.")
+  fi
+  die "This computer $1 $MIN_DRIVER or newer." \
+    "Install it, restart, and run the installer again. On $OS_NAME:" "${lines[@]}"
+}
+
+# the distribution's own way to the driver, as its documentation gives it
+driver_steps() {
+  local rel="${OS_VERSION_ID%%.*}" repo
+  case "$OS_FAMILY" in
+    debian)
+      [[ $rel =~ ^[0-9]+$ ]] || rel=12
+      echo "  curl -fLO https://developer.download.nvidia.com/compute/cuda/repos/debian$rel/x86_64/cuda-keyring_1.1-1_all.deb"
+      echo "  sudo dpkg -i cuda-keyring_1.1-1_all.deb"
+      echo "  sudo apt update && sudo apt install linux-headers-amd64 nvidia-open" ;;
+    fedora)
+      echo "  sudo dnf install https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$rel.noarch.rpm \\"
+      echo "    https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$rel.noarch.rpm"
+      echo "  sudo dnf install akmod-nvidia"
+      echo "  and wait for the module to build (modinfo -F version nvidia) before restarting: https://rpmfusion.org/Howto/NVIDIA" ;;
+    rhel)
+      [[ $rel =~ ^[0-9]+$ ]] || rel=10
+      echo "  curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/rhel$rel/x86_64/cuda-rhel$rel.repo | sudo tee /etc/yum.repos.d/cuda-rhel$rel.repo"
+      echo "  sudo dnf install nvidia-open" ;;
+    arch)
+      # Manjaro: the others install it
+      echo "  sudo mhwd -a pci nonfree 0300" ;;
+    suse)
+      repo=https://download.nvidia.com/opensuse/tumbleweed
+      case "$OS_ID" in *leap*|sles) repo="https://download.nvidia.com/opensuse/leap/$OS_VERSION_ID" ;; esac
+      echo "  sudo zypper addrepo $repo NVIDIA"
+      echo "  sudo zypper install-new-recommends --repo NVIDIA" ;;
+    *)
+      echo "  your distribution's NVIDIA driver package, or https://www.nvidia.com/drivers" ;;
+  esac
 }
 
 show_plan() {
@@ -1013,21 +1176,30 @@ hand_over() {
   exec bash "$SOURCE_DIR/install.sh" "${ARGS[@]}"
 }
 
+# the base packages this computer lacks, one a line, as its package manager
+# names them (pacman's curl holds libcurl too, hence the sort -u)
+base_packages_missing() {
+  {
+    command -v curl >/dev/null 2>&1 || echo curl
+    command -v git >/dev/null 2>&1 || echo git
+    [ -d /etc/ssl/certs ] || echo ca-certificates
+    # the server's one library beyond the C and C++ runtimes
+    if ! has_lib libcurl.so.4; then
+      case "$PKG" in dnf) echo libcurl ;; pacman) echo curl ;; *) echo libcurl4 ;; esac
+    fi
+    # a PC unpacks TensorRT's wheel
+    if [ "$JETSON" = 0 ] && ! command -v unzip >/dev/null 2>&1; then echo unzip; fi
+  } | sort -u
+}
+
 install_base_packages() {
-  local missing=() p wanted=(curl git ca-certificates libcurl4)
-  # a PC unpacks TensorRT's wheel
-  [ "$JETSON" = 1 ] || wanted+=(unzip)
-  for p in "${wanted[@]}"; do
-    case "$p" in
-      ca-certificates) [ -d /etc/ssl/certs ] || missing+=("$p") ;;
-      # the server's one library beyond the C and C++ runtimes
-      libcurl4) has_lib libcurl.so.4 || missing+=("$p") ;;
-      *) command -v "$p" >/dev/null 2>&1 || missing+=("$p") ;;
-    esac
-  done
+  # without a package manager, preflight has seen that nothing is missing
+  [ -n "$PKG" ] || return 0
+  local missing
+  mapfile -t missing < <(base_packages_missing)
   [ ${#missing[@]} -eq 0 ] && return 0
-  apt_update
-  step "Installing ${missing[*]}" apt_get install --no-install-recommends "${missing[@]}"
+  pkg_refresh
+  step "Installing ${missing[*]}" pkg_install "${missing[@]}"
 }
 
 # The running server keeps serving while the slow parts download and install,

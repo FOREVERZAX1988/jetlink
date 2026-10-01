@@ -46,8 +46,8 @@ Follow the **[Jetson setup guide](docs/jetson.md)** (power, JetPack, installer).
 
 ### Linux PC
 
-Untested on hardware. Needs Ubuntu 22.04 or 24.04 and an NVIDIA GeForce RTX 20
-series or newer GPU. Run:
+Needs an NVIDIA GeForce RTX 20 series or newer GPU, on Ubuntu 22.04 or 24.04
+(tested), Debian 12, Fedora, Arch or openSUSE. Run:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/zoompilot/jetlink/main/install.sh | bash

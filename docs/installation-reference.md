@@ -19,8 +19,15 @@ the [server command](#the-server-command) and custom integrations.
     sha256), unpacked to `/opt/jetlink/tensorrt/11.3.0.99` (2.7 GB). The
     service passes that folder to the server with `--tensorrt-libs`, and later
     server versions reuse it. Only the NVIDIA driver comes from the system.
-- Installs `libcurl4` (the server needs it), `curl` and `git` if missing, and
-  `unzip` on a PC.
+- Installs libcurl (the server needs it), `curl` and `git` if missing, and
+  `unzip` on a PC, from the distribution's package manager: apt, dnf, pacman
+  or zypper. A PC with another installs when they are already there.
+- PC without NVIDIA driver 580: on Ubuntu's family (Mint, Pop!_OS), installs
+  it with `ubuntu-drivers` (`nvidia:580-open`); on Arch's (EndeavourOS,
+  CachyOS; not Manjaro), `nvidia-open` for the running kernel
+  (`nvidia-open-lts` on the LTS kernel, `nvidia-open-dkms` and the headers on
+  another). Elsewhere it prints the distribution's documented steps and stops.
+  Either way the install continues after a restart.
 - Unpacks the release's server to `/opt/jetlink/<version>`, with
   `/opt/jetlink/current` pointing at it and `previous` at the one before, and
   checks it can use the GPU before it replaces the running one.
@@ -51,9 +58,11 @@ Docker itself stays.
 
 ### Installing by hand
 
-The installer is the supported path. Its pieces, from a release tarball:
+The installer is the supported path. Its pieces, from a release tarball, on
+any systemd distribution with glibc 2.35 or newer:
 
-1. `libcurl4`, and TensorRT:
+1. libcurl (`libcurl4` on apt and zypper, `libcurl` on dnf, in `curl` on
+   pacman), and TensorRT:
    - Jetson: `sudo apt install libnvinfer10 libnvonnxparsers10 libnvinfer-plugin10`.
    - PC: NVIDIA driver 580 or newer, and TensorRT 11.3.0.99's libraries from
      NVIDIA's wheel. Its sha256 must equal `PC_TRT_SHA256` at the top of

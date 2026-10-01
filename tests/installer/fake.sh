@@ -20,6 +20,8 @@ printf '%s %s%s\n' "$name" "$*" "$held" >>"${FAKE_LOG:-/tmp/fake.log}"
 
 # an installed package's version; fails when it is not installed
 pkg() { cat "$state/pkg-$1" 2>/dev/null; }
+# libcurl, installed under whatever name the package manager gives it
+libcurl_in() { echo 8.5.0 >"$state/pkg-libcurl4"; }
 # The images Docker has, a "REPOSITORY TAG ID" line each, from $state/images,
 # where a line is "repo:tag", or "repo:tag id" for an ID the scenario names.
 # An untagged image is repo:<none>, or <none>:<none> with no repository.
@@ -41,9 +43,32 @@ case "$name" in
   uname)
     case "${1:-}" in
       -m) echo "${FAKE_ARCH:-aarch64}" ;;
+      -r) echo "${FAKE_KERNEL:-6.8.0-fake}" ;;
       -s|'') echo Linux ;;
       *) /bin/uname "$@" ;;
     esac ;;
+
+  getconf)
+    # the C library's version, Ubuntu 24.04's unless a scenario says
+    case "${1:-}" in
+      GNU_LIBC_VERSION) echo "glibc ${FAKE_GLIBC:-2.39}" ;;
+      *) /usr/bin/getconf "$@" ;;
+    esac ;;
+
+  dnf|pacman|zypper)
+    # the other distributions' package managers: installing libcurl, by
+    # whatever name, makes it appear; a driver package installs silently.
+    # FAKE_PACMAN_STALE: a pacman whose package list is behind the mirror
+    # fails until it is refreshed (-Sy)
+    if [ "$name" = pacman ] && [ "${FAKE_PACMAN_STALE:-0}" = 1 ] && [ "${1:-}" != -Sy ]; then
+      echo "error: failed retrieving file 'curl-8.5.0-1-x86_64.pkg.tar.zst' from mirror : The requested URL returned error: 404" >&2
+      exit 1
+    fi
+    for arg in "$@"; do
+      case "$arg" in
+        libcurl|libcurl4|curl) libcurl_in ;;
+      esac
+    done ;;
 
   apt-get)
     # installing a package makes its commands and libraries appear; an
@@ -61,7 +86,7 @@ case "$name" in
         nvidia-container-toolkit) ln -sf "$0" "$FAKE_BIN/nvidia-ctk" ;;
         libnvinfer10|libnvonnxparsers10|libnvinfer-plugin10) echo "$TRT10" >"$state/pkg-$arg" ;;
         libnvinfer*=*|libnvonnxparsers*=*) echo "${arg#*=}" >"$state/pkg-${arg%%=*}" ;;
-        libcurl4) echo 8.5.0 >"$state/pkg-libcurl4" ;;
+        libcurl4) libcurl_in ;;
       esac
     done ;;
 
