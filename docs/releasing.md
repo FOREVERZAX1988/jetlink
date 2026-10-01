@@ -1,7 +1,10 @@
 # Updates and rollback
 
-Update the comma and Jetlink together: a comma on an older build stays on its
-small model. Update offroad, with both devices powered and online.
+The comma and the server have to speak the same protocol version. A release
+that changes it says so in its notes, and across it the two update together: a
+comma on the older protocol stays on its small model. Every other release, and
+every comma update, can be taken on its own. Update offroad, with both devices
+powered and online.
 
 ## Updating
 
@@ -25,8 +28,8 @@ small model. Update offroad, with both devices powered and online.
 ## Rolling back
 
 * Stop using Jetlink now: set **Settings > Models > Accelerator Link** to **Off**.
-* Roll back the comma build and server together; one alone can leave them
-  incompatible. Keep the model cache.
+* Across a protocol change, roll back the comma build and server together;
+  one alone leaves them incompatible. Keep the model cache.
 * Installer: `jetlink update --ref v0.7.0` (replace with the release to go
   back to). It stays there until `jetlink update --ref latest`.
 * Going back to 0.6.0 puts the Docker server back. To come forward from it,
@@ -41,6 +44,12 @@ Manual rollback: [installation reference](installation-reference.md#versions-and
 <a id="which-jetlink-to-run"></a>
 
 ## Maintainer reference
+
+The comma takes Jetlink as a git pin: zoompilot's `develop`,
+`danger-unstable` and `jetson-trt` pin a commit on `main`, driven on
+`danger-unstable` first, and it may lie between releases. A `v*` release is
+cut when the apps, the server or the wire changed, not for the comma's side
+alone; its notes list what changed on the comma since the last release too.
 
 Releasing: [publishing guide](publishing.md). A version bump in
 `jetlink/__init__.py` means running `JetlinkKit/Scripts/make_pins.py` again;

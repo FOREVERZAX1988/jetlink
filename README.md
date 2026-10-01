@@ -10,7 +10,8 @@
 
 **Jetlink is experimental.** It needs zoompilot's
 [`jetson-trt` branch](https://github.com/zoompilot/zoompilot/tree/jetson-trt);
-update the comma and Jetlink together.
+a release that changes the protocol says so, and then the comma and Jetlink
+update together.
 If the link drops or lags while engaged, the comma says **TAKE CONTROL** and
 stays engaged on the small model: be ready to take over.
 Read the [operating limits](docs/status.md) first.

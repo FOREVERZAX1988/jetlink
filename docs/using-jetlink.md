@@ -78,7 +78,7 @@ addresses for a phone that cannot find `.local` names.
 
 ## Update or stop using Jetlink
 
-- Update the comma and server together: [updates and rollback](releasing.md).
+- Updating the comma or the server: [updates and rollback](releasing.md).
 - Stop: set **Settings > Models > Accelerator Link** to **Off**.
 
 Link never ready? See [troubleshooting](../README.md#if-something-is-wrong).

@@ -6,6 +6,13 @@ publishing a release.
 A pushed `v*` tag runs the Release workflow: the macOS app and the Linux server
 for Jetsons and PCs.
 
+Cut one when something under `JetlinkKit`, `macos`, `ios`, `android`,
+`install.sh` or the wire (`jetlink/protocol.py`, `jetlink/transport`,
+`jetlink/spec.py`, `jetlink/registry`) changed. A change on the comma's side
+alone ships as a zoompilot pin of the `main` commit (driven on
+`danger-unstable` first) and waits for the next release's notes: a tag builds
+and publishes every app, and the installer moves every Jetson and PC to it.
+
 1. Set `__version__` in `jetlink/__init__.py` (`pyproject.toml` reads it), run
    `.venv/bin/python JetlinkKit/Scripts/make_pins.py` so `Pinned.swift` carries
    the new version, add a `Jetlink vX.Y.Z` section at the top of
@@ -13,7 +20,10 @@ for Jetsons and PCs.
    - The tag must match `__version__`; `macos/scripts/check-version.sh` checks
      before the build.
    - The section becomes the release notes: write what installers will notice,
-     not how it was done. Without one, GitHub generates the notes.
+     not how it was done. Without one, GitHub generates the notes. Include
+     what changed on the comma since the last release, and say whether the
+     protocol version moved; if it did, the comma and the server update
+     together.
 2. Tag and push (replace `0.7.0`):
 
 ```bash
