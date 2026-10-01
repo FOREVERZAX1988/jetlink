@@ -64,9 +64,10 @@ allocation, which the allocator treats as costly: with loggerd keeping the page
 cache full it can compact and reclaim inline, and that is the 200-350 ms gadget
 stall that made the big model fall back. `jetlink-root.sh vm apply` answered it
 with dirty-memory caps plus a 128 MB `vm.min_free_kbytes` floor, measured
-together (worst frame 244 to 72 ms). The floor is gone since 2026-09-30: it took
+together (worst frame 244 to 72 ms). The floor is gone since v0.7.3: it took
 about 360 MB out of MemAvailable and openpilot's LOW MEMORY alert fired at a real
-80 %. The caps alone are not yet measured against the stall.
+80 %. A drive with the fix showed no regression; the caps alone are not yet
+measured against the stall on the bench.
 
 To settle it, with a Jetson on the bench and the comma parked offroad:
 
