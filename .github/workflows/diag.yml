@@ -37,3 +37,11 @@ jobs:
             { echo '## JetlinkRegistryTests build errors'; echo '```'; tail -80 /tmp/tests.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
+      - name: Build the whole package and show the errors
+        run: |
+          if swift build --package-path JetlinkKit 2>&1 | tee /tmp/all.txt; then
+            echo "whole package builds" >> "$GITHUB_STEP_SUMMARY"
+          else
+            { echo '## Whole-package build errors'; echo '```'; tail -120 /tmp/all.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
