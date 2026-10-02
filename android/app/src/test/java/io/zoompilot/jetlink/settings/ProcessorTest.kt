@@ -13,9 +13,17 @@ class ProcessorTest {
     }
 
     @Test
-    fun anyOtherPhoneOffersTheCpuOnly() {
-        // QNN on a Google Tensor leaves every op to one CPU thread
-        assertEquals(listOf(Processor.Cpu), Processor.choices(qualcomm = false, emulator = false, current = Processor.Gpu))
+    fun anyOtherPhoneOffersTheGpuAndCpu() {
+        // QNN on a Google Tensor leaves every op to one CPU thread; LiteRT drives its GPU
+        assertEquals(listOf(Processor.Gpu, Processor.Cpu), Processor.choices(qualcomm = false, emulator = false, current = Processor.Gpu))
+    }
+
+    @Test
+    fun theQnnGpuChoiceBecomesLiteRtsGpu() {
+        assertEquals(Processor.Gpu, Processor.of("gpu"))
+        assertEquals(Processor.Gpu, Processor.of("litert-gpu"))
+        assertEquals(Processor.NpuGpu, Processor.of("htp"))
+        assertEquals(null, Processor.of("tpu"))
     }
 
     @Test

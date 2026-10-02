@@ -50,6 +50,6 @@ object BenchmarkText {
         Chip.Expectation.Recommended -> "Should keep up" to Tone.Good
         Chip.Expectation.Possible -> "Might keep up" to Tone.Warning
         Chip.Expectation.TooOld -> "NPU too old" to Tone.Bad
-        Chip.Expectation.NoNpu -> "No Snapdragon NPU" to Tone.Bad
+        Chip.Expectation.Unmeasured -> "Not measured yet" to Tone.Warning
     }
 }
