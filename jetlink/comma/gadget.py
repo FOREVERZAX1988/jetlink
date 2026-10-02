@@ -67,8 +67,9 @@ NET_STATUS = Path("/dev/shm/jetlink-net")   # jetlink-root.sh: "ok 192.168.60.1 
 CABLE_ADDR = (CABLE_ADDRESS, DEFAULT_PORT)
 
 
-def _read(path: Path) -> str:
-  """A record's text, stripped; '' when it is missing or unreadable."""
+def read(path: Path) -> str:
+  """A record's or a sysfs file's text, stripped; '' when it is missing or
+  unreadable."""
   try:
     return path.read_text().strip()
   except OSError:
@@ -89,7 +90,7 @@ def _write(path: Path, text: str | None, what: str) -> bool:
 
 
 def _link_record() -> list[str]:
-  return _read(LINK).split()
+  return read(LINK).split()
 
 
 def link_kind(mode: str | None = None) -> str:
@@ -121,7 +122,7 @@ def clear_link() -> None:
 
 def net_status() -> str | None:
   """What jetlink-root.sh said about the gadget's network interface, if it ran."""
-  return _read(NET_STATUS) or None
+  return read(NET_STATUS) or None
 
 
 def usb_speed() -> str | None:
@@ -207,7 +208,7 @@ def owner_status() -> dict | None:
   """The owner's status record, or None without one: no owner has run since
   boot, the last one stopped cleanly, or it is one too old to write it."""
   try:
-    record = json.loads(_read(STATUS))
+    record = json.loads(read(STATUS))
   except ValueError:
     return None
   return record if isinstance(record, dict) else None
@@ -224,7 +225,7 @@ def owner_alive(record: dict) -> bool:
 def _status_error(path: Path) -> str | None:
   """The reason in an "ok" or "error: <reason>" file. A missing file is not an
   error: whatever writes it has not run."""
-  reason = _read(path)
+  reason = read(path)
   if not reason or reason == 'ok':
     return None
   return reason.removeprefix('error:').strip() or None
@@ -253,7 +254,7 @@ def note_lender_error(reason: str | None) -> None:
 
 def bound_udc() -> str | None:
   """The device controller our gadget is attached to, if it is attached."""
-  return _read(GADGET_PATH / "UDC") or None
+  return read(GADGET_PATH / "UDC") or None
 
 
 def udc_state() -> str | None:
@@ -264,7 +265,7 @@ def udc_state() -> str | None:
   bind as a wake and did not finish waking looks like.
   """
   udc = bound_udc()
-  return None if udc is None else _read(UDC_PATH / udc / "state") or None
+  return None if udc is None else read(UDC_PATH / udc / "state") or None
 
 
 def host_attached() -> bool:
@@ -279,7 +280,7 @@ def cc_orientation() -> int | None:
   cable's pull-up rides on the host's VBUS and reads the same. None where the
   kernel does not say."""
   try:
-    return int(_read(CC_ORIENTATION))
+    return int(read(CC_ORIENTATION))
   except ValueError:
     return None
 
@@ -403,7 +404,7 @@ def set_dormant(on: bool) -> None:
 def dormant() -> bool:
   """Has a live owner released the gadget on purpose?"""
   try:
-    pid = int(_read(DORMANT))
+    pid = int(read(DORMANT))
   except ValueError:
     return False
   try:
@@ -428,7 +429,7 @@ def pending_shutdown() -> str | None:
   if not SHUTDOWN_REQUEST.exists():
     return None
   try:
-    return str(json.loads(_read(SHUTDOWN_REQUEST)).get('reason', ''))
+    return str(json.loads(read(SHUTDOWN_REQUEST)).get('reason', ''))
   except ValueError:
     return None
 

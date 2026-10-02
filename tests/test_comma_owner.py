@@ -84,9 +84,9 @@ class OwnerTest(unittest.TestCase):
     kwargs.setdefault('chestnut_ids', CHESTNUT_IDS)
     return owner.Owner(*(args or ((),)), **kwargs)
 
-  def vm_calls(self) -> list[str]:
-    """What the owner asked jetlink-root.sh vm to do, in order."""
-    return [c.args[1] for c in self.root_run.call_args_list if c.args[0] == 'vm']
+  def root_calls(self, command: str) -> list[str]:
+    """What the owner asked jetlink-root.sh `command` to do, in order."""
+    return [c.args[1] for c in self.root_run.call_args_list if c.args[0] == command]
 
   def heard(self, o, sleep_after=1.0) -> None:
     """A borrower passed on the server's hello (lending.Loan.note_server)."""
@@ -574,12 +574,12 @@ class TestTheToggle(OwnerTest):
     o = self.owner(presented=False)
     with mock.patch.object(gadget, 'link_configured', return_value=False):
       o.step()
-    self.assertEqual([c.args[0] for c in self.root_run.call_args_list], ['gadget', 'vm'])
+    self.assertEqual([c.args[0] for c in self.root_run.call_args_list], ['gadget', 'vm', 'udc'])
 
   def test_the_port_is_kept_a_device_while_the_link_is_on(self):
     o = self.owner()
     o.step()
-    o.port.update.assert_called_once_with()
+    o.port.update.assert_called_once_with(configured=False)
 
   def test_turning_it_off_gives_the_port_back(self):
     o = self.owner()
@@ -598,10 +598,10 @@ class TestTheToggle(OwnerTest):
 
 class TestVmTuning(OwnerTest):
   """When the owner applies and restores the VM tuning, against the real
-  jetlink-root.sh vm on a fake /proc/sys. A device with the link off runs
-  stock values, one that turns it off gets them back, and a plain exit keeps
-  them for the drive that follows. The values and the ratio-mode restore are
-  test_comma_root.py's."""
+  jetlink-root.sh vm on a fake /proc/sys, and the USB device side's knobs
+  (udc) with it. A device with the link off runs stock values, one that turns
+  it off gets them back, and a plain exit keeps them for the drive that
+  follows. The values and the ratio-mode restore are test_comma_root.py's."""
 
   def setUp(self):
     super().setUp()
@@ -621,7 +621,8 @@ class TestVmTuning(OwnerTest):
     o.step()
     o.stop = True
     o.run()
-    self.assertEqual(self.vm_calls(), ['apply'], "an exit is the ignition handoff; restoring there strips the drive of them")
+    self.assertEqual(self.root_calls('vm'), ['apply'], "an exit is the ignition handoff; restoring there strips the drive of them")
+    self.assertEqual(self.root_calls('udc'), ['apply'])
     self.assertTrue(self.tuned())
     self.assertTrue(comma_fakes.record(self.tmp).exists(), "the record is what a later disable restores to")
 
@@ -629,13 +630,13 @@ class TestVmTuning(OwnerTest):
     self.owner().step()
     stock = comma_fakes.record(self.tmp).read_text()
     self.owner().step()
-    self.assertEqual(self.vm_calls(), ['apply', 'apply'])
+    self.assertEqual(self.root_calls('vm'), ['apply', 'apply'])
     self.assertEqual(comma_fakes.record(self.tmp).read_text(), stock)
 
   def test_nothing_happens_when_disabled(self):
     self.write('JetlinkLink', b'0')
     self.owner().step()
-    self.assertEqual(self.vm_calls(), [])
+    self.assertEqual(self.root_calls('vm') + self.root_calls('udc'), [])
     self.assertFalse(comma_fakes.record(self.tmp).exists())
 
   def test_disabling_mid_run_restores(self):
@@ -643,7 +644,8 @@ class TestVmTuning(OwnerTest):
     o.step()
     self.write('JetlinkLink', b'0')
     o.step()
-    self.assertEqual(self.vm_calls(), ['apply', 'restore'])
+    self.assertEqual(self.root_calls('vm'), ['apply', 'restore'])
+    self.assertEqual(self.root_calls('udc'), ['apply', 'restore'])
     self.assertFalse(comma_fakes.record(self.tmp).exists(), 'the restore never ran')
 
 

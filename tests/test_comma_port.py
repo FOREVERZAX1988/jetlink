@@ -7,7 +7,9 @@ See the LICENSE file in the root directory for more details.
 The comma's USB-C port: when it is held at sink, when it is let go, and what it
 leaves alone. A USB-A host and a chestnut must see no change at all; a C-to-C
 host that lost the toss gets one hold, and only for as long as it is plugged
-in.
+in; one that powers the comma and still came out the device is asked over USB
+PD to host, a few times a plug. And a sink that is the device has its device
+side on, whatever the charger detection made of the far end.
 """
 import tempfile
 import unittest
@@ -15,10 +17,14 @@ from pathlib import Path
 from unittest import mock
 
 from jetlink.comma import port, root
-from tests.openpilot.fakes import CHESTNUT_IDS
+from tests.openpilot.fakes import CHESTNUT_IDS, PORT_FILES
 
 SWAP = port.SWAP_AFTER
 RELEASE = port.RELEASE_AFTER
+RETRY = port.RETRY_AFTER
+TRIES = port.SWAP_TRIES
+# the data role each power role starts a plug with: the source is the host
+DATA = {'source': 'dfp', 'sink': 'ufp', 'none': 'none'}
 CHESTNUT = (0xADD1, 0x0001)
 CHESTNUT_ROM = (0x174C, 0x2464)
 IPHONE = (0x05AC, 0x12A8)
@@ -30,16 +36,21 @@ class PortTest(unittest.TestCase):
     tmp = tempfile.TemporaryDirectory()
     self.addCleanup(tmp.cleanup)
     self.tmp = Path(tmp.name)
-    self.role = self.tmp / 'current_pr'
-    self.devices = self.tmp / 'devices'
+    self.role, self.data, self.mode, self.devices = (self.tmp / PORT_FILES[name] for name in
+                                                      ('POWER_ROLE', 'DATA_ROLE', 'UDC_MODE', 'USB_DEVICES'))
     self.devices.mkdir()
     self.plug('none')
+    self.mode.write_text('none\n')   # the device side, off with nothing plugged in
     self.script = mock.Mock(return_value=True)
-    for p in (mock.patch.object(port, 'POWER_ROLE', self.role),
-              mock.patch.object(port, 'USB_DEVICES', self.devices),
-              mock.patch.object(port, 'run_script', self.script)):
+    self.udc = mock.Mock(side_effect=self.turn_device_side)
+    patchers = [mock.patch.object(port, name, self.tmp / f) for name, f in PORT_FILES.items()]
+    patchers += [mock.patch.object(port, 'run_script', self.script),
+                 mock.patch.object(port, 'run_udc', self.udc),
+                 mock.patch.object(port.gadget, 'log')]
+    for p in patchers:
       self.addCleanup(p.stop)
       p.start()
+    self.log = port.gadget.log
     # openpilot's chestnut ids, as the fork's adapter hands them over
     self.port = port.Port(CHESTNUT_IDS)
     self.now = 100.0
@@ -48,8 +59,16 @@ class PortTest(unittest.TestCase):
     self.enumerate('1-1', (0x2C7C, 0x6007))
     self.enumerate('1-1:1.0', None)
 
-  def plug(self, role: str) -> None:
+  def turn_device_side(self, command: str) -> bool:
+    """jetlink-root.sh udc start|stop: the glue's mode, as on the comma."""
+    self.mode.write_text({'start': 'peripheral', 'stop': 'none'}[command] + '\n')
+    return True
+
+  def plug(self, role: str, data: str | None = None) -> None:
+    """The policy engine's roles; the data role is the one the power role
+    starts a plug with unless named."""
     self.role.write_text(role + '\n')
+    self.data.write_text((data or DATA[role]) + '\n')
 
   def enumerate(self, name: str, ids: tuple[int, int] | None) -> None:
     """An entry in the fake /sys/bus/usb/devices; an interface has no ids."""
@@ -59,14 +78,15 @@ class PortTest(unittest.TestCase):
       (d / 'idVendor').write_text(f'{ids[0]:04x}\n')
       (d / 'idProduct').write_text(f'{ids[1]:04x}\n')
 
-  def run_for(self, seconds: float) -> None:
+  def run_for(self, seconds: float, configured: bool = False) -> None:
     end = self.now + seconds
     while self.now < end:
-      self.port.update(now=self.now)
+      self.port.update(now=self.now, configured=configured)
       self.now += 0.5
 
-  def commands(self) -> list[str]:
-    return [c.args[0] for c in self.script.call_args_list]
+  def commands(self, script: mock.Mock | None = None) -> list[str]:
+    """What the port asked jetlink-root.sh port (or `script`) to do, in order."""
+    return [c.args[0] for c in (script or self.script).call_args_list]
 
 
 class TestAfterAnOwnerDied(PortTest):
@@ -76,11 +96,10 @@ class TestAfterAnOwnerDied(PortTest):
 
   def test_a_live_link_keeps_the_port_as_it_is_until_it_goes(self):
     self.plug('sink')
-    with mock.patch.object(port.gadget, 'host_attached', return_value=True), \
-         mock.patch.object(port.gadget, 'log') as log:
+    with mock.patch.object(port.gadget, 'host_attached', return_value=True):
       self.run_for(3)
     self.assertEqual(self.commands(), [])
-    log.warning.assert_called_once()
+    self.log.warning.assert_called_once()
     with mock.patch.object(port.gadget, 'host_attached', return_value=False):
       self.run_for(3)
     self.assertEqual(self.commands(), ['off'])
@@ -143,6 +162,170 @@ class TestHosts(PortTest):
       self.plug('none')
       self.run_for(RELEASE + 1)
     self.assertEqual(self.commands(), ['off', 'hold', 'off', 'hold', 'off'])
+
+
+class TestPoweredByTheDevice(PortTest):
+  """The far end came out the device, then took the source role with a PR_Swap,
+  which leaves the comma the sink and still the host. No hold can change that;
+  a DR_Swap or a hard reset can."""
+
+  ASKED = ['off'] + ['device'] * TRIES + ['reset']
+
+  def took_the_power_role(self) -> None:
+    self.plug('source')
+    self.run_for(1)
+    self.plug('sink', 'dfp')
+
+  def test_it_is_asked_to_take_the_host_role(self):
+    self.took_the_power_role()
+    self.run_for(SWAP - 0.5)
+    self.assertEqual(self.commands(), ['off'], "it gets its chance to swap by itself first")
+    self.run_for(1)
+    self.assertEqual(self.commands(), ['off', 'device'])
+    self.plug('sink', 'ufp')   # it took it
+    self.run_for(60)
+    self.assertEqual(self.commands(), ['off', 'device'])
+
+  def test_a_refusal_is_asked_again_then_reset_then_left(self):
+    self.took_the_power_role()
+    self.run_for(SWAP + RETRY * (TRIES + 1) + 0.5)
+    self.assertEqual(self.commands(), self.ASKED)
+    self.run_for(60)
+    self.assertEqual(self.commands(), self.ASKED, "a plug is asked a bounded number of times")
+    gave_up = [c for c in self.log.warning.call_args_list if 'until the next plug' in c.args[0]]
+    self.assertEqual(len(gave_up), 1)
+    self.assertIn('hub', gave_up[0].args[0])
+
+  def test_a_reset_that_worked_ends_it(self):
+    self.took_the_power_role()
+    self.run_for(SWAP + RETRY * TRIES + 0.5)
+    self.assertEqual(self.commands()[-1], 'reset')
+    self.plug('sink', 'ufp')   # by the spec a sink is the device after a hard reset
+    self.run_for(60)
+    self.assertEqual(self.commands(), self.ASKED)
+
+  def test_the_next_plug_is_asked_afresh(self):
+    self.took_the_power_role()
+    self.run_for(60)
+    self.plug('none')
+    self.run_for(port.UNPLUGGED + 0.5)
+    self.took_the_power_role()
+    self.run_for(SWAP + 0.5)
+    self.assertEqual(self.commands(), self.ASKED + ['device'])
+
+  def test_a_flicker_is_not_a_new_plug(self):
+    self.took_the_power_role()
+    self.run_for(60)
+    # a hard reset drops VBUS for a moment, and the role can read none
+    self.plug('none')
+    self.run_for(0.5)
+    self.plug('sink', 'dfp')
+    self.run_for(60)
+    self.assertEqual(self.commands(), self.ASKED)
+
+  def test_a_chestnut_that_powers_us_is_left_alone(self):
+    self.enumerate('2-1', CHESTNUT)
+    self.plug('sink', 'dfp')
+    self.run_for(60)
+    self.assertEqual(self.commands(), ['off'])
+
+  def test_the_device_end_is_never_asked(self):
+    for role in ('sink', 'source'):
+      self.plug(role, 'ufp')
+      self.run_for(1)
+    self.assertNotIn('device', self.commands())
+    self.assertNotIn('reset', self.commands())
+
+
+class TestTheRecord(PortTest):
+  def test_each_change_of_roles_is_one_line(self):
+    (self.tmp / 'contract').write_text('explicit\n')
+    (self.tmp / 'typec_mode').write_text('Source attached (default current)\n')
+    (self.tmp / 'real_type').write_text('USB_FLOAT\n')
+    self.run_for(5)
+    self.plug('source')
+    self.run_for(1)
+    self.plug('sink', 'dfp')
+    self.run_for(1)
+    self.plug('sink', 'ufp')
+    self.run_for(5)
+    lines = [c.args[0] % c.args[1:] for c in self.log.info.call_args_list]
+    self.assertEqual(len(lines), 4, lines)
+    self.assertEqual(lines[0], "jetlink: USB-C port none, no data role; USB PD contract explicit; "
+                               "Type-C Source attached (default current); charger detection USB_FLOAT")
+    self.assertTrue(lines[2].startswith("jetlink: USB-C port sink, host;"), lines[2])
+    self.assertTrue(lines[3].startswith("jetlink: USB-C port sink, device;"), lines[3])
+
+  def test_no_policy_engine_says_nothing(self):
+    self.role.unlink()
+    self.run_for(5)
+    self.log.info.assert_not_called()
+
+
+class TestTheDeviceSide(PortTest):
+  """A host that powers the port, with the comma its device: the device side
+  must be on, whatever the charger detection read, and off once the port is
+  empty."""
+
+  def test_a_device_side_already_on_is_left(self):
+    self.plug('sink')
+    self.mode.write_text('peripheral\n')   # the policy engine turned it on
+    self.run_for(60)
+    self.assertEqual(self.commands(self.udc), [])
+
+  def test_one_still_off_is_turned_on_and_off_once_the_port_is_empty(self):
+    self.plug('sink')
+    self.run_for(SWAP - 0.5)
+    self.assertEqual(self.commands(self.udc), [], "the policy engine gets its chance first")
+    self.run_for(60)
+    self.assertEqual(self.commands(self.udc), ['start'])
+    self.plug('none')
+    self.run_for(port.UNPLUGGED - 0.5)
+    self.assertEqual(self.commands(self.udc), ['start'], "a flicker is not an unplug")
+    self.run_for(60)
+    self.assertEqual(self.commands(self.udc), ['start', 'stop'])
+
+  def test_one_that_goes_off_again_is_turned_on_again_no_sooner_than_dwc3_allows(self):
+    self.plug('sink')
+    self.run_for(SWAP + 0.5)
+    self.mode.write_text('none\n')   # floating lines and the glue's knob not set: dwc3's 10 s
+    self.run_for(port.RESTART_AFTER - 1)
+    self.assertEqual(self.commands(self.udc), ['start'])
+    self.run_for(1)
+    self.assertEqual(self.commands(self.udc), ['start', 'start'])
+
+  def test_a_configured_gadget_is_not_looked_at(self):
+    self.plug('sink')
+    self.run_for(60, configured=True)
+    self.assertEqual(self.commands(self.udc), [])
+
+  def test_an_owner_after_one_that_left_it_on_turns_it_off(self):
+    self.mode.write_text('peripheral\n')
+    self.run_for(60)
+    self.assertEqual(self.commands(self.udc), ['stop'])
+
+  def test_a_stop_never_turns_it_off(self):
+    # the stop that comes as a chestnut turns up: the comma is about to host it
+    self.plug('sink')
+    self.run_for(SWAP + 1)
+    self.port.off()
+    self.plug('source')
+    self.run_for(port.UNPLUGGED + 1)
+    self.assertNotIn('stop', self.commands(self.udc))
+
+  def test_only_the_device_end_of_a_sink(self):
+    for role, data in (('source', 'dfp'), ('source', 'ufp'), ('sink', 'dfp')):
+      self.plug(role, data)
+      self.run_for(SWAP + 1)
+    self.assertNotIn('start', self.commands(self.udc))
+
+  def test_no_glue_is_left_alone(self):
+    self.mode.unlink()
+    self.plug('sink')
+    self.run_for(60)
+    self.plug('none')
+    self.run_for(60)
+    self.assertEqual(self.commands(self.udc), [])
 
 
 class TestAccessories(PortTest):

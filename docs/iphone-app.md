@@ -60,11 +60,27 @@ Building and testing without a phone: [iPhone development](../ios/README.md).
 
 - There is nothing to type: the app finds the comma itself.
 - Open the app before plugging in. Opened later, it still connects, just later.
-- A direct cable to a phone is untried. If the comma restarts when you plug in,
-  use a powered USB-C hub.
+- On a direct USB-C cable both ends can be the host, and the comma has to keep
+  its USB device side on for the phone. It sorts both out by itself in up to
+  about 15 seconds. If the title never reaches **Connected**,
+  or the comma restarts when you plug in, use a powered USB-C hub, or a USB-C
+  to USB-A adapter and a USB-A to USB-C cable; then
+  [send the comma's report](#if-a-direct-cable-does-not-connect).
 - The app has these steps under Settings > **Help > Connecting the Comma**.
 
 How the link works: [what the comma presents](transport.md#what-the-comma-presents).
+
+### If a direct cable does not connect
+
+Over SSH on the comma, with the phone plugged straight in for 30 seconds:
+
+```bash
+sudo /data/openpilot/jetlink_repo/scripts/comma/jetlink-root.sh check
+grep 'USB-C' /data/log/jetlink-owner.log | tail -n 40
+sudo dmesg | grep -iE 'usbpd|type-?c|swap|weak charger|reverse boost' | tail -n 60
+```
+
+Send the output with your phone model, and say whether the comma restarted.
 
 ### USB 3 matters
 

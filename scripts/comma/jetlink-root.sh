@@ -12,6 +12,9 @@
 #   sudo scripts/comma/jetlink-root.sh check             # what is there now
 #   sudo scripts/comma/jetlink-root.sh teardown
 #   sudo scripts/comma/jetlink-root.sh port hold|off     # the USB-C port held as the device, or let go
+#   sudo scripts/comma/jetlink-root.sh port device|reset # ask the far end to host over USB PD, or reset PD
+#   sudo scripts/comma/jetlink-root.sh udc apply|restore # the USB device controller kept a device, or stock
+#   sudo scripts/comma/jetlink-root.sh udc start|stop    # its device side turned on, or off
 #   sudo scripts/comma/jetlink-root.sh vm apply|restore  # the link's VM tuning, or the stock values
 #
 # For the comma four and the comma 3X only. Both are SDM845 on the same AGNOS
@@ -65,9 +68,22 @@ DNSMASQ_IF=/dev/shm/jetlink-dnsmasq.if
 DNSMASQ_LEASES=/dev/shm/jetlink-usb0.leases
 
 # port: the charger's DISABLE_POWER_ROLE_SWITCH voter on the PMI8998, the one
-# role lever that holds across plugs; jetlink/comma/port.py says why this one
+# role lever that holds across plugs, and the policy engine's own USB PD
+# requests; jetlink/comma/port.py says when each is used
 POWER_ROLE_VOTER=${JETLINK_POWER_ROLE_VOTER:-/sys/kernel/debug/pmic-votable/DISABLE_POWER_ROLE_SWITCH}
-USBPD=/sys/class/usbpd/usbpd0
+USBPD=${JETLINK_USBPD:-/sys/class/usbpd/usbpd0}
+DUAL_ROLE=${JETLINK_DUAL_ROLE:-/sys/class/dual_role_usb/otg_default}
+
+# udc: the dwc3 glue for the port's controller (usb0, ssusb@a600000) and the
+# policy engine's parameters. Both have a usb_compliance_mode, and each gates
+# one place only: the policy engine's turns the device side on at every sink
+# attach, not just when the charger detection read a USB port (SDP, CDP or
+# floating lines); the glue's keeps dwc3 from turning it off again when the
+# lines read floating and no host enumerated it in 10 s. An Apple port connects
+# its data lines only after USB PD, and at boot no gadget is bound for 10 s.
+UDC_GLUE=${JETLINK_UDC_GLUE:-/sys/devices/platform/soc/a600000.ssusb}
+PE_PARAMS=${JETLINK_PE_PARAMS:-/sys/module/policy_engine/parameters}
+USB_PSY=${JETLINK_USB_PSY:-/sys/class/power_supply/usb}
 
 # vm: loggerd's dirty pages pile up until the kernel reclaims them
 # synchronously, right while a FunctionFS transfer allocates its buffer: gadget
@@ -85,7 +101,7 @@ PROC_SYS=${JETLINK_PROC_SYS:-/proc/sys}
 SYSCTL_PREV=${JETLINK_SYSCTL_PREV:-/dev/shm/jetlink-sysctl-prev}
 
 usage() {
-  echo "usage: $0 gadget [--ios] | net | check | teardown | port hold|off | vm apply|restore" >&2
+  echo "usage: $0 gadget [--ios] | net | check | teardown | port hold|off|device|reset | udc apply|restore|start|stop | vm apply|restore" >&2
   exit 2
 }
 
@@ -404,10 +420,13 @@ cmd_check() {
   # end up sourcing it, which reboots the comma. Through a hub the comma sinks.
   # On a C-to-C cable the comma can come out the host instead; port hold fixes that.
   if [[ -d "$USBPD" ]]; then
-    echo "USB-C port: power role $(cat "$USBPD/current_pr" 2>/dev/null || echo unknown), data role $(cat "$USBPD/current_dr" 2>/dev/null || echo unknown)"
+    echo "USB-C port: power role $(cat "$USBPD/current_pr" 2>/dev/null || echo unknown), data role $(cat "$USBPD/current_dr" 2>/dev/null || echo unknown), USB PD contract $(cat "$USBPD/contract" 2>/dev/null || echo unknown), Type-C $(cat "$USB_PSY/typec_mode" 2>/dev/null || echo unknown)"
   fi
   if [[ "$(cat "$POWER_ROLE_VOTER/force_active" 2>/dev/null || true)" == 1 ]]; then
     echo "USB-C port: held as the device (port hold)"
+  fi
+  if [[ -d "$UDC_GLUE" ]]; then
+    echo "USB device controller: $(cat "$UDC_GLUE/mode" 2>/dev/null || echo unknown), charger detection $(cat "$USB_PSY/real_type" 2>/dev/null || echo unknown), kept a device $(cat "$PE_PARAMS/usb_compliance_mode" 2>/dev/null || echo '?')/$(cat "$UDC_GLUE/usb_compliance_mode" 2>/dev/null || echo '?')"
   fi
   if ! net_present; then
     echo "network function: none (the USB gadget, or no gadget)"
@@ -425,28 +444,64 @@ cmd_check() {
 
 # The comma's USB-C port, for a link that runs over USB. hold keeps the port at
 # sink, which makes the far end the host; off is dual role, as AGNOS boots it.
+# device asks the far end over USB PD to take the host role (a DR_Swap): for a
+# far end that powers the comma and still came out the device, which hold
+# cannot change. reset is a USB PD hard reset, which puts both ends back to
+# the roles their power gives them: a sink is the device.
 cmd_port() {
   case "${1:-}" in
-    hold|off) ;;
+    hold)
+      # force_val first: forcing applies whatever force_val holds at that moment
+      { echo 1 > "$POWER_ROLE_VOTER/force_val" && echo 1 > "$POWER_ROLE_VOTER/force_active"; } 2>/dev/null ||
+        { echo "jetlink: could not force $POWER_ROLE_VOTER to hold the port" >&2; exit 1; } ;;
+    off)
+      # letting go applies the voters' own result, which is dual role
+      { echo 0 > "$POWER_ROLE_VOTER/force_active" && echo 0 > "$POWER_ROLE_VOTER/force_val"; } 2>/dev/null ||
+        { echo "jetlink: could not release $POWER_ROLE_VOTER" >&2; exit 1; } ;;
+    # the kernel sends the DR_Swap and waits 100 ms for it; a refusal, or PD not
+    # ready yet, is a failed write
+    device) put device "$DUAL_ROLE/data_role" "the far end did not take the host role ($DUAL_ROLE/data_role)" || exit 1 ;;
+    reset) put 1 "$USBPD/hard_reset" "could not reset USB PD ($USBPD/hard_reset)" || exit 1 ;;
     *) usage ;;
   esac
-  if [[ "$1" == hold ]]; then
-    # force_val first: forcing applies whatever force_val holds at that moment
-    { echo 1 > "$POWER_ROLE_VOTER/force_val" && echo 1 > "$POWER_ROLE_VOTER/force_active"; } 2>/dev/null ||
-      { echo "jetlink: could not force $POWER_ROLE_VOTER to hold the port" >&2; exit 1; }
-  else
-    # letting go applies the voters' own result, which is dual role
-    { echo 0 > "$POWER_ROLE_VOTER/force_active" && echo 0 > "$POWER_ROLE_VOTER/force_val"; } 2>/dev/null ||
-      { echo "jetlink: could not release $POWER_ROLE_VOTER" >&2; exit 1; }
+}
+
+# The port's USB device controller, while the link is on. apply keeps it a
+# device whatever the charger detection made of the far end's data lines, and
+# restore puts the stock behaviour back; see UDC_GLUE. start turns the device
+# side on now, for a host that powers the port while it is off, and stop turns
+# it off again once that host is gone.
+cmd_udc() {
+  case "${1:-}" in
+    apply) udc_compliance Y || exit 1 ;;
+    restore) udc_compliance N || exit 1 ;;
+    start) put peripheral "$UDC_GLUE/mode" "could not start the USB device controller ($UDC_GLUE/mode)" || exit 1 ;;
+    stop) put none "$UDC_GLUE/mode" "could not stop the USB device controller ($UDC_GLUE/mode)" || exit 1 ;;
+    *) usage ;;
+  esac
+}
+
+# Both knobs, each on its own, so one the kernel lacks does not keep the other.
+udc_compliance() {
+  local failed=0 knob
+  for knob in "$PE_PARAMS/usb_compliance_mode" "$UDC_GLUE/usb_compliance_mode"; do
+    put "$1" "$knob" "could not set $knob" || failed=1
+  done
+  return $failed
+}
+
+# One value into one kernel file; a line on stderr and a failure when the kernel
+# refuses it. Not fail(): that is the gadget's record.
+put() {
+  if ! { echo "$1" > "$2"; } 2>/dev/null; then
+    echo "jetlink: $3" >&2
+    return 1
   fi
 }
 
 # One key per write, so a value the kernel rejects does not take the rest with it.
 sysctl_write() {
-  if ! { echo "$2" > "$PROC_SYS/${1//.//}"; } 2>/dev/null; then
-    echo "jetlink: could not set $1=$2" >&2
-    return 1
-  fi
+  put "$2" "$PROC_SYS/${1//.//}" "could not set $1=$2"
 }
 
 # Applied while the link is on, so a device with the link off runs stock
@@ -518,6 +573,7 @@ case "$cmd" in
   check) cmd_check ;;
   teardown) cmd_teardown ;;
   port) cmd_port "$@" ;;
+  udc) cmd_udc "$@" ;;
   vm) cmd_vm "$@" ;;
   *) usage ;;
 esac

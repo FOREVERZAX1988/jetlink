@@ -16,6 +16,17 @@ A USB 3 data cable; charge-only cables do not work.
 | Android | USB-A to USB-C, from a USB 3 hub with USB-C power pass-through on the phone, so it charges; or a USB-C to USB-A adapter |
 
 - The comma holds its USB-C port as the device for any host but a chestnut.
+  On a USB-C to USB-C cable either end can come out the host. A comma that
+  comes out the source holds its port at sink, which makes the far end the
+  host. A far end that powers the comma but came out the device is asked over
+  USB PD to take the host role (a data role swap), and failing that the comma
+  resets USB PD. If neither works, a hub or a USB-C to USB-A adapter settles
+  the roles: the A side can only be the host.
+- While the link is on the comma keeps its USB device side on whenever a host
+  powers the port. Stock, it turns it on only when its charger detection sees
+  a USB port's data lines, and turns it off after 10 s when they read as
+  floating with no host. An Apple port's lines read floating until USB PD is
+  done; a hub's never do.
 - The comma's USB-C port cannot serve Jetlink and chestnut at once.
 
 ### What the comma presents

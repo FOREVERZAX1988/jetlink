@@ -169,7 +169,7 @@ class Owner:
     self.transport = None
     self.stop = False
     self.dormant = False
-    self.vm_tuned = False
+    self.tuned = False
     # when there was last something to do. The hold runs from here, not from
     # process start: this daemon is not restarted at ignition any more, so a
     # hold measured from its birth expires once and never applies again, and
@@ -596,19 +596,23 @@ class Owner:
         self.close_link()
       self.stop_worker()
       self.wake()
-      if self.vm_tuned:
+      if self.tuned:
         root.run('vm', 'restore')
-        self.vm_tuned = False
+        root.run('udc', 'restore')
+        self.tuned = False
       self.port.off()
       return
     self.link_step(mode == 'ios')
-    if not self.vm_tuned:
-      # jetlink-root.sh vm: the recording VM tuning the gadget's reads need,
-      # while the link is on. After the step, so the first gadget does not
-      # wait on it. Put back only when the link is turned off, never on exit:
-      # manager stops this at ignition, just as the contention starts
+    if not self.tuned:
+      # jetlink-root.sh vm: the recording VM tuning the gadget's reads need;
+      # udc: the USB device side kept on for a host that powers the port
+      # (port.py). While the link is on. After the step, so the first gadget
+      # does not wait on them. Put back only when the link is turned off, never
+      # on exit: manager stops this at ignition, just as the contention starts,
+      # and a phone plugged in before it is back should still come up
       root.run('vm', 'apply')
-      self.vm_tuned = True
+      root.run('udc', 'apply')
+      self.tuned = True
 
   def ensure_lender(self) -> None:
     """Listen for borrowers, or say why not and try again later.
@@ -640,7 +644,7 @@ class Owner:
     """A step with the link on, for an iPhone or not."""
     self.ensure_lender()
     # before anything is presented: a C-to-C host has to find a device here
-    self.port.update()
+    self.port.update(configured=self.configured)
 
     offroad = self.settings.offroad()
     if self.switch_mode(offroad, ios):

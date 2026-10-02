@@ -55,6 +55,26 @@ def voter(tmp: Path) -> Path:
   return tmp / 'voter'
 
 
+def usbpd(tmp: Path) -> Path:
+  """The policy engine's usbpd0 directory; the script finds none until it is made."""
+  return tmp / 'usbpd0'
+
+
+def dual_role(tmp: Path) -> Path:
+  """The dual_role class's otg_default; the script finds none until it is made."""
+  return tmp / 'otg_default'
+
+
+def udc_glue(tmp: Path) -> Path:
+  """dwc3's glue for usb0; the script finds none until it is made."""
+  return tmp / 'a600000.ssusb'
+
+
+def pe_params(tmp: Path) -> Path:
+  """The policy engine's module parameters; the script finds none until they are made."""
+  return tmp / 'policy_engine'
+
+
 def run_script(tmp: Path, *args: str, timeout: float | None = None) -> subprocess.CompletedProcess:
   """jetlink-root.sh *args, as the user running the tests, on the fakes under `tmp`."""
   env = {
@@ -62,5 +82,9 @@ def run_script(tmp: Path, *args: str, timeout: float | None = None) -> subproces
     'JETLINK_PROC_SYS': str(tmp / 'sys'),
     'JETLINK_SYSCTL_PREV': str(record(tmp)),
     'JETLINK_POWER_ROLE_VOTER': str(voter(tmp)),
+    'JETLINK_USBPD': str(usbpd(tmp)),
+    'JETLINK_DUAL_ROLE': str(dual_role(tmp)),
+    'JETLINK_UDC_GLUE': str(udc_glue(tmp)),
+    'JETLINK_PE_PARAMS': str(pe_params(tmp)),
   }
   return subprocess.run(['bash', str(root.SCRIPT), *args], env=env, capture_output=True, text=True, timeout=timeout)
