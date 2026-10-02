@@ -261,19 +261,9 @@ struct LiteRTLowering {
   /// DEQUANTIZE when it is large and every value is exact in fp16.
   mutating func floatTensor(_ values: [Float], _ shape: [Int], _ name: String) -> Int {
     if values.count >= Self.fp16MinElements, values.allSatisfy({ Float(Float16($0)) == $0 }) {
-      var bytes: [UInt8] = []
-      bytes.reserveCapacity(values.count * 2)
-      for v in values {
-        withUnsafeBytes(of: Float16(v).bitPattern.littleEndian) { bytes.append(contentsOf: $0) }
-      }
-      return dequantized(buffer(bytes), shape, name)
+      return dequantized(buffer(Elements.encode(values, as: DataType.float16)), shape, name)
     }
-    var bytes: [UInt8] = []
-    bytes.reserveCapacity(values.count * 4)
-    for v in values {
-      withUnsafeBytes(of: v.bitPattern.littleEndian) { bytes.append(contentsOf: $0) }
-    }
-    return addTensor(name, shape, .float32, buffer: buffer(bytes))
+    return addTensor(name, shape, .float32, buffer: buffer(Elements.encode(values, as: DataType.float)))
   }
 
   /// FLOAT16 bytes' FLOAT32 tensor, through a DEQUANTIZE that runs first.
@@ -388,36 +378,17 @@ struct LiteRTLowering {
   }
 
   func floats(_ c: Constant) throws -> [Float] {
-    let b = try bytes(c)
-    return try b.withUnsafeBytes { p -> [Float] in
-      switch c.type {
-      case DataType.float16:
-        return (0..<c.count).map { Float(Float16(bitPattern: UInt16(littleEndian: p.loadUnaligned(fromByteOffset: $0 * 2, as: UInt16.self)))) }
-      case DataType.float:
-        return (0..<c.count).map { Float(bitPattern: UInt32(littleEndian: p.loadUnaligned(fromByteOffset: $0 * 4, as: UInt32.self))) }
-      case DataType.double:
-        return (0..<c.count).map { Float(Double(bitPattern: UInt64(littleEndian: p.loadUnaligned(fromByteOffset: $0 * 8, as: UInt64.self)))) }
-      case DataType.bfloat16:
-        return (0..<c.count).map { Float(bitPattern: UInt32(UInt16(littleEndian: p.loadUnaligned(fromByteOffset: $0 * 2, as: UInt16.self))) << 16) }
-      default:
-        if DataType.isInteger(c.type) || c.type == DataType.bool {
-          return try integers(c).map { Float($0) }
-        }
-        throw OnnxError("constant \(c.name) has element type \(OnnxMeta.typeName(c.type)), not a number")
-      }
+    if DataType.isInteger(c.type) || c.type == DataType.bool {
+      return try integers(c).map { Float($0) }
     }
+    return try Elements.floats(bytes(c), as: c.type, for: "constant \(c.name)")
   }
 
   func integers(_ c: Constant) throws -> [Int64] {
     if c.type == DataType.bool {
       return try bytes(c).map { $0 == 0 ? 0 : 1 }
     }
-    switch c.bytes {
-    case .initializer(let t): return try Elements.integers(t, src)
-    case .owned(let b):
-      let t = Tensor(name: c.name, dims: c.dims.map { Int64($0) }, dataType: c.type, raw: .owned(b))
-      return try Elements.integers(t, src)
-    }
+    return try Elements.integers(bytes(c), as: c.type, for: "constant \(c.name)")
   }
 
   /// A constant input read as integers: shapes, axes, slice bounds.

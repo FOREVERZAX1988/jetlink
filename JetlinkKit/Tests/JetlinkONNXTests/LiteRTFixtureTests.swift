@@ -22,12 +22,7 @@ import Testing
       let src = Source(bytes: buf)
       let g = try #require(try Decode.model(src).graph)
       let t = try #require(g.initializers.first { $0.key == name })
-      let bytes = try Elements.littleEndian(t, src)
-      return bytes.withUnsafeBytes { p in
-        t.elementType == DataType.float16
-          ? (0..<(bytes.count / 2)).map { Float(Float16(bitPattern: p.loadUnaligned(fromByteOffset: $0 * 2, as: UInt16.self))) }
-          : (0..<(bytes.count / 4)).map { Float(bitPattern: p.loadUnaligned(fromByteOffset: $0 * 4, as: UInt32.self)) }
-      }
+      return try Elements.floats(Elements.littleEndian(t, src), as: t.elementType, for: name)
     }
   }
 

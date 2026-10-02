@@ -85,11 +85,17 @@ enum Elements {
 
   /// An integer tensor's values.
   static func integers(_ t: Tensor, _ src: Source) throws -> [Int64] {
-    let type = t.elementType
-    guard DataType.isInteger(type), let size = DataType.size(type) else {
-      throw OnnxError("initializer \(t.key) has element type \(type), not an integer type")
+    guard DataType.isInteger(t.elementType) else {
+      throw OnnxError("initializer \(t.key) has element type \(t.elementType), not an integer type")
     }
-    let bytes = try littleEndian(t, src)
+    return try integers(littleEndian(t, src), as: t.elementType, for: t.key)
+  }
+
+  /// Little-endian integers of `type`, as raw_data holds them.
+  static func integers(_ bytes: [UInt8], as type: Int32, for name: String) throws -> [Int64] {
+    guard DataType.isInteger(type), let size = DataType.size(type) else {
+      throw OnnxError("\(name): element type \(type) is not an integer type")
+    }
     let signed = [DataType.int8, DataType.int16, DataType.int32, DataType.int64].contains(type)
     var values: [Int64] = []
     values.reserveCapacity(bytes.count / size)
@@ -128,5 +134,41 @@ enum Elements {
       }
     }
     return bytes
+  }
+
+  /// Little-endian elements of a float type (FLOAT, FLOAT16, DOUBLE or
+  /// BFLOAT16), as raw_data holds them, as Floats.
+  static func floats(_ bytes: [UInt8], as type: Int32, for name: String) throws -> [Float] {
+    func load<T: FixedWidthInteger>(_: T.Type, _ f: (T) -> Float) -> [Float] {
+      bytes.withUnsafeBytes { p in
+        (0..<(bytes.count / MemoryLayout<T>.size)).map { f(T(littleEndian: p.loadUnaligned(fromByteOffset: $0 * MemoryLayout<T>.size, as: T.self))) }
+      }
+    }
+    switch type {
+    case DataType.float: return load(UInt32.self) { Float(bitPattern: $0) }
+    case DataType.float16: return load(UInt16.self) { Float(Float16(bitPattern: $0)) }
+    case DataType.double: return load(UInt64.self) { Float(Double(bitPattern: $0)) }
+    case DataType.bfloat16: return load(UInt16.self) { Float(bitPattern: UInt32($0) << 16) }
+    default: throw OnnxError("\(name): element type \(OnnxMeta.typeName(type)) is not a float type")
+    }
+  }
+
+  /// Floats as little-endian elements of FLOAT, FLOAT16 or DOUBLE, each
+  /// rounded to the nearest value the type holds.
+  static func encode(_ values: [Float], as type: Int32) -> [UInt8] {
+    func store<T: FixedWidthInteger>(_ f: (Float) -> T) -> [UInt8] {
+      var bytes: [UInt8] = []
+      bytes.reserveCapacity(values.count * MemoryLayout<T>.size)
+      for v in values {
+        withUnsafeBytes(of: f(v).littleEndian) { bytes.append(contentsOf: $0) }
+      }
+      return bytes
+    }
+    switch type {
+    case DataType.float: return store { $0.bitPattern }
+    case DataType.float16: return store { Float16($0).bitPattern }
+    case DataType.double: return store { Double($0).bitPattern }
+    default: preconditionFailure("floats are not written as element type \(type)")
+    }
   }
 }

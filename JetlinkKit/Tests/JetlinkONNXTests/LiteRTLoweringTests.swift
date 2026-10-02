@@ -673,9 +673,7 @@ import Testing
       return
     }
     #expect(offset % 64 == 0 && offset >= report.flatbufferBytes && size == 64 * 32 * 2)
-    var raw: [UInt8] = []
-    for x in w { withUnsafeBytes(of: Float16(x).bitPattern.littleEndian) { raw.append(contentsOf: $0) } }
-    #expect(file.data(deq.inputs[0]) == raw)
+    #expect(file.data(deq.inputs[0]) == Elements.encode(w, as: DataType.float16))
     let add = try #require(file.operators.first { $0.op == "ADD" })
     let bias = file.tensors[add.inputs[1]]
     #expect(bias.type == TFLite.TensorType.float32.rawValue)

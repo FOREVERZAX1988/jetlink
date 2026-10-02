@@ -78,15 +78,11 @@ struct OnnxGraphBuilder {
   }
 
   mutating func fp16(_ name: String, _ dims: [Int64], _ values: [Float]) {
-    var raw: [UInt8] = []
-    for v in values { withUnsafeBytes(of: Float16(v).bitPattern.littleEndian) { raw.append(contentsOf: $0) } }
-    initializer(name, DataType.float16, dims, raw)
+    initializer(name, DataType.float16, dims, Elements.encode(values, as: DataType.float16))
   }
 
   mutating func fp32(_ name: String, _ dims: [Int64], _ values: [Float]) {
-    var raw: [UInt8] = []
-    for v in values { withUnsafeBytes(of: v.bitPattern.littleEndian) { raw.append(contentsOf: $0) } }
-    initializer(name, DataType.float, dims, raw)
+    initializer(name, DataType.float, dims, Elements.encode(values, as: DataType.float))
   }
 
   mutating func int64(_ name: String, _ values: [Int64], dims: [Int64]? = nil) {

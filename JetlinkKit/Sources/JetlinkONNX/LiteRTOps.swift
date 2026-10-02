@@ -190,8 +190,8 @@ extension LiteRTLowering {
       throw OnnxError("cannot fold \(op.name) of \(OnnxMeta.typeName(x.type)) and \(OnnxMeta.typeName(y.type)) constants")
     }
     let out = try Self.broadcast(x.dims, y.dims)
-    let a = Self.broadcastFloats(try floats(x), from: x.dims, to: out)
-    let b = Self.broadcastFloats(try floats(y), from: y.dims, to: out)
+    let a = try Self.broadcastFloats(floats(x), from: x.dims, to: out)
+    let b = try Self.broadcastFloats(floats(y), from: y.dims, to: out)
     let f: (Float, Float) -> Float
     switch op {
     case .add: f = (+)
@@ -202,14 +202,7 @@ extension LiteRTLowering {
     case .minimum: f = { Swift.min($0, $1) }
     default: throw OnnxError("cannot fold \(op.name)")
     }
-    let result = zip(a, b).map(f)
-    var bytes: [UInt8] = []
-    if x.type == DataType.float16 {
-      for v in result { withUnsafeBytes(of: Float16(v).bitPattern.littleEndian) { bytes.append(contentsOf: $0) } }
-    } else {
-      bytes = Self.floatBytes(result)
-    }
-    try defineConstant(name, out, x.type, bytes)
+    try defineConstant(name, out, x.type, Elements.encode(zip(a, b).map(f), as: x.type))
     count("folded constant arithmetic")
   }
 
@@ -236,7 +229,7 @@ extension LiteRTLowering {
 
   /// 1/x as DIV(1, x), as onnx2tf writes it: TFLite has no reciprocal.
   mutating func reciprocal(_ n: Node) throws {
-    let one = Constant(name: "\(n.outputs[0])__one", dims: [1], type: DataType.float, bytes: .owned(Self.floatBytes([1])))
+    let one = Constant(name: "\(n.outputs[0])__one", dims: [1], type: DataType.float, bytes: .owned(Elements.encode([1], as: DataType.float)))
     try elementwise(.div, .constant(one), value(n.inputs[0]), n.outputs[0], .div)
   }
 
@@ -254,15 +247,6 @@ extension LiteRTLowering {
       }
     }
     try elementwise(.pow, x, value(n.inputs[1]), n.outputs[0], .pow)
-  }
-
-  static func floatBytes(_ values: [Float]) -> [UInt8] {
-    var b: [UInt8] = []
-    b.reserveCapacity(values.count * 4)
-    for v in values {
-      withUnsafeBytes(of: v.bitPattern.littleEndian) { b.append(contentsOf: $0) }
-    }
-    return b
   }
 
   // MARK: Cast, Constant, Not
@@ -288,22 +272,15 @@ extension LiteRTLowering {
   /// A constant's elements converted to `to`, as ONNX's Cast does for the
   /// types the lowering meets.
   func castBytes(_ c: Constant, to: Int32) throws -> [UInt8] {
-    var out: [UInt8] = []
-    func append<T: FixedWidthInteger>(_ v: T) {
-      withUnsafeBytes(of: v.littleEndian) { out.append(contentsOf: $0) }
-    }
     switch to {
-    case DataType.float: for f in try floats(c) { append(f.bitPattern) }
-    case DataType.float16: for f in try floats(c) { append(Float16(f).bitPattern) }
-    case DataType.double: for f in try floats(c) { append(Double(f).bitPattern) }
-    case DataType.bool: for f in try floats(c) { out.append(f != 0 ? 1 : 0) }
+    case DataType.float, DataType.float16, DataType.double: return Elements.encode(try floats(c), as: to)
+    case DataType.bool: return try floats(c).map { $0 != 0 ? 1 : 0 }
     default:
       guard DataType.isInteger(to) else { throw OnnxError("cannot fold a Cast to \(OnnxMeta.typeName(to))") }
       let values: [Int64] =
         DataType.isInteger(c.type) || c.type == DataType.bool ? try integers(c) : try floats(c).map { Int64($0.rounded(.towardZero)) }
       return try Elements.encode(values, as: to, for: c.name)
     }
-    return out
   }
 
   mutating func constantNode(_ n: Node) throws {
@@ -313,9 +290,9 @@ extension LiteRTLowering {
       renamed.name = n.outputs[0]
       values[n.outputs[0]] = .constant(Constant(name: n.outputs[0], dims: t.dims.map { Int($0) }, type: t.elementType, bytes: .initializer(renamed)))
     } else if let f = n.attribute("value_float")?.f {
-      try defineConstant(n.outputs[0], [], DataType.float, Self.floatBytes([f]))
+      try defineConstant(n.outputs[0], [], DataType.float, Elements.encode([f], as: DataType.float))
     } else if let floats = n.attribute("value_floats")?.floats, !floats.isEmpty {
-      try defineConstant(n.outputs[0], [floats.count], DataType.float, Self.floatBytes(floats))
+      try defineConstant(n.outputs[0], [floats.count], DataType.float, Elements.encode(floats, as: DataType.float))
     } else if let i = n.attribute("value_int")?.i {
       try defineConstant(n.outputs[0], [], DataType.int64, Elements.encode([i], as: DataType.int64, for: n.outputs[0]))
     } else if let ints = n.attribute("value_ints")?.ints, !ints.isEmpty {
@@ -938,8 +915,8 @@ extension LiteRTLowering {
       let keep = bits.map { $0 == keepWhere ? Float(1) : 0 }
       // The fill and keep, both at the broadcast of the mask's and the fill's shapes.
       let shape = try Self.broadcast(mask.dims, fill.dims)
-      let keepFull = Self.broadcastFloats(keep, from: mask.dims, to: shape)
-      var fills = Self.broadcastFloats(try floats(fill), from: fill.dims, to: shape)
+      let keepFull = try Self.broadcastFloats(keep, from: mask.dims, to: shape)
+      var fills = try Self.broadcastFloats(floats(fill), from: fill.dims, to: shape)
       if fills.contains(where: \.isInfinite) {
         guard try softmaxReadsEveryRow(name, keep: keepFull, shape: shape, out: out) else {
           return try select(n, cond, x, y, out)
@@ -976,15 +953,12 @@ extension LiteRTLowering {
     return true
   }
 
-  static func broadcastFloats(_ values: [Float], from: [Int], to: [Int]) -> [Float] {
+  static func broadcastFloats(_ values: [Float], from: [Int], to: [Int]) throws -> [Float] {
     if from == to { return values }
     let padded = [Int](repeating: 1, count: to.count - from.count) + from
     let strides = Self.strides(padded).enumerated().map { padded[$0.offset] == 1 ? 0 : $0.element }
-    let bytes = Self.floatBytes(values)
-    let copied = Self.stridedCopy(bytes, size: 4, out: to, base: 0, strides: strides)
-    return copied.withUnsafeBytes { p in
-      (0..<to.reduce(1, *)).map { Float(bitPattern: UInt32(littleEndian: p.loadUnaligned(fromByteOffset: $0 * 4, as: UInt32.self))) }
-    }
+    let copied = Self.stridedCopy(Elements.encode(values, as: DataType.float), size: 4, out: to, base: 0, strides: strides)
+    return try Elements.floats(copied, as: DataType.float, for: "a broadcast")
   }
 
   private mutating func select(_ n: Node, _ cond: Value, _ x: Value, _ y: Value, _ out: [Int]) throws {
