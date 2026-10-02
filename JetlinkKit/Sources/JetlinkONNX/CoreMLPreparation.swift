@@ -23,6 +23,11 @@ import Foundation
 /// provider, which neither needs; the CPU provider on Android runs step 4's
 /// transposed fp16 Gemm on one thread, a hundred times slower than MatMul.
 ///
+/// `.liteRT` is none of the above but `Patches.forLiteRT`: the graph the
+/// TFLite writer reads, written out as model.onnx so it can be checked
+/// against the original on onnxruntime. The images stay uint8, there is no
+/// cache key, and a frame queue's input and output take their 4-D shape.
+///
 /// The files are what Python's onnx.save writes for the same model: field
 /// for field, and byte for byte on a model Python wrote.
 ///
@@ -45,6 +50,8 @@ public enum CoreMLPreparation {
     /// One model for TensorRT or the CPU: model.onnx, tinygrad's ops
     /// stripped and the images fp16, nothing else changed.
     case plain
+    /// One model rewritten for LiteRT (`Patches.forLiteRT`): model.onnx.
+    case liteRT
   }
 
   public struct Part: Sendable, Equatable {
@@ -73,6 +80,8 @@ public enum CoreMLPreparation {
     public let norms: Int
     /// Vision head nodes moved to fp32; 0 unless the layout is `.aneWhole`.
     public let heads: Int
+    /// What the LiteRT rewrites did; nil unless the layout is `.liteRT`.
+    public let liteRT: LiteRTRewrites?
     public let parts: [Part]
   }
 
@@ -107,6 +116,13 @@ public enum CoreMLPreparation {
     cacheKey: (String) -> String,
     progress: ((Double) -> Void)?
   ) throws -> Report {
+    if layout == .liteRT {
+      let (model, rewrites) = try Patches.liteRTModel(src)
+      let part = try write([("model", model)], src, into: directory, progress: progress)
+      return Report(
+        stripped: rewrites.stripped, retypedImages: false, gathers: rewrites.gathers, gemms: 0, tiles: 0, norms: 0, heads: 0,
+        liteRT: rewrites, parts: part)
+    }
     var model = try Decode.model(src)
     guard var g = model.graph else { throw OnnxError("the model has no graph") }
     if let t = g.initializers.first(where: \.isExternal) {
@@ -139,7 +155,7 @@ public enum CoreMLPreparation {
     case .split:
       let (vision, policy) = try Split.visionPolicy(model)
       parts = [("vision", vision), ("policy", policy)]
-    case .whole, .aneWhole, .plain:
+    case .whole, .aneWhole, .plain, .liteRT:
       parts = [("model", model)]
     }
     for i in parts.indices where layout != .plain {
@@ -147,7 +163,17 @@ public enum CoreMLPreparation {
       parts[i].model.props.removeAll { $0.key == cacheKeyProp || $0.key == "CACHE_KEY" }
       parts[i].model.props.append(Prop(raw: nil, key: cacheKeyProp, value: cacheKey(parts[i].name)))
     }
+    let reported = try write(parts, src, into: directory, progress: progress)
+    return Report(
+      stripped: stripped, retypedImages: retyped, gathers: gathers, gemms: gemms, tiles: tiles,
+      norms: norms, heads: heads, liteRT: nil, parts: reported)
+  }
 
+  /// Encodes each part and streams it to `<name>.onnx` in `directory`; on a
+  /// failure, the files already written go.
+  private static func write(
+    _ parts: [(name: String, model: Model)], _ src: Source, into directory: URL, progress: ((Double) -> Void)?
+  ) throws -> [Part] {
     let encoded = parts.map { part in
       (
         name: part.name, bytes: Encode.model(part.model, src),
@@ -178,9 +204,7 @@ public enum CoreMLPreparation {
       throw error
     }
     progress?(1.0)
-    return Report(
-      stripped: stripped, retypedImages: retyped, gathers: gathers, gemms: gemms, tiles: tiles,
-      norms: norms, heads: heads, parts: reported)
+    return reported
   }
 }
 
