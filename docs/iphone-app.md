@@ -15,7 +15,7 @@ Mac: [Jetlink for Mac](macos-app.md). Jetson or PC: [README](../README.md#quick-
 - An iPhone with USB-C on iOS 26.1 or later, or an iPad with USB-C on iPadOS
   26.1 or later. iPads with Lightning are not supported.
 - Ideally a USB 3 model: see [USB 3 matters](#usb-3-matters).
-- A USB 3 USB-C cable, or a USB-A to USB-C cable with a USB-C adapter.
+- A USB 3 USB-C cable.
 - A powered USB-C hub between them keeps the phone charging (it runs the model
   20 times a second).
 - About 3 GB free per model.
@@ -54,8 +54,8 @@ Building and testing without a phone: [iPhone development](../ios/README.md).
 1. On the comma, while offroad, set **Accelerator Link** to **iOS** in the
    models settings. **USB** is for a Jetson, Linux PC or Mac.
 2. Open Jetlink. The first time, allow **Local Network** access.
-3. Connect the phone to the comma with a USB 3 USB-C cable, or a USB-A to USB-C
-   cable with a USB-C adapter. A powered USB-C hub between them keeps it charging.
+3. Connect the phone to the comma with a USB 3 USB-C cable. A powered USB-C
+   hub between them keeps it charging.
 4. The title reads **Connected over USB 3**. **USB 2** (orange title, and on the
    Link tile) means the phone, hub or cable is not USB 3. See
    [USB 3 matters](#usb-3-matters).

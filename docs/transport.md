@@ -10,9 +10,9 @@ A USB 3 data cable; charge-only cables do not work.
 | Server | Cable to the comma's USB-C port |
 | --- | --- |
 | Jetson | USB-A to USB-C, from the Jetson's USB-A port (its USB-C port may not connect) |
-| Mac | USB-C cable, or USB-A to USB-C with a USB-C adapter |
+| Mac | USB-C cable |
 | Linux PC | USB-A to USB-C, from a USB-A port on the PC |
-| iPhone | USB-C cable, or USB-A to USB-C with a USB-C adapter; a powered USB-C hub between them keeps the phone charging |
+| iPhone | USB-C cable; a powered USB-C hub between them keeps the phone charging |
 | Android | USB-A to USB-C, from a USB 3 hub with USB-C power pass-through on the phone, so it charges; or a USB-C to USB-A adapter |
 
 - The comma holds its USB-C port as the device for any host but a chestnut.

@@ -109,8 +109,8 @@ Not yet run on a phone. You need:
 2. **Enable Jetlink.** Set **Settings > Models > Accelerator Link** to **USB**
    (Jetson, Linux PC, Mac, Android) or **iOS** (iPhone, iPad). Offroad only. Leave
    **Big Model** at its default for the first run.
-3. **Connect USB.** A USB 3 USB-C cable, or a USB-A to USB-C cable with a
-   USB-C adapter. Jetson: use its USB-A port. Charge-only cables won't work.
+3. **Connect USB.** A USB 3 USB-C cable (Jetson: USB-A to USB-C, from its
+   USB-A port). Charge-only cables won't work.
 4. **Wait for green.** The home-button icon pulses while the model downloads
    and prepares (first time: about 3 minutes on a Jetson, 20 seconds on an
    M1 Pro). Stay offroad and online until it turns green.
@@ -133,7 +133,7 @@ More: [daily use and icon meanings](docs/using-jetlink.md).
 | Problem | First check |
 | --- | --- |
 | No Accelerator Link setting | Confirm the `jetson-trt` branch in Settings > Software. |
-| Server stays waiting; icon never pulses | Check the server is running. Try another USB 3 data cable, or a USB-A to USB-C cable with a USB-C adapter. |
+| Server stays waiting; icon never pulses | Check the server is running. Try another USB 3 data cable. |
 | Model list is empty | Connect the comma to the internet, then use Refresh Model List. |
 | Setup alert or orange icon | Read the alert. Check internet, then set Accelerator Link to Off and back to USB or iOS. |
 | Alert says **no warp built for this camera** | Update or reinstall the `jetson-trt` branch. |
