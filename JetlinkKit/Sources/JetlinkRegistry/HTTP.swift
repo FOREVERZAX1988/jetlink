@@ -34,7 +34,7 @@ struct HTTP: Sendable {
       do {
         return try await getOnce(candidate, timeout: timeout, limit: limit)
       } catch let error as RegistryError {
-        if case .notFound = error { throw error }
+        if case .notFound(_) = error { throw error }
         last = error
       }
     }

@@ -60,7 +60,7 @@ public enum Mirrors {
     return .githubPrefix
   }
 
-  private enum Shape {
+  enum Shape {
     case huggingFaceProxy
     case githubPrefix
   }
@@ -75,6 +75,8 @@ public enum Mirrors {
     case .githubPrefix:
       guard let urlHost = host(of: url), githubHosts.contains(urlHost) else { return nil }
       return "\(base)/\(url)"
+    case nil:
+      return nil
     }
   }
 
