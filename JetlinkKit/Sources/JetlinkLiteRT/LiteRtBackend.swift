@@ -165,7 +165,7 @@ public final class LiteRtBackend: EngineBackend {
       // whole, and leaves the GPU's cache for every load after. No run: the
       // compile writes the cache (Metal's whole-graph one appears before any
       // run), and the host's warm-up runs the loaded model anyway.
-      let what = profile == .gpu ? "compiling for the GPU" : "loading the model to check it runs"
+      let what = profile == .gpu ? "compiling for the GPU" : "compiling for the CPU"
       let took = (expect["compile_seconds"] as? NSNumber)?.doubleValue ?? (profile == .gpu ? LiteRtBackend.expectedCompileSeconds : 0)
       report("compile", 0, what)
       let compileStarted = Date()
