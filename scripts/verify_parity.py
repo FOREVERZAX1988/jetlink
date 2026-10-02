@@ -317,6 +317,19 @@ def tolerance(ref: np.ndarray, spread: float) -> float:
   return max(TINY_TOLERANCE * float(np.abs(ref).max(initial=0.0)), CONSTANT_FRACTION * spread)
 
 
+def judge(a: np.ndarray, b: np.ndarray, per_frame: int, spread: float = np.inf) -> tuple[bool, str]:
+  """Whether `a` matches the reference `b`, and the number that says so. Correlation,
+  unless there is too little to correlate: fewer than MIN_SAMPLES values a frame, or
+  (a column) moving less than QUIET_FRACTION of `spread`, its slice's. Those are held
+  to absolute error, within `tolerance` of their own largest value."""
+  if per_frame < MIN_SAMPLES or b.std() < QUIET_FRACTION * spread:
+    bound = tolerance(b, b.std() if np.isinf(spread) else spread)
+    err = np.abs(a - b).max()
+    return err <= bound, f'by error, max abs {err:.4g} {"<=" if err <= bound else ">"} {bound:.4g}'
+  c = _corr(a, b)
+  return c >= MIN_CORR, f'{c:.6f}'
+
+
 def report_slices(spec: ModelSpec, links, refs) -> dict[str, bool]:
   """One line per output slice with every frame pooled. Returns whether each passed.
 
@@ -332,13 +345,8 @@ def report_slices(spec: ModelSpec, links, refs) -> dict[str, bool]:
     b = np.concatenate([y[sl] for y in refs])
     whole = _corr(a, b)
     # a slice's own size, not stop - start: a spec may count from the end, pad as [-2:]
-    if links[0][sl].size < MIN_SAMPLES:
-      bound = tolerance(b, b.std())
-      ok = np.abs(a - b).max() <= bound
-      detail = f"{'by error, within ' + f'{bound:.4g}':38}"
-    else:
-      ok = whole >= MIN_CORR
-      detail = f"{'(compared whole)':38}"
+    ok, why = judge(a, b, links[0][sl].size)
+    detail = f"{why if why.startswith('by error') else '(compared whole)':38}"
     cols_a = [columns(name, x[sl]) for x in links]
     if cols_a[0]:
       cols_b = [columns(name, y[sl]) for y in refs]
@@ -346,17 +354,13 @@ def report_slices(spec: ModelSpec, links, refs) -> dict[str, bool]:
       for k in cols_a[0]:
         ca = np.concatenate([c[k] for c in cols_a])
         cb = np.concatenate([c[k] for c in cols_b])
-        if cols_a[0][k].size < MIN_SAMPLES or cb.std() < QUIET_FRACTION * b.std():
+        col_ok, col_why = judge(ca, cb, cols_a[0][k].size, b.std())
+        if col_why.startswith('by error'):
           by_error += 1
-          bound = tolerance(cb, b.std())
-          if np.abs(ca - cb).max() > bound:
-            failed.append(f'{k} by error, max abs {np.abs(ca - cb).max():.4g} > {bound:.4g}')
-          continue
-        c = _corr(ca, cb)
-        if c < worst_c:
-          worst_c, worst_k = c, k
-        if c < MIN_CORR:
-          failed.append(f'{k} {c:.6f}')
+        elif float(col_why) < worst_c:
+          worst_c, worst_k = float(col_why), k
+        if not col_ok:
+          failed.append(f'{k} {col_why}')
       ok &= not failed
       worst = f"worst col {worst_c:8.6f} {worst_k:8}" if worst_k else f"{'no column correlated':27}"
       note = f'({by_error} by error)' if by_error else ''
@@ -391,32 +395,25 @@ def compare(args) -> int:
     refs.append(ref[:m])
 
   # Per frame: a stale queue or a dropped reset shows on the frame it happens to.
-  # Slices too small to correlate are held to error, against all frames' largest value.
-  frame_fail: dict[str, str] = {}
+  # A slice too small to correlate is held to error, which the pooled check below
+  # applies to every frame at once.
+  frame_fail: dict[str, float] = {}
   for i, (link, ref) in enumerate(zip(links, refs, strict=True)):
     print(f"\nframe {i}: corr {_corr(link, ref):.6f}  max abs {np.abs(link - ref).max():.4f}")
     for name, sl in sorted(spec.output_slices.items()):
       a, b = link[sl], ref[sl]
       c = _corr(a, b)
-      err = np.abs(a - b).max()
-      if a.size >= MIN_SAMPLES:
-        bad = c < MIN_CORR
-        why = f'{c:.6f}'
-      else:
-        pooled = np.concatenate([r[sl] for r in refs])
-        bound = tolerance(pooled, pooled.std())
-        bad = err > bound
-        why = f'max abs {err:.4g} > {bound:.4g}'
-      if bad and name not in frame_fail:
-        frame_fail[name] = why
-      flag = '   <-- FAIL' if bad else ('' if a.size >= MIN_SAMPLES else '   (by error)')
-      print(f"    {name:24} corr {c:8.6f}  max abs {err:8.4f}  "
+      gated = a.size >= MIN_SAMPLES
+      if gated and c < MIN_CORR:
+        frame_fail[name] = min(frame_fail.get(name, 2.0), c)
+      flag = '   <-- FAIL' if gated and c < MIN_CORR else ('' if gated else '   (by error, pooled)')
+      print(f"    {name:24} corr {c:8.6f}  max abs {np.abs(a - b).max():8.4f}  "
             f"mean abs {np.abs(a - b).mean():7.5f}{flag}")
 
   print(f"\npooled over {n} frames, per slice and per column:")
   passed = report_slices(spec, links, refs)
 
-  bad = [f'{k} {why} on one frame' for k, why in sorted(frame_fail.items())]
+  bad = [f'{k} {v:.6f} on one frame' for k, v in sorted(frame_fail.items(), key=lambda kv: kv[1])]
   bad += [f'{k} pooled' for k, ok in passed.items() if not ok and k not in frame_fail]
   if bad:
     print(f"\nFAIL: {len(bad)} slice(s) below corr {MIN_CORR} or past their error bound, whole or in a column: "
