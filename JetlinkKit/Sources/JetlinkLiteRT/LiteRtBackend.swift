@@ -24,33 +24,6 @@ public enum LiteRtProfile: String, CaseIterable, Sendable {
   }
 }
 
-/// Turns an ONNX into the .tflite LiteRT runs. JetlinkONNX's
-/// LiteRTPreparation does it on the device; behind this seam the backend
-/// builds, and its tests run, without it.
-public protocol LiteRTConverter: Sendable {
-  /// What the conversion writes now: an artifact converted under another
-  /// version rebuilds.
-  var version: Int { get }
-  /// Writes the model, one part, into `directory`.
-  func convert(model: URL, into directory: URL) throws -> PreparedModel
-}
-
-/// The conversion on the device: JetlinkONNX's LiteRTPreparation.
-public struct ONNXToLiteRT: LiteRTConverter {
-  public init() {}
-
-  public var version: Int { 1 }
-
-  public func convert(model: URL, into directory: URL) throws -> PreparedModel {
-    let r = try LiteRTPreparation.prepare(source: model, into: directory)
-    let rewrites = r.rewrites.filter { $0.value > 0 }.sorted { $0.key < $1.key }.map { "\($0.value) \($0.key)" }
-    return PreparedModel(
-      parts: [PreparedModel.Part(name: "model", file: r.url.lastPathComponent, weightBytes: r.weightBytes)],
-      summary: "\(rewrites.joined(separator: ", ")); \(r.operators.values.reduce(0, +)) operators, "
-        + "\(r.transposesRemoved) transposes removed, \(r.fileBytes / 1_000_000) MB")
-  }
-}
-
 /// LiteRT in process, on the GPU or the CPU: the backend for phones
 /// onnxruntime's QNN does not drive. The artifact is a directory holding the
 /// converted model, the GPU's compile cache and their manifest
@@ -63,6 +36,9 @@ public final class LiteRtBackend: EngineBackend {
   /// Cinque Terre V3 on an M1 Pro's Metal; a phone's OpenCL compile is
   /// unmeasured.
   static let expectedCompileSeconds = 60.0
+  /// What JetlinkONNX's LiteRTPreparation writes now: an artifact converted
+  /// under another version rebuilds.
+  static let conversionVersion = 1
   /// The CPU's pool when it runs the whole model: half the cores, leaving
   /// the rest to the link and the app.
   static var cpuThreads: Int { max(1, ProcessInfo.processInfo.activeProcessorCount / 2) }
@@ -74,7 +50,6 @@ public final class LiteRtBackend: EngineBackend {
   /// Where LiteRT's libraries are; nil for $JETLINK_LITERT_DIR or the
   /// loader's path (`LiteRtRuntime.load`).
   public let libraries: URL?
-  let converter: any LiteRTConverter
   private let preparer: any ModelPreparer
   private let chip: String
   private let log = ServerLog(category: "litert")
@@ -84,13 +59,9 @@ public final class LiteRtBackend: EngineBackend {
   /// $JETLINK_LITERT_DIR. `chip` names what the artifacts are valid for: on
   /// Android the SoC's model, "Tensor G5" (Build.SOC_MODEL), which a GPU's
   /// compiled programs are for; nil is HostChip's name for this machine.
-  public init(
-    profile: LiteRtProfile, preparer: any ModelPreparer, converter: any LiteRTConverter = ONNXToLiteRT(), libraries: URL? = nil,
-    chip: String? = nil
-  ) {
+  public init(profile: LiteRtProfile, preparer: any ModelPreparer, libraries: URL? = nil, chip: String? = nil) {
     self.profile = profile
     self.preparer = preparer
-    self.converter = converter
     self.libraries = libraries
     let chip = chip ?? HostChip.name()
     self.chip = chip.isEmpty ? "unknown" : chip
@@ -171,18 +142,16 @@ public final class LiteRtBackend: EngineBackend {
       report("convert", 0, "converting the model for LiteRT")
       let convertStarted = Date()
       let convertTook = (expect["convert_seconds"] as? NSNumber)?.doubleValue ?? 0
-      let prepared = try Ticker.during(interval: 1, Ticker.paced("convert", "converting the model for LiteRT", took: convertTook, report: report)) {
-        try converter.convert(model: model, into: staged)
-      }
-      guard prepared.parts.count == 1, let part = prepared.parts.first else {
-        throw HostError.failed("the conversion wrote \(prepared.parts.map(\.name)), expected one model")
+      let converted = try Ticker.during(interval: 1, Ticker.paced("convert", "converting the model for LiteRT", took: convertTook, report: report)) {
+        try LiteRTPreparation.prepare(source: model, into: staged)
       }
       let convertSeconds = Date().timeIntervalSince(convertStarted)
-      log.info("converted \(model.lastPathComponent): \(prepared.summary)")
+      log.info("converted \(model.lastPathComponent): \(converted.summary)")
       report("convert", 1, "converted in \(Int(convertSeconds.rounded())) s")
 
       // The cache is named for the artifact, which outlives the staging.
-      let manifest = LiteRtArtifact.Manifest(model: part.file, cache: "gpu-cache", cacheKey: artifact.deletingPathExtension().lastPathComponent)
+      let manifest = LiteRtArtifact.Manifest(
+        model: converted.url.lastPathComponent, cache: "gpu-cache", cacheKey: artifact.deletingPathExtension().lastPathComponent)
       try FileManager.default.createDirectory(at: staged.appending(path: manifest.cache, directoryHint: .isDirectory), withIntermediateDirectories: true)
       try LiteRtArtifact.write(manifest, in: staged)
 
@@ -212,7 +181,7 @@ public final class LiteRtBackend: EngineBackend {
 
   public func load(artifact: URL, report: @escaping ProgressFn) throws -> any Engine {
     try open()
-    let (manifest, meta) = try LiteRtArtifact.open(artifact, version: converter.version)
+    let (manifest, meta) = try LiteRtArtifact.open(artifact, version: LiteRtBackend.conversionVersion)
     let (engine, seconds) = try Artifact.load(artifact, meta: meta, what: "the model", report: report) {
       try self.engine(artifact, manifest)
     }

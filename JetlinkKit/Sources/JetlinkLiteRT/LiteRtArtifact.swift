@@ -52,7 +52,7 @@ enum LiteRtArtifact {
     var meta = Artifact.meta(backend, runtimeKey: "litert", model: model, started: started)
     meta["model"] = manifest.model
     meta["accelerator"] = engine.label
-    meta["prepare"] = backend.converter.version
+    meta["prepare"] = LiteRtBackend.conversionVersion
     meta["preparer"] = "swift"
     return meta
   }
