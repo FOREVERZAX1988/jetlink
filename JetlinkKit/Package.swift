@@ -114,7 +114,7 @@ let package = Package(
     .executableTarget(
       name: "jetlink-server",
       dependencies: [
-        "JetlinkKit", "JetlinkLog", "JetlinkRegistry", "JetlinkServer", "JetlinkORT", "JetlinkStatusPage",
+        "JetlinkKit", "JetlinkLog", "JetlinkRegistry", "JetlinkServer", "JetlinkORT", "JetlinkLiteRT", "JetlinkStatusPage",
         .target(name: "JetlinkTRT", condition: .when(platforms: [.linux])),
         .target(name: "JetlinkLinux", condition: .when(platforms: [.linux])),
         .product(name: "ArgumentParser", package: "swift-argument-parser", condition: .when(platforms: [.macOS, .linux])),

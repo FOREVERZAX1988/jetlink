@@ -153,6 +153,21 @@ struct InventoryTests {
     #expect(payload.artifacts.allSatisfy { !$0.current })
   }
 
+  @Test func aLiteRtArtifactIsPairedAndReportsItsRuntime() throws {
+    let tmp = try TemporaryDirectory()
+    let sha = String(repeating: "e", count: 64)
+    let key = "\(sha.prefix(16)).litert2.2.0.litert-gpu-Tensor_G5"
+    let artifact = tmp.layout.engines.appending(path: key + ".litertcache")
+    try FileManager.default.createDirectory(at: artifact, withIntermediateDirectories: true)
+    try Data(repeating: 1, count: 40).write(to: artifact.appending(path: "model.tflite"))
+    try JSON.object(["backend": "litert", "litert": "2.2.0", "device": "litert-gpu-Tensor_G5", "spec": makeSpec(sha)]).data()
+      .write(to: tmp.layout.engines.appending(path: key + ".json"))
+    let payload = Registry(layout: tmp.layout).inventory(artifactTag: "litert2.2.0.litert-gpu-Tensor_G5", artifactSuffix: ".litertcache", loaded: nil)
+    let entry = try #require(payload.artifacts.first)
+    #expect(entry.path == artifact.path(percentEncoded: false) && entry.bytes == 40)
+    #expect(entry.runtimeVersion == "2.2.0" && entry.current)
+  }
+
   @Test func aModelOfUnknownIdentityIsListedByItsPrefix() throws {
     let tmp = try TemporaryDirectory()
     let registry = Registry(layout: tmp.layout)
