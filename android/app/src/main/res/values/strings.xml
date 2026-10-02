@@ -39,6 +39,14 @@
     <string name="settings_keep_screen_on">Keep Screen On</string>
     <string name="settings_language">Language / 语言</string>
     <string name="settings_theme">Theme</string>
+    <string name="settings_mirrors">Mirror Sources</string>
+    <string name="settings_mirrors_footer">Model downloads and the catalog try these before the original hosts, in this order; the originals always come last. Any source that fails is skipped.</string>
+    <string name="mirror_add">Add a Mirror Source</string>
+    <string name="mirror_hint">e.g. https://hf-mirror.com or https://ghfast.top</string>
+    <string name="mirror_invalid">Enter an http:// or https:// web address.</string>
+    <string name="mirror_delete">Remove</string>
+    <string name="action_confirm">Confirm</string>
+    <string name="action_cancel_dialog">Cancel</string>
     <string name="theme_system">Follow System</string>
     <string name="theme_light">Light</string>
     <string name="theme_dark">Dark</string>

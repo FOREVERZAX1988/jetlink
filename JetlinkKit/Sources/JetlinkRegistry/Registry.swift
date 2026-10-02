@@ -314,7 +314,9 @@ public final class Registry: Sendable {
     if let status = Files.status(dest), status.isFile, status.size == pointer.size {
       return dest
     }
-    for endpoint in LFS.endpoints {
+    // Each endpoint, then each mirror that can stand in for it, then the
+    // endpoint itself: a blocked host is not different from a full one.
+    for endpoint in LFS.endpoints.flatMap({ Mirrors.candidates(for: $0) }) {
       guard let href = await LFS.resolve(endpoint: endpoint, pointer: pointer, session: session) else { continue }
       Registry.log.info("fetching \(pointer.oid.prefix(16), privacy: .public) (\(pointer.size >> 20) MB) from \(endpoint, privacy: .public)")
       return try await LFS.download(href: href, pointer: pointer, dest: dest, session: session, progress: progress, shouldStop: shouldStop)

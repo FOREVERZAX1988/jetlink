@@ -21,6 +21,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
@@ -101,6 +102,8 @@ class ServerController(private val context: Context, private val scope: Coroutin
         put("preload", true)
         put("chip", Chip.model)
         put("native_library_dir", context.applicationInfo.nativeLibraryDir)
+        // The mirror bases the model catalog and the LFS requests try first.
+        put("mirrors", buildJsonArray { settings.mirrors.forEach { add(JsonPrimitive(it)) } })
     }
 
     /** Follows the snapshot and the log for as long as the app runs. */

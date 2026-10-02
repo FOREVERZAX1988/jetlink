@@ -39,6 +39,14 @@
     <string name="settings_keep_screen_on">保持屏幕常亮</string>
     <string name="settings_language">Language / 语言</string>
     <string name="settings_theme">主题</string>
+    <string name="settings_mirrors">镜像源</string>
+    <string name="settings_mirrors_footer">模型下载与模型目录会按此顺序先尝试这些镜像源，最后才尝试原始站点；任一源失败会自动跳过。</string>
+    <string name="mirror_add">添加镜像源</string>
+    <string name="mirror_hint">例如 https://hf-mirror.com 或 https://ghfast.top</string>
+    <string name="mirror_invalid">请输入 http:// 或 https:// 开头的网址。</string>
+    <string name="mirror_delete">移除</string>
+    <string name="action_confirm">确定</string>
+    <string name="action_cancel_dialog">取消</string>
     <string name="theme_system">跟随系统</string>
     <string name="theme_light">亮色</string>
     <string name="theme_dark">深色</string>

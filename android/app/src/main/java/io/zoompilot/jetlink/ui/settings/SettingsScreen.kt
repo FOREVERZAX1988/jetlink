@@ -19,10 +19,17 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -164,6 +171,7 @@ fun SettingsContent(values: SettingsValues, info: SettingsInfo, actions: Setting
         Connection(values, info, actions)
         Performance(values, info, actions)
         DisplayAndLanguage(values, actions)
+        MirrorSources(values, actions)
         info.snapshot.disk?.let { disk ->
             FormSection(l10n(R.string.settings_storage)) {
                 ValueRow(l10n(R.string.storage_downloaded), Format.bytes(disk.modelsBytes))
@@ -253,6 +261,65 @@ private fun DisplayAndLanguage(values: SettingsValues, actions: SettingsActions)
                 }
             }
         }
+    }
+}
+
+/** The mirror bases the server tries before the original hosts, added and removed by hand. */
+@Composable
+private fun MirrorSources(values: SettingsValues, actions: SettingsActions) {
+    var adding by remember { mutableStateOf(false) }
+    var draft by remember { mutableStateOf("") }
+    FormSection(l10n(R.string.settings_mirrors), footer = { FormFooter(l10n(R.string.settings_mirrors_footer)) }) {
+        values.mirrors.forEach { mirror ->
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(mirror, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                IconButton(onClick = { actions.update { it.copy(mirrors = values.mirrors - mirror) } }) {
+                    Icon(Icons.Filled.Close, contentDescription = l10n(R.string.mirror_delete))
+                }
+            }
+            RowDivider()
+        }
+        ActionRow(l10n(R.string.mirror_add), { draft = ""; adding = true }, chevron = false)
+    }
+    if (adding) {
+        val trimmed = draft.trim()
+        val valid = (trimmed.startsWith("https://") || trimmed.startsWith("http://")) && trimmed.length > 8
+        AlertDialog(
+            onDismissRequest = { adding = false },
+            title = { Text(l10n(R.string.mirror_add)) },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = draft,
+                        onValueChange = { draft = it },
+                        singleLine = true,
+                        placeholder = { Text(l10n(R.string.mirror_hint)) },
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    )
+                    if (trimmed.isNotBlank() && !valid) {
+                        Text(l10n(R.string.mirror_invalid), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        adding = false
+                        val mirror = trimmed.trimEnd('/')
+                        if (mirror !in values.mirrors) {
+                            actions.update { it.copy(mirrors = values.mirrors + mirror) }
+                        }
+                    },
+                    enabled = valid,
+                ) { Text(l10n(R.string.action_confirm)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { adding = false }) { Text(l10n(R.string.action_cancel_dialog)) }
+            },
+        )
     }
 }
 
