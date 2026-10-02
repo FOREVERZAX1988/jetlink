@@ -6,12 +6,28 @@ import Testing
 @testable import JetlinkLiteRT
 @testable import JetlinkServer
 
+#if canImport(Android)
+  import Android
+#endif
+
 /// LiteRT's libraries, where $JETLINK_LITERT_DIR names them: the
 /// ai-edge-litert 2.2.0 wheel's package directory on a Mac. Without them the
 /// LiteRT suite skips, so a machine without LiteRT stays green.
 enum LiteRtLibraries {
   static var available: Bool {
     !(ProcessInfo.processInfo.environment[LiteRtRuntime.directoryVariable] ?? "").isEmpty
+  }
+
+  /// The profiles a test can run here. On Android the GPU needs OpenCL:
+  /// without it LiteRT falls back to OpenGL, which in a test runner (a shell
+  /// process, no app, no EGL context) dies inside LiteRT's accelerator on a
+  /// null string, as on the emulator, where the app's server gets an error.
+  static var profiles: [LiteRtProfile] {
+    #if os(Android)
+      dlopen("libOpenCL.so", RTLD_NOW) != nil ? [.cpu, .gpu] : [.cpu]
+    #else
+      [.cpu, .gpu]
+    #endif
   }
 
   /// The bench's directory, $JETLINK_LITERT_BENCH (LiteRtBenchTests).
@@ -50,7 +66,7 @@ struct LiteRtBackendTests {
     LiteRtBackend(profile: profile, preparer: ONNXPreparer(), converter: conversion)
   }
 
-  @Test("A comma is served Python's outputs from LiteRT", arguments: [LiteRtProfile.cpu, .gpu], ["tiny_queued", "tiny_stateful"])
+  @Test("A comma is served Python's outputs from LiteRT", arguments: LiteRtLibraries.profiles, ["tiny_queued", "tiny_stateful"])
   func servesGoldenFrames(_ profile: LiteRtProfile, _ name: String) throws {
     let golden = try Golden(name)
     try serve(backend: backend(profile)) { server, client in
@@ -84,7 +100,7 @@ struct LiteRtBackendTests {
     }
   }
 
-  @Test("Reset empties the looped state, in the GPU's memory as in the host's", arguments: [LiteRtProfile.cpu, .gpu])
+  @Test("Reset empties the looped state, in the GPU's memory as in the host's", arguments: LiteRtLibraries.profiles)
   func resetsState(_ profile: LiteRtProfile) throws {
     let temp = try TemporaryDirectory()
     let backend = backend(profile)
@@ -127,7 +143,9 @@ struct LiteRtBackendTests {
     #expect(Golden.correlation(Data(bytes: again, count: count * 4), Data(bytes: first, count: count * 4)) > 0.99999)
   }
 
-  @Test("A model the GPU cannot run whole fails to build, and says so; the CPU builds it")
+  @Test(
+    "A model the GPU cannot run whole fails to build, and says so; the CPU builds it",
+    .enabled(if: LiteRtLibraries.profiles.contains(.gpu), "no OpenCL for LiteRT's GPU here"))
   func gpuRunsEveryOpOrNothing() throws {
     let temp = try TemporaryDirectory()
     let conversion = FixtureConversion(fixtures: ["tiny_stateful": "tiny_stateful_5d"])
