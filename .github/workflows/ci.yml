@@ -200,7 +200,7 @@ jobs:
           path: |
             ~/.cache/jetlink-build
             JetlinkKit/.build
-          key: swift-linux-${{ matrix.arch }}-${{ hashFiles('scripts/build-linux.sh', 'JetlinkKit/Package.resolved') }}
+          key: swift-linux-v2-${{ matrix.arch }}-${{ hashFiles('scripts/build-linux.sh', 'JetlinkKit/Package.resolved') }}
 
       - name: Install curl
         run: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl

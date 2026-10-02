@@ -14,11 +14,11 @@ struct MirrorTests {
 
     Mirrors.configure(["https://hf-mirror.com", "https://ghfast.top"])
 
-    // HuggingFace: the proxy swaps the host, then the prefix tries, then direct.
+    // HuggingFace: the proxy swaps the host, then direct. A GitHub prefix
+    // mirror does not carry HuggingFace's hosts.
     let hf = "https://huggingface.co/api/models/commaai/openpilot_driving_models/tree/main"
     #expect(Mirrors.candidates(for: hf) == [
       "https://hf-mirror.com/api/models/commaai/openpilot_driving_models/tree/main",
-      "https://ghfast.top/\(hf)",
       hf,
     ])
     // The LFS batch endpoint, a .git path, proxies the same way.
