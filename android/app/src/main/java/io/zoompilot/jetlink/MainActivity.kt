@@ -8,10 +8,14 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.core.content.ContextCompat
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.core.content.ContextCompat
 import io.zoompilot.jetlink.server.ServerService
 import io.zoompilot.jetlink.ui.JetlinkTheme
 import io.zoompilot.jetlink.ui.RootScreen
@@ -50,8 +54,20 @@ class MainActivity : ComponentActivity() {
         val tab = intent.getStringExtra("tab")
         val benchmark = intent.getIntExtra("benchmark", 0).takeIf { it > 0 }
         setContent {
-            JetlinkTheme {
-                RootScreen(graph = graph, initialTab = tab, launchBenchmark = benchmark)
+            // A manual language override serves every stringResource below, and
+            // follows the saved Settings value (Settings.kt), so changing it in
+            // the settings screen repaints the whole app in place.
+            val language by remember { graph.settings.values }.collectAsStateWithLifecycle()
+            val localized = remember(language.language) { L10n.overlay(this, language.language) }
+            // The overlay only changes where resources (stringResource) come
+            // from; graph (server, settings) is process-wide and unchanged.
+            CompositionLocalProvider(
+                LocalAppLocale provides language.language,
+                LocalOverlayContext provides localized,
+            ) {
+                JetlinkTheme {
+                    RootScreen(graph = graph, initialTab = tab, launchBenchmark = benchmark)
+                }
             }
         }
     }

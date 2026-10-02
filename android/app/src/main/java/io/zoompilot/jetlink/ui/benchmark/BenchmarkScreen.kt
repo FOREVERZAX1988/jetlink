@@ -68,6 +68,8 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.zoompilot.jetlink.AppGraph
+import io.zoompilot.jetlink.R
+import io.zoompilot.jetlink.l10n
 import io.zoompilot.jetlink.server.BenchReport
 import io.zoompilot.jetlink.server.BenchWindow
 import io.zoompilot.jetlink.server.Benchmark
@@ -92,14 +94,15 @@ import io.zoompilot.jetlink.ui.components.rememberWifiAddress
 import io.zoompilot.jetlink.ui.components.share
 import io.zoompilot.jetlink.ui.components.tile
 import io.zoompilot.jetlink.ui.icon
+import io.zoompilot.jetlink.ui.status.StatusL10n
 import kotlinx.coroutines.launch
 
 /** The phone's chip, as the run card names it. */
-data class ChipInfo(val line: String, val expectation: String, val tone: Tone) {
+data class ChipInfo(val line: String, val expectationRes: Int, val tone: Tone) {
     companion object {
         fun current(): ChipInfo {
-            val (text, tone) = BenchmarkText.expectation(Chip.expectation)
-            return ChipInfo(BenchmarkText.chipLine(Chip.name, Chip.hexagon), text, tone)
+            val (res, tone) = BenchmarkText.expectation(Chip.expectation)
+            return ChipInfo(BenchmarkText.chipLine(Chip.name, Chip.hexagon), res, tone)
         }
     }
 }
@@ -135,7 +138,7 @@ fun BenchmarkScreen(graph: AppGraph) {
             graph.scope.launch {
                 val reply = graph.server.benchmark(seconds)
                 if (!reply.ok) {
-                    refusal = listOfNotNull("Couldn't start the benchmark.", reply.error?.let(Format::sentence)).joinToString(" ")
+                    refusal = reply.error?.let(Format::sentence)
                 }
                 starting = false
             }
@@ -149,11 +152,11 @@ fun BenchmarkScreen(graph: AppGraph) {
         containerColor = JetlinkTheme.colors.grouped,
         topBar = {
             TopAppBar(
-                title = { Text("Benchmark", fontWeight = FontWeight.Bold) },
+                title = { Text(l10n(R.string.tab_benchmark), fontWeight = FontWeight.Bold) },
                 actions = {
                     if (report != null && reportText != null) {
                         IconButton(onClick = { share(context, reportText, "Jetlink Benchmark") }) {
-                            Icon(Icons.Filled.Share, contentDescription = "Share")
+                            Icon(Icons.Filled.Share, contentDescription = l10n(R.string.content_desc_share))
                         }
                     }
                 },
@@ -202,19 +205,19 @@ fun BenchmarkContent(
         }
     }
     val commandCards: @Composable ColumnScope.() -> Unit = {
-        SectionHeader("From the Comma")
+        SectionHeader(l10n(R.string.section_from_comma))
         CommandCard(
-            "Over the Cable", Icons.Filled.Cable, BenchmarkText.COMMA_COMMAND,
-            missing = "Load a model to get the command.",
-            note = "Run it on the comma over SSH, offroad, with Accelerator Link set to USB.",
+            l10n(R.string.bench_over_cable), Icons.Filled.Cable, BenchmarkText.COMMA_COMMAND,
+            missing = l10n(R.string.bench_missing_model),
+            note = l10n(R.string.bench_note_comma),
         )
-        SectionHeader("Accuracy")
+        SectionHeader(l10n(R.string.section_accuracy))
         CommandCard(
-            "From a Mac", Icons.Filled.Verified, parity,
-            missing = if (wifi == null) "Join Wi-Fi and load a model to get the command." else "Load a model to get the command.",
-            note = "Run it in a jetlink checkout on a Mac on the same Wi-Fi.",
+            l10n(R.string.bench_from_mac), Icons.Filled.Verified, parity,
+            missing = if (wifi == null) l10n(R.string.bench_missing_wifi) else l10n(R.string.bench_missing_model),
+            note = l10n(R.string.bench_note_mac),
         )
-        TextButton(onClick = actions.openGuide) { Text("Learn More") }
+        TextButton(onClick = actions.openGuide) { Text(l10n(R.string.action_learn_more)) }
     }
     val spacing = Arrangement.spacedBy(CardSpacing)
     BoxWithConstraints(modifier.fillMaxSize()) {
@@ -254,17 +257,17 @@ private fun RunCard(
     val event = snapshot.benchmark
     val running = BenchmarkText.running(snapshot)
     val blocker = BenchmarkText.blocker(runState, snapshot)
-    SummaryCard("Benchmark", Icons.Filled.Timer, colors.info, trailing = processor) {
+    SummaryCard(l10n(R.string.tab_benchmark), Icons.Filled.Timer, colors.info, trailing = processor) {
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
-                sha?.let { snapshot.modelName(it) ?: "Model" } ?: "No Model",
+                sha?.let { snapshot.modelName(it) ?: l10n(R.string.placeholder_model) } ?: l10n(R.string.summary_no_model),
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
             )
             Text(
                 buildAnnotatedString {
                     withStyle(SpanStyle(color = colors.secondaryText)) { append(chip.line + " · ") }
-                    withStyle(SpanStyle(color = colors.tone(chip.tone))) { append(chip.expectation) }
+                    withStyle(SpanStyle(color = colors.tone(chip.tone))) { append(l10n(chip.expectationRes)) }
                 },
                 style = MaterialTheme.typography.bodyMedium,
             )
@@ -277,22 +280,23 @@ private fun RunCard(
                 Button(onClick = { actions.start(60) }, enabled = enabled, modifier = Modifier.weight(1f)) {
                     Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("1 Minute")
+                    Text(l10n(R.string.bench_1min))
                 }
                 FilledTonalButton(onClick = { actions.start(600) }, enabled = enabled, modifier = Modifier.weight(1f)) {
                     Icon(Icons.Filled.LocalFireDepartment, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("10 Minutes")
+                    Text(l10n(R.string.bench_10min))
                 }
             }
         }
-        val failure = refusal ?: if (event?.state == "failed") "The benchmark failed. See Logs for details." else null
+        val failure = refusal?.let { l10n(R.string.bench_refusal) + " " + it }
+            ?: if (event?.state == "failed") l10n(R.string.bench_failed) else null
         if (failure != null) {
             Text(failure, style = MaterialTheme.typography.bodySmall, color = colors.bad)
         } else if (!running && blocker != null) {
-            Text(blocker, style = MaterialTheme.typography.bodySmall, color = colors.warning)
+            Text(l10n(blocker), style = MaterialTheme.typography.bodySmall, color = colors.warning)
         }
-        Text("Run it with the phone charging and in its mount.", style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
+        Text(l10n(R.string.bench_hint), style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
     }
 }
 
@@ -308,12 +312,12 @@ private fun Progress(event: Benchmark, cancel: () -> Unit) {
         )
         Row {
             Text(
-                "${Format.clock(event.elapsed)} of ${Format.clock(event.total)}",
+                l10n(R.string.bench_elapsed, Format.clock(event.elapsed), Format.clock(event.total)),
                 style = MaterialTheme.typography.bodyMedium,
                 color = colors.secondaryText,
                 modifier = Modifier.weight(1f),
             )
-            Text("${Format.integer(event.frames)} frames", style = MaterialTheme.typography.bodyMedium, color = colors.secondaryText)
+            Text(l10n(R.string.bench_frames, Format.integer(event.frames)), style = MaterialTheme.typography.bodyMedium, color = colors.secondaryText)
         }
         FigureRow(listOf(Triple("P50", event.frame?.p50, Color.Unspecified), Triple("P99", event.frame?.p99, Color.Unspecified)))
         OutlinedButton(
@@ -323,7 +327,7 @@ private fun Progress(event: Benchmark, cancel: () -> Unit) {
         ) {
             Icon(Icons.Filled.Stop, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(6.dp))
-            Text("Cancel")
+            Text(l10n(R.string.action_cancel))
         }
     }
 }
@@ -340,16 +344,16 @@ private fun VerdictCard(report: BenchReport) {
     val colors = JetlinkTheme.colors
     val verdict = Verdict.of(report.frame.p99, report.over50)
     val tone = colors.tone(verdict.tone)
-    SummaryCard("Verdict", verdictIcon(verdict), tone, trailing = if (report.cancelled) "Stopped Early" else null) {
+    SummaryCard(l10n(R.string.bench_verdict), verdictIcon(verdict), tone, trailing = if (report.cancelled) l10n(R.string.verdict_stopped_early) else null) {
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(verdict.title, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, color = tone)
-            Text(verdict.detail, style = MaterialTheme.typography.bodyMedium, color = colors.secondaryText)
+            Text(BenchmarkText.verdictTitle(verdict), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, color = tone)
+            Text(BenchmarkText.verdictDetail(verdict), style = MaterialTheme.typography.bodyMedium, color = colors.secondaryText)
         }
         FigureRow(
             listOf(
                 Triple("P99", report.frame.p99, tone),
-                Triple("Max", report.frame.max, Color.Unspecified),
-                Triple("Mean", report.frame.mean, Color.Unspecified),
+                Triple(l10n(R.string.label_max), report.frame.max, Color.Unspecified),
+                Triple(l10n(R.string.label_mean), report.frame.mean, Color.Unspecified),
             ),
         )
     }
@@ -362,25 +366,25 @@ private fun Totals(report: BenchReport) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         MetricRow {
             MetricTile(
-                "Frames", Icons.Filled.Movie, colors.teal, Format.integer(report.frames), tile(),
+                l10n(R.string.tile_frames), Icons.Filled.Movie, colors.teal, Format.integer(report.frames), tile(),
                 note = BenchmarkText.framesNote(report),
             )
             MetricTile(
-                "Over Budget", Icons.Filled.SlowMotionVideo, colors.pink, Format.integer(report.over50), tile(),
+                l10n(R.string.tile_over_budget), Icons.Filled.SlowMotionVideo, colors.pink, Format.integer(report.over50), tile(),
                 note = BenchmarkText.overNote(report),
                 noteColor = if (report.over50 > 0) colors.bad else null,
             )
         }
         MetricRow {
             MetricTile(
-                "Temperature", thermal.icon, colors.orange, thermal.title, tile(),
+                l10n(R.string.tile_temperature), thermal.icon, colors.orange, StatusL10n.thermalTitle(thermal), tile(),
                 note = BenchmarkText.thermalNote(report),
                 noteColor = colors.tone(thermal.tone),
             )
             MetricTile(
-                "Model", Icons.Filled.Memory, colors.purple, Format.decimal(report.accelerator.mean), tile(),
+                l10n(R.string.placeholder_model), Icons.Filled.Memory, colors.purple, Format.decimal(report.accelerator.mean), tile(),
                 unit = "ms",
-                note = "Mean, model alone",
+                note = l10n(R.string.bench_model_note),
             )
         }
     }
@@ -390,7 +394,7 @@ private fun Totals(report: BenchReport) {
 @Composable
 private fun WindowsCard(windows: List<BenchWindow>) {
     val colors = JetlinkTheme.colors
-    SummaryCard("Over Time", Icons.Filled.BarChart, colors.indigo, trailing = "10 s each") {
+    SummaryCard(l10n(R.string.section_over_time), Icons.Filled.BarChart, colors.indigo, trailing = l10n(R.string.bench_10s_each)) {
         Column {
             windows.forEachIndexed { index, window ->
                 if (index > 0) HorizontalDivider()
@@ -411,7 +415,7 @@ private fun WindowsCard(windows: List<BenchWindow>) {
                     )
                     Icon(thermal.icon, contentDescription = null, tint = colors.tone(thermal.tone), modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(4.dp))
-                    Text(thermal.title, style = MaterialTheme.typography.bodyMedium, color = colors.tone(thermal.tone))
+                    Text(StatusL10n.thermalTitle(thermal), style = MaterialTheme.typography.bodyMedium, color = colors.tone(thermal.tone))
                 }
             }
         }
@@ -435,7 +439,7 @@ private fun CommandCard(title: String, icon: ImageVector, command: String?, miss
             }) {
                 Icon(if (copied) Icons.Filled.Check else Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
-                Text(if (copied) "Copied" else "Copy")
+                Text(if (copied) l10n(R.string.bench_copied) else l10n(R.string.action_copy))
             }
         } else {
             Text(missing, style = MaterialTheme.typography.bodyMedium, color = colors.secondaryText)
@@ -453,7 +457,7 @@ private fun BenchmarkPreview() {
                 snapshot = PreviewData.serving.copy(link = PreviewData.waiting.link, medium = null),
                 runState = RunState.Serving,
                 processor = "NPU + GPU",
-                chip = ChipInfo("Snapdragon 8 Gen 3 · NPU v75", "Should keep up", Tone.Good),
+                chip = ChipInfo("Snapdragon 8 Gen 3 · NPU v75", R.string.expectation_should, Tone.Good),
                 wifi = "192.168.1.23",
                 refusal = null,
                 starting = false,
@@ -474,7 +478,7 @@ private fun BenchmarkRunningPreview() {
                 ),
                 runState = RunState.Serving,
                 processor = "NPU + GPU",
-                chip = ChipInfo("Snapdragon 8 Gen 2 · NPU v73", "Might keep up", Tone.Warning),
+                chip = ChipInfo("Snapdragon 8 Gen 2 · NPU v73", R.string.expectation_possible, Tone.Warning),
                 wifi = null,
                 refusal = null,
                 starting = false,

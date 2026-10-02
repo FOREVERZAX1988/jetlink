@@ -1,5 +1,6 @@
 package io.zoompilot.jetlink.ui.benchmark
 
+import io.zoompilot.jetlink.R
 import io.zoompilot.jetlink.server.Engine
 import io.zoompilot.jetlink.server.RunState
 import io.zoompilot.jetlink.settings.Chip
@@ -12,7 +13,7 @@ import org.junit.Before
 import org.junit.Test
 import java.util.Locale
 
-/** The Benchmark tab's blocker, notes and commands. */
+/** The Benchmark tab's blocker and commands. The note words compose, so they show in the UI, not here. */
 class BenchmarkTextTest {
     private lateinit var locale: Locale
 
@@ -29,12 +30,12 @@ class BenchmarkTextTest {
 
     @Test
     fun whatStopsARun() {
-        assertEquals("The server is not running.", BenchmarkText.blocker(RunState.Stopped, PreviewData.waiting))
-        assertEquals("Load a model first.", BenchmarkText.blocker(RunState.Serving, PreviewData.waiting.copy(engine = Engine())))
-        assertEquals("Disconnect the comma first.", BenchmarkText.blocker(RunState.Serving, PreviewData.serving))
+        assertEquals(R.string.bench_blocker_not_serving, BenchmarkText.blocker(RunState.Stopped, PreviewData.waiting))
+        assertEquals(R.string.bench_blocker_no_model, BenchmarkText.blocker(RunState.Serving, PreviewData.waiting.copy(engine = Engine())))
+        assertEquals(R.string.bench_blocker_comma, BenchmarkText.blocker(RunState.Serving, PreviewData.serving))
         assertNull(BenchmarkText.blocker(RunState.Serving, PreviewData.waiting))
         // a model still preparing is not loaded
-        assertEquals("Load a model first.", BenchmarkText.blocker(RunState.Serving, PreviewData.preparing))
+        assertEquals(R.string.bench_blocker_no_model, BenchmarkText.blocker(RunState.Serving, PreviewData.preparing))
     }
 
     @Test
@@ -52,20 +53,10 @@ class BenchmarkTextTest {
     }
 
     @Test
-    fun totalsNotes() {
-        val report = PreviewData.report
-        assertEquals("1:00 at 20 Hz", BenchmarkText.framesNote(report))
-        assertEquals("None over 35 ms", BenchmarkText.overNote(report))
-        assertEquals("3 over 35 ms", BenchmarkText.overNote(report.copy(over35 = 3)))
-        assertEquals("From normal", BenchmarkText.thermalNote(report))
-        assertEquals("Throughout", BenchmarkText.thermalNote(report.copy(thermalAtStart = "fair")))
-    }
-
-    @Test
     fun theChip() {
         assertEquals("Snapdragon 8 Gen 3 · NPU v75", BenchmarkText.chipLine("Snapdragon 8 Gen 3", 75))
         assertEquals("SM7550", BenchmarkText.chipLine("SM7550", null))
-        assertEquals("Should keep up" to Tone.Good, BenchmarkText.expectation(Chip.Expectation.Recommended))
+        assertEquals(R.string.expectation_should to Tone.Good, BenchmarkText.expectation(Chip.Expectation.Recommended))
         assertEquals(Tone.Bad, BenchmarkText.expectation(Chip.Expectation.NoNpu).second)
     }
 }

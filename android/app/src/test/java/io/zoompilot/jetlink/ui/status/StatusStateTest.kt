@@ -10,6 +10,7 @@ import io.zoompilot.jetlink.server.Snapshot
 import io.zoompilot.jetlink.server.SnapshotTest
 import io.zoompilot.jetlink.ui.PreviewData
 import io.zoompilot.jetlink.ui.Tone
+import io.zoompilot.jetlink.R
 import io.zoompilot.jetlink.usb.UsbState
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -67,10 +68,10 @@ class StatusStateTest {
         assertEquals("Waiting for Comma · BMRLNAP Model v4", state.subtitle)
         assertEquals("BMRLNAP Model v4", state.accessoryDetail)
         assertEquals("Waiting", state.linkNote)
-        assertEquals("Plug in the comma.", state.waitingDescription)
+        assertEquals(R.string.waiting_desc_plug, state.waitingDescriptionRes)
         val plugged = state.copy(usb = UsbState.Attached)
         assertEquals("Connecting", plugged.linkNote)
-        assertEquals("Connecting over USB.", plugged.waitingDescription)
+        assertEquals(R.string.waiting_desc_usb, plugged.waitingDescriptionRes)
     }
 
     @Test

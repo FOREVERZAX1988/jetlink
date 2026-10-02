@@ -2,6 +2,7 @@ package io.zoompilot.jetlink.settings
 
 import android.content.Context
 import android.content.SharedPreferences
+import io.zoompilot.jetlink.AppLocale
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -36,6 +37,8 @@ data class SettingsValues(
     val keepCpuAwake: Boolean = false,
     /** The screen stays on while Jetlink is on screen. */
     val keepScreenOn: Boolean = true,
+    /** The UI language; System follows the phone (the default). */
+    val language: AppLocale = AppLocale.System,
 )
 
 class Settings(context: Context) {
@@ -51,6 +54,7 @@ class Settings(context: Context) {
             .putBoolean(KEEP_NPU_AWAKE, next.keepNpuAwake)
             .putBoolean(KEEP_CPU_AWAKE, next.keepCpuAwake)
             .putBoolean(KEEP_SCREEN_ON, next.keepScreenOn)
+            .putString(LANGUAGE, next.language.id)
             .apply()
         state.value = next
     }
@@ -64,6 +68,7 @@ class Settings(context: Context) {
             keepNpuAwake = prefs.getBoolean(KEEP_NPU_AWAKE, defaults.keepNpuAwake),
             keepCpuAwake = prefs.getBoolean(KEEP_CPU_AWAKE, defaults.keepCpuAwake),
             keepScreenOn = prefs.getBoolean(KEEP_SCREEN_ON, defaults.keepScreenOn),
+            language = AppLocale.of(prefs.getString(LANGUAGE, null)) ?: defaults.language,
         )
     }
 
@@ -73,6 +78,7 @@ class Settings(context: Context) {
         const val KEEP_NPU_AWAKE = "keepNpuAwake"
         const val KEEP_CPU_AWAKE = "keepCpuAwake"
         const val KEEP_SCREEN_ON = "keepScreenOn"
+        const val LANGUAGE = "language"
 
         /** The CPU on the emulator, which has no NPU; the split elsewhere. */
         fun defaultProcessor(): Processor = if (Chip.isEmulator) Processor.Cpu else Processor.NpuGpu
