@@ -19,7 +19,16 @@ public enum LiteRtProfile: String, CaseIterable, Sendable {
   var label: String {
     switch self {
     case .gpu: "GPU(fp16)"
-    case .cpu: "CPU(\(LiteRtBackend.cpuThreads) threads)"
+    case .cpu: "CPU(\(HostChip.cpuThreads) threads)"
+    }
+  }
+
+  /// How the profile compiles a model; on the GPU, its programs cached in
+  /// `cache` when there is one.
+  func options(cache: (directory: URL, key: String)? = nil) -> LiteRtCompileOptions {
+    switch self {
+    case .gpu: .gpu(cache: cache)
+    case .cpu: .cpu(threads: HostChip.cpuThreads)
     }
   }
 }
@@ -38,9 +47,6 @@ public final class LiteRtBackend: EngineBackend {
   /// What JetlinkONNX's LiteRTPreparation writes now: an artifact converted
   /// under another version rebuilds.
   static let conversionVersion = 1
-  /// The CPU's pool when it runs the whole model: half the cores, leaving
-  /// the rest to the link and the app.
-  static var cpuThreads: Int { max(1, ProcessInfo.processInfo.activeProcessorCount / 2) }
 
   public let name = "litert"
   /// A directory: the converted model and the GPU's compile cache.
@@ -62,8 +68,7 @@ public final class LiteRtBackend: EngineBackend {
     self.profile = profile
     self.preparer = preparer
     self.libraries = libraries
-    let chip = chip ?? HostChip.name()
-    self.chip = chip.isEmpty ? "unknown" : chip
+    self.chip = HostChip.resolve(chip)
   }
 
   /// The GPU accelerator's library, which LiteRT opens from beside its own.
@@ -99,17 +104,6 @@ public final class LiteRtBackend: EngineBackend {
     try preparer.readSpec(model: model, sha256: sha256, nbytes: nbytes, frameSkip: frameSkip)
   }
 
-  /// The compile the profile asks for, the GPU's cache in `directory`
-  /// under `cacheKey`.
-  func options(_ directory: URL, cacheKey: String) -> LiteRtCompileOptions {
-    switch profile {
-    case .gpu:
-      LiteRtCompileOptions(gpu: true, gpuFP16: true, cache: (directory.appending(path: LiteRtArtifact.cache, directoryHint: .isDirectory), cacheKey))
-    case .cpu:
-      LiteRtCompileOptions(gpu: false, cpuThreads: LiteRtBackend.cpuThreads)
-    }
-  }
-
   /// The model in `directory`, an artifact or its staging, compiled for the
   /// profile. On the GPU every op must be the GPU's: a model that runs
   /// partly on the CPU is a build that failed.
@@ -117,8 +111,9 @@ public final class LiteRtBackend: EngineBackend {
     let engine: LiteRtEngine
     do {
       engine = try LiteRtEngine(
-        model: directory.appending(path: LiteRtArtifact.model), options: options(directory, cacheKey: cacheKey), device: deviceTag(),
-        label: profile.label)
+        model: directory.appending(path: LiteRtArtifact.model),
+        options: profile.options(cache: (directory.appending(path: LiteRtArtifact.cache, directoryHint: .isDirectory), cacheKey)),
+        device: deviceTag(), label: profile.label)
     } catch let error as LiteRtError where profile == .gpu {
       // A GPU-only compile fails outright on an op the GPU cannot run.
       throw LiteRtError(

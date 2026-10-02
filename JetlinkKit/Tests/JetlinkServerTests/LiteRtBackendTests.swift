@@ -230,9 +230,7 @@ struct LiteRtBenchTests {
     let total = Int(environment["JETLINK_LITERT_BENCH_FRAMES"] ?? "") ?? 200
     try LiteRtRuntime.load()
     let compileStarted = DispatchTime.now()
-    let options =
-      profile == .gpu ? LiteRtCompileOptions(gpu: true, gpuFP16: true) : LiteRtCompileOptions(gpu: false, cpuThreads: LiteRtBackend.cpuThreads)
-    let engine = try LiteRtEngine(model: directory.appending(path: "model.tflite"), options: options, device: "bench", label: profile.label)
+    let engine = try LiteRtEngine(model: directory.appending(path: "model.tflite"), options: profile.options(), device: "bench", label: profile.label)
     defer { engine.close() }
     let compileMs = Double(DispatchTime.now().uptimeNanoseconds - compileStarted.uptimeNanoseconds) / 1e6
     #expect(engine.fullyAccelerated || profile == .cpu)

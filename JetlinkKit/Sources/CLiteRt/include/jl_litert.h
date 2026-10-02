@@ -33,20 +33,15 @@ typedef struct jl_litert_model jl_litert_model;
 typedef struct jl_litert_buffer jl_litert_buffer;
 
 typedef struct {
-  // JL_LITERT_CPU, JL_LITERT_GPU, or both for the GPU with the CPU taking
-  // what it cannot.
-  int accelerators;
+  // The GPU alone, in fp16 (1), so an op it cannot run fails the compile
+  // rather than run on the CPU; or the CPU alone (0).
+  int gpu;
   // XNNPACK's pool on the CPU; 0 leaves LiteRT's default.
   int cpu_threads;
-  // The GPU computes in fp16 where it can (1) or in fp32 throughout (0).
-  int gpu_fp16;
-  // Where the GPU keeps what it compiled between runs, under a key naming
-  // the model; NULL for no cache.
+  // Where the GPU keeps the programs it compiled between runs, under a key
+  // naming the model; NULL for no cache.
   const char *cache_dir;
   const char *cache_key;
-  // The compiled programs alone (1), or the whole compiled graph with its
-  // weights in the GPU's layout (0).
-  int cache_programs_only;
 } jl_litert_options;
 
 // Opens LiteRT from `directory`, NULL or "" for the loader's path, and makes
@@ -77,9 +72,9 @@ size_t jl_litert_model_io_count(const jl_litert_model *model, int output);
 char *jl_litert_model_io_info(const jl_litert_model *model, int output, size_t index, char *name, size_t name_cap,
                               int *elem_type, int64_t *dims, size_t dims_cap, size_t *rank);
 
-// Whether the accelerator reads or writes this input or output in host
-// memory itself (the CPU), so a buffer over the caller's memory costs no copy.
-char *jl_litert_model_io_host(const jl_litert_model *model, int output, size_t index, int *host);
+// Whether the accelerator reads input `index` in host memory itself (the
+// CPU), so a buffer over the caller's memory costs no copy.
+char *jl_litert_model_input_host(const jl_litert_model *model, size_t index, int *host);
 
 // A buffer for an input or output over `nbytes` of caller memory, 64-byte
 // aligned, which must outlive it.

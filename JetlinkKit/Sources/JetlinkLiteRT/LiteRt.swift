@@ -52,16 +52,13 @@ public struct LiteRtError: Error, CustomStringConvertible {
 }
 
 /// How a model is compiled: which accelerator runs it and with what.
-struct LiteRtCompileOptions: Sendable {
-  /// The GPU alone, so an op it cannot run fails the compile rather than
-  /// quietly running on the CPU.
-  var gpu: Bool
-  /// XNNPACK's pool on the CPU.
-  var cpuThreads = 1
-  /// fp16 arithmetic on the GPU where it can.
-  var gpuFP16 = true
-  /// Where the GPU keeps what it compiled, and the key it files it under.
-  var cache: (directory: URL, key: String)?
+enum LiteRtCompileOptions: Sendable {
+  /// The GPU alone, in fp16, so an op it cannot run fails the compile
+  /// rather than quietly running on the CPU. `cache` is where it keeps the
+  /// programs it compiled, and the key it files them under.
+  case gpu(cache: (directory: URL, key: String)?)
+  /// XNNPACK on the CPU, with a pool of `threads`.
+  case cpu(threads: Int)
 }
 
 /// One compiled model: a .tflite, compiled for an accelerator, and the
@@ -73,22 +70,24 @@ final class LiteRtModel: @unchecked Sendable {
 
   /// LiteRT must be open (`LiteRtRuntime.load`).
   init(model: URL, options: LiteRtCompileOptions) throws {
-    var compiled: OpaquePointer?
-    let cacheDirectory = options.cache.map { strdup($0.directory.path) } ?? nil
-    let cacheKey = options.cache.map { strdup($0.key) } ?? nil
+    var shim = jl_litert_options()
+    var cache: (directory: URL, key: String)?
+    switch options {
+    case .gpu(let programs):
+      shim.gpu = 1
+      cache = programs
+    case .cpu(let threads):
+      shim.cpu_threads = Int32(threads)
+    }
+    let cacheDirectory = cache.flatMap { strdup($0.directory.path) }
+    let cacheKey = cache.flatMap { strdup($0.key) }
     defer {
       free(cacheDirectory)
       free(cacheKey)
     }
-    var shim = jl_litert_options(
-      accelerators: Int32(options.gpu ? JL_LITERT_GPU : JL_LITERT_CPU), cpu_threads: Int32(options.cpuThreads),
-      gpu_fp16: options.gpuFP16 ? 1 : 0, cache_dir: cacheDirectory.map { UnsafePointer($0) },
-      cache_key: cacheKey.map { UnsafePointer($0) },
-      // A phone has no room for a second copy of the weights in the GPU's
-      // layout: on an M1 Pro the whole cache of Cinque Terre V3 was 772 MB
-      // (a 2 s load against a 7 s compile). The programs alone are what an
-      // OpenCL GPU compiles slowly; Metal writes no such cache.
-      cache_programs_only: 1)
+    shim.cache_dir = UnsafePointer(cacheDirectory)
+    shim.cache_key = UnsafePointer(cacheKey)
+    var compiled: OpaquePointer?
     try model.path.withCString { path in
       try LiteRtError.check(jl_litert_model_create(path, &shim, &compiled))
     }
@@ -120,7 +119,7 @@ final class LiteRtModel: @unchecked Sendable {
   /// as the CPU does, where a GPU wants its own.
   func readsHostMemory(input index: Int) throws -> Bool {
     var host: Int32 = 0
-    try LiteRtError.check(jl_litert_model_io_host(pointer, 0, index, &host))
+    try LiteRtError.check(jl_litert_model_input_host(pointer, index, &host))
     return host != 0
   }
 
