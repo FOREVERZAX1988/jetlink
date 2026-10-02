@@ -4,7 +4,7 @@ Updating an installed server: [updates and rollback](releasing.md). This page:
 publishing a release.
 
 A pushed `v*` tag runs the Release workflow: the macOS app and the Linux server
-for Jetsons and PCs.
+for Jetsons and PCs, then the iPhone app on TestFlight.
 
 Cut one when something under `JetlinkKit`, `macos`, `ios`, `android`,
 `install.sh` or the wire (`jetlink/protocol.py`, `jetlink/transport`,
@@ -38,6 +38,10 @@ git push origin v0.7.0
    `jetlink-server-0.7.0-linux-aarch64.tar.gz` and `-linux-x86_64.tar.gz`
    with their `.sha256`, and notes made of the changelog section and the
    install commands.
+5. The **TestFlight** job starts once the release is out and waits while
+   Apple processes the upload, usually 5 to 30 minutes. Then the build is in
+   the internal group and waiting for Beta App Review in the public one
+   ([below](#iphone-app-on-testflight)).
 
 - The release waits for both Linux servers: the installer takes the newest
   release, so one without them would stop every install and update.
@@ -72,6 +76,7 @@ signing mode" says which mode ran.
 | `NOTARY_KEY_ID` | the App Store Connect API key id |
 | `NOTARY_ISSUER_ID` | the issuer id of that key |
 | `NOTARY_PRIVATE_KEY_P8_BASE64` | the key's .p8 file, base64 encoded |
+| `APPLE_TEAM_ID` | the team ID the iPhone app is signed for; without it, nothing goes to TestFlight |
 
 - Notary key: a Team key made under **Users and Access > Integrations** in App
   Store Connect. The Developer role notarizes; give it Admin if the same key
@@ -85,26 +90,47 @@ signing mode" says which mode ran.
 
 ## iPhone app on TestFlight
 
-The iPhone app goes up from a Mac, not from the Release workflow:
+The Release workflow ends with `.github/workflows/testflight.yml`, after the
+GitHub release, for every tag but a prerelease (the App Store takes `X.Y.Z`
+only). It archives the app, uploads it, waits while Apple processes it, sets
+What to Test (a link to the release notes and how to try the app), adds the
+build to the **Public** group and submits it for Beta App Review.
 
-```bash
-JETLINK_TEAM=ABCDE12345 ASC_KEY_ID=... ASC_ISSUER_ID=... ASC_KEY_PATH=AuthKey_XXXX.p8 \
-  ios/scripts/testflight.sh
-```
-
+- It needs `APPLE_TEAM_ID` and the notary key, which needs the Admin role:
+  xcodebuild makes the distribution certificate and profile with it, so no
+  Mac signs in to Xcode.
+- xcodebuild also makes an Apple Development certificate for the archive,
+  since the runner has no key of its own; the job revokes it at the end.
+- The version is `jetlink.__version__`, the build number the commit count.
+- **Rerun failed jobs** after a failed review step publishes the build
+  already uploaded rather than making another.
+- **Actions > TestFlight > Run workflow** runs it on any branch. Unticked,
+  **upload** only archives and exports, which checks the signing on the
+  runner; ticked, it uploads a build of that branch. Clear **group** to keep
+  the build to the internal group.
+- The internal group (**Jetlink team**) gets every build once Apple has
+  processed it.
+- The public link (`https://testflight.apple.com/join/DAsYk5sP`, in the README,
+  the iPhone guide, the release notes and the site) is the **Public** group. A
+  build reaches it once it passes Beta App Review; later builds of a version
+  usually pass at once. The job ends at the submission, so a rejection shows
+  under **TestFlight** in App Store Connect, not in the run.
 - Once per team: register the App ID `io.zoompilot.jetlink` with the
   **Increased Memory Limit** capability, and create the app in App Store
   Connect with that bundle ID. App Store Connect has no API for the second.
-- The key needs the Admin role: xcodebuild makes the distribution certificate
-  and profile with it, so the Mac needs no Xcode login.
-- The version is `jetlink.__version__`, the build number the commit count.
-  `JETLINK_BUILD` overrides it when a build number is already taken.
-- Apple processes an upload for a few minutes before TestFlight lists it.
-  The internal group (**Jetlink team**) gets every build then.
-- The public link (`https://testflight.apple.com/join/DAsYk5sP`, in the README,
-  the iPhone guide, the release notes and the site) is the **Public** group. A
-  build reaches it once it is added to that group and passes Beta App Review,
-  under **TestFlight** in App Store Connect; later builds of a version usually
-  pass at once.
+
+The same script uploads from a Mac:
+
+```bash
+JETLINK_TEAM=ABCDE12345 ASC_KEY_ID=... ASC_ISSUER_ID=... ASC_KEY_PATH=AuthKey_XXXX.p8 \
+  TESTFLIGHT_GROUP=Public ios/scripts/testflight.sh
+```
+
+Without `TESTFLIGHT_GROUP` the build goes to the internal group alone.
+`JETLINK_BUILD` overrides the build number when it is already taken, and
+`TESTFLIGHT_NOTES` the What to Test text. `ios/scripts/asc.py` is what the
+script asks of App Store Connect after the upload; `asc.py wait VERSION BUILD`
+shows Apple's verdict on an upload, ITMS errors included, which the builds
+list in App Store Connect leaves out.
 
 <a id="the-container-images"></a>

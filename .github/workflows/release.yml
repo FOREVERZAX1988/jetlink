@@ -1,5 +1,6 @@
 # Everything a v* tag produces: the macOS app, the Linux server for Jetsons
-# and PCs, and the GitHub release that carries them.
+# and PCs, the GitHub release that carries them, and then the iPhone app on
+# TestFlight (testflight.yml).
 # A push to main builds the Linux server too and puts it on the edge
 # prerelease under fixed names, which is what `install.sh --ref main` installs,
 # unless the push changed only the comma's side (ci.yml's filter, repeated
@@ -71,12 +72,25 @@ jobs:
     # only that
     if: github.ref_type == 'tag'
     runs-on: ubuntu-24.04
+    outputs:
+      prerelease: ${{ steps.kind.outputs.prerelease }}
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
 
       - name: Check the tag matches the package version
         run: macos/scripts/check-version.sh "${GITHUB_REF_NAME}"
+
+      - name: Check for a prerelease
+        id: kind
+        run: |
+          # Both spellings of a prerelease: a hyphenated semver tag, and the
+          # PEP 440 suffixes jetlink.__version__ carries (check-version.sh),
+          # which have no hyphen.
+          case "$GITHUB_REF_NAME" in
+            *-*|*a[0-9]*|*b[0-9]*|*rc[0-9]*) echo "prerelease=true" ;;
+            *) echo "prerelease=false" ;;
+          esac >> "$GITHUB_OUTPUT"
 
   macos-app:
     name: macOS app
@@ -319,7 +333,7 @@ jobs:
     name: GitHub release
     # The server is required: install.sh takes the newest release, so one
     # without it would stop every Linux install and update.
-    needs: [macos-app, linux-server]
+    needs: [check, macos-app, linux-server]
     runs-on: ubuntu-24.04
     steps:
       - name: Check out the repository
@@ -346,6 +360,7 @@ jobs:
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ needs.check.outputs.prerelease }}
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
@@ -369,12 +384,9 @@ jobs:
           else
             ARGS=(--generate-notes --title "Jetlink $GITHUB_REF_NAME")
           fi
-          # Both spellings of a prerelease: a hyphenated semver tag, and the
-          # PEP 440 suffixes jetlink.__version__ carries (check-version.sh),
-          # which have no hyphen.
-          case "$GITHUB_REF_NAME" in
-            *-*|*a[0-9]*|*b[0-9]*|*rc[0-9]*) ARGS+=(--prerelease) ;;
-          esac
+          if [ "$PRERELEASE" = true ]; then
+            ARGS+=(--prerelease)
+          fi
           gh release create "$GITHUB_REF_NAME" "${ARGS[@]}" "${FILES[@]}"
 
           # Append the footer to the notes, rather than
@@ -401,3 +413,12 @@ jobs:
             fi
           } > notes.md
           gh release edit "$GITHUB_REF_NAME" --notes-file notes.md
+
+  testflight:
+    name: TestFlight
+    # After the release, so TestFlight never has a version GitHub does not.
+    # The App Store takes X.Y.Z alone, so a prerelease stays off it.
+    needs: [check, release]
+    if: needs.check.outputs.prerelease == 'false'
+    uses: ./.github/workflows/testflight.yml
+    secrets: inherit
