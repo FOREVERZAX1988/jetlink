@@ -57,6 +57,17 @@ enum class Processor(val backend: Backend, val device: String, val title: String
     }
 }
 
+/** The app's colour scheme; System follows the phone (the default). */
+enum class AppTheme(val id: String) {
+    System("system"),
+    Light("light"),
+    Dark("dark");
+
+    companion object {
+        fun of(id: String?): AppTheme? = entries.firstOrNull { it.id == id }
+    }
+}
+
 /** The few things worth changing on a phone, kept in SharedPreferences. */
 data class SettingsValues(
     /** Where bench tools such as `bench_link.py --host` reach the phone. */
@@ -70,6 +81,8 @@ data class SettingsValues(
     val keepScreenOn: Boolean = true,
     /** The UI language; System follows the phone (the default). */
     val language: AppLocale = AppLocale.System,
+    /** The colour scheme; System follows the phone (the default). */
+    val theme: AppTheme = AppTheme.System,
 )
 
 class Settings(context: Context) {
@@ -86,6 +99,7 @@ class Settings(context: Context) {
             .putBoolean(KEEP_CPU_AWAKE, next.keepCpuAwake)
             .putBoolean(KEEP_SCREEN_ON, next.keepScreenOn)
             .putString(LANGUAGE, next.language.id)
+            .putString(THEME, next.theme.id)
             .apply()
         state.value = next
     }
@@ -103,6 +117,7 @@ class Settings(context: Context) {
             keepCpuAwake = prefs.getBoolean(KEEP_CPU_AWAKE, defaults.keepCpuAwake),
             keepScreenOn = prefs.getBoolean(KEEP_SCREEN_ON, defaults.keepScreenOn),
             language = AppLocale.of(prefs.getString(LANGUAGE, null)) ?: defaults.language,
+            theme = AppTheme.of(prefs.getString(THEME, null)) ?: defaults.theme,
         )
     }
 
@@ -113,6 +128,7 @@ class Settings(context: Context) {
         const val KEEP_CPU_AWAKE = "keepCpuAwake"
         const val KEEP_SCREEN_ON = "keepScreenOn"
         const val LANGUAGE = "language"
+        const val THEME = "theme"
 
         /**
          * The GPU on every phone, a Snapdragon's too; the CPU on the emulator.

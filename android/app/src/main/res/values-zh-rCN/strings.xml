@@ -38,6 +38,10 @@
     <string name="settings_display_footer">熄屏后 Jetlink 仍会继续服务。</string>
     <string name="settings_keep_screen_on">保持屏幕常亮</string>
     <string name="settings_language">Language / 语言</string>
+    <string name="settings_theme">主题</string>
+    <string name="theme_system">跟随系统</string>
+    <string name="theme_light">亮色</string>
+    <string name="theme_dark">深色</string>
 
     <!-- Settings: storage -->
     <string name="settings_storage">存储</string>

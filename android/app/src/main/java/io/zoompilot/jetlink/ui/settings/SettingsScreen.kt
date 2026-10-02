@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.zoompilot.jetlink.AppGraph
 import io.zoompilot.jetlink.AppLocale
+import io.zoompilot.jetlink.settings.AppTheme
 import io.zoompilot.jetlink.R
 import io.zoompilot.jetlink.l10n
 import io.zoompilot.jetlink.BuildConfig
@@ -183,12 +184,49 @@ fun SettingsContent(values: SettingsValues, info: SettingsInfo, actions: Setting
     }
 }
 
-/** Display and the app language. The choice applies at once, everywhere. */
+/** The word for a theme choice, in the app's language. */
+@Composable
+private fun themeName(theme: AppTheme): String = l10n(
+    when (theme) {
+        AppTheme.System -> R.string.theme_system
+        AppTheme.Light -> R.string.theme_light
+        AppTheme.Dark -> R.string.theme_dark
+    },
+)
+
+/** Display, the theme and the app language. A choice applies at once, everywhere. */
 @Composable
 private fun DisplayAndLanguage(values: SettingsValues, actions: SettingsActions) {
+    var choosingTheme by remember { mutableStateOf(false) }
     var choosing by remember { mutableStateOf(false) }
     FormSection(l10n(R.string.settings_display), footer = { FormFooter(l10n(R.string.settings_display_footer)) }) {
         SwitchRow(l10n(R.string.settings_keep_screen_on), values.keepScreenOn, { on -> actions.update { it.copy(keepScreenOn = on) } })
+        RowDivider()
+        Box {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable(role = Role.DropdownList) { choosingTheme = true }
+                    .heightIn(min = 48.dp)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(l10n(R.string.settings_theme), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                Spacer(Modifier.width(12.dp))
+                Text(themeName(values.theme), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.primary)
+            }
+            DropdownMenu(expanded = choosingTheme, onDismissRequest = { choosingTheme = false }) {
+                AppTheme.entries.forEach { theme ->
+                    DropdownMenuItem(
+                        text = { Text(themeName(theme), fontWeight = if (theme == values.theme) FontWeight.SemiBold else null) },
+                        onClick = {
+                            choosingTheme = false
+                            if (theme != values.theme) actions.update { it.copy(theme = theme) }
+                        },
+                    )
+                }
+            }
+        }
         RowDivider()
         Box {
             Row(
