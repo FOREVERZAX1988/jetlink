@@ -1,9 +1,10 @@
 import Foundation
 
 /// A tensor's values, as numpy_helper.to_array reads them: raw_data when the
-/// tensor has it, otherwise the typed field onnx keeps that element type in.
-/// Only for the small tensors the patches read (Gather indices, Expand shapes)
-/// and for a weight in the typed fields at the moment it is transposed.
+/// tensor has it, otherwise the typed field onnx keeps that element type in;
+/// and elements to and from little-endian bytes. Only for small tensors (the
+/// indices, shapes and constants the patches and the LiteRT lowering read or
+/// fold) and for a weight in the typed fields at the moment it is transposed.
 enum Elements {
   /// The typed field a type's values live in (onnx.helper.tensor_dtype_to_field).
   static func typedField(_ type: Int32) -> Int? {

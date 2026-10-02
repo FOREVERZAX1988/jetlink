@@ -395,9 +395,7 @@ enum TFLiteOptimizer {
     guard t.type == .int32, t.buffer > 0 else { return nil }
     let e = l.buffers[t.buffer]
     guard e.allPieces.count == 1, case .bytes(let b) = e.allPieces[0] else { return nil }
-    return b.withUnsafeBytes { p in
-      (0..<(b.count / 4)).map { Int(Int32(littleEndian: p.loadUnaligned(fromByteOffset: $0 * 4, as: Int32.self))) }
-    }
+    return try? Elements.integers(b, as: DataType.int32, for: t.name).map { Int($0) }
   }
 
   /// The model with only what it uses: operators whose outputs something
