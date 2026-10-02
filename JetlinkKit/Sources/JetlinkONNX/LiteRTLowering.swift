@@ -15,6 +15,10 @@ import Foundation
 /// file records for it, so a lowering that goes wrong stops at the node that
 /// went wrong rather than at the runtime.
 struct LiteRTLowering {
+  /// A constant buffer and the type it holds; FLOAT16 is read as FLOAT32
+  /// through a DEQUANTIZE.
+  typealias Stored = (buffer: Int, type: TFLite.TensorType)
+
   /// What an ONNX tensor name stands for.
   enum Value {
     /// A TFLite tensor, by index.
@@ -64,8 +68,12 @@ struct LiteRTLowering {
   var readerIndices: [String: [Int]] = [:]
   var nodes: [Node] = []
   var names = Set<String>()
-  /// A constant's tensor, by name and shape, so each is stored once.
+  /// A constant's tensor, by name and shape, so each is made once.
   var constantTensors: [String: Int] = [:]
+  /// A constant's buffer, by name, so one read at two shapes is stored once.
+  var constantBuffers: [String: Stored] = [:]
+  /// Each INT32 constant, by its values and shape, so each is stored once.
+  var int32Tensors: [[[Int]]: Int] = [:]
   /// How often each special case fired, for the report: masks, views.
   var counts: [String: Int] = [:]
 
@@ -246,26 +254,37 @@ struct LiteRTLowering {
 
   /// A constant INT32 vector: shapes, axes, permutations, slice bounds.
   mutating func int32Tensor(_ values: [Int], _ name: String, shape: [Int]? = nil) -> Int {
+    let shape = shape ?? [values.count]
+    if let i = int32Tensors[[values, shape]] { return i }
     var bytes: [UInt8] = []
     bytes.reserveCapacity(values.count * 4)
     for v in values {
       withUnsafeBytes(of: Int32(truncatingIfNeeded: v).littleEndian) { bytes.append(contentsOf: $0) }
     }
-    return addTensor(name, shape ?? [values.count], .int32, buffer: buffer(bytes))
+    let i = addTensor(name, shape, .int32, buffer: buffer(bytes))
+    int32Tensors[[values, shape]] = i
+    return i
   }
 
-  /// A constant FLOAT32 tensor of `values`, stored as fp16 behind a
-  /// DEQUANTIZE when it is large and every value is exact in fp16.
+  /// A constant FLOAT32 tensor of `values`.
   mutating func floatTensor(_ values: [Float], _ shape: [Int], _ name: String) -> Int {
-    if values.count >= Self.fp16MinElements, values.allSatisfy({ Float(Float16($0)) == $0 }) {
-      return dequantized(buffer(Elements.encode(values, as: DataType.float16)), shape, name)
-    }
-    return addTensor(name, shape, .float32, buffer: buffer(Elements.encode(values, as: DataType.float)))
+    storedTensor(floatBuffer(values), shape, name)
   }
 
-  /// A FLOAT16 buffer's FLOAT32 tensor, through a DEQUANTIZE that runs first.
-  mutating func dequantized(_ buffer: Int, _ shape: [Int], _ name: String) -> Int {
-    let narrow = addTensor("\(name)__fp16", shape, .float16, buffer: buffer)
+  /// `values` stored as FLOAT32, or as FLOAT16 when there are many and
+  /// every one is exact in fp16.
+  mutating func floatBuffer(_ values: [Float]) -> Stored {
+    if values.count >= Self.fp16MinElements, values.allSatisfy({ Float(Float16($0)) == $0 }) {
+      return (buffer(Elements.encode(values, as: DataType.float16)), .float16)
+    }
+    return (buffer(Elements.encode(values, as: DataType.float)), .float32)
+  }
+
+  /// A tensor over a stored buffer. A FLOAT16 one is read as FLOAT32
+  /// through a DEQUANTIZE that runs before everything else.
+  mutating func storedTensor(_ stored: Stored, _ shape: [Int], _ name: String) -> Int {
+    guard stored.type == .float16 else { return addTensor(name, shape, stored.type, buffer: stored.buffer) }
+    let narrow = addTensor("\(name)__fp16", shape, .float16, buffer: stored.buffer)
     let wide = addTensor(name, shape, .float32)
     prologue.append(TFLite.Operator(op: .dequantize, inputs: [narrow], outputs: [wide]))
     return wide
@@ -311,18 +330,6 @@ struct LiteRTLowering {
     if let i = constantTensors[key] { return i }
     let index: Int
     switch c.type {
-    case DataType.float16:
-      if c.count >= Self.fp16MinElements {
-        index = dequantized(buffer(try stored(c, elementSize: 2)), shape, c.name)
-      } else {
-        index = floatTensor(try floats(c), shape, c.name)
-      }
-    case DataType.float:
-      index = addTensor(c.name, shape, .float32, buffer: buffer(try stored(c, elementSize: 4)))
-    case DataType.double, DataType.bfloat16:
-      index = floatTensor(try floats(c), shape, c.name)
-    case DataType.uint8, DataType.int8, DataType.bool:
-      index = addTensor(c.name, shape, try Self.computeType(c.type), buffer: buffer(try stored(c, elementSize: 1)))
     case DataType.int32, DataType.int64, DataType.int16, DataType.uint16, DataType.uint32:
       let ints = try integers(c)
       guard ints.allSatisfy({ $0 >= Int64(Int32.min) && $0 <= Int64(Int32.max) }) else {
@@ -330,10 +337,24 @@ struct LiteRTLowering {
       }
       index = int32Tensor(ints.map { Int($0) }, c.name, shape: shape)
     default:
-      throw OnnxError("constant \(c.name) has element type \(OnnxMeta.typeName(c.type)), which is not lowered")
+      let stored = try constantBuffers[c.name] ?? buffer(for: c)
+      constantBuffers[c.name] = stored
+      index = storedTensor(stored, shape, c.name)
     }
     constantTensors[key] = index
     return index
+  }
+
+  /// A constant's buffer: an fp16 weight's own bytes, small floats widened
+  /// to FLOAT32, bytes and booleans as they are.
+  private mutating func buffer(for c: Constant) throws -> Stored {
+    switch c.type {
+    case DataType.float16 where c.count >= Self.fp16MinElements: return (buffer(try stored(c, elementSize: 2)), .float16)
+    case DataType.float16, DataType.double, DataType.bfloat16: return floatBuffer(try floats(c))
+    case DataType.float: return (buffer(try stored(c, elementSize: 4)), .float32)
+    case DataType.uint8, DataType.int8, DataType.bool: return (buffer(try stored(c, elementSize: 1)), try Self.computeType(c.type))
+    default: throw OnnxError("constant \(c.name) has element type \(OnnxMeta.typeName(c.type)), which is not lowered")
+    }
   }
 
   /// A constant's bytes as a buffer: a range of the source where the

@@ -324,11 +324,12 @@ enum TFLite {
     var signatureKey = "serving_default"
   }
 
-  /// The flatbuffer for `model` with its buffers placed as `buffers` says.
-  /// Every field is written whatever its value, offsets and sizes included,
-  /// so the flatbuffer's length does not depend on where the buffers go:
-  /// it can be encoded once to learn its length and again with the offsets.
-  static func encode(_ model: Model, buffers: [Placement]) -> [UInt8] {
+  /// The flatbuffer for `model` with its buffers placed as `buffers` says,
+  /// and where each external buffer's offset is in it (8 bytes, little
+  /// endian), by buffer index. Offsets are written whatever their value, so
+  /// one can be written in later, once the flatbuffer's length says where
+  /// the buffers after it start.
+  static func encode(_ model: Model, buffers: [Placement]) -> (bytes: [UInt8], offsetFields: [Int: Int]) {
     var b = FlatBufferBuilder(capacity: 1 << 20)
 
     // Operator codes, in the order operators first use them.
@@ -339,7 +340,10 @@ enum TFLite {
       codes.append(o.op)
     }
 
-    let bufferTables = buffers.map { placement -> FlatBufferBuilder.Offset in
+    // Each external offset's distance from the end, which stays where it is
+    // as the builder writes towards the front.
+    var offsetsFromEnd: [Int: Int] = [:]
+    let bufferTables = buffers.enumerated().map { i, placement -> FlatBufferBuilder.Offset in
       switch placement {
       case .empty:
         b.startTable(fields: 3)
@@ -353,6 +357,7 @@ enum TFLite {
       case .external(let offset, let size):
         b.startTable(fields: 3)
         b.add(1, offset, force: true)
+        offsetsFromEnd[i] = b.size
         b.add(2, size, force: true)
         return b.endTable()
       }
@@ -451,6 +456,7 @@ enum TFLite {
     b.add(3, description)
     b.add(4, buffersVector)
     b.add(7, signatures)
-    return b.finish(b.endTable(), identifier: "TFL3")
+    let bytes = b.finish(b.endTable(), identifier: "TFL3")
+    return (bytes, offsetsFromEnd.mapValues { bytes.count - $0 })
   }
 }

@@ -842,8 +842,9 @@ extension LiteRTLowering {
 
   // MARK: Expand and Where
 
-  /// Expand as a multiply by ones of the output's shape, which is exact and
-  /// which the GPU runs (onnx2tf lowers it the same way).
+  /// Expand as a multiply by ones, which is exact and which the GPU runs
+  /// (onnx2tf lowers it the same way). The ones are 1 wide on the axes the
+  /// input already has, so the multiply broadcasts both ways.
   mutating func expand(_ n: Node) throws {
     let x = try value(n.inputs[0])
     guard let target = try constantInts(n, 1) else { throw OnnxError("Expand needs a constant shape") }
@@ -860,8 +861,9 @@ extension LiteRTLowering {
       return
     }
     guard case .tensor(let i) = x, model.tensors[i].type == .float32 else { throw OnnxError("Expand is lowered for float tensors only") }
-    let ones = floatTensor([Float](repeating: 1, count: out.reduce(1, *)), out, "\(n.outputs[0])__ones")
     let tx = try operand(x, rank: out.count, "\(n.outputs[0])__lhs")
+    let spread = zip(model.tensors[tx].shape, out).map { $0 == $1 ? 1 : $1 }
+    let ones = floatTensor([Float](repeating: 1, count: spread.reduce(1, *)), spread, "\(n.outputs[0])__ones")
     let o = try define(n.outputs[0], out, .float32)
     emit(.mul, [tx, ones], [o], .mul)
   }
@@ -1030,7 +1032,7 @@ extension LiteRTLowering {
     var e = Encoded()
     e.transposed(Transpose(elements: try transposeElements(w), rows: rows, cols: cols, elementSize: size))
     switch w.type {
-    case DataType.float16: return dequantized(buffer(e), [cols, rows], name)
+    case DataType.float16: return storedTensor((buffer(e), .float16), [cols, rows], name)
     case DataType.float: return addTensor(name, [cols, rows], .float32, buffer: buffer(e))
     default: throw OnnxError("weight \(w.name) has element type \(OnnxMeta.typeName(w.type))")
     }
@@ -1156,10 +1158,7 @@ extension LiteRTLowering {
         e.transposed(Transpose(elements: elements.slice((f * filterBytes)..<((f + 1) * filterBytes)), rows: i, cols: taps, elementSize: size))
       }
     }
-    if w.type == DataType.float16 {
-      return dequantized(buffer(e), shape, name)
-    }
-    return addTensor(name, shape, .float32, buffer: buffer(e))
+    return storedTensor((buffer(e), w.type == DataType.float16 ? .float16 : .float32), shape, name)
   }
 
   // MARK: LayerNormalization
