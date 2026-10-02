@@ -34,6 +34,8 @@ targets:
     sources:
       - path: Jetlink
       - path: Resources/Assets.xcassets
+      - path: Resources/PrivacyInfo.xcprivacy
+        buildPhase: resources
     dependencies:
       - package: JetlinkKit
         products: [JetlinkKit, JetlinkUI, JetlinkRegistry, JetlinkServer, JetlinkORT]
