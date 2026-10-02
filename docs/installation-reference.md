@@ -39,9 +39,13 @@ the [server command](#the-server-command) and custom integrations.
 - Keeps models and prepared engines in `/mnt/data/jetlink` on a Jetson,
   `/var/lib/jetlink` on a PC.
 - Jetson only: sets the fastest power mode (MAXN SUPER on an Orin Nano; may
-  need one restart) and runs `jetson_clocks` before every start; adds 8 GB of
-  swap for preparing the 1.7 GB models; stops boot waiting for a network (none
-  in the car; about two minutes); caps the system log at 200 MB.
+  need one restart) and runs `jetson_clocks` at every boot
+  (`jetlink-clocks.service`); adds 8 GB of swap for preparing the 1.7 GB
+  models; stops boot waiting for a network (none in the car; about two
+  minutes); caps the system log at 200 MB; and [boots faster](#faster-boot).
+  If you answer yes to turning off the desktop (asked when the Jetson starts
+  one), it starts `multi-user.target` instead of `graphical.target` from the
+  next restart; uninstall, or `jetlink setup`, puts the desktop back.
 
 An install from 0.6.0 or earlier runs the server in Docker. Its next
 `jetlink update` moves it to the native server, keeping the answers, models,
@@ -97,7 +101,11 @@ any systemd distribution with glibc 2.35 or newer:
 4. `share/jetlink/systemd/jetlink-server.service` from the tarball in
    `/etc/systemd/system`, then
    `sudo systemctl daemon-reload && sudo systemctl enable --now jetlink-server`.
-5. Jetson: a drop-in for the service with `ExecStartPre=-/usr/bin/jetson_clocks`.
+5. Jetson: a oneshot unit, enabled, that runs `/usr/bin/jetson_clocks` with
+   `After=nvpmodel.service` and `WantedBy=multi-user.target`. Do not order the
+   server after nvpmodel: that waits for the desktop's login screen. Have the
+   server wait for `/dev/nvhost-ctrl-gpu` instead, in an `ExecStartPre`
+   (the installer's is in `jetlink-server.service.d/20-jetson-gpu.conf`).
 6. Always-on supply only (lets the comma wake the Jetson):
    `share/jetlink/udev/99-jetlink-usb-wakeup.rules` in `/etc/udev/rules.d`.
 
@@ -128,8 +136,9 @@ starts it again 2 seconds after it exits. Its settings come from
   put anything else, such as `JETLINK_USB_LPM=1`, in a drop-in
   (`sudo systemctl edit jetlink-server`, then `Environment=JETLINK_USB_LPM=1`
   under `[Service]`).
-- Its own drop-ins wait for the cache's mount and, on a Jetson, run
-  `jetson_clocks` before each start.
+- Its own drop-ins wait for the cache's mount and, on a Jetson, for the GPU's
+  driver. `jetlink-clocks.service` runs `jetson_clocks` at boot once nvpmodel
+  has set the power mode; the server does not wait for it.
 
 `jetlink run` runs the service's command line, with those settings, in the
 terminal instead (it stops the service first; Ctrl-C stops it). Extra flags go
@@ -315,6 +324,35 @@ curl -fsSL https://raw.githubusercontent.com/zoompilot/jetlink/v0.7.0/install.sh
   ```bash
   curl -fsSL https://raw.githubusercontent.com/zoompilot/jetlink/main/install.sh | bash -s -- --update --ref latest
   ```
+
+<a id="faster-boot"></a>
+
+## Faster boot
+
+A Jetson on **Switched** power boots at every start of the car, and the big
+model drives only once the server is up. On JetPack 6.2 and 7.2 the installer
+makes three changes that took a reboot to the model loaded from 38.5 s to
+26.1 s (Orin Nano, JetPack 7.2.1):
+
+- **The firmware's boot menu waits 1 s** instead of JetPack's 5
+  (`efibootmgr -t 1`; the installer adds `efibootmgr` if it is missing). A
+  wait of 1 s or less stays as it is. To reach the firmware menu, give it the
+  5 s back first: `sudo efibootmgr -t 5`.
+- **`quiet` on the kernel command line**, at the end of the `APPEND` line of
+  the entry that boots in `/boot/extlinux/extlinux.conf`. Kernel messages
+  still go to the journal and `dmesg`, just not to the serial console, which
+  runs at 115200 baud. The file as it was stays as `extlinux.conf.jetlink-bak`.
+  If a JetPack update rewrites the file, the next `jetlink update` adds
+  `quiet` again.
+- **The server starts once the GPU's driver is up**, not after nvpmodel,
+  which waits for the desktop's login screen. A drop-in
+  (`20-jetson-gpu.conf`) waits up to 30 s for the GPU's control node, since
+  CUDA fails for good in a process that starts before it.
+  `jetlink-clocks.service` pins the clocks once nvpmodel has set the power
+  mode.
+
+`jetlink uninstall` puts the firmware's wait and `extlinux.conf` back as they
+were, unless you changed them since.
 
 ## Deep sleep and USB wake
 

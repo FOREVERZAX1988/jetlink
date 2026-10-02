@@ -84,6 +84,7 @@ case "$name" in
       case "$arg" in
         docker.io|docker-ce) ln -sf "$0" "$FAKE_BIN/docker" ;;
         nvidia-container-toolkit) ln -sf "$0" "$FAKE_BIN/nvidia-ctk" ;;
+        efibootmgr) ln -sf "$0" "$FAKE_BIN/efibootmgr" ;;
         libnvinfer10|libnvonnxparsers10|libnvinfer-plugin10) echo "$TRT10" >"$state/pkg-$arg" ;;
         libnvinfer*=*|libnvonnxparsers*=*) echo "${arg#*=}" >"$state/pkg-${arg%%=*}" ;;
         libcurl4) libcurl_in ;;
@@ -175,6 +176,9 @@ case "$name" in
       list-unit-files)
         u=systemd-networkd-wait-online.service
         [ "$u" = "${*: -1}" ] && echo "$u enabled enabled" ;;
+      # what the computer starts: the desktop (stock JetPack's) until set
+      get-default) cat "$state/default-target" 2>/dev/null || echo graphical.target ;;
+      set-default) echo "$2" >"$state/default-target" ;;
       mask) for u in "${@:2}"; do touch "$state/masked-$u"; done ;;
       unmask) for u in "${@:2}"; do rm -f "$state/masked-$u"; done ;;
     esac ;;
@@ -292,6 +296,23 @@ case "$name" in
       -m) read -r _ || true
           if [ "${FAKE_PM_REBOOT:-0}" = 1 ]; then echo "reboot required"; else echo MAXN_SUPER >"$state/pm"; fi ;;
     esac ;;
+
+  efibootmgr)
+    # the firmware's boot menu wait in $state/uefi-timeout: JetPack's 5 s
+    # until -t or -T changes it, and `none` for no Timeout variable.
+    # FAKE_UEFI_LOCKED: a firmware that keeps its variables as they are
+    if [ "${FAKE_UEFI_LOCKED:-0}" = 0 ]; then
+      case "${1:-}" in
+        -t) echo "$2" >"$state/uefi-timeout" ;;
+        -T) echo none >"$state/uefi-timeout" ;;
+      esac
+    fi
+    t="$(cat "$state/uefi-timeout" 2>/dev/null || echo 5)"
+    echo "BootCurrent: 0001"
+    [ "$t" = none ] || echo "Timeout: $t seconds"
+    echo "BootOrder: 0001,0000"
+    echo "Boot0000* Enter Setup"
+    echo "Boot0001* UEFI PNY CS1030 1TB SSD" ;;
 
   nvidia-smi)
     [ -n "${FAKE_SMI:-}" ] || exit 9
