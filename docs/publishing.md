@@ -73,9 +73,33 @@ signing mode" says which mode ran.
 | `NOTARY_ISSUER_ID` | the issuer id of that key |
 | `NOTARY_PRIVATE_KEY_P8_BASE64` | the key's .p8 file, base64 encoded |
 
-- Notary key: a Team key with the Developer role, made under **Users and
-  Access > Integrations** in App Store Connect.
+- Notary key: a Team key made under **Users and Access > Integrations** in App
+  Store Connect. The Developer role notarizes; give it Admin if the same key
+  uploads the iPhone app (below).
 - Encode a certificate with `base64 -i cert.p12 | pbcopy`; for
   `NOTARY_PRIVATE_KEY_P8_BASE64` encode the `.p8` file instead.
+- The p12 can come from a key and CSR made with openssl instead of Keychain
+  Access: upload the CSR under **Certificates > Developer ID Application**
+  (G2 Sub-CA), then join the key and the downloaded `.cer` with
+  `openssl pkcs12 -export`.
+
+## iPhone app on TestFlight
+
+The iPhone app goes up from a Mac, not from the Release workflow:
+
+```bash
+JETLINK_TEAM=ABCDE12345 ASC_KEY_ID=... ASC_ISSUER_ID=... ASC_KEY_PATH=AuthKey_XXXX.p8 \
+  ios/scripts/testflight.sh
+```
+
+- Once per team: register the App ID `io.zoompilot.jetlink` with the
+  **Increased Memory Limit** capability, and create the app in App Store
+  Connect with that bundle ID. App Store Connect has no API for the second.
+- The key needs the Admin role: xcodebuild makes the distribution certificate
+  and profile with it, so the Mac needs no Xcode login.
+- The version is `jetlink.__version__`, the build number the commit count.
+  `JETLINK_BUILD` overrides it when a build number is already taken.
+- Apple processes an upload for a few minutes before TestFlight lists it.
+  Internal testers get it then; external testers after Beta App Review.
 
 <a id="the-container-images"></a>

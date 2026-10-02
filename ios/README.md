@@ -62,3 +62,7 @@ swift build -c release --package-path JetlinkKit --product jetlink-server
 JetlinkKit/.build/release/jetlink-server --cache /tmp/jetlink-cache
 python3 scripts/bench_link.py --host 127.0.0.1 --onnx big_driving_supercombo.onnx --rate 20
 ```
+
+## TestFlight
+
+Uploading a build to App Store Connect: [publishing](../docs/publishing.md#iphone-app-on-testflight).
