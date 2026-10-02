@@ -108,7 +108,7 @@ let package = Package(
       ]),
     .target(name: "JetlinkStatusPage", dependencies: ["JetlinkKit", "JetlinkLog", "JetlinkServer"], resources: [.copy("Resources")]),
     .target(
-      name: "JetlinkAndroid", dependencies: ["JetlinkKit", "JetlinkServer", "JetlinkORT"],
+      name: "JetlinkAndroid", dependencies: ["JetlinkKit", "JetlinkServer", "JetlinkORT", "JetlinkLiteRT"],
       linkerSettings: [.linkedLibrary("log", .when(platforms: [.android]))]),
     // Built for Linux and macOS; elsewhere its sources compile to an empty program.
     .executableTarget(

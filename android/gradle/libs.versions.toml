@@ -11,6 +11,9 @@ junit = "4.13.2"
 # The same release the Mac and iPhone apps and the Python server run
 # (JetlinkKit/Sources/JetlinkKit/Pinned.swift). QNN is built into this one.
 onnxruntime = "1.29.0"
+# LiteRT's C runtime and its GPU accelerator, the release JetlinkKit's
+# vendored headers come from (JetlinkKit/Sources/CLiteRt/vendor).
+litert = "2.2.0"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "core-ktx" }
@@ -29,6 +32,7 @@ kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutine
 kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
 onnxruntime-qnn = { module = "com.microsoft.onnxruntime:onnxruntime-android-qnn", version.ref = "onnxruntime" }
+litert = { module = "com.google.ai.edge.litert:litert", version.ref = "litert" }
 junit = { module = "junit:junit", version.ref = "junit" }
 
 [plugins]
