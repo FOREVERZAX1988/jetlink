@@ -27,6 +27,12 @@ class ProcessorTest {
     }
 
     @Test
+    fun onlyOnnxruntimesNpuAndGpuChoicesNeedQnn() {
+        assertEquals(listOf(Processor.NpuGpu, Processor.Npu), Processor.entries.filter { it.usesQnn })
+        assertEquals(listOf(Backend.Ort, Backend.Ort, Backend.LiteRt, Backend.Ort), Processor.entries.map { it.backend })
+    }
+
+    @Test
     fun theEmulatorOffersEverything() {
         assertEquals(Processor.entries, Processor.choices(qualcomm = false, emulator = true, current = Processor.Cpu))
     }

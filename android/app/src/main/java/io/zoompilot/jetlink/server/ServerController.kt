@@ -83,7 +83,8 @@ class ServerController(private val context: Context, private val scope: Coroutin
 
     private fun config(settings: SettingsValues): JsonObject = buildJsonObject {
         put("cache", cacheDirectory.absolutePath)
-        put("device", settings.processor.id)
+        put("backend", settings.processor.backend.id)
+        put("device", settings.processor.device)
         put("keep_alive", settings.keepNpuAwake)
         put("keep_cpu_warm", settings.keepCpuAwake)
         put("port", settings.port)

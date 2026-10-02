@@ -4,16 +4,17 @@ import JetlinkONNX
 import JetlinkRegistry
 import JetlinkServer
 
-/// Where LiteRT runs a model. The raw value is what the apps' settings and
-/// `--device` name, and the device part of the artifact's tag.
+/// Where LiteRT runs a model. The raw value is the device the Android app's
+/// start config and `--device` name beside the backend, "litert", and the
+/// device part of the artifact's tag.
 public enum LiteRtProfile: String, CaseIterable, Sendable {
   /// The whole graph on the GPU in fp16: OpenCL on Android, Metal on a Mac.
   /// A model the GPU cannot run whole fails to build rather than run partly
   /// on the CPU at a fraction of the speed.
-  case gpu = "litert-gpu"
+  case gpu
   /// XNNPACK on the CPU: for tests, the emulator, and phones LiteRT drives no
   /// GPU on. Nowhere near the frame budget with a real model.
-  case cpu = "litert-cpu"
+  case cpu
 
   /// What the log and the benchmark's report call it.
   var label: String {

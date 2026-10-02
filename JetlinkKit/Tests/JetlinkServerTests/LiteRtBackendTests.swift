@@ -205,12 +205,13 @@ struct LiteRtBackendTests {
 struct LiteRtProfileTests {
   @Test("The profiles are the apps' device names, and the tag names the chip")
   func profiles() {
-    #expect(LiteRtProfile.allCases.map(\.rawValue) == ["litert-gpu", "litert-cpu"])
+    #expect(LiteRtProfile.allCases.map(\.rawValue) == ["gpu", "cpu"])
     let backend = LiteRtBackend(profile: .gpu, preparer: ONNXPreparer(), chip: "Tensor G5")
     #expect(backend.name == "litert" && backend.suffix == ".litertcache")
-    #expect(backend.deviceTag() == "litert-gpu-Tensor_G5")
-    #expect(backend.tag() == "litert2.2.0.litert-gpu-Tensor_G5")
-    #expect(LiteRtBackend(profile: .cpu, preparer: ONNXPreparer()).deviceTag() == sanitize("litert-cpu-\(HostChip.name())"))
+    #expect(backend.deviceTag() == "gpu-Tensor_G5")
+    #expect(backend.tag() == "litert2.2.0.gpu-Tensor_G5")
+    #expect(LiteRtBackend(profile: .cpu, preparer: ONNXPreparer()).deviceTag() == sanitize("cpu-\(HostChip.name())"))
+    #expect(LiteRtBackend(profile: .gpu, preparer: ONNXPreparer(), chip: "").deviceTag() == "gpu-unknown")
   }
 }
 
@@ -220,7 +221,7 @@ struct LiteRtProfileTests {
 /// and the frame time ($JETLINK_LITERT_BENCH_FRAMES of them, 200 by default),
 /// and writes the driving output of each recorded frame to
 /// outputs.litert.bin for a parity check against onnxruntime's.
-/// $JETLINK_LITERT_BENCH_DEVICE is litert-gpu (the default) or litert-cpu.
+/// $JETLINK_LITERT_BENCH_DEVICE is gpu (the default) or cpu.
 @Suite(
   "LiteRT bench", .serialized,
   .enabled(if: LiteRtLibraries.available && LiteRtLibraries.bench != nil, "no LiteRT, or no model in $JETLINK_LITERT_BENCH"))
