@@ -124,25 +124,9 @@ final class LiteRtModel: @unchecked Sendable {
   }
 
   private static func describe(_ model: OpaquePointer, output: Bool) throws -> [TensorSpec] {
-    let count = jl_litert_model_io_count(model, output ? 1 : 0)
-    var specs: [TensorSpec] = []
-    for index in 0..<count {
-      var name = [CChar](repeating: 0, count: 512)
-      var type: Int32 = 0
-      var dims = [Int64](repeating: 0, count: 16)
-      var rank = 0
+    try TensorSpec.described(count: jl_litert_model_io_count(model, output ? 1 : 0)) { index, name, type, dims, rank in
       try LiteRtError.check(jl_litert_model_io_info(model, output ? 1 : 0, index, &name, name.count, &type, &dims, dims.count, &rank))
-      let tensorName = String(decoding: name.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
-      guard let element = ElementType(rawValue: type) else {
-        throw LiteRtError("\(tensorName) has an element type jetlink does not stage")
-      }
-      let shape = dims.prefix(rank).map { Int($0) }
-      if shape.contains(where: { $0 <= 0 }) {
-        throw LiteRtError("\(tensorName) has a dynamic shape \(shape); jetlink builds fixed-shape engines")
-      }
-      specs.append(TensorSpec(name: tensorName, type: element, shape: shape))
     }
-    return specs
   }
 }
 
