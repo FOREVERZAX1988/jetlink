@@ -127,6 +127,20 @@ object Format {
     /** "42%", clamped to 0 to 100. */
     fun percent(frac: Double): String = "${(frac.coerceIn(0.0, 1.0) * 100).roundToInt()}%"
 
+    private val elapsed = Regex("""\d+ s(?= elapsed$)""")
+
+    /**
+     * How far along: "42%", or for a step with nothing to go by the seconds
+     * so far, "12 s", from the server's "…, 12 s elapsed" (Ticker.paced).
+     * Null before either.
+     */
+    fun progressAmount(frac: Double, msg: String?): String? =
+        if (frac > 0) percent(frac) else msg?.let { elapsed.find(it)?.value }
+
+    /** "Loading · 42%", "Loading · 12 s", or just "Loading". */
+    fun progressText(stage: String?, frac: Double, msg: String?): String =
+        listOfNotNull(stageName(stage), progressAmount(frac, msg)).joinToString(" · ")
+
     /** "18.4 ms headroom", or "3.2 ms over" once P99 is past the budget. */
     fun headroomText(p99: Double): String {
         val room = BUDGET_MS - p99
@@ -143,6 +157,7 @@ object Format {
         "build" -> "Building"
         "save" -> "Saving"
         "load" -> "Loading"
+        "warm" -> "Warming Up"
         "failed" -> "Failed"
         else -> "Working"
     }

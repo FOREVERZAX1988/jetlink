@@ -268,8 +268,8 @@ struct ModelRowView: View {
     case let .downloading(frac, rateBps):
       let percent = frac.formatted(.percent.precision(.fractionLength(0)))
       return rateBps > 0 ? "Downloading · \(percent) · \(ByteCount.rate(rateBps))" : "Downloading · \(percent)"
-    case let .preparing(stage, frac, _):
-      return "\(ProgressRow.stageName(stage)) · \(frac.formatted(.percent.precision(.fractionLength(0))))"
+    case let .preparing(stage, frac, msg):
+      return ProgressRow.text(stage: stage, frac: frac, msg: msg)
     case .loaded:
       return row.isOrphan ? "In Use · \(row.sha256.map { String($0.prefix(12)) } ?? "")" : "In Use"
     case .failed:
@@ -342,6 +342,16 @@ struct ProgressRing: View {
   let stoppable: Bool
 
   var body: some View {
+    // nothing to show yet, so it spins rather than sit at an empty ring
+    if frac <= 0 && !stoppable {
+      ProgressView()
+        .frame(width: 28, height: 28)
+    } else {
+      ring
+    }
+  }
+
+  private var ring: some View {
     ZStack {
       Circle()
         .stroke(Color.accentColor.opacity(0.2), lineWidth: 3)

@@ -2,7 +2,9 @@ package io.zoompilot.jetlink.ui.components
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -16,11 +18,16 @@ import androidx.compose.ui.unit.dp
 
 /**
  * A small determinate ring, as a store draws a download: with a stop square
- * inside while it can be stopped.
+ * inside while it can be stopped. With nothing to show yet and nothing to
+ * stop, it spins rather than sit empty.
  */
 @Composable
 fun ProgressRing(frac: Double, stoppable: Boolean, modifier: Modifier = Modifier) {
     val color = MaterialTheme.colorScheme.primary
+    if (frac <= 0 && !stoppable) {
+        CircularProgressIndicator(modifier.size(28.dp).padding(2.dp), color = color, strokeWidth = 3.dp, trackColor = color.copy(alpha = 0.2f))
+        return
+    }
     val shown by animateFloatAsState(frac.coerceIn(0.02, 1.0).toFloat(), label = "download")
     Canvas(modifier.size(28.dp)) {
         val stroke = 3.dp.toPx()

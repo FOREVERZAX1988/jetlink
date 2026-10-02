@@ -343,7 +343,11 @@ public final class EngineHost: @unchecked Sendable {
         progress("load", 0, "deserializing engine", force: true)
         engine = try backend.load(artifact: entry.path, report: progressFn)
       }
-      let loaded = try warm(engine!, spec: ready)
+      // A frame or two on zeros: minutes on a phone's CPU, so it ticks.
+      let warming = engine!
+      let loaded = try Ticker.during(interval: 1, Ticker.paced("warm", "warming up", took: 0, report: progressFn)) {
+        try warm(warming, spec: ready)
+      }
       engine = nil
       lock.lock()
       self.loaded = loaded

@@ -44,9 +44,24 @@
       case "build": "Building"
       case "save": "Saving"
       case "load": "Loading"
+      case "warm": "Warming Up"
       case "failed": "Failed"
       default: "Working"
       }
+    }
+
+    /// How far along: "42%", or for a step with nothing to go by the
+    /// seconds so far, "12 s", from the server's "…, 12 s elapsed"
+    /// (Ticker.paced). Nil before either.
+    public nonisolated static func amount(frac: Double, msg: String) -> String? {
+      if frac > 0 { return frac.formatted(.percent.precision(.fractionLength(0))) }
+      guard let range = msg.range(of: #"\d+ s(?= elapsed$)"#, options: .regularExpression) else { return nil }
+      return String(msg[range])
+    }
+
+    /// "Loading · 42%", "Loading · 12 s", or just "Loading".
+    public nonisolated static func text(stage: String?, frac: Double, msg: String) -> String {
+      [stageName(stage), amount(frac: frac, msg: msg)].compactMap { $0 }.joined(separator: " · ")
     }
   }
 
