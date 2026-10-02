@@ -23,7 +23,9 @@ Jetson or PC: [README](../README.md#quick-start).
 ### Which phones
 
 The model runs on the phone's NPU, the Hexagon in a Snapdragon, through
-Qualcomm's QNN runtime. Other phones run it on the CPU, far too slowly.
+Qualcomm's QNN runtime. Other phones, a Pixel's Google Tensor among them, can
+only choose the CPU, which takes seconds a frame: fine for trying the app, far
+too slow to drive with.
 
 | Snapdragon | NPU | Expect |
 | --- | --- | --- |
@@ -147,7 +149,7 @@ A hot phone slows down and frames miss 50 ms.
 | Link | USB 3 or USB 2 while connected (Wi-Fi for a bench tool) |
 | Port | The TCP port for `verify_parity.py` from a Mac, 5599 by default |
 | Wi-Fi | The phone's Wi-Fi address and port, for a Mac's bench tools |
-| Processor | **NPU + GPU** (default): the vision model on the NPU, the rest on the GPU, as a Mac splits it. **NPU**: the whole model on the NPU. **GPU**: when something else keeps the NPU busy. **CPU**: for the emulator. Changing it prepares the model again |
+| Processor | **NPU + GPU** (default): the vision model on the NPU, the rest on the GPU, as a Mac splits it. **NPU**: the whole model on the NPU. **GPU**: when something else keeps the NPU busy. **CPU**: the emulator, and the only choice on a phone without a Snapdragon. Changing it prepares the model again |
 | Keep NPU Awake | On by default. Holds the NPU at full speed between frames. Uses some power |
 | Keep CPU Awake | With the NPU: holds the CPU's clocks up between frames, through Android's performance hints, or a busy core on a phone without them. Uses some power |
 | Keep Screen On | On by default |

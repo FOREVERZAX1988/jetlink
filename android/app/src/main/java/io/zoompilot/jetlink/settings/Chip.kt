@@ -17,6 +17,9 @@ object Chip {
     val isQualcomm: Boolean
         get() = manufacturer.equals("QTI", ignoreCase = true) || manufacturer.equals("Qualcomm", ignoreCase = true)
 
+    /** What this phone's Settings offer. */
+    fun processors(current: Processor): List<Processor> = Processor.choices(isQualcomm, isEmulator, current)
+
     val isEmulator: Boolean
         get() = Build.HARDWARE.contains("ranchu") || Build.HARDWARE.contains("goldfish") || Build.PRODUCT.contains("sdk")
 

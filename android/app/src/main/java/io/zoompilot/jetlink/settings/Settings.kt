@@ -17,11 +17,23 @@ enum class Processor(val id: String, val title: String) {
     /** The whole model on the GPU, for when something else holds the NPU. */
     Gpu("gpu", "GPU"),
 
-    /** The CPU: the emulator, and tests. Far over the budget with a real model. */
+    /** The CPU: the emulator, tests, and phones without a Snapdragon. Far over the budget with a real model. */
     Cpu("cpu", "CPU");
 
     companion object {
         fun of(id: String?): Processor? = entries.firstOrNull { it.id == id }
+
+        /**
+         * What a phone can choose. The NPU and GPU choices run QNN, which
+         * needs a Snapdragon: anywhere else it leaves every op to one CPU
+         * thread, minutes a frame. The CPU is offered on a Snapdragon only
+         * once chosen; the emulator offers everything, for testing.
+         */
+        fun choices(qualcomm: Boolean, emulator: Boolean, current: Processor): List<Processor> = when {
+            emulator -> entries
+            qualcomm -> entries.filter { it != Cpu || current == Cpu }
+            else -> listOf(Cpu)
+        }
     }
 }
 
@@ -60,7 +72,10 @@ class Settings(context: Context) {
         val port = prefs.getInt(PORT, defaults.port)
         return SettingsValues(
             port = if (port in 1..65535) port else defaults.port,
-            processor = Processor.of(prefs.getString(PROCESSOR, null)) ?: defaults.processor,
+            // a QNN choice from before a phone without a Snapdragon was told apart
+            processor = Processor.of(prefs.getString(PROCESSOR, null))
+                ?.takeIf { it in Processor.choices(Chip.isQualcomm, Chip.isEmulator, it) }
+                ?: defaults.processor,
             keepNpuAwake = prefs.getBoolean(KEEP_NPU_AWAKE, defaults.keepNpuAwake),
             keepCpuAwake = prefs.getBoolean(KEEP_CPU_AWAKE, defaults.keepCpuAwake),
             keepScreenOn = prefs.getBoolean(KEEP_SCREEN_ON, defaults.keepScreenOn),
@@ -74,7 +89,7 @@ class Settings(context: Context) {
         const val KEEP_CPU_AWAKE = "keepCpuAwake"
         const val KEEP_SCREEN_ON = "keepScreenOn"
 
-        /** The CPU on the emulator, which has no NPU; the split elsewhere. */
-        fun defaultProcessor(): Processor = if (Chip.isEmulator) Processor.Cpu else Processor.NpuGpu
+        /** The split on a Snapdragon; the CPU on the emulator and on any other phone, which have no NPU QNN can drive. */
+        fun defaultProcessor(): Processor = if (Chip.isQualcomm && !Chip.isEmulator) Processor.NpuGpu else Processor.Cpu
     }
 }

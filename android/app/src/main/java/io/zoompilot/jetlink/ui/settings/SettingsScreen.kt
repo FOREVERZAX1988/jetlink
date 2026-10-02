@@ -79,8 +79,10 @@ data class SettingsInfo(
     val runtime: String?,
     val chip: String,
     val version: String,
-    /** The emulator also offers the CPU. */
-    val offerCpu: Boolean,
+    /** What the Processor row offers. */
+    val processors: List<Processor>,
+    /** A Snapdragon, whose NPU and GPU QNN can drive. */
+    val snapdragon: Boolean = true,
 )
 
 /** What the Settings rows do. */
@@ -117,7 +119,8 @@ fun SettingsScreen(graph: AppGraph, openConnect: () -> Unit, openLogs: () -> Uni
         runtime = snapshot.server?.runtimeVersion ?: runtime,
         chip = Chip.name,
         version = BuildConfig.VERSION_NAME,
-        offerCpu = Chip.isEmulator || values.processor == Processor.Cpu,
+        processors = Chip.processors(values.processor),
+        snapdragon = Chip.isQualcomm || Chip.isEmulator,
     )
     val actions = SettingsActions(
         update = graph.settings::update,
@@ -237,8 +240,13 @@ private fun Connection(values: SettingsValues, info: SettingsInfo, actions: Sett
 private fun Performance(values: SettingsValues, info: SettingsInfo, actions: SettingsActions) {
     val colors = JetlinkTheme.colors
     var choosing by remember { mutableStateOf(false) }
-    val choices = Processor.entries.filter { it != Processor.Cpu || info.offerCpu }
-    FormSection("Performance", footer = { FormFooter("Changing the processor prepares models again.") }) {
+    val choices = info.processors
+    val footer = if (info.snapdragon) {
+        "Changing the processor prepares models again."
+    } else {
+        "This phone has no Snapdragon, so the model runs on the CPU: seconds a frame, too slow to drive with."
+    }
+    FormSection("Performance", footer = { FormFooter(footer) }) {
         Box {
             Row(
                 Modifier
@@ -264,11 +272,13 @@ private fun Performance(values: SettingsValues, info: SettingsInfo, actions: Set
                 }
             }
         }
-        RowDivider()
-        SwitchRow(
-            "Keep NPU Awake", values.keepNpuAwake, { on -> actions.update { it.copy(keepNpuAwake = on) } },
-            supporting = "Holds the NPU at full speed between frames.",
-        )
+        if (info.snapdragon) {
+            RowDivider()
+            SwitchRow(
+                "Keep NPU Awake", values.keepNpuAwake, { on -> actions.update { it.copy(keepNpuAwake = on) } },
+                supporting = "Holds the NPU at full speed between frames.",
+            )
+        }
         RowDivider()
         SwitchRow(
             "Keep CPU Awake", values.keepCpuAwake, { on -> actions.update { it.copy(keepCpuAwake = on) } },
@@ -321,7 +331,7 @@ private fun SettingsPreview() {
                     runtime = "1.29.0",
                     chip = "Snapdragon 8 Gen 3",
                     version = "0.5.0",
-                    offerCpu = false,
+                    processors = listOf(Processor.NpuGpu, Processor.Npu, Processor.Gpu),
                 ),
                 SettingsActions(),
             )
