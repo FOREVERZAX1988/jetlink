@@ -65,7 +65,8 @@ struct LocalFunction {
   let calls: [(opType: String, domain: String)]
 }
 
-/// An AttributeProto, written back whole. Only what the patches read is decoded.
+/// An AttributeProto, written back whole. Only what the patches and the
+/// LiteRT lowering read is decoded.
 struct Attribute {
   enum Bytes {
     /// The whole field in the source, tag included.
@@ -80,6 +81,10 @@ struct Attribute {
   let i: Int64
   let f: Float
   let ints: [Int64]
+  let s: String
+  let floats: [Float]
+  /// A tensor attribute (Constant's value), its data left in the source.
+  let t: Tensor?
 
   /// An INT attribute as onnx.helper.make_attribute writes it: name, i, type.
   static func int(_ name: String, _ value: Int64) -> Attribute {
@@ -87,7 +92,7 @@ struct Attribute {
     e.stringField(1, name)
     e.intField(3, value)
     e.intField(20, 2)
-    return Attribute(bytes: .owned(e.tail), name: name, type: 2, i: value, f: 0, ints: [])
+    return Attribute(bytes: .owned(e.tail), name: name, type: 2, i: value, f: 0, ints: [], s: "", floats: [], t: nil)
   }
 
   /// An INTS attribute as make_attribute writes it: name, one ints field per
@@ -97,7 +102,7 @@ struct Attribute {
     e.stringField(1, name)
     for v in values { e.intField(8, v) }
     e.intField(20, 7)
-    return Attribute(bytes: .owned(e.tail), name: name, type: 7, i: 0, f: 0, ints: values)
+    return Attribute(bytes: .owned(e.tail), name: name, type: 7, i: 0, f: 0, ints: values, s: "", floats: [], t: nil)
   }
 }
 
@@ -300,6 +305,18 @@ enum Decode {
     return m
   }
 
+  /// The model and its graph, as a preparation starts from them. A model
+  /// whose initializers keep their data in an external file is refused:
+  /// no preparation reads one.
+  static func preparable(_ src: Source) throws -> (model: Model, graph: Graph) {
+    let m = try model(src)
+    guard let g = m.graph else { throw OnnxError("the model has no graph") }
+    if let t = g.initializers.first(where: \.isExternal) {
+      throw OnnxError("initializer \(t.key) keeps its data in an external file, which the preparation does not read")
+    }
+    return (m, g)
+  }
+
   /// The graph's inputs and outputs and the model's metadata_props, and
   /// nothing else: nodes and initializers are skipped by their lengths, so
   /// the weights are never read.
@@ -407,6 +424,9 @@ enum Decode {
     var i: Int64 = 0
     var float: Float = 0
     var ints: [UInt64] = []
+    var s = ""
+    var floats: [Float] = []
+    var t: Tensor?
     var fields: [WireField] = []
     var r = src.reader(field.payload)
     while let f = try r.next() {
@@ -421,6 +441,23 @@ enum Decode {
       case 3:
         try f.expect(.varint, "AttributeProto.i")
         i = Int64(bitPattern: f.value)
+      case 4:
+        try f.expect(.bytes, "AttributeProto.s")
+        s = String(decoding: src.slice(f.payload), as: UTF8.self)
+      case 5:
+        try f.expect(.bytes, "AttributeProto.t")
+        t = try tensor(src, f.payload)
+      case 7:
+        // Not declared packed, but parsers take it packed too.
+        if f.wire == .fixed32 {
+          floats.append(Float(bitPattern: UInt32(truncatingIfNeeded: f.value)))
+        } else {
+          try f.expect(.bytes, "AttributeProto.floats")
+          var p = src.reader(f.payload)
+          while !p.atEnd {
+            floats.append(Float(bitPattern: src.slice(try p.take(4)).loadUnaligned(as: UInt32.self).littleEndian))
+          }
+        }
       case 8:
         try f.appendVarints(to: &ints, src, "AttributeProto.ints")
       case 20:
@@ -433,7 +470,8 @@ enum Decode {
     // Almost always the source wrote it the way Python would, and it is
     // copied as it is. Otherwise it is written again the way Python does.
     let bytes: Attribute.Bytes = try Canonical.attribute(fields, src).map { .owned($0) } ?? .source(field.whole)
-    return Attribute(bytes: bytes, name: name, type: type, i: i, f: float, ints: ints.map { Int64(bitPattern: $0) })
+    return Attribute(
+      bytes: bytes, name: name, type: type, i: i, f: float, ints: ints.map { Int64(bitPattern: $0) }, s: s, floats: floats, t: t)
   }
 
   static func valueInfo(_ src: Source, _ range: Range<Int>) throws -> ValueInfo {

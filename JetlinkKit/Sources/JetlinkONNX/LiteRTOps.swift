@@ -5,91 +5,15 @@ import Foundation
 // throughout, so every shape, axis and bound is worked out here and written
 // as a constant.
 
-/// An attribute's value, decoded from the bytes the model keeps. Only what
-/// the lowering reads: f, i, s, t, floats and ints.
-struct AttributeValue {
-  var f: Float?
-  var i: Int64?
-  var s: String?
-  var t: Tensor?
-  var floats: [Float] = []
-  var ints: [Int64] = []
-}
-
-extension Attribute {
-  func decoded(_ src: Source) throws -> AttributeValue {
-    switch bytes {
-    case .source(let range):
-      var r = src.reader(range)
-      guard let field = try r.next() else { return AttributeValue() }
-      return try Self.decode(src, field.payload, tensors: true)
-    case .owned(let payload):
-      return try payload.withUnsafeBytes { try Self.decode(Source(bytes: $0), 0..<payload.count, tensors: false) }
-    }
-  }
-
-  /// AttributeProto's fields: f 2, i 3, s 4, t 5, floats 7, ints 8.
-  private static func decode(_ src: Source, _ range: Range<Int>, tensors: Bool) throws -> AttributeValue {
-    var v = AttributeValue()
-    var r = src.reader(range)
-    while let f = try r.next() {
-      switch f.number {
-      case 2:
-        try f.expect(.fixed32, "AttributeProto.f")
-        v.f = Float(bitPattern: UInt32(truncatingIfNeeded: f.value))
-      case 3:
-        try f.expect(.varint, "AttributeProto.i")
-        v.i = Int64(bitPattern: f.value)
-      case 4:
-        try f.expect(.bytes, "AttributeProto.s")
-        v.s = String(decoding: src.slice(f.payload), as: UTF8.self)
-      case 5:
-        try f.expect(.bytes, "AttributeProto.t")
-        guard tensors else { throw OnnxError("a tensor attribute the preparation rewrote cannot be read") }
-        v.t = try Decode.tensor(src, f.payload)
-      case 7:
-        if f.wire == .fixed32 {
-          v.floats.append(Float(bitPattern: UInt32(truncatingIfNeeded: f.value)))
-        } else {
-          try f.expect(.bytes, "AttributeProto.floats")
-          var p = src.reader(f.payload)
-          while !p.atEnd {
-            let b = src.slice(try p.take(4))
-            v.floats.append(Float(bitPattern: UInt32(littleEndian: b.loadUnaligned(as: UInt32.self))))
-          }
-        }
-      case 8:
-        var ints: [UInt64] = []
-        try f.appendVarints(to: &ints, src, "AttributeProto.ints")
-        v.ints += ints.map { Int64(bitPattern: $0) }
-      default:
-        break
-      }
-    }
-    return v
-  }
-}
-
 extension LiteRTLowering {
-  typealias Attrs = [String: AttributeValue]
-
-  func attributes(_ n: Node) throws -> Attrs {
-    var a: Attrs = [:]
-    for attr in n.attributes {
-      a[attr.name] = try attr.decoded(src)
-    }
-    return a
-  }
-
   mutating func lower(_ n: Node) throws {
     guard n.domainName.isEmpty || n.domainName == "ai.onnx" else {
       throw OnnxError("ops of domain \(n.domainName) are not lowered to LiteRT")
     }
-    let a = try attributes(n)
     switch n.op {
     case "Identity": try alias(n.outputs[0], value(n.inputs[0]))
-    case "Constant": try constantNode(n, a)
-    case "Cast": try cast(n, a)
+    case "Constant": try constantNode(n)
+    case "Cast": try cast(n)
     case "Add": try binary(.add, n, .add)
     case "Sub": try binary(.sub, n, .sub)
     case "Mul": try binary(.mul, n, .mul)
@@ -108,28 +32,28 @@ extension LiteRTLowering {
     case "Reciprocal": try reciprocal(n)
     case "Gelu":
       // approximate is "none" (erf) or "tanh"; GELU's options default to erf.
-      let approximate = a["approximate"]?.s ?? "none"
+      let approximate = n.attribute("approximate")?.s ?? "none"
       try unary(.gelu, n, approximate == "tanh" ? .gelu(approximate: true) : .none)
-    case "Softmax": try softmax(n, a)
-    case "ReduceMean": try reduce(.mean, n, a)
-    case "ReduceMax": try reduce(.reduceMax, n, a)
-    case "ReduceMin": try reduce(.reduceMin, n, a)
-    case "ReduceSum": try reduce(.sum, n, a)
-    case "Reshape": try reshape(n, a)
-    case "Flatten": try flatten(n, a)
-    case "Squeeze": try squeeze(n, a)
-    case "Unsqueeze": try unsqueeze(n, a)
-    case "Transpose": try transpose(n, a)
-    case "Concat": try concat(n, a)
+    case "Softmax": try softmax(n)
+    case "ReduceMean": try reduce(.mean, n)
+    case "ReduceMax": try reduce(.reduceMax, n)
+    case "ReduceMin": try reduce(.reduceMin, n)
+    case "ReduceSum": try reduce(.sum, n)
+    case "Reshape": try reshape(n)
+    case "Flatten": try flatten(n)
+    case "Squeeze": try squeeze(n)
+    case "Unsqueeze": try unsqueeze(n)
+    case "Transpose": try transpose(n)
+    case "Concat": try concat(n)
     case "Slice": try slice(n)
-    case "Split": try split(n, a)
-    case "Gather": try gather(n, a)
-    case "GatherND": try gatherND(n, a)
+    case "Split": try split(n)
+    case "Gather": try gather(n)
+    case "GatherND": try gatherND(n)
     case "Expand": try expand(n)
     case "MatMul": try matmul(n)
-    case "Gemm": try gemm(n, a)
-    case "Conv": try conv(n, a)
-    case "LayerNormalization": try layerNorm(n, a)
+    case "Gemm": try gemm(n)
+    case "Conv": try conv(n)
+    case "LayerNormalization": try layerNorm(n)
     case "Where": try `where`(n)
     case "Not": try not(n)
     default: throw OnnxError("\(n.op) is not lowered to LiteRT")
@@ -343,8 +267,8 @@ extension LiteRTLowering {
 
   // MARK: Cast, Constant, Not
 
-  mutating func cast(_ n: Node, _ a: Attrs) throws {
-    guard let to = a["to"]?.i.map({ Int32($0) }) else { throw OnnxError("Cast has no 'to'") }
+  mutating func cast(_ n: Node) throws {
+    guard let to = n.attribute("to").map({ Int32($0.i) }) else { throw OnnxError("Cast has no 'to'") }
     let target = try Self.computeType(to)
     let v = try value(n.inputs[0])
     switch v {
@@ -382,19 +306,19 @@ extension LiteRTLowering {
     return out
   }
 
-  mutating func constantNode(_ n: Node, _ a: Attrs) throws {
-    if let t = a["value"]?.t {
+  mutating func constantNode(_ n: Node) throws {
+    if let t = n.attribute("value")?.t {
       try check(n.outputs[0], t.dims.map { Int($0) })
       var renamed = t
       renamed.name = n.outputs[0]
       values[n.outputs[0]] = .constant(Constant(name: n.outputs[0], dims: t.dims.map { Int($0) }, type: t.elementType, bytes: .initializer(renamed)))
-    } else if let f = a["value_float"]?.f {
+    } else if let f = n.attribute("value_float")?.f {
       try defineConstant(n.outputs[0], [], DataType.float, Self.floatBytes([f]))
-    } else if let floats = a["value_floats"]?.floats, !floats.isEmpty {
+    } else if let floats = n.attribute("value_floats")?.floats, !floats.isEmpty {
       try defineConstant(n.outputs[0], [floats.count], DataType.float, Self.floatBytes(floats))
-    } else if let i = a["value_int"]?.i {
+    } else if let i = n.attribute("value_int")?.i {
       try defineConstant(n.outputs[0], [], DataType.int64, Elements.encode([i], as: DataType.int64, for: n.outputs[0]))
-    } else if let ints = a["value_ints"]?.ints, !ints.isEmpty {
+    } else if let ints = n.attribute("value_ints")?.ints, !ints.isEmpty {
       try defineConstant(n.outputs[0], [ints.count], DataType.int64, Elements.encode(ints, as: DataType.int64, for: n.outputs[0]))
     } else {
       throw OnnxError("a Constant of this kind is not lowered")
@@ -413,26 +337,27 @@ extension LiteRTLowering {
 
   // MARK: reductions and Softmax
 
-  /// Axes from the attribute (before opset 18, or 13 for ReduceSum) or the
-  /// second input, normalized and sorted.
-  func axes(_ n: Node, _ a: Attrs, rank: Int) throws -> [Int]? {
-    var raw: [Int]?
-    if let ints = a["axes"]?.ints, !ints.isEmpty {
-      raw = ints.map { Int($0) }
-    } else if let given = try constantInts(n, 1) {
-      raw = given
-    }
-    guard let raw else { return nil }
-    return try Array(Set(raw.map { try Self.normalize($0, rank: rank) })).sorted()
+  /// A node's axes as written: the attribute (the reductions before opset
+  /// 18, ReduceSum, Squeeze and Unsqueeze before 13) or the second input;
+  /// nil when it has neither.
+  func rawAxes(_ n: Node) throws -> [Int]? {
+    if let ints = n.attribute("axes")?.ints, !ints.isEmpty { return ints.map { Int($0) } }
+    return try constantInts(n, 1)
   }
 
-  mutating func reduce(_ op: TFLite.Op, _ n: Node, _ a: Attrs) throws {
+  /// A node's axes counted from the front of a rank-`rank` shape, each once,
+  /// in order.
+  func axes(_ n: Node, rank: Int) throws -> [Int]? {
+    try rawAxes(n).map { raw in try Array(Set(raw.map { try Self.normalize($0, rank: rank) })).sorted() }
+  }
+
+  mutating func reduce(_ op: TFLite.Op, _ n: Node) throws {
     let x = try tensor(n.inputs[0])
     let shape = model.tensors[x].shape
-    let keep = (a["keepdims"]?.i ?? 1) != 0
-    var axes = try self.axes(n, a, rank: shape.count) ?? []
+    let keep = (n.attribute("keepdims")?.i ?? 1) != 0
+    var axes = try self.axes(n, rank: shape.count) ?? []
     if axes.isEmpty {
-      if (a["noop_with_empty_axes"]?.i ?? 0) != 0 {
+      if (n.attribute("noop_with_empty_axes")?.i ?? 0) != 0 {
         try alias(n.outputs[0], .tensor(x))
         return
       }
@@ -450,11 +375,11 @@ extension LiteRTLowering {
     emit(op, [x, int32Tensor(axes, "\(n.outputs[0])__axes")], [o], .reducer(keepDims: keep))
   }
 
-  mutating func softmax(_ n: Node, _ a: Attrs) throws {
+  mutating func softmax(_ n: Node) throws {
     let x = try tensor(n.inputs[0])
     let shape = model.tensors[x].shape
     let rank = shape.count
-    let axis = try Self.normalize(Int(a["axis"]?.i ?? (opset >= 13 ? -1 : 1)), rank: rank)
+    let axis = try Self.normalize(Int(n.attribute("axis")?.i ?? (opset >= 13 ? -1 : 1)), rank: rank)
     let name = n.outputs[0]
     if axis == rank - 1 {
       let o = try define(name, shape, .float32)
@@ -498,7 +423,7 @@ extension LiteRTLowering {
     }
   }
 
-  mutating func reshape(_ n: Node, _ a: Attrs) throws {
+  mutating func reshape(_ n: Node) throws {
     let x = try value(n.inputs[0])
     let have = dims(x)
     let total = have.reduce(1, *)
@@ -511,7 +436,7 @@ extension LiteRTLowering {
     } else {
       throw OnnxError("the target shape is computed at run time and not recorded")
     }
-    if (a["allowzero"]?.i ?? 0) == 0 {
+    if (n.attribute("allowzero")?.i ?? 0) == 0 {
       for k in target.indices where target[k] == 0 {
         guard k < have.count else { throw OnnxError("shape \(target) copies a dimension \(have) does not have") }
         target[k] = have[k]
@@ -525,28 +450,27 @@ extension LiteRTLowering {
     try reshape(n.outputs[0], x, target)
   }
 
-  mutating func flatten(_ n: Node, _ a: Attrs) throws {
+  mutating func flatten(_ n: Node) throws {
     let x = try value(n.inputs[0])
     let shape = dims(x)
-    let axis = try Self.normalize(Int(a["axis"]?.i ?? 1), rank: shape.count + 1)
+    let axis = try Self.normalize(Int(n.attribute("axis")?.i ?? 1), rank: shape.count + 1)
     try reshape(n.outputs[0], x, [shape[..<axis].reduce(1, *), shape[axis...].reduce(1, *)])
   }
 
-  mutating func squeeze(_ n: Node, _ a: Attrs) throws {
+  mutating func squeeze(_ n: Node) throws {
     let x = try value(n.inputs[0])
     let shape = dims(x)
-    let axes = try self.axes(n, a, rank: shape.count) ?? shape.indices.filter { shape[$0] == 1 }
+    let axes = try self.axes(n, rank: shape.count) ?? shape.indices.filter { shape[$0] == 1 }
     for k in axes where shape[k] != 1 {
       throw OnnxError("cannot squeeze axis \(k) of \(shape)")
     }
     try reshape(n.outputs[0], x, shape.enumerated().filter { !axes.contains($0.offset) }.map(\.element))
   }
 
-  mutating func unsqueeze(_ n: Node, _ a: Attrs) throws {
+  mutating func unsqueeze(_ n: Node) throws {
     let x = try value(n.inputs[0])
     let shape = dims(x)
-    var raw = a["axes"]?.ints.map { Int($0) } ?? []
-    if raw.isEmpty, let given = try constantInts(n, 1) { raw = given }
+    let raw = try rawAxes(n) ?? []
     let rank = shape.count + raw.count
     let axes = Set(try raw.map { try Self.normalize($0, rank: rank) })
     var rest = shape.makeIterator()
@@ -560,10 +484,10 @@ extension LiteRTLowering {
 
   // MARK: layout ops
 
-  mutating func transpose(_ n: Node, _ a: Attrs) throws {
+  mutating func transpose(_ n: Node) throws {
     let x = try value(n.inputs[0])
     let shape = dims(x)
-    let perm = a["perm"]?.ints.map { Int($0) } ?? Array((0..<shape.count).reversed())
+    let perm = n.attribute("perm")?.ints.map { Int($0) } ?? Array((0..<shape.count).reversed())
     guard perm.count == shape.count, Set(perm) == Set(0..<shape.count) else {
       throw OnnxError("perm \(perm) does not fit rank \(shape.count)")
     }
@@ -584,9 +508,9 @@ extension LiteRTLowering {
     return size
   }
 
-  mutating func concat(_ n: Node, _ a: Attrs) throws {
+  mutating func concat(_ n: Node) throws {
     let inputs = try n.inputs.filter { !$0.isEmpty }.map { try value($0) }
-    guard let first = inputs.first, let axisValue = a["axis"]?.i else { throw OnnxError("Concat needs inputs and an axis") }
+    guard let first = inputs.first, let axisValue = n.attribute("axis")?.i else { throw OnnxError("Concat needs inputs and an axis") }
     let rank = dims(first).count
     let axis = try Self.normalize(Int(axisValue), rank: rank)
     var out = dims(first)
@@ -808,11 +732,11 @@ extension LiteRTLowering {
     return (shapeView.isEmpty ? [1] : shapeView, permView.isEmpty ? [0] : permView)
   }
 
-  mutating func split(_ n: Node, _ a: Attrs) throws {
+  mutating func split(_ n: Node) throws {
     let x = try value(n.inputs[0])
     let shape = dims(x)
-    let axis = try Self.normalize(Int(a["axis"]?.i ?? 0), rank: shape.count)
-    var sizes = a["split"]?.ints.map { Int($0) } ?? []
+    let axis = try Self.normalize(Int(n.attribute("axis")?.i ?? 0), rank: shape.count)
+    var sizes = n.attribute("split")?.ints.map { Int($0) } ?? []
     if sizes.isEmpty, let given = try constantInts(n, 1) { sizes = given }
     if sizes.isEmpty {
       let parts = n.outputs.count
@@ -839,10 +763,10 @@ extension LiteRTLowering {
 
   // MARK: gathers
 
-  mutating func gather(_ n: Node, _ a: Attrs) throws {
+  mutating func gather(_ n: Node) throws {
     let x = try value(n.inputs[0])
     let shape = dims(x)
-    let axis = try Self.normalize(Int(a["axis"]?.i ?? 0), rank: shape.count)
+    let axis = try Self.normalize(Int(n.attribute("axis")?.i ?? 0), rank: shape.count)
     guard let indices = constant(n.inputs[1]) else {
       // Indices computed at run time: GATHER itself, on INT32 indices.
       var idx = try tensor(n.inputs[1])
@@ -930,8 +854,8 @@ extension LiteRTLowering {
 
   /// GatherND with constant indices, as a Gather on the leading axes
   /// flattened into one.
-  mutating func gatherND(_ n: Node, _ a: Attrs) throws {
-    guard (a["batch_dims"]?.i ?? 0) == 0 else { throw OnnxError("GatherND with batch_dims is not lowered") }
+  mutating func gatherND(_ n: Node) throws {
+    guard (n.attribute("batch_dims")?.i ?? 0) == 0 else { throw OnnxError("GatherND with batch_dims is not lowered") }
     let x = try value(n.inputs[0])
     let shape = dims(x)
     guard let indices = constant(n.inputs[1]), let k = indices.dims.last, k >= 1, k <= shape.count else {
@@ -1042,7 +966,7 @@ extension LiteRTLowering {
     guard !readers.isEmpty else { return false }
     for r in readers {
       guard r.op == "Softmax" else { return false }
-      let axis = try attributes(r)["axis"]?.i.map { Int($0) } ?? (opset >= 13 ? -1 : 1)
+      let axis = r.attribute("axis").map { Int($0.i) } ?? (opset >= 13 ? -1 : 1)
       guard try Self.normalize(axis, rank: out.count) == out.count - 1 else { return false }
     }
     guard let last = shape.last, last == out.last else { return false }
@@ -1091,14 +1015,16 @@ extension LiteRTLowering {
     emit(.batchMatmul, [ta, tb], [o], .batchMatmul(adjX: false, adjY: false))
   }
 
-  mutating func gemm(_ n: Node, _ a: Attrs) throws {
-    guard (a["alpha"]?.f ?? 1) == 1, (a["beta"]?.f ?? 1) == 1 else { throw OnnxError("Gemm with alpha or beta other than 1 is not lowered") }
+  mutating func gemm(_ n: Node) throws {
+    guard (n.attribute("alpha")?.f ?? 1) == 1, (n.attribute("beta")?.f ?? 1) == 1 else {
+      throw OnnxError("Gemm with alpha or beta other than 1 is not lowered")
+    }
     let name = n.outputs[0]
     var x = try tensor(n.inputs[0])
-    if (a["transA"]?.i ?? 0) != 0 {
+    if (n.attribute("transA")?.i ?? 0) != 0 {
       x = transposed(x, [1, 0], "\(name)__a")
     }
-    let transB = (a["transB"]?.i ?? 0) != 0
+    let transB = (n.attribute("transB")?.i ?? 0) != 0
     let dx = model.tensors[x].shape
     guard dx.count == 2 else { throw OnnxError("Gemm of a rank-\(dx.count) input") }
     guard let w = constant(n.inputs[1]) else {
@@ -1171,7 +1097,7 @@ extension LiteRTLowering {
     }
   }
 
-  mutating func conv(_ n: Node, _ a: Attrs) throws {
+  mutating func conv(_ n: Node) throws {
     let name = n.outputs[0]
     let x = try tensor(n.inputs[0])
     let shape = model.tensors[x].shape
@@ -1179,16 +1105,16 @@ extension LiteRTLowering {
     guard let w = constant(n.inputs[1]), w.dims.count == 4 else { throw OnnxError("Conv needs a constant rank-4 weight") }
     let (batch, channels, height, width) = (shape[0], shape[1], shape[2], shape[3])
     let (filters, perGroup, kh, kw) = (w.dims[0], w.dims[1], w.dims[2], w.dims[3])
-    let group = Int(a["group"]?.i ?? 1)
+    let group = Int(n.attribute("group")?.i ?? 1)
     guard channels == perGroup * group else { throw OnnxError("Conv input has \(channels) channels for weight \(w.dims), group \(group)") }
     let depthwise = group > 1 && group == channels && perGroup == 1 && filters % channels == 0
     guard group == 1 || depthwise else { throw OnnxError("grouped convolutions other than depthwise are not lowered") }
-    let strides = a["strides"]?.ints.map { Int($0) } ?? [1, 1]
-    let dilations = a["dilations"]?.ints.map { Int($0) } ?? [1, 1]
+    let strides = n.attribute("strides")?.ints.map { Int($0) } ?? [1, 1]
+    let dilations = n.attribute("dilations")?.ints.map { Int($0) } ?? [1, 1]
     let kernel = [kh, kw]
     let input = [height, width]
     // pads are [top, left, bottom, right].
-    var pads = a["pads"]?.ints.map { Int($0) } ?? [0, 0, 0, 0]
+    var pads = n.attribute("pads")?.ints.map { Int($0) } ?? [0, 0, 0, 0]
     var same = [0, 0, 0, 0]
     for k in 0..<2 {
       let outSize = (input[k] + strides[k] - 1) / strides[k]
@@ -1196,7 +1122,7 @@ extension LiteRTLowering {
       same[k] = total / 2
       same[k + 2] = total - total / 2
     }
-    switch a["auto_pad"]?.s ?? "NOTSET" {
+    switch n.attribute("auto_pad")?.s ?? "NOTSET" {
     case "SAME_UPPER": pads = same
     case "SAME_LOWER": pads = [same[2], same[3], same[0], same[1]]
     case "VALID": pads = [0, 0, 0, 0]
@@ -1302,13 +1228,13 @@ extension LiteRTLowering {
   /// what stash_type asks for. Mean and InvStdDev, where the graph reads
   /// them, come from the same statistics: InvStdDev is (1/s) times the
   /// scaled form's reciprocal deviation.
-  mutating func layerNorm(_ n: Node, _ a: Attrs) throws {
+  mutating func layerNorm(_ n: Node) throws {
     let name = n.outputs[0]
     let x = try tensor(n.inputs[0])
     let shape = model.tensors[x].shape
-    let axis = try Self.normalize(Int(a["axis"]?.i ?? -1), rank: shape.count)
+    let axis = try Self.normalize(Int(n.attribute("axis")?.i ?? -1), rank: shape.count)
     let axes = int32Tensor(Array(axis..<shape.count), "\(name)__axes")
-    let epsilon = a["epsilon"]?.f ?? 1e-5
+    let epsilon = n.attribute("epsilon")?.f ?? 1e-5
     var reduced = shape
     for k in axis..<shape.count { reduced[k] = 1 }
     func step(_ op: TFLite.Op, _ inputs: [Int], _ suffix: String, _ shape: [Int], _ options: TFLite.Options) -> Int {

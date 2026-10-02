@@ -85,9 +85,6 @@ struct LiteRTLowering {
       }
     }
     for t in g.initializers {
-      guard !t.isExternal else {
-        throw OnnxError("initializer \(t.key) keeps its data in an external file, which the preparation does not read")
-      }
       l.values[t.key] = .constant(Constant(name: t.key, dims: t.dims.map { Int($0) }, type: t.elementType, bytes: .initializer(t)))
     }
     let initializers = Set(g.initializers.map(\.key))

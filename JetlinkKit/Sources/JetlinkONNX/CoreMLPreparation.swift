@@ -107,11 +107,7 @@ public enum CoreMLPreparation {
     cacheKey: (String) -> String,
     progress: ((Double) -> Void)?
   ) throws -> Report {
-    var model = try Decode.model(src)
-    guard var g = model.graph else { throw OnnxError("the model has no graph") }
-    if let t = g.initializers.first(where: \.isExternal) {
-      throw OnnxError("initializer \(t.key) keeps its data in an external file, which the preparation does not read")
-    }
+    var (model, g) = try Decode.preparable(src)
 
     let stripped = try Patches.stripTinygradOps(&g, &model.opsets)
     let retyped = Patches.needsPatch(g)

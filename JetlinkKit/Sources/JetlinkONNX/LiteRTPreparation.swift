@@ -70,13 +70,11 @@ public enum LiteRTPreparation {
   }
 
   private static func prepare(_ src: Source, into directory: URL) throws -> Report {
-    var model = try Decode.model(src)
-    guard var g = model.graph else { throw OnnxError("the model has no graph") }
-    if let t = g.initializers.first(where: \.isExternal) {
-      throw OnnxError("initializer \(t.key) keeps its data in an external file, which the preparation does not read")
-    }
+    var (model, g) = try Decode.preparable(src)
     let stripped = try Patches.stripTinygradOps(&g, &model.opsets)
-    let opset = try opsetVersion(model.opsets, src)
+    guard let opset = model.opsets.first(where: { $0.domain.isEmpty || $0.domain == "ai.onnx" })?.version else {
+      throw OnnxError("the model imports no default-domain opset")
+    }
 
     var lowered = try LiteRTLowering.lower(g, opset: opset, src)
     var removed = 0
@@ -140,19 +138,6 @@ public enum LiteRTPreparation {
     return Report(
       url: url, stripped: stripped, operators: operators, lowerings: lowered.counts, transposesRemoved: removed, transposesMoved: moved,
       reshapesFused: fused, flatbufferBytes: flatbuffer.count, weightBytes: Int64(file.count - flatbuffer.count))
-  }
-
-  /// The default domain's opset version (OperatorSetIdProto.version, field 2).
-  static func opsetVersion(_ opsets: [OpsetImport], _ src: Source) throws -> Int64 {
-    for o in opsets where o.domain.isEmpty || o.domain == "ai.onnx" {
-      var r = src.reader(o.raw)
-      guard let field = try r.next() else { continue }
-      var inner = src.reader(field.payload)
-      while let f = try inner.next() {
-        if f.number == 2 { return Int64(bitPattern: f.value) }
-      }
-    }
-    throw OnnxError("the model imports no default-domain opset")
   }
 
   static func align(_ n: Int) -> Int {
