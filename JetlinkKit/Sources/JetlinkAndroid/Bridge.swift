@@ -3,6 +3,7 @@
   import Foundation
   import JetlinkKit
   import JetlinkLiteRT
+  import JetlinkRegistry
   import JetlinkLog
   import JetlinkORT
   import JetlinkServer

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 
+import JetlinkRegistry
 @testable import JetlinkRegistry
 
 /// The URL rewrites the mirrors are tried in: a HuggingFace proxy swaps the
