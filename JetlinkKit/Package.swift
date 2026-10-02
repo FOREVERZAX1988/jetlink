@@ -11,6 +11,11 @@
 // -Xcc -I<a directory holding onnxruntime/onnxruntime_c_api.h>;
 // android/scripts/swift-build.sh passes the AAR's.
 //
+// LiteRT is opened at run time everywhere (CLiteRt), and its headers are
+// vendored, so building needs nothing of LiteRT's. Running needs its libraries
+// in $JETLINK_LITERT_DIR on a Mac or Linux (the ai-edge-litert wheel's), and
+// in the app's nativeLibraryDir on Android (the LiteRT AAR's).
+//
 // CTrt is the real shim over TensorRT only on Linux with JETLINK_TENSORRT set to
 // a directory holding TensorRT's and CUDA's headers (scripts/build-linux.sh
 // fetches them). Everywhere else it is the fake over host memory, which the
@@ -73,6 +78,13 @@ let package = Package(
         .linkedLibrary("c++", .when(platforms: apple)),
         .linkedLibrary("dl", .when(platforms: linux)),
       ]),
+    // LiteRT's C API, its 2.2.0 headers in vendor/. Its GL types stay opaque:
+    // nothing here touches OpenGL, and Android's EGL headers are not needed.
+    .target(
+      name: "CLiteRt",
+      exclude: ["vendor/LICENSE", "vendor/SOURCE.txt"],
+      cSettings: [.headerSearchPath("vendor"), .define("LITERT_DISABLE_OPENGL_SUPPORT")],
+      linkerSettings: [.linkedLibrary("dl", .when(platforms: linux))]),
     // usbdevfs's ioctls, which are macros Swift cannot import.
     .target(name: "CUsbfs"),
     .target(
