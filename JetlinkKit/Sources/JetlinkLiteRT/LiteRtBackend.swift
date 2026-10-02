@@ -81,7 +81,10 @@ public final class LiteRtBackend: EngineBackend {
   }
 
   /// Opens LiteRT from `libraries`, and for the GPU checks its accelerator
-  /// loaded: both are what an app shows when they fail.
+  /// loaded: both are what an app shows when they fail. Whoever makes the
+  /// backend calls it, before any build or load: the app as its server
+  /// starts, so a phone LiteRT cannot run on says so at once rather than
+  /// after converting a model.
   public func open() throws {
     try LiteRtRuntime.load(directory: libraries)
     if profile == .gpu {
@@ -132,8 +135,6 @@ public final class LiteRtBackend: EngineBackend {
   public func build(model: URL, artifact: URL, report: @escaping ProgressFn, metaExtra: [String: Any]) throws {
     let started = Date()
     let expect = Artifact.sidecar(artifact)
-    // Before converting: a phone without the library would convert for nothing.
-    try open()
     try Artifact.build(artifact, metaExtra: metaExtra, report: report) { staged in
       try FileManager.default.createDirectory(at: staged, withIntermediateDirectories: true)
       report("convert", 0, "converting the model for LiteRT")
@@ -153,20 +154,19 @@ public final class LiteRtBackend: EngineBackend {
         at: staged.appending(path: LiteRtArtifact.cache, directoryHint: .isDirectory), withIntermediateDirectories: true)
 
       // One compile on the profile's accelerator proves the model runs there
-      // whole, and leaves the GPU's cache for every load after.
+      // whole, and leaves the GPU's cache for every load after. No run: the
+      // compile writes the cache (Metal's whole-graph one appears before any
+      // run), and the host's warm-up runs the loaded model anyway.
       let what = profile == .gpu ? "compiling for the GPU" : "loading the model to check it runs"
       let took = (expect["compile_seconds"] as? NSNumber)?.doubleValue ?? (profile == .gpu ? LiteRtBackend.expectedCompileSeconds : 0)
       report("compile", 0, what)
       let compileStarted = Date()
-      let engine = try Ticker.during(interval: 1, Ticker.paced("compile", what, took: took, report: report)) {
-        try self.engine(staged, cacheKey: LiteRtArtifact.cacheKey(artifact))
+      try Ticker.during(interval: 1, Ticker.paced("compile", what, took: took, report: report)) {
+        try self.engine(staged, cacheKey: LiteRtArtifact.cacheKey(artifact)).close()
       }
-      defer { engine.close() }
       let compileSeconds = Date().timeIntervalSince(compileStarted)
       report("compile", 1, "compiled in \(Int(compileSeconds.rounded())) s")
-      try engine.run()
-      var meta = LiteRtArtifact.meta(self, engine: engine, model: model, started: started)
-      engine.close()
+      var meta = LiteRtArtifact.meta(self, model: model, started: started)
       meta["convert_seconds"] = pythonRound(convertSeconds, 1)
       meta["compile_seconds"] = pythonRound(compileSeconds, 1)
       meta["artifact_bytes"] = Files.size(of: staged)
@@ -177,7 +177,6 @@ public final class LiteRtBackend: EngineBackend {
   // MARK: load
 
   public func load(artifact: URL, report: @escaping ProgressFn) throws -> any Engine {
-    try open()
     let meta = try LiteRtArtifact.open(artifact)
     let (engine, seconds) = try Artifact.load(artifact, meta: meta, what: "the model", report: report) {
       try self.engine(artifact, cacheKey: LiteRtArtifact.cacheKey(artifact))

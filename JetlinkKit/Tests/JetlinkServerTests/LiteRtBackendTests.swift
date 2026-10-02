@@ -85,14 +85,17 @@ enum RankFiveAdd {
   "LiteRT backend", .serialized,
   .enabled(if: LiteRtLibraries.available, "LiteRT's libraries are not in $\(LiteRtRuntime.directoryVariable)"))
 struct LiteRtBackendTests {
-  func backend(_ profile: LiteRtProfile) -> LiteRtBackend {
-    LiteRtBackend(profile: profile, preparer: ONNXPreparer())
+  /// Opened, as the app and the command line open theirs.
+  func backend(_ profile: LiteRtProfile) throws -> LiteRtBackend {
+    let backend = LiteRtBackend(profile: profile, preparer: ONNXPreparer())
+    try backend.open()
+    return backend
   }
 
   @Test("A comma is served Python's outputs from LiteRT", arguments: LiteRtLibraries.profiles, ["tiny_queued", "tiny_stateful"])
   func servesGoldenFrames(_ profile: LiteRtProfile, _ name: String) throws {
     let golden = try Golden(name)
-    try serve(backend: backend(profile)) { server, client in
+    try serve(backend: try backend(profile)) { server, client in
       // The weights are fp16 and the GPU computes in fp16: held to what
       // verify_parity asks of a phone, not to Python's bits.
       let (hello, count) = try client.replay(golden, exact: false)
@@ -125,7 +128,7 @@ struct LiteRtBackendTests {
   @Test("Reset empties the looped state, in the GPU's memory as in the host's", arguments: LiteRtLibraries.profiles)
   func resetsState(_ profile: LiteRtProfile) throws {
     let temp = try TemporaryDirectory()
-    let backend = backend(profile)
+    let backend = try backend(profile)
     let artifact = temp.url.appending(path: "tiny.litertcache")
     try backend.build(model: TinyModel.stateful, artifact: artifact, report: { _, _, _ in }, metaExtra: [:])
     let engine = try #require(try backend.load(artifact: artifact, report: { _, _, _ in }) as? LiteRtEngine)

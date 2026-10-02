@@ -25,9 +25,9 @@ enum LiteRtArtifact {
 
   /// The sidecar keys every build writes; the runtime's release goes under
   /// `litert`, as onnxruntime's goes under `onnxruntime`.
-  static func meta(_ backend: LiteRtBackend, engine: LiteRtEngine, model: URL, started: Date) -> [String: Any] {
+  static func meta(_ backend: LiteRtBackend, model: URL, started: Date) -> [String: Any] {
     var meta = Artifact.meta(backend, runtimeKey: "litert", model: model, started: started)
-    meta["accelerator"] = engine.label
+    meta["accelerator"] = backend.profile.label
     meta["prepare"] = LiteRtBackend.conversionVersion
     meta["preparer"] = "swift"
     return meta
