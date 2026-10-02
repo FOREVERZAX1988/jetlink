@@ -15,13 +15,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BarChart
-import androidx.compose.material.icons.filled.Cable
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Dangerous
 import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.Memory
@@ -45,7 +41,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -58,10 +53,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.tooling.preview.Preview
@@ -85,10 +78,7 @@ import io.zoompilot.jetlink.ui.components.FigureRow
 import io.zoompilot.jetlink.ui.components.MetricRow
 import io.zoompilot.jetlink.ui.components.MetricTile
 import io.zoompilot.jetlink.ui.components.ReadableWidth
-import io.zoompilot.jetlink.ui.components.SectionHeader
 import io.zoompilot.jetlink.ui.components.SummaryCard
-import io.zoompilot.jetlink.ui.components.copy
-import io.zoompilot.jetlink.ui.components.rememberWifiAddress
 import io.zoompilot.jetlink.ui.components.share
 import io.zoompilot.jetlink.ui.components.tile
 import io.zoompilot.jetlink.ui.icon
@@ -108,23 +98,19 @@ data class ChipInfo(val line: String, val expectation: String, val tone: Tone) {
 class BenchmarkActions(
     val start: (Int) -> Unit = {},
     val cancel: () -> Unit = {},
-    val openGuide: () -> Unit = {},
 )
 
 /**
  * Is this phone fast enough, and does it stay fast enough? The loaded model
- * at the comma's pace on the phone alone, then the commands that add the
- * cable from the comma and check the numbers from a Mac.
+ * at the comma's pace on the phone alone.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BenchmarkScreen(graph: AppGraph) {
     val context = LocalContext.current
-    val uriHandler = LocalUriHandler.current
     val snapshot by graph.server.snapshot.collectAsStateWithLifecycle()
     val runState by graph.server.runState.collectAsStateWithLifecycle()
     val settings by graph.settings.values.collectAsStateWithLifecycle()
-    val wifi = rememberWifiAddress()
     var refusal by remember { mutableStateOf<String?>(null) }
     var starting by remember { mutableStateOf(false) }
     val chip = remember { ChipInfo.current() }
@@ -141,7 +127,6 @@ fun BenchmarkScreen(graph: AppGraph) {
             }
         },
         cancel = { graph.scope.launch { graph.server.cancelBenchmark() } },
-        openGuide = { runCatching { uriHandler.openUri(BenchmarkText.GUIDE) } },
     )
     val report = snapshot.benchmark?.report
     val reportText = snapshot.benchmark?.reportText
@@ -169,7 +154,6 @@ fun BenchmarkScreen(graph: AppGraph) {
             runState = runState,
             processor = settings.processor.title,
             chip = chip,
-            wifi = wifi,
             refusal = refusal,
             starting = starting,
             actions = actions,
@@ -178,44 +162,19 @@ fun BenchmarkScreen(graph: AppGraph) {
     }
 }
 
-/** The run, its results and the commands, without the server, for previews. */
+/** The run and its results, without the server, for previews. */
 @Composable
 fun BenchmarkContent(
     snapshot: Snapshot,
     runState: RunState,
     processor: String,
     chip: ChipInfo,
-    wifi: String?,
     refusal: String?,
     starting: Boolean,
     actions: BenchmarkActions,
     modifier: Modifier = Modifier,
 ) {
-    val sha = BenchmarkText.loadedSha(snapshot)
-    val parity = BenchmarkText.parityCommand(sha, snapshot.row(sha)?.bytes, wifi, snapshot.port)
-    val runCards: @Composable ColumnScope.() -> Unit = {
-        RunCard(snapshot, runState, processor, chip, refusal, starting, actions)
-        snapshot.benchmark?.report?.let { report ->
-            VerdictCard(report)
-            Totals(report)
-            if (report.windows.size > 1) WindowsCard(report.windows)
-        }
-    }
-    val commandCards: @Composable ColumnScope.() -> Unit = {
-        SectionHeader("From the Comma")
-        CommandCard(
-            "Over the Cable", Icons.Filled.Cable, BenchmarkText.COMMA_COMMAND,
-            missing = "Load a model to get the command.",
-            note = "Run it on the comma over SSH, offroad, with Accelerator Link set to USB.",
-        )
-        SectionHeader("Accuracy")
-        CommandCard(
-            "From a Mac", Icons.Filled.Verified, parity,
-            missing = if (wifi == null) "Join Wi-Fi and load a model to get the command." else "Load a model to get the command.",
-            note = "Run it in a jetlink checkout on a Mac on the same Wi-Fi.",
-        )
-        TextButton(onClick = actions.openGuide) { Text("Learn More") }
-    }
+    val report = snapshot.benchmark?.report
     val spacing = Arrangement.spacedBy(CardSpacing)
     BoxWithConstraints(modifier.fillMaxSize()) {
         val wide = maxWidth >= 840.dp
@@ -223,20 +182,33 @@ fun BenchmarkContent(
             Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = CardSpacing).padding(top = 8.dp, bottom = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            if (wide) {
-                // A tablet has room for the run beside the commands.
+            if (wide && report != null && report.frames > 0) {
+                // A tablet or an open fold has room for the run and its verdict beside the numbers behind it.
                 Row(horizontalArrangement = spacing) {
-                    Column(Modifier.weight(1f), verticalArrangement = spacing, content = runCards)
-                    Column(Modifier.weight(1f), verticalArrangement = spacing, content = commandCards)
+                    Column(Modifier.weight(1f), verticalArrangement = spacing) {
+                        RunCard(snapshot, runState, processor, chip, refusal, starting, actions)
+                        VerdictCard(report)
+                    }
+                    Column(Modifier.weight(1f), verticalArrangement = spacing) { Results(report) }
                 }
             } else {
                 Column(Modifier.widthIn(max = ReadableWidth).fillMaxWidth(), verticalArrangement = spacing) {
-                    runCards()
-                    commandCards()
+                    RunCard(snapshot, runState, processor, chip, refusal, starting, actions)
+                    if (report != null) {
+                        VerdictCard(report)
+                        if (report.frames > 0) Results(report)
+                    }
                 }
             }
         }
     }
+}
+
+/** The numbers behind the verdict: the totals, then the run ten seconds at a time. */
+@Composable
+private fun ColumnScope.Results(report: BenchReport) {
+    Totals(report)
+    if (report.windows.size > 1) WindowsCard(report.windows)
 }
 
 @Composable
@@ -332,26 +304,30 @@ private fun verdictIcon(verdict: Verdict): ImageVector = when (verdict) {
     Verdict.Good -> Icons.Filled.Verified
     Verdict.Tight -> Icons.Filled.Warning
     Verdict.Slow -> Icons.Filled.Dangerous
+    Verdict.None -> Icons.Filled.Timer
 }
 
 /** Fast enough, tight, or too slow, and the numbers that say so. */
 @Composable
 private fun VerdictCard(report: BenchReport) {
     val colors = JetlinkTheme.colors
-    val verdict = Verdict.of(report.frame.p99, report.over50)
+    val verdict = Verdict.of(report)
     val tone = colors.tone(verdict.tone)
     SummaryCard("Verdict", verdictIcon(verdict), tone, trailing = if (report.cancelled) "Stopped Early" else null) {
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(verdict.title, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, color = tone)
-            Text(verdict.detail, style = MaterialTheme.typography.bodyMedium, color = colors.secondaryText)
+            Text(BenchmarkText.verdictDetail(report, verdict), style = MaterialTheme.typography.bodyMedium, color = colors.secondaryText)
         }
-        FigureRow(
-            listOf(
-                Triple("P99", report.frame.p99, tone),
-                Triple("Max", report.frame.max, Color.Unspecified),
-                Triple("Mean", report.frame.mean, Color.Unspecified),
-            ),
-        )
+        // no frames, no numbers: zeros would read as fast
+        if (report.frames > 0) {
+            FigureRow(
+                listOf(
+                    Triple("P99", report.frame.p99, tone),
+                    Triple("Max", report.frame.max, Color.Unspecified),
+                    Triple("Mean", report.frame.mean, Color.Unspecified),
+                ),
+            )
+        }
     }
 }
 
@@ -418,32 +394,6 @@ private fun WindowsCard(windows: List<BenchWindow>) {
     }
 }
 
-/** A shell command with a Copy button, or why there is none yet. */
-@Composable
-private fun CommandCard(title: String, icon: ImageVector, command: String?, missing: String, note: String) {
-    val context = LocalContext.current
-    val colors = JetlinkTheme.colors
-    var copied by remember(command) { mutableStateOf(false) }
-    SummaryCard(title, icon, colors.gray) {
-        if (command != null) {
-            SelectionContainer {
-                Text(command, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
-            }
-            FilledTonalButton(onClick = {
-                copy(context, title, command)
-                copied = true
-            }) {
-                Icon(if (copied) Icons.Filled.Check else Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text(if (copied) "Copied" else "Copy")
-            }
-        } else {
-            Text(missing, style = MaterialTheme.typography.bodyMedium, color = colors.secondaryText)
-        }
-        Text(note, style = MaterialTheme.typography.bodySmall, color = colors.secondaryText)
-    }
-}
-
 @Preview(showBackground = true, heightDp = 1400)
 @Composable
 private fun BenchmarkPreview() {
@@ -454,7 +404,6 @@ private fun BenchmarkPreview() {
                 runState = RunState.Serving,
                 processor = "NPU + GPU",
                 chip = ChipInfo("Snapdragon 8 Gen 3 · NPU v75", "Should keep up", Tone.Good),
-                wifi = "192.168.1.23",
                 refusal = null,
                 starting = false,
                 actions = BenchmarkActions(),
@@ -475,7 +424,6 @@ private fun BenchmarkRunningPreview() {
                 runState = RunState.Serving,
                 processor = "NPU + GPU",
                 chip = ChipInfo("Snapdragon 8 Gen 2 · NPU v73", "Might keep up", Tone.Warning),
-                wifi = null,
                 refusal = null,
                 starting = false,
                 actions = BenchmarkActions(),

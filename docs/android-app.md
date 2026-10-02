@@ -90,7 +90,7 @@ share of each frame (not the cable).
 
 - **Verdict:** **Fast Enough** (green) is a P99 at or under 35 ms with nothing
   over 50. **Tight** (orange) is a P99 under 50 ms. **Too Slow** (red) misses
-  20 frames a second.
+  20 frames a second, or did not finish a frame in the whole run.
 - **Totals:** frames, frames over 50 ms (and over 35), the phone's temperature
   at start and end, and the model alone.
 - **Over Time:** P99 and temperature per 10 seconds. A phone that slows as it
@@ -98,10 +98,9 @@ share of each frame (not the cable).
 - **10 Minutes** heats the phone: compare the first and last windows.
 - The share button sends the report.
 
-The app fills in two commands to copy, as the iPhone app does: the comma's live
-bench (`jetlink_repo/scripts/comma/jetlink_live_bench.sh 180` over SSH, offroad,
-with the phone connected), and `scripts/verify_parity.py` from a Mac on the same
-Wi-Fi, which should end with OK.
+For the frame times the car will see, cable included, run
+`jetlink_repo/scripts/comma/jetlink_live_bench.sh 180` on the comma over SSH,
+offroad, with the phone connected.
 
 ## Status
 

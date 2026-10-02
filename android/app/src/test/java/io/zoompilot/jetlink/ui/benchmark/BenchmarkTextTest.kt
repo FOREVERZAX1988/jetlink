@@ -5,6 +5,7 @@ import io.zoompilot.jetlink.server.RunState
 import io.zoompilot.jetlink.settings.Chip
 import io.zoompilot.jetlink.ui.PreviewData
 import io.zoompilot.jetlink.ui.Tone
+import io.zoompilot.jetlink.ui.Verdict
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -12,7 +13,7 @@ import org.junit.Before
 import org.junit.Test
 import java.util.Locale
 
-/** The Benchmark tab's blocker, notes and commands. */
+/** The Benchmark tab's blocker, verdict and notes. */
 class BenchmarkTextTest {
     private lateinit var locale: Locale
 
@@ -38,17 +39,14 @@ class BenchmarkTextTest {
     }
 
     @Test
-    fun theParityCommand() {
-        val sha = PreviewData.BIG_MODEL_SHA
-        val command = BenchmarkText.parityCommand(sha, 765_953_504, "192.168.1.23", 5599)
-        assertEquals(
-            "python3 scripts/verify_parity.py capture --host 192.168.1.23 --port 5599 --sha256 $sha --nbytes 765953504 --dir parity-android \\\n" +
-                "  && python3 scripts/verify_parity.py reference --onnx \"\$HOME/Library/Application Support/Jetlink/cache/models/a086d5249fc308bb.onnx\" --dir parity-android \\\n" +
-                "  && python3 scripts/verify_parity.py compare --dir parity-android",
-            command,
-        )
-        assertNull(BenchmarkText.parityCommand(sha, 765_953_504, null, 5599))
-        assertNull(BenchmarkText.parityCommand(null, 765_953_504, "192.168.1.23", 5599))
+    fun aRunWithNoFrames() {
+        val none = PreviewData.report.copy(frames = 0, seconds = 178.0)
+        assertEquals(Verdict.Slow, Verdict.of(none))
+        assertEquals("Not one frame finished in 2:58.", BenchmarkText.verdictDetail(none, Verdict.of(none)))
+        val stopped = none.copy(cancelled = true)
+        assertEquals(Verdict.None, Verdict.of(stopped))
+        assertEquals("Stopped before a frame was measured.", BenchmarkText.verdictDetail(stopped, Verdict.of(stopped)))
+        assertEquals(Verdict.Good, Verdict.of(PreviewData.report))
     }
 
     @Test

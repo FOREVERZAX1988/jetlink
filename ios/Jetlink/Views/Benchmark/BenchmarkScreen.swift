@@ -1,11 +1,9 @@
 import JetlinkKit
 import JetlinkUI
 import SwiftUI
-import UIKit
 
 /// Is this iPhone or iPad fast enough, and does it stay fast enough? The
-/// loaded model at the comma's pace on the device alone, then the commands
-/// that add the cable from the comma and check the numbers from a Mac.
+/// loaded model at the comma's pace on the device alone.
 struct BenchmarkScreen: View {
   @Environment(AppModel.self) private var app
   @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -19,17 +17,23 @@ struct BenchmarkScreen: View {
     NavigationStack {
       ScrollView {
         Group {
-          // An iPad has room for the run and its results beside the
-          // commands; a narrower screen has them one under the other.
-          if horizontalSizeClass == .regular {
+          // An iPad has room for the run and its verdict beside the
+          // numbers behind it; a narrower screen has them one under the other.
+          if horizontalSizeClass == .regular, let report, report.frames > 0 {
             HStack(alignment: .top, spacing: StatusContent.spacing) {
-              VStack(spacing: StatusContent.spacing) { run }
-              VStack(spacing: StatusContent.spacing) { commands }
+              VStack(spacing: StatusContent.spacing) {
+                runCard
+                VerdictCard(report: report)
+              }
+              VStack(spacing: StatusContent.spacing) { results(report) }
             }
           } else {
             VStack(spacing: StatusContent.spacing) {
-              run
-              commands
+              runCard
+              if let report {
+                VerdictCard(report: report)
+                if report.frames > 0 { results(report) }
+              }
             }
             .frame(maxWidth: readableContentWidth)
             .frame(maxWidth: .infinity)
@@ -56,40 +60,13 @@ struct BenchmarkScreen: View {
     }
   }
 
-  static let guide = URL(string: "https://github.com/zoompilot/jetlink/blob/main/docs/iphone-app.md#benchmark")!
-
-  /// The run, then its verdict, totals and windows once there is a report.
+  /// The numbers behind the verdict: the totals, then the run ten seconds at a time.
   @ViewBuilder
-  private var run: some View {
-    runCard
-    if let report {
-      VerdictCard(report: report)
-      totals(report)
-      if report.windows.count > 1 {
-        WindowsCard(windows: report.windows)
-      }
+  private func results(_ report: BenchmarkReport) -> some View {
+    totals(report)
+    if report.windows.count > 1 {
+      WindowsCard(windows: report.windows)
     }
-  }
-
-  /// What the device cannot measure itself, as commands to copy.
-  @ViewBuilder
-  private var commands: some View {
-    SectionHeader("From the Comma")
-    CommandCard(
-      title: "Over the Cable", systemImage: "cable.connector", command: commaCommand,
-      missing: "Load a model to get the command.",
-      note: "Run it on the comma over SSH, offroad, with Accelerator Link set to iOS."
-    )
-    SectionHeader("Accuracy")
-    CommandCard(
-      title: "From a Mac", systemImage: "checkmark.seal", command: parityCommand,
-      missing: app.network.wifi == nil ? "Join Wi-Fi and load a model to get the command." : "Load a model to get the command.",
-      note: "Run it in a jetlink checkout on a Mac on the same Wi-Fi."
-    )
-    Link("Learn More", destination: BenchmarkScreen.guide)
-      .font(.subheadline)
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .padding(.horizontal, 16)
   }
 
   // MARK: state
@@ -99,11 +76,6 @@ struct BenchmarkScreen: View {
   private var report: BenchmarkReport? { event?.report }
   private var sha256: String? { app.server.engine.state == .ready ? app.server.engine.sha256 : nil }
   private var connected: Bool { app.server.link.state == .connected }
-
-  private var modelBytes: Int64? {
-    guard let sha256 else { return nil }
-    return app.models.inventory?.models.first { $0.sha256 == sha256 }?.bytes ?? app.models.rows.first { $0.sha256 == sha256 }?.bytes
-  }
 
   /// Why a run cannot start now, in a few words; nil when it can.
   private var blocker: String? {
@@ -234,22 +206,6 @@ struct BenchmarkScreen: View {
       }
     }
   }
-
-  // MARK: commands
-
-  /// The live bench on the comma: its cameras and modeld, over this phone's link.
-  private let commaCommand: String? = "/data/openpilot/jetlink_repo/scripts/comma/jetlink_live_bench.sh 180"
-
-  /// verify_parity from a Mac on the same Wi-Fi, dialing the phone's listener.
-  private var parityCommand: String? {
-    guard let sha256, let bytes = modelBytes, let wifi = app.network.wifi, let port = app.server.port else { return nil }
-    let onnx = "\"$HOME/Library/Application Support/Jetlink/cache/models/\(sha256.prefix(16)).onnx\""
-    return """
-      python3 scripts/verify_parity.py capture --host \(wifi.address) --port \(port) --sha256 \(sha256) --nbytes \(bytes) --dir parity-iphone \\
-        && python3 scripts/verify_parity.py reference --onnx \(onnx) --dir parity-iphone \\
-        && python3 scripts/verify_parity.py compare --dir parity-iphone
-      """
-  }
 }
 
 /// Fast enough, tight, or too slow, and the numbers that say so.
@@ -272,43 +228,5 @@ struct WindowsCard: View {
     SummaryCard(title: "Over Time", systemImage: "chart.bar.fill", tint: .indigo, trailing: "10 s each") {
       BenchmarkWindowRows(windows: windows)
     }
-  }
-}
-
-/// A shell command with a Copy button, or why there is none yet.
-struct CommandCard: View {
-  let title: String
-  let systemImage: String
-  let command: String?
-  let missing: String
-  let note: String
-  @State private var copied = false
-
-  var body: some View {
-    SummaryCard(title: title, systemImage: systemImage, tint: .gray) {
-      VStack(alignment: .leading, spacing: 12) {
-        if let command {
-          Text(command)
-            .font(.caption.monospaced())
-            .textSelection(.enabled)
-            .frame(maxWidth: .infinity, alignment: .leading)
-          Button {
-            UIPasteboard.general.string = command
-            copied = true
-          } label: {
-            Label(copied ? "Copied" : "Copy", systemImage: copied ? "checkmark" : "doc.on.doc")
-          }
-          .buttonStyle(.glass)
-        } else {
-          Text(missing)
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
-        }
-        Text(note)
-          .font(.footnote)
-          .foregroundStyle(.secondary)
-      }
-    }
-    .onChange(of: command) { copied = false }
   }
 }
