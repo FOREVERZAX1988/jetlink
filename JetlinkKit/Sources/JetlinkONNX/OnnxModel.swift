@@ -44,6 +44,8 @@ enum DataType {
 struct OpsetImport {
   let raw: Range<Int>
   let domain: String
+  /// 0 when the source writes none, as protobuf reads an absent int64.
+  let version: Int64
 }
 
 /// A StringStringEntryProto in ModelProto.metadata_props.
@@ -76,6 +78,8 @@ struct Attribute {
   let name: String
   let type: Int32
   let i: Int64
+  let f: Float
+  let ints: [Int64]
 
   /// An INT attribute as onnx.helper.make_attribute writes it: name, i, type.
   static func int(_ name: String, _ value: Int64) -> Attribute {
@@ -83,7 +87,17 @@ struct Attribute {
     e.stringField(1, name)
     e.intField(3, value)
     e.intField(20, 2)
-    return Attribute(bytes: .owned(e.tail), name: name, type: 2, i: value)
+    return Attribute(bytes: .owned(e.tail), name: name, type: 2, i: value, f: 0, ints: [])
+  }
+
+  /// An INTS attribute as make_attribute writes it: name, one ints field per
+  /// value (AttributeProto.ints is not declared packed), type.
+  static func ints(_ name: String, _ values: [Int64]) -> Attribute {
+    var e = Encoded()
+    e.stringField(1, name)
+    for v in values { e.intField(8, v) }
+    e.intField(20, 7)
+    return Attribute(bytes: .owned(e.tail), name: name, type: 7, i: 0, f: 0, ints: values)
   }
 }
 
@@ -111,10 +125,15 @@ struct Dim {
 }
 
 struct Shape {
-  /// The whole TensorShapeProto field, tag included; never changed, so it is
-  /// written back as it came.
-  let raw: Range<Int>
+  /// The whole TensorShapeProto field, tag included, written back as it came;
+  /// nil for a shape the preparation writes from `dims`.
+  let raw: Range<Int>?
   let dims: [Dim]
+
+  /// A static shape the preparation gives a tensor it makes or reshapes.
+  static func of(_ dims: [Int64]) -> Shape {
+    Shape(raw: nil, dims: dims.map { Dim(value: $0) })
+  }
 }
 
 struct TensorType {
@@ -136,6 +155,12 @@ struct ValueInfo {
   var key: String { name ?? "" }
   var elemType: Int32 { type?.tensor?.elemType ?? 0 }
   var shape: Shape? { type?.tensor?.shape }
+
+  /// A tensor's value info as onnx.helper.make_tensor_value_info writes it:
+  /// the name, the element type and a static shape.
+  static func tensor(_ name: String, _ elemType: Int32, _ dims: [Int64]) -> ValueInfo {
+    ValueInfo(name: name, type: TypeInfo(tensor: TensorType(elemType: elemType, shape: .of(dims))))
+  }
 }
 
 /// A transposed 2-D weight, produced block by block while it is written.
@@ -380,6 +405,8 @@ enum Decode {
     var name = ""
     var type: Int32 = 0
     var i: Int64 = 0
+    var float: Float = 0
+    var ints: [UInt64] = []
     var fields: [WireField] = []
     var r = src.reader(field.payload)
     while let f = try r.next() {
@@ -388,9 +415,14 @@ enum Decode {
       case 1:
         try f.expect(.bytes, "AttributeProto.name")
         name = try src.string(f.payload)
+      case 2:
+        try f.expect(.fixed32, "AttributeProto.f")
+        float = Float(bitPattern: UInt32(truncatingIfNeeded: f.value))
       case 3:
         try f.expect(.varint, "AttributeProto.i")
         i = Int64(bitPattern: f.value)
+      case 8:
+        try f.appendVarints(to: &ints, src, "AttributeProto.ints")
       case 20:
         try f.expect(.varint, "AttributeProto.type")
         type = Int32(truncatingIfNeeded: f.value)
@@ -401,7 +433,7 @@ enum Decode {
     // Almost always the source wrote it the way Python would, and it is
     // copied as it is. Otherwise it is written again the way Python does.
     let bytes: Attribute.Bytes = try Canonical.attribute(fields, src).map { .owned($0) } ?? .source(field.whole)
-    return Attribute(bytes: bytes, name: name, type: type, i: i)
+    return Attribute(bytes: bytes, name: name, type: type, i: i, f: float, ints: ints.map { Int64(bitPattern: $0) })
   }
 
   static func valueInfo(_ src: Source, _ range: Range<Int>) throws -> ValueInfo {
@@ -527,14 +559,21 @@ enum Decode {
 
   static func opset(_ src: Source, _ field: WireField) throws -> OpsetImport {
     var domain = ""
+    var version: Int64 = 0
     var r = src.reader(field.payload)
     while let f = try r.next() {
-      if f.number == 1 {
+      switch f.number {
+      case 1:
         try f.expect(.bytes, "OperatorSetIdProto.domain")
         domain = try src.string(f.payload)
+      case 2:
+        try f.expect(.varint, "OperatorSetIdProto.version")
+        version = Int64(bitPattern: f.value)
+      default:
+        break
       }
     }
-    return OpsetImport(raw: field.whole, domain: domain)
+    return OpsetImport(raw: field.whole, domain: domain, version: version)
   }
 
   static func prop(_ src: Source, _ field: WireField) throws -> Prop {
@@ -676,12 +715,32 @@ enum Encode {
       var inner = Encoded()
       var innerExtras = FieldCursor(tt.extras, known: tensorTypeFields)
       if let e = tt.elemType { inner.intField(1, Int64(e)) }
-      if let s = tt.shape { inner.source(s.raw, src) }
+      if let s = tt.shape { shape(s, &inner, src) }
       innerExtras.rest(&inner, src)
       out.message(1, inner)
     }
     extras.rest(&out, src)
     return out
+  }
+
+  /// A shape from the source as it came; one the preparation wrote as
+  /// make_tensor_value_info does, each dimension a dim_value.
+  static func shape(_ s: Shape, _ out: inout Encoded, _ src: Source) {
+    if let raw = s.raw {
+      out.source(raw, src)
+      return
+    }
+    var dims = Encoded()
+    for d in s.dims {
+      var dim = Encoded()
+      if let v = d.value {
+        dim.intField(1, v)
+      } else if let p = d.param {
+        dim.stringField(2, p)
+      }
+      dims.message(1, dim)
+    }
+    out.message(2, dims)
   }
 
   static func tensor(_ t: Tensor, _ src: Source) -> Encoded {
