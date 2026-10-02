@@ -1,3 +1,27 @@
+Jetlink v0.8.0
+==============
+**iPhone & iPad on TestFlight!**
+* Install from [TestFlight](https://testflight.apple.com/join/DAsYk5sP). No Xcode needed <3
+* **Tested:** Driven with an iPhone in the car.
+* **Direct Cable:** USB-C to USB-C should now work without a hub. Not yet tested.
+
+**Android on more phones**
+* Big models run on any phone's GPU, not just Snapdragon. The GPU is now the default.
+* **NPU:** Still an option on Snapdragon.
+* Not yet tested on a phone. Run the Benchmark before you drive.
+
+**Driving**
+* **Slow Model Handback:** A throttling iPhone no longer forces a disengagement. The small model takes over instead.
+
+**General Updates & Fixes**
+* **Faster Jetson Start:** Ready in 25 s (was 38.5). Run `jetlink update`.
+* **Jetson Desktop:** The installer can turn it off to free memory. Existing installs: `jetlink setup`.
+* **Installer:** Shorter, plainer questions.
+* **Benchmark:** A run with no frames now says **Too Slow**.
+* **Loading:** Shows seconds instead of a stuck 0%.
+* **Cable:** Use a USB 3 USB-C cable for the Mac, iPhone and Android.
+* **Update the comma:** zoompilot's `jetson-trt` branch pins Jetlink v0.8.0.
+
 Jetlink v0.7.4
 ==============
 **General Updates & Fixes**
