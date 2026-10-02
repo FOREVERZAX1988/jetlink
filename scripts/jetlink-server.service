@@ -33,9 +33,11 @@ EnvironmentFile=/etc/jetlink/server.env
 # the CPU. Two settings are flags or nothing: JETLINK_POWEROFF is --poweroff
 # on a Jetson whose user lets the comma power it off, and JETLINK_TENSORRT is
 # --tensorrt-libs DIR on a PC, whose TensorRT is its own copy (a Jetson's is
-# JetPack's, on the loader path). `jetlink run` runs this line through bash,
-# so it has no systemd prefixes or specifiers.
-ExecStart=/opt/jetlink/current/bin/jetlink-server --usb --backend trt --cache ${JETLINK_CACHE_DIR} --sleep-after ${JETLINK_SLEEP_AFTER} --status-port ${JETLINK_STATUS_PORT} $JETLINK_POWEROFF $JETLINK_TENSORRT
+# JetPack's, on the loader path). The web page on the status port asks for
+# the password in --web-auth's file, which `jetlink password` changes; without
+# the file the page shows the status only. `jetlink run` runs this line through
+# bash, so it has no systemd prefixes or specifiers.
+ExecStart=/opt/jetlink/current/bin/jetlink-server --usb --backend trt --cache ${JETLINK_CACHE_DIR} --sleep-after ${JETLINK_SLEEP_AFTER} --status-port ${JETLINK_STATUS_PORT} --web-auth /etc/jetlink/web-auth.json $JETLINK_POWEROFF $JETLINK_TENSORRT
 Restart=always
 RestartSec=2
 

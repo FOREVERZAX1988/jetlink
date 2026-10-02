@@ -106,7 +106,13 @@ let package = Package(
       dependencies: [
         "JetlinkKit", "JetlinkLog", "JetlinkServer", "JetlinkStatusPage", .target(name: "CUsbfs", condition: .when(platforms: linux)),
       ]),
-    .target(name: "JetlinkStatusPage", dependencies: ["JetlinkKit", "JetlinkLog", "JetlinkServer"], resources: [.copy("Resources")]),
+    // CryptoExtras for PBKDF2, on every platform: CommonCrypto's on Apple's,
+    // BoringSSL's elsewhere.
+    .target(
+      name: "JetlinkStatusPage",
+      dependencies: [
+        "JetlinkKit", "JetlinkLog", "JetlinkRegistry", "JetlinkServer", crypto, .product(name: "CryptoExtras", package: "swift-crypto"),
+      ], resources: [.copy("Resources")]),
     .target(
       name: "JetlinkAndroid", dependencies: ["JetlinkKit", "JetlinkServer", "JetlinkORT", "JetlinkLiteRT"],
       linkerSettings: [.linkedLibrary("log", .when(platforms: [.android]))]),

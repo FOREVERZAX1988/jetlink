@@ -89,7 +89,7 @@
       #expect(!benchLog.contains("Jetlink benchmark"), "the report is on stdout only")
     }
 
-    /// SIGTERM stops it cleanly, in order: the server, then the status page.
+    /// SIGTERM stops it cleanly, in order: the server, then the web page.
     @Test func sigtermStopsItCleanly() throws {
       let tmp = try TemporaryDirectory()
       let page = try TCPListener(host: "127.0.0.1", port: 0).port
@@ -108,7 +108,7 @@
 
       // Said once the server listens and the page is up.
       let serving = eventually(timeout: 30) {
-        !process.isRunning || String(decoding: (try? Data(contentsOf: log)) ?? Data(), as: UTF8.self).contains("status page on port")
+        !process.isRunning || String(decoding: (try? Data(contentsOf: log)) ?? Data(), as: UTF8.self).contains("web page on port")
       }
       guard serving, process.isRunning else {
         Issue.record("never listened: \(String(decoding: (try? Data(contentsOf: log)) ?? Data(), as: UTF8.self))")
@@ -126,7 +126,7 @@
       let stopping = try #require(text.range(of: "stopping on SIGTERM"), "\(text)")
       #expect(ready.upperBound <= stopping.lowerBound)
       let server = try #require(text.range(of: "stopped the server"), "\(text)")
-      let statusPage = try #require(text.range(of: "stopped the status page"), "\(text)")
+      let statusPage = try #require(text.range(of: "stopped the web page"), "\(text)")
       #expect(stopping.upperBound <= server.lowerBound)
       #expect(server.upperBound <= statusPage.lowerBound)
     }

@@ -100,10 +100,14 @@ final class CountingRegistry: ModelRegistry, @unchecked Sendable {
     let feed: PageFeed
     let server: PageServer
 
-    init(headerTimeout: TimeInterval = 30, keepalive: TimeInterval = 15, logs: @escaping @Sendable () -> [String] = { [] }) throws {
+    init(
+      auth: WebAuth? = nil, system: (any PageSystem)? = nil, headerTimeout: TimeInterval = 30, keepalive: TimeInterval = 15,
+      logs: @escaping @Sendable () -> [String] = { [] }
+    ) throws {
       feed = PageFeed(hardware: nil)
       server = try PageServer(
-        port: 0, page: Data("<!doctype html><p>page</p>".utf8), feed: feed, headerTimeout: headerTimeout, keepalive: keepalive, logs: logs)
+        port: 0, page: Data("<!doctype html><p>page</p>".utf8), feed: feed, auth: auth, system: system, headerTimeout: headerTimeout,
+        keepalive: keepalive, logs: logs)
     }
 
     var port: UInt16 { server.port }
@@ -183,11 +187,75 @@ final class CountingRegistry: ModelRegistry, @unchecked Sendable {
     }
 
     /// One whole request and its whole reply, read until the page closes.
-    static func get(_ port: UInt16, _ path: String, method: String = "GET") throws -> String {
+    static func get(_ port: UInt16, _ path: String, method: String = "GET", headers: [String] = []) throws -> String {
       let client = try Client(port: port)
-      client.send("\(method) \(path) HTTP/1.1\r\nHost: jetlink.local\r\n\r\n")
+      client.send("\(method) \(path) HTTP/1.1\r\nHost: jetlink.local\r\n" + headers.map { $0 + "\r\n" }.joined() + "\r\n")
       return client.read()
     }
+
+    /// A POST as the page sends one: JSON, with the page's header, unless
+    /// `headers` says otherwise.
+    static func post(
+      _ port: UInt16, _ path: String, _ body: [String: Any] = [:], cookie: String? = nil,
+      headers: [String] = ["X-Jetlink: 1", "Content-Type: application/json"]
+    ) throws -> Reply {
+      let data = try JSONSerialization.data(withJSONObject: body)
+      let client = try Client(port: port)
+      var all = headers + ["Content-Length: \(data.count)"]
+      if let cookie { all.append("Cookie: \(cookie)") }
+      client.send("POST \(path) HTTP/1.1\r\nHost: jetlink.local\r\n" + all.map { $0 + "\r\n" }.joined() + "\r\n" + String(decoding: data, as: UTF8.self))
+      return Reply(client.read())
+    }
+
+    static func fetch(_ port: UInt16, _ path: String, cookie: String? = nil) throws -> Reply {
+      Reply(try get(port, path, headers: cookie.map { ["Cookie: \($0)"] } ?? []))
+    }
+  }
+
+  /// A whole reply, taken apart.
+  struct Reply {
+    let text: String
+
+    init(_ text: String) { self.text = text }
+
+    var status: Int { Int(text.split(separator: " ", maxSplits: 2).dropFirst().first ?? "") ?? 0 }
+    var head: String { text.components(separatedBy: "\r\n\r\n").first ?? "" }
+    var body: String { text.components(separatedBy: "\r\n\r\n").dropFirst().joined(separator: "\r\n\r\n") }
+    var json: [String: Any] { (try? JSONSerialization.jsonObject(with: Data(body.utf8))) as? [String: Any] ?? [:] }
+
+    /// The `name=value` a Set-Cookie header gives, without its attributes.
+    var cookie: String? {
+      head.split(separator: "\r\n").first { $0.hasPrefix("Set-Cookie: ") }.map {
+        String($0.dropFirst("Set-Cookie: ".count).split(separator: ";").first ?? "")
+      }
+    }
+
+    var setCookie: String? {
+      head.split(separator: "\r\n").first { $0.hasPrefix("Set-Cookie: ") }.map { String($0.dropFirst("Set-Cookie: ".count)) }
+    }
+  }
+
+  /// A computer behind the page that remembers what it was asked.
+  final class FakeSystem: PageSystem, @unchecked Sendable {
+    let asked = Recorded<String>()
+    let refuse = Locked<PageSystemError?>(nil)
+
+    func info() -> [String: Any] {
+      ["installed": true, "jetson": true, "settings": ["power": "always", "comma_poweroff": "yes"]]
+    }
+
+    func apply(_ settings: [String: String]) throws(PageSystemError) {
+      if let refusal = refuse.value { throw refusal }
+      asked.append("apply " + settings.keys.sorted().map { "\($0)=\(settings[$0]!)" }.joined(separator: " "))
+    }
+
+    func perform(_ action: PageAction, seconds: Int?) throws(PageSystemError) -> [String: Any] {
+      if let refusal = refuse.value { throw refusal }
+      asked.append(action.rawValue + (seconds.map { " \($0)" } ?? ""))
+      return ["did": action.rawValue]
+    }
+
+    func task() -> [String: Any] { ["state": "none"] }
   }
 #endif
 

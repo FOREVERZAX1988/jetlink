@@ -18,6 +18,10 @@
       #expect(root.hasPrefix("HTTP/1.1 200 OK\r\n"))
       #expect(root.contains("Content-Type: text/html; charset=utf-8\r\n"))
       #expect(root.hasSuffix("\r\n\r\n<!doctype html><p>page</p>"))
+      // a browser that has this build's page is told so, and sent nothing
+      let etag = try #require(root.components(separatedBy: "\r\n").first { $0.hasPrefix("ETag: ") }).dropFirst(6)
+      #expect(try Client.get(page.port, "/", headers: ["If-None-Match: \(etag)"]).hasPrefix("HTTP/1.1 304 Not Modified\r\n"))
+      #expect(try Client.get(page.port, "/", headers: ["If-None-Match: \"other\""]).hasPrefix("HTTP/1.1 200 OK\r\n"))
       for path in ["/nope", "/index.html", "/events/x", "/logs/"] {
         #expect(try Client.get(page.port, path).hasPrefix("HTTP/1.1 404 Not Found\r\n"), "\(path)")
       }

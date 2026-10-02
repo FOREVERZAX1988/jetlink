@@ -62,3 +62,16 @@ package func blocking<T: Sendable>(_ work: @escaping @Sendable () async throws -
   done.wait()
   return try result.withLock { $0! }.get()
 }
+
+/// `blocking` for a caller that cannot wait for ever, a page's request: nil
+/// once `timeout` passes, while the work goes on.
+package func blocking<T: Sendable>(timeout: TimeInterval, _ work: @escaping @Sendable () async -> T) -> T? {
+  let result = Locked<T?>(nil)
+  let done = DispatchSemaphore(value: 0)
+  Task.detached {
+    let value = await work()
+    result.value = value
+    done.signal()
+  }
+  return done.wait(timeout: .now() + timeout) == .success ? result.value : nil
+}
