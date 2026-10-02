@@ -211,3 +211,13 @@ def test_a_wrong_column_fails_on_few_frames():
   assert not passed['wide_from_device_euler'], text
   passed, text = gate(links, refs)
   assert not passed['wide_from_device_euler'], text
+
+
+def test_a_slice_counted_from_the_end():
+  # a spec may name a slice from the end, as the queued models' pad, [-2:]
+  spec = SimpleNamespace(output_slices={**SPEC.output_slices, 'pad': slice(-2, None)})
+  refs = reference_frames()
+  links = fp16_noisy(refs)
+  with redirect_stdout(io.StringIO()) as buf:
+    passed = vp.report_slices(spec, links, refs)
+  assert passed['pad'], buf.getvalue()

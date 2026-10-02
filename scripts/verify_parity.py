@@ -331,7 +331,8 @@ def report_slices(spec: ModelSpec, links, refs) -> dict[str, bool]:
     a = np.concatenate([x[sl] for x in links])
     b = np.concatenate([y[sl] for y in refs])
     whole = _corr(a, b)
-    if sl.stop - sl.start < MIN_SAMPLES:
+    # a slice's own size, not stop - start: a spec may count from the end, pad as [-2:]
+    if links[0][sl].size < MIN_SAMPLES:
       bound = tolerance(b, b.std())
       ok = np.abs(a - b).max() <= bound
       detail = f"{'by error, within ' + f'{bound:.4g}':38}"
@@ -398,7 +399,7 @@ def compare(args) -> int:
       a, b = link[sl], ref[sl]
       c = _corr(a, b)
       err = np.abs(a - b).max()
-      if sl.stop - sl.start >= MIN_SAMPLES:
+      if a.size >= MIN_SAMPLES:
         bad = c < MIN_CORR
         why = f'{c:.6f}'
       else:
@@ -408,7 +409,7 @@ def compare(args) -> int:
         why = f'max abs {err:.4g} > {bound:.4g}'
       if bad and name not in frame_fail:
         frame_fail[name] = why
-      flag = '   <-- FAIL' if bad else ('' if sl.stop - sl.start >= MIN_SAMPLES else '   (by error)')
+      flag = '   <-- FAIL' if bad else ('' if a.size >= MIN_SAMPLES else '   (by error)')
       print(f"    {name:24} corr {c:8.6f}  max abs {err:8.4f}  "
             f"mean abs {np.abs(a - b).mean():7.5f}{flag}")
 
