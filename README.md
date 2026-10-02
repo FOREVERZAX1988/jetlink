@@ -78,11 +78,11 @@ You need:
 * An iPhone or iPad with USB-C on iOS or iPadOS 26.1 or later. For USB 3: an
   iPhone 15 Pro or later Pro, or an iPad Pro, Air, or mini.
 * A USB 3 USB-C cable.
-* A Mac with Xcode 26.
 
-1. Build and install with Xcode:
-   **[Jetlink for iPhone and iPad](docs/iphone-app.md)**. A free Apple account
-   works, but you must run it from Xcode again every 7 days.
+1. Install it from TestFlight on the iPhone or iPad. Setup:
+   **[Jetlink for iPhone and iPad](docs/iphone-app.md)**.
+
+   <a href="https://testflight.apple.com/join/DAsYk5sP"><img src="docs/images/testflight-badge.svg" alt="Available on TestFlight" height="40"></a>
 2. Open Jetlink and keep it on screen.
 
 ### Android (experimental)

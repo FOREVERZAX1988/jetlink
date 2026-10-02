@@ -100,6 +100,11 @@ JETLINK_TEAM=ABCDE12345 ASC_KEY_ID=... ASC_ISSUER_ID=... ASC_KEY_PATH=AuthKey_XX
 - The version is `jetlink.__version__`, the build number the commit count.
   `JETLINK_BUILD` overrides it when a build number is already taken.
 - Apple processes an upload for a few minutes before TestFlight lists it.
-  Internal testers get it then; external testers after Beta App Review.
+  The internal group (**Jetlink team**) gets every build then.
+- The public link (`https://testflight.apple.com/join/DAsYk5sP`, in the README,
+  the iPhone guide, the release notes and the site) is the **Public** group. A
+  build reaches it once it is added to that group and passes Beta App Review,
+  under **TestFlight** in App Store Connect; later builds of a version usually
+  pass at once.
 
 <a id="the-container-images"></a>
