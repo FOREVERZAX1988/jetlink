@@ -64,6 +64,6 @@ class BenchmarkTextTest {
         assertEquals("Snapdragon 8 Gen 3 · NPU v75", BenchmarkText.chipLine("Snapdragon 8 Gen 3", 75))
         assertEquals("SM7550", BenchmarkText.chipLine("SM7550", null))
         assertEquals("Should keep up" to Tone.Good, BenchmarkText.expectation(Chip.Expectation.Recommended))
-        assertEquals(Tone.Bad, BenchmarkText.expectation(Chip.Expectation.NoNpu).second)
+        assertEquals("GPU only, unmeasured" to Tone.Warning, BenchmarkText.expectation(Chip.Expectation.GpuOnly))
     }
 }

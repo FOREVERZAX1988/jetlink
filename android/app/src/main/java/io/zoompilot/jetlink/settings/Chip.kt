@@ -42,11 +42,11 @@ object Chip {
     val hexagon: Int? get() = known[model]?.second
 
     /** How well this phone should do, before a benchmark says for sure. */
-    enum class Expectation { Recommended, Possible, TooOld, NoNpu }
+    enum class Expectation { Recommended, Possible, TooOld, GpuOnly }
 
     val expectation: Expectation
         get() {
-            if (!isQualcomm) return Expectation.NoNpu
+            if (!isQualcomm) return Expectation.GpuOnly
             val v = hexagon ?: return Expectation.Possible
             return when {
                 v >= 75 -> Expectation.Recommended

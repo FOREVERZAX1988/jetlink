@@ -244,7 +244,7 @@ private fun Performance(values: SettingsValues, info: SettingsInfo, actions: Set
     val footer = if (info.snapdragon) {
         "Changing the processor prepares models again."
     } else {
-        "This phone has no Snapdragon, so the model runs on the CPU: seconds a frame, too slow to drive with."
+        "This phone has no Snapdragon NPU, so the model runs on its GPU. Run Benchmark to see whether it keeps up."
     }
     FormSection("Performance", footer = { FormFooter(footer) }) {
         Box {
@@ -272,7 +272,7 @@ private fun Performance(values: SettingsValues, info: SettingsInfo, actions: Set
                 }
             }
         }
-        if (info.snapdragon) {
+        if (values.processor.usesQnn) {
             RowDivider()
             SwitchRow(
                 "Keep NPU Awake", values.keepNpuAwake, { on -> actions.update { it.copy(keepNpuAwake = on) } },

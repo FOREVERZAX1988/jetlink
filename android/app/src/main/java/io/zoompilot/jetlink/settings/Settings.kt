@@ -6,33 +6,38 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-/** Where the model runs, as the server's OrtProfile names it. */
+/** Where the model runs, as the server names the device: an OrtProfile, or LiteRT's. */
 enum class Processor(val id: String, val title: String) {
-    /** The vision trunk on the NPU, the rest on the GPU: the Mac's split. */
+    /** The vision trunk on the NPU, the rest on the GPU: the Mac's split. QNN, a Snapdragon's. */
     NpuGpu("htp", "NPU + GPU"),
 
-    /** The whole model on the NPU, prepared as the iPhone's. */
+    /** The whole model on the NPU, prepared as the iPhone's. QNN, a Snapdragon's. */
     Npu("htp-whole", "NPU"),
 
-    /** The whole model on the GPU, for when something else holds the NPU. */
-    Gpu("gpu", "GPU"),
+    /** The whole model on the GPU through LiteRT, which drives any phone's: Adreno, Mali, PowerVR. */
+    Gpu("litert-gpu", "GPU"),
 
-    /** The CPU: the emulator, tests, and phones without a Snapdragon. Far over the budget with a real model. */
+    /** The CPU: the emulator and tests. Seconds a frame with a real model. */
     Cpu("cpu", "CPU");
 
+    /** Runs on QNN, which needs a Snapdragon. */
+    val usesQnn: Boolean get() = this == NpuGpu || this == Npu
+
     companion object {
-        fun of(id: String?): Processor? = entries.firstOrNull { it.id == id }
+        /** `gpu` was QNN on the Adreno, before LiteRT drove every phone's GPU. */
+        fun of(id: String?): Processor? = if (id == "gpu") Gpu else entries.firstOrNull { it.id == id }
 
         /**
-         * What a phone can choose. The NPU and GPU choices run QNN, which
-         * needs a Snapdragon: anywhere else it leaves every op to one CPU
-         * thread, minutes a frame. The CPU is offered on a Snapdragon only
-         * once chosen; the emulator offers everything, for testing.
+         * What a phone can choose. The NPU choices run QNN, which needs a
+         * Snapdragon: anywhere else it leaves every op to one CPU thread,
+         * minutes a frame. The GPU is LiteRT's, on any phone. The CPU is
+         * offered on a Snapdragon only once chosen; the emulator offers
+         * everything, for testing.
          */
         fun choices(qualcomm: Boolean, emulator: Boolean, current: Processor): List<Processor> = when {
             emulator -> entries
             qualcomm -> entries.filter { it != Cpu || current == Cpu }
-            else -> listOf(Cpu)
+            else -> listOf(Gpu, Cpu)
         }
     }
 }
@@ -89,7 +94,11 @@ class Settings(context: Context) {
         const val KEEP_CPU_AWAKE = "keepCpuAwake"
         const val KEEP_SCREEN_ON = "keepScreenOn"
 
-        /** The split on a Snapdragon; the CPU on the emulator and on any other phone, which have no NPU QNN can drive. */
-        fun defaultProcessor(): Processor = if (Chip.isQualcomm && !Chip.isEmulator) Processor.NpuGpu else Processor.Cpu
+        /** The split on a Snapdragon, the GPU on any other phone, the CPU on the emulator. */
+        fun defaultProcessor(): Processor = when {
+            Chip.isEmulator -> Processor.Cpu
+            Chip.isQualcomm -> Processor.NpuGpu
+            else -> Processor.Gpu
+        }
     }
 }

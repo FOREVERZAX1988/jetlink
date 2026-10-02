@@ -1,8 +1,8 @@
 # Jetlink for Android
 
-**Experimental, and not yet run on a phone.** Runs the Jetlink server in an
-Android app, on the phone's Snapdragon NPU, connected to the comma by USB. You
-build it from source. Run the [Benchmark](#benchmark) before you drive to see
+**Experimental, and not yet measured on a phone.** Runs the Jetlink server in an
+Android app, on a Snapdragon's NPU or any phone's GPU, connected to the comma by
+USB. You build it from source. Run the [Benchmark](#benchmark) before you drive to see
 if your phone keeps up.
 
 Mac: [Jetlink for Mac](macos-app.md). iPhone: [Jetlink for iPhone and iPad](iphone-app.md).
@@ -10,8 +10,7 @@ Jetson or PC: [README](../README.md#quick-start).
 
 ## Requirements
 
-- An Android 12 or later phone with a Snapdragon 8 Gen 2 or newer. See
-  [Which phones](#which-phones).
+- An Android 12 or later phone, a recent flagship. See [Which phones](#which-phones).
 - USB 3 on the phone, a USB 3 hub or adapter, and a USB 3 cable. See
   [Connect the comma](#connect-the-comma).
 - About 3 GB free per model.
@@ -22,10 +21,12 @@ Jetson or PC: [README](../README.md#quick-start).
 
 ### Which phones
 
-The model runs on the phone's NPU, the Hexagon in a Snapdragon, through
-Qualcomm's QNN runtime. Other phones, a Pixel's Google Tensor among them, can
-only choose the CPU, which takes seconds a frame: fine for trying the app, far
-too slow to drive with.
+On a Snapdragon the model runs on the NPU, the Hexagon, through Qualcomm's QNN
+runtime. Every other phone, a Pixel's Google Tensor among them, runs it on its
+GPU through Google's LiteRT: Jetlink converts the model for it on the phone.
+The big models are about 94 billion operations a frame. On a Mac's GPU the
+LiteRT path takes 37 ms a frame for Cinque Terre V3, and a phone's GPU is slower,
+so only the newest flagships may keep up. Run the [Benchmark](#benchmark).
 
 | Snapdragon | NPU | Expect |
 | --- | --- | --- |
@@ -149,8 +150,8 @@ A hot phone slows down and frames miss 50 ms.
 | Link | USB 3 or USB 2 while connected (Wi-Fi for a bench tool) |
 | Port | The TCP port for `verify_parity.py` from a Mac, 5599 by default |
 | Wi-Fi | The phone's Wi-Fi address and port, for a Mac's bench tools |
-| Processor | **NPU + GPU** (default): the vision model on the NPU, the rest on the GPU, as a Mac splits it. **NPU**: the whole model on the NPU. **GPU**: when something else keeps the NPU busy. **CPU**: the emulator, and the only choice on a phone without a Snapdragon. Changing it prepares the model again |
-| Keep NPU Awake | On by default. Holds the NPU at full speed between frames. Uses some power |
+| Processor | On a Snapdragon, **NPU + GPU** (default): the vision model on the NPU, the rest on the GPU, as a Mac splits it; **NPU**: the whole model on the NPU. **GPU**: the whole model on the GPU through LiteRT, the default on every other phone. **CPU**: for the emulator, seconds a frame. Changing it prepares the model again |
+| Keep NPU Awake | With the NPU, on by default. Holds the NPU at full speed between frames. Uses some power |
 | Keep CPU Awake | With the NPU: holds the CPU's clocks up between frames, through Android's performance hints, or a busy core on a phone without them. Uses some power |
 | Keep Screen On | On by default |
 | Help | How to connect the comma, and the logs |
