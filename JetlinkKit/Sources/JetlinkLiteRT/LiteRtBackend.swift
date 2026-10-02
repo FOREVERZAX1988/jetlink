@@ -42,8 +42,12 @@ public struct ONNXToLiteRT: LiteRTConverter {
   public var version: Int { 1 }
 
   public func convert(model: URL, into directory: URL) throws -> PreparedModel {
-    // STUB until LiteRTPreparation lands in JetlinkONNX: this line becomes its call.
-    throw LiteRtError("the ONNX to LiteRT conversion is not yet available")
+    let r = try LiteRTPreparation.prepare(source: model, into: directory)
+    let rewrites = r.rewrites.filter { $0.value > 0 }.sorted { $0.key < $1.key }.map { "\($0.value) \($0.key)" }
+    return PreparedModel(
+      parts: [PreparedModel.Part(name: "model", file: r.url.lastPathComponent, weightBytes: r.weightBytes)],
+      summary: "\(rewrites.joined(separator: ", ")); \(r.operators.values.reduce(0, +)) operators, "
+        + "\(r.transposesRemoved) transposes removed, \(r.fileBytes / 1_000_000) MB")
   }
 }
 

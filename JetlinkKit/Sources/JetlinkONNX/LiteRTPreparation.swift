@@ -146,21 +146,21 @@ public enum LiteRTPreparation {
       weightBytes: Int64(file.count - flatbuffer.count), fileBytes: Int64(file.count))
   }
 
-  /// The ONNX rewrites that come before the lowering, by name with how often
-  /// each applied.
+  /// The ONNX rewrites that come before the lowering (Patches.forLiteRT), by
+  /// name with how often each applied: tinygrad's ops stripped, gather indices
+  /// normalized, the fp16-safe LayerNorm, 4-D attention, the uint8 frame queue
+  /// as a 4-D view, constant gathers as slices, static reshapes. A graph they
+  /// already rewrote converts as it is.
   ///
-  /// TODO(litert/rewrites): replace this stand-in with
-  /// `try Patches.forLiteRT(&g, &opsets, src)` and report its LiteRTRewrites.
-  /// It strips tinygrad's ops and normalizes gather indices too, and does
-  /// what the spike's prep_gpu.py does: the fp16-safe LayerNorm, 4-D
-  /// attention, the uint8 frame queue as a 4-D view, constant gathers as
-  /// slices, static reshapes. Until then a graph gets only the rewrites
-  /// JetlinkONNX already has, and one prep_gpu.py or forLiteRT rewrote
-  /// converts as it is.
+  /// Metal runs the textbook LayerNorm in fp16 without overflowing (it fuses
+  /// it, by the look of it), but no Android GPU has been seen to, and 36 of
+  /// Cinque Terre V3's 85 overflow float16 when computed step by step.
   static func rewrite(_ g: inout Graph, _ opsets: inout [OpsetImport], _ src: Source) throws -> [String: Int] {
-    [
-      "stripTinygradOps": try Patches.stripTinygradOps(&g, &opsets),
-      "normalizeGatherIndices": try Patches.normalizeGatherIndices(&g, src),
+    let r = try Patches.forLiteRT(&g, &opsets, src)
+    return [
+      "stripTinygradOps": r.stripped, "normalizeGatherIndices": r.gathers, "normalizeGatherNDIndices": r.gatherNDs,
+      "attention4D": r.attention, "frameQueues4D": r.frameQueues, "gatherNDSlices": r.gatherNDSlices,
+      "gatherSlices": r.gatherSlices, "layerNorms": r.layerNorms, "staticReshapes": r.reshapes,
     ]
   }
 
