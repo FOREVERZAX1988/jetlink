@@ -46,7 +46,13 @@ SHARE=share/jetlink
 # released, but a bench has it): a move from Docker saves these, and a failed
 # one puts them back
 DOCKER_ERA_UNITS="$UNIT.service $UNIT.service.d jetlink-poweroff.path jetlink-poweroff.service jetlink-web.service jetlink-web.service.d"
+# jetson_clocks at boot, once nvpmodel has set the power mode. Up to 0.7.4 a
+# drop-in ran it before each server start, which held the server back until
+# nvpmodel ran; an install that has the drop-in loses it
+CLOCKS_UNIT=jetlink-clocks.service
 CLOCKS_DROPIN="$UNIT_DIR/$UNIT.service.d/20-jetson-clocks.conf"
+# on a Jetson the server waits for the GPU's driver instead
+GPU_DROPIN="$UNIT_DIR/$UNIT.service.d/20-jetson-gpu.conf"
 WAKE_RULE=/etc/udev/rules.d/99-jetlink-usb-wakeup.rules
 JOURNALD_DROPIN=/etc/systemd/journald.conf.d/60-jetlink.conf
 # the last release that ran in Docker: `jetlink update --ref` it to go back
@@ -79,6 +85,9 @@ TRT_GB_JP6=1
 TRT_GB_PC=7
 # units that hold up boot waiting for a network the car does not have
 WAIT_ONLINE_UNITS="systemd-networkd-wait-online.service NetworkManager-wait-online.service"
+# seconds the firmware's boot menu waits at power-on; JetPack's is 5, and 1
+# still leaves a moment for Esc
+UEFI_TIMEOUT=1
 # where detection looks; the installer's tests point these at fakes
 OS_RELEASE="${JETLINK_TEST_OS_RELEASE:-/etc/os-release}"
 PKG_PATH="${JETLINK_TEST_PKG_PATH:-$PATH}"
@@ -89,6 +98,8 @@ SWAPS="${JETLINK_TEST_SWAPS:-/proc/swaps}"
 PROC_VERSION="${JETLINK_TEST_PROC_VERSION:-/proc/version}"
 SYSTEMD_RUN="${JETLINK_TEST_SYSTEMD_RUN:-/run/systemd/system}"
 AWAKE_LOCK="${JETLINK_TEST_AWAKE_LOCK:-/run/jetlink-awake.lock}"
+EXTLINUX="${JETLINK_TEST_EXTLINUX:-/boot/extlinux/extlinux.conf}"
+EFIVARS="${JETLINK_TEST_EFIVARS:-/sys/firmware/efi/efivars}"
 # seconds between looks at something the installer waits on
 POLL_S="${JETLINK_TEST_POLL_S:-5}"
 # A new server has 3 minutes to say it serves, and then has to stay up. One
@@ -463,6 +474,8 @@ TRT_GB=0 TRT_PRESENT=0 TRT_VERSION=''
 TRT_ARGS=()
 DISK_GB=0
 DEEP_SLEEP=0
+# 1 when the Jetson starts its desktop (stock JetPack's graphical.target)
+HAS_DESKTOP=0
 PM_BEST_ID='' PM_BEST_NAME='' PM_CURRENT=''
 
 detect() {
@@ -555,6 +568,7 @@ detect_jetson() {
   PLATFORM_NAME="$MODEL, $JETPACK (Jetson Linux $L4T)"
 
   if grep -qw deep "$MEM_SLEEP" 2>/dev/null; then DEEP_SLEEP=1; fi
+  if [ "$(systemctl get-default 2>/dev/null || true)" = graphical.target ]; then HAS_DESKTOP=1; fi
   detect_power_modes
 }
 
@@ -625,12 +639,19 @@ detect_pc() {
 # server runs with), so an update asks nothing
 
 POWER='' SLEEP_AFTER=0 POWEROFF_WITH_COMMA=0 ADD_SWAP=0 AUTOSTART=1 STATUS_PORT=5600
+# 1 when the Jetson starts without its desktop; the default target changes
+# only when the answer does, so a desktop turned back on by hand stays on
+DESKTOP_OFF=0 DESKTOP_OFF_SAVED=0
 CACHE_DIR='' REF='' SOURCE='' SOURCE_DIR='' COMMIT=''
 # REF is what the install follows: latest (the newest release), a tag or a
 # branch. RESOLVED is the tag or branch that gave, or `local` for a checkout,
 # saved as JETLINK_VERSION (not VERSION, which /etc/os-release sets).
 RESOLVED=''
-SWAP_FILE='' MASKED_UNITS='' JOURNALD_CAPPED=0 NEED_REBOOT=0
+# what a restart at the end would finish, said in the closing note
+SWAP_FILE='' MASKED_UNITS='' JOURNALD_CAPPED=0 REBOOT_FOR=''
+# the firmware's boot menu wait before Jetlink changed it, for uninstall
+# (`none` when it had none set)
+UEFI_TIMEOUT_PREV=''
 HAD_INSTALL=0
 # 1 when the install to update runs the server in Docker (0.6.0 and older)
 DOCKER_ERA=0
@@ -653,12 +674,14 @@ load_previous() {
   # a run stopped while hold_sleep held the server awake left the answer here
   SLEEP_AFTER="${JETLINK_SLEEP_AFTER_HELD:-${JETLINK_SLEEP_AFTER:-0}}"
   POWEROFF_WITH_COMMA="${JETLINK_POWEROFF_WITH_COMMA:-0}"
+  DESKTOP_OFF="${JETLINK_DESKTOP_OFF:-0}" DESKTOP_OFF_SAVED="${JETLINK_DESKTOP_OFF:-0}"
   AUTOSTART="${JETLINK_AUTOSTART:-1}"
   CACHE_DIR="${JETLINK_CACHE_DIR:-}"
   STATUS_PORT="${JETLINK_STATUS_PORT:-$STATUS_PORT}"
   SWAP_FILE="${JETLINK_SWAP_FILE:-}"
   MASKED_UNITS="${JETLINK_MASKED_UNITS:-}"
   JOURNALD_CAPPED="${JETLINK_JOURNALD_CAPPED:-0}"
+  UEFI_TIMEOUT_PREV="${JETLINK_UEFI_TIMEOUT_PREV:-}"
   REF="${JETLINK_REF:-}"
   RESOLVED="${JETLINK_VERSION:-}"
   return 0
@@ -702,35 +725,45 @@ ask_questions() {
     # always on is the recommended wiring, for a Jetson that can deep-sleep
     local prev="$POWER" def=1 choice always
     if [ "$prev" = switched ] || { [ -z "$prev" ] && [ "$DEEP_SLEEP" = 0 ]; }; then def=2; fi
-    always="Always on ${D}(recommended)${N}: sleeps when the car is off to save battery, wakes when you start the car"
-    [ "$DEEP_SLEEP" = 1 ] || always="Always on: stays awake when the car is off ${D}(this Jetson cannot sleep)${N}"
-    ask_choice choice "$def" "How is the Jetson powered in the car?" \
+    always="Always on ${D}(recommended)${N}: sleeps while parked, wakes when the car starts"
+    [ "$DEEP_SLEEP" = 1 ] || always="Always on: stays awake while parked ${D}(this Jetson cannot sleep)${N}"
+    ask_choice choice "$def" "Does the Jetson's power stay on when the car is off?" \
       "$always" \
-      "Switched: turns on and off with the car"
+      "Switched: loses power with the car, boots at every start"
     if [ "$choice" = 1 ]; then
       set_always_on
       local off offdef=y
       [ "$prev" = always ] && [ "$POWEROFF_WITH_COMMA" = 0 ] && offdef=n
-      ask_yn off "$offdef" "Allow the comma to shut down the Jetson to protect the car battery?" \
-        "The comma does this when it shuts itself down for low battery. The Jetson then" \
-        "stays off until its power is reconnected."
+      ask_yn off "$offdef" "Let the comma turn the Jetson off to protect the car battery?" \
+        "When the comma shuts down (low battery, or parked 30 hours), the Jetson turns" \
+        "off too and stays off until its power is reconnected."
       if [ "$off" = y ]; then POWEROFF_WITH_COMMA=1; else POWEROFF_WITH_COMMA=0; fi
     else
       POWER=switched SLEEP_AFTER=0 POWEROFF_WITH_COMMA=0
+    fi
+
+    # only for a Jetson that starts its desktop, or one Jetlink turned it off on
+    if [ "$HAS_DESKTOP" = 1 ] || [ "$DESKTOP_OFF" = 1 ]; then
+      local desk deskdef=y
+      [ "$HAD_INSTALL" = 1 ] && [ "$DESKTOP_OFF" = 0 ] && deskdef=n
+      ask_yn desk "$deskdef" "Turn off the desktop? ${D}(recommended unless you use it)${N}" \
+        "Jetlink doesn't need it: more memory for the models, and a faster start." \
+        "jetlink setup turns it back on."
+      if [ "$desk" = y ]; then DESKTOP_OFF=1; else DESKTOP_OFF=0; fi
     fi
 
     AUTOSTART=1
   else
     local auto autodef=y
     [ "$AUTOSTART" = 0 ] && autodef=n
-    ask_yn auto "$autodef" "Start Jetlink automatically when this computer starts?" \
-      "If you say no, start it yourself with: jetlink start"
+    ask_yn auto "$autodef" "Start Jetlink when this computer starts?" \
+      "Otherwise, start it with: jetlink start"
     if [ "$auto" = y ]; then AUTOSTART=1; else AUTOSTART=0; fi
   fi
 
-  ask_port STATUS_PORT "$STATUS_PORT" "Which port should the status page use?" \
-    "A read-only page of what Jetlink is doing, for a phone on the same network" \
-    "(the comma's hotspot in the car). 0 turns it off."
+  ask_port STATUS_PORT "$STATUS_PORT" "Which port for the status page?" \
+    "A read-only page for a phone on the same network, like the comma's hotspot." \
+    "0 turns it off."
 }
 
 set_always_on() {
@@ -991,18 +1024,25 @@ show_plan() {
   fi
   if [ "$JETSON" = 1 ]; then
     if [ "$SLEEP_AFTER" != 0 ]; then
-      say "  • Sleep when the car is off to save battery, and wake when you start the car"
+      say "  • Sleep while parked, and wake when the car starts"
     fi
     if [ "$POWEROFF_WITH_COMMA" = 1 ]; then
-      say "  • Let the comma shut down the Jetson to protect the car battery"
+      say "  • Let the comma turn the Jetson off to protect the car battery"
     fi
     if [ "$DOCKER_ERA" = 0 ] && [ -n "$PM_BEST_ID" ] && [ "$PM_CURRENT" != "$PM_BEST_NAME" ]; then
-      say "  • Switch to the fastest power mode, $PM_BEST_NAME, which the large models need ${D}(may need a restart)${N}"
+      say "  • Switch to the fastest power mode, $PM_BEST_NAME ${D}(may need a restart)${N}"
     fi
     if [ "$ADD_SWAP" = 1 ] && [ -z "$SWAP_FILE" ]; then
-      say "  • Add ${SWAP_GB} GB of swap, which the largest models need while they are prepared"
+      say "  • Add ${SWAP_GB} GB of swap for preparing the largest models"
     fi
-    say "  • Start up without waiting for a network, and keep the system log small"
+    if [ "$DESKTOP_OFF" != "$DESKTOP_OFF_SAVED" ]; then
+      if [ "$DESKTOP_OFF" = 1 ]; then
+        say "  • Turn off the desktop ${D}(from the next restart)${N}"
+      else
+        say "  • Turn the desktop back on ${D}(from the next restart)${N}"
+      fi
+    fi
+    say "  • Start up faster, and keep the system log small"
   fi
   if [ "$STATUS_PORT" != 0 ]; then
     say "  • Show a read-only status page on port $STATUS_PORT"
@@ -1189,6 +1229,8 @@ base_packages_missing() {
     fi
     # a PC unpacks TensorRT's wheel
     if [ "$JETSON" = 0 ] && ! command -v unzip >/dev/null 2>&1; then echo unzip; fi
+    # a Jetson shortens its firmware's boot menu wait
+    if [ "$JETSON" = 1 ] && [ -d "$EFIVARS" ] && ! command -v efibootmgr >/dev/null 2>&1; then echo efibootmgr; fi
   } | sort -u
 }
 
@@ -1357,7 +1399,7 @@ others_units() {
   for f in "$UNIT_DIR"/jetlink-*.service; do
     [ -e "$f" ] || continue
     u="$(basename "$f")"
-    case " $DOCKER_ERA_UNITS " in *" $u "*) continue ;; esac
+    case " $DOCKER_ERA_UNITS $CLOCKS_UNIT " in *" $u "*) continue ;; esac
     if as_root systemctl is-active --quiet "$u" || [ "$(as_root systemctl is-enabled "$u" 2>/dev/null || true)" = enabled ]; then
       note "$u is not the installer's, and stays as it is. If it serves the comma too, stop it:"
       note "  sudo systemctl disable --now $u"
@@ -1719,6 +1761,9 @@ configure_jetson() {
   done
   MASKED_UNITS="${masked# }"
   [ -n "$MASKED_UNITS" ] && good "Starts without waiting for a network"
+  shorten_uefi_wait
+  quiet_kernel
+  set_desktop
   if [ "$JOURNALD_CAPPED" != 1 ]; then
     printf '# Jetlink: keep the system log from filling a small root partition\n[Journal]\nSystemMaxUse=200M\n' \
       | root_write "$JOURNALD_DROPIN"
@@ -1726,6 +1771,137 @@ configure_jetson() {
     JOURNALD_CAPPED=1
     good "System log limited to 200 MB"
   fi
+}
+
+# Boot. On switched power the Jetson boots at every start of the car, and the
+# big model drives only once the server is up. On an Orin Nano with JetPack
+# 7.2.1, a reboot to the model loaded took 4 s less with a 1 s firmware menu,
+# 4 s less with quiet (the serial console runs at 115200 baud), and 4 s less
+# with the server waiting for the GPU's driver (GPU_DROPIN) instead of for
+# nvpmodel (CLOCKS_UNIT).
+
+# the firmware's boot menu wait in seconds after `efibootmgr ARGS`, which
+# lists the variables once it has changed any; `none` when none is set, or
+# nothing when efibootmgr cannot say
+uefi_timeout() {
+  local out
+  out="$(as_root efibootmgr "$@" 2>>"$LOG" || true)"
+  [ -n "$out" ] || return 0
+  if [[ $out =~ Timeout:\ ([0-9]+) ]]; then echo "${BASH_REMATCH[1]}"; else echo none; fi
+}
+
+# down to UEFI_TIMEOUT, never up: a shorter wait is the user's own
+shorten_uefi_wait() {
+  [ -d "$EFIVARS" ] && command -v efibootmgr >/dev/null 2>&1 || return 0
+  local now
+  now="$(uefi_timeout)"
+  case "$now" in
+    '') note "Could not read the firmware's boot menu wait, so it stays as it is."; return 0 ;;
+    none) ;;
+    *) [ "$now" -gt "$UEFI_TIMEOUT" ] || return 0 ;;
+  esac
+  if [ "$(uefi_timeout -t "$UEFI_TIMEOUT")" = "$UEFI_TIMEOUT" ]; then
+    # what it was before Jetlink first changed it, which a later run keeps
+    [ -n "$UEFI_TIMEOUT_PREV" ] || UEFI_TIMEOUT_PREV="$now"
+    good "Firmware boot menu waits $UEFI_TIMEOUT s"
+  else
+    note "The firmware kept its boot menu wait; efibootmgr could not change it."
+  fi
+}
+
+restore_uefi_wait() {
+  [ -n "$UEFI_TIMEOUT_PREV" ] && command -v efibootmgr >/dev/null 2>&1 || return 0
+  # a wait changed since is the user's own
+  [ "$(uefi_timeout)" = "$UEFI_TIMEOUT" ] || return 0
+  local back
+  if [ "$UEFI_TIMEOUT_PREV" = none ]; then back="$(uefi_timeout -T)"; else back="$(uefi_timeout -t "$UEFI_TIMEOUT_PREV")"; fi
+  if [ "$back" = "$UEFI_TIMEOUT_PREV" ]; then good "The firmware's boot menu wait is as it was"; fi
+}
+
+# extlinux.conf on stdout with quiet added to (add) or taken off the end of
+# (remove) the APPEND line of the entry that boots: DEFAULT's, else the first
+# LABEL's. Exits 0 with that line changed, 1 with nothing to change, and 2
+# when that entry has no APPEND line or more than one, which is left alone.
+extlinux_quiet() {
+  awk -v mode="$1" '
+    NR == FNR {
+      key = toupper($1)
+      if (key == "DEFAULT" && def == "") def = $2
+      if (key == "LABEL" && first == "") first = $2
+      next
+    }
+    FNR == 1 && def == "" { def = first }
+    toupper($1) == "LABEL" { inside = ($2 == def) }
+    inside && toupper($1) == "APPEND" {
+      lines++
+      if (mode == "add") {
+        has = 0
+        for (i = 2; i <= NF; i++) if ($i == "quiet") has = 1
+        if (!has) { $0 = $0 " quiet"; changed++ }
+      } else if (sub(/ quiet$/, "")) {
+        changed++
+      }
+    }
+    { print }
+    END { exit (lines != 1 ? 2 : (changed ? 0 : 1)) }
+  ' "$EXTLINUX" "$EXTLINUX"
+}
+
+# quiet added (add) or taken off (remove) as extlinux_quiet says, with its
+# status. The new file is written beside the old one and renamed over it, so a
+# power cut leaves one whole file or the other. The first add keeps the file as
+# it was in extlinux.conf.jetlink-bak, which is also how uninstall knows the
+# quiet is Jetlink's.
+edit_extlinux() {
+  local new rc=0
+  new="$(mktemp)"
+  extlinux_quiet "$1" >"$new" || rc=$?
+  if [ "$rc" = 0 ]; then
+    [ -e "$EXTLINUX.jetlink-bak" ] || as_root cp -p "$EXTLINUX" "$EXTLINUX.jetlink-bak"
+    root_write "$EXTLINUX.jetlink-new" <"$new"
+    as_root mv -f "$EXTLINUX.jetlink-new" "$EXTLINUX"
+    as_root sync "$EXTLINUX" "$(dirname "$EXTLINUX")"
+  fi
+  rm -f "$new"
+  return "$rc"
+}
+
+# Kernel messages stay in the journal and dmesg. A quiet the user added stays.
+quiet_kernel() {
+  [ -f "$EXTLINUX" ] || return 0
+  local rc=0
+  edit_extlinux add || rc=$?
+  case "$rc" in
+    0) good "Kernel messages kept off the console" ;;
+    1) ;;
+    *) note "$EXTLINUX has no boot entry Jetlink can add quiet to, so it stays as it is." ;;
+  esac
+}
+
+restore_kernel_messages() {
+  [ -e "$EXTLINUX.jetlink-bak" ] || return 0
+  if edit_extlinux remove; then good "Kernel messages are on the console at boot again"; fi
+  as_root rm -f "$EXTLINUX.jetlink-bak"
+}
+
+# The desktop goes or comes back at the next start: stopping it now could end
+# the session the installer runs in.
+set_desktop() {
+  [ "$DESKTOP_OFF" != "$DESKTOP_OFF_SAVED" ] || return 0
+  local target=graphical.target why="bring the desktop back"
+  [ "$DESKTOP_OFF" = 0 ] || target=multi-user.target why="turn the desktop off"
+  if as_root systemctl set-default "$target" >>"$LOG" 2>&1; then
+    REBOOT_FOR="${REBOOT_FOR:+$REBOOT_FOR and }$why"
+  else
+    DESKTOP_OFF=$DESKTOP_OFF_SAVED
+    note "Could not change whether the desktop starts; see $LOG"
+  fi
+}
+
+restore_desktop() {
+  [ "$DESKTOP_OFF" = 1 ] && [ "$(systemctl get-default 2>/dev/null || true)" = multi-user.target ] || return 0
+  as_root systemctl set-default graphical.target >>"$LOG" 2>&1 || true
+  good "The desktop comes back at the next start"
 }
 
 set_power_mode() {
@@ -1739,7 +1915,7 @@ set_power_mode() {
     good "Power mode set to $PM_BEST_NAME"
     PM_CURRENT="$now"
   else
-    NEED_REBOOT=1
+    REBOOT_FOR="finish switching the power mode"
     note "Power mode $PM_BEST_NAME takes effect after a restart."
   fi
 }
@@ -1761,15 +1937,10 @@ install_files() {
   install_unit "$NEW_DIR"
   printf '# Jetlink: the cache has to be mounted before the server starts\n[Unit]\nRequiresMountsFor=%s\n' "$CACHE_DIR" \
     | root_write "$UNIT_DIR/$UNIT.service.d/10-cache.conf"
+  as_root rm -f "$CLOCKS_DROPIN"
   if [ "$JETSON" = 1 ]; then
-    # jetson_clocks pins the clocks and turns DVFS off, so the GPU sits at the
-    # power mode's ceiling instead of ramping between frames. A reboot undoes
-    # it, so it runs before every start, and after nvpmodel, whose mode sets
-    # the ceiling and would undo it too.
-    printf '# Jetlink: the GPU at full clock while the server runs\n[Unit]\nAfter=nvpmodel.service\n[Service]\nExecStartPre=-/usr/bin/jetson_clocks\n' \
-      | root_write "$CLOCKS_DROPIN"
-  else
-    as_root rm -f "$CLOCKS_DROPIN"
+    clocks_unit | root_write "$UNIT_DIR/$CLOCKS_UNIT"
+    gpu_dropin | root_write "$GPU_DROPIN"
   fi
   if [ "$DOCKER_ERA" = 1 ]; then set_aside_docker_dropins; fi
 
@@ -1792,6 +1963,41 @@ install_files() {
   write_conf
 }
 
+# jetson_clocks pins the clocks and turns DVFS off, so the GPU sits at the
+# power mode's ceiling instead of ramping between frames. A reboot undoes it,
+# so it runs at every boot, after nvpmodel, whose mode sets the ceiling and
+# would undo it too. The server does not wait for it: stock nvpmodel waits for
+# the desktop's login screen, which waits for NetworkManager.
+clocks_unit() {
+  cat <<'EOF'
+# Written by the Jetlink installer: the GPU at full clock for the Jetlink server
+[Unit]
+Description=Jetlink: Jetson clocks at the power mode's ceiling
+After=nvpmodel.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/jetson_clocks
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+# udev loads the GPU's driver during boot, after the server could start, and
+# CUDA fails for good in a process that asked before then: systemd's restart
+# cost 3.8 s on an Orin Nano. So the server waits for the control node the
+# driver makes last, which CUDA opens: nvgpu's on an Orin, by either of its
+# names, or the nvidia driver's; at most 30 s, then it starts anyway.
+gpu_dropin() {
+  cat <<'EOF'
+# Written by the Jetlink installer: the server starts once the GPU's driver is up
+[Service]
+ExecStartPre=/bin/sh -c 'n=0; until [ -e /dev/nvhost-ctrl-gpu ] || [ -e /dev/nvgpu/igpu0/ctrl ] || [ -e /dev/nvidia0 ] || [ $$n -ge 300 ]; do sleep 0.1; n=$$((n + 1)); done'
+EOF
+}
+
 # the unit of the server in directory $1, so the two always match
 install_unit() {
   as_root install -D -m 644 "$1/$SHARE/systemd/$UNIT.service" "$UNIT_DIR/$UNIT.service"
@@ -1803,7 +2009,7 @@ set_aside_docker_dropins() {
   local f
   for f in "$UNIT_DIR/$UNIT.service.d"/*.conf; do
     [ -f "$f" ] || continue
-    case "$f" in */10-cache.conf|"$CLOCKS_DROPIN") continue ;; esac
+    case "$f" in */10-cache.conf|"$GPU_DROPIN") continue ;; esac
     grep -qi docker "$f" || continue
     as_root rm -f "$f"
     note "Your drop-in $(basename "$f") runs Docker, so it is set aside in $DOCKER_ERA_DIR/systemd/$UNIT.service.d"
@@ -1852,10 +2058,12 @@ write_conf() {
     printf 'JETLINK_PLATFORM_NAME=%q\n' "$PLATFORM_NAME"
     printf 'JETLINK_POWER=%q\n' "$POWER"
     printf 'JETLINK_POWEROFF_WITH_COMMA=%q\n' "$POWEROFF_WITH_COMMA"
+    printf 'JETLINK_DESKTOP_OFF=%q\n' "$DESKTOP_OFF"
     printf 'JETLINK_AUTOSTART=%q\n' "$AUTOSTART"
     printf 'JETLINK_SWAP_FILE=%q\n' "$SWAP_FILE"
     printf 'JETLINK_MASKED_UNITS=%q\n' "$MASKED_UNITS"
     printf 'JETLINK_JOURNALD_CAPPED=%q\n' "$JOURNALD_CAPPED"
+    printf 'JETLINK_UEFI_TIMEOUT_PREV=%q\n' "$UEFI_TIMEOUT_PREV"
     printf 'JETLINK_INSTALLED_AT=%q\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   } | root_write "$CONF"
 }
@@ -1866,6 +2074,11 @@ start_server() {
     as_root systemctl enable "$UNIT" >>"$LOG" 2>&1
   else
     as_root systemctl disable "$UNIT" >>"$LOG" 2>&1 || true
+  fi
+  if [ "$JETSON" = 1 ]; then
+    as_root systemctl enable "$CLOCKS_UNIT" >>"$LOG" 2>&1 || true
+    # now too, at the ceiling of a power mode this run may have set
+    as_root systemctl restart "$CLOCKS_UNIT" >>"$LOG" 2>&1 || true
   fi
   local since
   since="$(date '+%Y-%m-%d %H:%M:%S')"
@@ -1996,9 +2209,9 @@ finish() {
   say "    jetlink logs      watch what it is doing"
   say "    jetlink update    get the newest version"
   say "    jetlink setup     change your answers"
-  if [ "$NEED_REBOOT" = 1 ]; then
+  if [ -n "$REBOOT_FOR" ]; then
     say ""
-    note "${B}Restart this computer once${N} to finish switching the power mode: sudo reboot"
+    note "${B}Restart this computer once${N} to $REBOOT_FOR: sudo reboot"
   fi
   say ""
 }
@@ -2015,18 +2228,22 @@ uninstall() {
   fi
   local go
   ask_yn go n "Remove Jetlink from this computer?" \
-    "TensorRT from apt stays installed, and so does Docker if you have it."
+    "TensorRT from apt and Docker stay installed."
   [ "$go" = y ] || { say "  Nothing changed."; exit 0; }
   [ "$OPT_DRY_RUN" = 1 ] && { say "  (dry run: nothing changed)"; exit 0; }
   get_root
   as_root systemctl disable --now "$UNIT" >>"$LOG" 2>&1 || true
   remove_docker_era_files
   if command -v docker >/dev/null 2>&1; then as_root docker rm -f jetlink >>"$LOG" 2>&1 || true; fi
-  as_root rm -rf "$UNIT_DIR/$UNIT.service" "$UNIT_DIR/$UNIT.service.d"
+  as_root systemctl disable "$CLOCKS_UNIT" >>"$LOG" 2>&1 || true
+  as_root rm -rf "$UNIT_DIR/$UNIT.service" "$UNIT_DIR/$UNIT.service.d" "$UNIT_DIR/$CLOCKS_UNIT"
   as_root systemctl daemon-reload
   as_root rm -f "$BIN" "$WAKE_RULE"
   as_root udevadm control --reload-rules >>"$LOG" 2>&1 || true
   good "Server and its settings removed"
+  restore_uefi_wait
+  restore_kernel_messages
+  restore_desktop
   if [ -n "$MASKED_UNITS" ]; then
     # shellcheck disable=SC2086
     as_root systemctl unmask $MASKED_UNITS >>"$LOG" 2>&1 || true
@@ -2043,7 +2260,7 @@ uninstall() {
   fi
   if [ -n "$(docker_images)" ]; then
     local rm_images
-    ask_yn rm_images y "Delete Jetlink's old Docker images to free their disk space (about 4 GB each)?"
+    ask_yn rm_images y "Delete Jetlink's old Docker images? ${D}(about 4 GB each)${N}"
     if [ "$rm_images" = y ]; then
       remove_docker_images
     fi
@@ -2051,8 +2268,8 @@ uninstall() {
   if [ -n "$CACHE_DIR" ] && [ -d "$CACHE_DIR" ]; then
     local size rm_cache
     size="$(as_root du -sh "$CACHE_DIR" 2>/dev/null | cut -f1)"
-    ask_yn rm_cache n "Also delete the downloaded models in $CACHE_DIR ($size)?" \
-      "Keep them if you might install Jetlink again: they take a while to download."
+    ask_yn rm_cache n "Also delete the downloaded models in $CACHE_DIR? ${D}($size)${N}" \
+      "Keep them if you might reinstall: they take a while to download."
     if [ "$rm_cache" = y ]; then
       as_root rm -rf "$CACHE_DIR"
       good "Models deleted"
@@ -2133,7 +2350,8 @@ main() {
 
   if [ "$HAD_INSTALL" = 1 ] && [ "$OPT_UPDATE" = 0 ] && [ "$OPT_RECONFIGURE" = 0 ] && [ "$INTERACTIVE" = 1 ]; then
     local keep
-    ask_yn keep y "Jetlink is already installed. Keep your current settings and update it?"
+    ask_yn keep y "Jetlink is already installed. Update it and keep your answers?" \
+      "No asks the questions again."
     [ "$keep" = y ] && OPT_UPDATE=1
   fi
   if [ "$OPT_UPDATE" = 0 ] || [ "$HAD_INSTALL" = 0 ]; then

@@ -18,7 +18,7 @@ server is only checked to load on them.
 
 Bench Jetson: Orin Nano Super 8 GB devkit, JetPack 7.2.1, TensorRT 10.16.2.10
 (FP16), MAXN SUPER with `jetson_clocks` pinning the clocks (the installer runs
-it before every start). comma four over USB 3 from the Jetson's USB-A port,
+it at every boot). comma four over USB 3 from the Jetson's USB-A port,
 with its CPU as when driving. Measured 2026-09-28 and 29.
 
 | Model | GPU time | Frame on the comma, p50 / p99: v0.6.0 | v0.7.0 |
