@@ -4,10 +4,6 @@ import JetlinkONNX
 import JetlinkRegistry
 import JetlinkServer
 
-#if canImport(Metal)
-  import Metal
-#endif
-
 /// Where onnxruntime runs a model: the sessions the graph is prepared into
 /// and what runs each, CoreML's units on Apple platforms, QNN's on a
 /// Snapdragon, the CPU provider anywhere. The raw value is what `--device`
@@ -159,25 +155,9 @@ public final class OrtBackend: EngineBackend {
     self.chip = chip.isEmpty ? "unknown" : chip
   }
 
-  /// The SoC's name on Apple platforms, which is the GPU: "Apple M1 Pro",
-  /// "Apple A17 Pro". On a Mac the CPU brand string, as the Python's gpu_name
-  /// reads it, so the two agree on a cache key. "cpu" elsewhere.
+  /// The chip's name, HostChip's: what QNN's and CoreML's artifacts are for.
   static func defaultChip() -> String {
-    #if os(macOS)
-      var size = 0
-      if sysctlbyname("machdep.cpu.brand_string", nil, &size, nil, 0) == 0, size > 1 {
-        var bytes = [CChar](repeating: 0, count: size)
-        if sysctlbyname("machdep.cpu.brand_string", &bytes, &size, nil, 0) == 0 {
-          return String(decoding: bytes.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
-        }
-      }
-    #endif
-    #if canImport(Metal)
-      let name = MTLCreateSystemDefaultDevice()?.name ?? "unknown"
-      return name.hasSuffix(" GPU") ? String(name.dropLast(4)) : name
-    #else
-      return "cpu"
-    #endif
+    HostChip.name()
   }
 
   public var runtimeVersion: String { OrtRuntime.version }

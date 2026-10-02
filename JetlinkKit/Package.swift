@@ -45,6 +45,7 @@ let package = Package(
     .library(name: "JetlinkRegistry", targets: ["JetlinkRegistry"]),
     .library(name: "JetlinkServer", targets: ["JetlinkServer"]),
     .library(name: "JetlinkORT", targets: ["JetlinkORT"]),
+    .library(name: "JetlinkLiteRT", targets: ["JetlinkLiteRT"]),
     .library(name: "jetlink", type: .dynamic, targets: ["JetlinkAndroid"]),
     .executable(name: "jetlink-server", targets: ["jetlink-server"]),
   ],
@@ -93,6 +94,7 @@ let package = Package(
     .target(
       name: "JetlinkORT", dependencies: ["JetlinkKit", "JetlinkONNX", "JetlinkServer", "COrt"],
       linkerSettings: [.linkedFramework("Metal", .when(platforms: apple))]),
+    .target(name: "JetlinkLiteRT", dependencies: ["CLiteRt", "JetlinkKit", "JetlinkONNX", "JetlinkRegistry", "JetlinkServer"]),
     .target(
       name: "CTrt",
       exclude: [tensorRT == nil ? "jl_trt.cpp" : "jl_trt_fake.c"],
