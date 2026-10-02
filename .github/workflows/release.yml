@@ -390,6 +390,7 @@ jobs:
             MAC="$(basename "$MAC")"
             printf '## Install\n\n'
             printf 'Mac (Apple silicon): [%s](https://github.com/%s/releases/download/%s/%s)\n\n' "$MAC" "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" "$MAC"
+            printf 'iPhone and iPad:\n\n[![Available on TestFlight](https://zoompilot.ai/jetlink/assets/testflight-badge.svg)](https://testflight.apple.com/join/DAsYk5sP)\n\n'
             printf 'Jetson or Linux PC:\n\n'
             printf '```bash\ncurl -fsSL https://raw.githubusercontent.com/zoompilot/jetlink/main/install.sh | bash\n```\n\n'
             printf 'It picks the server build: `jetlink-server-%s-linux-aarch64` for a Jetson, `-linux-x86_64` for a PC.\n\n' "$VERSION"
