@@ -26,8 +26,7 @@ public enum LiteRtProfile: String, CaseIterable, Sendable {
 
 /// LiteRT in process, on the GPU or the CPU: the backend for phones
 /// onnxruntime's QNN does not drive. The artifact is a directory holding the
-/// converted model, the GPU's compile cache and their manifest
-/// (LiteRtArtifact).
+/// converted model and the GPU's compile cache (LiteRtArtifact).
 ///
 /// Nothing here has run on a phone yet: the GPU path is Metal's on a Mac,
 /// and Android's OpenCL one follows LiteRT 2.2.0's documentation and source.
@@ -100,23 +99,26 @@ public final class LiteRtBackend: EngineBackend {
     try preparer.readSpec(model: model, sha256: sha256, nbytes: nbytes, frameSkip: frameSkip)
   }
 
-  /// The compile the profile asks for, its GPU cache in the artifact.
-  func options(_ artifact: URL, _ manifest: LiteRtArtifact.Manifest) -> LiteRtCompileOptions {
+  /// The compile the profile asks for, the GPU's cache in `directory`
+  /// under `cacheKey`.
+  func options(_ directory: URL, cacheKey: String) -> LiteRtCompileOptions {
     switch profile {
     case .gpu:
-      LiteRtCompileOptions(gpu: true, gpuFP16: true, cache: (artifact.appending(path: manifest.cache, directoryHint: .isDirectory), manifest.cacheKey))
+      LiteRtCompileOptions(gpu: true, gpuFP16: true, cache: (directory.appending(path: LiteRtArtifact.cache, directoryHint: .isDirectory), cacheKey))
     case .cpu:
       LiteRtCompileOptions(gpu: false, cpuThreads: LiteRtBackend.cpuThreads)
     }
   }
 
-  /// The artifact's model compiled for the profile. On the GPU every op must
-  /// be the GPU's: a model that runs partly on the CPU is a build that failed.
-  func engine(_ artifact: URL, _ manifest: LiteRtArtifact.Manifest) throws -> LiteRtEngine {
+  /// The model in `directory`, an artifact or its staging, compiled for the
+  /// profile. On the GPU every op must be the GPU's: a model that runs
+  /// partly on the CPU is a build that failed.
+  func engine(_ directory: URL, cacheKey: String) throws -> LiteRtEngine {
     let engine: LiteRtEngine
     do {
       engine = try LiteRtEngine(
-        model: artifact.appending(path: manifest.model), options: options(artifact, manifest), device: deviceTag(), label: profile.label)
+        model: directory.appending(path: LiteRtArtifact.model), options: options(directory, cacheKey: cacheKey), device: deviceTag(),
+        label: profile.label)
     } catch let error as LiteRtError where profile == .gpu {
       // A GPU-only compile fails outright on an op the GPU cannot run.
       throw LiteRtError(
@@ -149,11 +151,11 @@ public final class LiteRtBackend: EngineBackend {
       log.info("converted \(model.lastPathComponent): \(converted.summary)")
       report("convert", 1, "converted in \(Int(convertSeconds.rounded())) s")
 
-      // The cache is named for the artifact, which outlives the staging.
-      let manifest = LiteRtArtifact.Manifest(
-        model: converted.url.lastPathComponent, cache: "gpu-cache", cacheKey: artifact.deletingPathExtension().lastPathComponent)
-      try FileManager.default.createDirectory(at: staged.appending(path: manifest.cache, directoryHint: .isDirectory), withIntermediateDirectories: true)
-      try LiteRtArtifact.write(manifest, in: staged)
+      guard converted.url.lastPathComponent == LiteRtArtifact.model else {
+        throw HostError.failed("the conversion wrote \(converted.url.lastPathComponent), expected \(LiteRtArtifact.model)")
+      }
+      try FileManager.default.createDirectory(
+        at: staged.appending(path: LiteRtArtifact.cache, directoryHint: .isDirectory), withIntermediateDirectories: true)
 
       // One compile on the profile's accelerator proves the model runs there
       // whole, and leaves the GPU's cache for every load after.
@@ -162,13 +164,13 @@ public final class LiteRtBackend: EngineBackend {
       report("compile", 0, what)
       let compileStarted = Date()
       let engine = try Ticker.during(interval: 1, Ticker.paced("compile", what, took: took, report: report)) {
-        try self.engine(staged, manifest)
+        try self.engine(staged, cacheKey: LiteRtArtifact.cacheKey(artifact))
       }
       defer { engine.close() }
       let compileSeconds = Date().timeIntervalSince(compileStarted)
       report("compile", 1, "compiled in \(Int(compileSeconds.rounded())) s")
       try engine.run()
-      var meta = LiteRtArtifact.meta(self, manifest: manifest, engine: engine, model: model, started: started)
+      var meta = LiteRtArtifact.meta(self, engine: engine, model: model, started: started)
       engine.close()
       meta["convert_seconds"] = pythonRound(convertSeconds, 1)
       meta["compile_seconds"] = pythonRound(compileSeconds, 1)
@@ -181,9 +183,9 @@ public final class LiteRtBackend: EngineBackend {
 
   public func load(artifact: URL, report: @escaping ProgressFn) throws -> any Engine {
     try open()
-    let (manifest, meta) = try LiteRtArtifact.open(artifact, version: LiteRtBackend.conversionVersion)
+    let meta = try LiteRtArtifact.open(artifact)
     let (engine, seconds) = try Artifact.load(artifact, meta: meta, what: "the model", report: report) {
-      try self.engine(artifact, manifest)
+      try self.engine(artifact, cacheKey: LiteRtArtifact.cacheKey(artifact))
     }
     log.info("LiteRT on \(profile.rawValue) in \(String(format: "%.1f", seconds)) s: \(engine.label)")
     return engine

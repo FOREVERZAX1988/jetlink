@@ -22,6 +22,24 @@ package enum Artifact {
     try write(meta, to: sidecarURL(artifact))
   }
 
+  /// A built artifact's sidecar, once the artifact is one this build loads.
+  /// Throws `ArtifactInvalid`, which rebuilds it, when the sidecar's
+  /// `prepare` is not `version` (`unversioned` standing in for a sidecar
+  /// without one) or one of `files` is missing from it. `runtime` names the
+  /// backend in the message.
+  package static func open(_ artifact: URL, version: Int, unversioned: Int, runtime: String, files: [String]) throws -> [String: Any] {
+    let name = artifact.lastPathComponent
+    let meta = sidecar(artifact)
+    let built = (meta["prepare"] as? NSNumber)?.intValue ?? unversioned
+    if built != version {
+      throw ArtifactInvalid("\(name): prepared as version \(built), \(runtime) builds are now at \(version); rebuilding")
+    }
+    if let missing = files.first(where: { !FileManager.default.fileExists(atPath: artifact.appending(path: $0).path) }) {
+      throw ArtifactInvalid("\(name): \(missing) is missing")
+    }
+    return meta
+  }
+
   static func write(_ meta: [String: Any], to url: URL) throws {
     let data = try JSONSerialization.data(withJSONObject: meta, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
     // The seconds are Python's round(x, 1) floats, which keep their ".0";

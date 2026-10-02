@@ -25,18 +25,14 @@ enum OrtArtifact {
     else {
       throw ArtifactInvalid("\(name): no readable \(manifestName) inside")
     }
-    let meta = Artifact.sidecar(artifact)
-    let version = (meta["prepare"] as? NSNumber)?.intValue ?? 1
-    if version != expected {
-      throw ArtifactInvalid("\(name): prepared as version \(version), onnxruntime builds are now at \(expected); rebuilding")
+    let models = manifest.compactMap { $0["model"] as? String }
+    guard models.count == manifest.count else {
+      throw ArtifactInvalid("\(name): a session names no model")
     }
-    for entry in manifest {
-      guard let model = entry["model"] as? String, FileManager.default.fileExists(atPath: artifact.appending(path: model).path) else {
-        throw ArtifactInvalid("\(name): a session's model is missing")
-      }
-      if let problem = check(entry) {
-        throw ArtifactInvalid("\(name): \(problem)")
-      }
+    // Artifacts from before the sidecar said are version 1.
+    let meta = try Artifact.open(artifact, version: expected, unversioned: 1, runtime: "onnxruntime", files: models)
+    if let problem = manifest.lazy.compactMap(check).first {
+      throw ArtifactInvalid("\(name): \(problem)")
     }
     return (manifest, meta)
   }

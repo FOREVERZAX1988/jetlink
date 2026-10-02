@@ -106,15 +106,14 @@ struct LiteRtBackendTests {
       // The GPU keeps the queues in its own memory; the CPU reads the host's.
       #expect(engine?.stateOnDevice == (profile == .gpu && name == "tiny_stateful"))
 
-      // The artifact: the model, its manifest, the GPU's cache directory, a sidecar.
+      // The artifact: the model, the GPU's cache directory, a sidecar.
       let engines = server.cache.layout.engines
       let artifacts = try FileManager.default.contentsOfDirectory(atPath: engines.path).filter { $0.hasSuffix(".litertcache") }
       #expect(artifacts.count == 1)
       let artifact = engines.appending(path: artifacts[0])
-      let manifest = try LiteRtArtifact.open(artifact, version: LiteRtBackend.conversionVersion).manifest
-      #expect(manifest.model == "model.tflite")
-      #expect(FileManager.default.fileExists(atPath: artifact.appending(path: manifest.cache).path))
-      let meta = Artifact.sidecar(artifact)
+      #expect(FileManager.default.fileExists(atPath: artifact.appending(path: "model.tflite").path))
+      #expect(FileManager.default.fileExists(atPath: artifact.appending(path: "gpu-cache").path))
+      let meta = try LiteRtArtifact.open(artifact)
       #expect(meta["backend"] as? String == "litert")
       #expect(meta["litert"] as? String == LiteRtRuntime.version)
       #expect(meta["accelerator"] as? String == profile.label)
