@@ -110,9 +110,9 @@
     /// (the ai-edge-litert wheel's package directory): a Mac's way to try
     /// what the Android app runs on a phone without a Snapdragon.
     func litert() throws -> any EngineBackend {
-      let name = device ?? "gpu"
-      guard let profile = LiteRtProfile(rawValue: name) ?? LiteRtProfile(rawValue: "litert-\(name)") else {
-        throw HostError.invalid("LiteRT has no device \(name): gpu or cpu")
+      let name = device ?? LiteRtProfile.gpu.rawValue
+      guard let profile = LiteRtProfile(rawValue: name) else {
+        throw HostError.invalid("LiteRT has no device \(name): \(LiteRtProfile.allCases.map(\.rawValue).joined(separator: " or "))")
       }
       let backend = LiteRtBackend(profile: profile, preparer: ONNXPreparer())
       try backend.open()

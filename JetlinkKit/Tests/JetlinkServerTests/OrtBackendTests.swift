@@ -58,7 +58,7 @@ struct OrtBackendTests {
     let gpu = backend.plan(.qnnGPU, model: model, cache: nil)
     #expect(gpu.provider == "QNN" && gpu.label == "QNN(gpu)" && gpu.usesGPU)
     let cpu = backend.plan(.cpu, model: model, cache: nil)
-    #expect(cpu.provider == nil && cpu.label == "CPU" && cpu.threads == OrtBackend.cpuThreads)
+    #expect(cpu.provider == nil && cpu.label == "CPU" && cpu.threads == HostChip.cpuThreads)
     let coreML = backend.plan(.coreML("ALL"), model: model, cache: URL(fileURLWithPath: "/tmp/coreml-model"))
     #expect(coreML.provider == "CoreML" && coreML.label == "CoreML(ALL)" && coreML.usesGPU && coreML.usesNeuralEngine)
     #expect(coreML.options["ModelCacheDirectory"] == "/tmp/coreml-model")
@@ -86,6 +86,6 @@ struct OrtBackendTests {
     #expect(backend.deviceTag() == "htp-SM8650")
     #expect(backend.tag() == "ort\(sanitize(OrtRuntime.version)).htp-SM8650")
     #expect(OrtBackend(profile: .htp, preparer: ONNXPreparer(), chip: "").deviceTag() == "htp-unknown")
-    #expect(OrtBackend(profile: .cpu, preparer: ONNXPreparer()).deviceTag() == sanitize("cpu-\(OrtBackend.defaultChip())"))
+    #expect(OrtBackend(profile: .cpu, preparer: ONNXPreparer()).deviceTag() == sanitize("cpu-\(HostChip.name())"))
   }
 }

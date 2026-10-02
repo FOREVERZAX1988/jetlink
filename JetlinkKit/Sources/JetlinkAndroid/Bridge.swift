@@ -62,11 +62,11 @@
 
   // MARK: the calls
 
-  /// `config` is JSON: cache (a directory), device ("htp", "htp-whole", "gpu",
-  /// "cpu" for onnxruntime; "litert-gpu", "litert-cpu" for LiteRT),
-  /// keep_alive, keep_cpu_warm, listen, port, usb, preload, chip
-  /// (Build.SOC_MODEL) and native_library_dir. Returns nil, or why the server
-  /// could not start.
+  /// `config` is JSON: cache (a directory), backend ("ort", the default, or
+  /// "litert") and its device ("htp", "htp-whole", "gpu", "cpu" for
+  /// onnxruntime; "gpu", "cpu" for LiteRT), keep_alive, keep_cpu_warm,
+  /// listen, port, usb, preload, chip (Build.SOC_MODEL) and
+  /// native_library_dir. Returns nil, or why the server could not start.
   @_cdecl("Java_io_zoompilot_jetlink_server_Native_start")
   public func nativeStart(_ env: Env, _ cls: jclass?, _ config: jstring?) -> jstring? {
     do {
@@ -173,8 +173,7 @@
       guard let cache = config["cache"] as? String, !cache.isEmpty else {
         throw HostFailure("no cache directory")
       }
-      let deviceName = config["device"] as? String ?? OrtProfile.htp.rawValue
-      let backend = try Host.backend(deviceName, config)
+      let backend = try Host.backend(config)
       let configuration = Server.Configuration(
         port: UInt16(clamping: (config["port"] as? NSNumber)?.intValue ?? Int(Wire.defaultPort)),
         cacheRoot: URL(fileURLWithPath: cache, isDirectory: true),
@@ -208,24 +207,32 @@
       state.serverStarted()
     }
 
-    /// The backend a device names: LiteRT's profiles by their names, else
-    /// onnxruntime's.
-    static func backend(_ device: String, _ config: [String: Any]) throws -> any EngineBackend {
+    /// The backend and device the config names. A config without a backend
+    /// is onnxruntime's, as every config was before LiteRT.
+    static func backend(_ config: [String: Any]) throws -> any EngineBackend {
       let chip = config["chip"] as? String ?? ""
-      if let profile = LiteRtProfile(rawValue: device) {
+      let device = config["device"] as? String
+      switch config["backend"] as? String ?? "ort" {
+      case "litert":
+        guard let profile = LiteRtProfile(rawValue: device ?? LiteRtProfile.gpu.rawValue) else {
+          throw HostFailure("LiteRT has no device \(device ?? "")")
+        }
         let libraries = (config["native_library_dir"] as? String).flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true) }
         let backend = LiteRtBackend(profile: profile, preparer: ONNXPreparer(), libraries: libraries, chip: chip)
         // libLiteRt.so and its GPU accelerator, from the app's own libraries:
         // a phone LiteRT cannot run on says so now, not at the first build.
         try backend.open()
         return backend
+      case "ort":
+        guard let profile = OrtProfile(rawValue: device ?? OrtProfile.htp.rawValue), OrtProfile.available.contains(profile) else {
+          throw HostFailure("onnxruntime has no device \(device ?? "")")
+        }
+        return OrtBackend(
+          profile: profile, preparer: ONNXPreparer(), keepAlive: (config["keep_alive"] as? Bool) ?? true,
+          keepCPUWarm: (config["keep_cpu_warm"] as? Bool) ?? false, chip: chip)
+      case let other:
+        throw HostFailure("unknown backend \(other)")
       }
-      guard let profile = OrtProfile(rawValue: device), OrtProfile.available.contains(profile) else {
-        throw HostFailure("unknown device \(device)")
-      }
-      return OrtBackend(
-        profile: profile, preparer: ONNXPreparer(), keepAlive: (config["keep_alive"] as? Bool) ?? true,
-        keepCPUWarm: (config["keep_cpu_warm"] as? Bool) ?? false, chip: chip)
     }
 
     func stop() {

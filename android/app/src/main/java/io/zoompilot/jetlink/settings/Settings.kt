@@ -6,26 +6,40 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-/** Where the model runs, as the server names the device: an OrtProfile, or LiteRT's. */
-enum class Processor(val id: String, val title: String) {
+/** The server's backends, as its start config names them. */
+enum class Backend(val id: String) {
+    Ort("ort"),
+    LiteRt("litert"),
+}
+
+/**
+ * Where the model runs: a backend of the server's and its device, an
+ * OrtProfile or a LiteRtProfile. The device is also what Settings stores,
+ * and no two choices share one.
+ */
+enum class Processor(val backend: Backend, val device: String, val title: String) {
     /** The vision trunk on the NPU, the rest on the GPU: the Mac's split. QNN, a Snapdragon's. */
-    NpuGpu("htp", "NPU + GPU"),
+    NpuGpu(Backend.Ort, "htp", "NPU + GPU"),
 
     /** The whole model on the NPU, prepared as the iPhone's. QNN, a Snapdragon's. */
-    Npu("htp-whole", "NPU"),
+    Npu(Backend.Ort, "htp-whole", "NPU"),
 
     /** The whole model on the GPU through LiteRT, which drives any phone's: Adreno, Mali, PowerVR. */
-    Gpu("litert-gpu", "GPU"),
+    Gpu(Backend.LiteRt, "gpu", "GPU"),
 
     /** The CPU: the emulator and tests. Seconds a frame with a real model. */
-    Cpu("cpu", "CPU");
+    Cpu(Backend.Ort, "cpu", "CPU");
 
-    /** Runs on QNN, which needs a Snapdragon. */
-    val usesQnn: Boolean get() = this == NpuGpu || this == Npu
+    /** Runs on QNN, which needs a Snapdragon: onnxruntime anywhere but its CPU. */
+    val usesQnn: Boolean get() = backend == Backend.Ort && device != Cpu.device
 
     companion object {
-        /** `gpu` was QNN on the Adreno, before LiteRT drove every phone's GPU. */
-        fun of(id: String?): Processor? = if (id == "gpu") Gpu else entries.firstOrNull { it.id == id }
+        /**
+         * A stored choice. `gpu` was QNN on the Adreno before LiteRT drove
+         * every phone's GPU, and `litert-gpu` LiteRT's before the backend was
+         * a setting of its own: both are the GPU now.
+         */
+        fun of(device: String?): Processor? = if (device == "litert-gpu") Gpu else entries.firstOrNull { it.device == device }
 
         /**
          * What a phone can choose. The NPU choices run QNN, which needs a
@@ -64,7 +78,7 @@ class Settings(context: Context) {
         val next = change(state.value)
         prefs.edit()
             .putInt(PORT, next.port)
-            .putString(PROCESSOR, next.processor.id)
+            .putString(PROCESSOR, next.processor.device)
             .putBoolean(KEEP_NPU_AWAKE, next.keepNpuAwake)
             .putBoolean(KEEP_CPU_AWAKE, next.keepCpuAwake)
             .putBoolean(KEEP_SCREEN_ON, next.keepScreenOn)

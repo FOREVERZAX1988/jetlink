@@ -2,6 +2,10 @@ import CLiteRt
 import Foundation
 import JetlinkServer
 
+#if canImport(Android)
+  import Android
+#endif
+
 /// LiteRT, through the C shim in CLiteRt.
 public enum LiteRtRuntime {
   /// The release jetlink builds against and ships: CLiteRt's headers, the
@@ -34,6 +38,21 @@ public enum LiteRtRuntime {
     let text = String(decoding: names.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
     return (hardware & Int32(JL_LITERT_GPU) != 0, text)
   }
+
+  #if os(Android)
+    /// The names LiteRT's GPU accelerator looks for the vendor's OpenCL
+    /// under, which the app's manifest declares.
+    static let openCLLibraries = ["libOpenCL.so", "libOpenCL-pixel.so", "libOpenCL-car.so"]
+
+    /// Whether this process can open the vendor's OpenCL, which LiteRT's GPU
+    /// is pinned to on Android (the shim's GPU options): what a failed GPU
+    /// compile is blamed on, and what the tests run the GPU's on.
+    public static let hasOpenCL: Bool = openCLLibraries.contains { name in
+      guard let handle = dlopen(name, RTLD_NOW) else { return false }
+      dlclose(handle)
+      return true
+    }
+  #endif
 }
 
 public struct LiteRtError: Error, CustomStringConvertible {
@@ -52,16 +71,13 @@ public struct LiteRtError: Error, CustomStringConvertible {
 }
 
 /// How a model is compiled: which accelerator runs it and with what.
-struct LiteRtCompileOptions: Sendable {
-  /// The GPU alone, so an op it cannot run fails the compile rather than
-  /// quietly running on the CPU.
-  var gpu: Bool
-  /// XNNPACK's pool on the CPU.
-  var cpuThreads = 1
-  /// fp16 arithmetic on the GPU where it can.
-  var gpuFP16 = true
-  /// Where the GPU keeps what it compiled, and the key it files it under.
-  var cache: (directory: URL, key: String)?
+enum LiteRtCompileOptions: Sendable {
+  /// The GPU alone, in fp16, so an op it cannot run fails the compile
+  /// rather than quietly running on the CPU. `cache` is where it keeps the
+  /// programs it compiled, and the key it files them under.
+  case gpu(cache: (directory: URL, key: String)?)
+  /// XNNPACK on the CPU, with a pool of `threads`.
+  case cpu(threads: Int)
 }
 
 /// One compiled model: a .tflite, compiled for an accelerator, and the
@@ -73,22 +89,24 @@ final class LiteRtModel: @unchecked Sendable {
 
   /// LiteRT must be open (`LiteRtRuntime.load`).
   init(model: URL, options: LiteRtCompileOptions) throws {
-    var compiled: OpaquePointer?
-    let cacheDirectory = options.cache.map { strdup($0.directory.path) } ?? nil
-    let cacheKey = options.cache.map { strdup($0.key) } ?? nil
+    var shim = jl_litert_options()
+    var cache: (directory: URL, key: String)?
+    switch options {
+    case .gpu(let programs):
+      shim.gpu = 1
+      cache = programs
+    case .cpu(let threads):
+      shim.cpu_threads = Int32(threads)
+    }
+    let cacheDirectory = cache.flatMap { strdup($0.directory.path) }
+    let cacheKey = cache.flatMap { strdup($0.key) }
     defer {
       free(cacheDirectory)
       free(cacheKey)
     }
-    var shim = jl_litert_options(
-      accelerators: Int32(options.gpu ? JL_LITERT_GPU : JL_LITERT_CPU), cpu_threads: Int32(options.cpuThreads),
-      gpu_fp16: options.gpuFP16 ? 1 : 0, cache_dir: cacheDirectory.map { UnsafePointer($0) },
-      cache_key: cacheKey.map { UnsafePointer($0) },
-      // A phone has no room for a second copy of the weights in the GPU's
-      // layout: on an M1 Pro the whole cache of Cinque Terre V3 was 772 MB
-      // (a 2 s load against a 7 s compile). The programs alone are what an
-      // OpenCL GPU compiles slowly; Metal writes no such cache.
-      cache_programs_only: 1)
+    shim.cache_dir = UnsafePointer(cacheDirectory)
+    shim.cache_key = UnsafePointer(cacheKey)
+    var compiled: OpaquePointer?
     try model.path.withCString { path in
       try LiteRtError.check(jl_litert_model_create(path, &shim, &compiled))
     }
@@ -120,30 +138,14 @@ final class LiteRtModel: @unchecked Sendable {
   /// as the CPU does, where a GPU wants its own.
   func readsHostMemory(input index: Int) throws -> Bool {
     var host: Int32 = 0
-    try LiteRtError.check(jl_litert_model_io_host(pointer, 0, index, &host))
+    try LiteRtError.check(jl_litert_model_input_host(pointer, index, &host))
     return host != 0
   }
 
   private static func describe(_ model: OpaquePointer, output: Bool) throws -> [TensorSpec] {
-    let count = jl_litert_model_io_count(model, output ? 1 : 0)
-    var specs: [TensorSpec] = []
-    for index in 0..<count {
-      var name = [CChar](repeating: 0, count: 512)
-      var type: Int32 = 0
-      var dims = [Int64](repeating: 0, count: 16)
-      var rank = 0
+    try TensorSpec.described(count: jl_litert_model_io_count(model, output ? 1 : 0)) { index, name, type, dims, rank in
       try LiteRtError.check(jl_litert_model_io_info(model, output ? 1 : 0, index, &name, name.count, &type, &dims, dims.count, &rank))
-      let tensorName = String(decoding: name.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
-      guard let element = ElementType(rawValue: type) else {
-        throw LiteRtError("\(tensorName) has an element type jetlink does not stage")
-      }
-      let shape = dims.prefix(rank).map { Int($0) }
-      if shape.contains(where: { $0 <= 0 }) {
-        throw LiteRtError("\(tensorName) has a dynamic shape \(shape); jetlink builds fixed-shape engines")
-      }
-      specs.append(TensorSpec(name: tensorName, type: element, shape: shape))
     }
-    return specs
   }
 }
 
@@ -164,7 +166,7 @@ final class LiteRtBuffer {
   /// A zeroed buffer of the kind the accelerator works in for input `index`.
   init(_ model: LiteRtModel, input index: Int) throws {
     var buffer: OpaquePointer?
-    try LiteRtError.check(jl_litert_buffer_create(model.pointer, 0, index, &buffer))
+    try LiteRtError.check(jl_litert_buffer_create(model.pointer, index, &buffer))
     guard let buffer else { throw LiteRtError("LiteRT returned no buffer") }
     pointer = buffer
   }

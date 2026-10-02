@@ -27,4 +27,16 @@ public enum HostChip {
       return "cpu"
     #endif
   }
+
+  /// The chip a backend's artifacts are for: `chip` as the app names the
+  /// SoC, or this machine's name when it names none; "unknown" for an empty
+  /// name.
+  public static func resolve(_ chip: String?) -> String {
+    let name = chip ?? name()
+    return name.isEmpty ? "unknown" : name
+  }
+
+  /// A CPU backend's pool when it runs the whole model: half the cores,
+  /// leaving the rest to the link and the app.
+  public static var cpuThreads: Int { max(1, ProcessInfo.processInfo.activeProcessorCount / 2) }
 }

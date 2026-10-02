@@ -6,7 +6,11 @@ import JetlinkServer
 ///
 /// The host writes a frame's inputs into `hostInput(_:)`, calls `run()`, and
 /// reads `output(_:)`. LiteRT reads and writes those host buffers in place:
-/// the CPU directly, a GPU through a copy of its own each run. After
+/// the CPU directly, a GPU through a copy of its own each run. Buffers of
+/// the GPU's own, made once and written and read each frame, were no faster
+/// on Metal: Cinque Terre V3 ran 39.8 and 40.3 ms a frame that way against
+/// 39.7 and 40.1 ms through the host's buffers, outputs bit for bit the
+/// same. After
 /// `loopState`, a stateful graph's next_state_ outputs feed its state_ inputs
 /// on the next run without crossing to the host. On a GPU each pair has two
 /// buffers of GPU memory that swap roles every run; on the CPU two host

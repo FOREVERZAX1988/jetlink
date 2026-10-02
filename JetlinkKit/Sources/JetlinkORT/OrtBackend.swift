@@ -151,13 +151,7 @@ public final class OrtBackend: EngineBackend {
     self.preparer = preparer
     self.keepAlive = keepAlive
     self.keepCPUWarm = keepCPUWarm
-    let chip = chip ?? OrtBackend.defaultChip()
-    self.chip = chip.isEmpty ? "unknown" : chip
-  }
-
-  /// The chip's name, HostChip's: what QNN's and CoreML's artifacts are for.
-  static func defaultChip() -> String {
-    HostChip.name()
+    self.chip = HostChip.resolve(chip)
   }
 
   public var runtimeVersion: String { OrtRuntime.version }
@@ -169,10 +163,6 @@ public final class OrtBackend: EngineBackend {
   public func deriveSpec(model: URL, sha256: String, nbytes: Int64, frameSkip: Int) throws -> ModelSpec {
     try preparer.readSpec(model: model, sha256: sha256, nbytes: nbytes, frameSkip: frameSkip)
   }
-
-  /// The CPU provider's pool when the CPU runs the whole model: half the
-  /// cores, leaving the rest to the link and the app.
-  static var cpuThreads: Int { max(1, ProcessInfo.processInfo.activeProcessorCount / 2) }
 
   /// QNN's options for a unit, as onnxruntime 1.29 names them.
   func providerOptions(_ unit: OrtUnit) -> [String: String] {
@@ -200,7 +190,7 @@ public final class OrtBackend: EngineBackend {
     case .coreML(let units): SessionPlan(model: model, computeUnits: units, cacheDirectory: cache)
     case .htp: SessionPlan(model: model, provider: "QNN", options: providerOptions(unit), label: "QNN(htp)", usesNeuralEngine: true)
     case .qnnGPU: SessionPlan(model: model, provider: "QNN", options: providerOptions(unit), label: "QNN(gpu)", usesGPU: true)
-    case .cpu: SessionPlan(model: model, provider: nil, threads: OrtBackend.cpuThreads, label: "CPU")
+    case .cpu: SessionPlan(model: model, provider: nil, threads: HostChip.cpuThreads, label: "CPU")
     }
   }
 

@@ -268,19 +268,34 @@ static char *escaped(const char *s) {
   return out;
 }
 
+// On Android the GPU is OpenCL's alone. Left to choose, LiteRT falls back to
+// OpenGL where there is no OpenCL, a backend its own header calls
+// experimental; pinned, a phone without OpenCL fails the compile instead.
+// Metal is a Mac's only backend.
+#ifdef __ANDROID__
+_Static_assert(kLiteRtGpuBackendOpenCl == 1, "the backend line below");
+static const char gpu_backend[] = "backend = 1\n";
+#else
+static const char gpu_backend[] = "";
+#endif
+
+// fp16 arithmetic where the GPU can, and its compiled programs cached alone:
+// a phone has no room for a second copy of the weights in the GPU's layout,
+// which on an M1 Pro made the whole cache of Cinque Terre V3 772 MB (a 2 s
+// load against a 7 s compile). The programs are what an OpenCL GPU compiles
+// slowly; Metal writes no such cache.
 static char *gpu_toml(const jl_litert_options *o) {
-  int precision = o->gpu_fp16 ? kLiteRtDelegatePrecisionFp16 : kLiteRtDelegatePrecisionFp32;
   if (o->cache_dir == NULL || o->cache_key == NULL) {
-    return format("precision = %d\n", precision);
+    return format("precision = %d\n%s", kLiteRtDelegatePrecisionFp16, gpu_backend);
   }
   char *dir = escaped(o->cache_dir);
   char *key = escaped(o->cache_key);
   char *toml = NULL;
   if (dir != NULL && key != NULL) {
     toml = format(
-        "precision = %d\nserialization_dir = \"%s\"\nmodel_cache_key = \"%s\"\nserialize_program_cache = true\n"
-        "cache_only_compiled_programs = %s\n",
-        precision, dir, key, o->cache_programs_only ? "true" : "false");
+        "precision = %d\n%sserialization_dir = \"%s\"\nmodel_cache_key = \"%s\"\nserialize_program_cache = true\n"
+        "cache_only_compiled_programs = true\n",
+        kLiteRtDelegatePrecisionFp16, gpu_backend, dir, key);
   }
   free(dir);
   free(key);
@@ -376,14 +391,13 @@ static char *compile(jl_litert_model *m, const char *path, const jl_litert_optio
     return error;
   }
   TRY(LiteRtCreateOptions, &m->options);
-  TRY(LiteRtSetOptionsHardwareAccelerators, m->options, o->accelerators);
-  if ((o->accelerators & JL_LITERT_CPU) && o->cpu_threads > 0) {
-    // LrtGetCpuOptionsIdentifier()
-    error = add_toml(m->options, "xnnpack", cpu_toml(o->cpu_threads));
-  }
-  if (error == NULL && (o->accelerators & JL_LITERT_GPU)) {
+  TRY(LiteRtSetOptionsHardwareAccelerators, m->options, o->gpu ? kLiteRtHwAcceleratorGpu : kLiteRtHwAcceleratorCpu);
+  if (o->gpu) {
     // LrtGetGpuOptionsIdentifier()
     error = add_toml(m->options, "gpu_options", gpu_toml(o));
+  } else if (o->cpu_threads > 0) {
+    // LrtGetCpuOptionsIdentifier()
+    error = add_toml(m->options, "xnnpack", cpu_toml(o->cpu_threads));
   }
   if (error != NULL) {
     return error;
@@ -458,12 +472,12 @@ static char *requirements(const jl_litert_model *model, int output, size_t index
   return NULL;
 }
 
-char *jl_litert_model_io_host(const jl_litert_model *model, int output, size_t index, int *host) {
-  if (slot(model, output, index) < 0) {
-    return copy("no such input or output");
+char *jl_litert_model_input_host(const jl_litert_model *model, size_t index, int *host) {
+  if (slot(model, 0, index) < 0) {
+    return copy("no such input");
   }
   LiteRtTensorBufferRequirements req = NULL;
-  char *error = requirements(model, output, index, &req);
+  char *error = requirements(model, 0, index, &req);
   if (error != NULL) {
     return error;
   }
@@ -490,14 +504,14 @@ char *jl_litert_buffer_wrap(jl_litert_model *model, int output, size_t index, vo
   return NULL;
 }
 
-char *jl_litert_buffer_create(jl_litert_model *model, int output, size_t index, jl_litert_buffer **out) {
+char *jl_litert_buffer_create(jl_litert_model *model, size_t index, jl_litert_buffer **out) {
   *out = NULL;
-  ptrdiff_t i = slot(model, output, index);
+  ptrdiff_t i = slot(model, 0, index);
   if (i < 0) {
-    return copy("no such input or output");
+    return copy("no such input");
   }
   LiteRtTensorBufferRequirements req = NULL;
-  char *error = requirements(model, output, index, &req);
+  char *error = requirements(model, 0, index, &req);
   if (error != NULL) {
     return error;
   }

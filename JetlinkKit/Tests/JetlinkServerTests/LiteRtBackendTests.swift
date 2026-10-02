@@ -6,10 +6,6 @@ import Testing
 @testable import JetlinkLiteRT
 @testable import JetlinkServer
 
-#if canImport(Android)
-  import Android
-#endif
-
 /// LiteRT's libraries, where $JETLINK_LITERT_DIR names them: the
 /// ai-edge-litert 2.2.0 wheel's package directory on a Mac. Without them the
 /// LiteRT suite skips, so a machine without LiteRT stays green.
@@ -18,13 +14,13 @@ enum LiteRtLibraries {
     !(ProcessInfo.processInfo.environment[LiteRtRuntime.directoryVariable] ?? "").isEmpty
   }
 
-  /// The profiles a test can run here. On Android the GPU needs OpenCL:
-  /// without it LiteRT falls back to OpenGL, which in a test runner (a shell
-  /// process, no app, no EGL context) dies inside LiteRT's accelerator on a
-  /// null string, as on the emulator, where the app's server gets an error.
+  /// The profiles a test can run here: on Android the GPU only with OpenCL,
+  /// which LiteRT's GPU is pinned to there. Without it the app's server gets
+  /// a clean "no OpenCL" (seen on the emulator), but a test runner, a shell
+  /// process, dies inside LiteRT's OpenCL loader on a null string.
   static var profiles: [LiteRtProfile] {
     #if os(Android)
-      dlopen("libOpenCL.so", RTLD_NOW) != nil ? [.cpu, .gpu] : [.cpu]
+      LiteRtRuntime.hasOpenCL ? [.cpu, .gpu] : [.cpu]
     #else
       [.cpu, .gpu]
     #endif
@@ -36,40 +32,66 @@ enum LiteRtLibraries {
   }
 }
 
-/// The on-device conversion's stand-in: the .tflite that
-/// Scripts/make_litert_fixtures.py made from the same ONNX, which it finds
-/// by the uploaded model's bytes.
-struct FixtureConversion: LiteRTConverter {
-  /// The fixture handed over for each source graph.
-  var fixtures = ["tiny_queued": "tiny_queued", "tiny_stateful": "tiny_stateful"]
-  var version = 1
+/// A graph LiteRT's GPU cannot run: y = x + x on a rank-5 float tensor,
+/// which the conversion keeps rank 5 (its rewrites take only the driving
+/// models' rank-5 patterns down to rank 4). A run-time GATHER would not do:
+/// Metal runs it. The protobuf is written here field by field, as
+/// onnx.helper would write it.
+enum RankFiveAdd {
+  static func write(to url: URL) throws {
+    let node = string(1, "x") + string(1, "x") + string(2, "y") + string(3, "add") + string(4, "Add")
+    let graph = message(1, node) + string(2, "add") + value(11, "x", 1, [1, 2, 2, 2, 2]) + value(12, "y", 1, [1, 2, 2, 2, 2])
+    let model = varint(1, 8) + message(7, graph) + message(8, string(1, "") + varint(2, 17))
+    try Data(model).write(to: url)
+  }
 
-  func convert(model: URL, into directory: URL) throws -> PreparedModel {
-    let bytes = try Data(contentsOf: model)
-    guard let fixture = fixtures.first(where: { (try? Fixture.data("\($0.key).onnx")) == bytes })?.value else {
-      throw TestError("no LiteRT fixture for \(model.lastPathComponent)")
-    }
-    try FileManager.default.copyItem(at: Fixture.url("\(fixture).tflite"), to: directory.appending(path: "model.tflite"))
-    return PreparedModel(
-      parts: [PreparedModel.Part(name: "model", file: "model.tflite", weightBytes: 0)], summary: "\(fixture).tflite in place of a conversion")
+  /// A ValueInfoProto: a tensor of ONNX element type `type` and a static shape.
+  private static func value(_ field: Int, _ name: String, _ type: Int, _ dims: [Int]) -> [UInt8] {
+    let shape = dims.flatMap { message(1, varint(1, $0)) }
+    return message(field, string(1, name) + message(2, message(1, varint(1, type) + message(2, shape))))
+  }
+
+  private static func varint(_ field: Int, _ value: Int) -> [UInt8] {
+    leb(field << 3) + leb(value)
+  }
+
+  private static func message(_ field: Int, _ bytes: [UInt8]) -> [UInt8] {
+    leb(field << 3 | 2) + leb(bytes.count) + bytes
+  }
+
+  private static func string(_ field: Int, _ text: String) -> [UInt8] {
+    message(field, Array(text.utf8))
+  }
+
+  private static func leb(_ value: Int) -> [UInt8] {
+    var bytes: [UInt8] = []
+    var v = UInt64(value)
+    repeat {
+      bytes.append(UInt8(v & 0x7f) | (v > 0x7f ? 0x80 : 0))
+      v >>= 7
+    } while v > 0
+    return bytes
   }
 }
 
-/// LiteRT behind the whole server: the build through the conversion's seam,
-/// the compile, the load, the state loop on the GPU's memory or the CPU's,
-/// and the replies against Python's outputs. On a Mac the GPU is Metal's.
+/// LiteRT behind the whole server: the conversion on the device, the
+/// compile, the load, the state loop on the GPU's memory or the CPU's, and
+/// the replies against Python's outputs. On a Mac the GPU is Metal's.
 @Suite(
   "LiteRT backend", .serialized,
   .enabled(if: LiteRtLibraries.available, "LiteRT's libraries are not in $\(LiteRtRuntime.directoryVariable)"))
 struct LiteRtBackendTests {
-  func backend(_ profile: LiteRtProfile, _ conversion: FixtureConversion = FixtureConversion()) -> LiteRtBackend {
-    LiteRtBackend(profile: profile, preparer: ONNXPreparer(), converter: conversion)
+  /// Opened, as the app and the command line open theirs.
+  func backend(_ profile: LiteRtProfile) throws -> LiteRtBackend {
+    let backend = LiteRtBackend(profile: profile, preparer: ONNXPreparer())
+    try backend.open()
+    return backend
   }
 
   @Test("A comma is served Python's outputs from LiteRT", arguments: LiteRtLibraries.profiles, ["tiny_queued", "tiny_stateful"])
   func servesGoldenFrames(_ profile: LiteRtProfile, _ name: String) throws {
     let golden = try Golden(name)
-    try serve(backend: backend(profile)) { server, client in
+    try serve(backend: try backend(profile)) { server, client in
       // The weights are fp16 and the GPU computes in fp16: held to what
       // verify_parity asks of a phone, not to Python's bits.
       let (hello, count) = try client.replay(golden, exact: false)
@@ -83,19 +105,18 @@ struct LiteRtBackendTests {
       // The GPU keeps the queues in its own memory; the CPU reads the host's.
       #expect(engine?.stateOnDevice == (profile == .gpu && name == "tiny_stateful"))
 
-      // The artifact: the model, its manifest, the GPU's cache directory, a sidecar.
+      // The artifact: the model, the GPU's cache directory, a sidecar.
       let engines = server.cache.layout.engines
       let artifacts = try FileManager.default.contentsOfDirectory(atPath: engines.path).filter { $0.hasSuffix(".litertcache") }
       #expect(artifacts.count == 1)
       let artifact = engines.appending(path: artifacts[0])
-      let manifest = try LiteRtArtifact.open(artifact, version: 1).manifest
-      #expect(manifest.model == "model.tflite")
-      #expect(FileManager.default.fileExists(atPath: artifact.appending(path: manifest.cache).path))
-      let meta = Artifact.sidecar(artifact)
+      #expect(FileManager.default.fileExists(atPath: artifact.appending(path: "model.tflite").path))
+      #expect(FileManager.default.fileExists(atPath: artifact.appending(path: "gpu-cache").path))
+      let meta = try LiteRtArtifact.open(artifact)
       #expect(meta["backend"] as? String == "litert")
       #expect(meta["litert"] as? String == LiteRtRuntime.version)
       #expect(meta["accelerator"] as? String == profile.label)
-      #expect(meta["prepare"] as? Int == 1)
+      #expect(meta["prepare"] as? Int == LiteRtBackend.conversionVersion)
       #expect(((meta["artifact_bytes"] as? NSNumber)?.int64Value ?? 0) > 0)
     }
   }
@@ -103,7 +124,7 @@ struct LiteRtBackendTests {
   @Test("Reset empties the looped state, in the GPU's memory as in the host's", arguments: LiteRtLibraries.profiles)
   func resetsState(_ profile: LiteRtProfile) throws {
     let temp = try TemporaryDirectory()
-    let backend = backend(profile)
+    let backend = try backend(profile)
     let artifact = temp.url.appending(path: "tiny.litertcache")
     try backend.build(model: TinyModel.stateful, artifact: artifact, report: { _, _, _ in }, metaExtra: [:])
     let engine = try #require(try backend.load(artifact: artifact, report: { _, _, _ in }) as? LiteRtEngine)
@@ -148,15 +169,16 @@ struct LiteRtBackendTests {
     .enabled(if: LiteRtLibraries.profiles.contains(.gpu), "no OpenCL for LiteRT's GPU here"))
   func gpuRunsEveryOpOrNothing() throws {
     let temp = try TemporaryDirectory()
-    let conversion = FixtureConversion(fixtures: ["tiny_stateful": "tiny_stateful_5d"])
-    let artifact = temp.url.appending(path: "tiny.litertcache")
+    let model = temp.url.appending(path: "add.onnx")
+    try RankFiveAdd.write(to: model)
+    let artifact = temp.url.appending(path: "add.litertcache")
     #expect {
-      try backend(.gpu, conversion).build(model: TinyModel.stateful, artifact: artifact, report: { _, _, _ in }, metaExtra: [:])
+      try backend(.gpu).build(model: model, artifact: artifact, report: { _, _, _ in }, metaExtra: [:])
     } throws: { error in
       (error as? LiteRtError)?.description.contains("could not compile the model for the GPU") == true
     }
     #expect(!FileManager.default.fileExists(atPath: artifact.path))
-    try backend(.cpu, conversion).build(model: TinyModel.stateful, artifact: artifact, report: { _, _, _ in }, metaExtra: [:])
+    try backend(.cpu).build(model: model, artifact: artifact, report: { _, _, _ in }, metaExtra: [:])
     #expect(FileManager.default.fileExists(atPath: artifact.appending(path: "model.tflite").path))
   }
 
@@ -165,9 +187,11 @@ struct LiteRtBackendTests {
     let temp = try TemporaryDirectory()
     let artifact = temp.url.appending(path: "tiny.litertcache")
     try backend(.cpu).build(model: TinyModel.queued, artifact: artifact, report: { _, _, _ in }, metaExtra: [:])
-    var newer = FixtureConversion()
-    newer.version = 2
-    #expect(throws: ArtifactInvalid.self) { try backend(.cpu, newer).load(artifact: artifact, report: { _, _, _ in }) }
+    try backend(.cpu).load(artifact: artifact, report: { _, _, _ in }).close()
+    var meta = Artifact.sidecar(artifact)
+    meta["prepare"] = LiteRtBackend.conversionVersion + 1
+    try Artifact.writeSidecar(artifact, meta)
+    #expect(throws: ArtifactInvalid.self) { try backend(.cpu).load(artifact: artifact, report: { _, _, _ in }) }
     #expect(throws: ArtifactInvalid.self) { try backend(.cpu).load(artifact: temp.url.appending(path: "missing.litertcache"), report: { _, _, _ in }) }
   }
 }
@@ -177,12 +201,13 @@ struct LiteRtBackendTests {
 struct LiteRtProfileTests {
   @Test("The profiles are the apps' device names, and the tag names the chip")
   func profiles() {
-    #expect(LiteRtProfile.allCases.map(\.rawValue) == ["litert-gpu", "litert-cpu"])
+    #expect(LiteRtProfile.allCases.map(\.rawValue) == ["gpu", "cpu"])
     let backend = LiteRtBackend(profile: .gpu, preparer: ONNXPreparer(), chip: "Tensor G5")
     #expect(backend.name == "litert" && backend.suffix == ".litertcache")
-    #expect(backend.deviceTag() == "litert-gpu-Tensor_G5")
-    #expect(backend.tag() == "litert2.2.0.litert-gpu-Tensor_G5")
-    #expect(LiteRtBackend(profile: .cpu, preparer: ONNXPreparer()).deviceTag() == sanitize("litert-cpu-\(HostChip.name())"))
+    #expect(backend.deviceTag() == "gpu-Tensor_G5")
+    #expect(backend.tag() == "litert2.2.0.gpu-Tensor_G5")
+    #expect(LiteRtBackend(profile: .cpu, preparer: ONNXPreparer()).deviceTag() == sanitize("cpu-\(HostChip.name())"))
+    #expect(LiteRtBackend(profile: .gpu, preparer: ONNXPreparer(), chip: "").deviceTag() == "gpu-unknown")
   }
 }
 
@@ -192,7 +217,7 @@ struct LiteRtProfileTests {
 /// and the frame time ($JETLINK_LITERT_BENCH_FRAMES of them, 200 by default),
 /// and writes the driving output of each recorded frame to
 /// outputs.litert.bin for a parity check against onnxruntime's.
-/// $JETLINK_LITERT_BENCH_DEVICE is litert-gpu (the default) or litert-cpu.
+/// $JETLINK_LITERT_BENCH_DEVICE is gpu (the default) or cpu.
 @Suite(
   "LiteRT bench", .serialized,
   .enabled(if: LiteRtLibraries.available && LiteRtLibraries.bench != nil, "no LiteRT, or no model in $JETLINK_LITERT_BENCH"))
@@ -205,9 +230,7 @@ struct LiteRtBenchTests {
     let total = Int(environment["JETLINK_LITERT_BENCH_FRAMES"] ?? "") ?? 200
     try LiteRtRuntime.load()
     let compileStarted = DispatchTime.now()
-    let options =
-      profile == .gpu ? LiteRtCompileOptions(gpu: true, gpuFP16: true) : LiteRtCompileOptions(gpu: false, cpuThreads: LiteRtBackend.cpuThreads)
-    let engine = try LiteRtEngine(model: directory.appending(path: "model.tflite"), options: options, device: "bench", label: profile.label)
+    let engine = try LiteRtEngine(model: directory.appending(path: "model.tflite"), options: profile.options(), device: "bench", label: profile.label)
     defer { engine.close() }
     let compileMs = Double(DispatchTime.now().uptimeNanoseconds - compileStarted.uptimeNanoseconds) / 1e6
     #expect(engine.fullyAccelerated || profile == .cpu)
@@ -234,11 +257,12 @@ struct LiteRtBenchTests {
       if i < recorded { outputs.append(scratch) }
     }
     try outputs.write(to: directory.appending(path: "outputs.litert.bin"))
-    let steady = times.dropFirst(2).sorted()
-    let at = { (q: Double) in steady[min(steady.count - 1, Int(q * Double(steady.count)))] }
+    let steady = Array(times.dropFirst(2))
+    let stats = BenchmarkStats.of(steady)
     print(
       String(
-        format: "LiteRT bench %@ (%@): compile %.0f ms, first frame %.1f ms, then p50 %.2f ms p99 %.2f ms max %.2f ms over %d frames; %d recorded",
-        profile.rawValue, engine.notes, compileMs, times[0], at(0.5), at(0.99), steady.last ?? 0, steady.count, recorded))
+        format:
+          "LiteRT bench %@ (%@): compile %.0f ms, first frame %.1f ms, then mean %.2f ms p50 %.2f ms p99 %.2f ms max %.2f ms over %d frames; %d recorded",
+        profile.rawValue, engine.notes, compileMs, times[0], stats.mean, stats.p50, stats.p99, stats.max, steady.count, recorded))
   }
 }
