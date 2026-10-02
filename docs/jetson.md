@@ -92,9 +92,8 @@ on its next `jetlink update`, keeping its answers, models and prepared engines.
 Always-on power: leave both cables connected. The Jetson sleeps when parked and
 wakes when you start the car.
 
-Read [daily use](using-jetlink.md) before driving. A phone on the same
-network can watch the server on its [status page](using-jetlink.md#status-page);
-`jetlink status` prints the address. Frame times per model on a Jetson:
+Read [daily use](using-jetlink.md) before driving. Watch it from your phone:
+[status page](using-jetlink.md#status-page). Frame times per model on a Jetson:
 [performance](status.md#measured-performance).
 
 <a id="troubleshooting"></a>
