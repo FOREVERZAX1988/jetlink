@@ -208,6 +208,46 @@ import Testing
     #expect(maxError(try Self.run(file, ["x": x])["out"]!, want) < 1e-5)
   }
 
+  /// Two ConvNeXt blocks: depthwise convolution, a stretch in NHWC, back to
+  /// NCHW for the layer scale and the residual add. The TRANSPOSEs move past
+  /// the multiply and the add and cancel, so only the way in and the way out
+  /// are left. The layer scale has 1024 channels, so it moves as an fp16
+  /// constant behind a DEQUANTIZE of its own.
+  @Test func convNeXtBlocksChainInNHWC() throws {
+    let c = 1024
+    var v = Values(seed: 17)
+    let x = v(c * 4)
+    let w = [v(c * 9), v(c * 9)]
+    let gamma = [v(c), v(c)]
+    var g = OnnxGraphBuilder()
+    g.input("x", Self.f32, [1, Int64(c), 2, 2])
+    var previous = "x"
+    for k in 0..<2 {
+      g.fp16("w\(k)", [Int64(c), 1, 3, 3], w[k])
+      g.fp16("gamma\(k)", [1, Int64(c), 1, 1], gamma[k])
+      g.node("Conv", [previous, "w\(k)"], ["dw\(k)"], [("group", .int(Int64(c))), ("pads", .ints([1, 1, 1, 1]))])
+      g.node("Transpose", ["dw\(k)"], ["nhwc\(k)"], [("perm", .ints([0, 2, 3, 1]))])
+      g.node("Relu", ["nhwc\(k)"], ["mlp\(k)"])
+      g.node("Transpose", ["mlp\(k)"], ["nchw\(k)"], [("perm", .ints([0, 3, 1, 2]))])
+      g.node("Mul", ["nchw\(k)", "gamma\(k)"], ["scaled\(k)"])
+      g.node("Add", [previous, "scaled\(k)"], ["block\(k)"])
+      previous = "block\(k)"
+    }
+    g.output("block1", Self.f32, [1, Int64(c), 2, 2])
+    let (file, report) = try g.convert()
+    #expect(file.count("TRANSPOSE") == 2)
+    #expect(report.transposesMoved > 0)
+    let gammas = file.operators.filter { $0.op == "MUL" }.map { file.tensors[$0.inputs[1]] }
+    #expect(gammas.allSatisfy { $0.shape == [1, 1, 1, c] })
+
+    var want = x
+    for k in 0..<2 {
+      let dw = Self.conv(want, [1, c, 2, 2], w[k], [c, 1, 3, 3], nil, pads: [1, 1, 1, 1], strides: [1, 1], dilations: [1, 1], group: c)
+      want = want.indices.map { want[$0] + max(dw.values[$0], 0) * gamma[k][$0 / 4] }
+    }
+    #expect(maxError(try Self.run(file, ["x": x])["block1"]!, want) < 1e-4)
+  }
+
   // MARK: Gemm and MatMul
 
   @Test func gemmIsFullyConnected() throws {

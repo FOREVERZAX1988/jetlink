@@ -9,8 +9,9 @@ import Foundation
 /// 2. every node lowered to TFLite operators (`LiteRTLowering`), keeping
 ///    ONNX's layout, names and I/O types;
 /// 3. TRANSPOSE pairs the lowering left back to back taken out (the NHWC
-///    convolutions meet the graph's own NHWC permutes), and RESHAPEs of
-///    RESHAPEs joined (the views around rank-5 layout ops meet);
+///    convolutions meet the graph's own NHWC permutes), TRANSPOSEs moved
+///    past elementwise operators to meet the ones that undo them, and
+///    RESHAPEs of RESHAPEs joined (the views around rank-5 layout ops meet);
 /// 4. the flatbuffer written, then every weight after it, each referenced by
 ///    offset and size: schema 3c's layout for models over 2 GB, used for every
 ///    model here so the weights can stream.
@@ -33,6 +34,8 @@ public enum LiteRTPreparation {
     public let lowerings: [String: Int]
     /// TRANSPOSEs taken out after the lowering.
     public let transposesRemoved: Int
+    /// TRANSPOSEs moved past an elementwise operator to meet their inverse.
+    public let transposesMoved: Int
     /// RESHAPEs that read another RESHAPE's input instead, or went.
     public let reshapesFused: Int
     public let tensors: Int
@@ -69,12 +72,15 @@ public enum LiteRTPreparation {
     var lowered = try LiteRTLowering.lower(g, opset: opset, src)
     var removed = 0
     var fused = 0
+    var moved = 0
     while true {
       let r = TFLiteOptimizer.cancelTransposes(&lowered)
       let f = TFLiteOptimizer.fuseReshapes(&lowered)
+      let m = TFLiteOptimizer.sinkTransposes(&lowered)
       removed += r
       fused += f
-      if r + f == 0 { break }
+      moved += m
+      if r + f + m == 0 { break }
     }
     let (tflite, buffers) = TFLiteOptimizer.compact(lowered)
 
@@ -127,7 +133,7 @@ public enum LiteRTPreparation {
     return Report(
       url: url, rewrites: rewrites, operators: operators,
       lowerings: lowered.counts,
-      transposesRemoved: removed, reshapesFused: fused, tensors: tflite.tensors.count, flatbufferBytes: flatbuffer.count,
+      transposesRemoved: removed, transposesMoved: moved, reshapesFused: fused, tensors: tflite.tensors.count, flatbufferBytes: flatbuffer.count,
       weightBytes: Int64(file.count - flatbuffer.count), fileBytes: Int64(file.count))
   }
 
@@ -270,6 +276,125 @@ enum TFLiteOptimizer {
     // The bypassed RESHAPEs read nothing anyone needs now; compact drops them.
     l.model.operators.removeAll { $0.op == .reshape && same[$0.outputs[0]] != nil }
     return changed + same.count
+  }
+
+  static let unaryOps: Set<TFLite.Op> = [.abs, .exp, .gelu, .log, .logistic, .neg, .relu, .rsqrt, .sqrt, .tanh]
+  static let binaryOps: Set<TFLite.Op> = [.add, .sub, .mul, .div, .maximum, .minimum]
+
+  /// Moves a TRANSPOSE past the elementwise operator that reads it, so that
+  /// it can meet the TRANSPOSE that undoes it further on. A ConvNeXt block
+  /// runs NHWC from its depthwise convolution to its last linear, then the
+  /// graph permutes back to NCHW for the layer scale and the residual add,
+  /// and the next block's convolution permutes to NHWC again; moved past the
+  /// multiply and the add, the two meet and cancel, and the blocks chain in
+  /// NHWC. A TRANSPOSE only moves when that costs nothing: the elementwise
+  /// operator is the only reader of what it makes, the result is no larger,
+  /// and every other operand is a constant (read in the new layout), comes
+  /// out of the same TRANSPOSE, or is already there untransposed. Returns
+  /// how many moved.
+  static func sinkTransposes(_ l: inout LiteRTLowering) -> Int {
+    var moved = 0
+    while let change = nextSink(l) {
+      apply(change, &l)
+      moved += 1
+    }
+    return moved
+  }
+
+  private struct Sink {
+    /// The elementwise operator, and what it reads in the moved layout.
+    let op: Int
+    let inputs: [Int]
+    let perm: [Int]
+    /// Constants to read in the moved layout: operand position and shape.
+    let constants: [(position: Int, shape: [Int])]
+  }
+
+  private static func inverse(_ p: [Int]) -> [Int] {
+    var inverse = [Int](repeating: 0, count: p.count)
+    for (j, axis) in p.enumerated() { inverse[axis] = j }
+    return inverse
+  }
+
+  private static func nextSink(_ l: LiteRTLowering) -> Sink? {
+    var producer: [Int: Int] = [:]
+    var readers: [Int: [Int]] = [:]
+    for (k, o) in l.model.operators.enumerated() {
+      for t in o.outputs { producer[t] = k }
+      for t in o.inputs where t >= 0 { readers[t, default: []].append(k) }
+    }
+    let graphOutputs = Set(l.model.outputs)
+    func transposeOf(_ t: Int) -> (input: Int, perm: [Int])? {
+      guard let p = producer[t], l.model.operators[p].op == .transpose, let perm = perm(l, l.model.operators[p]) else { return nil }
+      return (l.model.operators[p].inputs[0], perm)
+    }
+    func isConstant(_ t: Int) -> Bool {
+      if l.model.tensors[t].buffer > 0 { return true }
+      guard let p = producer[t], l.model.operators[p].op == .dequantize else { return false }
+      return l.model.tensors[l.model.operators[p].inputs[0]].buffer > 0
+    }
+    for (k, o) in l.model.operators.enumerated() where unaryOps.contains(o.op) || binaryOps.contains(o.op) {
+      let out = l.model.tensors[o.outputs[0]].shape
+      for (i, a) in o.inputs.enumerated() {
+        guard let (source, p) = transposeOf(a), readers[a] == [k], !graphOutputs.contains(a), l.model.tensors[a].shape == out else {
+          continue
+        }
+        let back = inverse(p)
+        var inputs = o.inputs
+        inputs[i] = source
+        var constants: [(position: Int, shape: [Int])] = []
+        var movable = true
+        for (j, b) in o.inputs.enumerated() where j != i {
+          if let (bSource, q) = transposeOf(b), q == p {
+            inputs[j] = bSource
+          } else if let r = readers[b]?.first(where: { l.model.operators[$0].op == .transpose && perm(l, l.model.operators[$0]) == back }) {
+            inputs[j] = l.model.operators[r].outputs[0]
+          } else if isConstant(b), l.model.tensors[b].shape.count <= p.count {
+            let shape = l.model.tensors[b].shape
+            let padded = [Int](repeating: 1, count: p.count - shape.count) + shape
+            let view = back.map { padded[$0] }
+            // Only a view of the same bytes: the axes that are not 1 keep their order.
+            guard padded.filter({ $0 != 1 }) == view.filter({ $0 != 1 }) else {
+              movable = false
+              break
+            }
+            constants.append((j, view))
+          } else {
+            movable = false
+            break
+          }
+        }
+        if movable { return Sink(op: k, inputs: inputs, perm: p, constants: constants) }
+      }
+    }
+    return nil
+  }
+
+  private static func apply(_ s: Sink, _ l: inout LiteRTLowering) {
+    var o = l.model.operators[s.op]
+    var inputs = s.inputs
+    var dequantizes: [TFLite.Operator] = []
+    for (position, shape) in s.constants {
+      let t = l.model.tensors[o.inputs[position]]
+      if t.buffer > 0 {
+        inputs[position] = l.addTensor("\(t.name)__moved", shape, t.type, buffer: t.buffer)
+      } else if let d = l.model.operators.first(where: { $0.op == .dequantize && $0.outputs[0] == o.inputs[position] }) {
+        // The same fp16 bytes, read in the new shape by a DEQUANTIZE of its own.
+        let narrow = l.model.tensors[d.inputs[0]]
+        let moved = l.addTensor("\(narrow.name)__moved", shape, narrow.type, buffer: narrow.buffer)
+        inputs[position] = l.addTensor("\(t.name)__moved", shape, t.type)
+        dequantizes.append(TFLite.Operator(op: .dequantize, inputs: [moved], outputs: [inputs[position]]))
+      }
+    }
+    let z = l.model.tensors[o.outputs[0]]
+    let result = l.addTensor("\(z.name)__moved", inverse(s.perm).map { z.shape[$0] }, z.type)
+    let transpose = TFLite.Operator(
+      op: .transpose, inputs: [result, l.int32Tensor(s.perm, "\(z.name)__perm")], outputs: o.outputs, options: .transpose)
+    o.inputs = inputs
+    o.outputs = [result]
+    l.model.operators[s.op] = o
+    l.model.operators.insert(transpose, at: s.op + 1)
+    l.model.operators.insert(contentsOf: dequantizes, at: 0)
   }
 
   /// A TRANSPOSE's permutation, from its constant second input.
