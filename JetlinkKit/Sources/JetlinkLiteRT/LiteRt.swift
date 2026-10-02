@@ -2,6 +2,10 @@ import CLiteRt
 import Foundation
 import JetlinkServer
 
+#if canImport(Android)
+  import Android
+#endif
+
 /// LiteRT, through the C shim in CLiteRt.
 public enum LiteRtRuntime {
   /// The release jetlink builds against and ships: CLiteRt's headers, the
@@ -34,6 +38,21 @@ public enum LiteRtRuntime {
     let text = String(decoding: names.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
     return (hardware & Int32(JL_LITERT_GPU) != 0, text)
   }
+
+  #if os(Android)
+    /// The names LiteRT's GPU accelerator looks for the vendor's OpenCL
+    /// under, which the app's manifest declares.
+    static let openCLLibraries = ["libOpenCL.so", "libOpenCL-pixel.so", "libOpenCL-car.so"]
+
+    /// Whether this process can open the vendor's OpenCL, which LiteRT's GPU
+    /// is pinned to on Android (the shim's GPU options): what a failed GPU
+    /// compile is blamed on, and what the tests run the GPU's on.
+    public static let hasOpenCL: Bool = openCLLibraries.contains { name in
+      guard let handle = dlopen(name, RTLD_NOW) else { return false }
+      dlclose(handle)
+      return true
+    }
+  #endif
 }
 
 public struct LiteRtError: Error, CustomStringConvertible {

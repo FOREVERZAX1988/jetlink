@@ -119,6 +119,13 @@ public final class LiteRtBackend: EngineBackend {
         options: profile.options(cache: (directory.appending(path: LiteRtArtifact.cache, directoryHint: .isDirectory), cacheKey)),
         device: deviceTag(), label: profile.label)
     } catch let error as LiteRtError where profile == .gpu {
+      #if os(Android)
+        if !LiteRtRuntime.hasOpenCL {
+          throw LiteRtError(
+            "no OpenCL: LiteRT's GPU runs on OpenCL here, and \(chip) gives apps none of "
+              + "\(LiteRtRuntime.openCLLibraries.joined(separator: ", ")) (\(error.description)); the CPU profile runs every op")
+        }
+      #endif
       // A GPU-only compile fails outright on an op the GPU cannot run.
       throw LiteRtError(
         "LiteRT could not compile the model for the GPU on \(chip) (\(error.description)); LiteRT's log names any op the GPU cannot run, "

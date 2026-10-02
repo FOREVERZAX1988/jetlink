@@ -6,10 +6,6 @@ import Testing
 @testable import JetlinkLiteRT
 @testable import JetlinkServer
 
-#if canImport(Android)
-  import Android
-#endif
-
 /// LiteRT's libraries, where $JETLINK_LITERT_DIR names them: the
 /// ai-edge-litert 2.2.0 wheel's package directory on a Mac. Without them the
 /// LiteRT suite skips, so a machine without LiteRT stays green.
@@ -18,13 +14,13 @@ enum LiteRtLibraries {
     !(ProcessInfo.processInfo.environment[LiteRtRuntime.directoryVariable] ?? "").isEmpty
   }
 
-  /// The profiles a test can run here. On Android the GPU needs OpenCL:
-  /// without it LiteRT falls back to OpenGL, which in a test runner (a shell
-  /// process, no app, no EGL context) dies inside LiteRT's accelerator on a
-  /// null string, as on the emulator, where the app's server gets an error.
+  /// The profiles a test can run here: on Android the GPU only with OpenCL,
+  /// which LiteRT's GPU is pinned to there. Without it the app's server gets
+  /// a clean "no OpenCL" (seen on the emulator), but a test runner, a shell
+  /// process, dies inside LiteRT's OpenCL loader on a null string.
   static var profiles: [LiteRtProfile] {
     #if os(Android)
-      dlopen("libOpenCL.so", RTLD_NOW) != nil ? [.cpu, .gpu] : [.cpu]
+      LiteRtRuntime.hasOpenCL ? [.cpu, .gpu] : [.cpu]
     #else
       [.cpu, .gpu]
     #endif

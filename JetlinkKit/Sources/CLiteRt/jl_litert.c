@@ -268,6 +268,17 @@ static char *escaped(const char *s) {
   return out;
 }
 
+// On Android the GPU is OpenCL's alone. Left to choose, LiteRT falls back to
+// OpenGL where there is no OpenCL, a backend its own header calls
+// experimental; pinned, a phone without OpenCL fails the compile instead.
+// Metal is a Mac's only backend.
+#ifdef __ANDROID__
+_Static_assert(kLiteRtGpuBackendOpenCl == 1, "the backend line below");
+static const char gpu_backend[] = "backend = 1\n";
+#else
+static const char gpu_backend[] = "";
+#endif
+
 // fp16 arithmetic where the GPU can, and its compiled programs cached alone:
 // a phone has no room for a second copy of the weights in the GPU's layout,
 // which on an M1 Pro made the whole cache of Cinque Terre V3 772 MB (a 2 s
@@ -275,16 +286,16 @@ static char *escaped(const char *s) {
 // slowly; Metal writes no such cache.
 static char *gpu_toml(const jl_litert_options *o) {
   if (o->cache_dir == NULL || o->cache_key == NULL) {
-    return format("precision = %d\n", kLiteRtDelegatePrecisionFp16);
+    return format("precision = %d\n%s", kLiteRtDelegatePrecisionFp16, gpu_backend);
   }
   char *dir = escaped(o->cache_dir);
   char *key = escaped(o->cache_key);
   char *toml = NULL;
   if (dir != NULL && key != NULL) {
     toml = format(
-        "precision = %d\nserialization_dir = \"%s\"\nmodel_cache_key = \"%s\"\nserialize_program_cache = true\n"
+        "precision = %d\n%sserialization_dir = \"%s\"\nmodel_cache_key = \"%s\"\nserialize_program_cache = true\n"
         "cache_only_compiled_programs = true\n",
-        kLiteRtDelegatePrecisionFp16, dir, key);
+        kLiteRtDelegatePrecisionFp16, gpu_backend, dir, key);
   }
   free(dir);
   free(key);
