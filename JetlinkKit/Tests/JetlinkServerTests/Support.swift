@@ -212,11 +212,12 @@ extension CommaClient {
   }
 
   /// Hello, the model, then Python's golden frames, each reply checked against
-  /// Python's output: bit for bit on Apple, by correlation elsewhere. Every
-  /// other frame asks for the whole vector (WANT_HIDDEN); the rest get it less
-  /// hidden_state. Returns the hello and the frames sent.
+  /// Python's output: bit for bit on Apple, by correlation elsewhere and
+  /// wherever `exact` is false. Every other frame asks for the whole vector
+  /// (WANT_HIDDEN); the rest get it less hidden_state. Returns the hello and
+  /// the frames sent.
   @discardableResult
-  func replay(_ golden: Golden) throws -> (hello: [String: Any], frames: Int) {
+  func replay(_ golden: Golden, exact: Bool = Golden.exact) throws -> (hello: [String: Any], frames: Int) {
     let hello = try hello()
     let ready = try ensureEngine(model: golden.model, sha256: golden.sha256)
     let spec = try ModelSpec.from(ready["spec"] as! [String: Any])
@@ -238,17 +239,12 @@ extension CommaClient {
         expected.removeSubrange((hidden.lowerBound * 4)..<(hidden.upperBound * 4))
       }
       let got = Data(reply.payload[Wire.inferRespSize...])
-      #if os(Android) || os(Linux)
-        // onnxruntime's Android and Linux builds run an fp16 graph's MatMul
-        // and ReduceMean in fp16 where the Apple build does not, so
-        // tiny_queued (all fp16) lands within about 3% of Python's and
-        // tiny_stateful (fp32) bit for bit. Held to what verify_parity asks of
-        // a phone instead.
+      if exact {
+        #expect(got == expected, "frame \(i) differs from Python's by up to \(Golden.worstDifference(got, expected))")
+      } else {
         let correlation = Golden.correlation(got, expected)
         #expect(correlation >= 0.999, "frame \(i) correlates \(correlation) with Python's, differing by up to \(Golden.worstDifference(got, expected))")
-      #else
-        #expect(got == expected, "frame \(i) differs from Python's by up to \(Golden.worstDifference(got, expected))")
-      #endif
+      }
     }
     return (hello, count)
   }
@@ -287,6 +283,19 @@ final class TestClient: CommaClient {
 
 /// A tiny model, its identity, and the frames and outputs Python recorded.
 struct Golden {
+  /// Whether onnxruntime's CPU provider here computes Python's outputs bit
+  /// for bit. Its Android and Linux builds run an fp16 graph's MatMul and
+  /// ReduceMean in fp16 where the Apple build does not, so tiny_queued (all
+  /// fp16) lands within about 3% of Python's and tiny_stateful (fp32) bit for
+  /// bit; there replies are held to what verify_parity asks of a phone.
+  static var exact: Bool {
+    #if os(Android) || os(Linux)
+      false
+    #else
+      true
+    #endif
+  }
+
   /// Pearson correlation of two runs of float32 outputs, as verify_parity
   /// computes it.
   static func correlation(_ a: Data, _ b: Data) -> Double {

@@ -78,6 +78,17 @@ val onnxruntimeAar: Configuration by configurations.creating {
     isTransitive = false
 }
 
+/**
+ * The LiteRT AAR on its own, for its native libraries alone: libLiteRt.so and
+ * its GPU accelerator, which the server opens from nativeLibraryDir. Its
+ * Kotlin API and what that pulls in (litert-api, Guava, Play's AI delivery)
+ * are not wanted.
+ */
+val litertAar: Configuration by configurations.creating {
+    isCanBeConsumed = false
+    isTransitive = false
+}
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
@@ -97,6 +108,7 @@ dependencies {
     debugImplementation(libs.compose.ui.tooling)
 
     onnxruntimeAar(variantOf(libs.onnxruntime.qnn) { artifactType("aar") })
+    litertAar(variantOf(libs.litert) { artifactType("aar") })
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
@@ -143,8 +155,35 @@ val swiftBuild = tasks.register<SwiftBuild>("swiftBuild") {
     outputDir.set(layout.buildDirectory.dir("swift/jniLibs"))
 }
 
+/** LiteRT's runtime and GPU accelerator out of its AAR, for arm64 as the rest. */
+abstract class LiteRtLibraries @Inject constructor(
+    private val files: FileSystemOperations,
+    private val archives: ArchiveOperations,
+) : DefaultTask() {
+    @get:InputFiles @get:PathSensitive(PathSensitivity.NONE) abstract val aar: ConfigurableFileCollection
+    @get:OutputDirectory abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun extract() {
+        files.sync {
+            from(archives.zipTree(aar.singleFile)) {
+                include("jni/arm64-v8a/libLiteRt.so", "jni/arm64-v8a/libLiteRtClGlAccelerator.so")
+                eachFile { path = "arm64-v8a/$name" }
+            }
+            includeEmptyDirs = false
+            into(outputDir)
+        }
+    }
+}
+
+val liteRtLibraries = tasks.register<LiteRtLibraries>("liteRtLibraries") {
+    aar.from(litertAar)
+    outputDir.set(layout.buildDirectory.dir("litert/jniLibs"))
+}
+
 androidComponents {
     onVariants { variant ->
         variant.sources.jniLibs?.addGeneratedSourceDirectory(swiftBuild, SwiftBuild::outputDir)
+        variant.sources.jniLibs?.addGeneratedSourceDirectory(liteRtLibraries, LiteRtLibraries::outputDir)
     }
 }

@@ -172,6 +172,17 @@ struct ConvertTests {
     #expect(out == [7])
   }
 
+  @Test("float16 back to uint8 is exact for every byte an image queue holds, and stops at count")
+  func f16ToU8() {
+    let bytes = (0...255).map { UInt8($0) }
+    var halves = [UInt16](repeating: 0, count: 256)
+    bytes.withUnsafeBytes { s in halves.withUnsafeMutableBytes { d in Convert.u8ToF16(s.baseAddress!, d.baseAddress!, count: 256) } }
+    var back = [UInt8](repeating: 7, count: 257)
+    halves.withUnsafeBufferPointer { h in back.withUnsafeMutableBytes { d in Convert.f16ToU8(h.baseAddress!, d.baseAddress!, count: 256) } }
+    #expect(Array(back.prefix(256)) == bytes)
+    #expect(back[256] == 7)
+  }
+
   @Test("allFinite finds any NaN or infinity, wherever it is")
   func allFinite() {
     let finite: [Float] = (0..<1029).map { Float($0) * 1.5e35 - 7.7e37 } + [.greatestFiniteMagnitude, -.greatestFiniteMagnitude, .leastNonzeroMagnitude, -0.0]

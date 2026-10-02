@@ -2,6 +2,7 @@
   import Android
   import Foundation
   import JetlinkKit
+  import JetlinkLiteRT
   import JetlinkLog
   import JetlinkORT
   import JetlinkServer
@@ -62,7 +63,8 @@
   // MARK: the calls
 
   /// `config` is JSON: cache (a directory), device ("htp", "htp-whole", "gpu",
-  /// "cpu"), keep_alive, keep_cpu_warm, listen, port, usb, preload, chip
+  /// "cpu" for onnxruntime; "litert-gpu", "litert-cpu" for LiteRT),
+  /// keep_alive, keep_cpu_warm, listen, port, usb, preload, chip
   /// (Build.SOC_MODEL) and native_library_dir. Returns nil, or why the server
   /// could not start.
   @_cdecl("Java_io_zoompilot_jetlink_server_Native_start")
@@ -172,9 +174,7 @@
         throw HostFailure("no cache directory")
       }
       let deviceName = config["device"] as? String ?? OrtProfile.htp.rawValue
-      guard let profile = OrtProfile(rawValue: deviceName), OrtProfile.available.contains(profile) else {
-        throw HostFailure("unknown device \(deviceName)")
-      }
+      let backend = try Host.backend(deviceName, config)
       let configuration = Server.Configuration(
         port: UInt16(clamping: (config["port"] as? NSNumber)?.intValue ?? Int(Wire.defaultPort)),
         cacheRoot: URL(fileURLWithPath: cache, isDirectory: true),
@@ -182,9 +182,6 @@
         listen: (config["listen"] as? Bool) ?? true,
         usb: (config["usb"] as? Bool) ?? true,
         keepPlans: 2)
-      let backend = OrtBackend(
-        profile: profile, preparer: ONNXPreparer(), keepAlive: (config["keep_alive"] as? Bool) ?? true,
-        keepCPUWarm: (config["keep_cpu_warm"] as? Bool) ?? false, chip: config["chip"] as? String ?? "")
 
       // logcat too, where `adb logcat -s jetlink` finds it
       Log.sink = { level, category, message in
@@ -209,6 +206,26 @@
       }
       lock.withLock { embedded = server }
       state.serverStarted()
+    }
+
+    /// The backend a device names: LiteRT's profiles by their names, else
+    /// onnxruntime's.
+    static func backend(_ device: String, _ config: [String: Any]) throws -> any EngineBackend {
+      let chip = config["chip"] as? String ?? ""
+      if let profile = LiteRtProfile(rawValue: device) {
+        let libraries = (config["native_library_dir"] as? String).flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true) }
+        let backend = LiteRtBackend(profile: profile, preparer: ONNXPreparer(), libraries: libraries, chip: chip)
+        // libLiteRt.so and its GPU accelerator, from the app's own libraries:
+        // a phone LiteRT cannot run on says so now, not at the first build.
+        try backend.open()
+        return backend
+      }
+      guard let profile = OrtProfile(rawValue: device), OrtProfile.available.contains(profile) else {
+        throw HostFailure("unknown device \(device)")
+      }
+      return OrtBackend(
+        profile: profile, preparer: ONNXPreparer(), keepAlive: (config["keep_alive"] as? Bool) ?? true,
+        keepCPUWarm: (config["keep_cpu_warm"] as? Bool) ?? false, chip: chip)
     }
 
     func stop() {

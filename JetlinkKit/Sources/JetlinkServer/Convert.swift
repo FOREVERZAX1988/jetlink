@@ -45,6 +45,21 @@ enum Convert {
     #endif
   }
 
+  /// float16 to uint8 for an image queue's rows, which came from uint8
+  /// frames: each is a whole number in 0...255, which this returns exactly
+  /// from the bits alone, for a graph that reads its images as uint8 (as
+  /// LiteRT's do). The implicit leading one, shifted down by the exponent;
+  /// zero shifts it out entirely. Other values are not images and come out
+  /// wrong.
+  static func f16ToU8(_ source: UnsafePointer<UInt16>, _ destination: UnsafeMutableRawPointer, count: Int) {
+    let out = destination.assumingMemoryBound(to: UInt8.self)
+    for i in 0..<count {
+      let half = Int32(source[i])
+      let shift = max(0, 25 &- ((half &>> 10) & 0x1F))
+      out[i] = UInt8(truncatingIfNeeded: (0x400 | (half & 0x3FF)) &>> shift)
+    }
+  }
+
   /// No NaN and no infinity among `count` float32s. A float is not finite
   /// when its exponent bits are all set, and one more in the exponent then
   /// carries into the sign bit: or-ing those sums keeps the loop free of

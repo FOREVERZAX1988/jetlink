@@ -30,13 +30,16 @@ enum Stage {
     }
   }
 
-  /// float16 bits from a queue into a float16 or float32 input.
+  /// float16 bits from a queue into a float16 or float32 input, or a uint8
+  /// one for an image queue.
   static func store(f16 source: UnsafePointer<UInt16>, count: Int, into dest: UnsafeMutableRawPointer, as type: ElementType) {
     switch type {
     case .float16:
       dest.copyMemory(from: source, byteCount: count * 2)
     case .float:
       Convert.f16ToF32(source, dest, count: count)
+    case .uint8:
+      Convert.f16ToU8(source, dest, count: count)
     default:
       preconditionFailure("queue staged as \(type.name)")
     }
