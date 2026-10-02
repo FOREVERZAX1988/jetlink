@@ -18,8 +18,9 @@ next_state_ output back itself, so the server's state loop is checked too.
 
 The graph is float16 end to end, so this is two float16 implementations
 differing in accumulation order, not half against full precision: expect an
-absolute 0.005 to 0.03 across the head values. MIN_SAMPLES and
-CONSTANT_FRACTION say what a correlation can judge from that.
+absolute 0.005 to 0.03 across the head values, and a few times that from a
+phone GPU computing in float16 throughout. MIN_SAMPLES and QUIET_FRACTION say
+what a correlation can judge from that; what it cannot is held to TINY_TOLERANCE.
 
     # 1. on the comma, over the cable (stop jetlinkd first, it owns the link).
     #    the server returns the spec of a model it already has, so only the
@@ -49,14 +50,29 @@ from jetlink.spec import DRIVING_OUTPUT, ModelSpec
 # column or a stale queue, all of which a tolerance would wave through.
 MIN_CORR = 0.999
 
-# Correlation needs samples: one point correlates at 1.0 with anything, and pose,
-# euler and road_transform columns are one value a frame. Gated on all frames pooled,
-# anything thinner reported but not gated; those columns read 0.95 over 4, 0.9993 over 16.
+# Correlation needs samples: one point correlates at 1.0 with anything. A slice or a
+# column with fewer values a frame than this (lead_prob's three logits; pose, euler
+# and road_transform, one value a column) is held to absolute error instead, which
+# means something on any number of frames.
 MIN_SAMPLES = 16
 
-# A column spreading less than this fraction of its slice is constant at float16
-# resolution, so correlating it is noise against noise (euler's roll is ~1e-6 rad
-# beside pitch and yaw of ~7, and read 0.9877). Held to absolute error instead.
+# Correlation needs spread: a column moving less than this fraction of its slice's
+# spread (the plan's height and yaw rate) is float16 rounding against float16
+# rounding. Held to absolute error too. LiteRT's float16 GPU path read 0.9988 on the
+# plan's height and 0.992 on lead_prob while every head was within 6% of the
+# reference; the noise floor (onnxruntime against itself) already read 0.9977 on
+# road_transform's columns.
+QUIET_FRACTION = 0.05
+
+# What a slice or column held to absolute error may be off by: this fraction of its
+# own largest reference value. The worst a float16 GPU showed on road-like frames was
+# 6% (lead_prob), so a margin of 1.6; a negated, swapped or shifted head misses by
+# 50% or more.
+TINY_TOLERANCE = 0.1
+
+# The tolerance's floor, as a fraction of the slice's spread: a column the model
+# holds at ~0 (euler's roll, 1e-6 rad beside pitch and yaw of ~7) still gets the
+# slack of float16 resolution, not a tenth of nothing.
 CONSTANT_FRACTION = 1e-3
 
 # How openpilot's Parser reads each head (parse_model_outputs.py): `hypotheses`
@@ -294,12 +310,20 @@ def _frames(x) -> list[np.ndarray]:
   return [np.asarray(f, np.float32).reshape(-1) for f in seq]
 
 
+def tolerance(ref: np.ndarray, spread: float) -> float:
+  """What a slice or column held to absolute error may be off by: TINY_TOLERANCE of
+  its largest reference value, and never less than CONSTANT_FRACTION of `spread`,
+  its slice's standard deviation."""
+  return max(TINY_TOLERANCE * float(np.abs(ref).max(initial=0.0)), CONSTANT_FRACTION * spread)
+
+
 def report_slices(spec: ModelSpec, links, refs) -> dict[str, bool]:
   """One line per output slice with every frame pooled. Returns whether each passed.
 
   A slice passes when its pooled correlation and every column's clear MIN_CORR. A
-  column flatter than CONSTANT_FRACTION is judged on absolute error instead, because
-  correlating what is left of it is rounding noise against rounding noise.
+  slice or column with fewer than MIN_SAMPLES values a frame, or a column moving less
+  than QUIET_FRACTION of its slice, is held to absolute error instead (`tolerance`),
+  because correlating it is rounding noise against rounding noise.
   """
   links, refs = _frames(links), _frames(refs)
   passed = {}
@@ -307,34 +331,35 @@ def report_slices(spec: ModelSpec, links, refs) -> dict[str, bool]:
     a = np.concatenate([x[sl] for x in links])
     b = np.concatenate([y[sl] for y in refs])
     whole = _corr(a, b)
-    ok = whole >= MIN_CORR
-    detail = f"{'(compared whole)':38}"
+    if sl.stop - sl.start < MIN_SAMPLES:
+      bound = tolerance(b, b.std())
+      ok = np.abs(a - b).max() <= bound
+      detail = f"{'by error, within ' + f'{bound:.4g}':38}"
+    else:
+      ok = whole >= MIN_CORR
+      detail = f"{'(compared whole)':38}"
     cols_a = [columns(name, x[sl]) for x in links]
     if cols_a[0]:
       cols_b = [columns(name, y[sl]) for y in refs]
-      bound = CONSTANT_FRACTION * b.std()
-      worst_c, worst_k, failed, flat, thin = 2.0, '', [], 0, 0
+      worst_c, worst_k, failed, by_error = 2.0, '', [], 0
       for k in cols_a[0]:
         ca = np.concatenate([c[k] for c in cols_a])
         cb = np.concatenate([c[k] for c in cols_b])
-        if ca.size < MIN_SAMPLES:
-          thin += 1
+        if cols_a[0][k].size < MIN_SAMPLES or cb.std() < QUIET_FRACTION * b.std():
+          by_error += 1
+          bound = tolerance(cb, b.std())
+          if np.abs(ca - cb).max() > bound:
+            failed.append(f'{k} by error, max abs {np.abs(ca - cb).max():.4g} > {bound:.4g}')
           continue
         c = _corr(ca, cb)
-        if cb.std() < bound:
-          flat += 1
-          if np.abs(ca - cb).max() > bound:
-            failed.append(f'{k} flat, max abs {np.abs(ca - cb).max():.4g} > {bound:.4g}')
-          continue
         if c < worst_c:
           worst_c, worst_k = c, k
         if c < MIN_CORR:
           failed.append(f'{k} {c:.6f}')
       ok &= not failed
-      notes = ([f'{flat} flat'] if flat else []) + ([f'{thin} under {MIN_SAMPLES} samples, not gated'] if thin else [])
-      worst = f"worst col {worst_c:8.6f} {worst_k:8}" if worst_k else f"{'no column gated':27}"
-      note = '(' + ', '.join(notes) + ')' if notes else ''
-      detail = f"{worst} {note:9}"
+      worst = f"worst col {worst_c:8.6f} {worst_k:8}" if worst_k else f"{'no column correlated':27}"
+      note = f'({by_error} by error)' if by_error else ''
+      detail = f"{worst} {note:14}"
       if failed:
         detail += '  cols: ' + ', '.join(failed)
     passed[name] = ok
@@ -365,33 +390,39 @@ def compare(args) -> int:
     refs.append(ref[:m])
 
   # Per frame: a stale queue or a dropped reset shows on the frame it happens to.
-  # Slices too small to correlate on one frame are gated pooled, below.
-  frame_fail: dict[str, float] = {}
+  # Slices too small to correlate are held to error, against all frames' largest value.
+  frame_fail: dict[str, str] = {}
   for i, (link, ref) in enumerate(zip(links, refs, strict=True)):
     print(f"\nframe {i}: corr {_corr(link, ref):.6f}  max abs {np.abs(link - ref).max():.4f}")
     for name, sl in sorted(spec.output_slices.items()):
       a, b = link[sl], ref[sl]
       c = _corr(a, b)
-      gated = sl.stop - sl.start >= MIN_SAMPLES
-      if gated and c < MIN_CORR:
-        frame_fail[name] = min(frame_fail.get(name, 2.0), c)
-      flag = '   <-- FAIL' if gated and c < MIN_CORR else ('' if gated else '   (pooled only)')
-      print(f"    {name:24} corr {c:8.6f}  max abs {np.abs(a - b).max():8.4f}  "
+      err = np.abs(a - b).max()
+      if sl.stop - sl.start >= MIN_SAMPLES:
+        bad = c < MIN_CORR
+        why = f'{c:.6f}'
+      else:
+        pooled = np.concatenate([r[sl] for r in refs])
+        bound = tolerance(pooled, pooled.std())
+        bad = err > bound
+        why = f'max abs {err:.4g} > {bound:.4g}'
+      if bad and name not in frame_fail:
+        frame_fail[name] = why
+      flag = '   <-- FAIL' if bad else ('' if sl.stop - sl.start >= MIN_SAMPLES else '   (by error)')
+      print(f"    {name:24} corr {c:8.6f}  max abs {err:8.4f}  "
             f"mean abs {np.abs(a - b).mean():7.5f}{flag}")
 
   print(f"\npooled over {n} frames, per slice and per column:")
-  if n < MIN_SAMPLES:
-    print(f"    only {n} frames: columns with one value per frame (pose, euler, road_transform) "
-          f"have too few samples to gate; capture at least {MIN_SAMPLES}")
   passed = report_slices(spec, links, refs)
 
-  bad = [f'{k} {v:.6f} on one frame' for k, v in sorted(frame_fail.items(), key=lambda kv: kv[1])]
+  bad = [f'{k} {why} on one frame' for k, why in sorted(frame_fail.items())]
   bad += [f'{k} pooled' for k, ok in passed.items() if not ok and k not in frame_fail]
   if bad:
-    print(f"\nFAIL: {len(bad)} slice(s) below corr {MIN_CORR}, whole or in a column: " + ', '.join(bad))
+    print(f"\nFAIL: {len(bad)} slice(s) below corr {MIN_CORR} or past their error bound, whole or in a column: "
+          + ', '.join(bad))
     return 1
-  print(f"\nOK: every slice and every column at or above corr {MIN_CORR}, "
-        f"per frame and pooled over all {n} frames")
+  print(f"\nOK: every slice and every column at or above corr {MIN_CORR}, or within {TINY_TOLERANCE:.0%} of its "
+        f"largest value where too small or too quiet to correlate, per frame and pooled over all {n} frames")
   return 0
 
 
@@ -404,7 +435,7 @@ def main() -> int:
   p.add_argument('--nbytes', type=int, help='capture mode: ONNX size in bytes, with --sha256')
   p.add_argument('--dir', default='parity')
   p.add_argument('--n', type=int, default=32,
-                 help=f'capture mode: frames; pose-like columns have one value per frame and need {MIN_SAMPLES}+')
+                 help='capture mode: frames; more frames give the correlations more to go on')
   p.add_argument('--seed', type=int, default=0)
   p.add_argument('--onnx', help='reference mode: the ONNX the engine was built from')
   p.add_argument('--ffs', action='store_true', help='capture mode: this end is the gadget')
