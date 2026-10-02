@@ -261,11 +261,12 @@ struct LiteRtBenchTests {
       if i < recorded { outputs.append(scratch) }
     }
     try outputs.write(to: directory.appending(path: "outputs.litert.bin"))
-    let steady = times.dropFirst(2).sorted()
-    let at = { (q: Double) in steady[min(steady.count - 1, Int(q * Double(steady.count)))] }
+    let steady = Array(times.dropFirst(2))
+    let stats = BenchmarkStats.of(steady)
     print(
       String(
-        format: "LiteRT bench %@ (%@): compile %.0f ms, first frame %.1f ms, then p50 %.2f ms p99 %.2f ms max %.2f ms over %d frames; %d recorded",
-        profile.rawValue, engine.notes, compileMs, times[0], at(0.5), at(0.99), steady.last ?? 0, steady.count, recorded))
+        format:
+          "LiteRT bench %@ (%@): compile %.0f ms, first frame %.1f ms, then mean %.2f ms p50 %.2f ms p99 %.2f ms max %.2f ms over %d frames; %d recorded",
+        profile.rawValue, engine.notes, compileMs, times[0], stats.mean, stats.p50, stats.p99, stats.max, steady.count, recorded))
   }
 }

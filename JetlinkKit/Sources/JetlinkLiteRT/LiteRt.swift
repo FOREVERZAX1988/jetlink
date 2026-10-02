@@ -147,7 +147,7 @@ final class LiteRtBuffer {
   /// A zeroed buffer of the kind the accelerator works in for input `index`.
   init(_ model: LiteRtModel, input index: Int) throws {
     var buffer: OpaquePointer?
-    try LiteRtError.check(jl_litert_buffer_create(model.pointer, 0, index, &buffer))
+    try LiteRtError.check(jl_litert_buffer_create(model.pointer, index, &buffer))
     guard let buffer else { throw LiteRtError("LiteRT returned no buffer") }
     pointer = buffer
   }

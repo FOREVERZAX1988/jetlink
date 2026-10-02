@@ -81,9 +81,9 @@ char *jl_litert_model_input_host(const jl_litert_model *model, size_t index, int
 char *jl_litert_buffer_wrap(jl_litert_model *model, int output, size_t index, void *data, size_t nbytes,
                             jl_litert_buffer **out);
 
-// A buffer of the kind the accelerator works in for an input or output
-// (GPU memory on a GPU), zeroed.
-char *jl_litert_buffer_create(jl_litert_model *model, int output, size_t index, jl_litert_buffer **out);
+// A buffer of the kind the accelerator works in for input `index` (GPU
+// memory on a GPU), zeroed: the looped state's, which an output writes too.
+char *jl_litert_buffer_create(jl_litert_model *model, size_t index, jl_litert_buffer **out);
 
 // Copies `nbytes` into or out of a buffer. Writing NULL zeroes it.
 char *jl_litert_buffer_write(jl_litert_buffer *buffer, const void *data, size_t nbytes);

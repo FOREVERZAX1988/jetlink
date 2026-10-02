@@ -493,14 +493,14 @@ char *jl_litert_buffer_wrap(jl_litert_model *model, int output, size_t index, vo
   return NULL;
 }
 
-char *jl_litert_buffer_create(jl_litert_model *model, int output, size_t index, jl_litert_buffer **out) {
+char *jl_litert_buffer_create(jl_litert_model *model, size_t index, jl_litert_buffer **out) {
   *out = NULL;
-  ptrdiff_t i = slot(model, output, index);
+  ptrdiff_t i = slot(model, 0, index);
   if (i < 0) {
-    return copy("no such input or output");
+    return copy("no such input");
   }
   LiteRtTensorBufferRequirements req = NULL;
-  char *error = requirements(model, output, index, &req);
+  char *error = requirements(model, 0, index, &req);
   if (error != NULL) {
     return error;
   }
