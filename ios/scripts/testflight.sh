@@ -104,7 +104,10 @@ cat >"$OPTIONS" <<PLIST
 PLIST
 
 echo "==> exporting ($DESTINATION)"
-xcodebuild -exportArchive \
+# The export runs /usr/bin/rsync, which starts its other end as whatever rsync
+# is first on PATH; Homebrew's 3.x rejects Apple's -E and the export fails
+# with "Copy failed".
+PATH="/usr/bin:/bin:/usr/sbin:/sbin:$PATH" xcodebuild -exportArchive \
   -archivePath "$ARCHIVE" \
   -exportOptionsPlist "$OPTIONS" \
   -exportPath "$BUILD/export" \
