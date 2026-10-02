@@ -13,6 +13,11 @@ import Testing
 struct OrtBackendTests {
   @Test("Each profile's sessions and layout")
   func profiles() {
+    #if os(Android)
+      let cpuLayout = "plain"
+    #else
+      let cpuLayout = "whole"
+    #endif
     let table: [(OrtProfile, [String], [OrtUnit], String)] = [
       (.ane, ["vision", "policy"], [.coreML("CPUAndNeuralEngine"), .coreML("CPUAndGPU")], "split"),
       (.coreml, ["model"], [.coreML("CPUAndGPU")], "whole"),
@@ -20,7 +25,7 @@ struct OrtBackendTests {
       (.htp, ["vision", "policy"], [.htp, .qnnGPU], "split"),
       (.htpWhole, ["model"], [.htp], "aneWhole"),
       (.gpu, ["model"], [.qnnGPU], "whole"),
-      (.cpu, ["model"], [.cpu], "whole"),
+      (.cpu, ["model"], [.cpu], cpuLayout),
     ]
     #expect(table.map(\.0) == OrtProfile.allCases)
     for (profile, names, units, layout) in table {

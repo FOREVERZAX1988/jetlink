@@ -32,7 +32,7 @@ struct ServerTests {
       let manifest = try JSONSerialization.jsonObject(with: Data(contentsOf: artifact.appending(path: "sessions.json"))) as? [[String: Any]]
       #expect(manifest?.map { $0["unit"] as? String } == ["cpu"])
       let meta = Artifact.sidecar(artifact)
-      #expect(meta["prepare"] as? Int == OrtBackend.prepareVersion)
+      #expect(meta["prepare"] as? Int == OrtProfile.cpu.prepareVersion)
       #expect(meta["preparer"] as? String == "swift")
       #expect(((meta["artifact_bytes"] as? NSNumber)?.int64Value ?? 0) > 0)
     }

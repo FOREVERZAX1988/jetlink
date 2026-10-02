@@ -17,9 +17,11 @@ import Foundation
 ///    `.aneWhole`, model.onnx);
 /// 8. give each file a COREML_CACHE_KEY in its metadata_props.
 ///
-/// `.trt` is TensorRT's preparation (`onnx_patch.patch_file`, what
-/// trt/build.py parsed): steps 1 and 2 only, the whole graph, no cache key.
-/// The other steps work around CoreML's provider, which TensorRT does not need.
+/// `.plain` is TensorRT's preparation (`onnx_patch.patch_file`, what
+/// trt/build.py parsed), and onnxruntime's CPU provider's: steps 1 and 2
+/// only, the whole graph, no cache key. The other steps work around CoreML's
+/// provider, which neither needs; the CPU provider on Android runs step 4's
+/// transposed fp16 Gemm on one thread, a hundred times slower than MatMul.
 ///
 /// The files are what Python's onnx.save writes for the same model: field
 /// for field, and byte for byte on a model Python wrote.
@@ -40,9 +42,9 @@ public enum CoreMLPreparation {
     /// (`--device ane-whole`): model.onnx, with the policy's norms prescaled
     /// and the vision heads in fp32.
     case aneWhole
-    /// One model for TensorRT: model.onnx, tinygrad's ops stripped and the
-    /// images fp16, nothing else changed.
-    case trt
+    /// One model for TensorRT or the CPU: model.onnx, tinygrad's ops
+    /// stripped and the images fp16, nothing else changed.
+    case plain
   }
 
   public struct Part: Sendable, Equatable {
@@ -119,7 +121,7 @@ public enum CoreMLPreparation {
     var gathers = 0
     var gemms = 0
     var tiles = 0
-    if layout != .trt {
+    if layout != .plain {
       gathers = try Patches.normalizeGatherIndices(&g, src)
       gemms = try Patches.gemmWithTransposedWeight(&g, src)
       tiles = try Patches.expandToTile(&g, src)
@@ -137,10 +139,10 @@ public enum CoreMLPreparation {
     case .split:
       let (vision, policy) = try Split.visionPolicy(model)
       parts = [("vision", vision), ("policy", policy)]
-    case .whole, .aneWhole, .trt:
+    case .whole, .aneWhole, .plain:
       parts = [("model", model)]
     }
-    for i in parts.indices where layout != .trt {
+    for i in parts.indices where layout != .plain {
       // _with_cache_key: any key already there goes, the part's own is added last.
       parts[i].model.props.removeAll { $0.key == cacheKeyProp || $0.key == "CACHE_KEY" }
       parts[i].model.props.append(Prop(raw: nil, key: cacheKeyProp, value: cacheKey(parts[i].name)))

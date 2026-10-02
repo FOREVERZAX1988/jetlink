@@ -120,6 +120,16 @@ Nothing of this has run on a phone yet. What to check first, in order:
 4. The comma's live bench (`jetlink_repo/scripts/comma/jetlink_live_bench.sh 180`)
    and `scripts/verify_parity.py` from a Mac on the same Wi-Fi.
 
+The first phone a user ran it on was a Pixel 10 Pro Fold (Google Tensor G5,
+2026-10-01). QNN cannot drive a Tensor: every op fell to onnxruntime's CPU
+provider on one thread, minutes a frame, so Settings now offers only the CPU on
+a phone without a Snapdragon. onnxruntime 1.29's Android CPU provider also runs
+an fp16 Gemm with a transposed weight on one thread, about 100 times slower than
+the same product as a MatMul (8 s against 0.09 s for 256x1024x1024 on the
+emulator), so the CPU profile prepares the graph without CoreML's Gemm rewrite.
+The QNN profiles keep it: check on a Snapdragon that the NPU takes every Gemm,
+since one left to the CPU costs seconds.
+
 ## Licenses
 
 The APK carries onnxruntime (MIT) and Qualcomm's QNN runtime libraries from

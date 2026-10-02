@@ -4,7 +4,7 @@ import Testing
 
 @testable import JetlinkONNX
 
-/// The `.trt` layout held to Python's `onnx_patch.patch_file`, the call the
+/// The `.plain` layout held to Python's `onnx_patch.patch_file`, the call the
 /// TensorRT build made: trt.json has the counts or the error Python gave for
 /// each graph, and `<graph>.trt.model.expected.onnx` the file it wrote, made
 /// once before the Python server went. The files must match byte for byte.
@@ -23,7 +23,7 @@ import Testing
     let expected = try #require(Self.python["\(fixture).trt"])
     let out = try TemporaryDirectory()
     let prepare = {
-      try CoreMLPreparation.prepare(source: Fixtures.url("\(fixture).onnx"), into: out.url, layout: .trt, cacheKey: { _ in "unused" })
+      try CoreMLPreparation.prepare(source: Fixtures.url("\(fixture).onnx"), into: out.url, layout: .plain, cacheKey: { _ in "unused" })
     }
     if let message = expected.error {
       #expect(throws: OnnxError(message)) { try prepare() }
@@ -44,7 +44,7 @@ import Testing
   /// export's CACHE_KEY included.
   @Test func keepsTheModelsProps() throws {
     let out = try TemporaryDirectory()
-    let report = try CoreMLPreparation.prepare(source: Fixtures.url("queued.onnx"), into: out.url, layout: .trt, cacheKey: { $0 })
+    let report = try CoreMLPreparation.prepare(source: Fixtures.url("queued.onnx"), into: out.url, layout: .plain, cacheKey: { $0 })
     let meta = try OnnxMeta.read(contentsOf: report.parts[0].url)
     let source = try OnnxMeta.read(contentsOf: Fixtures.url("queued.onnx"))
     #expect(meta.props == source.props)
