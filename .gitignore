@@ -22,3 +22,11 @@ dist/
 
 # SwiftPM writes it when a build resolves swift-crypto (Linux, Android); the package pins a range
 /JetlinkKit/Package.resolved
+
+# Signing keys and certificates live outside the checkout; never commit one
+*.p8
+*.p12
+*.cer
+*.certSigningRequest
+*.mobileprovision
+*.provisionprofile
