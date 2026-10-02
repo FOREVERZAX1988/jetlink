@@ -613,15 +613,19 @@ extension LiteRTLowering {
   static let gpuRank = 4
 
   /// A slice of a tensor of rank above 4 as a slice of a smaller view of
-  /// it: axes of size 1 dropped, and each run of neighbouring axes the slice
-  /// takes whole merged into one. nil when nothing can merge.
+  /// it: axes of size 1 dropped and, if that leaves more than 4, each run of
+  /// neighbouring axes the slice takes whole merged into one. Merging no
+  /// more than that keeps the view's last axes the tensor's, so the RESHAPEs
+  /// around it are more often ones that cancel than copies on the GPU. nil
+  /// when nothing can go.
   static func sliceView(shape: [Int], begin: [Int], end: [Int], step: [Int], out: [Int])
     -> (shape: [Int], begin: [Int], end: [Int], step: [Int], out: [Int])?
   {
+    let merge = shape.filter { $0 != 1 }.count > gpuRank
     var groups: [(whole: Bool, axes: [Int])] = []
     for k in shape.indices where shape[k] != 1 {
       let whole = begin[k] == 0 && step[k] == 1 && out[k] == shape[k]
-      if whole, let last = groups.last, last.whole {
+      if merge, whole, let last = groups.last, last.whole {
         groups[groups.count - 1].axes.append(k)
       } else {
         groups.append((whole, [k]))
@@ -651,8 +655,8 @@ extension LiteRTLowering {
   }
 
   /// TRANSPOSE from tensor `i` into tensor `o`. Above rank 4 it runs on a
-  /// view: axes of size 1 dropped, and axes that stay neighbours in the same
-  /// order merged.
+  /// view: axes of size 1 dropped and, if that leaves more than 4, axes that
+  /// stay neighbours in the same order merged.
   mutating func emitTranspose(_ i: Int, _ perm: [Int], into o: Int, _ name: String) {
     let shape = model.tensors[i].shape
     if shape.count > Self.gpuRank {
@@ -673,10 +677,11 @@ extension LiteRTLowering {
   static func transposeView(shape: [Int], perm: [Int]) -> (shape: [Int], perm: [Int]) {
     let kept = shape.indices.filter { shape[$0] != 1 }
     let order = perm.filter { shape[$0] != 1 }.map { kept.firstIndex(of: $0)! }
-    // Runs of input axes that come out together and in order, in output order.
+    // Runs of input axes that come out together and in order, in output
+    // order; each axis its own run when dropping the 1s is enough.
     var runs: [[Int]] = []
     for a in order {
-      if let last = runs.last?.last, a == last + 1 {
+      if kept.count > gpuRank, let last = runs.last?.last, a == last + 1 {
         runs[runs.count - 1].append(a)
       } else {
         runs.append([a])
