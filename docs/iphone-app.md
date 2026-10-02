@@ -1,10 +1,8 @@
 # Jetlink for iPhone and iPad
 
-**Experimental.** The model has run on an iPhone; the link to the comma has
-only been tested with a Mac standing in for the phone. Runs the Jetlink server
-in an iOS app, connected to the comma by one USB cable. You build it from
-source. Run the [Benchmark](#benchmark) before you drive to see if your phone
-keeps up.
+**Experimental.** Runs the Jetlink server in an iOS app, connected to the comma
+by one USB cable. You build it from source. Run the [Benchmark](#benchmark)
+before you drive to see if your phone keeps up.
 
 On an iPad with USB-C, read iPad wherever this page says iPhone or phone.
 

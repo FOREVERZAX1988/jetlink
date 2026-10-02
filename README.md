@@ -73,8 +73,7 @@ Nothing else to install: the server is built into the app.
 
 <a href="docs/images/iphone-demo.mp4"><img src="docs/images/iphone-demo.webp" width="100%" alt="Jetlink for iPhone, recorded in the iOS Simulator: Get downloads and prepares a model, the comma connects over USB, and Status shows each frame against the 50 ms budget, with timings modeled on an iPhone 17 Pro measurement"></a>
 
-The link to the comma is only tested with a Mac standing in for the phone. You
-need:
+You need:
 
 * An iPhone or iPad with USB-C on iOS or iPadOS 26.1 or later. For USB 3: an
   iPhone 15 Pro or later Pro, or an iPad Pro, Air, or mini.
