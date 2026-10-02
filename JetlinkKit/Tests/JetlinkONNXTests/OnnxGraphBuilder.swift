@@ -146,7 +146,7 @@ struct OnnxGraphBuilder {
 }
 
 /// Seeded values for tests, the same on every platform.
-struct Values {
+struct SeededValues {
   private var state: UInt64
 
   init(seed: UInt64) {

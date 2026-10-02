@@ -53,7 +53,7 @@ import Testing
     #expect(types == [3, 3, 1, 1, 1, 1])
     #expect(file.tensors[file.outputs[0]].name == "outputs" && file.tensors[file.outputs[0]].type == 1)
 
-    var v = Values(seed: 31)
+    var v = SeededValues(seed: 31)
     let img = (0..<1536).map { Float(($0 * 37) % 256) }
     let big = (0..<1536).map { Float(($0 * 11 + 5) % 256) }
     let inputs: [String: [Float]] = [
@@ -80,7 +80,7 @@ import Testing
       "state_img_q": [Float](repeating: 0, count: 7680), "state_desire_q": [Float](repeating: 0, count: 48),
       "state_feat_q": [Float](repeating: 0, count: 64),
     ]
-    var v = Values(seed: 41)
+    var v = SeededValues(seed: 41)
     for frame in 0..<3 {
       let fresh = (0..<1536).map { Float(($0 * 13 + frame * 7) % 256) }
       var desire = [Float](repeating: 0, count: 8)

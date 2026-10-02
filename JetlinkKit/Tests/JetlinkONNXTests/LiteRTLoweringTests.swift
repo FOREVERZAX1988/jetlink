@@ -44,7 +44,7 @@ import Testing
     // y is read at run time with a lower rank: it gets the leading 1.
     #expect(file.count("RESHAPE") == 1)
     #expect(file.opNames.filter { $0 != "RESHAPE" } == ["ADD", "MUL", "SUB", "DIV", "MAXIMUM"])
-    var v = Values(seed: 1)
+    var v = SeededValues(seed: 1)
     let x = v(24)
     let y = v(3)
     let c: [Float] = [0.5, -1, 2, 0.25]
@@ -148,7 +148,7 @@ import Testing
 
   @Test(arguments: convCases)
   func convComputesONNXsConv(_ c: ConvCase) throws {
-    var v = Values(seed: 7)
+    var v = SeededValues(seed: 7)
     let x = v(c.input.reduce(1, *))
     let w = v(c.weight.reduce(1, *))
     let b = v(c.weight[0])
@@ -187,7 +187,7 @@ import Testing
   /// The NHWC convolution meets the graph's own NHWC permute, and the two
   /// TRANSPOSEs in between go.
   @Test func transposePairsCancel() throws {
-    var v = Values(seed: 3)
+    var v = SeededValues(seed: 3)
     let w = v(12)
     let x = v(48)
     var g = OnnxGraphBuilder()
@@ -215,7 +215,7 @@ import Testing
   /// constant behind a DEQUANTIZE of its own.
   @Test func convNeXtBlocksChainInNHWC() throws {
     let c = 1024
-    var v = Values(seed: 17)
+    var v = SeededValues(seed: 17)
     let x = v(c * 4)
     let w = [v(c * 9), v(c * 9)]
     let gamma = [v(c), v(c)]
@@ -251,7 +251,7 @@ import Testing
   // MARK: Gemm and MatMul
 
   @Test func gemmIsFullyConnected() throws {
-    var v = Values(seed: 11)
+    var v = SeededValues(seed: 11)
     let a = v(2 * 64)
     let wT = v(32 * 64)
     let w = v(64 * 32)
@@ -288,7 +288,7 @@ import Testing
   }
 
   @Test func matmulIsBatchMatmul() throws {
-    var v = Values(seed: 12)
+    var v = SeededValues(seed: 12)
     let x = v(2 * 3 * 5)
     let w = v(5 * 4)
     let q = v(2 * 3 * 4)
@@ -338,7 +338,7 @@ import Testing
     g.output("sum", Self.f32, [3])
     let (file, _) = try g.convert()
     #expect(Set(file.opNames) == ["MEAN", "REDUCE_MAX", "SUM"])
-    var v = Values(seed: 5)
+    var v = SeededValues(seed: 5)
     let x = v(24)
     let out = try Self.run(file, ["x": x])
     let mean = (0..<8).map { (e: Int) -> Float in Self.sum(3) { x[(e / 4) * 12 + $0 * 4 + e % 4] } / 3 }
@@ -360,7 +360,7 @@ import Testing
     #expect(file.count("SOFTMAX") == 2)
     // The middle axis goes last and back.
     #expect(file.count("TRANSPOSE") == 2)
-    var v = Values(seed: 6)
+    var v = SeededValues(seed: 6)
     let x = v(24)
     let out = try Self.run(file, ["x": x])
     func softmax(_ index: (Int, Int) -> Int, rows: Int, n: Int) -> [Float] {
@@ -421,7 +421,7 @@ import Testing
     let (file, _) = try g.convert()
     #expect(!file.opNames.contains("GATHER"))
     #expect(file.count("STRIDED_SLICE") == 2)
-    var v = Values(seed: 9)
+    var v = SeededValues(seed: 9)
     let x = v(60)
     let out = try Self.run(file, ["x": x])
     func view(_ outShape: [Int], _ source: ([Int]) -> [Int]) -> [Float] {
@@ -470,7 +470,7 @@ import Testing
     #expect(!file.tensors.contains { $0.type == TFLite.TensorType.bool.rawValue })
     #expect(file.opNames == ["MUL", "ADD", "SOFTMAX"])
     #expect(report.lowerings["finite mask fills"] == 1)
-    var v = Values(seed: 4)
+    var v = SeededValues(seed: 4)
     let s = v(18)
     let p = try Self.run(file, ["scores": s])["p"]!
     for row in 0..<6 {
@@ -613,7 +613,7 @@ import Testing
   /// (version 3) and sit after the flatbuffer, 64-byte aligned, with the
   /// ONNX file's bytes; smaller ones are FLOAT32 in the flatbuffer.
   @Test func weightsLiveAfterTheFlatbuffer() throws {
-    var v = Values(seed: 21)
+    var v = SeededValues(seed: 21)
     let w = v(64 * 32)
     var g = OnnxGraphBuilder()
     g.input("x", Self.f32, [1, 64])
