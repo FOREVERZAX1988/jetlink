@@ -135,12 +135,23 @@ struct OnnxGraphBuilder {
     return m.tail
   }
 
-  /// The model converted by LiteRTPreparation, read back.
-  func convert() throws -> (file: TFLiteFile, report: LiteRTPreparation.Report) {
+  /// The model converted by LiteRTPreparation, read back. Without
+  /// `rewrites` the graph goes to the lowering as it is.
+  func convert(rewrites: Bool = true) throws -> (file: TFLiteFile, report: LiteRTPreparation.Report) {
     let dir = try TemporaryDirectory()
-    let source = dir.url.appendingPathComponent("model.onnx")
-    try Data(bytes).write(to: source)
-    let report = try LiteRTPreparation.prepare(source: source, into: dir.url.appendingPathComponent("out"))
+    let out = dir.url.appendingPathComponent("out")
+    let report: LiteRTPreparation.Report
+    if rewrites {
+      let source = dir.url.appendingPathComponent("model.onnx")
+      try Data(bytes).write(to: source)
+      report = try LiteRTPreparation.prepare(source: source, into: out)
+    } else {
+      report = try bytes.withUnsafeBytes { buf in
+        let src = Source(bytes: buf)
+        let model = try Decode.model(src)
+        return try LiteRTPreparation.write(model.graph!, opsets: model.opsets, src, rewrites: [:], into: out, progress: nil)
+      }
+    }
     return (try TFLiteFile(report.url), report)
   }
 }

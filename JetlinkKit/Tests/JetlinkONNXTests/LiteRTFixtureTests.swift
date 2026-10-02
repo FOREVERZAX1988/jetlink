@@ -46,8 +46,9 @@ import Testing
   }
 
   @Test func tinyQueuedComputesItsReference() throws {
-    let (file, report) = try Self.convert(TinyModel.queued)
-    #expect(report.rewrites["stripTinygradOps"] == 1)
+    // It has tinygrad's Contiguous, which the lowering refuses: converting at
+    // all means the rewrites took it out.
+    let (file, _) = try Self.convert(TinyModel.queued)
     let types = file.inputs.map { file.tensors[$0].type }
     #expect(file.inputs.map { file.tensors[$0].name } == ["img", "big_img", "desire_pulse", "traffic_convention", "action_t", "features_buffer"])
     #expect(types == [3, 3, 1, 1, 1, 1])

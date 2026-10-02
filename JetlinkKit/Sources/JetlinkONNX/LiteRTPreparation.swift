@@ -67,7 +67,16 @@ public enum LiteRTPreparation {
       throw OnnxError("initializer \(t.key) keeps its data in an external file, which the preparation does not read")
     }
     let rewrites = try rewrite(&g, &model.opsets, src)
-    let opset = try opsetVersion(model.opsets, src)
+    return try write(g, opsets: model.opsets, src, rewrites: rewrites, into: directory, progress: progress)
+  }
+
+  /// Everything after the ONNX rewrites: the lowering, the tidying, and the
+  /// file. The tests call it on a graph as it is, to reach lowerings the
+  /// rewrites would otherwise get to first.
+  static func write(
+    _ g: Graph, opsets: [OpsetImport], _ src: Source, rewrites: [String: Int], into directory: URL, progress: ((Double) -> Void)?
+  ) throws -> Report {
+    let opset = try opsetVersion(opsets, src)
 
     var lowered = try LiteRTLowering.lower(g, opset: opset, src)
     var removed = 0

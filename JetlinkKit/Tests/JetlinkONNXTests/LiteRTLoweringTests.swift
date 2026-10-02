@@ -507,7 +507,7 @@ import Testing
     g.fp16("bias", [5], [0, 1, -1, 0.5, 2])
     g.node("LayerNormalization", ["x", "scale", "bias"], ["y"], [("epsilon", .float(1e-5))])
     g.output("y", Self.f32, [2, 5])
-    let (file, report) = try g.convert()
+    let (file, report) = try g.convert(rewrites: false)
     #expect(report.lowerings["plain LayerNormalizations"] == 1)
     let x: [Float] = [1, 2, 3, 4, 5, -3, 0.5, 8, 2, -1]
     let y = try Self.run(file, ["x": x])["y"]!
@@ -568,7 +568,7 @@ import Testing
     g.node("Cast", ["imgs"], ["out"], [("to", .int(1))])
     g.output("out", Self.f32, [1, 12, 2, 2])
     g.output("next_state_img_q", DataType.uint8, [2, 5, 6, 2, 2])
-    let (file, report) = try g.convert()
+    let (file, report) = try g.convert(rewrites: false)
     #expect(file.tensors[file.inputs[1]].shape == [2, 30, 2, 2])
     #expect(file.tensors[file.outputs[1]].shape == [2, 30, 2, 2])
     #expect(file.tensors.allSatisfy { $0.shape.count <= 4 }, "\(file.tensors.filter { $0.shape.count > 4 }.map(\.name))")
