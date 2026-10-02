@@ -35,7 +35,10 @@ the [server command](#the-server-command) and custom integrations.
   the server's tarball, so they always match the binary, and the `jetlink`
   command. Settings: `/etc/jetlink/server.env` ([keys](#the-service));
   your answers: `/etc/jetlink/install.conf`.
-- Serves the read-only status page on port 5600 (a question; 0 turns it off).
+- Serves the [web page](#the-web-page) on port 5600 (a question; 0 turns it
+  off), behind a password. A first install asks for one; Enter, or a run with
+  no terminal, has the server make one, shown at the end. Updates keep it, and
+  `jetlink setup` asks whether to.
 - Keeps models and prepared engines in `/mnt/data/jetlink` on a Jetson,
   `/var/lib/jetlink` on a PC.
 - Jetson only: sets the fastest power mode (MAXN SUPER on an Orin Nano; may
@@ -108,6 +111,9 @@ any systemd distribution with glibc 2.35 or newer:
    (the installer's is in `jetlink-server.service.d/20-jetson-gpu.conf`).
 6. Always-on supply only (lets the comma wake the Jetson):
    `share/jetlink/udev/99-jetlink-usb-wakeup.rules` in `/etc/udev/rules.d`.
+7. A password for the [web page](#the-web-page), or it shows the status only.
+   This makes one and prints it:
+   `sudo /opt/jetlink/current/bin/jetlink-server web-password --file /etc/jetlink/web-auth.json --generate`.
 
 The `jetlink` command needs the installer's files, so a hand install manages
 the service with `systemctl` and reads its log with
@@ -118,21 +124,22 @@ the service with `systemctl` and reads its log with
 ### The service
 
 `jetlink-server.service` runs
-`/opt/jetlink/current/bin/jetlink-server --usb --backend trt` as root, and
-starts it again 2 seconds after it exits. Its settings come from
+`/opt/jetlink/current/bin/jetlink-server --usb --backend trt --web-auth /etc/jetlink/web-auth.json`
+as root, and starts it again 2 seconds after it exits. Its settings come from
 `/etc/jetlink/server.env`:
 
 | Key | Passed as | The installer sets it to |
 | --- | --- | --- |
 | `JETLINK_CACHE_DIR` | `--cache` | `/mnt/data/jetlink` on a Jetson, `/var/lib/jetlink` on a PC |
 | `JETLINK_SLEEP_AFTER` | `--sleep-after` (0 when unset) | 120 for **Always on** with deep sleep, else 0 |
-| `JETLINK_STATUS_PORT` | `--status-port` (0 when unset) | the status page answer, 5600 by default |
+| `JETLINK_STATUS_PORT` | `--status-port` (0 when unset) | the web page's port, 5600 by default |
 | `JETLINK_POWEROFF` | `--poweroff`, or nothing | `--poweroff` on a Jetson whose battery answer was Yes |
 | `JETLINK_TENSORRT` | `--tensorrt-libs DIR`, or nothing | the TensorRT folder on a PC; empty on a Jetson |
 
 - The installer also writes `JETLINK_JETSON`, `JETLINK_FLAVOR` and
   `JETLINK_SERVER_VERSION` there, for the `jetlink` command.
-- It rewrites the file on every run. Change the answers with `jetlink setup`;
+- It rewrites the file on every run. Change the answers with `jetlink setup`
+  ([or one at a time](#changing-an-answer-without-questions));
   put anything else, such as `JETLINK_USB_LPM=1`, in a drop-in
   (`sudo systemctl edit jetlink-server`, then `Environment=JETLINK_USB_LPM=1`
   under `[Service]`).
@@ -143,6 +150,48 @@ starts it again 2 seconds after it exits. Its settings come from
 `jetlink run` runs the service's command line, with those settings, in the
 terminal instead (it stops the service first; Ctrl-C stops it). Extra flags go
 on the end: `jetlink run --listen` for a TCP bench, `jetlink run --log-level debug`.
+
+<a id="changing-an-answer-without-questions"></a>
+
+### Changing an answer without questions
+
+`jetlink setup --set KEY=VALUE` changes the answers it is given and keeps the
+rest. It asks nothing, so it runs without a terminal; the web page's settings
+use it. It keeps the installed server, its source and TensorRT, so it needs no
+network. Then it applies the answers as `jetlink setup` does and restarts the
+server. Give `--set` once for each answer; `install.sh --set` is the same.
+
+| Key | Values | Applies to |
+| --- | --- | --- |
+| `power` | `always` or `switched` | a Jetson |
+| `comma_poweroff` | `yes` or `no`; only with `always` | a Jetson |
+| `desktop` | `on` or `off`, from the next restart | a Jetson with a desktop |
+| `autostart` | `yes` or `no` | a PC |
+
+- An answer the install already has changes nothing.
+- An unknown key, a bad value, or a key for the other kind of computer stops it
+  before anything changes.
+- It needs an install to change, and does not go with `--update`,
+  `--uninstall`, `--ref` or `--binary`.
+
+<a id="the-web-page"></a>
+
+### The web page
+
+The server serves it on `JETLINK_STATUS_PORT`, for a phone or computer on the
+same network as the Jetson or PC: the status, the setup and the models.
+
+- It asks for a password, kept in `/etc/jetlink/web-auth.json` (owned by
+  root, mode 0600) as a salted hash, with the key that signs the sign-in
+  cookies. Without the file the page shows the status only.
+- `sudo jetlink password` sets a new one: typed twice, or made with
+  `--generate` and printed. Every device signed in is signed out. It is also
+  the way back from a forgotten password.
+- The server writes the file (`jetlink-server web-password`) and reads it again
+  whenever it changes, so a new password needs no restart.
+- It is plain HTTP: the password and the page cross the network unencrypted.
+  Use it on networks you trust, such as the comma's hotspot or your home Wi-Fi.
+- `jetlink uninstall` removes the file with the rest of `/etc/jetlink`.
 
 <a id="the-server-command"></a>
 
@@ -158,6 +207,7 @@ and the server inside the Mac, iPhone and Android apps.
 | `serve` (the default) | Serves the comma until SIGINT or SIGTERM. |
 | `build ONNX` | Builds this backend's engine for a model before a drive, and loads it once. The next `serve` on that cache preloads it. |
 | `models ...` | The model catalog and the cache: [model command reference](model-cli.md). |
+| `web-password --file FILE [--generate]` | Writes the [web page's](#the-web-page) password file, mode 0600: the password from the first line of standard input (8 to 128 characters), or with `--generate` a new one, printed. Exits 1 with the reason otherwise. |
 | `bench` | Runs a built engine at the comma's pace (20 frames a second) with no comma and no link, and prints its times. |
 | `backends` | Lists the backends and why each can or cannot run here. Exits 0 when one can. |
 | `spec ONNX` | Prints the spec the comma is sent for a model, as JSON (the file `scripts/bench_link.py --spec` reads). |
@@ -180,7 +230,8 @@ stop any server using the same cache first.
 | `--tensorrt-libs DIR` | `lib/tensorrt` beside `bin/` if it exists, else the loader path | Where TensorRT's libraries are: a PC's own copy. A Jetson's are JetPack's, on the loader path. |
 | `--gpu-timing` | off | TensorRT: time each launch with CUDA events and log their spread every 1,200 frames. |
 | `--sleep-after S` | 0 (never) | Linux, with `--usb` only: suspend after S seconds with no comma on the bus. |
-| `--status-port P` | 0 (off) | Serve the read-only [status page](control-protocol.md#the-status-page) on port P. |
+| `--status-port P` | 0 (off) | Serve the [web page](control-protocol.md#the-web-page) on port P. |
+| `--web-auth FILE` | none | The web page's password file. When it is there, the page asks for the password and has the setup and the models; without the flag or the file, it shows the status only. |
 | `--poweroff` | off | Linux: power the machine off when the comma asks (its battery-protection shutdown). Without it the comma is told yes and the machine stays up. |
 | `--no-preload` | off | Do not load the engine loaded last until a comma asks for it. |
 | `--no-keepalive` | off | Mac ONNX Runtime: no [GPU keep-alive](mac-performance.md#keeping-the-mac-gpu-responsive-between-frames) between frames. |

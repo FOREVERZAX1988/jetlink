@@ -42,6 +42,13 @@ Follow the **[Jetson setup guide](docs/jetson.md)** (power, JetPack, installer).
 
 </details>
 
+<details>
+<summary>Watch the web page</summary>
+
+<a href="docs/images/webui-demo.mp4"><img src="docs/images/webui-demo.webp" width="100%" alt="The Jetson's web page on a phone and a computer, with simulated drive data: sign in, frame timing against the 50 ms budget, a model downloaded and prepared (sped up), the power setting applied, and keep awake"></a>
+
+</details>
+
 <a id="jetson-or-linux-pc"></a>
 
 ### Linux PC

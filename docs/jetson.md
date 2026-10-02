@@ -93,7 +93,7 @@ Always-on power: leave both cables connected. The Jetson sleeps when parked and
 wakes when you start the car.
 
 Read [daily use](using-jetlink.md) before driving. Watch it from your phone:
-[status page](using-jetlink.md#status-page). Frame times per model on a Jetson:
+[web page](using-jetlink.md#web-page). Frame times per model on a Jetson:
 [performance](status.md#measured-performance).
 
 <a id="troubleshooting"></a>
@@ -116,11 +116,12 @@ Read [daily use](using-jetlink.md) before driving. Watch it from your phone:
 <a id="reporting-a-problem"></a>
 
 ```bash
-jetlink status      # check Jetlink, the comma connection, the status page address
+jetlink status      # check Jetlink, the comma connection, the web page address
 jetlink logs        # view errors; Ctrl-C to stop watching
 jetlink restart     # restart Jetlink
 jetlink update      # update to the newest release, keeping your settings
-jetlink setup       # change the power, desktop or status page answers
+jetlink setup       # change the power, desktop or web page answers
+jetlink password    # set a new password for the web page
 jetlink models      # list, download or prepare models (jetlink models --help)
 jetlink caffeinate  # keep it awake until Ctrl-C (-t SECONDS, or while a command runs)
 jetlink uninstall   # remove Jetlink
