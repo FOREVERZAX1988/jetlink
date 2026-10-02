@@ -13,6 +13,11 @@ enum LiteRtLibraries {
   static var available: Bool {
     !(ProcessInfo.processInfo.environment[LiteRtRuntime.directoryVariable] ?? "").isEmpty
   }
+
+  /// The bench's directory, $JETLINK_LITERT_BENCH (LiteRtBenchTests).
+  static var bench: URL? {
+    ProcessInfo.processInfo.environment["JETLINK_LITERT_BENCH"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true) }
+  }
 }
 
 /// The on-device conversion's stand-in: the .tflite that
@@ -160,5 +165,62 @@ struct LiteRtProfileTests {
     #expect(backend.deviceTag() == "litert-gpu-Tensor_G5")
     #expect(backend.tag() == "litert2.2.0.litert-gpu-Tensor_G5")
     #expect(LiteRtBackend(profile: .cpu, preparer: ONNXPreparer()).deviceTag() == sanitize("litert-cpu-\(HostChip.name())"))
+  }
+}
+
+/// A real model on LiteRT in a closed loop, where $JETLINK_LITERT_BENCH names
+/// a directory holding model.tflite and, for each input the host writes,
+/// `<name>.bin`: its frames back to back. Logs the compile, the first frame
+/// and the frame time ($JETLINK_LITERT_BENCH_FRAMES of them, 200 by default),
+/// and writes the driving output of each recorded frame to
+/// outputs.litert.bin for a parity check against onnxruntime's.
+/// $JETLINK_LITERT_BENCH_DEVICE is litert-gpu (the default) or litert-cpu.
+@Suite(
+  "LiteRT bench", .serialized,
+  .enabled(if: LiteRtLibraries.available && LiteRtLibraries.bench != nil, "no LiteRT, or no model in $JETLINK_LITERT_BENCH"))
+struct LiteRtBenchTests {
+  @Test("A model in a closed loop: compile, first frame, frame time, outputs")
+  func closedLoop() throws {
+    let environment = ProcessInfo.processInfo.environment
+    let directory = try #require(LiteRtLibraries.bench)
+    let profile = LiteRtProfile(rawValue: environment["JETLINK_LITERT_BENCH_DEVICE"] ?? "") ?? .gpu
+    let total = Int(environment["JETLINK_LITERT_BENCH_FRAMES"] ?? "") ?? 200
+    try LiteRtRuntime.load()
+    let compileStarted = DispatchTime.now()
+    let options =
+      profile == .gpu ? LiteRtCompileOptions(gpu: true, gpuFP16: true) : LiteRtCompileOptions(gpu: false, cpuThreads: LiteRtBackend.cpuThreads)
+    let engine = try LiteRtEngine(model: directory.appending(path: "model.tflite"), options: options, device: "bench", label: profile.label)
+    defer { engine.close() }
+    let compileMs = Double(DispatchTime.now().uptimeNanoseconds - compileStarted.uptimeNanoseconds) / 1e6
+    #expect(engine.fullyAccelerated || profile == .cpu)
+    try engine.loopState(
+      engine.inputs.keys.filter { $0.hasPrefix("state_") && engine.outputs["next_\($0)"] != nil }.map { (input: $0, output: "next_\($0)") })
+
+    let frames = try Dictionary(uniqueKeysWithValues: engine.hostInputs.map { ($0, try Data(contentsOf: directory.appending(path: "\($0).bin"))) })
+    let recorded = engine.hostInputs.map { frames[$0]!.count / engine.inputs[$0]!.byteCount }.min() ?? 0
+    #expect(recorded > 0)
+    let output = try #require(engine.outputs["outputs"])
+    var outputs = Data(capacity: recorded * output.byteCount)
+    var scratch = Data(count: output.byteCount)
+    var times: [Double] = []
+    for i in 0..<max(total, recorded) {
+      let frame = i % recorded
+      let started = DispatchTime.now()
+      for name in engine.hostInputs {
+        let bytes = engine.inputs[name]!.byteCount
+        frames[name]!.withUnsafeBytes { engine.hostInput(name)!.copyMemory(from: $0.baseAddress! + frame * bytes, byteCount: bytes) }
+      }
+      try engine.run()
+      scratch.withUnsafeMutableBytes { $0.baseAddress!.copyMemory(from: engine.output("outputs")!, byteCount: output.byteCount) }
+      times.append(Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1e6)
+      if i < recorded { outputs.append(scratch) }
+    }
+    try outputs.write(to: directory.appending(path: "outputs.litert.bin"))
+    let steady = times.dropFirst(2).sorted()
+    let at = { (q: Double) in steady[min(steady.count - 1, Int(q * Double(steady.count)))] }
+    print(
+      String(
+        format: "LiteRT bench %@ (%@): compile %.0f ms, first frame %.1f ms, then p50 %.2f ms p99 %.2f ms max %.2f ms over %d frames; %d recorded",
+        profile.rawValue, engine.notes, compileMs, times[0], at(0.5), at(0.99), steady.last ?? 0, steady.count, recorded))
   }
 }
