@@ -317,13 +317,13 @@ def tolerance(ref: np.ndarray, spread: float) -> float:
   return max(TINY_TOLERANCE * float(np.abs(ref).max(initial=0.0)), CONSTANT_FRACTION * spread)
 
 
-def judge(a: np.ndarray, b: np.ndarray, per_frame: int, spread: float = np.inf) -> tuple[bool, str]:
+def judge(a: np.ndarray, b: np.ndarray, per_frame: int, spread: float | None = None) -> tuple[bool, str]:
   """Whether `a` matches the reference `b`, and the number that says so. Correlation,
   unless there is too little to correlate: fewer than MIN_SAMPLES values a frame, or
-  (a column) moving less than QUIET_FRACTION of `spread`, its slice's. Those are held
-  to absolute error, within `tolerance` of their own largest value."""
-  if per_frame < MIN_SAMPLES or b.std() < QUIET_FRACTION * spread:
-    bound = tolerance(b, b.std() if np.isinf(spread) else spread)
+  (a column, `spread` its slice's) moving less than QUIET_FRACTION of its slice. Those
+  are held to absolute error, within `tolerance` of their own largest value."""
+  if per_frame < MIN_SAMPLES or (spread is not None and b.std() < QUIET_FRACTION * spread):
+    bound = tolerance(b, b.std() if spread is None else spread)
     err = np.abs(a - b).max()
     return err <= bound, f'by error, max abs {err:.4g} {"<=" if err <= bound else ">"} {bound:.4g}'
   c = _corr(a, b)

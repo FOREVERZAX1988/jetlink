@@ -221,3 +221,17 @@ def test_a_slice_counted_from_the_end():
   with redirect_stdout(io.StringIO()) as buf:
     passed = vp.report_slices(spec, links, refs)
   assert passed['pad'], buf.getvalue()
+
+
+def test_a_large_slice_is_held_to_correlation_not_error():
+  # 64 values a frame, off by 5% of the largest: within TINY_TOLERANCE, but a
+  # slice this size has enough to correlate, and correlates below MIN_CORR
+  hidden = slice(0, 64)
+  spec = SimpleNamespace(output_slices={'hidden_state': hidden})
+  rng = np.random.default_rng(3)
+  refs = [rng.standard_normal(64).astype(np.float32) for _ in range(N_FRAMES)]
+  links = [r + 0.05 * np.abs(r).max() * rng.standard_normal(64).astype(np.float32) for r in refs]
+  with redirect_stdout(io.StringIO()) as buf:
+    passed = vp.report_slices(spec, links, refs)
+  assert not passed['hidden_state'], buf.getvalue()
+  assert '(compared whole)' in buf.getvalue()
