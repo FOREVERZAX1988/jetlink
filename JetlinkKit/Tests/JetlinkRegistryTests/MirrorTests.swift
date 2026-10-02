@@ -1,8 +1,6 @@
 import Foundation
-import Testing
-
 import JetlinkRegistry
-@testable import JetlinkRegistry
+import Testing
 
 /// The URL rewrites the mirrors are tried in: a HuggingFace proxy swaps the
 /// host, a GitHub prefix carries GitHub's hosts only, and the original URL
