@@ -21,14 +21,18 @@ Jetson or PC: [README](../README.md#quick-start).
 
 ### Which phones
 
-On a Snapdragon the model runs on the NPU, the Hexagon, through Qualcomm's QNN
-runtime. Every other phone, a Pixel's Google Tensor among them, runs it on its
-GPU through Google's LiteRT: Jetlink converts the model for it on the phone.
-The big models are about 94 billion operations a frame. On a Mac's GPU the
-LiteRT path takes 37 ms a frame for Cinque Terre V3, and a phone's GPU is slower,
-so only the newest flagships may keep up. Run the [Benchmark](#benchmark).
+Every phone runs the model on its GPU through Google's LiteRT, which Jetlink
+converts the model for on the phone: Adreno, Mali and PowerVR GPUs, a Pixel's
+Google Tensor among them. The big models are about 94 billion operations a
+frame. On a Mac's GPU the LiteRT path takes 37 ms a frame for Cinque Terre V3,
+and a phone's GPU is slower, so only the newest flagships may keep up. Run the
+[Benchmark](#benchmark).
 
-| Snapdragon | NPU | Expect |
+On a Snapdragon you can instead choose the NPU, the Hexagon, through Qualcomm's
+QNN runtime (Settings > Processor). It has not run on a phone yet, so check its
+outputs from a Mac with `scripts/verify_parity.py` before you drive on it.
+
+| Snapdragon | NPU | Expect on the NPU |
 | --- | --- | --- |
 | 8 Elite Gen 5, 8 Elite, 8 Gen 3 | v81, v79, v75 | Fast enough (estimated) |
 | 8 Gen 2, 8s Gen 3 | v73 | Maybe |
@@ -150,7 +154,7 @@ A hot phone slows down and frames miss 50 ms.
 | Link | USB 3 or USB 2 while connected (Wi-Fi for a bench tool) |
 | Port | The TCP port for `verify_parity.py` from a Mac, 5599 by default |
 | Wi-Fi | The phone's Wi-Fi address and port, for a Mac's bench tools |
-| Processor | On a Snapdragon, **NPU + GPU** (default): the vision model on the NPU, the rest on the GPU, as a Mac splits it; **NPU**: the whole model on the NPU. **GPU**: the whole model on the GPU through LiteRT, the default on every other phone. **CPU**: for the emulator, seconds a frame. Changing it prepares the model again |
+| Processor | **GPU** (default): the whole model on the GPU through LiteRT. On a Snapdragon, also **NPU + GPU**: the vision model on the NPU, the rest on the GPU, as a Mac splits it; and **NPU**: the whole model on the NPU. **CPU**: for the emulator, seconds a frame. Changing it prepares the model again |
 | Keep NPU Awake | With the NPU, on by default. Holds the NPU at full speed between frames. Uses some power |
 | Keep CPU Awake | With the NPU: holds the CPU's clocks up between frames, through Android's performance hints, or a busy core on a phone without them. Uses some power |
 | Keep Screen On | On by default |

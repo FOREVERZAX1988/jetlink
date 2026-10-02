@@ -42,16 +42,19 @@ object Chip {
     val hexagon: Int? get() = known[model]?.second
 
     /** How well this phone should do, before a benchmark says for sure. */
-    enum class Expectation { Recommended, Possible, TooOld, GpuOnly }
+    enum class Expectation { Recommended, Possible, TooOld, Unmeasured }
 
-    val expectation: Expectation
-        get() {
-            if (!isQualcomm) return Expectation.GpuOnly
-            val v = hexagon ?: return Expectation.Possible
-            return when {
-                v >= 75 -> Expectation.Recommended
-                v >= 69 -> Expectation.Possible
-                else -> Expectation.TooOld
-            }
+    /**
+     * From the NPU's generation, for QNN's choices: Qualcomm's published
+     * numbers for similar models. No phone's GPU has been measured.
+     */
+    fun expectation(processor: Processor): Expectation {
+        if (!processor.usesQnn || !isQualcomm) return Expectation.Unmeasured
+        val v = hexagon ?: return Expectation.Possible
+        return when {
+            v >= 75 -> Expectation.Recommended
+            v >= 69 -> Expectation.Possible
+            else -> Expectation.TooOld
         }
+    }
 }

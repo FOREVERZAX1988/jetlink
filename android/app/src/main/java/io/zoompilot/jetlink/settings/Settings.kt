@@ -46,7 +46,7 @@ enum class Processor(val id: String, val title: String) {
 data class SettingsValues(
     /** Where bench tools such as `bench_link.py --host` reach the phone. */
     val port: Int = 5599,
-    val processor: Processor = Processor.NpuGpu,
+    val processor: Processor = Processor.Gpu,
     /** The NPU held in burst mode between frames rather than let it settle. */
     val keepNpuAwake: Boolean = true,
     /** A CPU core kept busy between frames. */
@@ -94,11 +94,13 @@ class Settings(context: Context) {
         const val KEEP_CPU_AWAKE = "keepCpuAwake"
         const val KEEP_SCREEN_ON = "keepScreenOn"
 
-        /** The split on a Snapdragon, the GPU on any other phone, the CPU on the emulator. */
-        fun defaultProcessor(): Processor = when {
-            Chip.isEmulator -> Processor.Cpu
-            Chip.isQualcomm -> Processor.NpuGpu
-            else -> Processor.Gpu
-        }
+        /**
+         * The GPU on every phone, a Snapdragon's too; the CPU on the emulator.
+         * LiteRT's GPU path is the one whose outputs are shown to match in
+         * float16 (after the LayerNorm rewrite). QNN's NPU choices stay on a
+         * Snapdragon but have run on no phone, and 20 of Cinque Terre V3's 44
+         * vision LayerNorms overflow float16 when computed step by step.
+         */
+        fun defaultProcessor(): Processor = if (Chip.isEmulator) Processor.Cpu else Processor.Gpu
     }
 }

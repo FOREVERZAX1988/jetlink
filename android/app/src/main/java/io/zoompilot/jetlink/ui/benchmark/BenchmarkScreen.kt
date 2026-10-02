@@ -67,6 +67,7 @@ import io.zoompilot.jetlink.server.Benchmark
 import io.zoompilot.jetlink.server.RunState
 import io.zoompilot.jetlink.server.Snapshot
 import io.zoompilot.jetlink.settings.Chip
+import io.zoompilot.jetlink.settings.Processor
 import io.zoompilot.jetlink.ui.Format
 import io.zoompilot.jetlink.ui.JetlinkTheme
 import io.zoompilot.jetlink.ui.PreviewData
@@ -87,8 +88,8 @@ import kotlinx.coroutines.launch
 /** The phone's chip, as the run card names it. */
 data class ChipInfo(val line: String, val expectation: String, val tone: Tone) {
     companion object {
-        fun current(): ChipInfo {
-            val (text, tone) = BenchmarkText.expectation(Chip.expectation)
+        fun current(processor: Processor): ChipInfo {
+            val (text, tone) = BenchmarkText.expectation(Chip.expectation(processor))
             return ChipInfo(BenchmarkText.chipLine(Chip.name, Chip.hexagon), text, tone)
         }
     }
@@ -113,7 +114,7 @@ fun BenchmarkScreen(graph: AppGraph) {
     val settings by graph.settings.values.collectAsStateWithLifecycle()
     var refusal by remember { mutableStateOf<String?>(null) }
     var starting by remember { mutableStateOf(false) }
-    val chip = remember { ChipInfo.current() }
+    val chip = remember(settings.processor) { ChipInfo.current(settings.processor) }
     val actions = BenchmarkActions(
         start = { seconds ->
             refusal = null
