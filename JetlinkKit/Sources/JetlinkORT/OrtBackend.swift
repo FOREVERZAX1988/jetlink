@@ -4,10 +4,6 @@ import JetlinkONNX
 import JetlinkRegistry
 import JetlinkServer
 
-#if canImport(Metal)
-  import Metal
-#endif
-
 /// Where onnxruntime runs a model: the sessions the graph is prepared into
 /// and what runs each, CoreML's units on Apple platforms, QNN's on a
 /// Snapdragon, the CPU provider anywhere. The raw value is what `--device`
@@ -59,13 +55,29 @@ public enum OrtProfile: String, CaseIterable, Sendable {
     }
   }
 
-  /// How the preparation lays the graph out for those sessions.
+  /// How the preparation lays the graph out for those sessions. On Android
+  /// the CPU's is the graph without CoreML's rewrites: onnxruntime's Android
+  /// build runs the rewritten fp16 Gemm on one thread, a hundred times slower
+  /// than the MatMul it replaces. Apple's build runs it as fast, and the
+  /// goldens hold the Mac's CPU to Python's outputs bit for bit.
   var layout: CoreMLPreparation.Layout {
     switch self {
     case .ane, .htp: .split
     case .aneWhole, .htpWhole: .aneWhole
-    case .coreml, .gpu, .cpu: .whole
+    case .coreml, .gpu: .whole
+    case .cpu:
+      #if os(Android)
+        .plain
+      #else
+        .whole
+      #endif
     }
+  }
+
+  /// What a build writes: 5 is every graph split on `ane` and Expand as Tile
+  /// on both, 6 the plain graph. An artifact prepared under another rebuilds.
+  public var prepareVersion: Int {
+    layout == .plain ? 6 : 5
   }
 
   var usesCoreML: Bool {
@@ -114,10 +126,6 @@ enum OrtUnit: Equatable {
 /// Nothing QNN has run on a Snapdragon yet: its options follow onnxruntime
 /// 1.29's QNN documentation and source.
 public final class OrtBackend: EngineBackend {
-  /// What a build writes: 5 is every graph split on `ane` and Expand as Tile
-  /// on both. Every profile prepares the same way, so one number; an artifact
-  /// prepared under another rebuilds.
-  public static let prepareVersion = 5
   /// A first NPU compile with no earlier build to go by. The QNN graph
   /// finalization of a big model is minutes on a phone (unmeasured).
   static let expectedCompileSeconds = 180.0
@@ -143,29 +151,7 @@ public final class OrtBackend: EngineBackend {
     self.preparer = preparer
     self.keepAlive = keepAlive
     self.keepCPUWarm = keepCPUWarm
-    let chip = chip ?? OrtBackend.defaultChip()
-    self.chip = chip.isEmpty ? "unknown" : chip
-  }
-
-  /// The SoC's name on Apple platforms, which is the GPU: "Apple M1 Pro",
-  /// "Apple A17 Pro". On a Mac the CPU brand string, as the Python's gpu_name
-  /// reads it, so the two agree on a cache key. "cpu" elsewhere.
-  static func defaultChip() -> String {
-    #if os(macOS)
-      var size = 0
-      if sysctlbyname("machdep.cpu.brand_string", nil, &size, nil, 0) == 0, size > 1 {
-        var bytes = [CChar](repeating: 0, count: size)
-        if sysctlbyname("machdep.cpu.brand_string", &bytes, &size, nil, 0) == 0 {
-          return String(decoding: bytes.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
-        }
-      }
-    #endif
-    #if canImport(Metal)
-      let name = MTLCreateSystemDefaultDevice()?.name ?? "unknown"
-      return name.hasSuffix(" GPU") ? String(name.dropLast(4)) : name
-    #else
-      return "cpu"
-    #endif
+    self.chip = HostChip.resolve(chip)
   }
 
   public var runtimeVersion: String { OrtRuntime.version }
@@ -177,10 +163,6 @@ public final class OrtBackend: EngineBackend {
   public func deriveSpec(model: URL, sha256: String, nbytes: Int64, frameSkip: Int) throws -> ModelSpec {
     try preparer.readSpec(model: model, sha256: sha256, nbytes: nbytes, frameSkip: frameSkip)
   }
-
-  /// The CPU provider's pool when the CPU runs the whole model: half the
-  /// cores, leaving the rest to the link and the app.
-  static var cpuThreads: Int { max(1, ProcessInfo.processInfo.activeProcessorCount / 2) }
 
   /// QNN's options for a unit, as onnxruntime 1.29 names them.
   func providerOptions(_ unit: OrtUnit) -> [String: String] {
@@ -208,7 +190,7 @@ public final class OrtBackend: EngineBackend {
     case .coreML(let units): SessionPlan(model: model, computeUnits: units, cacheDirectory: cache)
     case .htp: SessionPlan(model: model, provider: "QNN", options: providerOptions(unit), label: "QNN(htp)", usesNeuralEngine: true)
     case .qnnGPU: SessionPlan(model: model, provider: "QNN", options: providerOptions(unit), label: "QNN(gpu)", usesGPU: true)
-    case .cpu: SessionPlan(model: model, provider: nil, threads: OrtBackend.cpuThreads, label: "CPU")
+    case .cpu: SessionPlan(model: model, provider: nil, threads: HostChip.cpuThreads, label: "CPU")
     }
   }
 
@@ -345,7 +327,7 @@ public final class OrtBackend: EngineBackend {
   // MARK: load
 
   public func load(artifact: URL, report: @escaping ProgressFn) throws -> any Engine {
-    let (manifest, meta) = try OrtArtifact.open(artifact) { entry in
+    let (manifest, meta) = try OrtArtifact.open(artifact, version: profile.prepareVersion) { entry in
       guard let unit = OrtUnit(entry: entry) else { return "a session names no unit" }
       // Without its compile, onnxruntime would recompile under a "loading"
       // that never moves. Rebuild instead, which reports progress. Only the

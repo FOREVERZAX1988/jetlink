@@ -10,6 +10,11 @@
 # the Mac, so the device gets a copy of those folders and JETLINK_TEST_ROOT
 # points the tests at it (Tests/JetlinkTestSupport/SourceTree.swift).
 #
+# LITERT_AAR=path/to/litert-2.2.0.aar pushes LiteRT's libraries as well and
+# points the LiteRT suites at them ($JETLINK_LITERT_DIR), which otherwise skip;
+# with JETLINK_LITERT_BENCH=DIR, a directory already on the device, the bench
+# runs the model there too (LiteRtBackendTests.swift).
+#
 # Uses the toolchain, SDK and NDK swift-env.sh finds, and the one adb device.
 set -euo pipefail
 source "$(dirname "$0")/swift-env.sh"
@@ -46,6 +51,12 @@ for fixtures in JetlinkServerTests JetlinkONNXTests; do
   cp -R "$REPO/JetlinkKit/Tests/$fixtures/Fixtures" "$STAGE/repo/JetlinkKit/Tests/$fixtures/"
 done
 cp -R "$REPO/tests/fixtures" "$STAGE/repo/tests/"
+LITERT=""
+if [[ -n "${LITERT_AAR:-}" ]]; then
+  mkdir -p "$STAGE/litert"
+  unzip -o -q -j "$LITERT_AAR" 'jni/arm64-v8a/*.so' -d "$STAGE/litert"
+  LITERT="JETLINK_LITERT_DIR=$DEVICE_DIR/litert${JETLINK_LITERT_BENCH:+ JETLINK_LITERT_BENCH=$JETLINK_LITERT_BENCH}"
+fi
 
 "$ADB" shell rm -rf "$DEVICE_DIR"
 "$ADB" shell mkdir -p "$DEVICE_DIR"
@@ -54,6 +65,6 @@ cp -R "$REPO/tests/fixtures" "$STAGE/repo/tests/"
 status=0
 for target in "${TARGETS[@]}"; do
   echo "== $target"
-  "$ADB" shell "cd $DEVICE_DIR && chmod +x $target-test-runner && JETLINK_TEST_ROOT=$DEVICE_DIR/repo LD_LIBRARY_PATH=. ./$target-test-runner --testing-library swift-testing" || status=1
+  "$ADB" shell "cd $DEVICE_DIR && chmod +x $target-test-runner && JETLINK_TEST_ROOT=$DEVICE_DIR/repo $LITERT LD_LIBRARY_PATH=. ./$target-test-runner --testing-library swift-testing" || status=1
 done
 exit $status

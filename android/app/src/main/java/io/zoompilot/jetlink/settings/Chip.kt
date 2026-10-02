@@ -17,6 +17,9 @@ object Chip {
     val isQualcomm: Boolean
         get() = manufacturer.equals("QTI", ignoreCase = true) || manufacturer.equals("Qualcomm", ignoreCase = true)
 
+    /** What this phone's Settings offer. */
+    fun processors(current: Processor): List<Processor> = Processor.choices(isQualcomm, isEmulator, current)
+
     val isEmulator: Boolean
         get() = Build.HARDWARE.contains("ranchu") || Build.HARDWARE.contains("goldfish") || Build.PRODUCT.contains("sdk")
 
@@ -39,16 +42,19 @@ object Chip {
     val hexagon: Int? get() = known[model]?.second
 
     /** How well this phone should do, before a benchmark says for sure. */
-    enum class Expectation { Recommended, Possible, TooOld, NoNpu }
+    enum class Expectation { Recommended, Possible, TooOld, Unmeasured }
 
-    val expectation: Expectation
-        get() {
-            if (!isQualcomm) return Expectation.NoNpu
-            val v = hexagon ?: return Expectation.Possible
-            return when {
-                v >= 75 -> Expectation.Recommended
-                v >= 69 -> Expectation.Possible
-                else -> Expectation.TooOld
-            }
+    /**
+     * From the NPU's generation, for QNN's choices: Qualcomm's published
+     * numbers for similar models. No phone's GPU has been measured.
+     */
+    fun expectation(processor: Processor): Expectation {
+        if (!processor.usesQnn || !isQualcomm) return Expectation.Unmeasured
+        val v = hexagon ?: return Expectation.Possible
+        return when {
+            v >= 75 -> Expectation.Recommended
+            v >= 69 -> Expectation.Possible
+            else -> Expectation.TooOld
         }
+    }
 }

@@ -116,14 +116,19 @@ private fun Headroom(stats: Stats?, modifier: Modifier, compact: Boolean) {
 private fun Progress(engine: Engine, modelName: String?, modifier: Modifier) {
     val colors = JetlinkTheme.colors
     val title = if (engine.state == "loading") l10n(R.string.hero_loading) else l10n(R.string.hero_preparing)
-    SummaryCard(title, Icons.Filled.Build, colors.info, modifier, trailing = Format.percent(engine.frac)) {
+    SummaryCard(title, Icons.Filled.Build, colors.info, modifier, trailing = Format.progressAmount(engine.frac, engine.msg)) {
         Text(modelName ?: l10n(R.string.placeholder_model), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        LinearProgressIndicator(
-            progress = { engine.frac.coerceIn(0.0, 1.0).toFloat() },
-            modifier = Modifier.fillMaxWidth(),
-            color = colors.info,
-            trackColor = colors.info.copy(alpha = 0.2f),
-        )
+        // a step with no estimate moves rather than sit at 0%
+        if (engine.frac > 0) {
+            LinearProgressIndicator(
+                progress = { engine.frac.coerceIn(0.0, 1.0).toFloat() },
+                modifier = Modifier.fillMaxWidth(),
+                color = colors.info,
+                trackColor = colors.info.copy(alpha = 0.2f),
+            )
+        } else {
+            LinearProgressIndicator(Modifier.fillMaxWidth(), color = colors.info, trackColor = colors.info.copy(alpha = 0.2f))
+        }
         Text(Format.stageName(engine.stage), style = MaterialTheme.typography.bodyMedium, color = colors.secondaryText)
     }
 }

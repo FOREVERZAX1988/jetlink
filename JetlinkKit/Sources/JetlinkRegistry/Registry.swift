@@ -51,7 +51,7 @@ public final class Registry: Sendable {
   /// The suffix each backend gives its artifact, so a sidecar can be paired
   /// with the thing it describes without the backend (and so a Jetson's
   /// sidecars read on a phone).
-  public static let artifactSuffixes = ["trt": ".plan", "tinygrad": ".pkl", "ort": ".ortcache", "fake": ".fake"]
+  public static let artifactSuffixes = ["trt": ".plan", "tinygrad": ".pkl", "ort": ".ortcache", "litert": ".litertcache", "fake": ".fake"]
 
   static let hashChunk = 1 << 20
   static let copyChunk = 4 << 20
@@ -521,7 +521,8 @@ public final class Registry: Sendable {
 
     // Python's `or` chain: the first of these that is truthy, else trt_version
     // as it stands, which is how a Jetson's sidecar still reports its runtime.
-    let runtime = [meta["onnxruntime"], meta["tinygrad"]].lazy.compactMap { $0 }.first { $0.truthy } ?? meta["trt_version"]
+    // LiteRT's is Swift's alone.
+    let runtime = [meta["onnxruntime"], meta["tinygrad"], meta["litert"]].lazy.compactMap { $0 }.first { $0.truthy } ?? meta["trt_version"]
     let spec = meta["spec"].flatMap { $0.truthy ? $0 : nil }
     let current = tag.map { key == "\(sha256.prefix(16)).\($0)" && artifact.lastPathComponent.hasSuffix(suffix) } ?? false
     return InventoryArtifact(

@@ -1,8 +1,8 @@
 # Jetlink for Android
 
-**Experimental, and not yet run on a phone.** Runs the Jetlink server in an
-Android app, on the phone's Snapdragon NPU, connected to the comma by USB. You
-build it from source. Run the [Benchmark](#benchmark) before you drive to see
+**Experimental, and not yet measured on a phone.** Runs the Jetlink server in an
+Android app, on a Snapdragon's NPU or any phone's GPU, connected to the comma by
+USB. You build it from source. Run the [Benchmark](#benchmark) before you drive to see
 if your phone keeps up.
 
 Mac: [Jetlink for Mac](macos-app.md). iPhone: [Jetlink for iPhone and iPad](iphone-app.md).
@@ -10,8 +10,7 @@ Jetson or PC: [README](../README.md#quick-start).
 
 ## Requirements
 
-- An Android 12 or later phone with a Snapdragon 8 Gen 2 or newer. See
-  [Which phones](#which-phones).
+- An Android 12 or later phone, a recent flagship. See [Which phones](#which-phones).
 - USB 3 on the phone, a USB 3 hub or adapter, and a USB 3 cable. See
   [Connect the comma](#connect-the-comma).
 - About 3 GB free per model.
@@ -22,10 +21,18 @@ Jetson or PC: [README](../README.md#quick-start).
 
 ### Which phones
 
-The model runs on the phone's NPU, the Hexagon in a Snapdragon, through
-Qualcomm's QNN runtime. Other phones run it on the CPU, far too slowly.
+Every phone runs the model on its GPU through Google's LiteRT, which Jetlink
+converts the model for on the phone: Adreno, Mali and PowerVR GPUs, a Pixel's
+Google Tensor among them. The big models are about 94 billion operations a
+frame. On a Mac's GPU the LiteRT path takes 37 ms a frame for Cinque Terre V3,
+and a phone's GPU is slower, so only the newest flagships may keep up. Run the
+[Benchmark](#benchmark).
 
-| Snapdragon | NPU | Expect |
+On a Snapdragon you can instead choose the NPU, the Hexagon, through Qualcomm's
+QNN runtime (Settings > Processor). It has not run on a phone yet, so check its
+outputs from a Mac with `scripts/verify_parity.py` before you drive on it.
+
+| Snapdragon | NPU | Expect on the NPU |
 | --- | --- | --- |
 | 8 Elite Gen 5, 8 Elite, 8 Gen 3 | v81, v79, v75 | Fast enough (estimated) |
 | 8 Gen 2, 8s Gen 3 | v73 | Maybe |
@@ -90,7 +97,7 @@ share of each frame (not the cable).
 
 - **Verdict:** **Fast Enough** (green) is a P99 at or under 35 ms with nothing
   over 50. **Tight** (orange) is a P99 under 50 ms. **Too Slow** (red) misses
-  20 frames a second.
+  20 frames a second, or did not finish a frame in the whole run.
 - **Totals:** frames, frames over 50 ms (and over 35), the phone's temperature
   at start and end, and the model alone.
 - **Over Time:** P99 and temperature per 10 seconds. A phone that slows as it
@@ -98,10 +105,9 @@ share of each frame (not the cable).
 - **10 Minutes** heats the phone: compare the first and last windows.
 - The share button sends the report.
 
-The app fills in two commands to copy, as the iPhone app does: the comma's live
-bench (`jetlink_repo/scripts/comma/jetlink_live_bench.sh 180` over SSH, offroad,
-with the phone connected), and `scripts/verify_parity.py` from a Mac on the same
-Wi-Fi, which should end with OK.
+For the frame times the car will see, cable included, run
+`jetlink_repo/scripts/comma/jetlink_live_bench.sh 180` on the comma over SSH,
+offroad, with the phone connected.
 
 ## Status
 
@@ -148,8 +154,8 @@ A hot phone slows down and frames miss 50 ms.
 | Link | USB 3 or USB 2 while connected (Wi-Fi for a bench tool) |
 | Port | The TCP port for `verify_parity.py` from a Mac, 5599 by default |
 | Wi-Fi | The phone's Wi-Fi address and port, for a Mac's bench tools |
-| Processor | **NPU + GPU** (default): the vision model on the NPU, the rest on the GPU, as a Mac splits it. **NPU**: the whole model on the NPU. **GPU**: when something else keeps the NPU busy. **CPU**: for the emulator. Changing it prepares the model again |
-| Keep NPU Awake | On by default. Holds the NPU at full speed between frames. Uses some power |
+| Processor | **GPU** (default): the whole model on the GPU through LiteRT. On a Snapdragon, also **NPU + GPU**: the vision model on the NPU, the rest on the GPU, as a Mac splits it; and **NPU**: the whole model on the NPU. **CPU**: for the emulator, seconds a frame. Changing it prepares the model again |
+| Keep NPU Awake | With the NPU, on by default. Holds the NPU at full speed between frames. Uses some power |
 | Keep CPU Awake | With the NPU: holds the CPU's clocks up between frames, through Android's performance hints, or a busy core on a phone without them. Uses some power |
 | Keep Screen On | On by default |
 | Help | How to connect the comma, and the logs |

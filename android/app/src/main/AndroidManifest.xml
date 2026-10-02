@@ -28,6 +28,14 @@
 
         <!-- The FastRPC library the QNN provider reaches the NPU through. -->
         <uses-native-library android:name="libcdsprpc.so" android:required="false" />
+        <!-- The vendor OpenCL LiteRT's GPU accelerator loads, which an app
+             targeting Android 12 or later must declare. The LiteRT AAR's own
+             manifest declares these, but only its libraries are packaged
+             (app/build.gradle.kts). -->
+        <uses-native-library android:name="libOpenCL.so" android:required="false" />
+        <uses-native-library android:name="libOpenCL-car.so" android:required="false" />
+        <uses-native-library android:name="libOpenCL-pixel.so" android:required="false" />
+        <uses-native-library android:name="libvndksupport.so" android:required="false" />
 
         <activity
             android:name=".MainActivity"

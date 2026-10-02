@@ -95,7 +95,8 @@ interleaved on 2026-09-25:
   ([backends](backends.md#runtime-comparison)).
 - The cut also keeps the Neural Engine's fp16 LayerNormalization out of the
   layers after the trunk: with them on the Neural Engine, `road_transform` fell
-  to a correlation of 0.9988 over 32 frames and failed the parity gate.
+  to a correlation of 0.9988 over 32 frames and failed the parity gate (which
+  then correlated columns of one value a frame; it now holds them to error).
 
 Every CoreML build, GPU-only too:
 
@@ -116,7 +117,7 @@ only 43.5 ms. Then use `--device coreml` (**CoreML on the GPU** in the Mac app).
 
 | Tool | Does |
 | --- | --- |
-| `scripts/verify_parity.py` | compares 32 frames against ONNX Runtime on the CPU, with the model's hidden-state feedback; passes when every output slice and column has a correlation of at least 0.999 |
+| `scripts/verify_parity.py` | compares 32 frames against ONNX Runtime on the CPU, with the model's hidden-state feedback; passes when every output slice and column has a correlation of at least 0.999, or, where there is too little to correlate (fewer than 16 values a frame, or a column barely moving), is within 10% of its largest value |
 | `scripts/bench_link.py --rate 20` | round-trip latency through the server over TCP loopback; use 20 Hz results for the driving frame budget ([test without a comma](platforms.md#test-without-a-comma)) |
 | `jetlink-server bench` | runs a prepared engine at the comma's pace with no comma and no link, and reports its times |
 | `scripts/comma/jetlink_live_bench.sh` | on the comma: the big model's frame times as the car sees them |

@@ -53,3 +53,30 @@ public struct TensorSpec: Sendable, Equatable {
   public var count: Int { shape.reduce(1, *) }
   public var byteCount: Int { count * type.size }
 }
+
+extension TensorSpec {
+  /// The `count` inputs or outputs a runtime's C shim describes, `info`
+  /// filling in one's name (NUL terminated), ONNX element type, dims and
+  /// rank. Throws for one jetlink cannot stage: an element type ElementType
+  /// does not name, or a dimension that is not fixed.
+  package static func described(
+    count: Int, _ info: (_ index: Int, _ name: inout [CChar], _ type: inout Int32, _ dims: inout [Int64], _ rank: inout Int) throws -> Void
+  ) throws -> [TensorSpec] {
+    try (0..<count).map { index in
+      var name = [CChar](repeating: 0, count: 512)
+      var type: Int32 = 0
+      var dims = [Int64](repeating: 0, count: 16)
+      var rank = 0
+      try info(index, &name, &type, &dims, &rank)
+      let tensor = String(decoding: name.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+      guard let element = ElementType(rawValue: type) else {
+        throw HostError.failed("\(tensor) has ONNX element type \(type), which jetlink does not stage")
+      }
+      let shape = dims.prefix(rank).map { Int($0) }
+      if shape.contains(where: { $0 <= 0 }) {
+        throw HostError.failed("\(tensor) has a dynamic shape \(shape); jetlink builds fixed-shape engines")
+      }
+      return TensorSpec(name: tensor, type: element, shape: shape)
+    }
+  }
+}

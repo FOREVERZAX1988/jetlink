@@ -9,16 +9,16 @@ over. See [daily use](using-jetlink.md).
 
 Requirements: [Jetson](jetson.md), [Mac](macos-app.md),
 [iPhone](iphone-app.md), [Android](android-app.md), [PC](platforms.md).
-Tested on a Jetson with JetPack 7.2.1, on a Mac, and by users on Ubuntu PCs;
-JetPack 6.2 and WSL2 are untested. The installer also supports Debian, Fedora,
-Arch and openSUSE PCs, untested on hardware: each release's server is only
-checked to load on them.
+Tested on a Jetson with JetPack 7.2.1, on a Mac, on an iPhone, and by users on
+Ubuntu PCs; JetPack 6.2 and WSL2 are untested. The installer also supports
+Debian, Fedora, Arch and openSUSE PCs, untested on hardware: each release's
+server is only checked to load on them.
 
 ## Measured performance
 
 Bench Jetson: Orin Nano Super 8 GB devkit, JetPack 7.2.1, TensorRT 10.16.2.10
 (FP16), MAXN SUPER with `jetson_clocks` pinning the clocks (the installer runs
-it before every start). comma four over USB 3 from the Jetson's USB-A port,
+it at every boot). comma four over USB 3 from the Jetson's USB-A port,
 with its CPU as when driving. Measured 2026-09-28 and 29.
 
 | Model | GPU time | Frame on the comma, p50 / p99: v0.6.0 | v0.7.0 |

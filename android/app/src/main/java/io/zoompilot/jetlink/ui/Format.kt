@@ -1,5 +1,6 @@
 package io.zoompilot.jetlink.ui
 
+import io.zoompilot.jetlink.server.BenchReport
 import io.zoompilot.jetlink.server.HistorySample
 import io.zoompilot.jetlink.server.Stages
 import java.text.NumberFormat
@@ -48,12 +49,22 @@ enum class Room(val title: String, val tone: Tone) {
 enum class Verdict(val title: String, val detail: String, val tone: Tone) {
     Good("Fast Enough", "Room for the cable in the 50 ms budget.", Tone.Good),
     Tight("Tight", "Little room left for the cable.", Tone.Warning),
-    Slow("Too Slow", "Misses 20 frames a second.", Tone.Bad);
+    Slow("Too Slow", "Misses 20 frames a second.", Tone.Bad),
+
+    /** Stopped before a frame was measured. */
+    None("No Frames", "Stopped before a frame was measured.", Tone.Neutral);
 
     companion object {
         fun of(p99: Double, over50: Int = 0): Verdict = when {
             p99 <= ROOMY_P99_MS && over50 == 0 -> Good
             p99 <= BUDGET_MS -> Tight
+            else -> Slow
+        }
+
+        /** A run with no frames is too slow, unless it was stopped first: one frame outlasted the whole run. */
+        fun of(report: BenchReport): Verdict = when {
+            report.frames > 0 -> of(report.frame.p99, report.over50)
+            report.cancelled -> None
             else -> Slow
         }
     }
@@ -116,6 +127,20 @@ object Format {
     /** "42%", clamped to 0 to 100. */
     fun percent(frac: Double): String = "${(frac.coerceIn(0.0, 1.0) * 100).roundToInt()}%"
 
+    private val elapsed = Regex("""\d+ s(?= elapsed$)""")
+
+    /**
+     * How far along: "42%", or for a step with nothing to go by the seconds
+     * so far, "12 s", from the server's "…, 12 s elapsed" (Ticker.paced).
+     * Null before either.
+     */
+    fun progressAmount(frac: Double, msg: String?): String? =
+        if (frac > 0) percent(frac) else msg?.let { elapsed.find(it)?.value }
+
+    /** "Loading · 42%", "Loading · 12 s", or just "Loading". */
+    fun progressText(stage: String?, frac: Double, msg: String?): String =
+        listOfNotNull(stageName(stage), progressAmount(frac, msg)).joinToString(" · ")
+
     /** "18.4 ms headroom", or "3.2 ms over" once P99 is past the budget. */
     fun headroomText(p99: Double): String {
         val room = BUDGET_MS - p99
@@ -132,6 +157,7 @@ object Format {
         "build" -> "Building"
         "save" -> "Saving"
         "load" -> "Loading"
+        "warm" -> "Warming Up"
         "failed" -> "Failed"
         else -> "Working"
     }

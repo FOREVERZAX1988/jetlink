@@ -34,7 +34,7 @@ object ModelRules {
                 val percent = Format.percent(status.frac)
                 if (status.rateBps > 0) "Downloading · $percent · ${Format.rate(status.rateBps)}" else "Downloading · $percent"
             }
-            "preparing" -> "${Format.stageName(status.stage)} · ${Format.percent(status.frac)}"
+            "preparing" -> Format.progressText(status.stage, status.frac, status.msg)
             "loaded" -> if (row.isOrphan) "In Use · ${row.sha256.orEmpty().take(12)}" else "In Use"
             "failed" -> "Failed"
             "unresolved" -> "Checking…"

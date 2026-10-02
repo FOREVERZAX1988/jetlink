@@ -351,21 +351,32 @@ enum Patches {
   /// `numpy_helper.from_array(np.ascontiguousarray(W.T), name)`: the same
   /// element type, the dims swapped, the data as raw_data.
   private static func transposedTensor(_ weight: Tensor, _ name: String, _ src: Source) throws -> Tensor {
+    guard let size = DataType.size(weight.elementType) else {
+      throw OnnxError("\(weight.key): cannot transpose a weight of element type \(weight.elementType)")
+    }
+    let transpose = Transpose(
+      elements: try transposeElements(of: weight, src), rows: Int(weight.dims[0]), cols: Int(weight.dims[1]), elementSize: size)
+    return Tensor(
+      name: name, dims: [weight.dims[1], weight.dims[0]], dataType: weight.dataType,
+      raw: .transposed(transpose))
+  }
+
+  /// A weight's elements as a transpose reads them while it is written:
+  /// raw_data or a packed float or double field where it lies, a weight in
+  /// the other typed fields decoded then.
+  static func transposeElements(of weight: Tensor, _ src: Source) throws -> Transpose.Elements {
     let type = weight.elementType
     guard let size = DataType.size(type) else {
       throw OnnxError("\(weight.key): cannot transpose a weight of element type \(type)")
     }
-    let rows = Int(weight.dims[0])
-    let cols = Int(weight.dims[1])
-    let expected = rows * cols * size
-    let elements: Transpose.Elements
+    let expected = weight.elementCount * size
     switch weight.raw {
     case .source(let r):
       guard r.count == expected else { throw sizeMismatch(weight, r.count, expected) }
-      elements = .source(r)
+      return .source(r)
     case .owned(let bytes):
       guard bytes.count == expected else { throw sizeMismatch(weight, bytes.count, expected) }
-      elements = .owned(bytes)
+      return .owned(bytes)
     case .transposed:
       throw OnnxError("\(weight.key): a transposed weight cannot be transposed again")
     case .widened:
@@ -377,17 +388,12 @@ enum Patches {
       if let field, field == 4 || field == 10, type == DataType.float || type == DataType.double,
         let ranges = weight.typed[field], ranges.count == 1, ranges[0].count == expected
       {
-        elements = .source(ranges[0])
-      } else {
-        let count = try Elements.typedCount(weight, src)
-        guard count == rows * cols else { throw sizeMismatch(weight, count * size, expected) }
-        elements = .typed(weight)
+        return .source(ranges[0])
       }
+      let count = try Elements.typedCount(weight, src)
+      guard count == weight.elementCount else { throw sizeMismatch(weight, count * size, expected) }
+      return .typed(weight)
     }
-    let transpose = Transpose(elements: elements, rows: rows, cols: cols, elementSize: size)
-    return Tensor(
-      name: name, dims: [weight.dims[1], weight.dims[0]], dataType: weight.dataType,
-      raw: .transposed(transpose))
   }
 
   private static func sizeMismatch(_ t: Tensor, _ have: Int, _ want: Int) -> OnnxError {

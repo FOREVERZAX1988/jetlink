@@ -57,16 +57,16 @@ To keep it awake while you work on it, run `jetlink caffeinate`.
 
 ## Status page
 
-A Jetson or installed PC shows what the server is doing at
-`http://<name>.local:5600`, from any browser on the same network, such as a
-phone on the comma's hotspot. `jetlink status` prints the address, and the IP
-addresses for a phone that cannot find `.local` names.
+A read-only page for your phone: the link, model, frame times, hardware and
+log of a Jetson or PC.
 
-- Status: the server, the comma's link, the loaded model and its preparation.
-- The models on disk, the frame budget over the last two minutes, the hardware
-  (CPU, GPU, memory, temperatures, power), and the server log.
-- Read-only, with no login: nothing on it changes the server. Change the port,
-  or turn it off with 0, in `jetlink setup`.
+- **Turn on:** the installer asks for a port (5600; 0 is off). Change it with
+  `jetlink setup`.
+- **Same network:** in the car, turn on tethering in the comma's network
+  settings, then join the Jetson to it once (it reconnects by itself):
+  `sudo nmcli dev wifi connect "<hotspot name>" password "<password>"`. Your
+  phone's hotspot works the same way.
+- **Open:** `http://<jetson ip>:5600`. `jetlink status` prints the address.
 
 ## Choose a model
 

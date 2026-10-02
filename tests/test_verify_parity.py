@@ -9,7 +9,8 @@ The parity gate's statistics, on synthetic heads.
 Shapes follow Cinque Terre's spec: plan is 990 values, 33 rows by 15 columns for
 mu and again for std; euler is 3 and 3; lead_prob is three logits. The noise is
 float16 sized, ~0.01 absolute. The gate must ride through that on columns too
-small or too flat to correlate, and still fail a column that is wired wrong.
+small or too quiet to correlate, and on a phone GPU's float16 a few times larger,
+and still fail a column that is wired wrong.
 """
 import io
 from contextlib import redirect_stdout
@@ -87,7 +88,35 @@ def test_float16_noise_passes_pooled():
   links = fp16_noisy(refs)
   passed, text = gate(links, refs)
   assert all(passed.values()), text
-  assert '(1 flat)' in text, text
+  assert '(6 by error)' in text, text
+
+
+def gpu_fp16(frames, seed=2):
+  """What a phone GPU computing in float16 throughout returns: every value off by
+  2% of its own magnitude. LiteRT's float16 GPU path was within 6% on every head of
+  Cinque Terre V3 and correlated 0.992 on lead_prob, 0.9988 on the plan's height."""
+  rng = np.random.default_rng(seed)
+  return [(f * (1 + 0.02 * rng.standard_normal(f.shape).astype(np.float32))).astype(np.float16).astype(np.float32)
+          for f in frames]
+
+
+def test_a_float16_gpu_passes_by_error_where_correlation_cannot_judge():
+  refs = reference_frames()
+  links = gpu_fp16(refs)
+  assert vp._corr(np.concatenate([x[LEAD_PROB] for x in links]), np.concatenate([y[LEAD_PROB] for y in refs])) < 0.9999
+  passed, text = gate(links, refs)
+  assert all(passed.values()), text
+
+
+def test_a_tiny_slice_off_by_more_than_its_tolerance_fails():
+  refs = reference_frames()
+  links = []
+  for f in gpu_fp16(refs):
+    f = f.copy()
+    f[LEAD_PROB] *= 1.15   # 15% on every logit: past TINY_TOLERANCE of the largest
+    links.append(f)
+  passed, text = gate(links, refs)
+  assert not passed['lead_prob'], text
 
 
 def test_why_pooling_the_per_frame_column_would_have_failed():
@@ -147,7 +176,7 @@ def test_flat_column_with_a_real_error_fails():
     links.append(f)
   passed, text = gate(links, refs)
   assert not passed['wide_from_device_euler'], text
-  assert 'flat' in text
+  assert 'mu[0] by error' in text, text
 
 
 def test_negated_small_slice_fails_pooled():
@@ -161,24 +190,48 @@ def test_negated_small_slice_fails_pooled():
   assert not passed['lead_prob']
 
 
-def test_a_single_frame_reports_every_column_ungated():
+def test_a_single_frame_judges_one_value_columns_by_error():
   refs = reference_frames()
   links = fp16_noisy(refs)
   passed, text = gate(links[0], refs[0])
   assert set(passed) == set(SPEC.output_slices)
-  # one value per column: reported as not gated, never correlated
-  assert f'6 under {vp.MIN_SAMPLES} samples, not gated' in text, text
-  assert 'no column gated' in text
+  assert all(passed.values()), text
+  # one value per column: never correlated, held to error
+  assert 'no column correlated' in text and '(6 by error)' in text, text
 
 
-def test_too_few_frames_do_not_gate_thin_columns():
+def test_a_wrong_column_fails_on_few_frames():
   refs = reference_frames()
   links = []
   for f in fp16_noisy(refs):
     f = f.copy()
-    f[EULER.start + 1] = -f[EULER.start + 1]   # a wrong pitch would be caught with enough frames...
+    f[EULER.start + 1] = -f[EULER.start + 1]   # a wrong pitch: error needs no sample count
     links.append(f)
-  passed, _ = gate(links[:4], refs[:4])
-  assert passed['wide_from_device_euler']       # ...but four samples are not a verdict either way
+  passed, text = gate(links[:4], refs[:4])
+  assert not passed['wide_from_device_euler'], text
   passed, text = gate(links, refs)
   assert not passed['wide_from_device_euler'], text
+
+
+def test_a_slice_counted_from_the_end():
+  # a spec may name a slice from the end, as the queued models' pad, [-2:]
+  spec = SimpleNamespace(output_slices={**SPEC.output_slices, 'pad': slice(-2, None)})
+  refs = reference_frames()
+  links = fp16_noisy(refs)
+  with redirect_stdout(io.StringIO()) as buf:
+    passed = vp.report_slices(spec, links, refs)
+  assert passed['pad'], buf.getvalue()
+
+
+def test_a_large_slice_is_held_to_correlation_not_error():
+  # 64 values a frame, off by 5% of the largest: within TINY_TOLERANCE, but a
+  # slice this size has enough to correlate, and correlates below MIN_CORR
+  hidden = slice(0, 64)
+  spec = SimpleNamespace(output_slices={'hidden_state': hidden})
+  rng = np.random.default_rng(3)
+  refs = [rng.standard_normal(64).astype(np.float32) for _ in range(N_FRAMES)]
+  links = [r + 0.05 * np.abs(r).max() * rng.standard_normal(64).astype(np.float32) for r in refs]
+  with redirect_stdout(io.StringIO()) as buf:
+    passed = vp.report_slices(spec, links, refs)
+  assert not passed['hidden_state'], buf.getvalue()
+  assert '(compared whole)' in buf.getvalue()

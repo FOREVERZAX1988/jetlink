@@ -11,6 +11,11 @@
 // -Xcc -I<a directory holding onnxruntime/onnxruntime_c_api.h>;
 // android/scripts/swift-build.sh passes the AAR's.
 //
+// LiteRT is opened at run time everywhere (CLiteRt), and its headers are
+// vendored, so building needs nothing of LiteRT's. Running needs its libraries
+// in $JETLINK_LITERT_DIR on a Mac or Linux (the ai-edge-litert wheel's), and
+// in the app's nativeLibraryDir on Android (the LiteRT AAR's).
+//
 // CTrt is the real shim over TensorRT only on Linux with JETLINK_TENSORRT set to
 // a directory holding TensorRT's and CUDA's headers (scripts/build-linux.sh
 // fetches them). Everywhere else it is the fake over host memory, which the
@@ -40,6 +45,7 @@ let package = Package(
     .library(name: "JetlinkRegistry", targets: ["JetlinkRegistry"]),
     .library(name: "JetlinkServer", targets: ["JetlinkServer"]),
     .library(name: "JetlinkORT", targets: ["JetlinkORT"]),
+    .library(name: "JetlinkLiteRT", targets: ["JetlinkLiteRT"]),
     .library(name: "jetlink", type: .dynamic, targets: ["JetlinkAndroid"]),
     .executable(name: "jetlink-server", targets: ["jetlink-server"]),
   ],
@@ -73,6 +79,13 @@ let package = Package(
         .linkedLibrary("c++", .when(platforms: apple)),
         .linkedLibrary("dl", .when(platforms: linux)),
       ]),
+    // LiteRT's C API, its 2.2.0 headers in vendor/. Its GL types stay opaque:
+    // nothing here touches OpenGL, and Android's EGL headers are not needed.
+    .target(
+      name: "CLiteRt",
+      exclude: ["vendor/LICENSE", "vendor/SOURCE.txt"],
+      cSettings: [.headerSearchPath("vendor"), .define("LITERT_DISABLE_OPENGL_SUPPORT")],
+      linkerSettings: [.linkedLibrary("dl", .when(platforms: linux))]),
     // usbdevfs's ioctls, which are macros Swift cannot import.
     .target(name: "CUsbfs"),
     .target(
@@ -81,6 +94,7 @@ let package = Package(
     .target(
       name: "JetlinkORT", dependencies: ["JetlinkKit", "JetlinkONNX", "JetlinkServer", "COrt"],
       linkerSettings: [.linkedFramework("Metal", .when(platforms: apple))]),
+    .target(name: "JetlinkLiteRT", dependencies: ["CLiteRt", "JetlinkKit", "JetlinkONNX", "JetlinkRegistry", "JetlinkServer"]),
     .target(
       name: "CTrt",
       exclude: [tensorRT == nil ? "jl_trt.cpp" : "jl_trt_fake.c"],
@@ -94,13 +108,13 @@ let package = Package(
       ]),
     .target(name: "JetlinkStatusPage", dependencies: ["JetlinkKit", "JetlinkLog", "JetlinkServer"], resources: [.copy("Resources")]),
     .target(
-      name: "JetlinkAndroid", dependencies: ["JetlinkKit", "JetlinkServer", "JetlinkORT"],
+      name: "JetlinkAndroid", dependencies: ["JetlinkKit", "JetlinkServer", "JetlinkORT", "JetlinkLiteRT"],
       linkerSettings: [.linkedLibrary("log", .when(platforms: [.android]))]),
     // Built for Linux and macOS; elsewhere its sources compile to an empty program.
     .executableTarget(
       name: "jetlink-server",
       dependencies: [
-        "JetlinkKit", "JetlinkLog", "JetlinkRegistry", "JetlinkServer", "JetlinkORT", "JetlinkStatusPage",
+        "JetlinkKit", "JetlinkLog", "JetlinkRegistry", "JetlinkServer", "JetlinkORT", "JetlinkLiteRT", "JetlinkStatusPage",
         .target(name: "JetlinkTRT", condition: .when(platforms: [.linux])),
         .target(name: "JetlinkLinux", condition: .when(platforms: [.linux])),
         .product(name: "ArgumentParser", package: "swift-argument-parser", condition: .when(platforms: [.macOS, .linux])),
@@ -111,8 +125,10 @@ let package = Package(
     // The fixtures are read in place through #filePath, so they are not resources.
     .testTarget(name: "JetlinkONNXTests", dependencies: ["JetlinkONNX", "JetlinkTestSupport", crypto], exclude: ["Fixtures"]),
     .testTarget(name: "JetlinkRegistryTests", dependencies: ["JetlinkRegistry", "JetlinkTestSupport", crypto]),
-    // The server's tests run it on onnxruntime's CPU provider.
-    .testTarget(name: "JetlinkServerTests", dependencies: ["JetlinkServer", "JetlinkORT", "JetlinkTestSupport"], exclude: ["Fixtures"]),
+    // The server's tests run it on onnxruntime's CPU provider, and on LiteRT
+    // where $JETLINK_LITERT_DIR has its libraries.
+    .testTarget(
+      name: "JetlinkServerTests", dependencies: ["JetlinkServer", "JetlinkORT", "JetlinkLiteRT", "JetlinkTestSupport"], exclude: ["Fixtures"]),
     // On the fake shim (JL_TRT_FAKE), which jl_trt_fake.h drives.
     .testTarget(
       name: "JetlinkTRTTests", dependencies: ["JetlinkTRT", "CTrt", "JetlinkServer", "JetlinkONNX", "JetlinkTestSupport"],

@@ -46,9 +46,11 @@ struct BenchmarkView: View {
           BenchmarkVerdictSummary(report: report)
             .padding(.vertical, 4)
           LabeledContent("Frames", value: "\(report.frames.formatted()) in \(BenchmarkClock.text(report.seconds))")
-          LabeledContent("Over 50 ms", value: report.over50.formatted())
-          LabeledContent("Over 35 ms", value: report.over35.formatted())
-          LabeledContent("Model alone", value: "\(FrameBudgetView.ms(report.accelerator.mean)) mean")
+          if report.frames > 0 {
+            LabeledContent("Over 50 ms", value: report.over50.formatted())
+            LabeledContent("Over 35 ms", value: report.over35.formatted())
+            LabeledContent("Model alone", value: "\(FrameBudgetView.ms(report.accelerator.mean)) mean")
+          }
           LabeledContent("Temperature") {
             let end = ThermalLevel(label: report.thermalAtEnd)
             Label(end.title, systemImage: end.symbol)

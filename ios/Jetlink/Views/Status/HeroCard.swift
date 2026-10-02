@@ -59,12 +59,20 @@ struct HeroCard: View {
 
   private func progress(_ engine: EngineEvent) -> some View {
     let title = engine.state == .loading ? "Loading" : "Preparing"
-    return SummaryCard(title: title, systemImage: "gearshape.2.fill", tint: .blue, trailing: engine.frac.formatted(.percent.precision(.fractionLength(0)))) {
+    return SummaryCard(title: title, systemImage: "gearshape.2.fill", tint: .blue, trailing: ProgressRow.amount(frac: engine.frac, msg: engine.msg)) {
       VStack(alignment: .leading, spacing: 10) {
         Text(state.modelName ?? "Model")
           .font(.title2.weight(.bold))
-        ProgressView(value: min(max(engine.frac, 0), 1))
-          .tint(.blue)
+        // a step with no estimate moves rather than sit at 0%
+        Group {
+          if engine.frac > 0 {
+            ProgressView(value: min(engine.frac, 1))
+          } else {
+            ProgressView()
+              .progressViewStyle(.linear)
+          }
+        }
+        .tint(.blue)
         Text(ProgressRow.stageName(engine.stage))
           .font(.subheadline)
           .foregroundStyle(.secondary)

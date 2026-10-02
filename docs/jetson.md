@@ -34,6 +34,12 @@ Socket turns off a few minutes after parking? Choose **Switched**.
 - **No:** the Jetson stays in deep sleep while parked, with no
   battery-protection shutdown.
 
+**Turn off the desktop** (installer question, asked when the Jetson starts its
+desktop): **Yes**, recommended unless you use the desktop, leaves more memory
+free for the models and starts the Jetson a little faster. It takes effect at
+the next restart; the screen then shows a text login. `jetlink setup` turns it
+back on.
+
 <a id="1-put-jetpack-on-the-jetson"></a>
 <a id="2-run-the-installer"></a>
 
@@ -67,7 +73,7 @@ curl -fsSL https://raw.githubusercontent.com/zoompilot/jetlink/main/install.sh |
 ```
 
 It installs the latest release, and JetPack's TensorRT if it is missing (a
-2.3 GB download). Answer the power questions as above. Takes 10–30 minutes;
+2.3 GB download). Answer the questions as above. Takes 10–30 minutes;
 leave it running. An install from Jetlink 0.6.0 or earlier moves out of Docker
 on its next `jetlink update`, keeping its answers, models and prepared engines.
 
@@ -86,9 +92,8 @@ on its next `jetlink update`, keeping its answers, models and prepared engines.
 Always-on power: leave both cables connected. The Jetson sleeps when parked and
 wakes when you start the car.
 
-Read [daily use](using-jetlink.md) before driving. A phone on the same
-network can watch the server on its [status page](using-jetlink.md#status-page);
-`jetlink status` prints the address. Frame times per model on a Jetson:
+Read [daily use](using-jetlink.md) before driving. Watch it from your phone:
+[status page](using-jetlink.md#status-page). Frame times per model on a Jetson:
 [performance](status.md#measured-performance).
 
 <a id="troubleshooting"></a>
@@ -115,7 +120,7 @@ jetlink status      # check Jetlink, the comma connection, the status page addre
 jetlink logs        # view errors; Ctrl-C to stop watching
 jetlink restart     # restart Jetlink
 jetlink update      # update to the newest release, keeping your settings
-jetlink setup       # change power settings or the status page port
+jetlink setup       # change the power, desktop or status page answers
 jetlink models      # list, download or prepare models (jetlink models --help)
 jetlink caffeinate  # keep it awake until Ctrl-C (-t SECONDS, or while a command runs)
 jetlink uninstall   # remove Jetlink

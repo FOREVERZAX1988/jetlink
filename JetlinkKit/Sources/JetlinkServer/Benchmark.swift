@@ -73,6 +73,12 @@ extension EngineHost {
   public static let benchmarkWindow = 10
   /// Frames dropped at the start: CoreML settles over the first few.
   public static let benchmarkWarmup = 5
+  /// The warm-up ends after this long however few frames it saw, so an
+  /// engine that takes seconds a frame is measured rather than dropped.
+  public static let benchmarkWarmupSeconds = 1.0
+  /// The longest the screen goes without a progress event, for an engine
+  /// too slow to finish a second's worth of frames in one.
+  static let benchmarkProgressInterval = 1.0
 
   /// How this build was compiled and what ran beside it, for comparing reports.
   static func buildLine(_ engine: any Engine) -> String {
@@ -163,10 +169,12 @@ extension EngineHost {
     var next = t0
     var windowStart = 0
     var i = 0
+    var progressAt = t0
     lock.lock()
     l.staging.reset()
     lock.unlock()
     func progress(_ last: BenchmarkWindow?) {
+      progressAt = ProcessInfo.processInfo.systemUptime
       emit(
         .benchmark(
           BenchmarkEvent(
@@ -180,6 +188,7 @@ extension EngineHost {
       if wait > 0 { Thread.sleep(forTimeInterval: wait) }
       next += period
 
+      let frameAt = ProcessInfo.processInfo.systemUptime - t0
       lock.lock()
       guard loaded === l else {
         lock.unlock()
@@ -217,7 +226,7 @@ extension EngineHost {
       lock.unlock()
 
       i += 1
-      if i <= warmup { continue }
+      if i <= warmup && frameAt < EngineHost.benchmarkWarmupSeconds { continue }
       frameMs.append(Double(totalUs) / 1000)
       accelMs.append(Double(accel) / 1000)
       queueMs.append(Double(queueUs) / 1000)
@@ -231,7 +240,9 @@ extension EngineHost {
         windowFrames.removeAll(keepingCapacity: true)
         windowStart = second
         progress(window)
-      } else if frameMs.count % ModelConstants.runFrequency == 0 {
+      } else if frameMs.count % ModelConstants.runFrequency == 0
+        || ProcessInfo.processInfo.systemUptime - progressAt >= EngineHost.benchmarkProgressInterval
+      {
         progress(windows.last)
       }
     }

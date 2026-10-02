@@ -26,6 +26,7 @@
     <!-- Settings: performance -->
     <string name="settings_performance">性能</string>
     <string name="settings_performance_footer">更改处理器后会重新准备模型。</string>
+    <string name="settings_performance_footer_nonsnapdragon">此手机没有骁龙 NPU，模型将跑在 GPU 上。可用跑分功能确认速度是否跟得上。</string>
     <string name="settings_processor">处理器</string>
     <string name="settings_keep_npu">保持 NPU 唤醒</string>
     <string name="settings_keep_npu_support">帧间维持 NPU 全速运行。</string>
@@ -221,4 +222,8 @@
     <string name="expectation_possible">可能跟得上</string>
     <string name="expectation_too_old">NPU 过旧</string>
     <string name="expectation_no_npu">无骁龙 NPU</string>
+    <string name="verdict_none_title">无帧</string>
+    <string name="verdict_none_detail">在测得帧之前就停止了。</string>
+    <string name="expectation_unmeasured">还未测得</string>
+    <string name="bench_verdict_no_frames">在 %1$s 内没有一帧完成。</string>
 </resources>

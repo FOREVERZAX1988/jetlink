@@ -1,6 +1,7 @@
 #if os(macOS) || os(Linux)
   import ArgumentParser
   import Foundation
+  import JetlinkLiteRT
   import JetlinkORT
   import JetlinkServer
   #if os(Linux)
@@ -8,18 +9,21 @@
     import JetlinkTRT
   #endif
 
-  /// What runs the model. `auto` is TensorRT where it loads, else onnxruntime.
+  /// What runs the model. `auto` is TensorRT where it loads, else
+  /// onnxruntime; LiteRT only when named.
   enum BackendName: String, CaseIterable, ExpressibleByArgument {
-    case auto, trt, ort
+    case auto, trt, ort, litert
   }
 
   /// --backend and --device, as every command that runs a model takes them.
   struct BackendArguments: ParsableArguments {
-    @Option(help: "auto, trt or ort. auto takes TensorRT where it loads, else onnxruntime; a named one that cannot run here is an error.")
+    @Option(
+      help: "auto, trt, ort or litert. auto takes TensorRT where it loads, else onnxruntime; a named one that cannot run here is an error.")
     var backend = BackendName.auto
     @Option(
       help: ArgumentHelp(
-        "trt: a CUDA device index (0). ort: ane (default), ane-whole, coreml or cpu on a Mac; cpu on Linux.", valueName: "device"))
+        "trt: a CUDA device index (0). ort: ane (default), ane-whole, coreml or cpu on a Mac; cpu on Linux. litert: gpu (default) or cpu, its libraries in $JETLINK_LITERT_DIR.",
+        valueName: "device"))
     var device: String?
     @Flag(help: "TensorRT: time each launch with CUDA events and log their spread every 1,200 frames.")
     var gpuTiming = false
@@ -60,7 +64,7 @@
   /// What the backends read from the command line.
   struct BackendOptions {
     /// trt: a CUDA device index. ort: ane, ane-whole, coreml or cpu on a Mac,
-    /// cpu on Linux. nil for each one's default.
+    /// cpu on Linux. litert: gpu or cpu. nil for each one's default.
     var device: String?
     var keepAlive = true
     var keepCPUWarm = true
@@ -102,9 +106,28 @@
       return OrtBackend(profile: profile, preparer: ONNXPreparer(), keepAlive: keepAlive, keepCPUWarm: keepCPUWarm)
     }
 
-    /// `trt` or `ort`, made or refused.
+    /// LiteRT on the GPU or the CPU, its libraries in $JETLINK_LITERT_DIR
+    /// (the ai-edge-litert wheel's package directory): a Mac's way to try
+    /// what the Android app runs on a phone without a Snapdragon.
+    func litert() throws -> any EngineBackend {
+      let name = device ?? LiteRtProfile.gpu.rawValue
+      guard let profile = LiteRtProfile(rawValue: name) else {
+        throw HostError.invalid("LiteRT has no device \(name): \(LiteRtProfile.allCases.map(\.rawValue).joined(separator: " or "))")
+      }
+      let backend = LiteRtBackend(profile: profile, preparer: ONNXPreparer())
+      try backend.open()
+      return backend
+    }
+
+    /// `trt`, `ort` or `litert`, made or refused.
     func make(_ name: BackendName) -> Result<any EngineBackend, any Error> {
-      Result { name == .trt ? try trt() : try ort() }
+      Result {
+        switch name {
+        case .trt: try trt()
+        case .litert: try litert()
+        case .ort, .auto: try ort()
+        }
+      }
     }
 
     /// The backend `name` asks for, or why there is none. `auto` tries
@@ -149,7 +172,8 @@
       for name in chosen.backend == .auto ? [BackendName.trt, .ort] : [chosen.backend] {
         switch options.make(name) {
         case .success(let backend):
-          var line = "\(name.rawValue): usable: \(name == .trt ? "TensorRT" : "onnxruntime") \(backend.runtimeVersion) on \(backend.deviceTag())"
+          let runtime = [BackendName.trt: "TensorRT", .litert: "LiteRT"][name] ?? "onnxruntime"
+          var line = "\(name.rawValue): usable: \(runtime) \(backend.runtimeVersion) on \(backend.deviceTag())"
           #if os(Linux)
             if let trt = (backend as? TrtBackend)?.trt, !trt.library.isEmpty {
               line += ", libraries in \(URL(fileURLWithPath: trt.library).deletingLastPathComponent().path)"

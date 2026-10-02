@@ -48,9 +48,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.zoompilot.jetlink.AppGraph
 import io.zoompilot.jetlink.AppLocale
-import io.zoompilot.jetlink.BuildConfig
 import io.zoompilot.jetlink.R
 import io.zoompilot.jetlink.l10n
+import io.zoompilot.jetlink.BuildConfig
 import io.zoompilot.jetlink.server.RunState
 import io.zoompilot.jetlink.server.ServerService
 import io.zoompilot.jetlink.server.Snapshot
@@ -82,8 +82,10 @@ data class SettingsInfo(
     val runtime: String?,
     val chip: String,
     val version: String,
-    /** The emulator also offers the CPU. */
-    val offerCpu: Boolean,
+    /** What the Processor row offers. */
+    val processors: List<Processor>,
+    /** A Snapdragon, whose NPU and GPU QNN can drive. */
+    val snapdragon: Boolean = true,
 )
 
 /** What the Settings rows do. */
@@ -120,7 +122,8 @@ fun SettingsScreen(graph: AppGraph, openConnect: () -> Unit, openLogs: () -> Uni
         runtime = snapshot.server?.runtimeVersion ?: runtime,
         chip = Chip.name,
         version = BuildConfig.VERSION_NAME,
-        offerCpu = Chip.isEmulator || values.processor == Processor.Cpu,
+        processors = Chip.processors(values.processor),
+        snapdragon = Chip.isQualcomm || Chip.isEmulator,
     )
     val actions = SettingsActions(
         update = graph.settings::update,
@@ -273,8 +276,13 @@ private fun Connection(values: SettingsValues, info: SettingsInfo, actions: Sett
 private fun Performance(values: SettingsValues, info: SettingsInfo, actions: SettingsActions) {
     val colors = JetlinkTheme.colors
     var choosing by remember { mutableStateOf(false) }
-    val choices = Processor.entries.filter { it != Processor.Cpu || info.offerCpu }
-    FormSection(l10n(R.string.settings_performance), footer = { FormFooter(l10n(R.string.settings_performance_footer)) }) {
+    val choices = info.processors
+    val footer = if (info.snapdragon) {
+        l10n(R.string.settings_performance_footer)
+    } else {
+        l10n(R.string.settings_performance_footer_nonsnapdragon)
+    }
+    FormSection(l10n(R.string.settings_performance), footer = { FormFooter(footer) }) {
         Box {
             Row(
                 Modifier
@@ -300,11 +308,13 @@ private fun Performance(values: SettingsValues, info: SettingsInfo, actions: Set
                 }
             }
         }
-        RowDivider()
-        SwitchRow(
-            l10n(R.string.settings_keep_npu), values.keepNpuAwake, { on -> actions.update { it.copy(keepNpuAwake = on) } },
-            supporting = l10n(R.string.settings_keep_npu_support),
-        )
+        if (values.processor.usesQnn) {
+            RowDivider()
+            SwitchRow(
+                l10n(R.string.settings_keep_npu), values.keepNpuAwake, { on -> actions.update { it.copy(keepNpuAwake = on) } },
+                supporting = l10n(R.string.settings_keep_npu_support),
+            )
+        }
         RowDivider()
         SwitchRow(
             l10n(R.string.settings_keep_cpu), values.keepCpuAwake, { on -> actions.update { it.copy(keepCpuAwake = on) } },
@@ -357,7 +367,7 @@ private fun SettingsPreview() {
                     runtime = "1.29.0",
                     chip = "Snapdragon 8 Gen 3",
                     version = "0.5.0",
-                    offerCpu = false,
+                    processors = listOf(Processor.NpuGpu, Processor.Npu, Processor.Gpu),
                 ),
                 SettingsActions(),
             )

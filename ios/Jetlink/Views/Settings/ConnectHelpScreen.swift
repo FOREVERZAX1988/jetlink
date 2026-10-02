@@ -14,7 +14,7 @@ struct ConnectHelpScreen: View {
         step(3, "Connect your \(device) to the comma with a USB 3 USB-C cable.")
         step(4, "Wait for Connected.")
       } footer: {
-        Text("Or use a USB-A to USB-C cable with a USB-C adapter. A powered USB-C hub keeps your \(device) charging.")
+        Text("A powered USB-C hub keeps your \(device) charging.")
       }
       // Apple's tech specs: USB 3 on the iPhone 15 Pro and later Pro models,
       // and on every iPad Pro, iPad Air and iPad mini with USB-C; USB 2 on

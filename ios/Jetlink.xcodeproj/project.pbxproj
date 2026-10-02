@@ -20,6 +20,7 @@
 		704C60823F8F013189311EEF /* DeviceMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = F37E4DCE1D8F75581B01BA63 /* DeviceMonitor.swift */; };
 		867D4BEC3B41AABE9BE09147 /* JetlinkPhoneApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06BC10AE5D7D06DBE4A59332 /* JetlinkPhoneApp.swift */; };
 		89984B76F7548E2CC6D912A3 /* BenchmarkScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 459618D24B415A21929758C5 /* BenchmarkScreen.swift */; };
+		94ED96F702D5DF67F92CDF54 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 2195EBEDFD0F7923BA8F565A /* PrivacyInfo.xcprivacy */; };
 		A5E4E102CDE0D258167999C2 /* LocalNetworkAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0770C4D38956ECDB36EA481C /* LocalNetworkAccess.swift */; };
 		AB2684B23066DDD9F23FD099 /* ModelsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = D35A2D25446BA8901A1ACC8B /* ModelsScreen.swift */; };
 		ADFB4A5A28CCC9EF06EB05C0 /* PhoneServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8965401CE0D537AAE299392 /* PhoneServer.swift */; };
@@ -38,6 +39,7 @@
 		0362ED2711F16456CEB6535A /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
 		06BC10AE5D7D06DBE4A59332 /* JetlinkPhoneApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JetlinkPhoneApp.swift; sourceTree = "<group>"; };
 		0770C4D38956ECDB36EA481C /* LocalNetworkAccess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalNetworkAccess.swift; sourceTree = "<group>"; };
+		2195EBEDFD0F7923BA8F565A /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		2DF5CD5EDD3C0D6A4DBAF03F /* StatusScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusScreen.swift; sourceTree = "<group>"; };
 		43DBEE74070286C6D86FE93C /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
 		4460F447D4E35D304487C46F /* HeroCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeroCard.swift; sourceTree = "<group>"; };
@@ -111,6 +113,7 @@
 			isa = PBXGroup;
 			children = (
 				6B71A2709AC0F259D4486CB6 /* Assets.xcassets */,
+				2195EBEDFD0F7923BA8F565A /* PrivacyInfo.xcprivacy */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -295,6 +298,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C17ECDB8A4833CBCF16B9746 /* Assets.xcassets in Resources */,
+				94ED96F702D5DF67F92CDF54 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

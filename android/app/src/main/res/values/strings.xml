@@ -26,6 +26,7 @@
     <!-- Settings: performance -->
     <string name="settings_performance">Performance</string>
     <string name="settings_performance_footer">Changing the processor prepares models again.</string>
+    <string name="settings_performance_footer_nonsnapdragon">This phone has no Snapdragon NPU, so the model runs on its GPU. Run Benchmark to see whether it keeps up.</string>
     <string name="settings_processor">Processor</string>
     <string name="settings_keep_npu">Keep NPU Awake</string>
     <string name="settings_keep_npu_support">Holds the NPU at full speed between frames.</string>
@@ -221,4 +222,8 @@
     <string name="expectation_possible">Might keep up</string>
     <string name="expectation_too_old">NPU too old</string>
     <string name="expectation_no_npu">No Snapdragon NPU</string>
+    <string name="verdict_none_title">No Frames</string>
+    <string name="verdict_none_detail">Stopped before a frame was measured.</string>
+    <string name="expectation_unmeasured">Not measured yet</string>
+    <string name="bench_verdict_no_frames">Not one frame finished in %1$s.</string>
 </resources>

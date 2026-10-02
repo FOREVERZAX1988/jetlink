@@ -148,6 +148,45 @@ import Testing
     }
   }
 
+  /// onnx.helper.make_tensor_value_info('q', TensorProto.UINT8, [2, 30, 128, 256])
+  @Test func valueInfoMatchesMakeTensorValueInfo() {
+    let bytes = [UInt8]()
+    bytes.withUnsafeBytes { buf in
+      let src = Source(bytes: buf)
+      #expect(
+        hexString(flatten(Encode.valueInfo(.tensor("q", 2, [2, 30, 128, 256]), src), src))
+          == "0a017112180a16080212120a0208020a02081e0a030880010a03088002")
+    }
+  }
+
+  /// helper.make_node('Transpose', ['a'], ['b'], name='t', perm=[0, 2, 1, 3])
+  @Test func intsAttributeMatchesMakeNode() {
+    let node = Node(inputs: ["a"], outputs: ["b"], name: "t", opType: "Transpose", attributes: [.ints("perm", [0, 2, 1, 3])])
+    let bytes = [UInt8]()
+    bytes.withUnsafeBytes { buf in
+      let src = Source(bytes: buf)
+      #expect(
+        hexString(flatten(Encode.node(node, src), src))
+          == "0a01611201621a017422095472616e73706f73652a110a047065726d4000400240014003a00107")
+    }
+  }
+
+  /// make_opsetid('', 20) and make_attribute('epsilon', 1e-5), read back.
+  @Test func opsetVersionAndFloatAttributesAreRead() throws {
+    let opset = hex("0a001014")
+    try opset.withUnsafeBytes { buf in
+      let src = Source(bytes: buf)
+      let o = try Decode.opset(src, WireField(number: 8, wire: .bytes, start: 0, end: buf.count, value: 0, payload: 0..<buf.count))
+      #expect(o.domain == "" && o.version == 20)
+    }
+    let attribute = hex("0a07657073696c6f6e15acc52737a00101")
+    try attribute.withUnsafeBytes { buf in
+      let src = Source(bytes: buf)
+      let a = try Decode.attribute(src, WireField(number: 5, wire: .bytes, start: 0, end: buf.count, value: 0, payload: 0..<buf.count))
+      #expect(a.name == "epsilon" && a.f == Float(1e-5) && a.type == 1)
+    }
+  }
+
   private func assertReencodes(attribute input: String, to expected: String) throws {
     // Wrapped as NodeProto.attribute (field 5), then the node written back.
     let payload = hex(input)

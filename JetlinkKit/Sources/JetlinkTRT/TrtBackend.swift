@@ -88,7 +88,7 @@ public final class TrtBackend: EngineBackend {
     let cacheURL = timingCache(beside: artifact)
     try Artifact.build(artifact, metaExtra: metaExtra, report: report) { staged in
       report("patch", 0, "retyping uint8 image inputs to fp16")
-      let prepared = try CoreMLPreparation.prepare(source: model, into: staged.deletingLastPathComponent(), layout: .trt, cacheKey: { _ in "" })
+      let prepared = try CoreMLPreparation.prepare(source: model, into: staged.deletingLastPathComponent(), layout: .plain, cacheKey: { _ in "" })
       report("patch", 1, "patched")
 
       var build: OpaquePointer?

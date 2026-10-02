@@ -132,7 +132,7 @@ struct StatusView: View {
     } header: {
       Text("Comma")
     } footer: {
-      Text("Plug the comma into a USB-A port with an A-to-C data cable. Until it connects, the comma drives on its small model.")
+      Text("Connect to the comma with a USB 3 cable. Until it connects, the comma drives on its small model.")
         .font(.callout)
         .foregroundStyle(.secondary)
     }

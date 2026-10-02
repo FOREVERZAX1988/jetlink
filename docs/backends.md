@@ -52,7 +52,7 @@ None of the Android layouts has run on a Snapdragon yet.
 | Jetson Orin | TensorRT | USB-A host through usbfs | Tegra sensors | Suspend, USB wake and poweroff |
 | Linux with NVIDIA GPU | TensorRT 11.3 | usbfs; `scripts/99-jetlink-host.rules` without root | NVML | `--sleep-after` needs `/sys/power`; USB wake depends on hardware |
 | Windows with NVIDIA GPU (untested) | TensorRT 11.3 in WSL2 | `usbipd-win` | NVML | None |
-| macOS with Apple silicon | ONNX Runtime with CoreML on the Neural Engine and GPU | IOKit; a USB 3 USB-C cable, or USB-A to USB-C with a USB-C adapter | Not available | The app prevents idle sleep on power |
+| macOS with Apple silicon | ONNX Runtime with CoreML on the Neural Engine and GPU | IOKit; a USB 3 USB-C cable | Not available | The app prevents idle sleep on power |
 | iPhone and iPad | ONNX Runtime with CoreML | TCP over the comma's USB network interface | Not available | Keep the app on screen |
 | Android with Snapdragon | ONNX Runtime with QNN on the NPU and GPU | USB host through a hub; usbfs on the app's descriptor | Not available | A foreground service keeps it serving |
 
@@ -84,7 +84,7 @@ reliability. [Full measurements and test conditions](mac-performance.md).
 ## Hardware limitations
 
 - Native Windows is unsupported; use WSL2 ([Windows setup](platforms.md#windows-nvidia-gpu)).
-- Mac: a USB 3 USB-C cable, or USB-A to USB-C with a USB-C adapter; the comma
-  holds its port as the device, so the Mac is the USB host.
+- Mac: a USB 3 USB-C cable; the comma holds its port as the device, so the
+  Mac is the USB host.
 - Keep laptops powered and awake. Sustained GPU use can throttle thermally;
   check frame times.

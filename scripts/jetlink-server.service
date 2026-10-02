@@ -4,7 +4,7 @@
 # settings below, and the server in /opt/jetlink/current, a link to the
 # version's directory, so an update or a rollback is one rename. The installer
 # also adds drop-ins: one that waits for the cache's mount, and on a Jetson one
-# that runs jetson_clocks first.
+# that waits for the GPU's driver.
 #
 # By hand, with a release tarball unpacked to /opt/jetlink/<version>:
 #   sudo ln -sfn /opt/jetlink/<version> /opt/jetlink/current

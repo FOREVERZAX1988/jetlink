@@ -18,6 +18,9 @@ export JETLINK_TEST_DT_MODEL=/tmp/dt-model JETLINK_TEST_MEM_SLEEP=/tmp/mem-sleep
 export JETLINK_TEST_PROC_VERSION=/tmp/proc-version JETLINK_TEST_SYSTEMD_RUN=/tmp
 export JETLINK_TEST_OS_RELEASE=/tmp/os-release JETLINK_TEST_SECURE_BOOT=/tmp/secure-boot
 export JETLINK_TEST_PKG_PATH=$FAKE_BIN
+# a Jetson's boot loader configuration, and its firmware's variables
+export JETLINK_TEST_EXTLINUX=/tmp/boot/extlinux/extlinux.conf JETLINK_TEST_EFIVARS=/tmp/efivars
+EXTLINUX=$JETLINK_TEST_EXTLINUX
 # the lock a native server makes to be held awake; none until a scenario says
 export JETLINK_TEST_AWAKE_LOCK=/tmp/jetlink-awake.lock
 LOCK=$JETLINK_TEST_AWAKE_LOCK
@@ -68,7 +71,7 @@ reset_box() {
     "$UNITS"/jetlink-* /etc/udev/rules.d/99-jetlink-usb-wakeup.rules \
     /etc/systemd/journald.conf.d/60-jetlink.conf "$FAKE_STATE" "$FAKE_LOG" "$FAKE_BIN" \
     /etc/nv_tegra_release /etc/nvpmodel.conf /tmp/dt-model /tmp/mem-sleep /etc/apt/sources.list.d/nvidia-container-toolkit.list \
-    "$LOCK" /tmp/secure-boot
+    "$LOCK" /tmp/secure-boot /tmp/boot /tmp/efivars
   cp /tmp/fstab.orig /etc/fstab
   mkdir -p "$FAKE_STATE"
   echo "Linux version 6.8.0-fake (gcc) #1 SMP" >/tmp/proc-version
@@ -82,7 +85,7 @@ reset_box() {
   unset FAKE_ARCH FAKE_SMI FAKE_PUBLISHED FAKE_PM_REBOOT FAKE_SERVER_BROKEN FAKE_GPU_BROKEN \
     FAKE_TRT10 FAKE_NO_CURL FAKE_ROOT_FREE_GB FAKE_IMAGE_GB FAKE_DOWNLOAD_FAILS FAKE_BAD_SUM FAKE_NO_PLUGIN \
     FAKE_DOCKER_STUCK FAKE_BAD_WHEEL FAKE_SERVER_CRASHLOOP FAKE_PRELOAD FAKE_SERVER_OLD FAKE_DOWNLOAD_HANG \
-    FAKE_DOCKER_ROOT FAKE_OTHER_FS FAKE_KERNEL FAKE_GLIBC FAKE_PACMAN_STALE JETLINK_TEST_PRELOAD_S
+    FAKE_DOCKER_ROOT FAKE_OTHER_FS FAKE_KERNEL FAKE_GLIBC FAKE_PACMAN_STALE FAKE_UEFI_LOCKED JETLINK_TEST_PRELOAD_S
   export JETLINK_REPO_URL=file:///tmp/repo FAKE_LATEST=v0.10.0 JETLINK_TEST_SYSTEMD_RUN=/tmp
 }
 
@@ -128,8 +131,60 @@ EOF
   # no TensorRT on the host: the Docker era had it only in the image
   export FAKE_ARCH=aarch64
   [ "$1" = 36 ] && export FAKE_TRT10=10.3.0.30-1+cuda12.5
+  # UEFI, efibootmgr, and JetPack's extlinux.conf as a flash leaves it
+  mkdir -p /tmp/efivars
+  ln -sf "$SRC/tests/installer/fake.sh" "$FAKE_BIN/efibootmgr"
+  local append='root=PARTUUID=c6679549-196f-44be-9e3f-e4b5751013cb rw rootwait rootfstype=ext4 mminit_loglevel=4 console=ttyTCU0,115200 firmware_class.path=/etc/firmware fbcon=map:0'
+  if [ "$1" = 36 ]; then
+    append="$append nospectre_bhb video=efifb:off console=tty0"
+  else
+    append="$append video=efifb:off console=tty0 efi_pstore.pstore_disable=1 pstore.backend=ramoops efi=runtime pci=pcie_bus_perf nvme.use_threaded_interrupts=1 swiotlb=2048 "
+  fi
+  extlinux "TIMEOUT 30
+DEFAULT primary
+
+MENU TITLE L4T boot options
+
+LABEL primary
+      MENU LABEL primary kernel
+      LINUX /boot/Image
+      INITRD /boot/initrd
+      APPEND \${cbootargs} $append
+
+# When testing a custom kernel, it is recommended that you create a backup of
+# the original kernel and add a new entry to this file so that the device can
+# fallback to the original kernel. To do this:
+#
+# 1, Make a backup of the original kernel
+#      sudo cp /boot/Image /boot/Image.backup
+#
+# 2, Copy your custom kernel into /boot/Image
+#
+# 3, Uncomment below menu setting lines for the original kernel
+#
+# 4, Reboot
+
+# LABEL backup
+#    MENU LABEL backup kernel
+#    LINUX /boot/Image.backup
+#    INITRD /boot/initrd
+#    APPEND \${cbootargs}"
   return 0
 }
+
+EXTLINUX_ORIG=/tmp/boot/extlinux.orig
+extlinux() {  # extlinux TEXT: the boot loader's configuration, and a copy as it was
+  mkdir -p "$(dirname "$EXTLINUX")"
+  printf '%s\n' "$1" >"$EXTLINUX"
+  cp "$EXTLINUX" "$EXTLINUX_ORIG"
+}
+expect_one_quiet() { check "quiet is on more than the one line" test "$(grep -c quiet "$EXTLINUX")" = 1; }
+# the file as it was with quiet on the end of its one APPEND line, and nothing else changed
+expect_quiet_added() {
+  check "extlinux.conf is not the one it was with quiet added" \
+    cmp -s <(sed '/^ *APPEND/s/$/ quiet/' "$EXTLINUX_ORIG") "$EXTLINUX"
+}
+expect_extlinux_as_was() { check "extlinux.conf is not as it was" cmp -s "$EXTLINUX_ORIG" "$EXTLINUX"; }
 
 pc() {  # pc DRIVER
   export FAKE_ARCH=x86_64 FAKE_SMI="NVIDIA GeForce RTX 4070 Laptop GPU, $1, 8.9"
@@ -297,14 +352,21 @@ export JETLINK_TEST_TRT_SHA256
 
 scenario "JetPack 7.2 Jetson, always-on power, fresh install"
 reset_box; jetson 39 2.1
-# questions: power (1 = always on), let the comma shut it down, the status
-# page's port (Enter), go ahead
-run_installer curl '1\ny\n\ny\n'
+# questions: power (1 = always on), let the comma shut it down, turn off the
+# desktop, the status page's port (Enter), go ahead
+run_installer curl '1\ny\ny\n\ny\n'
 expect_rc 0
 expect_out "Orin Nano"
 expect_out "JetPack 7 (Jetson Linux 39.2.1)"
-expect_out "How is the Jetson powered in the car?"
-expect_out "Which port should the status page use?"
+expect_out "Does the Jetson's power stay on when the car is off?"
+expect_out "Turn off the desktop?"
+expect_out "Which port for the status page?"
+# the desktop goes at the next start, not under the installer
+expect_out "Turn off the desktop (from the next restart)"
+expect_ran "systemctl set-default multi-user.target"
+expect_not_ran "systemctl stop gdm"
+expect_out "Restart this computer once to turn the desktop off: sudo reboot"
+expect_in /etc/jetlink/install.conf "JETLINK_DESKTOP_OFF=1"
 expect_out "Install NVIDIA TensorRT from JetPack's package source"
 expect_no_out "fastest power mode ("
 expect_out "Jetlink is installed and running"
@@ -339,9 +401,35 @@ expect_in /etc/jetlink/install.conf "JETLINK_REF=latest"
 expect_in /etc/jetlink/install.conf "JETLINK_VERSION=v0.10.0"
 check "the unit is not the server's own" cmp -s "$UNITS/jetlink-server.service" /opt/jetlink/0.10.0/share/jetlink/systemd/jetlink-server.service
 expect_in "$UNITS/jetlink-server.service.d/10-cache.conf" "RequiresMountsFor=/mnt/data/jetlink"
-expect_in "$UNITS/jetlink-server.service.d/20-jetson-clocks.conf" "ExecStartPre=-/usr/bin/jetson_clocks"
-# after the power mode is set at boot, which would undo it
-expect_in "$UNITS/jetlink-server.service.d/20-jetson-clocks.conf" "After=nvpmodel.service"
+# jetson_clocks at boot after the power mode is set, which would undo it, and
+# now; the server waits for neither
+expect_in "$UNITS/jetlink-clocks.service" "ExecStart=/usr/bin/jetson_clocks"
+expect_in "$UNITS/jetlink-clocks.service" "After=nvpmodel.service"
+expect_in "$UNITS/jetlink-clocks.service" "WantedBy=multi-user.target"
+expect_no_file "$UNITS/jetlink-server.service.d/20-jetson-clocks.conf"
+refute "the server waits for nvpmodel" grep -rqs nvpmodel "$UNITS/jetlink-server.service" "$UNITS/jetlink-server.service.d"
+expect_ran "systemctl enable jetlink-clocks.service"
+expect_before "systemctl restart jetlink-clocks.service" "systemctl restart jetlink-server"
+# it waits for the GPU's driver instead: as systemd runs the wait, it ends at
+# once with the driver's control node there
+GPU_DROPIN="$UNITS/jetlink-server.service.d/20-jetson-gpu.conf"
+expect_in "$GPU_DROPIN" "[ -e /dev/nvhost-ctrl-gpu ]"
+gpu_wait="$(sed -n "s/^ExecStartPre=\/bin\/sh -c '\(.*\)'$/\1/p" "$GPU_DROPIN" | sed 's/\$\$/$/g')"
+check "no wait for the GPU in $GPU_DROPIN" test -n "$gpu_wait"
+touch /dev/nvhost-ctrl-gpu
+check "the wait for the GPU did not end with its node there" timeout 5 sh -c "$gpu_wait"
+rm -f /dev/nvhost-ctrl-gpu
+# boot: the firmware's menu waits 1 s (JetPack's 5 s kept for uninstall), and
+# quiet on the kernel's command line, its one change to extlinux.conf
+expect_ran "efibootmgr -t 1"
+expect_in "$FAKE_STATE/uefi-timeout" 1
+expect_in /etc/jetlink/install.conf "JETLINK_UEFI_TIMEOUT_PREV=5"
+expect_quiet_added
+check "the backup is not the file as it was" cmp -s "$EXTLINUX_ORIG" "$EXTLINUX.jetlink-bak"
+expect_no_file "$EXTLINUX.jetlink-new"
+expect_out "Start up faster, and keep the system log small"
+expect_out "Firmware boot menu waits 1 s"
+expect_out "Kernel messages kept off the console"
 # up once it says it serves: the line the Swift server says, whatever the comma does
 expect_in /var/log/jetlink-install.log "jetlink-server is serving"
 check "Serve.swift no longer says the line install.sh waits for" \
@@ -362,7 +450,7 @@ expect_in /tmp/status.txt "server         0.10.0 (TensorRT 10.16.2.10)"
 expect_in /tmp/status.txt "comma          not connected"
 expect_in /tmp/status.txt "status page    http://"
 expect_in /tmp/status.txt ".local:5600"
-expect_in /tmp/status.txt "always on: sleeps when the car is off; the comma can shut it down"
+expect_in /tmp/status.txt "always on: sleeps while parked; the comma can turn it off"
 jetlink models list >/dev/null 2>&1
 expect_ran "jetlink-server models list --cache /mnt/data/jetlink"
 jetlink models --help >/dev/null 2>&1
@@ -375,8 +463,24 @@ systemctl start jetlink-server
 scenario "update keeps the answers and asks nothing"
 # a native server that sleeps, with the awake lock it makes at start
 : >"$LOCK" && chmod 644 "$LOCK"
+# and the clocks drop-in 0.7.4 and older wrote, which held the server back
+printf '[Unit]\nAfter=nvpmodel.service\n[Service]\nExecStartPre=-/usr/bin/jetson_clocks\n' \
+  >"$UNITS/jetlink-server.service.d/20-jetson-clocks.conf"
+# and a desktop turned back on by hand, which an update leaves on
+echo graphical.target >"$FAKE_STATE/default-target"
 cli update
 expect_rc 0
+expect_not_ran "systemctl set-default"
+expect_in "$FAKE_STATE/default-target" graphical.target
+expect_no_out "Restart this computer once"
+expect_no_file "$UNITS/jetlink-server.service.d/20-jetson-clocks.conf"
+expect_file "$UNITS/jetlink-clocks.service"
+expect_no_out "jetlink-clocks.service is not the installer's"
+# boot is as the install left it, and what it was before stays known
+expect_not_ran "efibootmgr -t"
+expect_quiet_added
+expect_in /etc/jetlink/install.conf "JETLINK_UEFI_TIMEOUT_PREV=5"
+check "the backup is not the file as it was" cmp -s "$EXTLINUX_ORIG" "$EXTLINUX.jetlink-bak"
 expect_out "Getting the newest Jetlink (v0.10.0)"
 expect_no_out "A few questions"
 expect_no_out "Go ahead?"
@@ -439,8 +543,8 @@ expect_out "The server is not running natively; nothing to hold."
 scenario "a second run offers to keep the settings"
 run_installer curl 'y\n'
 expect_rc 0
-expect_out "Jetlink is already installed. Keep your current settings and update it?"
-expect_no_out "How is the Jetson powered in the car?"
+expect_out "Jetlink is already installed. Update it and keep your answers?"
+expect_no_out "Does the Jetson's power stay on when the car is off?"
 
 scenario "a failed update puts the previous server back"
 echo '# the previous settings' >>/etc/jetlink/server.env
@@ -654,10 +758,14 @@ expect_no_file "$UNITS/jetlink-server.service"
 
 scenario "JetPack 6.2 Jetson, switched power"
 reset_box; jetson 36 4.3
-# questions: power (2 = switched), the status page's port (Enter), go ahead (Enter)
-run_installer curl '2\n\n\n'
+# questions: power (2 = switched), keep the desktop, the status page's port
+# (Enter), go ahead (Enter)
+run_installer curl '2\nn\n\n\n'
 expect_rc 0
 expect_out "JetPack 6 (Jetson Linux 36.4.3)"
+expect_not_ran "systemctl set-default"
+expect_no_out "Turn off the desktop (from"
+expect_in /etc/jetlink/install.conf "JETLINK_DESKTOP_OFF=0"
 expect_ran "$(apt_install "libnvinfer10 libnvonnxparsers10")"
 expect_out "TensorRT 10.3.0.30"
 # JetPack 6 stays on its TensorRT 10.3
@@ -667,15 +775,25 @@ expect_in /etc/jetlink/server.env "JETLINK_FLAVOR=linux-aarch64"
 expect_ran "nvpmodel -m 2"
 expect_in /etc/fstab "/mnt/data/jetlink-swapfile none swap sw 0 0"
 expect_no_file /etc/udev/rules.d/99-jetlink-usb-wakeup.rules
-expect_file "$UNITS/jetlink-server.service.d/20-jetson-clocks.conf"
+expect_in "$UNITS/jetlink-clocks.service" "After=nvpmodel.service"
+expect_no_file "$UNITS/jetlink-server.service.d/20-jetson-clocks.conf"
+expect_file "$UNITS/jetlink-server.service.d/20-jetson-gpu.conf"
 expect_in /etc/jetlink/server.env 'JETLINK_POWEROFF=""'
+# the same boot changes as on JetPack 7.2
+expect_ran "efibootmgr -t 1"
+expect_in /etc/jetlink/install.conf "JETLINK_UEFI_TIMEOUT_PREV=5"
+expect_quiet_added
+expect_file "$EXTLINUX.jetlink-bak"
 
-scenario "jetlink setup changes the answers: power, and the status page off"
-# questions: power (1 = always on), the comma may shut it down, port 0, go ahead
-answers '1\ny\n0\ny\n'
+scenario "jetlink setup changes the answers: power, the desktop off, and the status page off"
+# questions: power (1 = always on), the comma may shut it down, turn off the
+# desktop, port 0, go ahead
+answers '1\ny\ny\n0\ny\n'
 JETLINK_INPUT=/tmp/answers jetlink setup >"$OUT" 2>&1; RC=$?
 expect_rc 0
-expect_out "How is the Jetson powered in the car?"
+expect_out "Does the Jetson's power stay on when the car is off?"
+expect_ran "systemctl set-default multi-user.target"
+expect_in /etc/jetlink/install.conf "JETLINK_DESKTOP_OFF=1"
 expect_no_out "Show a read-only status page"
 expect_no_out "Status page:"
 expect_in /etc/jetlink/install.conf "JETLINK_POWER=always"
@@ -699,7 +817,143 @@ scenario "a power mode that needs a restart says so"
 reset_box; jetson 39 2.1
 FAKE_PM_REBOOT=1 run_installer curl '' --yes
 expect_rc 0
-expect_out "Restart this computer once"
+# one restart for both, the power mode and the desktop --yes turns off
+expect_out "Restart this computer once to finish switching the power mode and turn the desktop off: sudo reboot"
+
+scenario "uninstall on a Jetson puts its boot back as it was"
+reset_box; jetson 39 2.1
+run_installer curl '' --yes
+expect_rc 0
+expect_in "$FAKE_STATE/default-target" multi-user.target
+# questions: remove?, delete the models?
+run_installer checkout 'y\nn\n' --uninstall
+expect_rc 0
+expect_out "The desktop comes back at the next start"
+expect_in "$FAKE_STATE/default-target" graphical.target
+expect_out "The firmware's boot menu wait is as it was"
+expect_out "Kernel messages are on the console at boot again"
+expect_in "$FAKE_STATE/uefi-timeout" 5
+expect_extlinux_as_was
+expect_no_file "$EXTLINUX.jetlink-bak"
+expect_ran "systemctl disable jetlink-clocks.service"
+expect_no_file "$UNITS/jetlink-clocks.service"
+
+scenario "a Jetson that starts no desktop is not asked, and uninstall leaves it that way"
+reset_box; jetson 39 2.1
+echo multi-user.target >"$FAKE_STATE/default-target"
+# questions: power (Enter), the comma may shut it down (Enter), the port (Enter), go ahead
+run_installer curl '\n\n\ny\n'
+expect_rc 0
+expect_no_out "Turn off the desktop?"
+expect_not_ran "systemctl set-default"
+expect_in /etc/jetlink/install.conf "JETLINK_DESKTOP_OFF=0"
+run_installer checkout 'y\nn\n' --uninstall
+expect_rc 0
+expect_not_ran "systemctl set-default"
+expect_in "$FAKE_STATE/default-target" multi-user.target
+
+scenario "boot settings of the user's own stay: a shorter firmware wait, their quiet, a wait changed since"
+reset_box; jetson 39 2.1
+echo 0 >"$FAKE_STATE/uefi-timeout"
+extlinux "$(sed 's/^\( *APPEND .*\)$/\1 quiet splash/' "$EXTLINUX")"
+run_installer curl '' --yes
+expect_rc 0
+expect_not_ran "efibootmgr -t"
+expect_in /etc/jetlink/install.conf "JETLINK_UEFI_TIMEOUT_PREV=''"
+expect_extlinux_as_was
+expect_no_file "$EXTLINUX.jetlink-bak"
+run_installer checkout 'y\nn\n' --uninstall
+expect_rc 0
+expect_no_out "boot menu wait is as it was"
+expect_no_out "Kernel messages are on the console"
+expect_in "$FAKE_STATE/uefi-timeout" 0
+expect_extlinux_as_was
+# a wait the user set after the install is theirs too
+reset_box; jetson 39 2.1
+run_installer curl '' --yes
+echo 3 >"$FAKE_STATE/uefi-timeout"
+: >"$FAKE_LOG"
+run_installer checkout 'y\nn\n' --uninstall
+expect_rc 0
+expect_not_ran "efibootmgr -t"
+expect_in "$FAKE_STATE/uefi-timeout" 3
+
+scenario "a firmware with no boot menu wait set gets it taken away again"
+reset_box; jetson 36 4.3
+echo none >"$FAKE_STATE/uefi-timeout"
+run_installer curl '' --yes
+expect_rc 0
+expect_in "$FAKE_STATE/uefi-timeout" 1
+expect_in /etc/jetlink/install.conf "JETLINK_UEFI_TIMEOUT_PREV=none"
+run_installer checkout 'y\nn\n' --uninstall
+expect_rc 0
+expect_ran "efibootmgr -T"
+expect_in "$FAKE_STATE/uefi-timeout" none
+
+scenario "efibootmgr comes from apt; a firmware that keeps its wait, or no UEFI, changes nothing"
+reset_box; jetson 39 2.1
+rm -f "$FAKE_BIN/efibootmgr"
+run_installer curl '' --yes
+expect_rc 0
+check "efibootmgr was not installed" grep -qE '^apt-get .* install --no-install-recommends .*efibootmgr' "$FAKE_LOG"
+expect_ran "efibootmgr -t 1"
+expect_in "$FAKE_STATE/uefi-timeout" 1
+reset_box; jetson 39 2.1
+FAKE_UEFI_LOCKED=1 run_installer curl '' --yes
+expect_rc 0
+expect_out "The firmware kept its boot menu wait"
+expect_in /etc/jetlink/install.conf "JETLINK_UEFI_TIMEOUT_PREV=''"
+# the rest of boot is changed all the same
+expect_quiet_added
+reset_box; jetson 39 2.1
+rm -rf /tmp/efivars
+run_installer curl '' --yes
+expect_rc 0
+# neither run nor installed
+expect_not_ran "efibootmgr"
+
+scenario "quiet goes on the entry that boots, and an entry the installer cannot read stays as it is"
+reset_box; jetson 39 2.1
+extlinux "TIMEOUT 30
+DEFAULT jetlink
+
+LABEL backup
+      LINUX /boot/Image.backup
+      APPEND \${cbootargs} root=/dev/nvme0n1p1 rw
+
+LABEL jetlink
+      MENU LABEL primary kernel
+      LINUX /boot/Image
+      APPEND \${cbootargs} root=/dev/nvme0n1p1 rw console=tty0"
+run_installer curl '' --yes
+expect_rc 0
+expect_in "$EXTLINUX" "rw console=tty0 quiet"
+expect_one_quiet
+# without DEFAULT the boot loader starts the first entry
+reset_box; jetson 39 2.1
+extlinux "LABEL first
+      LINUX /boot/Image
+      APPEND \${cbootargs} root=/dev/nvme0n1p1 rw
+
+LABEL second
+      LINUX /boot/Image.backup
+      APPEND \${cbootargs} root=/dev/nvme0n1p1 rw console=tty0"
+run_installer curl '' --yes
+expect_rc 0
+expect_in "$EXTLINUX" "root=/dev/nvme0n1p1 rw quiet"
+expect_one_quiet
+# two APPEND lines in the entry that boots: which one counts is the boot
+# loader's business, so the file is left alone
+reset_box; jetson 39 2.1
+extlinux "LABEL primary
+      LINUX /boot/Image
+      APPEND \${cbootargs} root=/dev/nvme0n1p1 rw
+      APPEND console=tty0"
+run_installer curl '' --yes
+expect_rc 0
+expect_out "has no boot entry Jetlink can add quiet to"
+expect_extlinux_as_was
+expect_no_file "$EXTLINUX.jetlink-bak"
 
 scenario "PC with a driver too old for CUDA 13"
 reset_box; pc 575.64.03
@@ -717,7 +971,7 @@ export FAKE_NO_CURL=1
 run_installer curl 'y\n\ny\n'
 expect_rc 0
 expect_out "NVIDIA driver 580.95.05"
-expect_no_out "How is the Jetson powered"
+expect_no_out "Does the Jetson's power stay on"
 expect_out "Download NVIDIA TensorRT $PC_TRT into $PC_TRT_DIR"
 check "install.sh's PC_TRT $PC_TRT is not the build build-linux.sh compiles against" \
   grep -qF "libnvinfer-headers-dev_${PC_TRT}-" "$SRC/scripts/build-linux.sh"
@@ -743,6 +997,9 @@ expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=0"
 expect_in /etc/jetlink/server.env "JETLINK_FLAVOR=linux-x86_64"
 expect_no_file /etc/systemd/journald.conf.d/60-jetlink.conf
 expect_no_file "$UNITS/jetlink-server.service.d/20-jetson-clocks.conf"
+expect_no_file "$UNITS/jetlink-clocks.service"
+expect_no_file "$UNITS/jetlink-server.service.d/20-jetson-gpu.conf"
+expect_not_ran "efibootmgr"
 expect_in /etc/jetlink/server.env 'JETLINK_POWEROFF=""'
 expect_out "Keep this computer plugged in and awake"
 jetlink status >/tmp/status.txt 2>&1
@@ -1097,7 +1354,9 @@ expect_not_ran "releases/download"
 expect_link /opt/jetlink/current /opt/jetlink/0.10.0
 expect_in "$UNITS/jetlink-server.service" "/opt/jetlink/current/bin/jetlink-server"
 check "the source moved" test "$(git -C /opt/jetlink/src rev-parse HEAD)" = "$head_before"
-answers '1\ny\n\ny\n'
+# questions: power, the comma may shut it down, the desktop (Enter keeps the
+# answer), the port, go ahead
+answers '1\ny\n\n\ny\n'
 FAKE_LATEST=v0.6.0 JETLINK_INPUT=/tmp/answers jetlink setup >"$OUT" 2>&1; RC=$?
 expect_rc 0
 expect_out "Keep the Jetlink server that is installed"
@@ -1210,7 +1469,8 @@ expect_out "Your drop-in 50-pull.conf runs Docker, so it is set aside"
 expect_no_file "$UNITS/jetlink-server.service.d/50-pull.conf"
 expect_file "$UNITS/jetlink-server.service.d/60-nice.conf"
 expect_in "$UNITS/jetlink-server.service.d/10-cache.conf" "RequiresMountsFor=/mnt/data/jetlink"
-expect_file "$UNITS/jetlink-server.service.d/20-jetson-clocks.conf"
+expect_no_file "$UNITS/jetlink-server.service.d/20-jetson-clocks.conf"
+expect_file "$UNITS/jetlink-clocks.service"
 expect_in "$UNITS/jetlink-server.service" "/opt/jetlink/current/bin/jetlink-server"
 expect_no_file /usr/local/lib/jetlink
 expect_no_file "$UNITS/jetlink-poweroff.path"

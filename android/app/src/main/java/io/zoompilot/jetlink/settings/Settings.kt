@@ -7,22 +7,53 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-/** Where the model runs, as the server's OrtProfile names it. */
-enum class Processor(val id: String, val title: String) {
-    /** The vision trunk on the NPU, the rest on the GPU: the Mac's split. */
-    NpuGpu("htp", "NPU + GPU"),
+/** The server's backends, as its start config names them. */
+enum class Backend(val id: String) {
+    Ort("ort"),
+    LiteRt("litert"),
+}
 
-    /** The whole model on the NPU, prepared as the iPhone's. */
-    Npu("htp-whole", "NPU"),
+/**
+ * Where the model runs: a backend of the server's and its device, an
+ * OrtProfile or a LiteRtProfile. The device is also what Settings stores,
+ * and no two choices share one.
+ */
+enum class Processor(val backend: Backend, val device: String, val title: String) {
+    /** The vision trunk on the NPU, the rest on the GPU: the Mac's split. QNN, a Snapdragon's. */
+    NpuGpu(Backend.Ort, "htp", "NPU + GPU"),
 
-    /** The whole model on the GPU, for when something else holds the NPU. */
-    Gpu("gpu", "GPU"),
+    /** The whole model on the NPU, prepared as the iPhone's. QNN, a Snapdragon's. */
+    Npu(Backend.Ort, "htp-whole", "NPU"),
 
-    /** The CPU: the emulator, and tests. Far over the budget with a real model. */
-    Cpu("cpu", "CPU");
+    /** The whole model on the GPU through LiteRT, which drives any phone's: Adreno, Mali, PowerVR. */
+    Gpu(Backend.LiteRt, "gpu", "GPU"),
+
+    /** The CPU: the emulator and tests. Seconds a frame with a real model. */
+    Cpu(Backend.Ort, "cpu", "CPU");
+
+    /** Runs on QNN, which needs a Snapdragon: onnxruntime anywhere but its CPU. */
+    val usesQnn: Boolean get() = backend == Backend.Ort && device != Cpu.device
 
     companion object {
-        fun of(id: String?): Processor? = entries.firstOrNull { it.id == id }
+        /**
+         * A stored choice. `gpu` was QNN on the Adreno before LiteRT drove
+         * every phone's GPU, and `litert-gpu` LiteRT's before the backend was
+         * a setting of its own: both are the GPU now.
+         */
+        fun of(device: String?): Processor? = if (device == "litert-gpu") Gpu else entries.firstOrNull { it.device == device }
+
+        /**
+         * What a phone can choose. The NPU choices run QNN, which needs a
+         * Snapdragon: anywhere else it leaves every op to one CPU thread,
+         * minutes a frame. The GPU is LiteRT's, on any phone. The CPU is
+         * offered on a Snapdragon only once chosen; the emulator offers
+         * everything, for testing.
+         */
+        fun choices(qualcomm: Boolean, emulator: Boolean, current: Processor): List<Processor> = when {
+            emulator -> entries
+            qualcomm -> entries.filter { it != Cpu || current == Cpu }
+            else -> listOf(Gpu, Cpu)
+        }
     }
 }
 
@@ -30,7 +61,7 @@ enum class Processor(val id: String, val title: String) {
 data class SettingsValues(
     /** Where bench tools such as `bench_link.py --host` reach the phone. */
     val port: Int = 5599,
-    val processor: Processor = Processor.NpuGpu,
+    val processor: Processor = Processor.Gpu,
     /** The NPU held in burst mode between frames rather than let it settle. */
     val keepNpuAwake: Boolean = true,
     /** A CPU core kept busy between frames. */
@@ -50,7 +81,7 @@ class Settings(context: Context) {
         val next = change(state.value)
         prefs.edit()
             .putInt(PORT, next.port)
-            .putString(PROCESSOR, next.processor.id)
+            .putString(PROCESSOR, next.processor.device)
             .putBoolean(KEEP_NPU_AWAKE, next.keepNpuAwake)
             .putBoolean(KEEP_CPU_AWAKE, next.keepCpuAwake)
             .putBoolean(KEEP_SCREEN_ON, next.keepScreenOn)
@@ -64,7 +95,10 @@ class Settings(context: Context) {
         val port = prefs.getInt(PORT, defaults.port)
         return SettingsValues(
             port = if (port in 1..65535) port else defaults.port,
-            processor = Processor.of(prefs.getString(PROCESSOR, null)) ?: defaults.processor,
+            // a QNN choice from before a phone without a Snapdragon was told apart
+            processor = Processor.of(prefs.getString(PROCESSOR, null))
+                ?.takeIf { it in Processor.choices(Chip.isQualcomm, Chip.isEmulator, it) }
+                ?: defaults.processor,
             keepNpuAwake = prefs.getBoolean(KEEP_NPU_AWAKE, defaults.keepNpuAwake),
             keepCpuAwake = prefs.getBoolean(KEEP_CPU_AWAKE, defaults.keepCpuAwake),
             keepScreenOn = prefs.getBoolean(KEEP_SCREEN_ON, defaults.keepScreenOn),
@@ -80,7 +114,13 @@ class Settings(context: Context) {
         const val KEEP_SCREEN_ON = "keepScreenOn"
         const val LANGUAGE = "language"
 
-        /** The CPU on the emulator, which has no NPU; the split elsewhere. */
-        fun defaultProcessor(): Processor = if (Chip.isEmulator) Processor.Cpu else Processor.NpuGpu
+        /**
+         * The GPU on every phone, a Snapdragon's too; the CPU on the emulator.
+         * LiteRT's GPU path is the one whose outputs are shown to match in
+         * float16 (after the LayerNorm rewrite). QNN's NPU choices stay on a
+         * Snapdragon but have run on no phone, and 20 of Cinque Terre V3's 44
+         * vision LayerNorms overflow float16 when computed step by step.
+         */
+        fun defaultProcessor(): Processor = if (Chip.isEmulator) Processor.Cpu else Processor.Gpu
     }
 }

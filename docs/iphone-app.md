@@ -1,10 +1,8 @@
 # Jetlink for iPhone and iPad
 
-**Experimental.** The model has run on an iPhone; the link to the comma has
-only been tested with a Mac standing in for the phone. Runs the Jetlink server
-in an iOS app, connected to the comma by one USB cable. You build it from
-source. Run the [Benchmark](#benchmark) before you drive to see if your phone
-keeps up.
+**Experimental.** Runs the Jetlink server in an iOS app, connected to the comma
+by one USB cable. You build it from source. Run the [Benchmark](#benchmark)
+before you drive to see if your phone keeps up.
 
 On an iPad with USB-C, read iPad wherever this page says iPhone or phone.
 
@@ -15,7 +13,7 @@ Mac: [Jetlink for Mac](macos-app.md). Jetson or PC: [README](../README.md#quick-
 - An iPhone with USB-C on iOS 26.1 or later, or an iPad with USB-C on iPadOS
   26.1 or later. iPads with Lightning are not supported.
 - Ideally a USB 3 model: see [USB 3 matters](#usb-3-matters).
-- A USB 3 USB-C cable, or a USB-A to USB-C cable with a USB-C adapter.
+- A USB 3 USB-C cable.
 - A powered USB-C hub between them keeps the phone charging (it runs the model
   20 times a second).
 - About 3 GB free per model.
@@ -54,8 +52,8 @@ Building and testing without a phone: [iPhone development](../ios/README.md).
 1. On the comma, while offroad, set **Accelerator Link** to **iOS** in the
    models settings. **USB** is for a Jetson, Linux PC or Mac.
 2. Open Jetlink. The first time, allow **Local Network** access.
-3. Connect the phone to the comma with a USB 3 USB-C cable, or a USB-A to USB-C
-   cable with a USB-C adapter. A powered USB-C hub between them keeps it charging.
+3. Connect the phone to the comma with a USB 3 USB-C cable. A powered USB-C
+   hub between them keeps it charging.
 4. The title reads **Connected over USB 3**. **USB 2** (orange title, and on the
    Link tile) means the phone, hub or cable is not USB 3. See
    [USB 3 matters](#usb-3-matters).
@@ -109,7 +107,7 @@ share of each frame (not the cable).
 
 - **Verdict:** **Fast Enough** (green) is a P99 at or under 35 ms with nothing
   over 50. **Tight** (orange) is a P99 under 50 ms. **Too Slow** (red) misses
-  20 frames a second.
+  20 frames a second, or did not finish a frame in the whole run.
 - **Totals:** frames, frames over 50 ms (and over 35), the phone's temperature
   at start and end, and the model alone.
 - **Over Time:** P99 and temperature per 10 seconds. A phone that slows as it
@@ -117,14 +115,10 @@ share of each frame (not the cable).
 - **10 Minutes** heats the phone: compare the first and last windows.
 - The share button copies the report or puts it in a note.
 
-The app fills in two commands to copy:
-
-- **From the comma:** `jetlink_repo/scripts/comma/jetlink_live_bench.sh 180`
-  over SSH, offroad, with **Accelerator Link** on **iOS** and the phone
-  connected. It reports the frame times the car will see. Frames over 50 ms
-  should be 0.
-- **From a Mac:** `scripts/verify_parity.py ...` on the same Wi-Fi. It checks
-  the phone computes what onnxruntime does on a computer, and should end with OK.
+For the frame times the car will see, cable included, run
+`jetlink_repo/scripts/comma/jetlink_live_bench.sh 180` on the comma over SSH,
+offroad, with **Accelerator Link** on **iOS** and the phone connected. Frames
+over 50 ms should be 0.
 
 ## Status
 

@@ -9,7 +9,7 @@ Command line on any platform: [platform setup](platforms.md).
 
 - An Apple silicon Mac on macOS 15 or later. Intel Macs are not supported.
 - 16 GB of memory recommended, and about 3 GB of disk per model.
-- A USB 3 USB-C cable, or a USB-A to USB-C cable with a USB-C adapter.
+- A USB 3 USB-C cable.
 - A comma running a zoompilot build with Jetlink, set up per the
   [README](../README.md#quick-start).
 
@@ -26,8 +26,8 @@ online, and the Mac powered and awake.
 
 1. Complete [comma setup](../README.md#comma-setup-all-platforms), with
    **Accelerator Link** set to **USB**.
-2. Connect the **Mac to the comma** with a USB 3 USB-C cable, or a USB-A to
-   USB-C cable with a USB-C adapter. A USB 2 cable costs about 10 ms a frame.
+2. Connect the **Mac to the comma** with a USB 3 USB-C cable. A USB 2 cable
+   costs about 10 ms a frame.
 
 Status (and the menu bar) then shows:
 
@@ -133,7 +133,7 @@ through macOS's USB framework, or listens on the TCP port for a bench client.
 | Problem | What to do |
 | --- | --- |
 | The server failed to start | Open **Logs**: the last lines say why. Usually another server holds the USB device (a `jetlink-server` in a terminal, say), or the cache folder is not writable. |
-| Stays on Waiting for comma | Use a USB 3 data cable, or a USB-A to USB-C cable with a USB-C adapter. Check **Accelerator Link** is **USB** under Settings > Models on the comma. |
+| Stays on Waiting for comma | Use a USB 3 data cable. Check **Accelerator Link** is **USB** under Settings > Models on the comma. |
 | Use Model takes a long time | Expect about 20 seconds to prepare and up to 10 to load. If it takes minutes, right-click the model in **Models**, choose **Delete Prepared Engines…**, and use it again. Close large apps to free memory. |
 | The comma says **Big model lost** | Check the cable. Turn on **Keep the Mac awake while serving** and keep the Mac on power. |
 | Everything rebuilt after an update | Expected: a new runtime prepares the model again. The download is kept. |

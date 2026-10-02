@@ -5,6 +5,6 @@
 // the committed project file.
 
 DEVELOPMENT_TEAM =
-PRODUCT_BUNDLE_IDENTIFIER = io.zoompilot.jetlink.ios
+PRODUCT_BUNDLE_IDENTIFIER = io.zoompilot.jetlink
 
 #include? "Local.xcconfig"

@@ -13,13 +13,8 @@ import io.zoompilot.jetlink.ui.Tone
 import io.zoompilot.jetlink.ui.Verdict
 import io.zoompilot.jetlink.ui.status.StatusL10n
 
-/** The Benchmark tab's words and commands, as plain functions of the state. */
+/** The Benchmark tab's words, as plain functions of the state. */
 object BenchmarkText {
-    /** The live bench on the comma: its cameras and modeld, over this phone's link. */
-    const val COMMA_COMMAND = "/data/openpilot/jetlink_repo/scripts/comma/jetlink_live_bench.sh 180"
-
-    const val GUIDE = "https://github.com/zoompilot/jetlink/blob/main/docs/android-app.md#benchmark"
-
     /** Why a run cannot start now, as a resource; null when it can. The server refuses the same things. */
     fun blocker(serving: Boolean, modelLoaded: Boolean, commaConnected: Boolean): Int? = when {
         !serving -> R.string.bench_blocker_not_serving
@@ -37,17 +32,14 @@ object BenchmarkText {
     /** A benchmark that has not finished. */
     fun running(snapshot: Snapshot): Boolean = snapshot.benchmark?.state == "running"
 
-    /**
-     * verify_parity from a Mac on the same Wi-Fi, dialing the phone's listener,
-     * then checking its outputs against onnxruntime on the Mac.
-     */
-    fun parityCommand(sha256: String?, bytes: Long?, host: String?, port: Int?): String? {
-        if (sha256 == null || bytes == null || host == null || port == null) return null
-        val onnx = "\"\$HOME/Library/Application Support/Jetlink/cache/models/${sha256.take(16)}.onnx\""
-        return "python3 scripts/verify_parity.py capture --host $host --port $port --sha256 $sha256 --nbytes $bytes --dir parity-android \\\n" +
-            "  && python3 scripts/verify_parity.py reference --onnx $onnx --dir parity-android \\\n" +
-            "  && python3 scripts/verify_parity.py compare --dir parity-android"
-    }
+    /** The line under the verdict: what it means, or that no frame finished. */
+    @Composable
+    fun verdictDetail(report: BenchReport, verdict: Verdict): String =
+        if (report.frames == 0 && verdict == Verdict.Slow) {
+            l10n(R.string.bench_verdict_no_frames, Format.clock(report.seconds))
+        } else {
+            verdictDetail(verdict)
+        }
 
     /** "1:00 at 20 Hz", under the frame count. */
     @Composable
@@ -74,7 +66,7 @@ object BenchmarkText {
         Chip.Expectation.Recommended -> R.string.expectation_should to Tone.Good
         Chip.Expectation.Possible -> R.string.expectation_possible to Tone.Warning
         Chip.Expectation.TooOld -> R.string.expectation_too_old to Tone.Bad
-        Chip.Expectation.NoNpu -> R.string.expectation_no_npu to Tone.Bad
+        Chip.Expectation.Unmeasured -> R.string.expectation_unmeasured to Tone.Warning
     }
 
     @Composable
@@ -83,6 +75,7 @@ object BenchmarkText {
             Verdict.Good -> R.string.verdict_good_title
             Verdict.Tight -> R.string.verdict_tight_title
             Verdict.Slow -> R.string.verdict_slow_title
+            Verdict.None -> R.string.verdict_none_title
         },
     )
 
@@ -92,6 +85,7 @@ object BenchmarkText {
             Verdict.Good -> R.string.verdict_good_detail
             Verdict.Tight -> R.string.verdict_tight_detail
             Verdict.Slow -> R.string.verdict_slow_detail
+            Verdict.None -> R.string.verdict_none_detail
         },
     )
 }

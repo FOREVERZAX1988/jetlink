@@ -72,6 +72,16 @@ class FormatTest {
         assertEquals("Loading", Format.stageName("load"))
         assertEquals("Working", Format.stageName(null))
         assertEquals("Working", Format.stageName("something new"))
+        assertEquals("Warming Up", Format.stageName("warm"))
+    }
+
+    @Test
+    fun progressWithAndWithoutAnEstimate() {
+        assertEquals("Loading · 42%", Format.progressText("load", 0.42, "loading the model, 5 s of about 12 s"))
+        // nothing to go by: the seconds so far, never a 0% that never moves
+        assertEquals("Loading · 12 s", Format.progressText("load", 0.0, "loading the model to check it runs, 12 s elapsed"))
+        assertEquals("Loading", Format.progressText("load", 0.0, "loading the model"))
+        assertEquals(null, Format.progressAmount(0.0, null))
     }
 
     @Test

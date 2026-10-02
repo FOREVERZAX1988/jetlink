@@ -138,11 +138,11 @@ cmd_status() {
   echo "  server         $(server_line)"
   echo "  models folder  $JETLINK_CACHE_DIR ${D}($(human_size "$JETLINK_CACHE_DIR"))${N}"
   if [ "${JETLINK_JETSON:-0}" = 1 ]; then
-    local power="switched: turns on and off with the car"
+    local power="switched: loses power with the car"
     if [ "${JETLINK_POWER:-}" = always ]; then
       power="always on"
-      [ "${JETLINK_SLEEP_AFTER:-0}" != 0 ] && power="$power: sleeps when the car is off"
-      [ "${JETLINK_POWEROFF_WITH_COMMA:-0}" = 1 ] && power="$power; the comma can shut it down"
+      [ "${JETLINK_SLEEP_AFTER:-0}" != 0 ] && power="$power: sleeps while parked"
+      [ "${JETLINK_POWEROFF_WITH_COMMA:-0}" = 1 ] && power="$power; the comma can turn it off"
     fi
     echo "  power          $power"
   fi
@@ -320,7 +320,7 @@ main() {
         echo "Stopping the background server while this one runs..."
         systemctl stop "$UNIT"
       fi
-      # the unit's ExecStartPre on a Jetson
+      # on a Jetson, what jetlink-clocks.service does at boot
       if [ "${JETLINK_JETSON:-0}" = 1 ] && command -v jetson_clocks >/dev/null 2>&1; then
         jetson_clocks || true
       fi

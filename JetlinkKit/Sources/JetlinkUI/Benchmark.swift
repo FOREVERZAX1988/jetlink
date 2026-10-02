@@ -7,13 +7,21 @@
   /// on a phone and on a Mac.
   public enum BenchmarkVerdict: Equatable, Sendable {
     case good, tight, slow
+    /// Stopped before a frame was measured.
+    case none
 
     /// A P99 at or under this, with no frame over the budget, leaves room for
     /// the cable in the 50 ms budget (`FrameBudgetView.budgetMs`).
     public static let roomyP99Ms = 35.0
 
+    /// A run with no frames is too slow, unless it was stopped first: one
+    /// frame outlasted the whole run.
     public init(_ report: BenchmarkReport) {
-      self.init(p99: report.frame.p99, over50: report.over50)
+      if report.frames == 0 {
+        self = report.cancelled ? .none : .slow
+      } else {
+        self.init(p99: report.frame.p99, over50: report.over50)
+      }
     }
 
     public init(p99: Double, over50: Int = 0) {
@@ -31,6 +39,7 @@
       case .good: "Fast Enough"
       case .tight: "Tight"
       case .slow: "Too Slow"
+      case .none: "No Frames"
       }
     }
 
@@ -39,6 +48,7 @@
       case .good: "Room for the cable in the 50 ms budget."
       case .tight: "Little room left for the cable."
       case .slow: "Misses 20 frames a second."
+      case .none: "Stopped before a frame was measured."
       }
     }
 
@@ -47,6 +57,7 @@
       case .good: "checkmark.seal.fill"
       case .tight: "exclamationmark.triangle.fill"
       case .slow: "xmark.octagon.fill"
+      case .none: "stopwatch"
       }
     }
 
@@ -55,6 +66,7 @@
       case .good: .green
       case .tight: .orange
       case .slow: .red
+      case .none: .secondary
       }
     }
   }
@@ -185,18 +197,28 @@
           Text(verdict.title)
             .font(.system(.title, design: .rounded, weight: .bold))
             .foregroundStyle(verdict.tone)
-          Text(verdict.detail)
+          Text(BenchmarkVerdictSummary.detail(report, verdict))
             .font(.subheadline)
             .foregroundStyle(.secondary)
         }
-        HStack(spacing: 0) {
-          Figure("P99", ms: report.frame.p99, tone: verdict.tone)
-          Divider().frame(height: 32)
-          Figure("Max", ms: report.frame.max)
-          Divider().frame(height: 32)
-          Figure("Mean", ms: report.frame.mean)
+        // no frames, no numbers: zeros would read as fast
+        if report.frames > 0 {
+          HStack(spacing: 0) {
+            Figure("P99", ms: report.frame.p99, tone: verdict.tone)
+            Divider().frame(height: 32)
+            Figure("Max", ms: report.frame.max)
+            Divider().frame(height: 32)
+            Figure("Mean", ms: report.frame.mean)
+          }
         }
       }
+    }
+  }
+
+  extension BenchmarkVerdictSummary {
+    /// The line under the verdict: what it means, or that no frame finished.
+    public static func detail(_ report: BenchmarkReport, _ verdict: BenchmarkVerdict) -> String {
+      report.frames == 0 && verdict == .slow ? "Not one frame finished in \(BenchmarkClock.text(report.seconds))." : verdict.detail
     }
   }
 

@@ -73,8 +73,7 @@ Nothing else to install: the server is built into the app.
 
 <a href="docs/images/iphone-demo.mp4"><img src="docs/images/iphone-demo.webp" width="100%" alt="Jetlink for iPhone, recorded in the iOS Simulator: Get downloads and prepares a model, the comma connects over USB, and Status shows each frame against the 50 ms budget, with timings modeled on an iPhone 17 Pro measurement"></a>
 
-The link to the comma is only tested with a Mac standing in for the phone. You
-need:
+You need:
 
 * An iPhone or iPad with USB-C on iOS or iPadOS 26.1 or later. For USB 3: an
   iPhone 15 Pro or later Pro, or an iPad Pro, Air, or mini.
@@ -109,8 +108,8 @@ Not yet run on a phone. You need:
 2. **Enable Jetlink.** Set **Settings > Models > Accelerator Link** to **USB**
    (Jetson, Linux PC, Mac, Android) or **iOS** (iPhone, iPad). Offroad only. Leave
    **Big Model** at its default for the first run.
-3. **Connect USB.** A USB 3 USB-C cable, or a USB-A to USB-C cable with a
-   USB-C adapter. Jetson: use its USB-A port. Charge-only cables won't work.
+3. **Connect USB.** A USB 3 USB-C cable (Jetson: USB-A to USB-C, from its
+   USB-A port). Charge-only cables won't work.
 4. **Wait for green.** The home-button icon pulses while the model downloads
    and prepares (first time: about 3 minutes on a Jetson, 20 seconds on an
    M1 Pro). Stay offroad and online until it turns green.
@@ -133,7 +132,7 @@ More: [daily use and icon meanings](docs/using-jetlink.md).
 | Problem | First check |
 | --- | --- |
 | No Accelerator Link setting | Confirm the `jetson-trt` branch in Settings > Software. |
-| Server stays waiting; icon never pulses | Check the server is running. Try another USB 3 data cable, or a USB-A to USB-C cable with a USB-C adapter. |
+| Server stays waiting; icon never pulses | Check the server is running. Try another USB 3 data cable. |
 | Model list is empty | Connect the comma to the internet, then use Refresh Model List. |
 | Setup alert or orange icon | Read the alert. Check internet, then set Accelerator Link to Off and back to USB or iOS. |
 | Alert says **no warp built for this camera** | Update or reinstall the `jetson-trt` branch. |

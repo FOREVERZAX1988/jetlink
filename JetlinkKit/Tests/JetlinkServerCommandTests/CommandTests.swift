@@ -28,6 +28,12 @@
       #expect(libs.chosen.options().tensorrtLibs == "/opt/jetlink/tensorrt/11.3.0.99")
     }
 
+    @Test func litertIsNamedAndTakesGpuOrCpu() throws {
+      let serve = try #require(try root(["--backend", "litert", "--device", "cpu"]) as? Serve)
+      #expect(serve.chosen.backend == .litert && serve.chosen.device == "cpu")
+      #expect { try BackendOptions(device: "npu").litert() } throws: { "\($0)".contains("gpu or cpu") }
+    }
+
     @Test func tensorrtDefaultsToLibBesideBinWhenThere() throws {
       let tmp = try TemporaryDirectory()
       let binary = tmp.url.appending(path: "bin/jetlink-server")
