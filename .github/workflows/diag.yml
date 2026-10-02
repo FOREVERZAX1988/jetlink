@@ -1,0 +1,39 @@
+# A scratch job that surfaces the Swift compile errors to the run summary,
+# where they are visible without signing in. Delete once the tree builds.
+name: Diag
+
+on:
+  push:
+    branches: [android-l10n]
+  workflow_dispatch:
+
+concurrency:
+  group: diag-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  registry:
+    name: Compile JetlinkRegistry
+    runs-on: ubuntu-24.04
+    container: swift:6.3.3-jammy
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+      - name: Install curl
+        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl
+      - name: Build the registry and show the errors
+        run: |
+          if swift build --package-path JetlinkKit --target JetlinkRegistry 2>&1 | tee /tmp/out.txt; then
+            echo "JetlinkRegistry builds" >> "$GITHUB_STEP_SUMMARY"
+          else
+            { echo '## JetlinkRegistry build errors'; echo '```'; tail -80 /tmp/out.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+      - name: Build the registry tests and show the errors
+        run: |
+          if swift build --package-path JetlinkKit --build-tests --target JetlinkRegistryTests 2>&1 | tee /tmp/tests.txt; then
+            echo "JetlinkRegistryTests build" >> "$GITHUB_STEP_SUMMARY"
+          else
+            { echo '## JetlinkRegistryTests build errors'; echo '```'; tail -80 /tmp/tests.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
