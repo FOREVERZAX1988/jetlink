@@ -189,6 +189,18 @@ struct Transpose {
   var byteCount: Int { rows * cols * elementSize }
 }
 
+extension Transpose.Elements {
+  /// The elements in `range`, a byte range of these: one filter of a
+  /// weight. Typed elements are decoded first, so they cannot be sliced.
+  func slice(_ range: Range<Int>) -> Transpose.Elements {
+    switch self {
+    case .source(let r): .source((r.lowerBound + range.lowerBound)..<(r.lowerBound + range.upperBound))
+    case .owned(let b): .owned(Array(b[range]))
+    case .typed: preconditionFailure("a weight in the typed fields is decoded before it is sliced")
+    }
+  }
+}
+
 /// An fp16 weight's fp32 copy (`numpy_helper.to_array(w).astype(np.float32)`
 /// in heads_in_fp32), produced a band at a time while it is written.
 struct Widen {

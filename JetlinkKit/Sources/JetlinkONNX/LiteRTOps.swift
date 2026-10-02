@@ -20,7 +20,7 @@ extension LiteRTLowering {
     case "Div": try binary(.div, n, .div)
     case "Max": try variadic(.maximum, n)
     case "Min": try variadic(.minimum, n)
-    case "Pow": try pow(n)
+    case "Pow": try binary(.pow, n, .pow)
     case "Abs": try unary(.abs, n, .abs)
     case "Sqrt": try unary(.sqrt, n)
     case "Sigmoid": try unary(.logistic, n)
@@ -233,22 +233,6 @@ extension LiteRTLowering {
     try elementwise(.div, .constant(one), value(n.inputs[0]), n.outputs[0], .div)
   }
 
-  mutating func pow(_ n: Node) throws {
-    let x = try value(n.inputs[0])
-    if let c = constant(n.inputs[1]), c.count == 1 {
-      let e = try floats(c)[0]
-      if e == 1, try dims(x) == Self.broadcast(dims(x), c.dims) {
-        try alias(n.outputs[0], x)
-        return
-      }
-      if e == 2 {
-        try elementwise(.mul, x, x, n.outputs[0], .mul)
-        return
-      }
-    }
-    try elementwise(.pow, x, value(n.inputs[1]), n.outputs[0], .pow)
-  }
-
   // MARK: Cast, Constant, Not
 
   mutating func cast(_ n: Node) throws {
@@ -361,24 +345,19 @@ extension LiteRTLowering {
     if axis == rank - 1 {
       let o = try define(name, shape, .float32)
       emit(.softmax, [x], [o], .softmax(beta: 1))
-    } else if opset >= 13 {
-      // SOFTMAX works on the last axis; the axis goes there and back.
-      var perm = Array(0..<rank)
-      perm.swapAt(axis, rank - 1)
-      let t = transposed(x, perm, "\(name)__last")
-      let s = addTensor("\(name)__softmax", model.tensors[t].shape, .float32)
-      emit(.softmax, [t], [s], .softmax(beta: 1))
-      let o = try define(name, shape, .float32)
-      emit(.transpose, [s, int32Tensor(perm, "\(name)__perm")], [o], .transpose)
-    } else {
-      // Before opset 13 Softmax works on the input flattened to 2-D at the axis.
-      let rows = shape[..<axis].reduce(1, *)
-      let flat = reshaped(x, [rows, shape[axis...].reduce(1, *)], "\(name)__2d")
-      let s = addTensor("\(name)__softmax", model.tensors[flat].shape, .float32)
-      emit(.softmax, [flat], [s], .softmax(beta: 1))
-      let o = try define(name, shape, .float32)
-      emit(.reshape, [s, int32Tensor(shape, "\(name)__shape")], [o], .reshape(newShape: shape.map { Int32($0) }))
+      return
     }
+    // Before opset 13 Softmax flattens to 2-D at the axis, which is the last
+    // axis's softmax only when the axis is the last.
+    guard opset >= 13 else { throw OnnxError("a Softmax before opset 13 over more than the last axis is not lowered") }
+    // SOFTMAX works on the last axis; the axis goes there and back.
+    var perm = Array(0..<rank)
+    perm.swapAt(axis, rank - 1)
+    let t = transposed(x, perm, "\(name)__last")
+    let s = addTensor("\(name)__softmax", model.tensors[t].shape, .float32)
+    emit(.softmax, [t], [s], .softmax(beta: 1))
+    let o = try define(name, shape, .float32)
+    emit(.transpose, [s, int32Tensor(perm, "\(name)__perm")], [o], .transpose)
   }
 
   // MARK: reshapes
@@ -1051,23 +1030,17 @@ extension LiteRTLowering {
     var e = Encoded()
     e.transposed(Transpose(elements: try transposeElements(w), rows: rows, cols: cols, elementSize: size))
     switch w.type {
-    case DataType.float16: return dequantized(e, [cols, rows], name)
+    case DataType.float16: return dequantized(buffer(e), [cols, rows], name)
     case DataType.float: return addTensor(name, [cols, rows], .float32, buffer: buffer(e))
     default: throw OnnxError("weight \(w.name) has element type \(OnnxMeta.typeName(w.type))")
     }
   }
 
-  private func transposeElements(_ w: Constant, range: Range<Int>? = nil) throws -> Transpose.Elements {
+  /// A constant's elements for a transpose made as the file is written.
+  private func transposeElements(_ w: Constant) throws -> Transpose.Elements {
     switch w.bytes {
-    case .initializer(let t):
-      if case .source(let r)? = t.raw {
-        guard let range else { return .source(r) }
-        return .source((r.lowerBound + range.lowerBound)..<(r.lowerBound + range.upperBound))
-      }
-      let all = try Elements.littleEndian(t, src)
-      return .owned(range.map { Array(all[$0]) } ?? all)
-    case .owned(let b):
-      return .owned(range.map { Array(b[$0]) } ?? b)
+    case .initializer(let t): try Patches.transposeElements(of: t, src)
+    case .owned(let b): .owned(b)
     }
   }
 
@@ -1175,14 +1148,16 @@ extension LiteRTLowering {
     } else if depthwise {
       e.transposed(Transpose(elements: try transposeElements(w), rows: o, cols: taps, elementSize: size))
     } else {
+      // Filter by filter; a weight in the typed fields is decoded once for all of them.
+      var elements = try transposeElements(w)
+      if case .typed(let t) = elements { elements = .owned(try Elements.littleEndian(t, src)) }
       let filterBytes = i * taps * size
       for f in 0..<o {
-        let range = (f * filterBytes)..<((f + 1) * filterBytes)
-        e.transposed(Transpose(elements: try transposeElements(w, range: range), rows: i, cols: taps, elementSize: size))
+        e.transposed(Transpose(elements: elements.slice((f * filterBytes)..<((f + 1) * filterBytes)), rows: i, cols: taps, elementSize: size))
       }
     }
     if w.type == DataType.float16 {
-      return dequantized(e, shape, name)
+      return dequantized(buffer(e), shape, name)
     }
     return addTensor(name, shape, .float32, buffer: buffer(e))
   }

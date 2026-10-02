@@ -207,19 +207,17 @@ struct LiteRTLowering {
 
   @discardableResult
   mutating func addTensor(_ name: String, _ shape: [Int], _ type: TFLite.TensorType, buffer: Int = 0) -> Int {
-    var unique = name
-    var n = 1
-    while names.contains(unique) {
-      unique = "\(name)__\(n)"
-      n += 1
-    }
-    names.insert(unique)
-    model.tensors.append(TFLite.Tensor(name: unique, shape: shape, type: type, buffer: buffer))
+    model.tensors.append(TFLite.Tensor(name: uniqueName(name), shape: shape, type: type, buffer: buffer))
     return model.tensors.count - 1
   }
 
   mutating func rename(_ index: Int, to name: String) {
     names.remove(model.tensors[index].name)
+    model.tensors[index].name = uniqueName(name)
+  }
+
+  /// `name`, or `name__1`, `name__2`... if a tensor has it, taken.
+  private mutating func uniqueName(_ name: String) -> String {
     var unique = name
     var n = 1
     while names.contains(unique) {
@@ -227,24 +225,23 @@ struct LiteRTLowering {
       n += 1
     }
     names.insert(unique)
-    model.tensors[index].name = unique
+    return unique
   }
 
   mutating func emit(_ op: TFLite.Op, _ inputs: [Int], _ outputs: [Int], _ options: TFLite.Options = .none) {
     model.operators.append(TFLite.Operator(op: op, inputs: inputs, outputs: outputs, options: options))
   }
 
-  /// A buffer of owned bytes.
-  mutating func buffer(_ bytes: [UInt8]) -> Int {
-    var e = Encoded()
-    e.bytes(bytes)
+  mutating func buffer(_ e: Encoded) -> Int {
     buffers.append(e)
     return buffers.count - 1
   }
 
-  mutating func buffer(_ e: Encoded) -> Int {
-    buffers.append(e)
-    return buffers.count - 1
+  /// A buffer of owned bytes.
+  mutating func buffer(_ bytes: [UInt8]) -> Int {
+    var e = Encoded()
+    e.bytes(bytes)
+    return buffer(e)
   }
 
   /// A constant INT32 vector: shapes, axes, permutations, slice bounds.
@@ -264,11 +261,6 @@ struct LiteRTLowering {
       return dequantized(buffer(Elements.encode(values, as: DataType.float16)), shape, name)
     }
     return addTensor(name, shape, .float32, buffer: buffer(Elements.encode(values, as: DataType.float)))
-  }
-
-  /// FLOAT16 bytes' FLOAT32 tensor, through a DEQUANTIZE that runs first.
-  mutating func dequantized(_ e: Encoded, _ shape: [Int], _ name: String) -> Int {
-    dequantized(buffer(e), shape, name)
   }
 
   /// A FLOAT16 buffer's FLOAT32 tensor, through a DEQUANTIZE that runs first.
@@ -302,10 +294,7 @@ struct LiteRTLowering {
 
   /// A name as a tensor operators can read; a constant is stored, once per shape.
   mutating func tensor(_ name: String) throws -> Int {
-    switch try value(name) {
-    case .tensor(let i): return i
-    case .constant(let c): return try constantTensor(c)
-    }
+    try tensor(value(name))
   }
 
   mutating func tensor(_ v: Value) throws -> Int {

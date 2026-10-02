@@ -77,7 +77,6 @@ enum TFLite {
     case reduceMin = 89
     case logicalNot = 87
     case abs = 101
-    case gatherNd = 107
     case selectV2 = 123
     case batchMatmul = 126
     case gelu = 150
@@ -118,7 +117,6 @@ enum TFLite {
       case .reduceMin: "REDUCE_MIN"
       case .logicalNot: "LOGICAL_NOT"
       case .abs: "ABS"
-      case .gatherNd: "GATHER_ND"
       case .selectV2: "SELECT_V2"
       case .batchMatmul: "BATCH_MATMUL"
       case .gelu: "GELU"
@@ -156,7 +154,6 @@ enum TFLite {
     case maximumMinimum
     case slice
     case abs
-    case gatherNd
     case selectV2
     case batchMatmul(adjX: Bool, adjY: Bool)
     case gelu(approximate: Bool)
@@ -193,7 +190,6 @@ enum TFLite {
       case .pow: 56
       case .logicalNot: 63
       case .abs: 78
-      case .gatherNd: 83
       case .selectV2: 98
       case .batchMatmul: 101
       case .gelu: 116
@@ -278,7 +274,7 @@ enum TFLite {
         // fused_activation_function, pot_scale_int16 (true)
         b.startTable(fields: 2)
         return b.endTable()
-      case .mul, .div, .pad, .transpose, .dequantize, .maximumMinimum, .slice, .abs, .gatherNd, .selectV2, .pow, .exp, .neg,
+      case .mul, .div, .pad, .transpose, .dequantize, .maximumMinimum, .slice, .abs, .selectV2, .pow, .exp, .neg,
         .logicalNot:
         b.startTable(fields: 0)
         return b.endTable()
