@@ -226,7 +226,9 @@ extension Patches {
         return nil
       }
     }
-    return outputs.isEmpty ? nil : (outputs, nodes)
+    // a guard, not a ternary: the Android toolchain's type checker gives up on nil beside a tuple
+    guard !outputs.isEmpty else { return nil }
+    return (outputs, nodes)
   }
 
   // MARK: the frame queue in 4-D (prep_gpu.py --img4d)
