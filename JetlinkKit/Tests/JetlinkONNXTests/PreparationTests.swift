@@ -208,4 +208,18 @@ import Testing
         source: out.url.appendingPathComponent("none.onnx"), into: out.url, layout: .whole, cacheKey: { $0 })
     }
   }
+
+  /// A real model prepared on request, to check against the original with
+  /// onnxruntime or to measure: JETLINK_PREPARE=<layout>:<model.onnx>:<directory>,
+  /// the layout whole, ane-whole, split or plain.
+  @Test(.enabled(if: ProcessInfo.processInfo.environment["JETLINK_PREPARE"] != nil))
+  func preparesARealModel() throws {
+    let spec = ProcessInfo.processInfo.environment["JETLINK_PREPARE"]!.split(separator: ":", maxSplits: 2).map(String.init)
+    let layouts: [String: CoreMLPreparation.Layout] = ["whole": .whole, "ane-whole": .aneWhole, "split": .split, "plain": .plain]
+    let layout = try #require(layouts[spec[0]])
+    let start = Date()
+    let report = try CoreMLPreparation.prepare(
+      source: URL(fileURLWithPath: spec[1]), into: URL(fileURLWithPath: spec[2]), layout: layout, cacheKey: { "jetlink\($0)" })
+    print("prepared in \(Date().timeIntervalSince(start)) s: \(report)")
+  }
 }

@@ -500,27 +500,68 @@ import Testing
 
   // MARK: LayerNormalization and constants
 
-  @Test func layerNormalizationDecomposes() throws {
-    var g = OnnxGraphBuilder()
-    g.input("x", Self.f32, [2, 5])
-    g.fp16("scale", [5], [1, 0.5, 2, -1, 0.25])
-    g.fp16("bias", [5], [0, 1, -1, 0.5, 2])
-    g.node("LayerNormalization", ["x", "scale", "bias"], ["y"], [("epsilon", .float(1e-5))])
-    g.output("y", Self.f32, [2, 5])
-    let (file, report) = try g.convert(rewrites: false)
-    #expect(report.lowerings["plain LayerNormalizations"] == 1)
-    let x: [Float] = [1, 2, 3, 4, 5, -3, 0.5, 8, 2, -1]
-    let y = try Self.run(file, ["x": x])["y"]!
-    let scale: [Float] = [1, 0.5, 2, -1, 0.25]
-    let bias: [Float] = [0, 1, -1, 0.5, 2]
-    for r in 0..<2 {
-      let row = Array(x[(r * 5)..<(r * 5 + 5)])
-      let mean = row.reduce(0, +) / 5
-      let variance = row.map { ($0 - mean) * ($0 - mean) }.reduce(0, +) / 5
-      for k in 0..<5 {
-        #expect(abs(y[r * 5 + k] - ((row[k] - mean) / (variance + 1e-5).squareRoot() * scale[k] + bias[k])) < 1e-5)
-      }
+  /// ONNX's LayerNormalization over the axes from `axis` on, in Double:
+  /// the output, the mean and the inverse deviation, row by row.
+  static func layerNorm(_ x: [Float], inner: Int, scale: [Float], bias: [Float]?, epsilon: Double)
+    -> (y: [Float], mean: [Float], invStd: [Float])
+  {
+    var (y, means, invStds) = ([Float](), [Float](), [Float]())
+    for start in stride(from: 0, to: x.count, by: inner) {
+      let row = x[start..<(start + inner)].map { Double($0) }
+      let mean = row.reduce(0, +) / Double(inner)
+      let invStd = 1 / (row.map { ($0 - mean) * ($0 - mean) }.reduce(0, +) / Double(inner) + epsilon).squareRoot()
+      y += row.indices.map { Float((row[$0] - mean) * invStd * Double(scale[$0]) + Double(bias?[$0] ?? 0)) }
+      means.append(Float(mean))
+      invStds.append(Float(invStd))
     }
+    return (y, means, invStds)
+  }
+
+  /// Rows that spread widely, as the norms' inputs do in Cinque Terre V3:
+  /// squared, their deviations pass fp16's 65504.
+  static let spread = (0..<48).map { (i: Int) -> Float in Float((i * 37) % 48) * 300 - 7000 + (i % 3 == 0 ? 2500 : 0) }
+
+  /// Every LayerNormalization in the fp16-safe form, over the last axis or
+  /// the last two, with and without a bias: what is squared stays within 1.
+  @Test(arguments: [(Int64(-1), true), (1, true), (-1, false)])
+  func layerNormalizationIsFP16Safe(_ axis: Int64, _ bias: Bool) throws {
+    let inner = axis == -1 ? 8 : 24
+    let scale = (0..<inner).map { 0.5 + Float($0) / 16 }
+    let shift = (0..<inner).map { Float($0) / 8 - 1 }
+    var g = OnnxGraphBuilder()
+    g.input("x", Self.f32, [2, 3, 8])
+    let dims: [Int64] = axis == -1 ? [8] : [3, 8]
+    g.fp16("scale", dims, scale)
+    g.fp16("bias", dims, shift)
+    g.node("LayerNormalization", bias ? ["x", "scale", "bias"] : ["x", "scale"], ["y"], [("axis", .int(axis)), ("epsilon", .float(1e-5))])
+    g.output("y", Self.f32, [2, 3, 8])
+    let (file, report) = try g.convert()
+    #expect(report.lowerings["fp16-safe LayerNormalizations"] == 1)
+    #expect(file.count("RSQRT") == 1 && file.count("REDUCE_MAX") == 1 && file.count("MEAN") == 2)
+    var interpreter = TFLiteInterpreter(file)
+    let y = try interpreter.run(["x": Self.spread])["y"]!
+    let squared = try #require(file.tensor(named: "y__sq"))
+    #expect(interpreter.values[squared]!.allSatisfy { $0 <= 1 })
+    let want = Self.layerNorm(Self.spread, inner: inner, scale: scale, bias: bias ? shift : nil, epsilon: 1e-5).y
+    #expect(maxError(y, want) < 1e-4)
+  }
+
+  /// A norm whose Mean and InvStdDev the graph reads gives them from the
+  /// scaled statistics.
+  @Test func layerNormalizationMeanAndInvStdDev() throws {
+    var g = OnnxGraphBuilder()
+    g.input("x", Self.f32, [2, 3, 8])
+    g.fp16("scale", [8], [Float](repeating: 1, count: 8))
+    g.node("LayerNormalization", ["x", "scale"], ["y", "mean", "inv"], [("epsilon", .float(1e-3))])
+    g.output("y", Self.f32, [2, 3, 8])
+    g.output("mean", Self.f32, [2, 3, 1])
+    g.output("inv", Self.f32, [2, 3, 1])
+    let (file, _) = try g.convert()
+    let out = try Self.run(file, ["x": Self.spread])
+    let want = Self.layerNorm(Self.spread, inner: 8, scale: [Float](repeating: 1, count: 8), bias: nil, epsilon: 1e-3)
+    #expect(maxError(out["y"]!, want.y) < 1e-4)
+    #expect(maxError(out["mean"]!, want.mean) < 1e-3)
+    #expect(zip(out["inv"]!, want.invStd).allSatisfy { abs($0 - $1) <= 1e-5 * $1 })
   }
 
   /// What only reads constants is worked out here: no operator is left with
@@ -568,7 +609,7 @@ import Testing
     g.node("Cast", ["imgs"], ["out"], [("to", .int(1))])
     g.output("out", Self.f32, [1, 12, 2, 2])
     g.output("next_state_img_q", DataType.uint8, [2, 5, 6, 2, 2])
-    let (file, report) = try g.convert(rewrites: false)
+    let (file, report) = try g.convert()
     #expect(file.tensors[file.inputs[1]].shape == [2, 30, 2, 2])
     #expect(file.tensors[file.outputs[1]].shape == [2, 30, 2, 2])
     #expect(file.tensors.allSatisfy { $0.shape.count <= 4 }, "\(file.tensors.filter { $0.shape.count > 4 }.map(\.name))")

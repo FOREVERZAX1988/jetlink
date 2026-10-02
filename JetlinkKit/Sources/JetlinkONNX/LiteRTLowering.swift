@@ -173,8 +173,8 @@ struct LiteRTLowering {
   /// The shape a graph input or output has in the file. LiteRT's GPU takes
   /// rank 4 at most, so a larger one is the same bytes as
   /// [d0, d1 * ... * d(r-3), d(r-2), d(r-1)]: the uint8 frame queue
-  /// [2, 5, 6, 128, 256] is [2, 30, 128, 256], the view Patches.forLiteRT
-  /// gives it. Element counts are what the server checks, and they stay.
+  /// [2, 5, 6, 128, 256] is [2, 30, 128, 256]. Element counts are what the
+  /// server checks, and they stay.
   static func edgeView(_ dims: [Int]) -> [Int] {
     guard dims.count > 4 else { return dims }
     return [dims[0], dims[1...(dims.count - 3)].reduce(1, *), dims[dims.count - 2], dims[dims.count - 1]]

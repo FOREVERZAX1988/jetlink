@@ -4,10 +4,11 @@ import Foundation
 /// written on the device from the ONNX file, as every jetlink platform
 /// prepares its engine, so custom and uploaded models work the same.
 ///
-/// 1. the ONNX rewrites that make the graph something LiteRT's GPU runs
-///    whole (see `rewrite`);
+/// 1. tinygrad's layout ops stripped, the one ONNX rewrite;
 /// 2. every node lowered to TFLite operators (`LiteRTLowering`), keeping
-///    ONNX's layout, names and I/O types;
+///    ONNX's layout, names and I/O types, in forms LiteRT's GPU runs whole:
+///    rank-5 tensors as views of rank 4 at most, constant gathers as slices,
+///    LayerNormalization in a form that stays inside fp16;
 /// 3. TRANSPOSE pairs the lowering left back to back taken out (the NHWC
 ///    convolutions meet the graph's own NHWC permutes), TRANSPOSEs moved
 ///    past elementwise operators to meet the ones that undo them, and
@@ -25,12 +26,12 @@ import Foundation
 public enum LiteRTPreparation {
   public struct Report: Sendable, Equatable {
     public let url: URL
-    /// The ONNX rewrites applied before the lowering, by name.
-    public let rewrites: [String: Int]
+    /// tinygrad layout ops stripped before the lowering.
+    public let stripped: Int
     /// The TFLite operators written, by TFLite's name for them.
     public let operators: [String: Int]
-    /// The lowering's special cases, by name: masked Wheres, plain
-    /// LayerNormalizations, infinite mask fills made finite.
+    /// The lowering's special cases, by name: fp16-safe LayerNormalizations,
+    /// masked Wheres, rank-5 layout ops on views.
     public let lowerings: [String: Int]
     /// TRANSPOSEs taken out after the lowering.
     public let transposesRemoved: Int
@@ -38,12 +39,20 @@ public enum LiteRTPreparation {
     public let transposesMoved: Int
     /// RESHAPEs that read another RESHAPE's input instead, or went.
     public let reshapesFused: Int
-    public let tensors: Int
     /// The flatbuffer at the start of the file.
     public let flatbufferBytes: Int
     /// Everything after it: the weights.
     public let weightBytes: Int64
-    public let fileBytes: Int64
+
+    public var fileBytes: Int64 { Int64(flatbufferBytes) + weightBytes }
+
+    /// What the conversion did, in a line for the log.
+    public var summary: String {
+      let special = lowerings.sorted { $0.key < $1.key }.map { "\($0.value) \($0.key)" }
+      return "\(stripped) tinygrad op(s) stripped; \(special.isEmpty ? "no special cases" : special.joined(separator: ", ")); "
+        + "\(operators.values.reduce(0, +)) operators, \(transposesRemoved) transposes removed and \(transposesMoved) moved, "
+        + "\(reshapesFused) reshapes fused, \(fileBytes / 1_000_000) MB"
+    }
   }
 
   /// The file's name in the directory.
@@ -53,30 +62,21 @@ public enum LiteRTPreparation {
   /// Where each buffer after the flatbuffer starts: a multiple of this.
   static let alignment = 64
 
-  public static func prepare(source: URL, into directory: URL, progress: ((Double) -> Void)? = nil) throws -> Report {
+  public static func prepare(source: URL, into directory: URL) throws -> Report {
     let data = try Data(contentsOf: source, options: .alwaysMapped)
     return try data.withUnsafeBytes { buf in
-      try prepare(Source(bytes: buf), into: directory, progress: progress)
+      try prepare(Source(bytes: buf), into: directory)
     }
   }
 
-  private static func prepare(_ src: Source, into directory: URL, progress: ((Double) -> Void)?) throws -> Report {
+  private static func prepare(_ src: Source, into directory: URL) throws -> Report {
     var model = try Decode.model(src)
     guard var g = model.graph else { throw OnnxError("the model has no graph") }
     if let t = g.initializers.first(where: \.isExternal) {
       throw OnnxError("initializer \(t.key) keeps its data in an external file, which the preparation does not read")
     }
-    let rewrites = try rewrite(&g, &model.opsets, src)
-    return try write(g, opsets: model.opsets, src, rewrites: rewrites, into: directory, progress: progress)
-  }
-
-  /// Everything after the ONNX rewrites: the lowering, the tidying, and the
-  /// file. The tests call it on a graph as it is, to reach lowerings the
-  /// rewrites would otherwise get to first.
-  static func write(
-    _ g: Graph, opsets: [OpsetImport], _ src: Source, rewrites: [String: Int], into directory: URL, progress: ((Double) -> Void)?
-  ) throws -> Report {
-    let opset = try opsetVersion(opsets, src)
+    let stripped = try Patches.stripTinygradOps(&g, &model.opsets)
+    let opset = try opsetVersion(model.opsets, src)
 
     var lowered = try LiteRTLowering.lower(g, opset: opset, src)
     var removed = 0
@@ -128,40 +128,18 @@ public enum LiteRTPreparation {
 
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let url = directory.appendingPathComponent(fileName)
-    let total = Double(max(1, file.count))
     do {
-      try PartWriter.write(file, src, to: url) { bytes in progress?(Double(bytes) / total) }
+      try PartWriter.write(file, src, to: url) { _ in }
     } catch {
       try? FileManager.default.removeItem(at: url)
       throw error
     }
-    progress?(1.0)
 
     var operators: [String: Int] = [:]
     for o in tflite.operators { operators[o.op.name, default: 0] += 1 }
     return Report(
-      url: url, rewrites: rewrites, operators: operators,
-      lowerings: lowered.counts,
-      transposesRemoved: removed, transposesMoved: moved, reshapesFused: fused, tensors: tflite.tensors.count, flatbufferBytes: flatbuffer.count,
-      weightBytes: Int64(file.count - flatbuffer.count), fileBytes: Int64(file.count))
-  }
-
-  /// The ONNX rewrites that come before the lowering (Patches.forLiteRT), by
-  /// name with how often each applied: tinygrad's ops stripped, gather indices
-  /// normalized, the fp16-safe LayerNorm, 4-D attention, the uint8 frame queue
-  /// as a 4-D view, constant gathers as slices, static reshapes. A graph they
-  /// already rewrote converts as it is.
-  ///
-  /// Metal runs the textbook LayerNorm in fp16 without overflowing (it fuses
-  /// it, by the look of it), but no Android GPU has been seen to, and 36 of
-  /// Cinque Terre V3's 85 overflow float16 when computed step by step.
-  static func rewrite(_ g: inout Graph, _ opsets: inout [OpsetImport], _ src: Source) throws -> [String: Int] {
-    let r = try Patches.forLiteRT(&g, &opsets, src)
-    return [
-      "stripTinygradOps": r.stripped, "normalizeGatherIndices": r.gathers, "normalizeGatherNDIndices": r.gatherNDs,
-      "attention4D": r.attention, "frameQueues4D": r.frameQueues, "gatherNDSlices": r.gatherNDSlices,
-      "gatherSlices": r.gatherSlices, "layerNorms": r.layerNorms, "staticReshapes": r.reshapes,
-    ]
+      url: url, stripped: stripped, operators: operators, lowerings: lowered.counts, transposesRemoved: removed, transposesMoved: moved,
+      reshapesFused: fused, flatbufferBytes: flatbuffer.count, weightBytes: Int64(file.count - flatbuffer.count))
   }
 
   /// The default domain's opset version (OperatorSetIdProto.version, field 2).

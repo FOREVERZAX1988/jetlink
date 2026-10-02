@@ -43,11 +43,8 @@ public struct ONNXToLiteRT: LiteRTConverter {
 
   public func convert(model: URL, into directory: URL) throws -> PreparedModel {
     let r = try LiteRTPreparation.prepare(source: model, into: directory)
-    let rewrites = r.rewrites.filter { $0.value > 0 }.sorted { $0.key < $1.key }.map { "\($0.value) \($0.key)" }
     return PreparedModel(
-      parts: [PreparedModel.Part(name: "model", file: r.url.lastPathComponent, weightBytes: r.weightBytes)],
-      summary: "\(rewrites.joined(separator: ", ")); \(r.operators.values.reduce(0, +)) operators, "
-        + "\(r.transposesRemoved) transposes removed, \(r.fileBytes / 1_000_000) MB")
+      parts: [PreparedModel.Part(name: "model", file: r.url.lastPathComponent, weightBytes: r.weightBytes)], summary: r.summary)
   }
 }
 

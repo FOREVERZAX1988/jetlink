@@ -1,7 +1,7 @@
 import Foundation
 
 // The lowering of each ONNX op LiteRTPreparation meets: the four driving
-// models after Patches' rewrites, and the test fixtures. Shapes are static
+// models, with tinygrad's ops stripped, and the test fixtures. Shapes are static
 // throughout, so every shape, axis and bound is worked out here and written
 // as a constant.
 
@@ -1289,38 +1289,59 @@ extension LiteRTLowering {
 
   // MARK: LayerNormalization
 
-  /// The textbook decomposition over the axes from `axis` on. On the GPU's
-  /// fp16 its square overflows on the driving models' activations, which is
-  /// why Patches.forLiteRT rewrites every LayerNormalization into its
-  /// fp16-safe form before the lowering sees it; this is for graphs that
-  /// arrive without that.
+  /// LayerNormalization over the axes from `axis` on, as
+  ///
+  ///     d = x - mean(x);  s = max(max|d|, 1e-2);  y = (d/s) / sqrt(mean((d/s)^2) + eps/s^2)
+  ///
+  /// then scale and bias. It is LayerNorm exactly in real arithmetic, but
+  /// nothing in it exceeds 1 before the square root, where the textbook form
+  /// squares deviations up to 5.5e6 in Cinque Terre V3's norms: past fp16's
+  /// 65504, which a GPU computing in fp16 turns into wrong outputs. Metal
+  /// fuses the textbook form and gets away with it; no Android GPU has been
+  /// seen to. The statistics are FLOAT32 like all the math here, which is
+  /// what stash_type asks for. Mean and InvStdDev, where the graph reads
+  /// them, come from the same statistics: InvStdDev is (1/s) times the
+  /// scaled form's reciprocal deviation.
   mutating func layerNorm(_ n: Node, _ a: Attrs) throws {
     let name = n.outputs[0]
     let x = try tensor(n.inputs[0])
     let shape = model.tensors[x].shape
     let axis = try Self.normalize(Int(a["axis"]?.i ?? -1), rank: shape.count)
-    let axes = Array(axis..<shape.count)
+    let axes = int32Tensor(Array(axis..<shape.count), "\(name)__axes")
     let epsilon = a["epsilon"]?.f ?? 1e-5
     var reduced = shape
-    for k in axes { reduced[k] = 1 }
+    for k in axis..<shape.count { reduced[k] = 1 }
     func step(_ op: TFLite.Op, _ inputs: [Int], _ suffix: String, _ shape: [Int], _ options: TFLite.Options) -> Int {
       let o = addTensor("\(name)__\(suffix)", shape, .float32)
       emit(op, inputs, [o], options)
       return o
     }
-    let mean = step(.mean, [x, int32Tensor(axes, "\(name)__axes")], "mean", reduced, .reducer(keepDims: true))
-    let d = step(.sub, [x, mean], "centered", shape, .sub)
-    let sq = step(.mul, [d, d], "squared", shape, .mul)
-    let variance = step(.mean, [sq, int32Tensor(axes, "\(name)__axes2")], "variance", reduced, .reducer(keepDims: true))
-    let eps = floatTensor([epsilon], [1], "\(name)__epsilon")
-    let ve = step(.add, [variance, eps], "variance_eps", reduced, .add)
-    let rs = step(.rsqrt, [ve], "rstd", reduced, .none)
-    var y = Value.tensor(step(.mul, [d, rs], "normalized", shape, .mul))
+    let mean = step(.mean, [x, axes], "mean", reduced, .reducer(keepDims: true))
+    let d = step(.sub, [x, mean], "d", shape, .sub)
+    let magnitude = step(.abs, [d], "abs", shape, .abs)
+    let peak = step(.reduceMax, [magnitude, axes], "peak", reduced, .reducer(keepDims: true))
+    let s = step(.maximum, [peak, floatTensor([1e-2], [1], "\(name)__floor")], "s", reduced, .maximumMinimum)
+    let r = step(.div, [floatTensor([1], [1], "\(name)__one"), s], "r", reduced, .div)
+    let dn = step(.mul, [d, r], "dn", shape, .mul)
+    let square = step(.mul, [dn, dn], "sq", shape, .mul)
+    let variance = step(.mean, [square, axes], "var", reduced, .reducer(keepDims: true))
+    let r2 = step(.mul, [r, r], "r2", reduced, .mul)
+    let scaledEpsilon = step(.mul, [r2, floatTensor([epsilon], [1], "\(name)__epsilon")], "eps", reduced, .mul)
+    let sum = step(.add, [variance, scaledEpsilon], "ve", reduced, .add)
+    let rs = step(.rsqrt, [sum], "rs", reduced, .none)
+    var y = Value.tensor(step(.mul, [dn, rs], "normalized", shape, .mul))
     let hasBias = n.inputs.count > 2 && !n.inputs[2].isEmpty
     y = .tensor(try elementwise(.mul, y, value(n.inputs[1]), hasBias ? "\(name)__scaled" : name, .mul, define: !hasBias))
     if hasBias {
       try elementwise(.add, y, value(n.inputs[2]), name, .add)
     }
-    count("plain LayerNormalizations")
+    if n.outputs.count > 1, !n.outputs[1].isEmpty {
+      try alias(n.outputs[1], .tensor(mean))
+    }
+    if n.outputs.count > 2, !n.outputs[2].isEmpty {
+      let o = try define(n.outputs[2], reduced, .float32)
+      emit(.mul, [r, rs], [o], .mul)
+    }
+    count("fp16-safe LayerNormalizations")
   }
 }
