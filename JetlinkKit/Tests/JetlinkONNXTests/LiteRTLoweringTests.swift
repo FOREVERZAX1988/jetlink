@@ -204,7 +204,7 @@ import Testing
     #expect(file.count("TRANSPOSE") == 2)
     #expect(report.transposesRemoved == 2)
     let y = Self.conv(x, [1, 3, 4, 4], w, [4, 3, 1, 1], nil, pads: [0, 0, 0, 0], strides: [1, 1], dilations: [1, 1], group: 1)
-    let want = y.values.map { 1 / (1 + Foundation.exp(-max($0, 0))) }
+    let want = y.values.map { (v: Float) -> Float in 1 / (1 + Float(exp(-Double(max(v, 0))))) }
     #expect(maxError(try Self.run(file, ["x": x])["out"]!, want) < 1e-5)
   }
 
@@ -366,7 +366,7 @@ import Testing
     func softmax(_ index: (Int, Int) -> Int, rows: Int, n: Int) -> [Float] {
       var r = [Float](repeating: 0, count: 24)
       for row in 0..<rows {
-        let e = (0..<n).map { Foundation.exp(x[index(row, $0)]) }
+        let e = (0..<n).map { (k: Int) -> Float in Float(exp(Double(x[index(row, k)]))) }
         let total = e.reduce(0, +)
         for k in 0..<n { r[index(row, k)] = e[k] / total }
       }
@@ -475,7 +475,7 @@ import Testing
     let p = try Self.run(file, ["scores": s])["p"]!
     for row in 0..<6 {
       let keep = (0..<3).filter { causal[(row % 3) * 3 + $0] }
-      let e = keep.map { Foundation.exp(s[row * 3 + $0]) }
+      let e = keep.map { (k: Int) -> Float in Float(exp(Double(s[row * 3 + k]))) }
       for k in 0..<3 {
         let want = keep.firstIndex(of: k).map { e[$0] / e.reduce(0, +) } ?? 0
         #expect(abs(p[row * 3 + k] - want) < 1e-6)

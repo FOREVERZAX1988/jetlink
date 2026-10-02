@@ -249,7 +249,7 @@ struct TFLiteInterpreter {
         case "DIV": (/)
         case "MAXIMUM": { max($0, $1) }
         case "MINIMUM": { min($0, $1) }
-        default: { Foundation.pow($0, $1) }
+        default: { Float(pow(Double($0), Double($1))) }
         }
       let a = broadcast(x, inShape, outShape)
       let b = broadcast(try get(o.inputs[1]), shape(o.inputs[1]), outShape)
@@ -262,19 +262,19 @@ struct TFLiteInterpreter {
     case "ABS": return x.map { abs($0) }
     case "SQRT": return x.map { $0.squareRoot() }
     case "RSQRT": return x.map { 1 / $0.squareRoot() }
-    case "LOGISTIC": return x.map { 1 / (1 + Foundation.exp(-$0)) }
+    case "LOGISTIC": return x.map { 1 / (1 + Float(exp(-Double($0)))) }
     case "RELU": return x.map { max($0, 0) }
-    case "TANH": return x.map { Foundation.tanh($0) }
-    case "EXP": return x.map { Foundation.exp($0) }
-    case "LOG": return x.map { Foundation.log($0) }
+    case "TANH": return x.map { Float(tanh(Double($0))) }
+    case "EXP": return x.map { Float(exp(Double($0))) }
+    case "LOG": return x.map { Float(log(Double($0))) }
     case "NEG": return x.map { -$0 }
     case "LOGICAL_NOT": return x.map { $0 == 0 ? 1 : 0 }
     case "GELU":
       let approximate = o.options?.bool(0) ?? false
       return x.map { v in
         approximate
-          ? 0.5 * v * (1 + Foundation.tanh(0.797_884_6 * (v + 0.044_715 * v * v * v)))
-          : 0.5 * v * (1 + Float(Foundation.erf(Double(v) / 2.0.squareRoot())))
+          ? 0.5 * v * (1 + Float(tanh(Double(0.797_884_6 * (v + 0.044_715 * v * v * v)))))
+          : 0.5 * v * (1 + Float(erf(Double(v) / 2.0.squareRoot())))
       }
     case "CAST":
       if file.tensors[o.outputs[0]].type == TFLite.TensorType.float16.rawValue { return x.map { Float(Float16($0)) } }
@@ -339,7 +339,7 @@ struct TFLiteInterpreter {
       return stride(from: 0, to: x.count, by: n).flatMap { r -> [Float] in
         let row = x[r..<(r + n)]
         let m = row.max()!
-        let e = row.map { Foundation.exp($0 - m) }
+        let e = row.map { Float(exp(Double($0 - m))) }
         let total = e.reduce(0, +)
         return e.map { $0 / total }
       }
