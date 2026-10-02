@@ -23,7 +23,9 @@ trap 'rm -rf "$tree" "$old" "$logs"' EXIT
 git ls-files -z --cached --others --exclude-standard | xargs -0 tar -cf - | tar -xf - -C "$tree"
 for tag in $OLD_RELEASES; do
   if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+    # A fork has no release tags of its own; fall back to the upstream repo.
     git fetch -q --depth 1 "$(git remote | head -n 1)" "refs/tags/$tag:refs/tags/$tag" \
+      || git fetch -q --depth 1 https://github.com/zoompilot/jetlink "refs/tags/$tag:refs/tags/$tag" \
       || { echo "run.sh: cannot find release $tag; fetch the tags (git fetch --tags)" >&2; exit 1; }
   fi
   mkdir -p "$old/$tag"
