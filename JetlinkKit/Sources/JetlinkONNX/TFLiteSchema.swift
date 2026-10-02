@@ -77,7 +77,6 @@ enum TFLite {
     case reduceMin = 89
     case logicalNot = 87
     case abs = 101
-    case gatherNd = 107
     case selectV2 = 123
     case batchMatmul = 126
     case gelu = 150
@@ -118,7 +117,6 @@ enum TFLite {
       case .reduceMin: "REDUCE_MIN"
       case .logicalNot: "LOGICAL_NOT"
       case .abs: "ABS"
-      case .gatherNd: "GATHER_ND"
       case .selectV2: "SELECT_V2"
       case .batchMatmul: "BATCH_MATMUL"
       case .gelu: "GELU"
@@ -156,7 +154,6 @@ enum TFLite {
     case maximumMinimum
     case slice
     case abs
-    case gatherNd
     case selectV2
     case batchMatmul(adjX: Bool, adjY: Bool)
     case gelu(approximate: Bool)
@@ -193,7 +190,6 @@ enum TFLite {
       case .pow: 56
       case .logicalNot: 63
       case .abs: 78
-      case .gatherNd: 83
       case .selectV2: 98
       case .batchMatmul: 101
       case .gelu: 116
@@ -278,7 +274,7 @@ enum TFLite {
         // fused_activation_function, pot_scale_int16 (true)
         b.startTable(fields: 2)
         return b.endTable()
-      case .mul, .div, .pad, .transpose, .dequantize, .maximumMinimum, .slice, .abs, .gatherNd, .selectV2, .pow, .exp, .neg,
+      case .mul, .div, .pad, .transpose, .dequantize, .maximumMinimum, .slice, .abs, .selectV2, .pow, .exp, .neg,
         .logicalNot:
         b.startTable(fields: 0)
         return b.endTable()
@@ -328,11 +324,12 @@ enum TFLite {
     var signatureKey = "serving_default"
   }
 
-  /// The flatbuffer for `model` with its buffers placed as `buffers` says.
-  /// Every field is written whatever its value, offsets and sizes included,
-  /// so the flatbuffer's length does not depend on where the buffers go:
-  /// it can be encoded once to learn its length and again with the offsets.
-  static func encode(_ model: Model, buffers: [Placement]) -> [UInt8] {
+  /// The flatbuffer for `model` with its buffers placed as `buffers` says,
+  /// and where each external buffer's offset is in it (8 bytes, little
+  /// endian), by buffer index. Offsets are written whatever their value, so
+  /// one can be written in later, once the flatbuffer's length says where
+  /// the buffers after it start.
+  static func encode(_ model: Model, buffers: [Placement]) -> (bytes: [UInt8], offsetFields: [Int: Int]) {
     var b = FlatBufferBuilder(capacity: 1 << 20)
 
     // Operator codes, in the order operators first use them.
@@ -343,7 +340,10 @@ enum TFLite {
       codes.append(o.op)
     }
 
-    let bufferTables = buffers.map { placement -> FlatBufferBuilder.Offset in
+    // Each external offset's distance from the end, which stays where it is
+    // as the builder writes towards the front.
+    var offsetsFromEnd: [Int: Int] = [:]
+    let bufferTables = buffers.enumerated().map { i, placement -> FlatBufferBuilder.Offset in
       switch placement {
       case .empty:
         b.startTable(fields: 3)
@@ -357,6 +357,7 @@ enum TFLite {
       case .external(let offset, let size):
         b.startTable(fields: 3)
         b.add(1, offset, force: true)
+        offsetsFromEnd[i] = b.size
         b.add(2, size, force: true)
         return b.endTable()
       }
@@ -455,6 +456,7 @@ enum TFLite {
     b.add(3, description)
     b.add(4, buffersVector)
     b.add(7, signatures)
-    return b.finish(b.endTable(), identifier: "TFL3")
+    let bytes = b.finish(b.endTable(), identifier: "TFL3")
+    return (bytes, offsetsFromEnd.mapValues { bytes.count - $0 })
   }
 }

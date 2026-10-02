@@ -195,25 +195,19 @@ struct TFLiteInterpreter {
     return (0..<count).map { flat in shape.indices.map { (flat / s[$0]) % shape[$0] } }
   }
 
-  func constant(_ t: Int) -> [Float]? {
+  func constant(_ t: Int) throws -> [Float]? {
     guard let b = file.data(t) else { return nil }
-    return b.withUnsafeBytes { p -> [Float] in
-      switch file.tensors[t].type {
-      case TFLite.TensorType.float32.rawValue:
-        return (0..<(b.count / 4)).map { Float(bitPattern: UInt32(littleEndian: p.loadUnaligned(fromByteOffset: $0 * 4, as: UInt32.self))) }
-      case TFLite.TensorType.float16.rawValue:
-        return (0..<(b.count / 2)).map { Float(Float16(bitPattern: UInt16(littleEndian: p.loadUnaligned(fromByteOffset: $0 * 2, as: UInt16.self)))) }
-      case TFLite.TensorType.int32.rawValue:
-        return (0..<(b.count / 4)).map { Float(Int32(littleEndian: p.loadUnaligned(fromByteOffset: $0 * 4, as: Int32.self))) }
-      default:
-        return b.map { Float($0) }
-      }
+    switch file.tensors[t].type {
+    case TFLite.TensorType.float32.rawValue: return try Elements.floats(b, as: DataType.float, for: file.tensors[t].name)
+    case TFLite.TensorType.float16.rawValue: return try Elements.floats(b, as: DataType.float16, for: file.tensors[t].name)
+    case TFLite.TensorType.int32.rawValue: return try Elements.integers(b, as: DataType.int32, for: file.tensors[t].name).map { Float($0) }
+    default: return b.map { Float($0) }
     }
   }
 
   func get(_ t: Int) throws -> [Float] {
     if let v = values[t] { return v }
-    if let c = constant(t) { return c }
+    if let c = try constant(t) { return c }
     throw TestError("tensor \(file.tensors[t].name) is read before it is written")
   }
 

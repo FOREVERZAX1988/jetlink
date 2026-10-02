@@ -22,12 +22,7 @@ import Testing
       let src = Source(bytes: buf)
       let g = try #require(try Decode.model(src).graph)
       let t = try #require(g.initializers.first { $0.key == name })
-      let bytes = try Elements.littleEndian(t, src)
-      return bytes.withUnsafeBytes { p in
-        t.elementType == DataType.float16
-          ? (0..<(bytes.count / 2)).map { Float(Float16(bitPattern: p.loadUnaligned(fromByteOffset: $0 * 2, as: UInt16.self))) }
-          : (0..<(bytes.count / 4)).map { Float(bitPattern: p.loadUnaligned(fromByteOffset: $0 * 4, as: UInt32.self)) }
-      }
+      return try Elements.floats(Elements.littleEndian(t, src), as: t.elementType, for: name)
     }
   }
 
@@ -47,7 +42,7 @@ import Testing
 
   @Test func tinyQueuedComputesItsReference() throws {
     // It has tinygrad's Contiguous, which the lowering refuses: converting at
-    // all means the rewrites took it out.
+    // all means the preparation stripped it.
     let (file, _) = try Self.convert(TinyModel.queued)
     let types = file.inputs.map { file.tensors[$0].type }
     #expect(file.inputs.map { file.tensors[$0].name } == ["img", "big_img", "desire_pulse", "traffic_convention", "action_t", "features_buffer"])

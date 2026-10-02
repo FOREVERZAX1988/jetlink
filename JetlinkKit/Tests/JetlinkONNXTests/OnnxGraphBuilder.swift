@@ -3,155 +3,85 @@ import JetlinkTestSupport
 
 @testable import JetlinkONNX
 
+extension Attribute {
+  /// A FLOAT attribute as onnx.helper.make_attribute writes it: name, f, type.
+  static func float(_ name: String, _ value: Float) -> Attribute {
+    var e = Encoded()
+    e.stringField(1, name)
+    e.tag(2, .fixed32)
+    withUnsafeBytes(of: value.bitPattern.littleEndian) { e.bytes($0) }
+    e.intField(20, 1)
+    return Attribute(bytes: .owned(e.tail), name: name, type: 1, i: 0, f: value, ints: [], s: "", floats: [], t: nil)
+  }
+}
+
 /// A small ONNX model written from Swift for the LiteRT lowering tests:
-/// nodes, initializers as raw_data, and value infos with static shapes,
-/// encoded as onnx.helper would.
+/// nodes, initializers as raw_data and value infos with static shapes, in a
+/// Graph that Encode.model writes as onnx.save would.
 struct OnnxGraphBuilder {
-  enum Attr {
-    case int(Int64)
-    case ints([Int64])
-    case float(Float)
-    case string(String)
-  }
-
-  struct Value {
-    let name: String
-    let type: Int32
-    let dims: [Int64]
-  }
-
-  var opset: Int64 = 17
-  var inputs: [Value] = []
-  var outputs: [Value] = []
-  var valueInfo: [Value] = []
-  private var nodes: [Encoded] = []
-  private var initializers: [Encoded] = []
+  var opset: Int64
+  var graph = Graph(name: "test")
 
   init(opset: Int64 = 17) {
     self.opset = opset
   }
 
   mutating func input(_ name: String, _ type: Int32, _ dims: [Int64]) {
-    inputs.append(Value(name: name, type: type, dims: dims))
+    graph.inputs.append(.tensor(name, type, dims))
   }
 
   mutating func output(_ name: String, _ type: Int32, _ dims: [Int64]) {
-    outputs.append(Value(name: name, type: type, dims: dims))
+    graph.outputs.append(.tensor(name, type, dims))
   }
 
-  mutating func node(_ op: String, _ inputs: [String], _ outputs: [String], _ attrs: [(String, Attr)] = []) {
-    var e = Encoded()
-    for i in inputs { e.stringField(1, i) }
-    for o in outputs { e.stringField(2, o) }
-    e.stringField(3, "\(op)_\(nodes.count)")
-    e.stringField(4, op)
-    for (name, value) in attrs {
-      var a = Encoded()
-      a.stringField(1, name)
-      switch value {
-      case .float(let f):
-        a.tag(2, .fixed32)
-        withUnsafeBytes(of: f.bitPattern.littleEndian) { a.bytes($0) }
-        a.varintField(20, 1)
-      case .int(let i):
-        a.intField(3, i)
-        a.varintField(20, 2)
-      case .string(let s):
-        a.stringField(4, s)
-        a.varintField(20, 3)
-      case .ints(let ints):
-        for i in ints { a.intField(8, i) }
-        a.varintField(20, 7)
-      }
-      e.message(5, a)
-    }
-    nodes.append(e)
+  mutating func valueInfo(_ name: String, _ type: Int32, _ dims: [Int64]) {
+    graph.valueInfo.append(.tensor(name, type, dims))
+  }
+
+  mutating func node(_ op: String, _ inputs: [String], _ outputs: [String], _ attributes: [Attribute] = []) {
+    graph.nodes.append(Node(inputs: inputs, outputs: outputs, name: "\(op)_\(graph.nodes.count)", opType: op, attributes: attributes))
   }
 
   mutating func initializer(_ name: String, _ type: Int32, _ dims: [Int64], _ raw: [UInt8]) {
-    var e = Encoded()
-    for d in dims { e.intField(1, d) }
-    e.intField(2, Int64(type))
-    e.stringField(8, name)
-    e.bytesField(9, raw)
-    initializers.append(e)
+    graph.initializers.append(Tensor(name: name, dims: dims, dataType: type, raw: .owned(raw)))
   }
 
   mutating func fp16(_ name: String, _ dims: [Int64], _ values: [Float]) {
-    var raw: [UInt8] = []
-    for v in values { withUnsafeBytes(of: Float16(v).bitPattern.littleEndian) { raw.append(contentsOf: $0) } }
-    initializer(name, DataType.float16, dims, raw)
+    initializer(name, DataType.float16, dims, Elements.encode(values, as: DataType.float16))
   }
 
   mutating func fp32(_ name: String, _ dims: [Int64], _ values: [Float]) {
-    var raw: [UInt8] = []
-    for v in values { withUnsafeBytes(of: v.bitPattern.littleEndian) { raw.append(contentsOf: $0) } }
-    initializer(name, DataType.float, dims, raw)
+    initializer(name, DataType.float, dims, Elements.encode(values, as: DataType.float))
   }
 
   mutating func int64(_ name: String, _ values: [Int64], dims: [Int64]? = nil) {
-    var raw: [UInt8] = []
-    for v in values { withUnsafeBytes(of: v.littleEndian) { raw.append(contentsOf: $0) } }
-    initializer(name, DataType.int64, dims ?? [Int64(values.count)], raw)
+    var t = Patches.int64Tensor(values, name)
+    t.dims = dims ?? t.dims
+    graph.initializers.append(t)
   }
 
   mutating func bool(_ name: String, _ dims: [Int64], _ values: [Bool]) {
     initializer(name, DataType.bool, dims, values.map { $0 ? 1 : 0 })
   }
 
-  private static func valueInfo(_ v: Value) -> Encoded {
-    var dims = Encoded()
-    for d in v.dims {
-      var dim = Encoded()
-      dim.intField(1, d)
-      dims.message(1, dim)
-    }
-    var tensor = Encoded()
-    tensor.intField(1, Int64(v.type))
-    tensor.message(2, dims)
-    var type = Encoded()
-    type.message(1, tensor)
-    var e = Encoded()
-    e.stringField(1, v.name)
-    e.message(2, type)
-    return e
-  }
-
   var bytes: [UInt8] {
-    var g = Encoded()
-    for n in nodes { g.message(1, n) }
-    g.stringField(2, "test")
-    for t in initializers { g.message(5, t) }
-    for v in inputs { g.message(11, Self.valueInfo(v)) }
-    for v in outputs { g.message(12, Self.valueInfo(v)) }
-    for v in valueInfo { g.message(13, Self.valueInfo(v)) }
+    // Nothing is read from a source: every field is made here.
+    let none = Source(bytes: UnsafeRawBufferPointer(start: nil, count: 0))
+    var m = Encode.model(Model(irVersion: 8, graph: graph), none)
+    // An opset import is copied from its source; this one is written.
     var opsetImport = Encoded()
     opsetImport.stringField(1, "")
     opsetImport.intField(2, opset)
-    var m = Encoded()
-    m.intField(1, 8)
-    m.message(7, g)
     m.message(8, opsetImport)
-    return m.tail
+    return flatten(m, none)
   }
 
-  /// The model converted by LiteRTPreparation, read back. Without
-  /// `rewrites` the graph goes to the lowering as it is.
-  func convert(rewrites: Bool = true) throws -> (file: TFLiteFile, report: LiteRTPreparation.Report) {
+  /// The model converted by LiteRTPreparation, read back.
+  func convert() throws -> (file: TFLiteFile, report: LiteRTPreparation.Report) {
     let dir = try TemporaryDirectory()
-    let out = dir.url.appendingPathComponent("out")
-    let report: LiteRTPreparation.Report
-    if rewrites {
-      let source = dir.url.appendingPathComponent("model.onnx")
-      try Data(bytes).write(to: source)
-      report = try LiteRTPreparation.prepare(source: source, into: out)
-    } else {
-      report = try bytes.withUnsafeBytes { buf in
-        let src = Source(bytes: buf)
-        let model = try Decode.model(src)
-        return try LiteRTPreparation.write(model.graph!, opsets: model.opsets, src, rewrites: [:], into: out, progress: nil)
-      }
-    }
+    let source = dir.url.appendingPathComponent("model.onnx")
+    try Data(bytes).write(to: source)
+    let report = try LiteRTPreparation.prepare(source: source, into: dir.url.appendingPathComponent("out"))
     return (try TFLiteFile(report.url), report)
   }
 }

@@ -4,10 +4,11 @@ import Foundation
 /// written on the device from the ONNX file, as every jetlink platform
 /// prepares its engine, so custom and uploaded models work the same.
 ///
-/// 1. the ONNX rewrites that make the graph something LiteRT's GPU runs
-///    whole (see `rewrite`);
+/// 1. tinygrad's layout ops stripped, the one ONNX rewrite;
 /// 2. every node lowered to TFLite operators (`LiteRTLowering`), keeping
-///    ONNX's layout, names and I/O types;
+///    ONNX's layout, names and I/O types, in forms LiteRT's GPU runs whole:
+///    rank-5 tensors as views of rank 4 at most, constant gathers as slices,
+///    LayerNormalization in a form that stays inside fp16;
 /// 3. TRANSPOSE pairs the lowering left back to back taken out (the NHWC
 ///    convolutions meet the graph's own NHWC permutes), TRANSPOSEs moved
 ///    past elementwise operators to meet the ones that undo them, and
@@ -25,12 +26,12 @@ import Foundation
 public enum LiteRTPreparation {
   public struct Report: Sendable, Equatable {
     public let url: URL
-    /// The ONNX rewrites applied before the lowering, by name.
-    public let rewrites: [String: Int]
+    /// tinygrad layout ops stripped before the lowering.
+    public let stripped: Int
     /// The TFLite operators written, by TFLite's name for them.
     public let operators: [String: Int]
-    /// The lowering's special cases, by name: masked Wheres, plain
-    /// LayerNormalizations, infinite mask fills made finite.
+    /// The lowering's special cases, by name: fp16-safe LayerNormalizations,
+    /// masked Wheres, rank-5 layout ops on views.
     public let lowerings: [String: Int]
     /// TRANSPOSEs taken out after the lowering.
     public let transposesRemoved: Int
@@ -38,12 +39,20 @@ public enum LiteRTPreparation {
     public let transposesMoved: Int
     /// RESHAPEs that read another RESHAPE's input instead, or went.
     public let reshapesFused: Int
-    public let tensors: Int
     /// The flatbuffer at the start of the file.
     public let flatbufferBytes: Int
     /// Everything after it: the weights.
     public let weightBytes: Int64
-    public let fileBytes: Int64
+
+    public var fileBytes: Int64 { Int64(flatbufferBytes) + weightBytes }
+
+    /// What the conversion did, in a line for the log.
+    public var summary: String {
+      let special = lowerings.sorted { $0.key < $1.key }.map { "\($0.value) \($0.key)" }
+      return "\(stripped) tinygrad op(s) stripped; \(special.isEmpty ? "no special cases" : special.joined(separator: ", ")); "
+        + "\(operators.values.reduce(0, +)) operators, \(transposesRemoved) transposes removed and \(transposesMoved) moved, "
+        + "\(reshapesFused) reshapes fused, \(fileBytes / 1_000_000) MB"
+    }
   }
 
   /// The file's name in the directory.
@@ -53,30 +62,19 @@ public enum LiteRTPreparation {
   /// Where each buffer after the flatbuffer starts: a multiple of this.
   static let alignment = 64
 
-  public static func prepare(source: URL, into directory: URL, progress: ((Double) -> Void)? = nil) throws -> Report {
+  public static func prepare(source: URL, into directory: URL) throws -> Report {
     let data = try Data(contentsOf: source, options: .alwaysMapped)
     return try data.withUnsafeBytes { buf in
-      try prepare(Source(bytes: buf), into: directory, progress: progress)
+      try prepare(Source(bytes: buf), into: directory)
     }
   }
 
-  private static func prepare(_ src: Source, into directory: URL, progress: ((Double) -> Void)?) throws -> Report {
-    var model = try Decode.model(src)
-    guard var g = model.graph else { throw OnnxError("the model has no graph") }
-    if let t = g.initializers.first(where: \.isExternal) {
-      throw OnnxError("initializer \(t.key) keeps its data in an external file, which the preparation does not read")
+  private static func prepare(_ src: Source, into directory: URL) throws -> Report {
+    var (model, g) = try Decode.preparable(src)
+    let stripped = try Patches.stripTinygradOps(&g, &model.opsets)
+    guard let opset = model.opsets.first(where: { $0.domain.isEmpty || $0.domain == "ai.onnx" })?.version else {
+      throw OnnxError("the model imports no default-domain opset")
     }
-    let rewrites = try rewrite(&g, &model.opsets, src)
-    return try write(g, opsets: model.opsets, src, rewrites: rewrites, into: directory, progress: progress)
-  }
-
-  /// Everything after the ONNX rewrites: the lowering, the tidying, and the
-  /// file. The tests call it on a graph as it is, to reach lowerings the
-  /// rewrites would otherwise get to first.
-  static func write(
-    _ g: Graph, opsets: [OpsetImport], _ src: Source, rewrites: [String: Int], into directory: URL, progress: ((Double) -> Void)?
-  ) throws -> Report {
-    let opset = try opsetVersion(opsets, src)
 
     var lowered = try LiteRTLowering.lower(g, opset: opset, src)
     var removed = 0
@@ -93,30 +91,20 @@ public enum LiteRTPreparation {
     }
     let (tflite, buffers) = TFLiteOptimizer.compact(lowered)
 
-    // The flatbuffer's length does not depend on the offsets in it, so it
-    // is encoded once to place the weights and again to point at them.
-    var placements: [TFLite.Placement] = []
+    // The flatbuffer is written with every weight's offset 0, then each
+    // offset goes in once the flatbuffer's length says where the weights start.
+    let placements = try buffers.map { b -> TFLite.Placement in
+      if b.count == 0 { return .empty }
+      return b.count < externalFrom ? .inline(try inlineBytes(b, src)) : .external(offset: 0, size: UInt64(b.count))
+    }
+    var (flatbuffer, offsetFields) = TFLite.encode(tflite, buffers: placements)
     var external: [(index: Int, offset: Int)] = []
-    for (i, b) in buffers.enumerated() {
-      if b.count == 0 {
-        placements.append(.empty)
-      } else if b.count < externalFrom {
-        placements.append(.inline(try inlineBytes(b, src)))
-      } else {
-        placements.append(.external(offset: 0, size: UInt64(b.count)))
-        external.append((i, 0))
-      }
-    }
-    let draft = TFLite.encode(tflite, buffers: placements)
-    var at = align(draft.count)
-    for k in external.indices {
-      external[k].offset = at
-      placements[external[k].index] = .external(offset: UInt64(at), size: UInt64(buffers[external[k].index].count))
-      at = align(at + buffers[external[k].index].count)
-    }
-    let flatbuffer = TFLite.encode(tflite, buffers: placements)
-    guard flatbuffer.count == draft.count else {
-      throw OnnxError("the flatbuffer came out \(flatbuffer.count) bytes, not the \(draft.count) its weights were placed after")
+    var at = align(flatbuffer.count)
+    for i in buffers.indices {
+      guard let field = offsetFields[i] else { continue }
+      withUnsafeBytes(of: UInt64(at).littleEndian) { flatbuffer.replaceSubrange(field..<(field + 8), with: $0) }
+      external.append((i, at))
+      at = align(at + buffers[i].count)
     }
 
     var file = Encoded()
@@ -128,53 +116,18 @@ public enum LiteRTPreparation {
 
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let url = directory.appendingPathComponent(fileName)
-    let total = Double(max(1, file.count))
     do {
-      try PartWriter.write(file, src, to: url) { bytes in progress?(Double(bytes) / total) }
+      try PartWriter.write(file, src, to: url) { _ in }
     } catch {
       try? FileManager.default.removeItem(at: url)
       throw error
     }
-    progress?(1.0)
 
     var operators: [String: Int] = [:]
     for o in tflite.operators { operators[o.op.name, default: 0] += 1 }
     return Report(
-      url: url, rewrites: rewrites, operators: operators,
-      lowerings: lowered.counts,
-      transposesRemoved: removed, transposesMoved: moved, reshapesFused: fused, tensors: tflite.tensors.count, flatbufferBytes: flatbuffer.count,
-      weightBytes: Int64(file.count - flatbuffer.count), fileBytes: Int64(file.count))
-  }
-
-  /// The ONNX rewrites that come before the lowering (Patches.forLiteRT), by
-  /// name with how often each applied: tinygrad's ops stripped, gather indices
-  /// normalized, the fp16-safe LayerNorm, 4-D attention, the uint8 frame queue
-  /// as a 4-D view, constant gathers as slices, static reshapes. A graph they
-  /// already rewrote converts as it is.
-  ///
-  /// Metal runs the textbook LayerNorm in fp16 without overflowing (it fuses
-  /// it, by the look of it), but no Android GPU has been seen to, and 36 of
-  /// Cinque Terre V3's 85 overflow float16 when computed step by step.
-  static func rewrite(_ g: inout Graph, _ opsets: inout [OpsetImport], _ src: Source) throws -> [String: Int] {
-    let r = try Patches.forLiteRT(&g, &opsets, src)
-    return [
-      "stripTinygradOps": r.stripped, "normalizeGatherIndices": r.gathers, "normalizeGatherNDIndices": r.gatherNDs,
-      "attention4D": r.attention, "frameQueues4D": r.frameQueues, "gatherNDSlices": r.gatherNDSlices,
-      "gatherSlices": r.gatherSlices, "layerNorms": r.layerNorms, "staticReshapes": r.reshapes,
-    ]
-  }
-
-  /// The default domain's opset version (OperatorSetIdProto.version, field 2).
-  static func opsetVersion(_ opsets: [OpsetImport], _ src: Source) throws -> Int64 {
-    for o in opsets where o.domain.isEmpty || o.domain == "ai.onnx" {
-      var r = src.reader(o.raw)
-      guard let field = try r.next() else { continue }
-      var inner = src.reader(field.payload)
-      while let f = try inner.next() {
-        if f.number == 2 { return Int64(bitPattern: f.value) }
-      }
-    }
-    throw OnnxError("the model imports no default-domain opset")
+      url: url, stripped: stripped, operators: operators, lowerings: lowered.counts, transposesRemoved: removed, transposesMoved: moved,
+      reshapesFused: fused, flatbufferBytes: flatbuffer.count, weightBytes: Int64(file.count - flatbuffer.count))
   }
 
   static func align(_ n: Int) -> Int {
@@ -199,6 +152,17 @@ public enum LiteRTPreparation {
 /// What the lowering leaves to tidy: TRANSPOSEs that undo each other, and
 /// tensors and buffers nothing reads any more.
 enum TFLiteOptimizer {
+  /// Which operator writes each tensor and which read it, by index.
+  static func links(_ operators: [TFLite.Operator]) -> (producer: [Int: Int], readers: [Int: [Int]]) {
+    var producer: [Int: Int] = [:]
+    var readers: [Int: [Int]] = [:]
+    for (k, o) in operators.enumerated() {
+      for t in o.outputs { producer[t] = k }
+      for t in o.inputs where t >= 0 { readers[t, default: []].append(k) }
+    }
+    return (producer, readers)
+  }
+
   /// Takes out each TRANSPOSE whose input another TRANSPOSE made, composing
   /// the two: into nothing when they undo each other, into one otherwise.
   /// The first goes too once nothing else reads it. Returns how many went.
@@ -207,12 +171,7 @@ enum TFLiteOptimizer {
     var changed = true
     while changed {
       changed = false
-      var producer: [Int: Int] = [:]
-      var readers: [Int: [Int]] = [:]
-      for (k, o) in l.model.operators.enumerated() {
-        for t in o.outputs { producer[t] = k }
-        for t in o.inputs where t >= 0 { readers[t, default: []].append(k) }
-      }
+      var (producer, readers) = links(l.model.operators)
       let graphOutputs = Set(l.model.outputs)
       var dead = Set<Int>()
       for k in l.model.operators.indices where !dead.contains(k) {
@@ -301,18 +260,80 @@ enum TFLiteOptimizer {
   /// and every other operand is a constant (read in the new layout), comes
   /// out of the same TRANSPOSE, or is already there untransposed. Returns
   /// how many moved.
+  ///
+  /// One pass in order: the operators are copied to a new list, each moved
+  /// TRANSPOSE written after the operator it moved past, where the operators
+  /// that read it, all later, can move it on.
   static func sinkTransposes(_ l: inout LiteRTLowering) -> Int {
+    let operators = l.model.operators
+    // Readers by operator: its index in `operators`, or past them for the
+    // TRANSPOSEs moved here.
+    var readers = links(operators).readers
+    let graphOutputs = Set(l.model.outputs)
+    var out: [TFLite.Operator] = []
+    out.reserveCapacity(operators.count)
+    // Where in `out` each tensor is made, and where each operator went.
+    var producer: [Int: Int] = [:]
+    var position: [Int: Int] = [:]
+    var dequantizes: [TFLite.Operator] = []
+    func append(_ o: TFLite.Operator, _ id: Int) {
+      for t in o.outputs { producer[t] = out.count }
+      position[id] = out.count
+      out.append(o)
+    }
+    func transposeOf(_ t: Int) -> (input: Int, perm: [Int])? {
+      guard let p = producer[t], out[p].op == .transpose, let perm = perm(l, out[p]) else { return nil }
+      return (out[p].inputs[0], perm)
+    }
+    func isConstant(_ t: Int) -> Bool {
+      if l.model.tensors[t].buffer > 0 { return true }
+      guard let p = producer[t], out[p].op == .dequantize else { return false }
+      return l.model.tensors[out[p].inputs[0]].buffer > 0
+    }
+    func written(_ id: Int) -> TFLite.Operator? {
+      position[id].map { out[$0] }
+    }
+
     var moved = 0
-    while let change = nextSink(l) {
-      apply(change, &l)
+    for (k, o) in operators.enumerated() {
+      guard unaryOps.contains(o.op) || binaryOps.contains(o.op),
+        let s = sink(o, k, l, readers, graphOutputs, transposeOf, isConstant, written)
+      else {
+        append(o, k)
+        continue
+      }
+      var moving = o
+      var inputs = s.inputs
+      for (at, shape) in s.constants {
+        let t = l.model.tensors[o.inputs[at]]
+        if t.buffer > 0 {
+          inputs[at] = l.addTensor("\(t.name)__moved", shape, t.type, buffer: t.buffer)
+        } else if let p = producer[o.inputs[at]] {
+          // The same fp16 bytes, read in the new shape by a DEQUANTIZE of its own.
+          let narrow = l.model.tensors[out[p].inputs[0]]
+          let narrowMoved = l.addTensor("\(narrow.name)__moved", shape, narrow.type, buffer: narrow.buffer)
+          inputs[at] = l.addTensor("\(t.name)__moved", shape, t.type)
+          dequantizes.append(TFLite.Operator(op: .dequantize, inputs: [narrowMoved], outputs: [inputs[at]]))
+        }
+      }
+      for t in o.inputs where t >= 0 { readers[t]?.removeAll { $0 == k } }
+      for t in inputs where t >= 0 { readers[t, default: []].append(k) }
+      let z = l.model.tensors[o.outputs[0]]
+      let result = l.addTensor("\(z.name)__moved", inverse(s.perm).map { z.shape[$0] }, z.type)
+      moving.inputs = inputs
+      moving.outputs = [result]
+      append(moving, k)
+      let id = operators.count + moved
+      readers[result] = [id]
+      append(TFLite.Operator(op: .transpose, inputs: [result, l.int32Tensor(s.perm, "\(z.name)__perm")], outputs: o.outputs, options: .transpose), id)
       moved += 1
     }
+    l.model.operators = dequantizes + out
     return moved
   }
 
   private struct Sink {
-    /// The elementwise operator, and what it reads in the moved layout.
-    let op: Int
+    /// What the elementwise operator reads in the moved layout.
     let inputs: [Int]
     let perm: [Int]
     /// Constants to read in the moved layout: operand position and shape.
@@ -325,85 +346,46 @@ enum TFLiteOptimizer {
     return inverse
   }
 
-  private static func nextSink(_ l: LiteRTLowering) -> Sink? {
-    var producer: [Int: Int] = [:]
-    var readers: [Int: [Int]] = [:]
-    for (k, o) in l.model.operators.enumerated() {
-      for t in o.outputs { producer[t] = k }
-      for t in o.inputs where t >= 0 { readers[t, default: []].append(k) }
-    }
-    let graphOutputs = Set(l.model.outputs)
-    func transposeOf(_ t: Int) -> (input: Int, perm: [Int])? {
-      guard let p = producer[t], l.model.operators[p].op == .transpose, let perm = perm(l, l.model.operators[p]) else { return nil }
-      return (l.model.operators[p].inputs[0], perm)
-    }
-    func isConstant(_ t: Int) -> Bool {
-      if l.model.tensors[t].buffer > 0 { return true }
-      guard let p = producer[t], l.model.operators[p].op == .dequantize else { return false }
-      return l.model.tensors[l.model.operators[p].inputs[0]].buffer > 0
-    }
-    for (k, o) in l.model.operators.enumerated() where unaryOps.contains(o.op) || binaryOps.contains(o.op) {
-      let out = l.model.tensors[o.outputs[0]].shape
-      for (i, a) in o.inputs.enumerated() {
-        guard let (source, p) = transposeOf(a), readers[a] == [k], !graphOutputs.contains(a), l.model.tensors[a].shape == out else {
-          continue
-        }
-        let back = inverse(p)
-        var inputs = o.inputs
-        inputs[i] = source
-        var constants: [(position: Int, shape: [Int])] = []
-        var movable = true
-        for (j, b) in o.inputs.enumerated() where j != i {
-          if let (bSource, q) = transposeOf(b), q == p {
-            inputs[j] = bSource
-          } else if let r = readers[b]?.first(where: { l.model.operators[$0].op == .transpose && perm(l, l.model.operators[$0]) == back }) {
-            inputs[j] = l.model.operators[r].outputs[0]
-          } else if isConstant(b), l.model.tensors[b].shape.count <= p.count {
-            let shape = l.model.tensors[b].shape
-            let padded = [Int](repeating: 1, count: p.count - shape.count) + shape
-            let view = back.map { padded[$0] }
-            // Only a view of the same bytes: the axes that are not 1 keep their order.
-            guard padded.filter({ $0 != 1 }) == view.filter({ $0 != 1 }) else {
-              movable = false
-              break
-            }
-            constants.append((j, view))
-          } else {
+  /// How elementwise operator `o` (operator `id`) can read its inputs with a
+  /// TRANSPOSE moved past it, or nil if none can move. `written` is an
+  /// operator already in the new list, by id.
+  private static func sink(
+    _ o: TFLite.Operator, _ id: Int, _ l: LiteRTLowering, _ readers: [Int: [Int]], _ graphOutputs: Set<Int>,
+    _ transposeOf: (Int) -> (input: Int, perm: [Int])?, _ isConstant: (Int) -> Bool, _ written: (Int) -> TFLite.Operator?
+  ) -> Sink? {
+    let out = l.model.tensors[o.outputs[0]].shape
+    for (i, a) in o.inputs.enumerated() {
+      guard let (source, p) = transposeOf(a), readers[a] == [id], !graphOutputs.contains(a), l.model.tensors[a].shape == out else {
+        continue
+      }
+      let back = inverse(p)
+      var inputs = o.inputs
+      inputs[i] = source
+      var constants: [(position: Int, shape: [Int])] = []
+      var movable = true
+      for (j, b) in o.inputs.enumerated() where j != i {
+        if let (bSource, q) = transposeOf(b), q == p {
+          inputs[j] = bSource
+        } else if let undo = readers[b]?.lazy.compactMap(written).first(where: { $0.op == .transpose && perm(l, $0) == back }) {
+          inputs[j] = undo.outputs[0]
+        } else if isConstant(b), l.model.tensors[b].shape.count <= p.count {
+          let shape = l.model.tensors[b].shape
+          let padded = [Int](repeating: 1, count: p.count - shape.count) + shape
+          let view = back.map { padded[$0] }
+          // Only a view of the same bytes: the axes that are not 1 keep their order.
+          guard padded.filter({ $0 != 1 }) == view.filter({ $0 != 1 }) else {
             movable = false
             break
           }
+          constants.append((j, view))
+        } else {
+          movable = false
+          break
         }
-        if movable { return Sink(op: k, inputs: inputs, perm: p, constants: constants) }
       }
+      if movable { return Sink(inputs: inputs, perm: p, constants: constants) }
     }
     return nil
-  }
-
-  private static func apply(_ s: Sink, _ l: inout LiteRTLowering) {
-    var o = l.model.operators[s.op]
-    var inputs = s.inputs
-    var dequantizes: [TFLite.Operator] = []
-    for (position, shape) in s.constants {
-      let t = l.model.tensors[o.inputs[position]]
-      if t.buffer > 0 {
-        inputs[position] = l.addTensor("\(t.name)__moved", shape, t.type, buffer: t.buffer)
-      } else if let d = l.model.operators.first(where: { $0.op == .dequantize && $0.outputs[0] == o.inputs[position] }) {
-        // The same fp16 bytes, read in the new shape by a DEQUANTIZE of its own.
-        let narrow = l.model.tensors[d.inputs[0]]
-        let moved = l.addTensor("\(narrow.name)__moved", shape, narrow.type, buffer: narrow.buffer)
-        inputs[position] = l.addTensor("\(t.name)__moved", shape, t.type)
-        dequantizes.append(TFLite.Operator(op: .dequantize, inputs: [moved], outputs: [inputs[position]]))
-      }
-    }
-    let z = l.model.tensors[o.outputs[0]]
-    let result = l.addTensor("\(z.name)__moved", inverse(s.perm).map { z.shape[$0] }, z.type)
-    let transpose = TFLite.Operator(
-      op: .transpose, inputs: [result, l.int32Tensor(s.perm, "\(z.name)__perm")], outputs: o.outputs, options: .transpose)
-    o.inputs = inputs
-    o.outputs = [result]
-    l.model.operators[s.op] = o
-    l.model.operators.insert(transpose, at: s.op + 1)
-    l.model.operators.insert(contentsOf: dequantizes, at: 0)
   }
 
   /// A TRANSPOSE's permutation, from its constant second input.
@@ -413,9 +395,7 @@ enum TFLiteOptimizer {
     guard t.type == .int32, t.buffer > 0 else { return nil }
     let e = l.buffers[t.buffer]
     guard e.allPieces.count == 1, case .bytes(let b) = e.allPieces[0] else { return nil }
-    return b.withUnsafeBytes { p in
-      (0..<(b.count / 4)).map { Int(Int32(littleEndian: p.loadUnaligned(fromByteOffset: $0 * 4, as: Int32.self))) }
-    }
+    return try? Elements.integers(b, as: DataType.int32, for: t.name).map { Int($0) }
   }
 
   /// The model with only what it uses: operators whose outputs something

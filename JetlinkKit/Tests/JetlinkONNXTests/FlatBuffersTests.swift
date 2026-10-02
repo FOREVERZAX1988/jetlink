@@ -89,7 +89,7 @@ import Testing
     m.inputs = [0]
     m.outputs = [6]
     let placements: [TFLite.Placement] = [.empty, .inline([1, 2, 3, 4]), .external(offset: 4096, size: 8)]
-    let file = try TFLiteFile(bytes: TFLite.encode(m, buffers: placements))
+    let file = try TFLiteFile(bytes: TFLite.encode(m, buffers: placements).bytes)
     #expect(file.version == 3)
     #expect(file.tensors.map(\.name) == ["x", "x__f32", "w", "big__fp16", "big", "y", "out"])
     #expect(file.tensors.allSatisfy { $0.signature == $0.shape })
@@ -111,13 +111,19 @@ import Testing
     #expect(file.signatureOutputs.map(\.0) == ["out"] && file.signatureOutputs.map(\.1) == [6])
   }
 
-  /// The flatbuffer's length does not move with the offsets in it, which
-  /// is how the preparation places the weights after it.
-  @Test func lengthIgnoresOffsets() {
+  /// Where an external buffer's offset sits, so the preparation can write
+  /// it in once it knows the flatbuffer's length.
+  @Test func externalOffsetsCanBeWrittenIn() throws {
     var m = TFLite.Model()
     m.tensors = [TFLite.Tensor(name: "w", shape: [2], type: .float32, buffer: 1)]
-    let near = TFLite.encode(m, buffers: [.empty, .external(offset: 0, size: 0)])
-    let far = TFLite.encode(m, buffers: [.empty, .external(offset: 3 << 40, size: 1 << 33)])
-    #expect(near.count == far.count)
+    var (bytes, fields) = TFLite.encode(m, buffers: [.empty, .external(offset: 0, size: 8)])
+    let field = try #require(fields[1])
+    #expect(fields.count == 1 && bytes[field..<(field + 8)].allSatisfy { $0 == 0 })
+    withUnsafeBytes(of: UInt64(3 << 40).littleEndian) { bytes.replaceSubrange(field..<(field + 8), with: $0) }
+    guard case .external(let offset, let size) = try TFLiteFile(bytes: bytes).buffers[1] else {
+      Issue.record("buffer 1 is not external")
+      return
+    }
+    #expect(offset == 3 << 40 && size == 8)
   }
 }

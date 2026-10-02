@@ -61,12 +61,6 @@ public struct ONNXPreparer: ModelPreparer {
     if layout == .aneWhole {
       summary += "; for the whole Neural Engine: \(report.norms) policy LayerNormalization(s) prescaled, \(report.heads) vision head node(s) in fp32"
     }
-    if let r = report.liteRT {
-      summary =
-        "for LiteRT: stripped \(r.stripped) tinygrad op(s), \(r.gathers + r.gatherNDs) negative Gather/GatherND index(es) normalized, "
-        + "\(r.attention) attention split(s) and \(r.frameQueues) frame queue(s) made 4-D, \(r.gatherSlices + r.gatherNDSlices) constant "
-        + "Gather/GatherND(s) as Slices, \(r.layerNorms) LayerNormalization(s) scaled for fp16, \(r.reshapes) Squeeze/Unsqueeze(s) as Reshape"
-    }
     return PreparedModel(
       parts: report.parts.map { PreparedModel.Part(name: $0.name, file: $0.url.lastPathComponent, weightBytes: $0.weightBytes) },
       summary: summary)

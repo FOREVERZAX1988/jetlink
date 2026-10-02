@@ -63,12 +63,12 @@ import Testing
     var g = OnnxGraphBuilder()
     g.input("h", Self.f16, [1, 4])
     g.input("img", DataType.uint8, [1, 4])
-    g.node("Cast", ["h"], ["h32"], [("to", .int(1))])
-    g.node("Cast", ["img"], ["img16"], [("to", .int(10))])
-    g.node("Cast", ["img16"], ["img32"], [("to", .int(1))])
+    g.node("Cast", ["h"], ["h32"], [.int("to", 1)])
+    g.node("Cast", ["img"], ["img16"], [.int("to", 10)])
+    g.node("Cast", ["img16"], ["img32"], [.int("to", 1)])
     g.node("Add", ["h32", "img32"], ["sum"])
     g.node("Relu", ["sum"], ["r"])
-    g.node("Cast", ["r"], ["o"], [("to", .int(10))])
+    g.node("Cast", ["r"], ["o"], [.int("to", 10)])
     g.output("o", Self.f16, [1, 4])
     let (file, _) = try g.convert()
     #expect(file.inputs.map { file.tensors[$0].name } == ["h", "img"])
@@ -159,8 +159,8 @@ import Testing
     g.node(
       "Conv", c.bias ? ["x", "w", "b"] : ["x", "w"], ["y"],
       [
-        ("group", .int(Int64(c.group))), ("pads", .ints(c.pads.map { Int64($0) })),
-        ("strides", .ints(c.strides.map { Int64($0) })), ("dilations", .ints(c.dilations.map { Int64($0) })),
+        .int("group", Int64(c.group)), .ints("pads", c.pads.map { Int64($0) }),
+        .ints("strides", c.strides.map { Int64($0) }), .ints("dilations", c.dilations.map { Int64($0) }),
       ])
     let want = Self.conv(x, c.input, w, c.weight, c.bias ? b : nil, pads: c.pads, strides: c.strides, dilations: c.dilations, group: c.group)
     g.output("y", Self.f32, want.shape.map { Int64($0) })
@@ -194,9 +194,9 @@ import Testing
     g.input("x", Self.f32, [1, 3, 4, 4])
     g.fp16("w", [4, 3, 1, 1], w)
     g.node("Conv", ["x", "w"], ["y"])
-    g.node("Transpose", ["y"], ["nhwc"], [("perm", .ints([0, 2, 3, 1]))])
+    g.node("Transpose", ["y"], ["nhwc"], [.ints("perm", [0, 2, 3, 1])])
     g.node("Relu", ["nhwc"], ["r"])
-    g.node("Transpose", ["r"], ["back"], [("perm", .ints([0, 3, 1, 2]))])
+    g.node("Transpose", ["r"], ["back"], [.ints("perm", [0, 3, 1, 2])])
     g.node("Sigmoid", ["back"], ["out"])
     g.output("out", Self.f32, [1, 4, 4, 4])
     let (file, report) = try g.convert()
@@ -225,10 +225,10 @@ import Testing
     for k in 0..<2 {
       g.fp16("w\(k)", [Int64(c), 1, 3, 3], w[k])
       g.fp16("gamma\(k)", [1, Int64(c), 1, 1], gamma[k])
-      g.node("Conv", [previous, "w\(k)"], ["dw\(k)"], [("group", .int(Int64(c))), ("pads", .ints([1, 1, 1, 1]))])
-      g.node("Transpose", ["dw\(k)"], ["nhwc\(k)"], [("perm", .ints([0, 2, 3, 1]))])
+      g.node("Conv", [previous, "w\(k)"], ["dw\(k)"], [.int("group", Int64(c)), .ints("pads", [1, 1, 1, 1])])
+      g.node("Transpose", ["dw\(k)"], ["nhwc\(k)"], [.ints("perm", [0, 2, 3, 1])])
       g.node("Relu", ["nhwc\(k)"], ["mlp\(k)"])
-      g.node("Transpose", ["mlp\(k)"], ["nchw\(k)"], [("perm", .ints([0, 3, 1, 2]))])
+      g.node("Transpose", ["mlp\(k)"], ["nchw\(k)"], [.ints("perm", [0, 3, 1, 2])])
       g.node("Mul", ["nchw\(k)", "gamma\(k)"], ["scaled\(k)"])
       g.node("Add", [previous, "scaled\(k)"], ["block\(k)"])
       previous = "block\(k)"
@@ -264,9 +264,9 @@ import Testing
     g.fp16("bias", [32], bias)
     g.fp16("row", [1, 32], bias)
     g.fp32("full", [2, 32], full)
-    g.node("Gemm", ["a", "wT", "bias"], ["g1"], [("transB", .int(1))])
+    g.node("Gemm", ["a", "wT", "bias"], ["g1"], [.int("transB", 1)])
     g.node("Gemm", ["a", "w", "row"], ["g2"])
-    g.node("Gemm", ["a", "wT", "full"], ["g3"], [("transB", .int(1))])
+    g.node("Gemm", ["a", "wT", "full"], ["g3"], [.int("transB", 1)])
     g.output("g1", Self.f32, [2, 32])
     g.output("g2", Self.f32, [2, 32])
     g.output("g3", Self.f32, [2, 32])
@@ -323,16 +323,16 @@ import Testing
     var g = OnnxGraphBuilder(opset: opset)
     g.input("x", Self.f32, [2, 3, 4])
     if opset < 18 {
-      g.node("ReduceMean", ["x"], ["mean"], [("axes", .ints([1]))])
-      g.node("ReduceMax", ["x"], ["max"], [("axes", .ints([-1])), ("keepdims", .int(0))])
+      g.node("ReduceMean", ["x"], ["mean"], [.ints("axes", [1])])
+      g.node("ReduceMax", ["x"], ["max"], [.ints("axes", [-1]), .int("keepdims", 0)])
     } else {
       g.int64("one", [1])
       g.int64("last", [-1])
       g.node("ReduceMean", ["x", "one"], ["mean"])
-      g.node("ReduceMax", ["x", "last"], ["max"], [("keepdims", .int(0))])
+      g.node("ReduceMax", ["x", "last"], ["max"], [.int("keepdims", 0)])
     }
     g.int64("both", [0, 2])
-    g.node("ReduceSum", ["x", "both"], ["sum"], [("keepdims", .int(0))])
+    g.node("ReduceSum", ["x", "both"], ["sum"], [.int("keepdims", 0)])
     g.output("mean", Self.f32, [2, 1, 4])
     g.output("max", Self.f32, [2, 3])
     g.output("sum", Self.f32, [3])
@@ -353,7 +353,7 @@ import Testing
     var g = OnnxGraphBuilder()
     g.input("x", Self.f32, [2, 3, 4])
     g.node("Softmax", ["x"], ["last"])
-    g.node("Softmax", ["x"], ["middle"], [("axis", .int(1))])
+    g.node("Softmax", ["x"], ["middle"], [.int("axis", 1)])
     g.output("last", Self.f32, [2, 3, 4])
     g.output("middle", Self.f32, [2, 3, 4])
     let (file, _) = try g.convert()
@@ -397,18 +397,18 @@ import Testing
     g.int64("st3", [-1])
     g.node("Slice", ["x", "s3", "e3", "a3", "st3"], ["reversed"])
     g.int64("one", [1], dims: [])
-    g.node("Gather", ["x", "one"], ["picked"], [("axis", .int(1))])
+    g.node("Gather", ["x", "one"], ["picked"], [.int("axis", 1)])
     g.int64("cols", [0, 1, -2])
-    g.node("Gather", ["x", "cols"], ["columns"], [("axis", .int(2))])
+    g.node("Gather", ["x", "cols"], ["columns"], [.int("axis", 2)])
     g.int64("rows", [2, 0], dims: [1, 2])
     g.node("Gather", ["x", "rows"], ["grid"])
     g.int64("sizes", [2, 3])
-    g.node("Split", ["x", "sizes"], ["left", "right"], [("axis", .int(2))])
-    g.node("Concat", ["right", "left"], ["swapped"], [("axis", .int(-1))])
-    g.node("Transpose", ["x"], ["moved"], [("perm", .ints([2, 0, 1]))])
+    g.node("Split", ["x", "sizes"], ["left", "right"], [.int("axis", 2)])
+    g.node("Concat", ["right", "left"], ["swapped"], [.int("axis", -1)])
+    g.node("Transpose", ["x"], ["moved"], [.ints("perm", [2, 0, 1])])
     g.int64("shape", [0, -1])
     g.node("Reshape", ["x", "shape"], ["flat"])
-    g.node("Flatten", ["x"], ["flat2"], [("axis", .int(2))])
+    g.node("Flatten", ["x"], ["flat2"], [.int("axis", 2)])
     g.int64("ax", [0])
     g.node("Unsqueeze", ["picked", "ax"], ["lifted"])
     g.node("Squeeze", ["lifted", "ax"], ["dropped"])
@@ -464,7 +464,7 @@ import Testing
     g.fp16("ninf", [], [-.infinity])
     g.node("Not", ["mask"], ["masked"])
     g.node("Where", ["masked", "ninf", "scores"], ["filled"])
-    g.node("Softmax", ["filled"], ["p"], [("axis", .int(-1))])
+    g.node("Softmax", ["filled"], ["p"], [.int("axis", -1)])
     g.output("p", Self.f32, [1, 2, 3, 3])
     let (file, report) = try g.convert()
     #expect(!file.tensors.contains { $0.type == TFLite.TensorType.bool.rawValue })
@@ -500,27 +500,68 @@ import Testing
 
   // MARK: LayerNormalization and constants
 
-  @Test func layerNormalizationDecomposes() throws {
-    var g = OnnxGraphBuilder()
-    g.input("x", Self.f32, [2, 5])
-    g.fp16("scale", [5], [1, 0.5, 2, -1, 0.25])
-    g.fp16("bias", [5], [0, 1, -1, 0.5, 2])
-    g.node("LayerNormalization", ["x", "scale", "bias"], ["y"], [("epsilon", .float(1e-5))])
-    g.output("y", Self.f32, [2, 5])
-    let (file, report) = try g.convert(rewrites: false)
-    #expect(report.lowerings["plain LayerNormalizations"] == 1)
-    let x: [Float] = [1, 2, 3, 4, 5, -3, 0.5, 8, 2, -1]
-    let y = try Self.run(file, ["x": x])["y"]!
-    let scale: [Float] = [1, 0.5, 2, -1, 0.25]
-    let bias: [Float] = [0, 1, -1, 0.5, 2]
-    for r in 0..<2 {
-      let row = Array(x[(r * 5)..<(r * 5 + 5)])
-      let mean = row.reduce(0, +) / 5
-      let variance = row.map { ($0 - mean) * ($0 - mean) }.reduce(0, +) / 5
-      for k in 0..<5 {
-        #expect(abs(y[r * 5 + k] - ((row[k] - mean) / (variance + 1e-5).squareRoot() * scale[k] + bias[k])) < 1e-5)
-      }
+  /// ONNX's LayerNormalization over the axes from `axis` on, in Double:
+  /// the output, the mean and the inverse deviation, row by row.
+  static func layerNorm(_ x: [Float], inner: Int, scale: [Float], bias: [Float]?, epsilon: Double)
+    -> (y: [Float], mean: [Float], invStd: [Float])
+  {
+    var (y, means, invStds) = ([Float](), [Float](), [Float]())
+    for start in stride(from: 0, to: x.count, by: inner) {
+      let row = x[start..<(start + inner)].map { Double($0) }
+      let mean = row.reduce(0, +) / Double(inner)
+      let invStd = 1 / (row.map { ($0 - mean) * ($0 - mean) }.reduce(0, +) / Double(inner) + epsilon).squareRoot()
+      y += row.indices.map { Float((row[$0] - mean) * invStd * Double(scale[$0]) + Double(bias?[$0] ?? 0)) }
+      means.append(Float(mean))
+      invStds.append(Float(invStd))
     }
+    return (y, means, invStds)
+  }
+
+  /// Rows that spread widely, as the norms' inputs do in Cinque Terre V3:
+  /// squared, their deviations pass fp16's 65504.
+  static let spread = (0..<48).map { (i: Int) -> Float in Float((i * 37) % 48) * 300 - 7000 + (i % 3 == 0 ? 2500 : 0) }
+
+  /// Every LayerNormalization in the fp16-safe form, over the last axis or
+  /// the last two, with and without a bias: what is squared stays within 1.
+  @Test(arguments: [(Int64(-1), true), (1, true), (-1, false)])
+  func layerNormalizationIsFP16Safe(_ axis: Int64, _ bias: Bool) throws {
+    let inner = axis == -1 ? 8 : 24
+    let scale = (0..<inner).map { 0.5 + Float($0) / 16 }
+    let shift = (0..<inner).map { Float($0) / 8 - 1 }
+    var g = OnnxGraphBuilder()
+    g.input("x", Self.f32, [2, 3, 8])
+    let dims: [Int64] = axis == -1 ? [8] : [3, 8]
+    g.fp16("scale", dims, scale)
+    g.fp16("bias", dims, shift)
+    g.node("LayerNormalization", bias ? ["x", "scale", "bias"] : ["x", "scale"], ["y"], [.int("axis", axis), .float("epsilon", 1e-5)])
+    g.output("y", Self.f32, [2, 3, 8])
+    let (file, report) = try g.convert()
+    #expect(report.lowerings["fp16-safe LayerNormalizations"] == 1)
+    #expect(file.count("RSQRT") == 1 && file.count("REDUCE_MAX") == 1 && file.count("MEAN") == 2)
+    var interpreter = TFLiteInterpreter(file)
+    let y = try interpreter.run(["x": Self.spread])["y"]!
+    let squared = try #require(file.tensor(named: "y__sq"))
+    #expect(interpreter.values[squared]!.allSatisfy { $0 <= 1 })
+    let want = Self.layerNorm(Self.spread, inner: inner, scale: scale, bias: bias ? shift : nil, epsilon: 1e-5).y
+    #expect(maxError(y, want) < 1e-4)
+  }
+
+  /// A norm whose Mean and InvStdDev the graph reads gives them from the
+  /// scaled statistics.
+  @Test func layerNormalizationMeanAndInvStdDev() throws {
+    var g = OnnxGraphBuilder()
+    g.input("x", Self.f32, [2, 3, 8])
+    g.fp16("scale", [8], [Float](repeating: 1, count: 8))
+    g.node("LayerNormalization", ["x", "scale"], ["y", "mean", "inv"], [.float("epsilon", 1e-3)])
+    g.output("y", Self.f32, [2, 3, 8])
+    g.output("mean", Self.f32, [2, 3, 1])
+    g.output("inv", Self.f32, [2, 3, 1])
+    let (file, _) = try g.convert()
+    let out = try Self.run(file, ["x": Self.spread])
+    let want = Self.layerNorm(Self.spread, inner: 8, scale: [Float](repeating: 1, count: 8), bias: nil, epsilon: 1e-3)
+    #expect(maxError(out["y"]!, want.y) < 1e-4)
+    #expect(maxError(out["mean"]!, want.mean) < 1e-3)
+    #expect(zip(out["inv"]!, want.invStd).allSatisfy { abs($0 - $1) <= 1e-5 * $1 })
   }
 
   /// What only reads constants is worked out here: no operator is left with
@@ -533,7 +574,7 @@ import Testing
     g.fp16("offset", [3], [0.5, 0.25, 0.125])
     g.node("Gather", ["table", "pick"], ["rows"])
     g.node("Add", ["rows", "offset"], ["shifted"])
-    g.node("Cast", ["shifted"], ["wide"], [("to", .int(1))])
+    g.node("Cast", ["shifted"], ["wide"], [.int("to", 1)])
     g.node("Mul", ["x", "wide"], ["y"])
     g.output("y", Self.f32, [2, 3])
     let (file, report) = try g.convert()
@@ -561,14 +602,14 @@ import Testing
     g.int64("cam", [1, 12, 2, 2])
     g.node("Unsqueeze", ["new_img", "ax1"], ["frame"])
     g.node("Slice", ["state_img_q", "one", "end", "ax1"], ["tail"])
-    g.node("Concat", ["tail", "frame"], ["next_state_img_q"], [("axis", .int(1))])
+    g.node("Concat", ["tail", "frame"], ["next_state_img_q"], [.int("axis", 1)])
     g.node("Gather", ["next_state_img_q", "i0"], ["road"])
     g.node("Slice", ["road", "zero", "end", "zero", "four"], ["pair"])
     g.node("Reshape", ["pair", "cam"], ["imgs"])
-    g.node("Cast", ["imgs"], ["out"], [("to", .int(1))])
+    g.node("Cast", ["imgs"], ["out"], [.int("to", 1)])
     g.output("out", Self.f32, [1, 12, 2, 2])
     g.output("next_state_img_q", DataType.uint8, [2, 5, 6, 2, 2])
-    let (file, report) = try g.convert(rewrites: false)
+    let (file, report) = try g.convert()
     #expect(file.tensors[file.inputs[1]].shape == [2, 30, 2, 2])
     #expect(file.tensors[file.outputs[1]].shape == [2, 30, 2, 2])
     #expect(file.tensors.allSatisfy { $0.shape.count <= 4 }, "\(file.tensors.filter { $0.shape.count > 4 }.map(\.name))")
@@ -591,7 +632,7 @@ import Testing
     g.input("x", Self.f32, [1, 3, 24])
     g.int64("heads", [1, 3, 3, 2, 4])
     g.node("Reshape", ["x", "heads"], ["qkv"])
-    g.node("Transpose", ["qkv"], ["split"], [("perm", .ints([2, 0, 3, 1, 4]))])
+    g.node("Transpose", ["qkv"], ["split"], [.ints("perm", [2, 0, 3, 1, 4])])
     g.int64("k0", [1])
     g.int64("k1", [2])
     g.int64("ax", [0])
@@ -632,9 +673,7 @@ import Testing
       return
     }
     #expect(offset % 64 == 0 && offset >= report.flatbufferBytes && size == 64 * 32 * 2)
-    var raw: [UInt8] = []
-    for x in w { withUnsafeBytes(of: Float16(x).bitPattern.littleEndian) { raw.append(contentsOf: $0) } }
-    #expect(file.data(deq.inputs[0]) == raw)
+    #expect(file.data(deq.inputs[0]) == Elements.encode(w, as: DataType.float16))
     let add = try #require(file.operators.first { $0.op == "ADD" })
     let bias = file.tensors[add.inputs[1]]
     #expect(bias.type == TFLite.TensorType.float32.rawValue)
@@ -659,7 +698,7 @@ import Testing
     g.input("x", Self.f32, [2, 3])
     g.node("Relu", ["x"], ["r"])
     g.node("Sigmoid", ["r"], ["y"])
-    g.valueInfo.append(.init(name: "r", type: Self.f32, dims: [3, 2]))
+    g.valueInfo("r", Self.f32, [3, 2])
     g.output("y", Self.f32, [2, 3])
     #expect(throws: OnnxError("Relu 'Relu_0': lowered r to shape [2, 3] where the model records [3, 2]")) { try g.convert() }
   }

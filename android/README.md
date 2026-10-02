@@ -15,7 +15,7 @@ native library, `libjetlink.so`:
 | `JetlinkKit` | The server, the model registry and the ONNX preparation, shared with every platform |
 | `JetlinkORT/OrtBackend.swift` | onnxruntime's profiles; `htp`, `htp-whole` and `gpu` use its QNN provider on a Snapdragon's NPU and GPU |
 | `JetlinkLiteRT`, `CLiteRt` | LiteRT's profiles `gpu` and `cpu`, through LiteRT's C API opened at run time: the GPU path every phone defaults to |
-| `JetlinkONNX/LiteRTPatches.swift`, `LiteRTPreparation.swift` | The ONNX rewrites LiteRT's GPU needs (fp16-safe LayerNorm, no rank-5 tensors, constant gathers as slices) and the conversion to `.tflite`, on the phone |
+| `JetlinkONNX/LiteRTPreparation.swift`, `LiteRTLowering.swift`, `LiteRTOps.swift` | The conversion to `.tflite` on the phone, in the forms LiteRT's GPU needs (fp16-safe LayerNorm, no rank-5 tensors, constant gathers as slices) |
 | `JetlinkServer/UsbfsPipes.swift`, `CUsbfs` | The comma's bulk pair through usbdevfs, on the descriptor the app opened |
 | `JetlinkKit/AppSnapshot.swift` | The app's state as the screens draw it, from the server's events |
 | `JetlinkAndroid` | The JNI functions `io.zoompilot.jetlink.server.Native` calls |
