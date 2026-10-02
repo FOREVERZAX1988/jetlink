@@ -76,6 +76,19 @@ xcodebuild archive \
   "MARKETING_VERSION=$VERSION" \
   "CURRENT_PROJECT_VERSION=$BUILD_NUMBER"
 
+# onnxruntime's xcframework is a static library whose Info.plist says iOS
+# 15.1. Xcode links it into a dynamic framework for the app's deployment target
+# but keeps that Info.plist, and App Store Connect refuses the mismatch
+# (ITMS-90208). Each framework gets the version its binary was built for; the
+# export re-signs them.
+for framework in "$ARCHIVE"/Products/Applications/Jetlink.app/Frameworks/*.framework; do
+  [ -d "$framework" ] || continue
+  executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$framework/Info.plist")"
+  minos="$(vtool -show-build "$framework/$executable" | awk '$1 == "minos" { print $2; exit }')"
+  [ -n "$minos" ] || { echo "error: no minos in $framework/$executable" >&2; exit 1; }
+  /usr/libexec/PlistBuddy -c "Set :MinimumOSVersion $minos" "$framework/Info.plist"
+done
+
 if [ "${UPLOAD:-1}" = 0 ]; then
   DESTINATION="export"
 else
