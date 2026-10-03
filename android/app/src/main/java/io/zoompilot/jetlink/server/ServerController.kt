@@ -2,6 +2,7 @@ package io.zoompilot.jetlink.server
 
 import android.content.Context
 import android.net.Uri
+import android.os.Build
 import android.util.Log
 import io.zoompilot.jetlink.settings.Chip
 import io.zoompilot.jetlink.settings.SettingsValues
@@ -82,9 +83,10 @@ class ServerController(private val context: Context, private val scope: Coroutin
     }
 
     private fun config(settings: SettingsValues): JsonObject = buildJsonObject {
+        val processor = settings.processor.resolved(Chip.automatic)
         put("cache", cacheDirectory.absolutePath)
-        put("backend", settings.processor.backend.id)
-        put("device", settings.processor.device)
+        put("backend", processor.backend.id)
+        put("device", processor.device)
         put("keep_alive", settings.keepNpuAwake)
         put("keep_cpu_warm", settings.keepCpuAwake)
         put("port", settings.port)
@@ -93,6 +95,8 @@ class ServerController(private val context: Context, private val scope: Coroutin
         put("usb", true)
         put("preload", true)
         put("chip", Chip.model)
+        // a model compiled for the NPU is good for this system build alone
+        put("firmware", Build.FINGERPRINT)
         put("native_library_dir", context.applicationInfo.nativeLibraryDir)
     }
 

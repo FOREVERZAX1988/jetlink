@@ -6,6 +6,8 @@ import android.os.Build
  * The phone's SoC, and whether its NPU can run the model. QNN runs the
  * model in fp16 on the Hexagon NPU, which only v69 and later have: the
  * Snapdragon 8 Gen 1 and newer 8-series. The list is by Build.SOC_MODEL.
+ * On a Google Tensor, LiteRT compiles the model for the NPU on the phone,
+ * from the G3 on.
  */
 object Chip {
     /** "SM8650", or the board name on older builds. */
@@ -17,8 +19,17 @@ object Chip {
     val isQualcomm: Boolean
         get() = manufacturer.equals("QTI", ignoreCase = true) || manufacturer.equals("Qualcomm", ignoreCase = true)
 
+    /** A Google Tensor whose NPU LiteRT compiles for: "Tensor G3" (the Pixel 8) or later. */
+    val hasTensorNpu: Boolean get() = (tensorGeneration(model) ?: 0) >= 3
+
+    /** 5 for "Tensor G5", as Build.SOC_MODEL names a Pixel's SoC; null for any other. */
+    fun tensorGeneration(model: String): Int? = Regex("^Tensor G(\\d+)$").find(model.trim())?.groupValues?.get(1)?.toIntOrNull()
+
     /** What this phone's Settings offer. */
-    fun processors(current: Processor): List<Processor> = Processor.choices(isQualcomm, isEmulator, current)
+    fun processors(current: Processor): List<Processor> = Processor.choices(isQualcomm, hasTensorNpu, isEmulator, current)
+
+    /** What Automatic runs on here. */
+    val automatic: Processor get() = Processor.automatic(hasTensorNpu, isEmulator)
 
     val isEmulator: Boolean
         get() = Build.HARDWARE.contains("ranchu") || Build.HARDWARE.contains("goldfish") || Build.PRODUCT.contains("sdk")
@@ -46,7 +57,8 @@ object Chip {
 
     /**
      * From the NPU's generation, for QNN's choices: Qualcomm's published
-     * numbers for similar models. No phone's GPU has been measured.
+     * numbers for similar models. No phone's GPU or Tensor NPU has been
+     * measured.
      */
     fun expectation(processor: Processor): Expectation {
         if (!processor.usesQnn || !isQualcomm) return Expectation.Unmeasured

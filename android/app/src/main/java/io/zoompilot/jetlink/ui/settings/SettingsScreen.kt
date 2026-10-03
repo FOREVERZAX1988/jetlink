@@ -83,6 +83,10 @@ data class SettingsInfo(
     val processors: List<Processor>,
     /** A Snapdragon, whose NPU and GPU QNN can drive. */
     val snapdragon: Boolean = true,
+    /** A Google Tensor G3 or later, whose NPU LiteRT compiles for. */
+    val tensorNpu: Boolean = false,
+    /** What Automatic runs on here. */
+    val automatic: Processor = Processor.Gpu,
 )
 
 /** What the Settings rows do. */
@@ -121,6 +125,8 @@ fun SettingsScreen(graph: AppGraph, openConnect: () -> Unit, openLogs: () -> Uni
         version = BuildConfig.VERSION_NAME,
         processors = Chip.processors(values.processor),
         snapdragon = Chip.isQualcomm || Chip.isEmulator,
+        tensorNpu = Chip.hasTensorNpu,
+        automatic = Chip.automatic,
     )
     val actions = SettingsActions(
         update = graph.settings::update,
@@ -241,10 +247,12 @@ private fun Performance(values: SettingsValues, info: SettingsInfo, actions: Set
     val colors = JetlinkTheme.colors
     var choosing by remember { mutableStateOf(false) }
     val choices = info.processors
-    val footer = if (info.snapdragon) {
-        "Changing the processor prepares models again."
-    } else {
-        "This phone has no Snapdragon NPU, so the model runs on its GPU. Run Benchmark to see whether it keeps up."
+    val footer = when {
+        info.tensorNpu ->
+            "Automatic runs the model on the Tensor NPU, which prepares it the first time. " +
+                "A model the NPU cannot take runs on the GPU. Changing the processor prepares models again."
+        info.snapdragon -> "Automatic runs the model on the GPU for now. Changing the processor prepares models again."
+        else -> "This phone has no NPU Jetlink can use, so the model runs on its GPU. Run Benchmark to see whether it keeps up."
     }
     FormSection("Performance", footer = { FormFooter(footer) }) {
         Box {
@@ -258,7 +266,11 @@ private fun Performance(values: SettingsValues, info: SettingsInfo, actions: Set
             ) {
                 Text("Processor", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
                 Spacer(Modifier.width(12.dp))
-                Text(values.processor.title, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.primary)
+                Text(
+                    if (values.processor == Processor.Auto) "Automatic (${info.automatic.title})" else values.processor.title,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                )
             }
             DropdownMenu(expanded = choosing, onDismissRequest = { choosing = false }, modifier = Modifier.background(colors.card)) {
                 choices.forEach { processor ->
@@ -331,7 +343,7 @@ private fun SettingsPreview() {
                     runtime = "1.29.0",
                     chip = "Snapdragon 8 Gen 3",
                     version = "0.5.0",
-                    processors = listOf(Processor.NpuGpu, Processor.Npu, Processor.Gpu),
+                    processors = listOf(Processor.Auto, Processor.NpuGpu, Processor.Npu, Processor.Gpu),
                 ),
                 SettingsActions(),
             )

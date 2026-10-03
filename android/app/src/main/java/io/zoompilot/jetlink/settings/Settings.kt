@@ -14,15 +14,26 @@ enum class Backend(val id: String) {
 
 /**
  * Where the model runs: a backend of the server's and its device, an
- * OrtProfile or a LiteRtProfile. The device is also what Settings stores,
- * and no two choices share one.
+ * OrtProfile or a LiteRtProfile, or Automatic, which picks one of those for
+ * the phone. The device is also what Settings stores, and no two choices
+ * share one.
  */
 enum class Processor(val backend: Backend, val device: String, val title: String) {
+    /** The phone's NPU where Jetlink has one for it, else the GPU ([automatic]). */
+    Auto(Backend.LiteRt, "auto", "Automatic"),
+
     /** The vision trunk on the NPU, the rest on the GPU: the Mac's split. QNN, a Snapdragon's. */
     NpuGpu(Backend.Ort, "htp", "NPU + GPU"),
 
     /** The whole model on the NPU, prepared as the iPhone's. QNN, a Snapdragon's. */
     Npu(Backend.Ort, "htp-whole", "NPU"),
+
+    /**
+     * A Google Tensor's NPU, which LiteRT compiles the model for on the phone
+     * through the compiler in its system; the GPU runs a model that compiler
+     * cannot take.
+     */
+    TensorNpu(Backend.LiteRt, "npu", "NPU"),
 
     /** The whole model on the GPU through LiteRT, which drives any phone's: Adreno, Mali, PowerVR. */
     Gpu(Backend.LiteRt, "gpu", "GPU"),
@@ -33,6 +44,9 @@ enum class Processor(val backend: Backend, val device: String, val title: String
     /** Runs on QNN, which needs a Snapdragon: onnxruntime anywhere but its CPU. */
     val usesQnn: Boolean get() = backend == Backend.Ort && device != Cpu.device
 
+    /** The choice the server runs: Automatic's pick for this phone, or this one. */
+    fun resolved(automatic: Processor): Processor = if (this == Auto) automatic else this
+
     companion object {
         /**
          * A stored choice. `gpu` was QNN on the Adreno before LiteRT drove
@@ -42,17 +56,42 @@ enum class Processor(val backend: Backend, val device: String, val title: String
         fun of(device: String?): Processor? = if (device == "litert-gpu") Gpu else entries.firstOrNull { it.device == device }
 
         /**
-         * What a phone can choose. The NPU choices run QNN, which needs a
-         * Snapdragon: anywhere else it leaves every op to one CPU thread,
-         * minutes a frame. The GPU is LiteRT's, on any phone. The CPU is
-         * offered on a Snapdragon only once chosen; the emulator offers
+         * What a phone can choose, Automatic first. The Snapdragon NPU
+         * choices run QNN, which needs a Snapdragon: anywhere else it leaves
+         * every op to one CPU thread, minutes a frame. A Google Tensor G3 or
+         * later has its own NPU choice. The GPU is LiteRT's, on any phone. The
+         * CPU is offered on a Snapdragon only once chosen; the emulator offers
          * everything, for testing.
          */
-        fun choices(qualcomm: Boolean, emulator: Boolean, current: Processor): List<Processor> = when {
+        fun choices(qualcomm: Boolean, tensorNpu: Boolean, emulator: Boolean, current: Processor): List<Processor> = when {
             emulator -> entries
-            qualcomm -> entries.filter { it != Cpu || current == Cpu }
-            else -> listOf(Gpu, Cpu)
+            qualcomm -> entries.filter { it != TensorNpu && (it != Cpu || current == Cpu) }
+            tensorNpu -> listOf(Auto, TensorNpu, Gpu, Cpu)
+            else -> listOf(Auto, Gpu, Cpu)
         }
+
+        /**
+         * Automatic's pick: a Google Tensor's NPU, which runs on the GPU any
+         * model it cannot compile; the CPU on the emulator; else the GPU. A
+         * Snapdragon stays on the GPU: QNN's NPU has run on no phone, and 20
+         * of Cinque Terre V3's 44 vision LayerNorms overflow float16 when
+         * computed step by step, which would give wrong outputs rather than
+         * an error to fall back on.
+         */
+        fun automatic(tensorNpu: Boolean, emulator: Boolean): Processor = when {
+            emulator -> Cpu
+            tensorNpu -> TensorNpu
+            else -> Gpu
+        }
+
+        /**
+         * A choice stored before Automatic: `gpu` was every phone's default
+         * then, the only other choice off a Snapdragon was the CPU, and
+         * Automatic runs a Snapdragon on the GPU too, so it becomes
+         * Automatic. Anything else was chosen and stays.
+         */
+        fun migrated(stored: Processor?): Processor? = if (stored == Gpu) Auto else stored
+
     }
 }
 
@@ -60,7 +99,7 @@ enum class Processor(val backend: Backend, val device: String, val title: String
 data class SettingsValues(
     /** Where bench tools such as `bench_link.py --host` reach the phone. */
     val port: Int = 5599,
-    val processor: Processor = Processor.Gpu,
+    val processor: Processor = Processor.Auto,
     /** The NPU held in burst mode between frames rather than let it settle. */
     val keepNpuAwake: Boolean = true,
     /** A CPU core kept busy between frames. */
@@ -79,6 +118,7 @@ class Settings(context: Context) {
         prefs.edit()
             .putInt(PORT, next.port)
             .putString(PROCESSOR, next.processor.device)
+            .putBoolean(PROCESSOR_AUTOMATIC, true)
             .putBoolean(KEEP_NPU_AWAKE, next.keepNpuAwake)
             .putBoolean(KEEP_CPU_AWAKE, next.keepCpuAwake)
             .putBoolean(KEEP_SCREEN_ON, next.keepScreenOn)
@@ -87,13 +127,14 @@ class Settings(context: Context) {
     }
 
     private fun read(): SettingsValues {
-        val defaults = SettingsValues(processor = defaultProcessor())
+        val defaults = SettingsValues()
         val port = prefs.getInt(PORT, defaults.port)
+        val stored = Processor.of(prefs.getString(PROCESSOR, null))
         return SettingsValues(
             port = if (port in 1..65535) port else defaults.port,
             // a QNN choice from before a phone without a Snapdragon was told apart
-            processor = Processor.of(prefs.getString(PROCESSOR, null))
-                ?.takeIf { it in Processor.choices(Chip.isQualcomm, Chip.isEmulator, it) }
+            processor = (if (prefs.getBoolean(PROCESSOR_AUTOMATIC, false)) stored else Processor.migrated(stored))
+                ?.takeIf { it in Processor.choices(Chip.isQualcomm, Chip.hasTensorNpu, Chip.isEmulator, it) }
                 ?: defaults.processor,
             keepNpuAwake = prefs.getBoolean(KEEP_NPU_AWAKE, defaults.keepNpuAwake),
             keepCpuAwake = prefs.getBoolean(KEEP_CPU_AWAKE, defaults.keepCpuAwake),
@@ -104,17 +145,10 @@ class Settings(context: Context) {
     private companion object {
         const val PORT = "port"
         const val PROCESSOR = "processor"
+        /** Set once the processor is stored by an app that has Automatic. */
+        const val PROCESSOR_AUTOMATIC = "processorAutomatic"
         const val KEEP_NPU_AWAKE = "keepNpuAwake"
         const val KEEP_CPU_AWAKE = "keepCpuAwake"
         const val KEEP_SCREEN_ON = "keepScreenOn"
-
-        /**
-         * The GPU on every phone, a Snapdragon's too; the CPU on the emulator.
-         * LiteRT's GPU path is the one whose outputs are shown to match in
-         * float16 (after the LayerNorm rewrite). QNN's NPU choices stay on a
-         * Snapdragon but have run on no phone, and 20 of Cinque Terre V3's 44
-         * vision LayerNorms overflow float16 when computed step by step.
-         */
-        fun defaultProcessor(): Processor = if (Chip.isEmulator) Processor.Cpu else Processor.Gpu
     }
 }

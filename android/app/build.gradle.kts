@@ -1,4 +1,5 @@
 import java.io.File
+import java.security.MessageDigest
 import javax.inject.Inject
 
 plugins {
@@ -110,6 +111,12 @@ val litertAar: Configuration by configurations.creating {
     isTransitive = false
 }
 
+/** LiteRT's NPU runtime libraries, a zip from its GitHub release (settings.gradle.kts). */
+val litertNpu: Configuration by configurations.creating {
+    isCanBeConsumed = false
+    isTransitive = false
+}
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
@@ -130,6 +137,7 @@ dependencies {
 
     onnxruntimeAar(variantOf(libs.onnxruntime.qnn) { artifactType("aar") })
     litertAar(variantOf(libs.litert) { artifactType("aar") })
+    litertNpu(variantOf(libs.litert.npu) { artifactType("zip") })
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
@@ -177,19 +185,36 @@ val swiftBuild = tasks.register<SwiftBuild>("swiftBuild") {
     outputDir.set(layout.buildDirectory.dir("swift/jniLibs"))
 }
 
-/** LiteRT's runtime and GPU accelerator out of its AAR, for arm64 as the rest. */
+/**
+ * LiteRT's runtime and GPU accelerator out of its AAR, and Google Tensor's
+ * dispatch library and compiler plugin out of the same release's NPU zip,
+ * for arm64 as the rest. LiteRT opens them all from nativeLibraryDir. The
+ * zip comes from GitHub rather than Maven, so its hash is checked.
+ */
 abstract class LiteRtLibraries @Inject constructor(
     private val files: FileSystemOperations,
     private val archives: ArchiveOperations,
 ) : DefaultTask() {
     @get:InputFiles @get:PathSensitive(PathSensitivity.NONE) abstract val aar: ConfigurableFileCollection
+    @get:InputFiles @get:PathSensitive(PathSensitivity.NONE) abstract val npu: ConfigurableFileCollection
+    @get:Input abstract val npuSha256: Property<String>
     @get:OutputDirectory abstract val outputDir: DirectoryProperty
 
     @TaskAction
     fun extract() {
+        val zip = npu.singleFile
+        val sha256 = MessageDigest.getInstance("SHA-256").digest(zip.readBytes()).joinToString("") { "%02x".format(it) }
+        check(sha256 == npuSha256.get()) { "${zip.name} has SHA-256 $sha256, not the ${npuSha256.get()} jetlink was built against" }
         files.sync {
             from(archives.zipTree(aar.singleFile)) {
                 include("jni/arm64-v8a/libLiteRt.so", "jni/arm64-v8a/libLiteRtClGlAccelerator.so")
+                eachFile { path = "arm64-v8a/$name" }
+            }
+            from(archives.zipTree(zip)) {
+                include(
+                    "google_tensor_runtime/src/main/jni/arm64-v8a/libLiteRtDispatch_GoogleTensor.so",
+                    "google_tensor_runtime/src/main/jni/arm64-v8a/libLiteRtCompilerPlugin_google_tensor.so",
+                )
                 eachFile { path = "arm64-v8a/$name" }
             }
             includeEmptyDirs = false
@@ -200,6 +225,9 @@ abstract class LiteRtLibraries @Inject constructor(
 
 val liteRtLibraries = tasks.register<LiteRtLibraries>("liteRtLibraries") {
     aar.from(litertAar)
+    npu.from(litertNpu)
+    // litert_npu_runtime_libraries_jit.zip of LiteRT v2.2.0
+    npuSha256.set("d6d160104f110e690f1c9b0c54ab3855af1a12e405dcc6e644dd7e3e1955aac4")
     outputDir.set(layout.buildDirectory.dir("litert/jniLibs"))
 }
 

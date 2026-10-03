@@ -36,6 +36,11 @@
         <uses-native-library android:name="libOpenCL-car.so" android:required="false" />
         <uses-native-library android:name="libOpenCL-pixel.so" android:required="false" />
         <uses-native-library android:name="libvndksupport.so" android:required="false" />
+        <!-- A Google Tensor's NPU (Pixel 8 and later): LiteRT's Google Tensor
+             plugin compiles a model through the first, and its dispatch
+             library runs the compiled model through both. -->
+        <uses-native-library android:name="libedgetpu_litert.so" android:required="false" />
+        <uses-native-library android:name="libedgetpu_util.so" android:required="false" />
 
         <activity
             android:name=".MainActivity"
