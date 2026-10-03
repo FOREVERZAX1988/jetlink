@@ -100,9 +100,9 @@ Not yet run on a phone. You need:
 
 * An Android phone with a Snapdragon 8 Gen 2 or newer and USB 3.
 * A USB 3 hub with USB-C power pass-through, and a USB-A to USB-C cable.
-* A Mac or Linux PC to build the app.
 
-1. Build and install it: **[Jetlink for Android](docs/android-app.md)**.
+1. Download the APK from [Releases](https://github.com/zoompilot/jetlink/releases)
+   on the phone and install it: **[Jetlink for Android](docs/android-app.md#install)**.
 2. Open Jetlink, plug in the comma, and tick **Always open** when Android asks.
 
 ## Comma setup (all platforms)

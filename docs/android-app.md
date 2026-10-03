@@ -2,7 +2,7 @@
 
 **Experimental, and not yet measured on a phone.** Runs the Jetlink server in an
 Android app, on a Snapdragon's NPU or any phone's GPU, connected to the comma by
-USB. You build it from source. Run the [Benchmark](#benchmark) before you drive to see
+USB. Each release carries the APK. Run the [Benchmark](#benchmark) before you drive to see
 if your phone keeps up.
 
 Mac: [Jetlink for Mac](macos-app.md). iPhone: [Jetlink for iPhone and iPad](iphone-app.md).
@@ -14,7 +14,6 @@ Jetson or PC: [README](../README.md#quick-start).
 - USB 3 on the phone, a USB 3 hub or adapter, and a USB 3 cable. See
   [Connect the comma](#connect-the-comma).
 - About 3 GB free per model.
-- A Mac or Linux PC to build the app: see [Android development](../android/README.md).
 - A comma running a zoompilot build with Jetlink, set up per the
   [README](../README.md#comma-setup-all-platforms), with **Accelerator Link**
   on **USB**.
@@ -44,14 +43,26 @@ published numbers for similar models; no phone has been measured.
 
 ## Install
 
-1. Build the APK: [Android development](../android/README.md#build).
-2. On the phone, turn on **Developer options** (tap **Build number** seven
-   times) and **USB debugging**, then `adb install` it. Or copy the APK to the
-   phone and allow your file manager to install unknown apps.
+1. On the phone, open the
+   [latest release](https://github.com/zoompilot/jetlink/releases/latest) and
+   download `Jetlink-<version>-Android.apk` under **Assets**.
+2. Open the download. Android asks you to allow your browser or file manager
+   to install unknown apps: allow it, go back, and tap **Install**. If Play
+   Protect warns that it does not know the developer, install anyway.
+
+   Or from a computer: on the phone, turn on **Developer options** (tap
+   **Build number** seven times) and **USB debugging**, then
+   `adb install Jetlink-<version>-Android.apk`.
 3. Open Jetlink. Allow notifications: the notification is how Jetlink keeps
    running with the screen off.
 
-There is no Play Store build.
+To update, install the new release's APK the same way. Your models and
+settings stay.
+
+- An APK you built yourself is signed with your own key, and Android installs
+  neither over the other. Uninstall Jetlink first, which deletes its models.
+- To build it yourself: [Android development](../android/README.md#build).
+- There is no Play Store build.
 
 ## Connect the comma
 

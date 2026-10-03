@@ -1,8 +1,8 @@
 # Jetlink for Android development
 
-To install and use the app, follow the [Android user guide](../docs/android-app.md).
-This page covers building and testing it from source. Run the commands from the
-repository root.
+To install and use the app, follow the [Android user guide](../docs/android-app.md):
+each release carries the APK. This page covers building and testing it from
+source. Run the commands from the repository root.
 
 ## Layout
 
@@ -62,7 +62,12 @@ instead, for work on the Kotlin side without the Swift toolchain. The APK is
 arm64 only, as the QNN runtime is.
 
 Release builds are signed with the debug key so they install over debug ones;
-the app is sideloaded, never published.
+the app is sideloaded, never on a store. The APK on the releases page is signed
+with the project's release key instead, which the Release workflow names in
+`JETLINK_ANDROID_KEYSTORE`, `JETLINK_ANDROID_KEYSTORE_PASSWORD` and
+`JETLINK_ANDROID_KEY_ALIAS` ([publishing](../docs/publishing.md#android-release-key)).
+Android installs neither over the other, so uninstall the released app before
+you install your own build, and the other way round.
 
 `python3 android/scripts/make-icon.py` makes the launcher and notification icons
 from the iPhone app's, with Pillow. The outputs are committed.

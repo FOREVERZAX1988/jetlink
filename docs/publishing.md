@@ -3,8 +3,8 @@
 Updating an installed server: [updates and rollback](releasing.md). This page:
 publishing a release.
 
-A pushed `v*` tag runs the Release workflow: the macOS app and the Linux server
-for Jetsons and PCs, then the iPhone app on TestFlight.
+A pushed `v*` tag runs the Release workflow: the macOS app, the Android app and
+the Linux server for Jetsons and PCs, then the iPhone app on TestFlight.
 
 Cut one when something under `JetlinkKit`, `macos`, `ios`, `android`,
 `install.sh` or the wire (`jetlink/protocol.py`, `jetlink/transport`,
@@ -32,9 +32,12 @@ git push origin v0.7.0
 ```
 
 3. Watch **Actions > Release**. The macOS job builds, smoke-tests and notarizes
-   the app; each Linux server builds on a native runner for its architecture
-   with `scripts/build-linux.sh`.
-4. Check the release page: `Jetlink-0.7.0-macOS.dmg`, `SHA256SUMS`,
+   the app; the Android jobs build `libjetlink.so` and the APK as CI does and
+   sign it with the [release key](#android-release-key); each Linux server
+   builds on a native runner for its architecture with
+   `scripts/build-linux.sh`.
+4. Check the release page: `Jetlink-0.7.0-macOS.dmg`,
+   `Jetlink-0.7.0-Android.apk`, `SHA256SUMS` (both apps),
    `jetlink-server-0.7.0-linux-aarch64.tar.gz` and `-linux-x86_64.tar.gz`
    with their `.sha256`, and notes made of the changelog section and the
    install commands.
@@ -56,17 +59,20 @@ git push origin v0.7.0
 
 ## Installing the app
 
-Open the DMG and drag Jetlink to Applications. Verify against `SHA256SUMS`:
+Open the DMG and drag Jetlink to Applications. The APK installs as in
+[Jetlink for Android](android-app.md#install). Verify a download against
+`SHA256SUMS`, in the folder it is in:
 
 ```bash
-shasum -a 256 -c SHA256SUMS
+shasum -a 256 -c --ignore-missing SHA256SUMS
 ```
 
 ## Signing secrets
 
-Releases are signed with a Developer ID and notarized. A fork without these
-secrets gets an ad hoc signed ZIP and no DMG; the workflow step "Report the
-signing mode" says which mode ran.
+Releases are signed with a Developer ID and notarized, and the APK with the
+Android release key. A fork without these secrets gets an ad hoc signed ZIP
+and no DMG, and an APK signed with the runner's debug key; the workflow steps
+"Report the signing mode" say which mode ran.
 
 | Secret | What |
 | --- | --- |
@@ -77,6 +83,9 @@ signing mode" says which mode ran.
 | `NOTARY_ISSUER_ID` | the issuer id of that key |
 | `NOTARY_PRIVATE_KEY_P8_BASE64` | the key's .p8 file, base64 encoded |
 | `APPLE_TEAM_ID` | the team ID the iPhone app is signed for; without it, nothing goes to TestFlight |
+| `ANDROID_KEYSTORE_BASE64` | the Android release keystore, base64 encoded ([below](#android-release-key)) |
+| `ANDROID_KEYSTORE_PASSWORD` | its password, which is also the key's |
+| `ANDROID_KEY_ALIAS` | the key's alias in it |
 
 - Notary key: a Team key made under **Users and Access > Integrations** in App
   Store Connect. The Developer role notarizes; give it Admin if the same key
@@ -87,6 +96,36 @@ signing mode" says which mode ran.
   Access: upload the CSR under **Certificates > Developer ID Application**
   (G2 Sub-CA), then join the key and the downloaded `.cer` with
   `openssl pkcs12 -export`.
+
+### Android release key
+
+Android installs an update only over an app signed with the same key, so every
+release's APK has to be signed with this one. Make it once, with the JDK's
+keytool, which asks for a password (the store's and the key's):
+
+```bash
+keytool -genkeypair -v -keystore jetlink-release.keystore -storetype PKCS12 \
+  -alias jetlink -keyalg RSA -keysize 4096 -validity 10000 \
+  -dname "CN=Jetlink, O=zoompilot"
+```
+
+Then set the three secrets (`gh secret set` without `--body` asks for the
+value):
+
+```bash
+base64 -i jetlink-release.keystore | gh secret set ANDROID_KEYSTORE_BASE64 --repo zoompilot/jetlink
+gh secret set ANDROID_KEYSTORE_PASSWORD --repo zoompilot/jetlink
+gh secret set ANDROID_KEY_ALIAS --repo zoompilot/jetlink --body jetlink
+```
+
+- Keep the keystore and its password backed up outside the repository. A lost
+  key means a new one, and every phone then has to uninstall Jetlink, models
+  and all, to take the next release.
+- The workflow's "Check the APK" step fails a build that has the secrets but
+  came out with the debug key, or whose version is not the tag's.
+- To sign a local build with it, set `JETLINK_ANDROID_KEYSTORE` (an absolute
+  path), `JETLINK_ANDROID_KEYSTORE_PASSWORD` and `JETLINK_ANDROID_KEY_ALIAS`
+  before `./gradlew :app:assembleRelease`.
 
 ## iPhone app on TestFlight
 

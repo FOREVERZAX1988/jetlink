@@ -17,8 +17,10 @@ powered and online.
      Docker, keeping its models and prepared engines.
    - Mac app: quit Jetlink, replace it with the new release, and reopen it.
    - iPhone app: run `git pull` in the checkout, then click **Run** in Xcode.
-   - Android app: run `git pull` in the checkout, then build and install it
-     again ([Android development](../android/README.md#build)).
+   - Android app: install the new release's APK over the old one
+     ([Install](android-app.md#install)). Your own build: run `git pull` in
+     the checkout, then build and install it again
+     ([Android development](../android/README.md#build)).
    - Mac terminal: run `git pull`, then build `jetlink-server` again
      ([from a terminal](platforms.md#from-a-terminal)).
 
