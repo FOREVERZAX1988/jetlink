@@ -43,6 +43,11 @@ PRESENT_TIMEOUT = 5.0
 BUILD_TIMEOUT = 1800.0
 
 
+def _left(deadline: float | None, default: float) -> float:
+  """What is left of an absolute `deadline`, or `default` without one."""
+  return default if deadline is None else max(0.0, deadline - time.monotonic())
+
+
 def connect(log, loan, deadline: float | None = None, name: str | None = None, wait: float | None = None):
   """Open the link over what jetlinkd lent (jetlink.comma.lending): the
   endpoint files, or on the cable the phone's next dial, which the loan
@@ -92,8 +97,9 @@ class Link:
     if self.client is not None and self.client.dead:
       self.close()
     if self.client is None:
-      wait = None if deadline is None else max(0.0, deadline - time.monotonic())
-      self.client = connect(self.log, name=self.name, loan=self._borrow(deadline), wait=wait)
+      from jetlink.comma import lending
+      self.client = connect(self.log, name=self.name, loan=self._borrow(deadline),
+                            wait=_left(deadline, lending.BORROW_TIMEOUT))
     return self.client
 
   def adopt(self, client) -> bool:
@@ -133,12 +139,11 @@ class Link:
     owner ever holds ep0, so the join loop asks again with the small model
     driving. An owner whose lender cannot listen says so in the offroad alert."""
     from jetlink.comma import lending
-    # bounded by whatever the caller has left: an early present that spends its
-    # whole budget here has nothing left to open the link with
-    timeout = lending.BORROW_TIMEOUT if deadline is None else max(0.0, deadline - time.monotonic())
     if self.loan is not None and not self.loan.closed:
       return self.loan
-    self.loan = lending.borrow(self.name, timeout=timeout)
+    # bounded by whatever the caller has left: an early present that spends its
+    # whole budget here has nothing left to open the link with
+    self.loan = lending.borrow(self.name, timeout=_left(deadline, lending.BORROW_TIMEOUT))
     if self.loan is None:
       raise TimeoutError("jetlinkd lent no link")
     return self.loan

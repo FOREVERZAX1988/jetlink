@@ -117,9 +117,17 @@ public enum LinkMedium: String, Codable, Sendable, CaseIterable {
   public var isSlow: Bool { self == .usb2 || self == .usb1 }
 
   /// What to do about a slow link, in a sentence; nil when it is fast enough.
-  public var advice: String? {
-    isSlow ? "\(title) costs about 10 ms a frame more than USB 3. Use a USB 3 cable and port." : nil
+  /// A phone's cable carries the frame as TCP over USB networking, whose USB 2
+  /// cost is estimated at 5 ms a frame (docs/iphone-app.md, not yet measured);
+  /// a host on the vendor interface pays about 10.
+  public func advice(cable: Bool) -> String? {
+    guard isSlow else { return nil }
+    let cost = cable ? "about 5 ms" : "about 10 ms"
+    return "\(title) costs \(cost) a frame more than USB 3. Use a USB 3 cable and port."
   }
+
+  /// `advice(cable:)` for a host on the vendor interface, as the Mac shows it.
+  public var advice: String? { advice(cable: false) }
 }
 
 public struct EngineEvent: Codable, Sendable, Equatable {

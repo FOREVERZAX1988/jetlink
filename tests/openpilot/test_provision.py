@@ -304,7 +304,7 @@ class TestTheLoan(OpenpilotTest):
     d.client = mock.Mock(dead=True)
     client = d.client
     d.close_link()
-    client.leave.assert_not_called()
+    client.leave.assert_called_once_with('provisioned')   # and the client says nothing over a dead link
     client.close.assert_called_once()
 
   def test_a_loan_is_opened_over(self):

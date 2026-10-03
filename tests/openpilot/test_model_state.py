@@ -15,6 +15,7 @@ code that drives.
 """
 from __future__ import annotations
 
+import contextlib
 import sys
 import tempfile
 import unittest
@@ -64,11 +65,12 @@ class FakeClient:
     self.last_output = None
     self._in_flight = []
     # frames (by seq) whose reply is not back within the hold, and the holds
-    # run() asked for
+    # end() asked for
     self.late = set()
     self.holds = []
     self.drains = 0
-    self.waiting = 0.0
+    # what a reply asked for telemetry carries, when the server has any
+    self.telemetry = None
 
   def infer_begin(self, data, packed, frame_id, reset=False, want_state=False):
     self.sent.append((np.frombuffer(bytes(data), np.uint8).copy(), np.array(packed, copy=True), frame_id, reset))
@@ -82,6 +84,7 @@ class FakeClient:
       return None
     self._in_flight.remove(seq)
     self.last_output = self.output
+    self._piggyback()
     return self.output
 
   def drain(self):
@@ -89,10 +92,12 @@ class FakeClient:
     answered, self._in_flight = len(self._in_flight), []
     if answered:
       self.last_output = self.output
+      self._piggyback()
     return answered
 
-  def waiting_for(self):
-    return self.waiting
+  def _piggyback(self):
+    if self.telemetry is not None and self.asked[-1]:
+      self.last_state = self.telemetry
 
   @property
   def unanswered(self):
@@ -136,7 +141,8 @@ class ModelStateTest(unittest.TestCase):
               {'desire_pulse': desire, 'traffic_convention': np.array([1, 0], np.float32),
                'action_t': np.array([0.1, 0.2], np.float32)})
       if i < shadow:
-        state.shadow(*args)
+        state.prepare(*args)
+        state.send()
       else:
         outs.append(state.run(*args, after_enqueue))
     return outs
@@ -179,7 +185,7 @@ class TestWire(ModelStateTest):
     summary = state.trips.summary()
     self.assertEqual(summary['frames'], 3)
     self.assertEqual(summary['over'], 0)
-    for key in ('held_s', 'p50_ms', 'p99_ms', 'max_ms', 'server_ms'):
+    for key in ('span_s', 'p50_ms', 'p99_ms', 'max_ms', 'server_ms'):
       self.assertIn(key, summary)
 
   def test_trips_summarise_the_frames_kept(self):
@@ -191,7 +197,7 @@ class TestWire(ModelStateTest):
     self.assertEqual((summary['frames'], summary['over']), (100, 1))
     self.assertEqual((summary['p50_ms'], summary['max_ms'], summary['server_ms']), (30.0, 200.0, 25.0))
     self.assertEqual(summary['p99_ms'], 30.0, 'p99 is the 99th of a hundred, as the server takes it')
-    self.assertEqual(model_state.Trips().summary(), {'frames': 0, 'over': 0, 'held': 0, 'shadowed': 0, 'held_s': 0.0})
+    self.assertEqual(model_state.Trips().summary(), {'frames': 0, 'over': 0, 'held': 0, 'shadowed': 0, 'span_s': 0.0})
 
   def test_usb_keeps_the_host_copy(self):
     _, state, _, _ = self.run_frames(STATEFUL)
@@ -237,7 +243,7 @@ class TestShadow(ModelStateTest):
       np.testing.assert_array_equal(data, warped)
     self.assertEqual(client.holds, [], 'a shadow frame waits for nothing')
     self.assertEqual(client.drains, 3, 'what came back is read before each send')
-    self.assertEqual((state.trips.shadowed, state.trips.frames), (3, 0))
+    self.assertEqual((state.trips.sent, state.trips.frames), (3, 0))
     self.assertEqual(state.trips.summary()['shadowed'], 3)
 
   def test_the_first_driving_frame_after_shadows_carries_no_reset_and_is_held_if_late(self):
@@ -246,16 +252,8 @@ class TestShadow(ModelStateTest):
     _, state, client, _ = self.run_frames(STATEFUL, n=1, client=client, shadow=2)
     self.assertEqual([f[3] for f in client.sent], [True, False, False])
     # the newest shadow reply is the output a late first frame publishes
-    self.assertTrue(state.frame_held)
     self.assertEqual(state.trips.held, 1)
-
-  def test_a_host_that_answers_nothing_is_abandoned(self):
-    client = FakeClient()
-    client.waiting = model_state.SHADOW_TIMEOUT + 0.1
-    from jetlink.transport.base import LinkError
-    with self.assertRaises(LinkError):
-      self.run_frames(STATEFUL, n=0, client=client, shadow=1)
-    self.assertEqual(client.sent, [], 'nothing more goes to a host that has gone quiet')
+    self.assertIsNone(state.behind, 'one hold is weather')
 
   def test_the_first_shadow_frames_are_timed_in_the_log(self):
     self.run_frames(STATEFUL, n=0, shadow=4)
@@ -283,7 +281,6 @@ class TestHold(ModelStateTest):
     self.assertTrue((held['plan'] == 1.0).all(), 'the frame before, again')
     self.assertTrue((after['plan'] == 2.0).all(), 'and the next frame its own')
     self.assertEqual(state.trips.held, 1)
-    self.assertFalse(state.frame_held)
     self.assertTrue(any('held' in line for line in self.log.lines('warning')))
 
   def test_the_hold_is_the_rest_of_the_frame_budget(self):
@@ -297,6 +294,46 @@ class TestHold(ModelStateTest):
     with mock.patch.object(model_state, 'HOLD_FRAME', None):
       _, _, client, _ = self.run_frames(STATEFUL, n=3)
     self.assertEqual(client.holds, [None, None, None])
+
+  def holding(self, late, n: int, **patches):
+    """`n` driven frames, the replies to `late` seqs (a predicate) too late
+    to wait for. The state, and what `behind` said after each frame."""
+    client = FakeClient()
+    client.late = {seq for seq in range(1, n + 1) if late(seq)}
+    spec = spec_for(STATEFUL)
+    warped = SimpleNamespace(data=lambda: np.zeros(np.prod(spec.warped_shape), np.uint8))
+    behind = []
+    with mock.patch.object(model_state, 'call_warp', return_value=warped), contextlib.ExitStack() as patched:
+      if patches:
+        patched.enter_context(mock.patch.multiple(model_state, **patches))
+      state = self.make(spec, client)
+      for _ in range(n):
+        self.frames(state, 1)
+        behind.append(state.behind)
+    return state, behind
+
+  def test_holds_in_a_row_say_behind(self):
+    # the first frame has nothing to hold, so it waits; the five after are held
+    state, behind = self.holding(lambda seq: True, n=1 + model_state.HOLDS_IN_A_ROW)
+    self.assertEqual(behind[:-1], [None] * model_state.HOLDS_IN_A_ROW)
+    self.assertEqual(behind[-1], f'held {model_state.HOLDS_IN_A_ROW} frames in a row')
+    self.assertEqual(state.trips.held, model_state.HOLDS_IN_A_ROW)
+
+  def test_a_frame_that_is_not_held_ends_the_run(self):
+    run = model_state.HOLDS_IN_A_ROW - 1
+    _, behind = self.holding(lambda seq: seq != 1 and seq != run + 2, n=1 + 2 * run + 1)
+    self.assertEqual(behind, [None] * len(behind))
+
+  def test_holds_spread_over_the_window_say_behind_past_the_allowance(self):
+    allowed = model_state.HOLDS_ALLOWED
+    _, behind = self.holding(lambda seq: seq % 2 == 0, n=2 * allowed + 2)   # never two in a row
+    self.assertEqual(behind[:2 * allowed + 1], [None] * (2 * allowed + 1), 'the allowance is forgiven')
+    self.assertEqual(behind[-1], f'held {allowed + 1} frames in {model_state.HOLD_WINDOW:.0f} s')
+
+  def test_holds_further_apart_than_the_window_are_weather(self):
+    # a window of nothing: every hold is the only one in it
+    _, behind = self.holding(lambda seq: seq % 2 == 0, n=4 * model_state.HOLDS_ALLOWED, HOLD_WINDOW=0.0)
+    self.assertEqual(behind, [None] * len(behind))
 
 
 class TestTheFace(ModelStateTest):
@@ -343,9 +380,14 @@ class TestTelemetry(ModelStateTest):
   modeld asked by passing a callback every second frame; with none, the model
   asks as often itself and logs what came back at 1 Hz."""
 
-  def test_without_a_callback_every_second_frame_asks(self):
-    _, _, client, _ = self.run_frames(STATEFUL, n=6)
-    self.assertEqual(client.asked, [False, True, False, True, False, True])
+  def test_without_a_callback_a_frame_asks_when_the_log_is_due(self):
+    # the log takes one a second; asking on every second frame cost nine
+    # replies in ten a JSON decode nobody read
+    client = FakeClient()
+    client.telemetry = {'gpu_temp': 51.0}
+    _, _, client, _ = self.run_frames(STATEFUL, n=6, client=client)
+    self.assertEqual(client.asked, [True, False, False, False, False, False])
+    self.assertEqual(len(self.events), 1)
 
   def test_what_came_back_is_logged_at_one_hertz(self):
     client = FakeClient()
@@ -364,7 +406,6 @@ class TestTelemetry(ModelStateTest):
     self.run_frames(STATEFUL, n=3, client=client, after_enqueue=callback)
     self.assertEqual(client.asked, [True, True, True])
     self.assertEqual(callback.call_count, 3)
-    self.assertEqual(self.events, [], "the callback's to log")
 
 
 if __name__ == '__main__':

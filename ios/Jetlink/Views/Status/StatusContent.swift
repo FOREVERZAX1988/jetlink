@@ -44,10 +44,17 @@ struct StatusContent: View {
   private var layout: some View {
     VStack(spacing: StatusContent.spacing) {
       if state.needsForeground {
-        foregroundBanner
+        banner(
+          "Keep Jetlink on Screen", "The big model stops while Jetlink is in the background.",
+          symbol: "exclamationmark.triangle.fill")
       }
-      if state.linkMedium?.isSlow == true {
-        slowLinkBanner
+      // in every arrangement: the Link tile's note sits below the fold upright
+      // and is not drawn on a phone on its side, so a USB 2 cable, hub or
+      // phone read as Connected and nothing more
+      if let medium = state.linkMedium, let advice = medium.advice(cable: true) {
+        banner(
+          "\(medium.title) Link", "\(advice) \(USBSpeedGuide.summary(for: state.deviceName))",
+          symbol: "tortoise.fill")
       }
       cards
     }
@@ -116,56 +123,24 @@ struct StatusContent: View {
     }
   }
 
-  /// Shown while the scene is not active, so it is what the person sees
-  /// when they come back to an app the system was about to suspend.
-  private var foregroundBanner: some View {
+  /// An orange banner over the cards: something the person should act on
+  /// now, such as an app the system is about to suspend or a slow link.
+  private func banner(_ title: String, _ detail: String, symbol: String) -> some View {
     Label {
       VStack(alignment: .leading, spacing: 2) {
-        Text("Keep Jetlink on Screen")
+        Text(title)
           .font(.subheadline.weight(.semibold))
-        Text("The big model stops while Jetlink is in the background.")
+        Text(detail)
           .font(.footnote)
       }
     } icon: {
-      Image(systemName: "exclamationmark.triangle.fill")
+      Image(systemName: symbol)
     }
     .foregroundStyle(.white)
     .padding(14)
     .frame(maxWidth: .infinity, alignment: .leading)
     .background(.orange, in: .rect(cornerRadius: cardCornerRadius, style: .continuous))
     .padding(.top, 8)
-  }
-
-  /// Over a USB 2 link, in every arrangement: the Link tile's note sits below
-  /// the fold upright and is not drawn on a phone on its side, so a USB 2
-  /// cable, hub or phone read as Connected and nothing more.
-  private var slowLinkBanner: some View {
-    Label {
-      VStack(alignment: .leading, spacing: 2) {
-        Text("USB 2 Link")
-          .font(.subheadline.weight(.semibold))
-        Text(StatusContent.slowLinkAdvice(for: state.deviceName))
-          .font(.footnote)
-      }
-    } icon: {
-      Image(systemName: "tortoise.fill")
-    }
-    .foregroundStyle(.white)
-    .padding(14)
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .background(.orange, in: .rect(cornerRadius: cardCornerRadius, style: .continuous))
-    .padding(.top, 8)
-  }
-
-  /// What a USB 2 link costs and where it comes from, by the kind of device.
-  /// Every hop must be USB 3 (docs/iphone-app.md); the two causes a person
-  /// can act on are the cable or hub, and the device itself.
-  static func slowLinkAdvice(for deviceName: String) -> String {
-    let frames = "Each frame takes about 5 ms longer than over USB 3."
-    if deviceName == "iPad" {
-      return "\(frames) iPad Pro, Air and mini are USB 3 with a USB 3 cable and hub; the iPad (10th generation) and iPad (A16) are USB 2."
-    }
-    return "\(frames) iPhone 15 Pro and later Pro models are USB 3 with a USB 3 cable and hub; other iPhones are USB 2."
   }
 
   private func latency(_ recent: StatsEvent, compact: Bool = false) -> some View {

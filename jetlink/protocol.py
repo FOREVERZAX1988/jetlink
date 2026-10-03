@@ -83,6 +83,15 @@ class Msg(IntEnum):
                        # ERROR unknown_message, which the client discards (JetlinkClient.leave)
 
 
+# Why a client stops using the link, LEAVE's json 'reason' (JetlinkClient.leave);
+# the server logs each in words (Session.onLeave) and anything else verbatim
+LEAVE_BEHIND = 'behind'            # modeld fell behind the large model
+LEAVE_LOST = 'lost'                # the comma lost the link, said when it can still carry it
+LEAVE_STOPPED = 'stopped'          # modeld stopped
+LEAVE_PROVISIONED = 'provisioned'  # the provisioning run finished
+LEAVE_REASONS = (LEAVE_BEHIND, LEAVE_LOST, LEAVE_STOPPED, LEAVE_PROVISIONED)
+
+
 class Flag(IntEnum):
   RESET_QUEUES = 1 << 0   # on INFER_REQ: warm-start, clear history before this frame
   WANT_STATE = 1 << 1     # on INFER_REQ: append telemetry json to the response.

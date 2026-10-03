@@ -288,12 +288,13 @@ def test_frames_sent_without_waiting_are_answered_in_order_and_drained(queued):
   outs = [queued.infer(w, p, frame_id=i + 5) for i, (w, p) in enumerate(frames[4:])]
   for got, w in zip(outs, want[4:], strict=True):
     close_enough(outside(got, spec), outside(w, spec), atol=0.02)
-  # and a frame given up on is read quietly by the next one's wait
+  # and a frame given up on is read quietly by the next one's wait. A hold
+  # of 0 still takes a reply already in: with the tiny model answering in
+  # under a millisecond, either outcome is right here
   w, p = queued_frames(1, seed=4)[0]
   seq = queued.infer_begin(w, p, frame_id=7)
   held = queued.infer_end(seq, hold=0.0)
-  if held is None:
-    assert queued.unanswered == 1 and not queued.dead
+  assert queued.unanswered == (1 if held is None else 0) and not queued.dead
   out = queued.infer(w, p, frame_id=8)
   assert queued.unanswered == 0
   close_enough(outside(out, spec), outside(queued_reference(frames + [(w, p), (w, p)])[7], spec), atol=0.02)

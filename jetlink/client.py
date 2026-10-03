@@ -25,6 +25,7 @@ import time
 from collections import deque
 from collections.abc import Callable
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 
@@ -55,6 +56,14 @@ StopFn = Callable[[], bool]
 # set, from what infer_end returns. The server keeps the hidden state, so ask for
 # it on those runs, or the log would carry zeros where it goes.
 RAW_PRED_ENV = 'SEND_RAW_PRED'
+
+
+class Sent(NamedTuple):
+  """A frame sent and not yet answered."""
+  seq: int
+  frame_id: int
+  flags: int
+  sent_at: float
 
 
 class EngineMissing(LinkError):
@@ -91,14 +100,14 @@ class JetlinkClient:
     self.last_timings = (0, 0, 0)  # gpu_us, queue_us, total_us, server-side
     self.last_state: dict | None = None  # most recent piggybacked telemetry
     # the newest model output read off the link, whichever call read it: what
-    # a frame whose own reply is late publishes again (JetlinkModelState.run)
+    # a frame whose own reply is late publishes again (JetlinkModelState.end)
     self.last_output: np.ndarray | None = None
-    # frames sent and not yet answered, oldest first: (seq, frame_id, flags,
-    # sent at). More than one while the frames go out without being waited
-    # for (drain), or after a reply a frame gave up on (infer_end with hold)
-    self._in_flight: deque[tuple[int, int, int, float]] = deque()
+    # frames sent and not yet answered, oldest first. More than one while
+    # frames go out without being waited for (drain), or after a reply a
+    # frame gave up on (infer_end with hold)
+    self._in_flight: deque[Sent] = deque()
     # seqs sent with no reply wanted (leave): an ERROR to one is not this link's
-    self._unanswered: set[int] = set()
+    self._no_reply_wanted: set[int] = set()
 
   # -- construction ---------------------------------------------------------
 
@@ -175,27 +184,32 @@ class JetlinkClient:
         self._engine_state = state
     elif msg.msg_type == P.Msg.ERROR:
       e = json.loads(bytes(msg.payload))
-      if msg.seq in self._unanswered:
+      if msg.seq in self._no_reply_wanted:
         # an older server answering a message it does not know; see leave()
-        self._unanswered.discard(msg.seq)
+        self._no_reply_wanted.discard(msg.seq)
         log.info("the server did not take seq %d (%s: %s)", msg.seq, e.get('error'), e.get('detail'))
         return
       raise LinkError(f"server error: {e.get('error')}: {e.get('detail')}")
 
   def _expect(self, msg_type: int, seq: int, timeout: float | None) -> Message:
-    """Wait for one specific reply, servicing anything unsolicited on the way."""
+    """Wait for one specific reply, servicing anything unsolicited on the way.
+    A timeout of 0 still takes a reply that has already arrived: one read
+    that does not wait, as the transport does it."""
     end = None if timeout is None else time.monotonic() + timeout
+    read_once_late = False
     while True:
       remaining = None if end is None else end - time.monotonic()
       if remaining is not None and remaining <= 0:
-        raise LinkTimeout(f'timed out waiting for message type={msg_type} seq={seq}')
+        if read_once_late:
+          raise LinkTimeout(f'timed out waiting for {_name(P.Msg, msg_type)} seq={seq}')
+        read_once_late, remaining = True, 0.0
       msg = self.t.recv(timeout=remaining)
       if msg.msg_type == msg_type and msg.seq == seq:
         return msg
       if msg.msg_type in (P.Msg.PROGRESS, P.Msg.ENGINE_RESP, P.Msg.ERROR):
         self._dispatch(msg)
         continue
-      if msg.msg_type == P.Msg.INFER_RESP and any(f[0] == msg.seq for f in self._in_flight):
+      if msg.msg_type == P.Msg.INFER_RESP and any(f.seq == msg.seq for f in self._in_flight):
         # the answer to a frame nobody waited for, or one a frame gave up
         # waiting for: read like any other, then on to what is wanted
         self._take_reply(msg)
@@ -248,17 +262,19 @@ class JetlinkClient:
     return json.loads(bytes(self._expect(P.Msg.SHUTDOWN_RESP, seq, timeout).payload))
 
   def leave(self, reason: str, timeout: float = 0.5, **measured) -> None:
-    """Say why this client stops using the link, and what it measured over it
-    (JetlinkModelState.trips): the server logs both next to its own numbers,
-    which are the half the comma cannot see, and the other way round. No reply
-    is read, and the connection stays: a later hello starts a new session over
-    it. An older server answers ERROR unknown_message, which _dispatch discards
-    by this seq. Never raises; a send that fails leaves the link as dead as it
-    found it."""
+    """Say why this client stops using the link (protocol.LEAVE_REASONS), and
+    what it measured over it (JetlinkModelState.trips): the server logs both
+    next to its own numbers, which are the half the comma cannot see, and the
+    other way round. No reply is read, and the connection stays: a later hello
+    starts a new session over it. An older server answers ERROR
+    unknown_message, which _dispatch discards by this seq. Never raises, and
+    says nothing over a dead link; a send that fails leaves it dead."""
+    if self.dead:
+      return
     seq = self._next_seq()
-    self._unanswered.add(seq)
+    self._no_reply_wanted.add(seq)
     try:
-      self.t.send(P.Msg.LEAVE, seq, (json.dumps({'reason': reason, **measured}).encode(),), timeout=timeout)
+      self.t.send_json(P.Msg.LEAVE, seq, {'reason': reason, **measured}, timeout=timeout)
     except LinkError as e:
       self.dead = True
       log.warning("could not say why the link is left (%s)", e)
@@ -367,20 +383,24 @@ class JetlinkClient:
 
     Split from infer_end so the caller can work while the Jetson is busy;
     openpilot publishes chestnutState in that window. A frame nobody calls
-    infer_end for is read by the next drain or infer_end, and keeps the
-    host's model running while the small model drives (JetlinkModelState.shadow).
+    infer_end for is read by the next drain or infer_end. A host that has
+    answered none of them for the client's deadline is gone, not slow, and
+    the link is done here, before another frame goes out to it.
     """
     if self.spec is None:
       raise LinkError("ensure_engine() first")
     if self.dead:
       raise LinkError("link previously failed")
+    if self._in_flight and time.monotonic() - self._in_flight[0].sent_at > self.deadline:
+      self.dead = True
+      raise LinkError(f"no answer to {len(self._in_flight)} frames in {self.deadline:.1f}s; link abandoned")
     warped = _as_bytes(warped, self.spec.warped_nbytes, 'warped')
     packed = _as_bytes(packed, self.spec.packed_nbytes, 'packed')
     seq = self._next_seq()
     flags = ((P.Flag.RESET_QUEUES if reset else 0) | (P.Flag.WANT_STATE if want_state else 0)
              | (P.Flag.WANT_HIDDEN if self.want_hidden else 0))
     try:
-      self._in_flight.append((seq, frame_id, flags, time.monotonic()))
+      self._in_flight.append(Sent(seq, frame_id, flags, time.monotonic()))
       self.t.send(P.Msg.INFER_REQ, seq, (P.pack_infer_req(frame_id, flags), warped, packed),
                   timeout=self.deadline if deadline is None else deadline)
     except LinkError:
@@ -398,22 +418,19 @@ class JetlinkClient:
     off the stream by whatever reads it next. Another frame can go out
     meanwhile, so the camera frame is not dropped waiting for this one.
     """
-    sent_at = next((f[3] for f in self._in_flight if f[0] == seq), None)
-    if sent_at is None:
+    sent = next((f for f in self._in_flight if f.seq == seq), None)
+    if sent is None:
       raise LinkError(f'frame seq {seq} was not sent, or has been read already')
+    failing = hold is None
+    if failing:
+      hold = (self.deadline if deadline is None else deadline) - (time.monotonic() - sent.sent_at)
     try:
-      if hold is not None:
-        try:
-          msg = self._expect(P.Msg.INFER_RESP, seq, max(0.0, hold))
-        except LinkTimeout:
-          return None
-      else:
-        budget = self.deadline if deadline is None else deadline
-        remaining = budget - (time.monotonic() - sent_at)
-        if remaining <= 0:
-          raise LinkTimeout('frame deadline elapsed during send')
-        msg = self._expect(P.Msg.INFER_RESP, seq, remaining)
+      if failing and hold <= 0:
+        raise LinkTimeout('frame deadline elapsed during send')
+      msg = self._expect(P.Msg.INFER_RESP, seq, hold)
     except LinkTimeout as e:
+      if not failing:
+        return None
       self.dead = True
       raise LinkError(f"no answer for frame in {self.deadline:.1f}s; link abandoned") from e
     except LinkError:
@@ -427,11 +444,11 @@ class JetlinkClient:
     last_output, last_timings and last_state, as infer_end keeps it; a frame
     the server failed is this link's failure, as it would have been there."""
     answered = 0
-    while True:
+    while self._in_flight:   # with nothing out there is nothing to read for
       try:
         msg = self.t.recv(timeout=0)
       except LinkTimeout:
-        return answered
+        break
       except LinkError:
         self.dead = True
         raise
@@ -440,6 +457,7 @@ class JetlinkClient:
         answered += 1
       else:
         self._dispatch(msg)
+    return answered
 
   @property
   def unanswered(self) -> int:
@@ -450,17 +468,17 @@ class JetlinkClient:
     """How long the oldest frame still unanswered has been out, in seconds;
     0 with none. A host that has gone quiet shows here before any frame
     waits on it."""
-    return time.monotonic() - self._in_flight[0][3] if self._in_flight else 0.0
+    return time.monotonic() - self._in_flight[0].sent_at if self._in_flight else 0.0
 
   def _take_reply(self, msg: Message) -> np.ndarray:
     """One INFER_RESP off the stream: checked against the frame it answers,
     its timings and telemetry kept, the frame and any older one taken out of
     flight. Raises, with the link dead, on anything but a good answer."""
-    while self._in_flight and self._in_flight[0][0] != msg.seq:
+    while self._in_flight and self._in_flight[0].seq != msg.seq:
       # an older frame the server never answered: it answers in order, and a
       # frame that fell out of its session (a hello between) is not coming
       skipped = self._in_flight.popleft()
-      log.warning('frame %d (seq %d) was never answered', skipped[1], skipped[0])
+      log.warning('frame %d (seq %d) was never answered', skipped.frame_id, skipped.seq)
     if not self._in_flight:
       self.dead = True
       raise LinkError(f'inference response seq {msg.seq} answers no frame sent')

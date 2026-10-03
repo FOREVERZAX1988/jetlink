@@ -223,10 +223,11 @@ final class Session: @unchecked Sendable {
     if adopt(helloMedium(message)), announced {
       onLink?(linkEvent, false)
     }
-    if !client.isEmpty && who != client {
-      log.info("session handed from \(client) to \(who.isEmpty ? "an unnamed client" : who)")
-    }
+    let previous = client
     client = who
+    if !previous.isEmpty && previous != client {
+      log.info("session handed from \(previous) to \(self.who)")
+    }
     greeted = true
     lastSeq = message.seq
     request = nil
@@ -234,7 +235,7 @@ final class Session: @unchecked Sendable {
     host.lock.lock()
     host.loaded?.staging.newClient()
     host.lock.unlock()
-    log.info("hello from \(who.isEmpty ? "an unnamed client" : who) (seq \(message.seq))")
+    log.info("hello from \(self.who) (seq \(message.seq))")
   }
 
   private func onHello(_ message: Message) throws {
@@ -509,19 +510,18 @@ final class Session: @unchecked Sendable {
   private func onLeave(_ message: Message) {
     let d = JSONLine.decode(message.payload) ?? [:]
     let reason: String
-    switch d["reason"] as? String {
-    case "behind": reason = "modeld fell behind the large model"
-    case "lost": reason = "the comma lost the link"
-    case "stopped": reason = "modeld stopped"
-    case "provisioned": reason = "the provisioning run finished"
-    case let other?: reason = other
-    case nil: reason = "no reason given"
+    switch (d["reason"] as? String).flatMap(LeaveReason.init(rawValue:)) {
+    case .behind: reason = "modeld fell behind the large model"
+    case .lost: reason = "the comma lost the link"
+    case .stopped: reason = "modeld stopped"
+    case .provisioned: reason = "the provisioning run finished"
+    case nil: reason = d["reason"] as? String ?? "no reason given"
     }
     var line = "\(who) is leaving: \(reason)"
     func number(_ key: String) -> Double? { (d[key] as? NSNumber)?.doubleValue }
     if let frames = number("frames") {
       line += "; the comma measured \(Int(frames)) frames"
-      if let held = number("held_s") { line += " in \(held) s" }
+      if let span = number("span_s") { line += " in \(span) s" }
       if let p50 = number("p50_ms"), let p99 = number("p99_ms"), let max = number("max_ms") {
         line += ": whole frame p50 \(p50) p99 \(p99) max \(max) ms"
       }
@@ -554,6 +554,12 @@ final class Session: @unchecked Sendable {
 /// The frames one session served: a count, the slow ones, and a 1 ms
 /// histogram of the server's total, so p50 and p99 cost a bucket increment a
 /// frame and nothing on the hot path allocates.
+/// Why a comma stops using the link, as its LEAVE says it: the Python's
+/// protocol.LEAVE_REASONS, pinned as Pinned.leaveReasons.
+enum LeaveReason: String, CaseIterable {
+  case behind, lost, stopped, provisioned
+}
+
 struct SessionTrips {
   private var buckets = [UInt32](repeating: 0, count: 1001)
   private var count = 0

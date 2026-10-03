@@ -9,7 +9,7 @@ Jetlink v0.8.1
 
 **Driving, every accelerator**
 * **Warm at the switch:** The big model runs every frame from the moment it joins, while the small model drives. Switching costs an ordinary frame, not a 110 to 120 ms first one.
-* **Late frames held, not dropped:** A reply that misses the frame keeps the previous plan for one frame. A phone with an occasional slow frame no longer drops camera frames toward a hand-back. Four late frames in a row, or more than twenty in ten seconds, still hand back.
+* **Late frames held, not dropped:** A reply that misses the frame keeps the previous plan for one frame. A phone with an occasional slow frame no longer drops camera frames toward a hand-back. Five late frames in a row, or more than twenty in ten seconds, still hand back.
 * **Update the comma:** zoompilot's `jetson-trt` branch pins Jetlink v0.8.1.
 
 Jetlink v0.8.0

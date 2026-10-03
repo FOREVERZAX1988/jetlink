@@ -19,14 +19,12 @@ import numpy as np
 from jetlink import protocol as P
 from jetlink.client import JetlinkClient
 from jetlink.transport.base import LinkError
-from jetlink.transport.tcp import TcpTransport
-from tests.test_protocol import _spec
+from tests.test_protocol import _spec, make_pair, reply
 
 
 class SocketPairTest(unittest.TestCase):
   def setUp(self):
-    a, b = socket.socketpair()
-    self.ours, self.peer = TcpTransport(a), TcpTransport(b)
+    self.ours, self.peer = make_pair()
     self.addCleanup(self.ours.close)
     self.addCleanup(self.peer.close)
     self.client = JetlinkClient(self.ours)
@@ -43,6 +41,12 @@ class SocketPairTest(unittest.TestCase):
 
 
 class TheLeave(SocketPairTest):
+  def test_a_dead_link_carries_no_leave(self):
+    self.client.dead = True
+    self.client.leave('lost')
+    with self.assertRaises(LinkError):
+      self.peer.recv(timeout=0.2)
+
   def test_it_says_why_with_what_was_measured_and_wants_no_answer(self):
     self.client.leave('behind', frames=3, p50_ms=41.2)
     msg = self.peer.recv(timeout=1.0)
@@ -99,7 +103,9 @@ class FramesInFlight(SocketPairTest):
     msg = self.peer.recv(timeout=2.0)
     self.assertEqual(msg.msg_type, P.Msg.INFER_REQ)
     frame_id = P.unpack_infer_req(msg.payload)[0]
-    payload = P.pack_infer_resp(frame_id, status, 0, 0, 0) + np.full(self.client.spec.reply_nelem, frame_id, np.float32).tobytes()
+    payload = reply(np.full(self.client.spec.reply_nelem, frame_id, np.float32), frame_id=frame_id)
+    if status != P.Status.OK:
+      payload = P.pack_infer_resp(frame_id, status, 0, 0, 0) + payload[P.INFER_RESP_SIZE:]
     self.peer.send(P.Msg.INFER_RESP, msg.seq, (payload,))
 
   def test_a_drain_takes_what_has_arrived_and_waits_for_nothing(self):
@@ -126,8 +132,7 @@ class FramesInFlight(SocketPairTest):
     self.assertGreater(self.client.waiting_for(), 0.0)
     # the late answer lands, then the next frame goes out and is answered
     frame_id = P.unpack_infer_req(request.payload)[0]
-    self.peer.send(P.Msg.INFER_RESP, request.seq,
-                   (P.pack_infer_resp(frame_id, P.Status.OK, 0, 0, 0) + np.ones(self.client.spec.reply_nelem, np.float32).tobytes(),))
+    self.peer.send(P.Msg.INFER_RESP, request.seq, (reply(np.ones(self.client.spec.reply_nelem), frame_id=frame_id),))
     seq2 = self.send(2)
     self.answer()
     with self.assertNoLogs('jetlink.client', level='WARNING'):
@@ -140,6 +145,17 @@ class FramesInFlight(SocketPairTest):
     time.sleep(0.02)
     self.assertGreater(self.client.waiting_for(), 0.015)
     self.assertEqual(self.client.drain(), 0)
+
+  def test_a_host_that_answers_nothing_for_the_deadline_fails_the_link_before_the_next_frame(self):
+    # whichever model is driving: frames keep going out while the small one
+    # does, so a quiet host shows here, not in a wait
+    self.client.deadline = 0.05
+    self.send(1)
+    time.sleep(0.06)
+    with self.assertRaises(LinkError) as quiet:
+      self.send(2)
+    self.assertIn('no answer to 1 frames', str(quiet.exception))
+    self.assertTrue(self.client.dead)
 
   def test_a_frame_the_server_failed_fails_the_link_when_drained(self):
     self.send(1)

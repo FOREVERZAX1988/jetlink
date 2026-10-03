@@ -150,10 +150,10 @@ bench tools). There is one version: update the comma and Jetlink together.
   error, and the comma says hello again.
 - **Late replies.** With the big model driving, a reply not back 46 ms into
   the frame is not waited for: the comma publishes the previous frame's
-  output again and reads the late reply with the next frame's. Four of those
+  output again and reads the late reply with the next frame's. Five of those
   in a row, or more than twenty in ten seconds, hand the drive back to the
-  small model (`behind` in the leave); a quiet host is found within 0.4 s
-  while the small model drives (`lost`).
+  small model (`behind` in the leave). A host that answers nothing for 0.2 s
+  has lost the link, whichever model is driving (`lost`).
 - **INFER_REQ.** The comma's warped camera images (uint8) and 12 floats
   (`desire`, `traffic_convention`, `action_t`): 393,304 bytes with the header,
   409,600 over USB with the comma's padding.

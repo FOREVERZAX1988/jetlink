@@ -97,15 +97,14 @@ class Loan:
   back, and a modeld that crashed hands it back the same way.
   """
 
-  def __init__(self, conn: socket.socket, buf: bytearray, mount: str, udc: str,
-               cable: bool = False, name: str = 'modeld'):
+  def __init__(self, conn: socket.socket, buf: bytearray, mount: str, udc: str, name: str = 'modeld'):
     self.conn = conn
     self.mount = mount
     self.udc = udc
     self.name = name
     # a phone is the host: the link is its dial, taken by accept, and the
-    # endpoint files are left alone
-    self.cable = cable
+    # endpoint files are left alone. The owner's answer says (_take)
+    self.cable = False
     # the cable listener, bound on the first accept and kept for the loan
     self._srv: socket.socket | None = None
     self.bound: tuple | None = None
@@ -188,21 +187,11 @@ class Loan:
         time.sleep(RETRY)
         continue
       self._srv, self.bound = srv, srv.getsockname()
-    conn = None
     while True:
-      wait = 0.0 if conn is not None else max(0.0, deadline - time.monotonic())
-      if select.select([self._srv], [], [], wait)[0]:
-        try:
-          newer, _ = self._srv.accept()
-        except (BlockingIOError, InterruptedError):
-          newer = None
-        if newer is not None:
-          _close(conn)
-          conn = newer
-          continue
-      if conn is not None:
-        conn.setblocking(True)
-        return conn
+      if select.select([self._srv], [], [], max(0.0, deadline - time.monotonic()))[0]:
+        conn = newest_dial(self._srv)
+        if conn is not None:
+          return conn
       if time.monotonic() >= deadline:
         raise TimeoutError(f'no phone dialed in {timeout:.0f} s')
 
@@ -287,16 +276,28 @@ CABLE_BIND_BACKOFF = 5.0
 def _listen() -> socket.socket:
   """A listener on CABLE_ADDR, non-blocking, or OSError: the address is
   usb0's, which may not exist yet, or another process still has it."""
-  srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-  try:
-    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    srv.bind(gadget.CABLE_ADDR)
-    srv.listen(2)
-    srv.setblocking(False)
-  except OSError:
-    srv.close()
-    raise
+  from jetlink.transport.tcp import TcpTransport
+  srv = TcpTransport.listen(*gadget.CABLE_ADDR, backlog=2)
+  srv.setblocking(False)
   return srv
+
+
+def newest_dial(srv: socket.socket) -> socket.socket | None:
+  """Every dial waiting on the non-blocking listener `srv`, the newest kept
+  and the others closed: the app may have restarted behind an older one.
+  None with nobody waiting. The dial comes back blocking, as a transport
+  wants it."""
+  conn = None
+  while True:
+    try:
+      newer, _ = srv.accept()
+    except (BlockingIOError, InterruptedError):
+      break
+    _close(conn)
+    conn = newer
+  if conn is not None:
+    conn.setblocking(True)
+  return conn
 
 
 class CableListener:
@@ -365,16 +366,15 @@ class CableListener:
       return None
     self._drop_if_dead()
     try:
-      conn, addr = self._srv.accept()
-    except (BlockingIOError, InterruptedError):
-      return None
+      conn = newest_dial(self._srv)
     except OSError:
       gadget.log.exception("jetlink: the cable listener failed")
       return None
-    conn.setblocking(True)
+    if conn is None:
+      return None
     with self._lock:
       old, self._sock = self._sock, conn
-      self.peer = str(addr[0])
+      self.peer = str(conn.getpeername()[0])
       self.news, self.redial_expected = not self.redial_expected, False
     _close(old)
     return self.peer
@@ -394,15 +394,9 @@ class CableListener:
     itself: the port is free when the owner's yes lands, and the phone dials
     again in a moment, to the borrower. Its dial after the loan is the same
     phone coming back, not news. From the lender's thread."""
-    with self._lock:
-      sock, self._sock = self._sock, None
-      srv, self._srv = self._srv, None
-      self.peer = None
-      self.bound = None
-      self.next_open = 0.0   # listen again on the first step after the loan ends
-      self.redial_expected = sock is not None
-    _close(sock)
-    _close(srv)
+    self.release(expect_redial=True)
+    self._stop_listening()
+    self.next_open = 0.0   # listen again on the first step after the loan ends
 
   def release(self, expect_redial: bool = False) -> None:
     """Close the held dial. The phone dials again and the next accept
@@ -417,8 +411,12 @@ class CableListener:
 
   def close(self) -> None:
     self.release()
-    srv, self._srv = self._srv, None
-    self.bound = None
+    self._stop_listening()
+
+  def _stop_listening(self) -> None:
+    with self._lock:
+      srv, self._srv = self._srv, None
+      self.bound = None
     _close(srv)
 
 

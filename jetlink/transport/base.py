@@ -87,9 +87,9 @@ class Transport(ABC):
   def close(self) -> None:
     ...
 
-  def send_json(self, msg_type: int, seq: int, obj, flags: int = 0) -> None:
+  def send_json(self, msg_type: int, seq: int, obj, flags: int = 0, timeout: float | None = None) -> None:
     import json
-    self.send(msg_type, seq, (json.dumps(obj).encode(),), flags)
+    self.send(msg_type, seq, (json.dumps(obj).encode(),), flags, timeout)
 
   @property
   def lendable(self) -> bool:

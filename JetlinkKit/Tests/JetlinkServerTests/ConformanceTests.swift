@@ -90,6 +90,7 @@ struct PinnedConstantTests {
     #expect(Wire.maxMessage == Pinned.maxMessage)
     #expect(Wire.inferReqSize == Pinned.inferReqSize)
     #expect(Wire.inferRespSize == Pinned.inferRespSize)
+    #expect(LeaveReason.allCases.map(\.rawValue) == Pinned.leaveReasons)
     #expect(Wire.defaultPort == Pinned.defaultPort)
   }
 

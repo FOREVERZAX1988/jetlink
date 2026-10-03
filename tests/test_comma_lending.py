@@ -296,15 +296,12 @@ class TheCable(LendingTest):
     # the owner was listening and holding the phone's dial; both go, and the
     # borrower binds the same address. The phone, hung up on, dials again
     listener = self.listener()
-    phone = self.dial(listener)
+    self.dial(listener)
     bound = listener.bound[:2]
     with mock.patch.object(lending.gadget, 'CABLE_ADDR', bound):
       self.lender(vacate=listener.vacate)
       loan = self.take()
-      assert not listener.listening and not listener.held
-      assert listener.redial_expected, 'the next dial is the same phone coming back'
-      phone.settimeout(3.0)
-      assert phone.recv(1) == b''
+      assert not listener.listening, 'the owner still listens'   # what vacate does is the listener's test
       t, got = self.accepting(loan)
       assert loan.bound[:2] == bound, 'the borrower did not get the same address'
       self.phone(loan)
