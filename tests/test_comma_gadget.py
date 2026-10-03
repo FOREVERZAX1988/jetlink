@@ -160,6 +160,19 @@ class TestTheTwoGadgets(unittest.TestCase):
       self.assertTrue(gadget.built_for_ios())
 
 
+  def test_another_bound_gadget_is_named(self):
+    configfs = Path(tempfile.mkdtemp())
+    ours, adb = configfs / 'jetlink', configfs / 'g1'
+    for g in (ours, adb):
+      g.mkdir()
+      (g / 'UDC').write_text('\n')
+    with unittest.mock.patch.object(gadget, 'GADGET_PATH', ours):
+      self.assertIsNone(gadget.other_gadget())
+      (ours / 'UDC').write_text('a600000.dwc3\n')
+      self.assertIsNone(gadget.other_gadget())
+      (adb / 'UDC').write_text('a600000.dwc3\n')
+      self.assertEqual(gadget.other_gadget(), 'g1')
+
 class TestGadgetSetup(unittest.TestCase):
   """The owner creates the gadget, and brings its network up after a bind,
   through the root script."""

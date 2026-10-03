@@ -260,6 +260,16 @@ def bound_udc() -> str | None:
   return read(GADGET_PATH / "UDC") or None
 
 
+def other_gadget() -> str | None:
+  """Another gadget bound to a device controller, by name: on a comma, AGNOS's
+  ADB gadget (g1) while ADB is on. jetlink-root.sh refuses to take the
+  controller from it."""
+  for udc in GADGET_PATH.parent.glob("*/UDC"):
+    if udc.parent != GADGET_PATH and read(udc):
+      return udc.parent.name
+  return None
+
+
 def udc_state() -> str | None:
   """What the device controller says about the bus, or None if we are unbound.
 

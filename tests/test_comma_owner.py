@@ -985,6 +985,19 @@ class TestSwitchingMode(OwnerTest):
     self.assertEqual(self.setup_gadget.call_count, 2)
     self.assertTrue(o.built_ios)
 
+  def test_a_controller_another_gadget_holds_is_tried_again_in_seconds(self):
+    # ADB on: AGNOS's gadget holds the controller until openpilot turns it off
+    self.setup_gadget.return_value = False
+    o = self.switched()
+    with mock.patch.object(owner, 'GADGET_SETUP_BACKOFF', 1e9):
+      with mock.patch.object(gadget, 'other_gadget', return_value='g1'):
+        o.step()
+      self.assertLessEqual(o.next_gadget_attempt - time.monotonic(), owner.GADGET_HELD_RETRY)
+      with mock.patch.object(gadget, 'other_gadget', return_value=None):
+        o.next_gadget_attempt = 0.0
+        o.step()
+      self.assertGreater(o.next_gadget_attempt - time.monotonic(), owner.GADGET_HELD_RETRY)
+
   def test_entering_ios_parked_a_run_of_ours_is_stopped_not_waited_for(self):
     # a run can sit in a build for half an hour; it is ours to stop, and its
     # loan ends as it exits

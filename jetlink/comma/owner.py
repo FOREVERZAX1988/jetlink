@@ -66,6 +66,9 @@ SETTLE_TIMEOUT = 10.0
 LEASE_SETTLE = 4.0
 RECONNECT_BACKOFF = 5.0
 GADGET_SETUP_BACKOFF = 60.0
+# a build refused because another gadget holds the controller: the host turns
+# that one off itself (openpilot's ADB toggle with the link on), within seconds
+GADGET_HELD_RETRY = 2.0
 # between attempts to bring the gadget's network interface up after a bind
 NET_BACKOFF = 5.0
 # between attempts to listen for borrowers after one failed
@@ -325,13 +328,15 @@ class Owner:
     """Set the gadget up for USB or iOS. A failure backs off, since the script
     is sudo, configfs and for iOS the network; a success does not, or a switch
     just after a build would wait out the backoff. The backoff is the failed
-    mode's: a half-built iOS gadget never delays the way back to USB."""
+    mode's: a half-built iOS gadget never delays the way back to USB, and a
+    controller another gadget holds is tried again in seconds."""
     now = time.monotonic()
     if now < self.next_gadget_attempt and ios == self.failed_ios:
       return False
     if not gadget.setup_gadget(ios):
       self.failed_ios = ios
-      self.next_gadget_attempt = now + GADGET_SETUP_BACKOFF
+      held = gadget.other_gadget() is not None
+      self.next_gadget_attempt = now + (GADGET_HELD_RETRY if held else GADGET_SETUP_BACKOFF)
       return False
     self.failed_ios = None
     self.built_ios = ios
