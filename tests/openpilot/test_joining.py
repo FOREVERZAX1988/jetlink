@@ -414,10 +414,10 @@ class JoiningTest(JoiningBase):
     self.assertEqual(s._drops, 2)
     self._wait_reported(s, 'waiting for the accelerator; link dropped 2 times this drive, check the USB cable')
 
-  def test_a_lag_demote_says_why_over_the_live_link_before_closing_it(self):
+  def test_a_lag_demote_says_why_over_the_live_link(self):
     # the phone's log carried no reason and none of the comma's numbers: a
     # session there was the big model's time plus the backoff, and nothing
-    # said which. The leave goes first, with what the comma measured
+    # said which. The leave carries what the comma measured
     s = self._state()
     self._wait_joined(s)
     s._engaged = False
@@ -427,11 +427,31 @@ class JoiningTest(JoiningBase):
     s.frame_drop_ratio = joining.DROP_LIMIT * 2
     self.assertEqual(self._run(s), {'from': 'small'})
     for _ in range(200):
-      if self.big.closed:
+      if self.big.client.leave.called:
         break
       time.sleep(0.01)
-    self.assertTrue(self.big.closed)
     self.big.client.leave.assert_called_once_with('behind', drops=0, lags=1, frames=7, p50_ms=41.5)
+
+  def test_a_lag_demote_keeps_a_live_link_for_the_next_attempt(self):
+    # the next attempt is a hello and a model request over the same
+    # connection: no reconnect, and on a phone's cable no redial. The link is
+    # closed only when it is dead
+    s = self._state()
+    self._wait_joined(s)
+    s._engaged = False
+    self._run(s)
+    self.big.client = mock.Mock(dead=False)
+    s.frame_drop_ratio = joining.DROP_LIMIT * 2
+    with mock.patch.object(joining, 'REJOIN_DELAY_QUICK', 0.05):
+      self.assertEqual(self._run(s), {'from': 'small'})
+      for _ in range(200):
+        if self.connect_calls > 1:
+          break
+        time.sleep(0.01)
+    self.assertGreater(self.connect_calls, 1)
+    self.assertFalse(self.big.closed, 'a live link was closed')
+    self.big.client.leave.assert_called_once()
+    self.big.client.close.assert_not_called()
 
   def test_a_lost_link_cannot_carry_a_leave(self):
     s = self._state()
@@ -494,8 +514,8 @@ class JoiningTest(JoiningBase):
     self._wait_joined(s)
     s._engaged = False
     self.assertEqual(self._run(s), {'from': 'small'})
-    # Not straight back onto the link: the next attempt waits REJOIN_DELAY.
-    self.assertGreater(s._rejoin_at, time.monotonic() + 1.0)
+    # Not straight back onto the link: the next attempt waits REJOIN_DELAY_QUICK.
+    self.assertGreater(s._rejoin_at, time.monotonic() + 0.5)
     self.assertFalse(s.chestnut)
     self.assertEqual(s.big_model_state, 'retrying')
 
@@ -534,16 +554,18 @@ class JoiningTest(JoiningBase):
       self.assertTrue(s.chestnut)
 
   def test_failures_back_off_and_a_stable_join_starts_over(self):
-    # A link that dies on its first frame every time used to cost a swap, a
-    # demote and a chime every REJOIN_DELAY for the drive.
+    # A demote is mostly one late frame: the first few are retried in a
+    # second. A link that dies on its first frame every time used to cost a
+    # swap, a demote and a chime every REJOIN_DELAY for the drive, so a streak
+    # past QUICK_RETRIES doubles as before.
     s = self._state()
     s._joined_at = 0.0
     delays = []
-    for _ in range(5):
+    for _ in range(8):
       t = time.monotonic()
       s._back_off()
       delays.append(round(s._rejoin_at - t))
-    self.assertEqual(delays, [5, 10, 20, 40, 60])
+    self.assertEqual(delays, [1, 1, 1, 5, 10, 20, 40, 60])
 
     # A join that held is not that link, and must not inherit its delay: a
     # link that ran for minutes and then went is a USB drop, and the host
@@ -553,9 +575,10 @@ class JoiningTest(JoiningBase):
     s._back_off()
     self.assertEqual(round(s._rejoin_at - t), round(REJOIN_DELAY_QUICK))
     self.assertEqual(s._failures, 1)
-    # and a failure on its heels is the second rung, not the first again
-    s._back_off()
-    self.assertEqual(round(s._rejoin_at - time.monotonic()), 10)
+    # and failures on its heels climb the same rungs
+    for _ in range(joining.QUICK_RETRIES):
+      s._back_off()
+    self.assertEqual(round(s._rejoin_at - time.monotonic()), 5)
 
   def test_small_model_failure_is_modelds(self):
     s = self._state()
@@ -923,6 +946,8 @@ class ReplugTest(JoiningBase):
     self.s._engaged = False
     self._run(self.s)
     self.assertTrue(self.s.chestnut)
+    # past the quick retries: the shortcut matters once the backoff is long
+    self.s._failures = joining.QUICK_RETRIES
 
   def lose_the_link(self):
     self.big.raises = RuntimeError('host dropped the gadget configuration (udc: not attached)')

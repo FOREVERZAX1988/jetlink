@@ -45,6 +45,12 @@ STABLE_SECONDS = 60.0
 # drop, and the host re-enumerates a rebound gadget in under a second. The
 # rest of the old delay was the driver's time, not the Jetson's
 REJOIN_DELAY_QUICK = 1.0
+# failures in a streak retried that quickly before the doubling starts. A
+# demote is mostly one late frame, a tail of the link or the host and not a
+# dead one: on a phone's cable each one cost 5 to 60 s on the small model,
+# five times in nine minutes on an iPad (2026-10-03). A link that fails on
+# its heels this many times is backed off as before
+QUICK_RETRIES = 3
 # how often a backoff looks at the gadget. A host that configures it again
 # after it went away is a replug, which the backoff is not for: one waited 16 s
 # for a Jetson that was back in 0.4 (2026-09-29)
@@ -399,12 +405,19 @@ class JoiningModelState:
       self._reset_small()
 
   def _close_retired(self, why: str | None = None) -> None:
+    """Let the retired large model's link go, or keep it. A model that fell
+    behind leaves a live link: it is told why and kept, on `Link`, for the
+    next attempt, which is a hello and a model request over it and not a
+    reconnect. A lost link, and a build that failed, are closed."""
     with self._lock:
       retired, self._retired = self._retired, None
     if retired is None:
       return
     if why is not None:
       self._leave(retired, LEAVING.get(why, why))
+    client = getattr(retired, 'client', None)
+    if why == BEHIND and client is not None and not getattr(client, 'dead', True):
+      return
     try:
       retired.close()
     except Exception:
@@ -431,8 +444,9 @@ class JoiningModelState:
     """Push the next attempt out, further each time one fails on its heels.
 
     Each failed cycle is a swap frame, a demote frame and the alerts that go
-    with them. A join that held for STABLE_SECONDS is retried at once, as
-    failure one; a failure on its heels is the second rung.
+    with them. The first QUICK_RETRIES failures of a streak are retried in
+    REJOIN_DELAY_QUICK; the ones after double from REJOIN_DELAY. A join that
+    held for STABLE_SECONDS starts a new streak.
     """
     held = time.monotonic() - self._joined_at if self._joined_at else 0.0
     stable = bool(self._joined_at) and held > STABLE_SECONDS
@@ -440,10 +454,10 @@ class JoiningModelState:
     if stable:
       self._replugged = False   # a new streak may skip a backoff for a replug again
     self._joined_at = 0.0
-    if stable:
+    if self._failures <= QUICK_RETRIES:
       delay = REJOIN_DELAY_QUICK
     else:
-      delay = min(REJOIN_DELAY * 2 ** (self._failures - 1), REJOIN_DELAY_MAX)
+      delay = min(REJOIN_DELAY * 2 ** (self._failures - QUICK_RETRIES - 1), REJOIN_DELAY_MAX)
     self._rejoin_at = time.monotonic() + delay
     self._rejoin.set()
     self._log.warning("jetlink: next attempt in %.0f s (failure %d, link held %.0f s, drop %d, lag %d this drive)",
