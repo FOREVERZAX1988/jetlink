@@ -108,15 +108,23 @@ class FramesInFlight(SocketPairTest):
       payload = P.pack_infer_resp(frame_id, status, 0, 0, 0) + payload[P.INFER_RESP_SIZE:]
     self.peer.send(P.Msg.INFER_RESP, msg.seq, (payload,))
 
+  def answering(self, n: int) -> threading.Thread:
+    """The far end answering `n` requests as they come: a 393 KB frame does
+    not fit a Linux loopback socket's buffers twice over, so a peer that
+    only reads afterwards blocks the second send."""
+    t = threading.Thread(target=lambda: [self.answer() for _ in range(n)], daemon=True)
+    t.start()
+    return t
+
   def test_a_drain_takes_what_has_arrived_and_waits_for_nothing(self):
     t0 = time.monotonic()
     self.assertEqual(self.client.drain(), 0)
     self.assertLess(time.monotonic() - t0, 0.05, 'a drain with nothing to read waited')
+    t = self.answering(2)
     self.send(1)
     self.send(2)
-    self.answer()
-    self.answer()
-    for _ in range(50):   # the replies cross a socket pair; give them a moment
+    t.join(2.0)
+    for _ in range(50):   # the replies cross a socket; give them a moment
       if self.client.drain():
         break
       time.sleep(0.005)

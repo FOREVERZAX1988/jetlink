@@ -11,6 +11,7 @@
 		15023ACD3AC6BCE6E2D2CD0A /* JetlinkKit in Frameworks */ = {isa = PBXBuildFile; productRef = EE168AFAF92FF522E4DD799C /* JetlinkKit */; };
 		19B4F58262E92BFF0D8E1DAC /* DeviceHealth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97D183B499FE3A9E2A1F1C6C /* DeviceHealth.swift */; };
 		1D0A668C1539B8689D46AE98 /* StatusScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DF5CD5EDD3C0D6A4DBAF03F /* StatusScreen.swift */; };
+		21FA66960B064655822E91A9 /* USBSpeedGuide.swift in Sources */ = {isa = PBXBuildFile; fileRef = 307335BF2002E595A3A053AD /* USBSpeedGuide.swift */; };
 		343E2DEDC2FA6A0FA1C3CD9F /* SettingsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA25A3A098F7C2EDFC752AA6 /* SettingsScreen.swift */; };
 		3621BC8C8E848D685FB21407 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BBD8FD990F83901290E13A3 /* RootView.swift */; };
 		4F73EECC86A909ED778A1FE6 /* NetworkInterfaces.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B61B41EBDB9F3F6A507D23F /* NetworkInterfaces.swift */; };
@@ -41,6 +42,7 @@
 		0770C4D38956ECDB36EA481C /* LocalNetworkAccess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalNetworkAccess.swift; sourceTree = "<group>"; };
 		2195EBEDFD0F7923BA8F565A /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		2DF5CD5EDD3C0D6A4DBAF03F /* StatusScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusScreen.swift; sourceTree = "<group>"; };
+		307335BF2002E595A3A053AD /* USBSpeedGuide.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = USBSpeedGuide.swift; sourceTree = "<group>"; };
 		43DBEE74070286C6D86FE93C /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
 		4460F447D4E35D304487C46F /* HeroCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeroCard.swift; sourceTree = "<group>"; };
 		459618D24B415A21929758C5 /* BenchmarkScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BenchmarkScreen.swift; sourceTree = "<group>"; };
@@ -170,6 +172,7 @@
 			isa = PBXGroup;
 			children = (
 				F7585EEA0A0D690E6B7CAD4F /* Cards.swift */,
+				307335BF2002E595A3A053AD /* USBSpeedGuide.swift */,
 			);
 			path = Components;
 			sourceTree = "<group>";
@@ -328,6 +331,7 @@
 				E7EB4D4A712E9336D41D327B /* StatusContent.swift in Sources */,
 				1D0A668C1539B8689D46AE98 /* StatusScreen.swift in Sources */,
 				5AA1F48F85AC0413344622A8 /* StatusState.swift in Sources */,
+				21FA66960B064655822E91A9 /* USBSpeedGuide.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
