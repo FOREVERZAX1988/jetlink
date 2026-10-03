@@ -216,6 +216,8 @@ abstract class LiteRtLibraries @Inject constructor(
                     "google_tensor_runtime/src/main/jni/arm64-v8a/libLiteRtCompilerPlugin_google_tensor.so",
                 )
                 eachFile { path = "arm64-v8a/$name" }
+                // the zip has them read-only, which the next sync could not replace
+                filePermissions { unix("rw-r--r--") }
             }
             includeEmptyDirs = false
             into(outputDir)
