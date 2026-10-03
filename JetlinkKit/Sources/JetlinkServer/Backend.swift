@@ -37,6 +37,9 @@ public protocol Engine: AnyObject {
   /// What ran beside the model, for a benchmark report's build line: "CPU
   /// keep-warm on". Empty when there is nothing to say.
   var notes: String { get }
+  /// What runs the model when the backend's device does not say it all:
+  /// LiteRT's NPU profile falls back to the GPU. Empty otherwise.
+  var accelerator: String { get }
   /// Where the host writes an input. For every input but a looped pair's
   /// state_ one the pointer stays the same from load to close, as does
   /// `output`'s for every output the engine does not loop: staging looks
@@ -77,6 +80,7 @@ public protocol EngineBackend: AnyObject, Sendable {
 
 extension Engine {
   public var notes: String { "" }
+  public var accelerator: String { "" }
   public func flushTiming() {}
 }
 

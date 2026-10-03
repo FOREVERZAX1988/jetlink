@@ -31,6 +31,7 @@ public final class LiteRtEngine: EngineCore, @unchecked Sendable {
   /// Whether the looped state stays in the accelerator's memory.
   public var stateOnDevice: Bool { !deviceState.isEmpty }
   public override var notes: String { stateOnDevice ? "state on the \(hardware.name)" : "" }
+  public override var accelerator: String { label }
 
   private var model: LiteRtModel?
   /// Every buffer a run reads or writes, alive as long as the sets below.

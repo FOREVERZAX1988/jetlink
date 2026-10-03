@@ -252,13 +252,18 @@ public final class LiteRtBackend: EngineBackend {
           return engine.hardware
         }
       }
-      let hardware = try target == .npu ? attempt.during(compile) : compile()
+      let hardware: LiteRtProfile
+      do {
+        hardware = try target == .npu ? attempt.during(compile) : compile()
+      } catch {
+        if target == .npu { copyLiteRtLog(since: compileStarted) }
+        throw error
+      }
       let compileSeconds = Date().timeIntervalSince(compileStarted)
       report("compile", 1, "compiled in \(Int(compileSeconds.rounded())) s")
       if hardware != target {
-        log.warning(
-          "the NPU's compiler could not take \(model.lastPathComponent), so it runs on the GPU; "
-            + "logcat's litert lines say why")
+        log.warning("the NPU's compiler could not take \(model.lastPathComponent), so it runs on the GPU; LiteRT's lines below say why")
+        copyLiteRtLog(since: compileStarted)
       }
       var meta = LiteRtArtifact.meta(self, model: model, started: started)
       meta["accelerator"] = hardware.label(chip: chip)
@@ -294,15 +299,39 @@ public final class LiteRtBackend: EngineBackend {
         throw ArtifactInvalid("\(artifact.lastPathComponent): the last load for the NPU never finished")
       }
     }
-    let (engine, seconds) = try Artifact.load(artifact, meta: meta, what: "the model", report: report) {
-      let load = { try self.engine(artifact, cacheKey: LiteRtArtifact.cacheKey(artifact), on: target) }
-      return try target == .npu ? attempt.during(load) : load()
+    let loadStarted = Date()
+    let (engine, seconds): (LiteRtEngine, TimeInterval)
+    do {
+      (engine, seconds) = try Artifact.load(artifact, meta: meta, what: "the model", report: report) {
+        let load = { try self.engine(artifact, cacheKey: LiteRtArtifact.cacheKey(artifact), on: target) }
+        return try target == .npu ? attempt.during(load) : load()
+      }
+    } catch {
+      if target == .npu { copyLiteRtLog(since: loadStarted) }
+      throw error
     }
     if engine.hardware != target {
-      log.warning("\(artifact.lastPathComponent) was compiled for the NPU but loaded on the GPU; logcat's litert lines say why")
+      log.warning("\(artifact.lastPathComponent) was compiled for the NPU but loaded on the GPU; LiteRT's lines below say why")
+      copyLiteRtLog(since: loadStarted)
     }
     log.info("LiteRT on \(profile.rawValue) in \(String(format: "%.1f", seconds)) s: \(engine.label)")
     return engine
+  }
+}
+
+extension LiteRtBackend {
+  /// LiteRT's lines since `start` into jetlink's log, which a tester shares:
+  /// why the NPU took no model, which LiteRT says only in Android's log.
+  func copyLiteRtLog(since start: Date) {
+    #if os(Android)
+      let lines = LiteRtLog.lines(since: start)
+      for line in lines {
+        log.warning("litert: \(line)")
+      }
+      if let refusal = LiteRtLog.refusal(lines) {
+        log.warning("why the NPU took no model: \(refusal)")
+      }
+    #endif
   }
 }
 

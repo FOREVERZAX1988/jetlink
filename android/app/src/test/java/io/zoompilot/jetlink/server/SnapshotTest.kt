@@ -78,6 +78,16 @@ class SnapshotTest {
         assertNull(empty.recent)
         assertTrue(empty.models.isEmpty())
         assertEquals("none", empty.engine.state)
+        assertNull(empty.engine.accelerator)
+    }
+
+    @Test
+    fun aReadyEngineSaysWhatRunsIt() {
+        val ready = Snapshot.parse(
+            """{"version": 2, "running": true, "link": {"state": "waiting", "detail": "", "peer": null},
+               "engine": {"state": "ready", "sha256": "ab", "detail": "", "frac": 1, "msg": "", "load_only": false, "accelerator": "GPU(fp16)"}}""",
+        )
+        assertEquals("GPU(fp16)", ready.engine.accelerator)
     }
 
     @Test

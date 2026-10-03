@@ -86,6 +86,55 @@ public struct LiteRtError: Error, CustomStringConvertible {
   }
 }
 
+/// LiteRT's lines in this process's log: the reason an NPU compile failed,
+/// which LiteRT's Google Tensor plugin and the phone's compiler say only
+/// there. The app's log, which a tester shares, gets a copy.
+enum LiteRtLog {
+  /// The lines of `logcat -v epoch` text logged at `since` or after, but for
+  /// jetlink's own, as "W litert: message": the last `limit` of them.
+  static func select(_ text: String, since: TimeInterval, limit: Int = 60) -> [String] {
+    var lines: [String] = []
+    for line in text.split(separator: "\n") {
+      // "1791043556.899  3544  3782 W litert  : message"
+      let fields = line.split(separator: " ", maxSplits: 4, omittingEmptySubsequences: true)
+      guard fields.count == 5, let time = Double(fields[0]), time >= since, let colon = fields[4].range(of: ": ") else { continue }
+      let tag = fields[4][..<colon.lowerBound].trimmingCharacters(in: .whitespaces)
+      guard tag != "jetlink" else { continue }
+      lines.append("\(fields[3]) \(tag): \(fields[4][colon.upperBound...])")
+    }
+    return Array(lines.suffix(limit))
+  }
+
+  /// What `lines` say kept the NPU from the model, in words for the log,
+  /// when it is a reason jetlink knows: a Pixel's EdgeTPU service serves only
+  /// the apps on Google's allowlist, by package and signing key ("error code
+  /// 16", seen on a Pixel 10 Pro Fold, 2026-10-03).
+  static func refusal(_ lines: [String]) -> String? {
+    guard lines.contains(where: { $0.contains("not be allowed to access EdgeTPU") || $0.contains("not in the EdgeTPU allowed list") }) else {
+      return nil
+    }
+    return "the phone's NPU serves only the apps on Google's EdgeTPU allowlist, and this build of Jetlink is not on it"
+  }
+
+  #if os(Android)
+    /// What this process logged since `start`: LiteRT's info lines and up,
+    /// everything else's warnings and up. An app may read its own.
+    static func lines(since start: Date) -> [String] {
+      guard let pipe = popen("logcat -d -v epoch --pid=\(getpid()) litert:I *:W", "r") else { return [] }
+      defer { pclose(pipe) }
+      var data = Data()
+      var buffer = [UInt8](repeating: 0, count: 1 << 16)
+      while true {
+        let n = fread(&buffer, 1, buffer.count, pipe)
+        if n <= 0 { break }
+        data.append(contentsOf: buffer[..<n])
+      }
+      // a second's slack for the log's own clock
+      return select(String(decoding: data, as: UTF8.self), since: start.timeIntervalSince1970 - 1)
+    }
+  #endif
+}
+
 /// How a model is compiled: which accelerator runs it and with what.
 enum LiteRtCompileOptions: Sendable {
   /// The GPU alone, in fp16, so an op it cannot run fails the compile

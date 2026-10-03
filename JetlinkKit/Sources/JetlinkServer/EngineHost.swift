@@ -156,7 +156,10 @@ public final class EngineHost: @unchecked Sendable {
   private func snapshotLocked() -> EngineEvent {
     let (stage, frac, msg) = lastStage
     if let loaded {
-      return EngineEvent(state: .ready, sha256: loaded.sha256, detail: "", stage: nil, frac: 1, msg: msg, loadOnly: job?.loadOnly ?? false)
+      let accelerator = loaded.engine.accelerator
+      return EngineEvent(
+        state: .ready, sha256: loaded.sha256, detail: "", stage: nil, frac: 1, msg: msg, loadOnly: job?.loadOnly ?? false,
+        accelerator: accelerator.isEmpty ? nil : accelerator)
     }
     if let job, job.state == .building {
       return EngineEvent(

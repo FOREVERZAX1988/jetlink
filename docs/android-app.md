@@ -27,13 +27,17 @@ frame. On a Mac's GPU the LiteRT path takes 37 ms a frame for Cinque Terre V3,
 and a phone's GPU is slower, so only the newest flagships may keep up. Run the
 [Benchmark](#benchmark).
 
-On a Pixel 8 or later (Google Tensor G3, G4, G5), the model runs on the
-phone's NPU. The phone compiles the model for its NPU, with the compiler that
-comes with Android on a Pixel. That takes minutes the first time, and again
-after a system update. A model the NPU cannot take runs on the GPU instead.
-This has not run on a phone yet, so check its outputs from a Mac with
-`scripts/verify_parity.py` before you drive on it. The Pixel 6 and 7 (Tensor
-G1, G2) run on the GPU.
+On a Pixel 8 or later (Google Tensor G3, G4, G5), Jetlink is built to run the
+model on the phone's NPU. The phone compiles the model for its NPU, with the
+compiler that comes with Android on a Pixel. That takes minutes the first
+time, and again after a system update. A model the NPU cannot take runs on the
+GPU instead, and Settings > Processor says so.
+
+For now every Pixel runs it on the GPU: a Pixel's NPU serves only the apps on
+Google's allowlist, and Jetlink is not on it yet. Jetlink's log then says
+"why the NPU took no model". Once it is on the list, check the NPU's outputs
+from a Mac with `scripts/verify_parity.py` before you drive on it. The Pixel 6
+and 7 (Tensor G1, G2) run on the GPU.
 
 On a Snapdragon you can instead choose the NPU, the Hexagon, through Qualcomm's
 QNN runtime (Settings > Processor). It has not run on a phone yet, so check its

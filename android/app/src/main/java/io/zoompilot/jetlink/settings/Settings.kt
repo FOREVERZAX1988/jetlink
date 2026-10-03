@@ -47,6 +47,23 @@ enum class Processor(val backend: Backend, val device: String, val title: String
     /** The choice the server runs: Automatic's pick for this phone, or this one. */
     fun resolved(automatic: Processor = Chip.automatic): Processor = if (this == Auto) automatic else this
 
+    /**
+     * Whether the loaded model runs on the GPU though this choice is a Tensor
+     * NPU: the NPU took no model. [accelerator] is the ready engine's.
+     */
+    fun fellBack(accelerator: String?, automatic: Processor = Chip.automatic): Boolean =
+        resolved(automatic) == TensorNpu && hardwareOf(accelerator).let { it != null && it != "NPU" }
+
+    /** What the Processor row says: the choice, and with Automatic what it runs on. */
+    fun summary(accelerator: String?, automatic: Processor = Chip.automatic): String {
+        val runsOn = if (fellBack(accelerator, automatic)) hardwareOf(accelerator)!! else resolved(automatic).title
+        return when {
+            this == Auto -> "Automatic ($runsOn)"
+            fellBack(accelerator, automatic) -> "$title ($runsOn)"
+            else -> title
+        }
+    }
+
     companion object {
         /**
          * A stored choice. `gpu` was QNN on the Adreno before LiteRT drove
@@ -54,6 +71,9 @@ enum class Processor(val backend: Backend, val device: String, val title: String
          * a setting of its own: both are the GPU now.
          */
         fun of(device: String?): Processor? = if (device == "litert-gpu") Gpu else entries.firstOrNull { it.device == device }
+
+        /** "NPU", "GPU" or "CPU": the hardware an engine's accelerator names, "NPU(Tensor G5)". */
+        fun hardwareOf(accelerator: String?): String? = accelerator?.substringBefore('(')?.trim()?.takeIf(String::isNotEmpty)
 
         /**
          * What a phone can choose, Automatic first. The Snapdragon NPU

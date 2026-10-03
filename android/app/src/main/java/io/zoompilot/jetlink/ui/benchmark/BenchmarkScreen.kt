@@ -154,7 +154,8 @@ fun BenchmarkScreen(graph: AppGraph) {
         BenchmarkContent(
             snapshot = snapshot,
             runState = runState,
-            processor = processor.title,
+            // what the loaded engine runs on, which a Tensor NPU that took no model leaves to the GPU
+            processor = Processor.hardwareOf(snapshot.engine.accelerator) ?: processor.title,
             chip = chip,
             refusal = refusal,
             starting = starting,

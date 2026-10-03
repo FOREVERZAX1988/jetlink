@@ -66,6 +66,15 @@ struct ControlProtocolTests {
     #expect(try line(.hello(HelloEvent(version: "0.7.0"))).count == 3)
   }
 
+  @Test func aReadyEngineSaysWhatRunsItOnlyWhenItsBackendDoes() throws {
+    let ready = EngineEvent(state: .ready, sha256: "ab", detail: "", stage: nil, frac: 1, msg: "", loadOnly: false)
+    #expect(try line(.engine(ready))["accelerator"] == nil)
+    let fellBack = EngineEvent(state: .ready, sha256: "ab", detail: "", stage: nil, frac: 1, msg: "", loadOnly: false, accelerator: "GPU(fp16)")
+    #expect(try line(.engine(fellBack))["accelerator"] as? String == "GPU(fp16)")
+    let read = try JSONDecoder().decode(EngineEvent.self, from: Data(#"{"state":"ready","detail":"","frac":1,"msg":"","loadOnly":false}"#.utf8))
+    #expect(read.accelerator == nil)
+  }
+
   @Test func aBenchmarkReportGoesOutWhole() throws {
     let report = BenchmarkReport(
       sha256: String(repeating: "a", count: 64), device: "ane-Apple A19 Pro", seconds: 60, frames: 1195, frame: BenchmarkStats.empty,

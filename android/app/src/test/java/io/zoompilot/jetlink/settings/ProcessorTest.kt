@@ -1,6 +1,8 @@
 package io.zoompilot.jetlink.settings
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /** What each kind of phone may choose to run the model on. */
@@ -77,6 +79,28 @@ class ProcessorTest {
     @Test
     fun theEmulatorOffersEverything() {
         assertEquals(Processor.entries, Processor.choices(qualcomm = false, tensorNpu = false, emulator = true, current = Processor.Cpu))
+    }
+
+    @Test
+    fun theProcessorRowSaysWhatRuns() {
+        assertEquals("Automatic (NPU)", Processor.Auto.summary("NPU(Tensor G5)", automatic = Processor.TensorNpu))
+        assertEquals("Automatic (NPU)", Processor.Auto.summary(null, automatic = Processor.TensorNpu))
+        assertEquals("Automatic (GPU)", Processor.Auto.summary(null, automatic = Processor.Gpu))
+        assertEquals("GPU", Processor.Gpu.summary(null, automatic = Processor.TensorNpu))
+    }
+
+    @Test
+    fun aTensorNpuThatTookNoModelSaysTheGpuRunsIt() {
+        // what a Pixel 10 Pro Fold off Google's EdgeTPU allowlist reported (2026-10-03)
+        assertTrue(Processor.Auto.fellBack("GPU(fp16)", automatic = Processor.TensorNpu))
+        assertEquals("Automatic (GPU)", Processor.Auto.summary("GPU(fp16)", automatic = Processor.TensorNpu))
+        assertEquals("NPU (GPU)", Processor.TensorNpu.summary("GPU(fp16)", automatic = Processor.TensorNpu))
+        assertFalse(Processor.Auto.fellBack("NPU(Tensor G5)", automatic = Processor.TensorNpu))
+        // only a Tensor NPU falls back; nothing loaded says nothing
+        assertFalse(Processor.Gpu.fellBack("GPU(fp16)", automatic = Processor.TensorNpu))
+        assertFalse(Processor.Auto.fellBack(null, automatic = Processor.TensorNpu))
+        assertEquals("GPU", Processor.hardwareOf("GPU(fp16)"))
+        assertEquals(null, Processor.hardwareOf(""))
     }
 
     @Test

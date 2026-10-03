@@ -247,6 +247,27 @@ struct LiteRtProfileTests {
     #expect(LiteRtArtifact.keptNPUModel(temp.url))
   }
 
+  @Test("An NPU attempt's lines come out of logcat's, newest last, jetlink's own left out")
+  func logLines() {
+    // `logcat -v epoch` from the Pixel 10 Pro Fold that refused the NPU (2026-10-03)
+    let text = """
+      1791043558.844  3544  5944 I litert  : [compiler_plugin.cc:433] Loading Google Tensor Compiler Adapter
+      1791043559.501  3544  5944 E libedgetpu_client: Compile failed, error code 16, message: Current application should not be allowed to access EdgeTPU.
+      1791043559.616  3544  5944 E litert  : [compiler_plugin.cc:876] Failed to compile model: Compile failed, error code 16
+      1791043566.223  3544  5944 W jetlink : the NPU's compiler could not take 404a18cfd86d2963.onnx
+      --------- beginning of main
+      """
+    let lines = LiteRtLog.select(text, since: 1_791_043_559)
+    #expect(
+      lines == [
+        "E libedgetpu_client: Compile failed, error code 16, message: Current application should not be allowed to access EdgeTPU.",
+        "E litert: [compiler_plugin.cc:876] Failed to compile model: Compile failed, error code 16",
+      ])
+    #expect(LiteRtLog.select(text, since: 0, limit: 1) == ["E litert: [compiler_plugin.cc:876] Failed to compile model: Compile failed, error code 16"])
+    #expect(LiteRtLog.refusal(lines)?.contains("allowlist") == true)
+    #expect(LiteRtLog.refusal(["I litert: [compiler_plugin.cc:433] Loading Google Tensor Compiler Adapter"]) == nil)
+  }
+
   @Test("What runs the model names the chip for the NPU")
   func labels() {
     #expect(LiteRtProfile.npu.label(chip: "Tensor G4") == "NPU(Tensor G4)")

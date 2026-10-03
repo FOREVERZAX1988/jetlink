@@ -463,8 +463,17 @@ static char *compile(jl_litert_model *m, const char *path, const jl_litert_optio
   if (error != NULL) {
     return error;
   }
-  TRY(LiteRtCreateCompiledModel, environment_of(m), m->model, m->options, &m->compiled);
-  return NULL;
+  // The log is the only word of why an NPU's plugin could not take a model,
+  // so a compile for one says what it does there, partitions and all.
+  bool npu = o->npu_cache_dir != NULL;
+  if (npu) {
+    lrt.LiteRtSetMinLoggerSeverity(lrt.LiteRtGetDefaultLogger(), kLiteRtLogSeverityInfo);
+  }
+  LiteRtStatus status = lrt.LiteRtCreateCompiledModel(environment_of(m), m->model, m->options, &m->compiled);
+  if (npu) {
+    lrt.LiteRtSetMinLoggerSeverity(lrt.LiteRtGetDefaultLogger(), kLiteRtLogSeverityWarning);
+  }
+  return take(status, "LiteRtCreateCompiledModel");
 }
 
 char *jl_litert_model_create(const char *path, const jl_litert_options *options, jl_litert_model **out) {

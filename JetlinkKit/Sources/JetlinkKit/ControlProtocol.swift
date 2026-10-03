@@ -138,8 +138,14 @@ public struct EngineEvent: Codable, Sendable, Equatable {
   public let frac: Double
   public let msg: String
   public let loadOnly: Bool
+  /// What runs the ready model, as its backend names it when that is more
+  /// than its device says: "NPU(Tensor G5)", or "GPU(fp16)" where the NPU
+  /// could not take the model. Nil otherwise, and from older servers.
+  public let accelerator: String?
 
-  public init(state: EngineState, sha256: String?, detail: String, stage: String?, frac: Double, msg: String, loadOnly: Bool) {
+  public init(
+    state: EngineState, sha256: String?, detail: String, stage: String?, frac: Double, msg: String, loadOnly: Bool, accelerator: String? = nil
+  ) {
     self.state = state
     self.sha256 = sha256
     self.detail = detail
@@ -147,6 +153,7 @@ public struct EngineEvent: Codable, Sendable, Equatable {
     self.frac = frac
     self.msg = msg
     self.loadOnly = loadOnly
+    self.accelerator = accelerator
   }
 
   public static let none = EngineEvent(state: .none, sha256: nil, detail: "", stage: nil, frac: 0, msg: "", loadOnly: false)

@@ -170,6 +170,7 @@ open class EngineCore: Engine, @unchecked Sendable {
   }
 
   open var notes: String { "" }
+  open var accelerator: String { "" }
 
   /// Logs whatever timing of its own the engine has gathered but not said
   /// yet (TensorRT's --gpu-timing), for a benchmark's end. Nothing by default.

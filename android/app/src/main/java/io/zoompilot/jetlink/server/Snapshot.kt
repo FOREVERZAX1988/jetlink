@@ -89,6 +89,11 @@ data class Engine(
     val frac: Double = 0.0,
     val msg: String = "",
     val loadOnly: Boolean = false,
+    /**
+     * What runs the ready model when its backend says more than the device
+     * does: "NPU(Tensor G5)", or "GPU(fp16)" where the NPU could not take it.
+     */
+    val accelerator: String? = null,
 )
 
 @Serializable

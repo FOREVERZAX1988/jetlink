@@ -138,12 +138,22 @@ Nothing of this has run on a phone yet. What to check first, in order:
 6. On a Pixel 8 or later, the same for **NPU** (Automatic's pick there). The
    log says `compiling for the NPU`, how long it took and what runs the model:
    `NPU(Tensor G5)`, or a warning that the NPU's compiler could not take it and
-   the GPU runs it. `adb logcat -s litert` has the compiler's reason. Watch the
+   the GPU runs it, followed by LiteRT's own lines from logcat (`litert:` in
+   Jetlink's log), so a shared log carries the reason. Settings > Processor and
+   the Benchmark then say GPU. Watch the
    app's memory during that compile (`adb shell dumpsys meminfo
    io.zoompilot.jetlink.android`): Google's compiler for Tensor needed about
    11 times the model's weights on a PC, 8 GB and more for a big model, and a
    compile that gets the app killed is not tried again on that system build
    (the `.npu-compiling` file beside the artifact says so).
+
+The first Pixel to try it (a Pixel 10 Pro Fold, 2026-10-03) refused: the
+EdgeTPU service in `/system_ext` serves only the apps on Google's allowlist, by
+package name and signing certificate, which Google delivers as the
+`edgetpu_native` device config flags (`persist.device_config.edgetpu_native.allowlist_*`).
+Jetlink logs "is not in the EdgeTPU allowed list" and "error code 16", and runs
+on the GPU. Google adds an app; the release key's certificate is the one to
+give them (docs/publishing.md#android-release-key).
 
 The NPU path follows LiteRT 2.2.0's source. LiteRT's Google Tensor plugin
 (`libLiteRtCompilerPlugin_google_tensor.so`, which the APK carries) hands the

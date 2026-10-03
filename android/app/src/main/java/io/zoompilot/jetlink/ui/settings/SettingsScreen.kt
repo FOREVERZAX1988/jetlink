@@ -85,6 +85,8 @@ data class SettingsInfo(
     val snapdragon: Boolean = true,
     /** What Automatic runs on here. */
     val automatic: Processor = Processor.Gpu,
+    /** What runs the loaded model, when its engine says ("GPU(fp16)"). */
+    val accelerator: String? = null,
 )
 
 /** What the Settings rows do. */
@@ -124,6 +126,7 @@ fun SettingsScreen(graph: AppGraph, openConnect: () -> Unit, openLogs: () -> Uni
         processors = Chip.processors(values.processor),
         snapdragon = Chip.isQualcomm || Chip.isEmulator,
         automatic = Chip.automatic,
+        accelerator = snapshot.engine.takeIf { it.state == "ready" }?.accelerator,
     )
     val actions = SettingsActions(
         update = graph.settings::update,
@@ -245,6 +248,9 @@ private fun Performance(values: SettingsValues, info: SettingsInfo, actions: Set
     var choosing by remember { mutableStateOf(false) }
     val choices = info.processors
     val footer = when {
+        values.processor.fellBack(info.accelerator, info.automatic) ->
+            "The NPU did not take this model, so it runs on the GPU. Logs (in Help) say why. " +
+                "Changing the processor prepares models again."
         info.automatic == Processor.TensorNpu ->
             "Automatic runs the model on the Tensor NPU, which prepares it the first time. " +
                 "A model the NPU cannot take runs on the GPU. Changing the processor prepares models again."
@@ -264,7 +270,7 @@ private fun Performance(values: SettingsValues, info: SettingsInfo, actions: Set
                 Text("Processor", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
                 Spacer(Modifier.width(12.dp))
                 Text(
-                    if (values.processor == Processor.Auto) "Automatic (${info.automatic.title})" else values.processor.title,
+                    values.processor.summary(info.accelerator, info.automatic),
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.primary,
                 )
