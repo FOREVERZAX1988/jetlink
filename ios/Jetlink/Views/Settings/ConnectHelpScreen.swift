@@ -16,14 +16,10 @@ struct ConnectHelpScreen: View {
       } footer: {
         Text("A powered USB-C hub keeps your \(device) charging.")
       }
-      // Apple's tech specs: USB 3 on the iPhone 15 Pro and later Pro models,
-      // and on every iPad Pro, iPad Air and iPad mini with USB-C; USB 2 on
-      // the other USB-C iPhones and on the iPad (10th generation) and (A16).
       Section {
-        LabeledContent("iPhone 15 Pro and Later", value: "USB 3")
-        LabeledContent("Other iPhones", value: "USB 2")
-        LabeledContent("iPad Pro, Air and mini", value: "USB 3")
-        LabeledContent("Other iPads", value: "USB 2")
+        ForEach(USBSpeedGuide.rows, id: \.models) { row in
+          LabeledContent(row.models, value: row.speed)
+        }
       } header: {
         Text("Speed")
       } footer: {

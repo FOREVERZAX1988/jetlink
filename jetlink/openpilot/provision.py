@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import signal
 
+from jetlink import protocol as P
 from jetlink.comma import gadget, lending
 from jetlink.openpilot import link
 
@@ -59,6 +60,7 @@ class ProvisioningRun:
     client, self.client = self.client, None
     if client is not None:
       try:
+        client.leave(P.LEAVE_PROVISIONED)
         client.close()
       except Exception:
         self.log.exception("jetlink: error closing the link")

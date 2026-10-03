@@ -359,6 +359,9 @@ public final class Server: @unchecked Sendable {
     _ = hooks.gadgetIdle?(.disconnected)
     gadget?.sessionEnded()
     log.info("client disconnected: \(reason)")
+    if let summary = session.summary {
+      log.info("the session with \(session.who) served \(summary)")
+    }
     if isCurrent && !isStopped {
       setLink(LinkEvent(state: .disconnected, detail: reason, peer: nil))
     }

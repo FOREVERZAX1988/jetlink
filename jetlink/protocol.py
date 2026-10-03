@@ -77,6 +77,19 @@ class Msg(IntEnum):
   PONG = 16
   SHUTDOWN_REQ = 17    # json: {reason} -> power the Jetson off for good; see JetlinkClient.shutdown
   SHUTDOWN_RESP = 18   # json: {ok, detail}
+  LEAVE = 19           # json: {reason, ...what the client measured}; client -> server, no reply.
+                       # The client stops using the link: it handed the model back or is exiting.
+                       # The connection may stay for a later HELLO_REQ. An older server answers
+                       # ERROR unknown_message, which the client discards (JetlinkClient.leave)
+
+
+# Why a client stops using the link, LEAVE's json 'reason' (JetlinkClient.leave);
+# the server logs each in words (Session.onLeave) and anything else verbatim
+LEAVE_BEHIND = 'behind'            # modeld fell behind the large model
+LEAVE_LOST = 'lost'                # the comma lost the link, said when it can still carry it
+LEAVE_STOPPED = 'stopped'          # modeld stopped
+LEAVE_PROVISIONED = 'provisioned'  # the provisioning run finished
+LEAVE_REASONS = (LEAVE_BEHIND, LEAVE_LOST, LEAVE_STOPPED, LEAVE_PROVISIONED)
 
 
 class Flag(IntEnum):

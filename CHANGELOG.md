@@ -1,3 +1,17 @@
+Jetlink v0.8.1
+==============
+**iPhone & iPad link**
+* **Fewer dropouts:** A big model that fell behind rejoins in a second over the same connection, instead of hanging up and waiting 5 to 60 s.
+* **Simpler on the comma:** Whoever uses the link listens for the phone. No more passing the phone's connection between processes.
+* **Logs that say why:** The comma tells the phone why it stopped using the link, with the timings only the comma can see. The phone logs what each session served.
+* **USB 2 said plainly:** A banner on the Status tab, in both orientations, when the link is USB 2, with what costs it and whether it is the cable, the hub or the device.
+* **Docs:** A direct USB-C cable is not reliable yet; use a hub or an adapter until it is.
+
+**Driving, every accelerator**
+* **Warm at the switch:** The big model runs every frame from the moment it joins, while the small model drives. Switching costs an ordinary frame, not a 110 to 120 ms first one.
+* **Late frames held, not dropped:** A reply that misses the frame keeps the previous plan for one frame. A phone with an occasional slow frame no longer drops camera frames toward a hand-back. Five late frames in a row, or more than twenty in ten seconds, still hand back.
+* **Update the comma:** zoompilot's `jetson-trt` branch pins Jetlink v0.8.1.
+
 Jetlink v0.8.0
 ==============
 **iPhone & iPad on TestFlight!**

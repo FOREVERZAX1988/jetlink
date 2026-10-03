@@ -73,11 +73,12 @@ Building and testing without a phone: [iPhone development](../ios/README.md).
 
 - There is nothing to type: the app finds the comma itself.
 - Open the app before plugging in. Opened later, it still connects, just later.
-- On a direct USB-C cable both ends can be the host, and the comma has to keep
-  its USB device side on for the phone. It sorts both out by itself in up to
-  about 15 seconds. If the title never reaches **Connected**,
-  or the comma restarts when you plug in, use a powered USB-C hub, or a USB-C
-  to USB-A adapter and a USB-A to USB-C cable; then
+- A direct USB-C cable is not reliable yet. On one, both ends can be the host,
+  and the comma has to keep its USB device side on for the phone; it tries to
+  sort both out by itself, and a tester connected with an e-marked
+  Thunderbolt cable where a plain cable failed. Until it is proven, use a
+  powered USB-C hub, or a USB-C to USB-A adapter and a USB-A to USB-C cable.
+  If a direct cable does not connect, or the comma restarts when you plug in,
   [send the comma's report](#if-a-direct-cable-does-not-connect).
 - The app has these steps under Settings > **Help > Connecting the Comma**.
 
@@ -93,7 +94,21 @@ grep 'USB-C' /data/log/jetlink-owner.log | tail -n 40
 sudo dmesg | grep -iE 'usbpd|type-?c|swap|weak charger|reverse boost' | tail -n 60
 ```
 
-Send the output with your phone model, and say whether the comma restarted.
+Send the output with your phone model, your comma model, the cable, and say
+whether the comma restarted. Do it once for each way round the cable can go.
+
+### If the big model comes and goes
+
+Open **Logs** in the app after the drive. Each time the comma stops using the
+link it says why (behind, lost, stopped) with what it measured: the whole
+frame as the comma waited on it, which the phone cannot see from its side,
+how many frames it held (a reply that came too late, the previous plan kept
+for one frame) and how many the phone ran while the small model was driving.
+Send that log with the comma's:
+
+```bash
+tail -n 200 /data/log/jetlink-owner.log
+```
 
 ### USB 3 matters
 
@@ -107,6 +122,9 @@ Every hop must be USB 3: the phone, the cable and any hub.
 Sources: [Apple, iPhone](https://support.apple.com/en-us/105099),
 [Identify your iPad model](https://support.apple.com/en-us/108043).
 
+- Over a USB 2 link the app shows a **USB 2 Link** banner on the Status tab,
+  in both orientations, saying which of the two it can be: the cable or hub,
+  or the device itself.
 - USB 2 adds an estimated 4 to 6 ms a frame (not yet measured).
 - To check the speed on the comma, run `sudo scripts/comma/jetlink-root.sh check`:
   `super-speed` is USB 3, `high-speed` is USB 2.

@@ -106,7 +106,7 @@ class BenchLoan(HoldTest):
     borrow, opened = lending.borrow, []
     with mock.patch.object(lending, 'borrow', lambda name, timeout: borrow(name, timeout=timeout, path=self.path)), \
          mock.patch.object(bench.JetlinkClient, 'open_borrowed_ffs',
-                           lambda mount, udc, bounce: opened.append((mount, udc, bounce)) or 'client'):
+                           lambda mount, udc, bounce, **kw: opened.append((mount, udc, bounce)) or 'client'):
       loan, client = bench.open_loan(timeout=1.0)
     try:
       assert client == 'client'

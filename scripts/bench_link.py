@@ -28,6 +28,7 @@ takes ~21 ms of it. Sends real-sized payloads at the real rate and reports the t
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 import time
 from pathlib import Path
@@ -88,9 +89,10 @@ def open_loan(timeout: float = LOAN_TIMEOUT):
   if loan is None:
     raise SystemExit(f"no loan from the gadget owner in {timeout:g}s: is jetlinkd running, "
                      "and is modeld or jetlink_hold.py holding it?")
-  print(f"borrowed the {'cable link' if loan.sock is not None else 'gadget'}: udc {loan.udc}, mount {loan.mount}")
+  print(f"borrowed the {'cable link' if loan.cable else 'gadget'}: udc {loan.udc}, mount {loan.mount}")
   try:
-    return loan, JetlinkClient.open_loan(loan)
+    from jetlink.openpilot.link import connect
+    return loan, connect(logging.getLogger('jetlink.bench'), loan, name='bench', wait=timeout)
   except BaseException:
     loan.close()
     raise

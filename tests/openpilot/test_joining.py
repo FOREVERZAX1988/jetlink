@@ -35,18 +35,47 @@ class FakeModel:
     self.raises = None
     self.closed = False
     self.warmed = False
+    # the small model's: whether run() calls back once its work is enqueued,
+    # as both modelds' do
+    self.calls_back = True
+    # the large model's: frames prepared and sent while the small model drove,
+    # and why it should hand back after its last driven frame
+    self.shadows = 0
+    self.prepare_raises = None
+    self.sent = False
+    self.behind = None
 
   def run(self, bufs, transforms, inputs, after_enqueue=None):
     self.calls += 1
     if self.raises is not None:
       raise self.raises
+    if after_enqueue is not None and self.calls_back:
+      after_enqueue()
     return {'from': self.name}
+
+  def prepare(self, bufs, transforms, inputs):
+    if self.prepare_raises is not None:
+      raise self.prepare_raises
+    self.sent = False
+
+  def send(self):
+    self.sent = True
+    self.shadows += 1
 
   def warmup(self):
     self.warmed = True
 
   def close(self):
     self.closed = True
+
+
+def wait_for(predicate, timeout=2.0) -> bool:
+  deadline = time.monotonic() + timeout
+  while time.monotonic() < deadline:
+    if predicate():
+      return True
+    time.sleep(0.005)
+  return False
 
 
 class JoiningBase(unittest.TestCase):
@@ -112,15 +141,25 @@ class JoiningBase(unittest.TestCase):
       t.join(5)
 
   def _wait_joined(self, s, timeout=5.0):
-    # connect() returning is not publication: wait for the owner to hand off.
+    # connect() returning is not publication: wait for the owner to hand off,
+    # or for a frame to have taken the join up and built the large model
     deadline = time.monotonic() + timeout
-    while s._joined is None and time.monotonic() < deadline:
+    while s._joined is None and s._big is None and time.monotonic() < deadline:
       time.sleep(0.001)
-    self.assertIsNotNone(s._joined)
+    self.assertTrue(s._joined is not None or s._big is not None, 'never joined')
 
   def _run(self, s):
     s._engagement_updated = time.monotonic()
     return s.run({}, {}, {})
+
+  def _driving(self, dead: bool):
+    """A state with the large model driving, over a client that is dead or live."""
+    s = self._state()
+    self._wait_joined(s)
+    s._engaged = False
+    self.assertEqual(self._run(s), {'from': 'big'})
+    self.big.client = mock.Mock(dead=dead)
+    return s
 
   def _wait_reported(self, s, msg, timeout=2.0):
     deadline = time.monotonic() + timeout
@@ -182,43 +221,6 @@ class JoiningTest(JoiningBase):
     self.assertFalse(s.big_model_available)
     self.assertEqual(s.big_model_state, 'running')
 
-  def test_availability_survives_ping_but_not_link_loss(self):
-    pinging, release = threading.Event(), threading.Event()
-    client = mock.MagicMock()
-
-    def ping(**kwargs):
-      pinging.set()
-      release.wait(5)
-      raise RuntimeError('link lost while waiting to switch')
-
-    client.ping.side_effect = ping
-    self._connect = lambda should_stop=None: (client, 'spec')
-    with mock.patch.object(joining, 'KEEPALIVE_PERIOD', 0.01):
-      s = self._state()
-      self.addCleanup(release.set)
-      self.assertTrue(pinging.wait(5))
-      self.assertIsNone(s._joined)
-      self.assertTrue(s.big_model_available)
-      self.assertEqual(self._run(s), {'from': 'small'})
-      release.set()
-      deadline = time.monotonic() + 2
-      while s.big_model_available and time.monotonic() < deadline:
-        time.sleep(0.001)
-      self.assertFalse(s.big_model_available)
-      self.assertFalse(s.chestnut)
-
-  def test_ping_taking_the_pending_link_during_swap_check_keeps_availability(self):
-    s = self._state()
-    self._wait_joined(s)
-    joined = s._joined
-    s._engaged = False
-    # The frame sees _joined before locking, then the keepalive takes it.
-    with mock.patch.object(s, '_lock') as lock:
-      lock.__enter__.side_effect = lambda: setattr(s, '_joined', None)
-      self.assertEqual(self._run(s), {'from': 'small'})
-      self.assertTrue(s.big_model_available)
-    s._joined = joined
-
   def test_close_with_pending_model_clears_availability(self):
     s = self._state()
     self._wait_joined(s)
@@ -248,11 +250,7 @@ class JoiningTest(JoiningBase):
     # modeld still gets an output for this frame, from the small model.
     self.assertEqual(self._run(s), {'from': 'small'})
     self.assertFalse(s.chestnut)
-    for _ in range(100):
-      if self.big.closed:
-        break
-      time.sleep(0.01)
-    self.assertTrue(self.big.closed)
+    self.assertTrue(wait_for(lambda: self.big.closed))
     # And it tries again rather than staying small for the rest of the drive.
     self.assertTrue(s._rejoin_at > time.monotonic() or self.connect_calls > 1)
 
@@ -414,6 +412,73 @@ class JoiningTest(JoiningBase):
     self.assertEqual(s._drops, 2)
     self._wait_reported(s, 'waiting for the accelerator; link dropped 2 times this drive, check the USB cable')
 
+  def test_a_lag_demote_says_why_over_the_live_link(self):
+    # the phone's log carried no reason and none of the comma's numbers: a
+    # session there was the big model's time plus the backoff, and nothing
+    # said which. The leave carries what the comma measured
+    s = self._driving(dead=False)
+    self.big.trips = mock.Mock(summary=lambda: {'frames': 7, 'p50_ms': 41.5})
+    s.frame_drop_ratio = joining.DROP_LIMIT * 2
+    self.assertEqual(self._run(s), {'from': 'small'})
+    self.assertTrue(wait_for(lambda: self.big.client.leave.called))
+    self.big.client.leave.assert_called_once_with('behind', drops=0, lags=1, frames=7, p50_ms=41.5)
+
+  def test_a_lag_demote_keeps_a_live_link_for_the_next_attempt(self):
+    # the next attempt is a hello and a model request over the same
+    # connection: no reconnect, and on a phone's cable no redial. The link is
+    # closed only when it is dead
+    s = self._driving(dead=False)
+    s.frame_drop_ratio = joining.DROP_LIMIT * 2
+    with mock.patch.object(joining, 'REJOIN_DELAY_QUICK', 0.05):
+      self.assertEqual(self._run(s), {'from': 'small'})
+      self.assertTrue(wait_for(lambda: self.connect_calls > 1))
+    self.assertFalse(self.big.closed, 'a live link was closed')
+    self.big.client.leave.assert_called_once()
+    self.big.client.close.assert_not_called()
+
+  def test_a_dead_link_is_closed_and_a_live_one_kept_whatever_went_wrong(self):
+    # the client knows whether it is dead; the joining state only asks. A
+    # failure on the comma's side (the warp, the parser) leaves the link up
+    s = self._driving(dead=True)
+    self.big.raises = RuntimeError('link gone')
+    self._run(s)
+    self.assertTrue(wait_for(lambda: self.big.closed))
+
+    self.big = FakeModel('big', chestnut=True, client=object())
+    s = self._driving(dead=False)
+    self.big.raises = RuntimeError('a tensor was the wrong shape')
+    with mock.patch.object(joining, 'REJOIN_DELAY_QUICK', 0.05):
+      self._run(s)
+      self.assertTrue(wait_for(lambda: self.big.client.leave.called))
+    self.assertFalse(self.big.closed)
+    self.big.client.leave.assert_called_once_with('lost', drops=1, lags=0)
+
+  def test_closing_says_stopped_once_to_whatever_holds_the_link(self):
+    # a link waiting for a window, a large model running every frame without
+    # driving, and one driving: each hears modeld stop, once, however many
+    # times close() runs
+    s = self._state()
+    self._wait_joined(s)
+    pending = s._joined[0]
+    pending.dead = False
+    s.close()
+    s.close()
+    pending.leave.assert_called_once_with('stopped', drops=0, lags=0)
+    pending.close.assert_called()
+
+    for engaged in (True, False):
+      self.big = FakeModel('big', chestnut=True, client=object())
+      s = self._state()
+      self._wait_joined(s)
+      s._engaged = engaged
+      self._run(s)
+      self.assertEqual(s.chestnut, not engaged)
+      self.big.client = mock.Mock(dead=False)
+      s.close()
+      s.close()
+      self.big.client.leave.assert_called_once_with('stopped', drops=0, lags=0)
+      self.assertTrue(self.big.closed)
+
   def test_the_frame_that_loses_the_link_does_not_report_or_read_the_port(self):
     # the frame thread is SCHED_FIFO on modeld's core; params and sysfs are
     # for the join thread. The drop is only counted here
@@ -425,7 +490,7 @@ class JoiningTest(JoiningBase):
     # the join thread is held asleep, so whatever reported did so on the frame
     with mock.patch.object(s._rejoin, 'set'), mock.patch.object(s, '_note_link_loss') as note:
       self.assertEqual(self._run(s), {'from': 'small'})
-      self.assertTrue(s._demoted)
+      self.assertIsNotNone(s._retired)
       self.assertEqual(s._drops, 1)
       note.assert_not_called()
       calls = [c for c in self.progress.report.call_args_list if c.args[2].startswith('lost')]
@@ -438,56 +503,24 @@ class JoiningTest(JoiningBase):
     self._wait_joined(s)
     s._engaged = False
     self.assertEqual(self._run(s), {'from': 'small'})
-    # Not straight back onto the link: the next attempt waits REJOIN_DELAY.
-    self.assertGreater(s._rejoin_at, time.monotonic() + 1.0)
+    # Not straight back onto the link: the next attempt waits REJOIN_DELAY_QUICK.
+    self.assertGreater(s._rejoin_at, time.monotonic() + 0.5)
     self.assertFalse(s.chestnut)
     self.assertEqual(s.big_model_state, 'retrying')
 
-  def test_a_link_that_dies_before_the_swap_is_reopened(self):
-    # a link waits in _joined for a window, which on a drive with no stop is the
-    # whole drive; a Jetson that reboots in there must be caught before the swap
-    clients = []
-
-    def connect(should_stop=None):
-      c = mock.MagicMock(name='client')
-      clients.append(c)
-      self.connect_calls += 1
-      self.joined.set()
-      return (c, 'spec')
-
-    self._connect = connect
-    with mock.patch.object(joining, 'KEEPALIVE_PERIOD', 0.05), \
-         mock.patch.object(joining, 'REJOIN_DELAY', 0.05):
-      s = self._state()
-      self._wait_joined(s)
-      # Never a window, so nothing consumes it; the ping is what notices.
-      s._engaged = True
-      clients[0].ping.side_effect = RuntimeError("jetson rebooted")
-      for _ in range(100):
-        if len(clients) > 1:
-          break
-        time.sleep(0.05)
-      self.assertGreater(len(clients), 1, "a dead pending link was never reopened")
-      clients[0].close.assert_called()
-      # And the fresh one is what the window eventually gets.
-      s._engaged = False
-      for _ in range(40):
-        if self._run(s) == {'from': 'big'}:
-          break
-        time.sleep(0.05)
-      self.assertTrue(s.chestnut)
-
   def test_failures_back_off_and_a_stable_join_starts_over(self):
-    # A link that dies on its first frame every time used to cost a swap, a
-    # demote and a chime every REJOIN_DELAY for the drive.
+    # A demote is mostly one late frame: the first few are retried in a
+    # second. A link that dies on its first frame every time used to cost a
+    # swap, a demote and a chime every REJOIN_DELAY for the drive, so a streak
+    # past QUICK_RETRIES doubles as before.
     s = self._state()
     s._joined_at = 0.0
     delays = []
-    for _ in range(5):
+    for _ in range(8):
       t = time.monotonic()
       s._back_off()
       delays.append(round(s._rejoin_at - t))
-    self.assertEqual(delays, [5, 10, 20, 40, 60])
+    self.assertEqual(delays, [1, 1, 1, 5, 10, 20, 40, 60])
 
     # A join that held is not that link, and must not inherit its delay: a
     # link that ran for minutes and then went is a USB drop, and the host
@@ -497,9 +530,10 @@ class JoiningTest(JoiningBase):
     s._back_off()
     self.assertEqual(round(s._rejoin_at - t), round(REJOIN_DELAY_QUICK))
     self.assertEqual(s._failures, 1)
-    # and a failure on its heels is the second rung, not the first again
-    s._back_off()
-    self.assertEqual(round(s._rejoin_at - time.monotonic()), 10)
+    # and failures on its heels climb the same rungs
+    for _ in range(joining.QUICK_RETRIES):
+      s._back_off()
+    self.assertEqual(round(s._rejoin_at - time.monotonic()), 5)
 
   def test_small_model_failure_is_modelds(self):
     s = self._state()
@@ -571,6 +605,91 @@ class JoiningTest(JoiningBase):
     self.big.raises = RuntimeError("link gone")
     self._run(s)
     self.assertEqual(s.big_model_state, 'retrying')
+
+
+class ShadowTest(JoiningBase):
+  """From the join on, every frame goes to the large model; the small model
+  drives until the window opens, and the swap changes only whose output is
+  published."""
+
+  def test_every_frame_goes_to_the_large_model_from_the_join_on(self):
+    booted = threading.Event()
+    connect = self._connect
+
+    def after_boot(should_stop=None):
+      booted.wait(5)
+      return connect()
+
+    self._connect = after_boot
+    s = self._state()
+    self.addCleanup(booted.set)
+    self.assertEqual(self._run(s), {'from': 'small'})
+    self.assertEqual(self.big.shadows, 0, 'nothing to send to before the join')
+    booted.set()
+    self._wait_joined(s)
+    for n in (1, 2, 3):
+      self.assertEqual(self._run(s), {'from': 'small'})
+      self.assertEqual(self.big.shadows, n)
+    self.assertEqual(s.big_model_state, 'ready')
+    s._engaged = False
+    self.assertEqual(self._run(s), {'from': 'big'})
+    self.assertEqual(self.big.shadows, 3, 'a driving model is not shadowed')
+    self.assertEqual(self.big.calls, 1)
+
+  def test_the_build_is_on_the_frame_after_the_join_and_the_swap_builds_nothing(self):
+    build = mock.Mock(wraps=self._build)
+    s = self._make(self.small, self._connect, build)
+    self.addCleanup(self._close, s)
+    self._wait_joined(s)
+    self.assertEqual(self._run(s), {'from': 'small'})
+    build.assert_called_once()
+    self.assertIsNone(s._joined)
+    self.assertTrue(s.big_model_available)
+    s._engaged = False
+    self.assertEqual(self._run(s), {'from': 'big'})
+    build.assert_called_once()
+    self.assertFalse(self.big.warmed)
+    self.assertTrue(any('every frame from here' in line for line in self.log.lines('warning')))
+
+  def test_the_frame_is_sent_while_the_small_model_works_or_after_it_if_it_never_calls_back(self):
+    # the send overlaps the small model's GPU work through its after_enqueue;
+    # a small model that never calls back still gets the frame sent
+    s = self._state()
+    self._wait_joined(s)
+    sent_inside = []
+    run = self.small.run
+
+    def watching(bufs, transforms, inputs, after_enqueue=None):
+      def enqueued():
+        after_enqueue()
+        sent_inside.append(self.big.sent)
+      return run(bufs, transforms, inputs, enqueued if after_enqueue is not None and self.small.calls_back else None)
+    self.small.run = watching
+    self.assertEqual(self._run(s), {'from': 'small'})
+    self.assertEqual((sent_inside, self.big.shadows), ([True], 1))
+    self.small.calls_back = False
+    self.assertEqual(self._run(s), {'from': 'small'})
+    self.assertEqual((sent_inside, self.big.shadows), ([True], 2))
+
+  def test_a_link_that_fails_with_the_small_model_driving_is_lost_not_handed_back(self):
+    for failing in ('prepare', 'send'):
+      self.big = FakeModel('big', chestnut=True, client=object())
+      s = self._state()
+      self._wait_joined(s)
+      self.assertEqual(self._run(s), {'from': 'small'})
+      if failing == 'prepare':
+        self.big.prepare_raises = RuntimeError('peer closed the connection')
+      else:
+        self.big.send = mock.Mock(side_effect=RuntimeError('send failed'))
+      handovers = s.handovers
+      self.assertEqual(self._run(s), {'from': 'small'}, failing)
+      self.assertEqual(s.handovers, handovers, 'the small model drove throughout')
+      self.assertEqual((s._drops, s._lags), (1, 0))
+      self.assertFalse(s.big_model_available)
+      self.assertEqual(s.big_model_state, 'retrying')
+      self.assertTrue(wait_for(lambda: self.big.closed), failing)
+      self.assertGreater(s._rejoin_at, 0.0)
+      self._close(s)
 
 
 class LagTest(JoiningBase):
@@ -654,6 +773,15 @@ class LagTest(JoiningBase):
     self.frame(took=joining.LATE_FRAME + 0.01)
     self.frame()
 
+  def behind(self):
+    """One frame after which the large model says it held too many
+    (model_state.JetlinkModelState.behind), published as it came."""
+    self.big.behind = 'held 5 frames in a row'
+    try:
+      return self.frame(took=0.046)
+    finally:
+      self.big.behind = None
+
   def assert_big_drives(self):
     self.assertEqual(self.frame(), {'from': 'big'})
     self.assertTrue(self.s.chestnut)
@@ -714,6 +842,33 @@ class LagTest(JoiningBase):
     self.assert_big_drives()
     self.reset.assert_not_called()
 
+  def test_a_model_that_says_it_held_too_many_is_handed_back_on_the_next_frame(self):
+    handovers = self.s.handovers
+    self.assertEqual(self.behind(), {'from': 'big'}, 'published as it came')
+    self.assertEqual(self.s.handovers, handovers + 1)
+    self.assertEqual(self.frame(), {'from': 'small'})
+    self.assertEqual((self.s._lags, self.s._drops), (1, 0))
+    self.assertTrue(any('held 5 frames' in line for line in self.log.lines('warning')))
+
+  def test_the_large_model_runs_every_frame_again_after_a_hand_back(self):
+    shadows = self.big.shadows
+    self.hand_back()
+    self.assertEqual(self.frame(), {'from': 'small'})
+    self.assertEqual(self.big.shadows, shadows, 'a model handed back is retired, not shadowed')
+    self.s._rejoin_at = 0.0
+    self.s._rejoin.set()
+    self._wait_joined(self.s)
+    # engaged through the rejoin: the new large model runs every frame
+    # without driving, and swaps in with no build when the window opens
+    self.s._engaged = True
+    for _ in range(3):
+      self.assertEqual(self.frame(), {'from': 'small'})
+    self.assertEqual(self.big.shadows, shadows + 3)
+    self.assertEqual(self.s.big_model_state, 'ready')
+    self.s._engaged = False
+    self.swap()
+    self.settle()
+
   def test_lag_never_blames_the_cable(self):
     for _ in range(joining.DROPS_TO_BLAME_CABLE):
       self.hand_back()
@@ -725,9 +880,10 @@ class LagTest(JoiningBase):
     self.frame(took=joining.SLOW_FRAME + 0.005)
     self.hand_back()
     self.assertFalse(self.s.chestnut)
-    self.assertIsNone(self.s._slow_at)
-    # the join comes back and swaps: its first frames are slow and forgiven
+    # the join comes back and swaps with no strike against it: its first
+    # frames are slow and forgiven, and one slow frame after is jitter
     self.rejoin()
+    self.assertIsNone(self.s._slow_at)
     self.frame(took=joining.SLOW_FRAME + 0.005)
     self.assert_big_drives()
 
@@ -867,6 +1023,8 @@ class ReplugTest(JoiningBase):
     self.s._engaged = False
     self._run(self.s)
     self.assertTrue(self.s.chestnut)
+    # past the quick retries: the shortcut matters once the backoff is long
+    self.s._failures = joining.QUICK_RETRIES
 
   def lose_the_link(self):
     self.big.raises = RuntimeError('host dropped the gadget configuration (udc: not attached)')
@@ -892,7 +1050,7 @@ class ReplugTest(JoiningBase):
   def test_a_host_back_before_the_backoff_began_was_still_replugged(self):
     # the teardown between the loss and the backoff can take longer than a replug
     self.attached = False
-    with mock.patch.object(self.s, '_close_retired', side_effect=lambda: setattr(self, 'attached', True)):
+    with mock.patch.object(self.s, '_close_retired', side_effect=lambda *why: setattr(self, 'attached', True)):
       self.lose_the_link()
       self.assertTrue(self.connects_within(1.0))
 
@@ -967,36 +1125,28 @@ class EngagementTest(unittest.TestCase):
     self.addCleanup(lambda: (s.close(), [t.join(5) for t in s._threads]))
     return s
 
-  def wait_for(self, predicate, timeout=2.0):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-      if predicate():
-        return True
-      time.sleep(0.005)
-    return False
-
   def test_disengaged_and_fresh_opens_the_window(self):
     self.engaged = False
     s = self.state()
-    self.assertTrue(self.wait_for(lambda: s._window_open))
+    self.assertTrue(wait_for(lambda: s._window_open))
     self.assertEqual(set(self.answers), {joining.ENGAGEMENT_POLL_MS})
 
   def test_engaged_or_unknown_keeps_it_shut(self):
     # the adapter answers True for "not known" too: missing, dead or invalid messages
     s = self.state()
-    self.assertTrue(self.wait_for(lambda: self.answers))
+    self.assertTrue(wait_for(lambda: self.answers))
     time.sleep(0.05)
     self.assertFalse(s._window_open)
     self.engaged = False
-    self.assertTrue(self.wait_for(lambda: s._window_open))
+    self.assertTrue(wait_for(lambda: s._window_open))
     self.engaged = True
-    self.assertTrue(self.wait_for(lambda: not s._window_open))
+    self.assertTrue(wait_for(lambda: not s._window_open))
 
   def test_a_poller_that_stops_answering_shuts_it(self):
     # the frame thread expires the answer: a stalled watcher cannot leave it open
     self.engaged = False
     s = self.state()
-    self.assertTrue(self.wait_for(lambda: s._window_open))
+    self.assertTrue(wait_for(lambda: s._window_open))
     s._engagement_updated = time.monotonic() - 1.0
     self.assertFalse(s._window_open)
 
@@ -1008,7 +1158,7 @@ class EngagementTest(unittest.TestCase):
     self.made_on = events
     with mock.patch.object(joining, 'background_thread', lambda: events.append(('off', threading.current_thread().name))):
       s = self.state()
-      self.assertTrue(self.wait_for(lambda: len(events) >= 3))
+      self.assertTrue(wait_for(lambda: len(events) >= 3))
     join_loop, watcher = (t.name for t in s._threads)
     self.assertIn(('off', join_loop), events)
     self.assertLess(events.index(('off', watcher)), events.index(watcher), 'made the poller on a realtime thread')
@@ -1016,7 +1166,7 @@ class EngagementTest(unittest.TestCase):
   def test_the_poller_is_made_on_the_watchers_thread(self):
     # a SubMaster's sockets belong to the thread that made them
     self.state()
-    self.assertTrue(self.wait_for(lambda: self.made_on))
+    self.assertTrue(wait_for(lambda: self.made_on))
     self.assertNotEqual(self.made_on, [threading.current_thread().name])
 
 class FakeV2Model(FakeModel):

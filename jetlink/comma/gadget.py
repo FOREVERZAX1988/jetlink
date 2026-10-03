@@ -57,11 +57,11 @@ def set_logger(logger) -> None:
 # whose comma end is 192.168.60.1 (jetlink-root.sh gadget --ios, and net, which
 # also runs the DHCP server), and the phone dials CABLE_ADDR whenever it holds
 # a lease on that network.
-# The owner hands the accepted socket to whoever borrows the link; nothing
-# writes to the endpoint files, which a phone never reads. The setting, not a
-# guess, says which: a hello over FunctionFS to a phone blocks 15 s and bounces
-# the gadget, and waiting to see whether a phone dials cost every Jetson
-# reconnect 5 to 10 s.
+# Whoever holds the loan listens for the dial, the owner while nobody does;
+# nothing writes to the endpoint files, which a phone never reads. The setting,
+# not a guess, says which: a hello over FunctionFS to a phone blocks 15 s and
+# bounces the gadget, and waiting to see whether a phone dials cost every
+# Jetson reconnect 5 to 10 s.
 LINK = Path("/dev/shm/jetlink-link")        # "cable <peer ip>" while a phone is dialed in
 NET_STATUS = Path("/dev/shm/jetlink-net")   # jetlink-root.sh: "ok 192.168.60.1 <netdev>", "error: ...", "net: off" (USB)
 CABLE_ADDR = (CABLE_ADDRESS, DEFAULT_PORT)
@@ -89,25 +89,28 @@ def _write(path: Path, text: str | None, what: str) -> bool:
     return False
 
 
-def _link_record() -> list[str]:
-  return read(LINK).split()
+def link_state() -> tuple[str | None, str | None]:
+  """The link record in one read: the gadget the owner built, 'cable' for
+  iOS (the phone's network interface on the gadget) or 'usb', and on the
+  cable the phone's address while a link is up. (None, None) before the
+  owner has said."""
+  record = read(LINK).split()
+  if record[:1] not in (['cable'], ['usb']):
+    return None, None
+  return record[0], (record[1] if record[0] == 'cable' and len(record) > 1 else None)
 
 
 def link_kind(mode: str | None = None) -> str:
-  """The gadget the owner built and published: 'cable' for iOS (the phone's
-  network interface on the gadget) or 'usb'. `mode`, the Accelerator Link
-  setting as the caller read it, stands in only until the owner has said: it
-  may have moved and be waiting for the car to park. Without either, 'usb'."""
-  record = _link_record()
-  if record[:1] in (['cable'], ['usb']):
-    return record[0]
-  return 'cable' if mode == 'ios' else 'usb'
+  """link_state's kind, or a stand-in: `mode`, the Accelerator Link setting as
+  the caller read it, stands in only until the owner has said: it may have
+  moved and be waiting for the car to park. Without either, 'usb'."""
+  kind, _ = link_state()
+  return kind or ('cable' if mode == 'ios' else 'usb')
 
 
 def link_peer() -> str | None:
   """The phone's address, while a cable link is up."""
-  record = _link_record()
-  return record[1] if record[:1] == ['cable'] and len(record) > 1 else None
+  return link_state()[1]
 
 
 def note_link(kind: str, peer: str | None = None) -> None:

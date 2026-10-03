@@ -98,8 +98,10 @@ class TcpTransport(StreamTransport):
     self._set_timeout(timeout)
     try:
       n = self.sock.recv_into(dest, dest.nbytes)
-    except TimeoutError:
-      return 0  # recv_into delivers nothing on timeout; _fill owns the deadline
+    except (TimeoutError, BlockingIOError):
+      # nothing in time, or nothing at all on a read that may not wait (a
+      # timeout of 0 makes the socket non-blocking); _fill owns the deadline
+      return 0
     except OSError as e:
       raise LinkError(f"recv failed: {e}") from e
     if n == 0:
@@ -107,10 +109,14 @@ class TcpTransport(StreamTransport):
     return n
 
   def close(self) -> None:
-    try:
-      self.sock.close()
-    except OSError:
-      pass
+    # shut down first: a close alone keeps the connection up while another
+    # process holds a copy of the socket (the comma's gadget owner holds the
+    # phone's dial), and the peer hears nothing until that copy goes too
+    for let_go in (lambda: self.sock.shutdown(socket.SHUT_RDWR), self.sock.close):
+      try:
+        let_go()
+      except OSError:
+        pass
 
 
 def _tune(sock: socket.socket) -> None:

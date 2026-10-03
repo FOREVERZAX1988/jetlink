@@ -18,7 +18,6 @@ import socket
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import unittest
 from pathlib import Path
@@ -653,10 +652,10 @@ class TestUsb(OwnerTest):
   """Accelerator Link USB: a Jetson or a Mac. The plain gadget, lent at once;
   nothing waits for a phone and nothing of the phone's runs."""
 
-  def test_borrowers_are_never_held_off(self):
+  def test_borrowers_are_lent_the_endpoint_files(self):
     o = self.owner()
     o.step()
-    self.assertFalse(o.holding())
+    self.assertFalse(o.cable_mode())
     self.assertEqual(gadget.link_kind(), 'usb')
 
   def test_no_network_and_no_listener(self):
@@ -684,14 +683,37 @@ class IosTest(OwnerTest):
 
 
 class TestCable(IosTest):
-  """The phone dials the owner, and a borrower gets its socket; nothing is
-  ever lent the endpoint files, which a phone does not read."""
+  """The phone dials the comma: the owner while nobody holds the loan, the
+  borrower while it does; nothing is ever lent the endpoint files, which a
+  phone does not read."""
 
-  def test_borrowers_wait_for_the_phone(self):
+  def test_borrowers_listen_for_the_phone_themselves(self):
     o = self.owner()
     o.step()
-    self.assertTrue(o.holding())
+    self.assertTrue(o.cable_mode())
     self.assertEqual(gadget.link_kind(), 'cable')
+
+  def test_a_borrower_takes_the_port_and_the_owner_listens_again_after(self):
+    o = self.owner()
+    o.step()
+    phone = self.dial(o)
+    o.step()
+    self.assertTrue(o.cable.held)
+    # the lender, on a borrow: the owner's listener and the dial it holds go
+    o.cable.vacate()
+    o.lender.lent = True
+    phone.settimeout(3.0)
+    self.assertEqual(phone.recv(1), b'')
+    o.step()
+    self.assertFalse(o.cable.listening, 'listened while the borrower held the port')
+    # the loan ends: the owner listens again, and the phone coming back is not news
+    o.lender.lent = False
+    o.spawn_worker.reset_mock()
+    o.step()
+    self.assertTrue(o.cable.listening)
+    self.dial(o)
+    o.step()
+    o.spawn_worker.assert_not_called()
 
   def test_a_dial_is_the_link(self):
     o = self.owner()
@@ -749,7 +771,7 @@ class TestCable(IosTest):
     o.step()
     self.assertFalse(o.cable.held)
     self.assertIsNone(gadget.link_peer())
-    self.assertTrue(o.holding(), 'lent the endpoint files to a phone between its dials')
+    self.assertTrue(o.cable_mode(), 'lent the endpoint files to a phone between its dials')
 
   def test_a_phone_that_hung_up_does_not_send_the_owner_dormant(self):
     # the record says the far end sleeps (a run with nothing to do never
@@ -935,7 +957,7 @@ class TestSwitchingMode(OwnerTest):
     with mock.patch.object(gadget, 'built_for_ios', return_value=True):
       o.step()
     self.assertTrue(o.built_ios)
-    self.assertTrue(o.holding())
+    self.assertTrue(o.cable_mode())
     self.assertEqual(gadget.link_kind(), 'cable')
     self.setup_gadget.assert_not_called()
 
@@ -1002,7 +1024,7 @@ class TestLeavingIos(IosTest):
   def assert_usb(self, o):
     self.setup_gadget.assert_called_once_with(False)
     self.assertFalse(o.built_ios)
-    self.assertFalse(o.holding())
+    self.assertFalse(o.cable_mode())
     self.assertEqual(gadget.link_kind(), 'usb')
 
   def test_no_phone_and_a_borrower_waiting_for_one(self):
@@ -1014,10 +1036,13 @@ class TestLeavingIos(IosTest):
     o.close_link.assert_called_once()
     self.assert_usb(o)
 
-  def test_a_real_borrower_waiting_for_a_dial_is_lent_the_usb_gadget(self):
+  def test_a_real_borrower_is_told_the_cable_at_once_and_the_usb_gadget_after_the_switch(self):
+    # nobody waits at the lender for a phone any more: a borrower in iOS is
+    # told the cable and listens for the dial itself, so a switch out of iOS
+    # finds nothing of a borrower's under the rebuild
     o = self.make()
     sock = self.tmp / 'lend.sock'
-    o.lender = lending.Lender(o.lendable, o.bounce_gadget, path=sock, holding=o.holding, cable=o.cable,
+    o.lender = lending.Lender(o.lendable, o.bounce_gadget, path=sock, cable=o.cable_mode, vacate=o.cable.vacate,
                               server=o.note_server)
     self.addCleanup(o.lender.stop)
     self.addCleanup(o.cable.close)
@@ -1030,28 +1055,24 @@ class TestLeavingIos(IosTest):
     o.seen = o.settings.marks()
     o.had_host = True
     self.assertTrue(o.lender.start())
-    got = {}
-
-    def borrow():
-      got['loan'] = lending.borrow('modeld', timeout=5.0, path=sock)
-
-    t = threading.Thread(target=borrow, daemon=True)
-    t.start()
+    loan = lending.borrow('modeld', timeout=5.0, path=sock)
+    self.assertIsNotNone(loan, 'a borrower in iOS was kept waiting')
+    self.assertTrue(loan.cable)
+    loan.close()
     deadline = time.monotonic() + 2.0
-    while not o.lender.lent and time.monotonic() < deadline:
+    while o.lender.lent and time.monotonic() < deadline:
       time.sleep(0.01)
-    self.assertTrue(o.lender.lent, 'the borrower never asked')
+    self.assertFalse(o.lender.lent)
     self.write('JetlinkLink', b'1')
     with mock.patch.object(gadget, 'bound_udc', return_value='a600000.dwc3'):
       o.step()
       self.assert_usb(o)
       # the USB gadget presented, as open_link does on the next step
       o.transport = mock.Mock(lendable=True)
-      t.join(5.0)
-    loan = got.get('loan')
-    self.assertIsNotNone(loan, 'the waiting borrower was never lent the USB gadget')
+      loan = lending.borrow('modeld', timeout=5.0, path=sock)
+    self.assertIsNotNone(loan, 'the next borrower was not lent the USB gadget')
     self.addCleanup(loan.close)
-    self.assertIsNone(loan.sock)   # the endpoint files, not a phone's socket
+    self.assertFalse(loan.cable)   # the endpoint files, not a phone's dial
     self.assertEqual(loan.udc, 'a600000.dwc3')
 
   def test_a_silent_phone_with_a_stuck_run_is_left_inside_the_grace(self):
@@ -1111,7 +1132,7 @@ class TestLeavingIos(IosTest):
     o.step()
     self.assertEqual(self.setup_gadget.call_args_list, [mock.call(False)] * 2)
     self.assertFalse(o.built_ios)
-    self.assertFalse(o.holding())
+    self.assertFalse(o.cable_mode())
 
   def test_off_lets_everything_go(self):
     o = self.owner()

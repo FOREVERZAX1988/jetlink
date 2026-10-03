@@ -44,6 +44,7 @@ public enum Pinned {
     ("PONG", 16),
     ("SHUTDOWN_REQ", 17),
     ("SHUTDOWN_RESP", 18),
+    ("LEAVE", 19),
   ]
   /// jetlink.protocol.Flag
   public static let flags: [(name: String, value: UInt32)] = [
@@ -78,6 +79,8 @@ public enum Pinned {
   ]
   /// jetlink.transport.tcp.CABLE_ADDRESS
   public static let cableAddress: String = "192.168.60.1"
+  /// jetlink.protocol.LEAVE_REASONS
+  public static let leaveReasons: [String] = ["behind", "lost", "stopped", "provisioned"]
   /// jetlink.spec.MODEL_RUN_FREQ
   public static let modelRunFrequency: Int = 20
   /// jetlink.spec.MODEL_CONTEXT_FREQ

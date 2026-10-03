@@ -143,6 +143,15 @@
       "name": "SHUTDOWN_RESP",
       "reserved": 0,
       "seq": 15007
+    },
+    {
+      "flags": 1,
+      "hex": "4a4c4e4b03001300873e00000100000001000000630000000000000000000000",
+      "length": 1,
+      "msg_type": 19,
+      "name": "LEAVE",
+      "reserved": 99,
+      "seq": 16007
     }
   ],
   "infer_req": [

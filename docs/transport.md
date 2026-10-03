@@ -45,8 +45,9 @@ settings):
 - Changing the setting rebuilds the gadget (an unplug), so it changes only
   offroad.
 - Comma side: the `jetlink.comma` package. The owner holds the gadget and lends
-  modeld its endpoints or the phone's dial; every root step goes through
-  `scripts/comma/jetlink-root.sh`. See the
+  modeld its endpoints, or on the cable the right to take the phone's dial:
+  whoever holds the loan listens for it, the owner while nobody does. Every
+  root step goes through `scripts/comma/jetlink-root.sh`. See the
   [installation reference](installation-reference.md#custom-usb-integrations).
 
 ### Bus speed
@@ -141,9 +142,18 @@ bench tools). There is one version: update the comma and Jetlink together.
   on its small model.
 - **Session.** The comma says hello, asks for its model's engine (uploading
   the model if the server lacks it), waits until it is ready, then sends one
-  INFER_REQ per model frame, 20 a second. While it waits it pings; a server
-  that has not heard this comma's hello (it restarted meanwhile) answers with
-  an error, and the comma says hello again.
+  INFER_REQ per camera frame, 20 a second, from then on: whether the big
+  model is driving or the small one still is, so the big model's history and
+  hidden state are current and warm when it takes over. The server cannot
+  tell the two apart. Until the first frame goes out it pings; a server that
+  has not heard this comma's hello (it restarted meanwhile) answers with an
+  error, and the comma says hello again.
+- **Late replies.** With the big model driving, a reply not back 46 ms into
+  the frame is not waited for: the comma publishes the previous frame's
+  output again and reads the late reply with the next frame's. Five of those
+  in a row, or more than twenty in ten seconds, hand the drive back to the
+  small model (`behind` in the leave). A host that answers nothing for 0.2 s
+  has lost the link, whichever model is driving (`lost`).
 - **INFER_REQ.** The comma's warped camera images (uint8) and 12 floats
   (`desire`, `traffic_convention`, `action_t`): 393,304 bytes with the header,
   409,600 over USB with the comma's padding.

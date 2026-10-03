@@ -44,7 +44,17 @@ struct StatusContent: View {
   private var layout: some View {
     VStack(spacing: StatusContent.spacing) {
       if state.needsForeground {
-        foregroundBanner
+        banner(
+          "Keep Jetlink on Screen", "The big model stops while Jetlink is in the background.",
+          symbol: "exclamationmark.triangle.fill")
+      }
+      // in every arrangement: the Link tile's note sits below the fold upright
+      // and is not drawn on a phone on its side, so a USB 2 cable, hub or
+      // phone read as Connected and nothing more
+      if let medium = state.linkMedium, let advice = medium.advice(cable: true) {
+        banner(
+          "\(medium.title) Link", "\(advice) \(USBSpeedGuide.summary(for: state.deviceName))",
+          symbol: "tortoise.fill")
       }
       cards
     }
@@ -113,18 +123,18 @@ struct StatusContent: View {
     }
   }
 
-  /// Shown while the scene is not active, so it is what the person sees
-  /// when they come back to an app the system was about to suspend.
-  private var foregroundBanner: some View {
+  /// An orange banner over the cards: something the person should act on
+  /// now, such as an app the system is about to suspend or a slow link.
+  private func banner(_ title: String, _ detail: String, symbol: String) -> some View {
     Label {
       VStack(alignment: .leading, spacing: 2) {
-        Text("Keep Jetlink on Screen")
+        Text(title)
           .font(.subheadline.weight(.semibold))
-        Text("The big model stops while Jetlink is in the background.")
+        Text(detail)
           .font(.footnote)
       }
     } icon: {
-      Image(systemName: "exclamationmark.triangle.fill")
+      Image(systemName: symbol)
     }
     .foregroundStyle(.white)
     .padding(14)
