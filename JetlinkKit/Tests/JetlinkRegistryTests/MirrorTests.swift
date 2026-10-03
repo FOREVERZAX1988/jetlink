@@ -17,10 +17,12 @@ struct MirrorTests {
     // HuggingFace: the proxy swaps the host, then direct. A GitHub prefix
     // mirror does not carry HuggingFace's hosts.
     let hf = "https://huggingface.co/api/models/commaai/openpilot_driving_models/tree/main"
-    #expect(Mirrors.candidates(for: hf) == [
-      "https://hf-mirror.com/api/models/commaai/openpilot_driving_models/tree/main",
-      hf,
-    ])
+    #expect(
+      Mirrors.candidates(for: hf) == [
+        "https://hf-mirror.com/api/models/commaai/openpilot_driving_models/tree/main",
+        hf,
+      ],
+    )
     // The LFS batch endpoint, a .git path, proxies the same way.
     let batch = "https://huggingface.co/commaai/openpilot-lfs.git/info/lfs"
     #expect(Mirrors.candidates(for: batch).first == "https://hf-mirror.com/commaai/openpilot-lfs.git/info/lfs")

@@ -43,7 +43,7 @@ public enum Mirrors {
     let rest = base[schemeEnd.upperBound...]
     let host = rest.prefix { $0 != "/" && $0 != "?" && $0 != "#" }
     guard !host.isEmpty else { return nil }
-    return scheme + String(host)
+    return scheme + "://" + String(host)
   }
 
   static func host(of url: String) -> String? {
