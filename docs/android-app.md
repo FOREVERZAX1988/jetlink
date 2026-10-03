@@ -1,8 +1,8 @@
 # Jetlink for Android
 
 **Experimental, and not yet measured on a phone.** Runs the Jetlink server in an
-Android app, on a Snapdragon's NPU or any phone's GPU, connected to the comma by
-USB. Each release carries the APK. Run the [Benchmark](#benchmark) before you drive to see
+Android app, on a Pixel's Tensor NPU, a Snapdragon's NPU or any phone's GPU,
+connected to the comma by USB. Each release carries the APK. Run the [Benchmark](#benchmark) before you drive to see
 if your phone keeps up.
 
 Mac: [Jetlink for Mac](macos-app.md). iPhone: [Jetlink for iPhone and iPad](iphone-app.md).
@@ -27,9 +27,18 @@ frame. On a Mac's GPU the LiteRT path takes 37 ms a frame for Cinque Terre V3,
 and a phone's GPU is slower, so only the newest flagships may keep up. Run the
 [Benchmark](#benchmark).
 
+On a Pixel 8 or later (Google Tensor G3, G4, G5), the model runs on the
+phone's NPU. The phone compiles the model for its NPU, with the compiler that
+comes with Android on a Pixel. That takes minutes the first time, and again
+after a system update. A model the NPU cannot take runs on the GPU instead.
+This has not run on a phone yet, so check its outputs from a Mac with
+`scripts/verify_parity.py` before you drive on it. The Pixel 6 and 7 (Tensor
+G1, G2) run on the GPU.
+
 On a Snapdragon you can instead choose the NPU, the Hexagon, through Qualcomm's
 QNN runtime (Settings > Processor). It has not run on a phone yet, so check its
 outputs from a Mac with `scripts/verify_parity.py` before you drive on it.
+**Automatic** keeps a Snapdragon on the GPU for now.
 
 | Snapdragon | NPU | Expect on the NPU |
 | --- | --- | --- |
@@ -165,9 +174,9 @@ A hot phone slows down and frames miss 50 ms.
 | Link | USB 3 or USB 2 while connected (Wi-Fi for a bench tool) |
 | Port | The TCP port for `verify_parity.py` from a Mac, 5599 by default |
 | Wi-Fi | The phone's Wi-Fi address and port, for a Mac's bench tools |
-| Processor | **GPU** (default): the whole model on the GPU through LiteRT. On a Snapdragon, also **NPU + GPU**: the vision model on the NPU, the rest on the GPU, as a Mac splits it; and **NPU**: the whole model on the NPU. **CPU**: for the emulator, seconds a frame. Changing it prepares the model again |
-| Keep NPU Awake | With the NPU, on by default. Holds the NPU at full speed between frames. Uses some power |
-| Keep CPU Awake | With the NPU: holds the CPU's clocks up between frames, through Android's performance hints, or a busy core on a phone without them. Uses some power |
+| Processor | **Automatic** (default): the NPU on a Pixel 8 or later, else the GPU. **GPU**: the whole model on the GPU through LiteRT. On a Pixel 8 or later, also **NPU**: the whole model on the Tensor NPU, or on the GPU when the NPU cannot take it. On a Snapdragon, also **NPU + GPU**: the vision model on the NPU, the rest on the GPU, as a Mac splits it; and **NPU**: the whole model on the NPU. **CPU**: for the emulator, seconds a frame. Changing it prepares the model again |
+| Keep NPU Awake | With a Snapdragon's NPU, on by default. Holds the NPU at full speed between frames. Uses some power |
+| Keep CPU Awake | Holds the CPU's clocks up between frames, through Android's performance hints, or a busy core on a phone without them. Uses some power |
 | Keep Screen On | On by default |
 | Help | How to connect the comma, and the logs |
 | Server | **Restart Server** starts it again with the same settings; **Stop Server** stops serving until **Start Server** |

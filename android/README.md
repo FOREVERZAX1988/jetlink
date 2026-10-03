@@ -14,7 +14,7 @@ native library, `libjetlink.so`:
 | --- | --- |
 | `JetlinkKit` | The server, the model registry and the ONNX preparation, shared with every platform |
 | `JetlinkORT/OrtBackend.swift` | onnxruntime's profiles; `htp`, `htp-whole` and `gpu` use its QNN provider on a Snapdragon's NPU and GPU |
-| `JetlinkLiteRT`, `CLiteRt` | LiteRT's profiles `gpu` and `cpu`, through LiteRT's C API opened at run time: the GPU path every phone defaults to |
+| `JetlinkLiteRT`, `CLiteRt` | LiteRT's profiles `gpu`, `cpu` and `npu`, through LiteRT's C API opened at run time: the GPU path every phone can take, and a Google Tensor's NPU, compiled for on the phone |
 | `JetlinkONNX/LiteRTPreparation.swift`, `LiteRTLowering.swift`, `LiteRTOps.swift` | The conversion to `.tflite` on the phone, in the forms LiteRT's GPU needs (fp16-safe LayerNorm, no rank-5 tensors, constant gathers as slices) |
 | `JetlinkServer/UsbfsPipes.swift`, `CUsbfs` | The comma's bulk pair through usbdevfs, on the descriptor the app opened |
 | `JetlinkKit/AppSnapshot.swift` | The app's state as the screens draw it, from the server's events |
@@ -135,21 +135,59 @@ Nothing of this has run on a phone yet. What to check first, in order:
    built (`QNN(htp) then QNN(gpu)`) and how long the NPU compile took. It runs
    in float16 on the NPU without the GPU path's LayerNorm rewrite, so
    `verify_parity.py` decides whether it can be the default there.
+6. On a Pixel 8 or later, the same for **NPU** (Automatic's pick there). The
+   log says `compiling for the NPU`, how long it took and what runs the model:
+   `NPU(Tensor G5)`, or a warning that the NPU's compiler could not take it and
+   the GPU runs it. `adb logcat -s litert` has the compiler's reason. Watch the
+   app's memory during that compile (`adb shell dumpsys meminfo
+   io.zoompilot.jetlink.android`): Google's compiler for Tensor needed about
+   11 times the model's weights on a PC, 8 GB and more for a big model, and a
+   compile that gets the app killed is not tried again on that system build
+   (the `.npu-compiling` file beside the artifact says so).
+
+The NPU path follows LiteRT 2.2.0's source. LiteRT's Google Tensor plugin
+(`libLiteRtCompilerPlugin_google_tensor.so`, which the APK carries) hands the
+converted model to `EdgeTpuCompilerCompileFlatbuffer` in the Pixel's
+`/vendor/lib64/libedgetpu_litert.so`. The September 2026 system images of the
+Pixel 8, 9 and 10 Pro Fold all export it, and list the library as public to
+apps. LiteRT keeps the compiled model in the artifact's `npu-cache/`, keyed by
+the phone's build fingerprint, and the artifact records the fingerprint too, so
+a system update prepares the model again.
 
 The first phone a user ran it on was a Pixel 10 Pro Fold (Google Tensor G5,
 2026-10-01). QNN cannot drive a Tensor: every op fell to onnxruntime's CPU
 provider on one thread, minutes a frame, so QNN's choices are a Snapdragon's
-only, and every phone now defaults to LiteRT's GPU. onnxruntime 1.29's Android CPU provider also runs
+only, a Pixel 8 or later defaults to its Tensor NPU through LiteRT, and every other phone to LiteRT's GPU. onnxruntime 1.29's Android CPU provider also runs
 an fp16 Gemm with a transposed weight on one thread, about 100 times slower than
 the same product as a MatMul (8 s against 0.09 s for 256x1024x1024 on the
 emulator), so the CPU profile prepares the graph without CoreML's Gemm rewrite.
 The QNN profiles keep it: check on a Snapdragon that the NPU takes every Gemm,
 since one left to the CPU costs seconds.
 
+## Checking a model against Google's compiler for Tensor
+
+A phone compiles the model for its NPU itself, so nothing here needs Google's
+Tensor SDK. With access to the SDK's beta (an x86-64 Linux compiler), its
+ahead-of-time compiler shows on a PC whether a converted model compiles for a
+Tensor G3 to G6 at all:
+
+```
+android/scripts/tensor-compile-check.sh path/to/litert_plugin_compiler.tar.gz model.tflite Tensor_G5
+```
+
+`model.tflite` is the one in a LiteRT artifact (`jetlink-server build ONNX
+--backend litert` on a Mac writes one). The script runs the compiler in Docker
+for linux/amd64. It needs about 11 times the model's weights in memory: 8 GB
+and more for a big model.
+
 ## Licenses
 
 The APK carries LiteRT's C library and GPU accelerator (Apache 2.0, from Maven,
-`com.google.ai.edge.litert:litert`), onnxruntime (MIT) and Qualcomm's QNN runtime libraries from
+`com.google.ai.edge.litert:litert`), LiteRT's Google Tensor dispatch library
+and compiler plugin (from LiteRT's v2.2.0 GitHub release,
+`litert_npu_runtime_libraries_jit.zip`; their source directory in LiteRT
+carries Google's Tensor SDK terms beside the Apache license, read them before
+you share a build), onnxruntime (MIT) and Qualcomm's QNN runtime libraries from
 Maven (`com.qualcomm.qti:qnn-runtime`, which `onnxruntime-android-qnn`
 depends on), under Qualcomm's AI Stack License: redistributable only inside an
 app, not on their own. That license also advises against what it calls
