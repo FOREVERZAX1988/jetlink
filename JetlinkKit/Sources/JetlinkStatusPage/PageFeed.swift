@@ -43,8 +43,12 @@ final class PageFeed: @unchecked Sendable {
     fileprivate var dropped = false
   }
 
-  /// Replayed in this order, then the stats history.
-  static let order = ["hello", "server", "link", "engine", "inventory"]
+  /// Replayed in this order, then the stats history. The catalog, the last
+  /// download and the last benchmark exist only once a signed-in page asked
+  /// for them.
+  static let order = ["hello", "server", "link", "engine", "inventory", "catalog", "download", "benchmark"]
+  /// Frames this recent mean the car is driving on the big model.
+  static let driving: TimeInterval = 10
   static let keepalive = Data(": keepalive\n\n".utf8)
 
   let limits: Limits
@@ -61,6 +65,7 @@ final class PageFeed: @unchecked Sendable {
   private var hwFrame: Data?
   private var sampling = false
   private var lastLeft = -TimeInterval.infinity
+  private var lastStats = -TimeInterval.infinity
   private var stopped = false
 
   init(hardware: (any PageHardwareSource)?, limits: Limits = Limits(), clock: @escaping @Sendable () -> TimeInterval = PageFeed.uptime) {
@@ -69,12 +74,12 @@ final class PageFeed: @unchecked Sendable {
     self.clock = clock
   }
 
-  /// What a page shows. The catalog, downloads, imports and benchmarks are
-  /// the apps' model management, and replies never come: nothing here sends
-  /// a command.
+  /// What a page shows. The catalog, downloads and benchmarks only come
+  /// after a signed-in page's command; imports are the apps', and replies go
+  /// to the page that asked, never here.
   static func isRelayed(_ event: ControlEvent) -> Bool {
     switch event {
-    case .hello, .server, .link, .engine, .inventory, .stats: true
+    case .hello, .server, .link, .engine, .inventory, .stats, .catalog, .download, .benchmark: true
     default: false
     }
   }
@@ -113,6 +118,7 @@ final class PageFeed: @unchecked Sendable {
     defer { condition.unlock() }
     if isStats {
       stats.append((frame, at))
+      lastStats = max(lastStats, at)
       trimHistory(now: at)
     } else {
       if onlyNew && latest[event.name] != nil { return }
@@ -185,6 +191,16 @@ final class PageFeed: @unchecked Sendable {
     let frames = stream.frames
     stream.frames = []
     return frames
+  }
+
+  /// The comma is connected and frames came in the last `driving` seconds:
+  /// nothing that restarts, builds, downloads or deletes may start now.
+  var isDriving: Bool {
+    flush()
+    condition.lock()
+    defer { condition.unlock() }
+    guard case .link(let link)? = latest["link"]?.event, link.state == .connected else { return false }
+    return clock() - lastStats < PageFeed.driving
   }
 
   /// Whether the hardware sampler runs: the one thing a test cannot see from

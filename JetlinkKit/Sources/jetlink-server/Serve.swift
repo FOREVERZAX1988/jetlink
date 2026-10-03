@@ -45,8 +45,13 @@
     @OptionGroup var cache: CacheArguments
     @Option(help: "Suspend after this many seconds with no gadget (Linux, with --usb); 0 never.")
     var sleepAfter = 0.0
-    @Option(help: "Serve the read-only status page on this port; 0 is off.")
+    @Option(help: "Serve the web page on this port; 0 is off.")
     var statusPort = 0
+    @Option(
+      help: ArgumentHelp(
+        "The web page's password file (web-password writes it). With it the page signs in and has the controls; without it, or without the file, it is read-only.",
+        valueName: "file"))
+    var webAuth: String?
     @Flag(help: "Power this machine off when the comma asks (Linux). Without it the comma is told ok and the machine stays up.")
     var poweroff = false
     @Flag(name: .customLong("no-preload"), help: "Do not load the engine loaded last before a comma asks.")
@@ -123,22 +128,30 @@
         log.info("stopped the server")
         if let page {
           page.stop()
-          log.info("stopped the status page")
+          log.info("stopped the web page")
         }
       }
     }
 
-    /// The read-only status page, on its own low-priority threads. It
-    /// observes `controller` and sends it no command, so a page never starts
-    /// a catalog fetch, a download or a build. Without its page it stays
-    /// off: the comma matters more than a page.
+    /// The web page, on its own low-priority threads. It observes
+    /// `controller`, and sends it a command only for a signed-in page, so an
+    /// open page never starts a catalog fetch, a download or a build by
+    /// itself. Without its page it stays off: the comma matters more than a
+    /// page.
     private func startPage(_ controller: ServerController, hardware: (any PageHardwareSource)?, log: ServerLog) -> PageServer? {
+      let auth = webAuth.map { WebAuth(url: URL(fileURLWithPath: $0)) }
+      var system: (any PageSystem)?
+      #if os(Linux)
+        system = PageHost()
+      #endif
       do {
-        let page = try PageServer.start(port: statusPort, controller: controller, version: productVersion(), hardware: hardware)
-        log.info("status page on port \(page.port)")
+        let page = try PageServer.start(
+          port: statusPort, controller: controller, version: productVersion(), hardware: hardware, auth: auth, system: system)
+        let signIn = auth == nil ? "read-only" : auth!.isConfigured ? "with sign-in" : "read-only until \(auth!.url.path) is written"
+        log.info("web page on port \(page.port), \(signIn)")
         return page
       } catch {
-        log.warning("no status page: \(error)")
+        log.warning("no web page: \(error)")
         return nil
       }
     }

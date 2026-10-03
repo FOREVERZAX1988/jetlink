@@ -294,7 +294,8 @@ public final class TCPListener: @unchecked Sendable {
 
   /// The next client's descriptor, blocking, and its address; the caller
   /// closes the descriptor. Nil once the listener is closed.
-  package func acceptConnection() -> (fd: Int32, peer: String)? {
+  /// A client's socket, `host:port`, and the host alone.
+  package func acceptConnection() -> (fd: Int32, peer: String, host: String)? {
     while true {
       lock.lock()
       let isClosed = closed
@@ -328,7 +329,7 @@ public final class TCPListener: @unchecked Sendable {
       // BSD hands the listener's O_NONBLOCK on to what it accepts.
       _ = fcntl(client, F_SETFL, fcntl(client, F_GETFL) & ~O_NONBLOCK)
       let (host, port) = TCPListener.peer(address)
-      return (client, "\(host):\(port)")
+      return (client, "\(host):\(port)", host)
     }
   }
 

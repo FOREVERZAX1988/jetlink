@@ -55,18 +55,27 @@ With **always-on power** and **Always on** chosen in the installer:
 Adapter and installer choices: [power setup](transport.md#recommended-jetson-power-setup).
 To keep it awake while you work on it, run `jetlink caffeinate`.
 
-## Status page
+<a id="status-page"></a>
+## Web page
 
-A read-only page for your phone: the link, model, frame times, hardware and
-log of a Jetson or PC.
+A page for your phone or computer: the link, model, frame times and hardware,
+and the setup the installer asked about, the models, updates, restarts and the
+log, behind a password.
 
-- **Turn on:** the installer asks for a port (5600; 0 is off). Change it with
-  `jetlink setup`.
+- **Turn on:** the installer asks for a port (5600; 0 is off) and a password
+  (Enter makes one and shows it at the end). `jetlink setup` changes the port;
+  `sudo jetlink password` sets a new password.
 - **Same network:** in the car, turn on tethering in the comma's network
   settings, then join the Jetson to it once (it reconnects by itself):
   `sudo nmcli dev wifi connect "<hotspot name>" password "<password>"`. Your
   phone's hotspot works the same way.
 - **Open:** `http://<jetson ip>:5600`. `jetlink status` prints the address.
+  Your phone stays signed in; add the page to its home screen.
+- **While driving:** the page shows everything and changes nothing that would
+  cost the comma frames: settings, updates, restarts and model work wait until
+  the car is parked.
+- **Plain HTTP:** use it on networks you trust, like the comma's hotspot or
+  your home Wi-Fi.
 
 ## Choose a model
 

@@ -223,6 +223,9 @@ def owner_config() -> OwnerConfig:
 # the USB-C port in sysfs, and the lend socket
 GADGET_FILES = ('LINK', 'NET_STATUS', 'GADGET_STATUS', 'LENDER_STATUS', 'DORMANT', 'SHUTDOWN_REQUEST', 'STATUS',
                 'STARTS', 'OWNER_LOCK', 'SERVER', 'CC_ORIENTATION')
+# the USB-C port's sysfs, by the name of its fake under a test's root
+PORT_FILES = {'POWER_ROLE': 'current_pr', 'DATA_ROLE': 'current_dr', 'CONTRACT': 'contract',
+              'TYPEC_MODE': 'typec_mode', 'CHARGER': 'real_type', 'UDC_MODE': 'udc-mode', 'USB_DEVICES': 'usb-devices'}
 
 
 def redirect(root: Path) -> list:
@@ -237,9 +240,8 @@ def redirect(root: Path) -> list:
                mock.patch.object(gadget, 'FFS_MOUNT', root / 'ffs-jetlink'),
                mock.patch.object(gadget, 'UDC_PATH', root / 'udc'),
                mock.patch.object(base, 'UDC_SYSFS', str(root / 'udc')),
-               mock.patch.object(lending, 'SOCKET', dev / 'jetlink-lend.sock'),
-               mock.patch.object(port, 'POWER_ROLE', root / 'current_pr'),
-               mock.patch.object(port, 'USB_DEVICES', root / 'usb-devices')]
+               mock.patch.object(lending, 'SOCKET', dev / 'jetlink-lend.sock')]
+  patchers += [mock.patch.object(port, name, root / f) for name, f in PORT_FILES.items()]
   for p in patchers:
     p.start()
   return patchers

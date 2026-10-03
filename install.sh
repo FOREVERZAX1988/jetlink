@@ -18,6 +18,10 @@
 #   --binary FILE    install this server tarball instead of downloading one
 #   --dry-run        check and ask, then show the plan without changing anything
 #   --uninstall      remove Jetlink
+#   --set KEY=VALUE  change one answer and apply it, asking nothing and keeping
+#                    the installed server; repeatable. On a Jetson:
+#                    power=always|switched, comma_poweroff=yes|no,
+#                    desktop=on|off. On a PC: autostart=yes|no
 #
 # Everything runs from main(), called on the last line, so a download cut off
 # part way through runs nothing, and nothing reading stdin can eat the script.
@@ -30,6 +34,9 @@ RELEASES_URL=https://github.com/zoompilot/jetlink/releases/download
 ETC_DIR=/etc/jetlink
 CONF="$ETC_DIR/install.conf"
 ENV_FILE="$ETC_DIR/server.env"
+# the web page's password: a salted hash and the key its sign-ins are signed
+# with, root's alone, written by the server's web-password
+AUTH_FILE="$ETC_DIR/web-auth.json"
 # what the Docker era installed, kept for a failed move and for going back by hand
 DOCKER_ERA_DIR="$ETC_DIR/docker-era"
 BIN=/usr/local/bin/jetlink
@@ -113,6 +120,11 @@ PRELOAD_S="${JETLINK_TEST_PRELOAD_S:-1200}"
 
 OPT_YES=0 OPT_UPDATE=0 OPT_RECONFIGURE=0 OPT_DRY_RUN=0 OPT_UNINSTALL=0
 OPT_REF="" OPT_BINARY=""
+# --set's KEY=VALUE pairs
+OPT_SET=()
+# 1 for a run that changes answers only: it keeps the server, its source and
+# the TensorRT there are, and needs no network (--set)
+KEEP_INSTALLED=0
 # as given, for the installer of an older release to take over with
 ARGS=()
 
@@ -247,7 +259,10 @@ version_ge() {
 
 INTERACTIVE=0
 open_input() {
-  if [ -n "${JETLINK_INPUT:-}" ]; then  # the installer's tests
+  if [ ${#OPT_SET[@]} -gt 0 ]; then
+    # --set asks nothing, so it runs where nobody can answer, like the web page
+    INTERACTIVE=0
+  elif [ -n "${JETLINK_INPUT:-}" ]; then  # the installer's tests
     exec 3<"$JETLINK_INPUT"
     INTERACTIVE=1
   elif [ "$OPT_YES" = 1 ] || [ "$OPT_UPDATE" = 1 ]; then
@@ -268,6 +283,14 @@ read_answer() {
   local __ra_reply=''
   IFS= read -r __ra_reply <&3 || true
   printf -v "$1" '%s' "$__ra_reply"
+}
+
+# read_answer without echo, for a password; the Enter typed does not show either
+read_secret() {
+  local __rs_reply=''
+  IFS= read -rs __rs_reply <&3 || true
+  printf '\n'
+  printf -v "$1" '%s' "$__rs_reply"
 }
 
 # ask_intro "question" ["explanation"...]
@@ -345,6 +368,31 @@ ask_port() {
   fi
   ask_intro "$@"
   ask_number "$__pt_var" "$__pt_def" 0 65535
+}
+
+# The web page's password, typed twice; Enter alone has the server make one.
+# Sets WEB_AUTH to typed (the password in WEB_PASSWORD) or generate.
+ask_web_password() {
+  ask_intro "Which password should the web page ask for?" \
+    "8 to 128 characters. Press Enter to have one made; it is shown at the end."
+  local __wp_a __wp_b
+  while true; do
+    printf '  Password: '
+    read_secret __wp_a
+    if [ -z "$__wp_a" ]; then
+      WEB_AUTH=generate WEB_PASSWORD=''
+      return
+    fi
+    if [ ${#__wp_a} -lt 8 ] || [ ${#__wp_a} -gt 128 ]; then
+      printf '  Please use 8 to 128 characters.\n'
+      continue
+    fi
+    printf '  Once more: '
+    read_secret __wp_b
+    [ "$__wp_a" = "$__wp_b" ] && break
+    printf '  The two did not match; please type it again.\n'
+  done
+  WEB_AUTH=typed WEB_PASSWORD=$__wp_a
 }
 
 # ---------------------------------------------------------------------------
@@ -761,9 +809,99 @@ ask_questions() {
     if [ "$auto" = y ]; then AUTOSTART=1; else AUTOSTART=0; fi
   fi
 
-  ask_port STATUS_PORT "$STATUS_PORT" "Which port for the status page?" \
-    "A read-only page for a phone on the same network, like the comma's hotspot." \
+  ask_port STATUS_PORT "$STATUS_PORT" "Which port for the web page?" \
+    "A page for your phone or computer on the same network, like the comma's" \
+    "hotspot: the status, the setup and the models, behind a password." \
     "0 turns it off."
+}
+
+# The web page's password, when the page is on. A run that asks nothing (an
+# update, --set, --yes, no terminal) keeps the one there is, or has the server
+# make one, shown at the end; one that asks offers to keep it. WEB_AUTH: keep,
+# typed (WEB_PASSWORD holds it until the server writes the file), generate,
+# or empty with the page off.
+WEB_AUTH='' WEB_PASSWORD=''
+choose_web_password() {
+  WEB_AUTH='' WEB_PASSWORD=''
+  [ "$STATUS_PORT" != 0 ] || return 0
+  local asks=1 keep
+  if [ "$INTERACTIVE" != 1 ] || { [ "$OPT_UPDATE" = 1 ] && [ "$HAD_INSTALL" = 1 ]; }; then asks=0; fi
+  if [ -f "$AUTH_FILE" ]; then
+    WEB_AUTH=keep
+    [ "$asks" = 1 ] || return 0
+    ask_yn keep y "Keep the web page's password?" "No sets a new one."
+    [ "$keep" = n ] || return 0
+  fi
+  if [ "$asks" = 1 ]; then ask_web_password; else WEB_AUTH=generate; fi
+}
+
+# --set: the install it changes, and the answers it gives, checked before
+# anything is shown. It keeps the server and the source that are here, so it
+# needs no network, and the web page can run it in the car.
+SET_KEYS="On a Jetson: power=always|switched, comma_poweroff=yes|no, desktop=on|off. On a PC: autostart=yes|no."
+SET_POWER='' SET_POWEROFF='' SET_DESKTOP='' SET_AUTOSTART=''
+check_set() {
+  [ ${#OPT_SET[@]} -gt 0 ] || return 0
+  [ "$DOCKER_ERA" = 0 ] || die "This install runs the server in Docker, and --set changes only a native one." \
+    "Move it out of Docker first: jetlink update"
+  { [ "$HAD_INSTALL" = 1 ] && [ -L "$SRC_ROOT/current" ]; } || die "Jetlink is not installed here, so --set has nothing to change." \
+    "Install it first: curl -fsSL $RAW_URL/main/install.sh | bash"
+  [ -f "$SOURCE_DIR/scripts/jetlink" ] || die "--set keeps the Jetlink files in $SOURCE_DIR, and they are missing." \
+    "Get them back with: jetlink update"
+  local kv key value
+  for kv in "${OPT_SET[@]}"; do
+    [[ $kv == ?*=* ]] || die "--set takes KEY=VALUE, not '$kv'." "$SET_KEYS"
+    key="${kv%%=*}" value="${kv#*=}"
+    case "$key" in
+      power|comma_poweroff|desktop)
+        [ "$JETSON" = 1 ] || die "--set $key is for a Jetson, and this computer is a PC." "$SET_KEYS" ;;
+      autostart)
+        [ "$JETSON" = 0 ] || die "--set autostart is for a PC: a Jetson always starts Jetlink." "$SET_KEYS" ;;
+      *) die "--set does not know '$key'." "$SET_KEYS" ;;
+    esac
+    case "$key=$value" in
+      power=always|power=switched) SET_POWER=$value ;;
+      comma_poweroff=yes|comma_poweroff=no) SET_POWEROFF=$value ;;
+      desktop=on|desktop=off) SET_DESKTOP=$value ;;
+      autostart=yes|autostart=no) SET_AUTOSTART=$value ;;
+      power=*) die "--set power takes always or switched, not '$value'." ;;
+      desktop=*) die "--set desktop takes on or off, not '$value'." ;;
+      *) die "--set $key takes yes or no, not '$value'." ;;
+    esac
+  done
+  KEEP_INSTALLED=1 KEEP_SOURCE=1 REUSE_SERVER=1
+}
+
+# --set's answers over the saved ones, in the questions' order, so the power
+# comes first whatever order they were given in. An answer the install already
+# has changes nothing: the web page sends every one that applies.
+apply_set() {
+  if [ "$SET_POWER" = always ] && [ "$POWER" != always ]; then set_always_on; fi
+  if [ "$SET_POWER" = switched ]; then POWER=switched SLEEP_AFTER=0 POWEROFF_WITH_COMMA=0; fi
+  case "$SET_POWEROFF" in
+    yes)
+      if [ "$POWER" = always ]; then
+        POWEROFF_WITH_COMMA=1
+      else
+        note "comma_poweroff=yes does nothing on switched power: the Jetson loses power with the car."
+      fi ;;
+    no) POWEROFF_WITH_COMMA=0 ;;
+  esac
+  case "$SET_DESKTOP" in
+    on) DESKTOP_OFF=0 ;;
+    off)
+      # as the question: one that starts no desktop has none to turn off
+      if [ "$HAS_DESKTOP" = 1 ] || [ "$DESKTOP_OFF" = 1 ]; then
+        DESKTOP_OFF=1
+      else
+        note "This Jetson starts no desktop, so there is none to turn off."
+      fi ;;
+  esac
+  case "$SET_AUTOSTART" in
+    yes) AUTOSTART=1 ;;
+    no) AUTOSTART=0 ;;
+  esac
+  return 0
 }
 
 set_always_on() {
@@ -860,7 +998,7 @@ preflight() {
     [ ${#missing[@]} -eq 0 ] || die "Jetlink needs ${missing[*]}, and this system's package manager is not one the installer knows (apt, dnf, pacman, zypper)." \
       "Install them and run the installer again."
   fi
-  if [ "$OPT_DRY_RUN" != 1 ] && [ -z "$OPT_BINARY" ] \
+  if [ "$OPT_DRY_RUN" != 1 ] && [ -z "$OPT_BINARY" ] && [ "$KEEP_INSTALLED" = 0 ] \
       && ! curl -fsS --max-time 15 -o /dev/null https://github.com 2>/dev/null; then
     die "No internet connection." "The installer downloads TensorRT and the Jetlink server; connect and try again."
   fi
@@ -1044,9 +1182,11 @@ show_plan() {
     fi
     say "  • Start up faster, and keep the system log small"
   fi
-  if [ "$STATUS_PORT" != 0 ]; then
-    say "  • Show a read-only status page on port $STATUS_PORT"
-  fi
+  case "$WEB_AUTH" in
+    generate) say "  • Serve the web page on port $STATUS_PORT ${D}(with a new password, shown at the end)${N}" ;;
+    typed) say "  • Serve the web page on port $STATUS_PORT ${D}(with the password you chose)${N}" ;;
+    keep) say "  • Serve the web page on port $STATUS_PORT ${D}(with the password it has)${N}" ;;
+  esac
   if [ "$DOCKER_ERA" = 1 ]; then
     say "  • Delete Jetlink's Docker images once the new server runs ${D}(Docker itself stays)${N}"
   fi
@@ -1432,8 +1572,12 @@ ensure_runtime() {
     good "TensorRT $PC_TRT"
     return 0
   fi
-  jetson_trt
-  trt_plugins
+  # --set keeps the TensorRT there is: no network, and no newer one that
+  # would prepare every model again
+  if [ "$KEEP_INSTALLED" = 0 ] || [ "$TRT_PRESENT" = 0 ]; then
+    jetson_trt
+    trt_plugins
+  fi
   # what apt downloaded is as big again as what it installed
   if [ "$APT_UPDATED" = 1 ]; then apt_get clean >>"$LOG" 2>&1 || true; fi
   if ! { has_lib libnvinfer.so.10 && has_lib libnvonnxparser.so.10; }; then
@@ -2169,6 +2313,35 @@ stays_up() {
   return 1
 }
 
+# The web page's password goes in once the new server is up and staying up,
+# so a run that fails leaves no password nobody was shown; the server reads
+# the file again whenever it changes. The server writes it, since it knows
+# the format, and a typed one goes in on stdin, where ps cannot see it.
+write_web_auth() {
+  case "$WEB_AUTH" in generate|typed) ;; *) return 0 ;; esac
+  # a server from before the sign-in has no web-password, and its unit no --web-auth
+  if ! grep -qs -- '--web-auth' "$NEW_DIR/$SHARE/systemd/$UNIT.service"; then
+    note "This server's web page has no sign-in; it shows the status only."
+    WEB_AUTH='' WEB_PASSWORD=''
+    return 0
+  fi
+  local server="$NEW_DIR/bin/jetlink-server" err rc=0
+  err="$(mktemp)"
+  if [ "$WEB_AUTH" = generate ]; then
+    WEB_PASSWORD="$(as_root "$server" web-password --file "$AUTH_FILE" --generate 2>"$err")" || rc=$?
+  else
+    printf '%s\n' "$WEB_PASSWORD" | as_root "$server" web-password --file "$AUTH_FILE" >/dev/null 2>"$err" || rc=$?
+  fi
+  if [ "$rc" = 0 ] && [ -n "$WEB_PASSWORD" ]; then
+    good "Web page password set"
+  else
+    note "Could not set the web page's password: $(tail -n 1 "$err")"
+    note "Set one with: sudo jetlink password"
+    WEB_AUTH='' WEB_PASSWORD=''
+  fi
+  rm -f "$err"
+}
+
 finish() {
   save_log >/dev/null
   heading "${G}Jetlink is installed and running.${N}"
@@ -2199,9 +2372,13 @@ finish() {
   fi
   if [ "$STATUS_PORT" != 0 ]; then
     say ""
-    say "  ${B}Status page:${N} http://$(hostname 2>/dev/null || uname -n).local:$STATUS_PORT"
-    say "    from a phone on the same network, like the comma's hotspot. It only shows"
-    say "    what the server is doing; nothing on it changes anything."
+    say "  ${B}Web page:${N} http://$(hostname 2>/dev/null || uname -n).local:$STATUS_PORT"
+    say "    from a phone or computer on the same network, like the comma's hotspot."
+    case "$WEB_AUTH" in
+      generate) say "    ${B}Password:${N} $WEB_PASSWORD ${D}(change it with: sudo jetlink password)${N}" ;;
+      typed) say "    Sign in with the password you chose; sudo jetlink password sets a new one." ;;
+      keep) say "    Sign in with its password, as before; sudo jetlink password sets a new one." ;;
+    esac
   fi
   say ""
   say "  ${B}Handy commands:${N}"
@@ -2275,6 +2452,7 @@ uninstall() {
       good "Models deleted"
     fi
   fi
+  # the answers, the settings and the web page's password with them
   as_root rm -rf "$ETC_DIR" "$SRC_ROOT"
   heading "Jetlink is removed."
   local trt
@@ -2302,6 +2480,8 @@ parse_args() {
       --binary=*) OPT_BINARY="${1#*=}" ;;
       --dry-run) OPT_DRY_RUN=1 ;;
       --uninstall) OPT_UNINSTALL=1 ;;
+      --set) OPT_SET+=("${2:?--set needs KEY=VALUE}"); shift ;;
+      --set=*) OPT_SET+=("${1#*=}") ;;
       --build|--image|--image=*)
         die "Jetlink no longer runs in Docker, so $1 is gone." \
           "To install a server you built: --binary jetlink-server-<version>-<flavor>.tar.gz" ;;
@@ -2310,6 +2490,13 @@ parse_args() {
     esac
     shift
   done
+  if [ ${#OPT_SET[@]} -gt 0 ]; then
+    if [ "$OPT_UPDATE" = 1 ] || [ "$OPT_UNINSTALL" = 1 ] || [ -n "$OPT_REF" ] || [ -n "$OPT_BINARY" ]; then
+      die "--set does not go with --update, --uninstall, --ref or --binary." \
+        "It changes answers, and keeps the server that is installed."
+    fi
+    OPT_RECONFIGURE=1
+  fi
 }
 
 main() {
@@ -2338,6 +2525,7 @@ main() {
   detect
   load_previous
   detect_source
+  check_set
   choose_ref
   if [ -z "$CACHE_DIR" ]; then
     CACHE_DIR=/var/lib/jetlink
@@ -2354,9 +2542,12 @@ main() {
       "No asks the questions again."
     [ "$keep" = y ] && OPT_UPDATE=1
   fi
-  if [ "$OPT_UPDATE" = 0 ] || [ "$HAD_INSTALL" = 0 ]; then
+  if [ ${#OPT_SET[@]} -gt 0 ]; then
+    apply_set
+  elif [ "$OPT_UPDATE" = 0 ] || [ "$HAD_INSTALL" = 0 ]; then
     ask_questions   # on an update the saved answers stand
   fi
+  choose_web_password
   jetson_musts
 
   resolve_ref
@@ -2389,6 +2580,7 @@ main() {
   configure_jetson
   install_files
   start_server
+  write_web_auth
   finish
 }
 

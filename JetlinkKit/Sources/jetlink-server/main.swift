@@ -11,7 +11,7 @@
       commandName: "jetlink-server",
       abstract: "Runs the comma's big model on this machine and serves it over USB or TCP.",
       version: productVersion(),
-      subcommands: [Serve.self, Build.self, Spec.self, ListBackends.self, Bench.self, Models.self],
+      subcommands: [Serve.self, Build.self, Spec.self, ListBackends.self, Bench.self, Models.self, WebPassword.self],
       defaultSubcommand: Serve.self)
 
     /// `main()`, except that a usage mistake exits 1 as any other error

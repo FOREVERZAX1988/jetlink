@@ -21,7 +21,8 @@ from pathlib import Path
 import pytest
 
 from jetlink.comma import root
-from tests.comma_fakes import STOCK, TUNED, proc_sys, read_all, read_sys, record, run_script, voter
+from tests.comma_fakes import (STOCK, TUNED, dual_role, pe_params, proc_sys, read_all, read_sys, record, run_script,
+                                udc_glue, usbpd, voter)
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -208,15 +209,52 @@ def test_port_hold_forces_the_voter_and_off_lets_it_go(tmp_path):
   assert (lever / 'force_val').read_text().strip() == '0'
 
 
-def test_port_without_the_lever_fails(tmp_path):
-  # both commas have it, so its absence is a failure like any other
-  for command, verb in (('hold', 'force'), ('off', 'release')):
-    result = run_script(tmp_path, 'port', command)
-    assert result.returncode == 1
-    assert f'could not {verb}' in result.stderr
+@pytest.mark.parametrize('args, made, says', [
+  (('port', 'hold'), None, 'could not force'),
+  (('port', 'off'), None, 'could not release'),
+  # a refusal, or PD not ready, is a failed write; so is a missing class
+  (('port', 'device'), None, 'did not take the host role'),
+  (('port', 'reset'), None, 'could not reset USB PD'),
+  (('udc', 'start'), None, 'could not start the USB device controller'),
+  (('udc', 'stop'), None, 'could not stop the USB device controller'),
+  # a kernel without the glue's knob still gets the policy engine's
+  (('udc', 'apply'), pe_params, 'a600000.ssusb/usb_compliance_mode'),
+])
+def test_a_lever_the_kernel_lacks_fails(tmp_path, args, made, says):
+  # both commas have them all, so an absence is a failure like any other
+  if made is not None:
+    made(tmp_path).mkdir()
+  result = run_script(tmp_path, *args)
+  assert result.returncode == 1
+  assert says in result.stderr
+  if made is not None:
+    assert (made(tmp_path) / 'usb_compliance_mode').read_text().strip() == 'Y'
 
 
-@pytest.mark.parametrize('args', [(), ('setup',), ('--ios',), ('gadget', '--net'), ('port',), ('port', 'on'), ('vm',), ('vm', 'undo')])
+@pytest.mark.parametrize('args, where, name, value', [
+  # the kernel turns this write into a USB PD DR_Swap
+  (('port', 'device'), dual_role, 'data_role', 'device'),
+  (('port', 'reset'), usbpd, 'hard_reset', '1'),
+  (('udc', 'start'), udc_glue, 'mode', 'peripheral'),
+  (('udc', 'stop'), udc_glue, 'mode', 'none'),
+])
+def test_a_lever_is_one_write(tmp_path, args, where, name, value):
+  where(tmp_path).mkdir()
+  assert run_script(tmp_path, *args).returncode == 0
+  assert (where(tmp_path) / name).read_text().strip() == value
+
+
+def test_udc_apply_keeps_the_device_and_restore_puts_it_back(tmp_path):
+  for d in (udc_glue(tmp_path), pe_params(tmp_path)):
+    d.mkdir()
+  for command, value in (('apply', 'Y'), ('restore', 'N')):
+    assert run_script(tmp_path, 'udc', command).returncode == 0
+    for d in (udc_glue(tmp_path), pe_params(tmp_path)):
+      assert (d / 'usb_compliance_mode').read_text().strip() == value
+
+
+@pytest.mark.parametrize('args', [(), ('setup',), ('--ios',), ('gadget', '--net'), ('port',), ('port', 'on'), ('udc',),
+                                  ('udc', 'on'), ('vm',), ('vm', 'undo')])
 def test_anything_else_is_usage(tmp_path, args):
   result = run_script(tmp_path, *args)
   assert result.returncode == 2

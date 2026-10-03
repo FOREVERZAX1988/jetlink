@@ -50,8 +50,17 @@
     /// `arguments` and this process's environment. The daemon blocks SIGINT
     /// and SIGTERM on every thread and ignores SIGPIPE, and a child inherits
     /// both through exec: the child gets an empty mask and those signals'
-    /// defaults back.
-    static func spawn(_ path: String, _ arguments: [String]) throws(KernelError) -> pid_t {
+    /// defaults back. With `output`, the child's stdout and stderr go there
+    /// and its stdin is /dev/null.
+    static func spawn(_ path: String, _ arguments: [String], output: Int32? = nil) throws(KernelError) -> pid_t {
+      var actions = posix_spawn_file_actions_t()
+      posix_spawn_file_actions_init(&actions)
+      defer { posix_spawn_file_actions_destroy(&actions) }
+      if let output {
+        posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0)
+        posix_spawn_file_actions_adddup2(&actions, output, 1)
+        posix_spawn_file_actions_adddup2(&actions, output, 2)
+      }
       var attributes = posix_spawnattr_t()
       posix_spawnattr_init(&attributes)
       defer { posix_spawnattr_destroy(&attributes) }
@@ -68,7 +77,9 @@
       let argv = ([path] + arguments).map { strdup($0) } + [nil]
       defer { argv.forEach { free($0) } }
       var pid: pid_t = 0
-      let error = posix_spawnp(&pid, path, nil, &attributes, argv, environ)
+      let error =
+        output == nil
+        ? posix_spawnp(&pid, path, nil, &attributes, argv, environ) : posix_spawnp(&pid, path, &actions, &attributes, argv, environ)
       guard error == 0 else { throw KernelError(what: path, errno: error) }
       return pid
     }

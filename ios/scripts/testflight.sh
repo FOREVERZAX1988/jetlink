@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# Archive the app for the App Store and upload it to App Store Connect, where
-# it appears in TestFlight once Apple has processed it.
+# Archive the app for the App Store, upload it to App Store Connect and wait
+# while Apple processes it, after which TestFlight lists it.
 #
 #   JETLINK_TEAM=ABCDE12345 ASC_KEY_ID=... ASC_ISSUER_ID=... ASC_KEY_PATH=AuthKey_XXXX.p8 \
 #     ios/scripts/testflight.sh
@@ -10,6 +10,11 @@
 # certificate and profile itself, which needs a key with the Admin role. The
 # notary key's NOTARY_* variables stand in for ASC_* when one key does both.
 # UPLOAD=0 stops at an exported .ipa in ios/build/export.
+#
+# TESTFLIGHT_GROUP=Public also adds the build to that external group and
+# submits it for Beta App Review, which is how it reaches the public link.
+# TESTFLIGHT_NOTES replaces the What to Test text. A build already uploaded
+# (a rerun after a failed review step) is published without a new one.
 #
 # The version is jetlink.__version__ and the build number the commit count, as
 # on the Mac; App Store Connect refuses a build number it already has for that
@@ -47,6 +52,36 @@ case "$VERSION" in
 esac
 BUILD_NUMBER="${JETLINK_BUILD:-$(git -C "$REPO_ROOT" rev-list --count HEAD)}"
 BUNDLE_ID="${JETLINK_BUNDLE_ID:-io.zoompilot.jetlink}"
+export ASC_KEY_ID ASC_ISSUER_ID ASC_KEY_PATH
+export JETLINK_BUNDLE_ID="$BUNDLE_ID"
+
+if [ "${UPLOAD:-1}" = 0 ]; then
+  DESTINATION="export"
+else
+  DESTINATION="upload"
+fi
+
+ASC=(/usr/bin/python3 "$SCRIPT_DIR/asc.py")
+PUBLISH=(--notes "${TESTFLIGHT_NOTES:-"Jetlink $VERSION: https://github.com/zoompilot/jetlink/releases/tag/v$VERSION
+
+Load a model and run Benchmark, then set Accelerator Link to iOS on the comma and connect with a USB 3 cable. Send feedback with a screenshot from TestFlight."}")
+if [ -n "${TESTFLIGHT_GROUP:-}" ]; then
+  PUBLISH+=(--group "$TESTFLIGHT_GROUP")
+fi
+
+publish() {
+  echo "==> waiting for App Store Connect to process $VERSION ($BUILD_NUMBER)"
+  # Apple's verdict on the bundle, ITMS errors included, shows only here
+  "${ASC[@]}" wait "$VERSION" "$BUILD_NUMBER"
+  echo "==> publishing $VERSION ($BUILD_NUMBER) on TestFlight"
+  "${ASC[@]}" publish "$VERSION" "$BUILD_NUMBER" "${PUBLISH[@]}"
+}
+
+if [ "$DESTINATION" = upload ] && "${ASC[@]}" uploaded "$VERSION" "$BUILD_NUMBER"; then
+  echo "==> $VERSION ($BUILD_NUMBER) is already uploaded; publishing it as it is"
+  publish
+  exit 0
+fi
 
 AUTH=(
   -allowProvisioningUpdates
@@ -89,11 +124,6 @@ for framework in "$ARCHIVE"/Products/Applications/Jetlink.app/Frameworks/*.frame
   /usr/libexec/PlistBuddy -c "Set :MinimumOSVersion $minos" "$framework/Info.plist"
 done
 
-if [ "${UPLOAD:-1}" = 0 ]; then
-  DESTINATION="export"
-else
-  DESTINATION="upload"
-fi
 OPTIONS="$BUILD/ExportOptions.plist"
 cat >"$OPTIONS" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -127,7 +157,8 @@ PATH="/usr/bin:/bin:/usr/sbin:/sbin:$PATH" xcodebuild -exportArchive \
   "${AUTH[@]}"
 
 if [ "$DESTINATION" = upload ]; then
-  echo "uploaded $VERSION ($BUILD_NUMBER); it shows in TestFlight once App Store Connect has processed it"
+  publish
+  echo "$VERSION ($BUILD_NUMBER) is on TestFlight"
 else
   echo "exported: $BUILD/export"
 fi

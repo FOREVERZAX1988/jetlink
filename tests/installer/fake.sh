@@ -227,6 +227,36 @@ case "$name" in
         fi
         echo "trt: usable: TensorRT 10.16.2.10 on Orin-sm87"
         echo "ort: not usable: libonnxruntime.so: cannot open shared object file: No such file or directory" ;;
+      web-password)
+        # --file FILE [--generate]: the password from stdin's first line, or
+        # one made and printed, as the real one makes it. The file holds it in
+        # the clear, so a scenario can see which reached it, and a nonce, so
+        # every write differs, as a new salt makes the real one's.
+        file='' generate=0
+        shift
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --file) file=$2; shift ;;
+            --generate) generate=1 ;;
+          esac
+          shift
+        done
+        [ -n "$file" ] || { echo "web-password needs --file" >&2; exit 1; }
+        if [ "$generate" = 1 ]; then
+          chars=23456789abcdefghjkmnpqrstuvwxyz pw=''
+          for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            pw="$pw${chars:RANDOM % ${#chars}:1}"
+            [ $((i % 4)) != 0 ] || [ "$i" = 12 ] || pw="$pw-"
+          done
+        else
+          IFS= read -r pw || [ -n "$pw" ] || { echo "no password on standard input" >&2; exit 1; }
+          if [ ${#pw} -lt 8 ]; then echo "The password needs at least 8 characters." >&2; exit 1; fi
+          if [ ${#pw} -gt 128 ]; then echo "The password can have at most 128 characters." >&2; exit 1; fi
+        fi
+        mkdir -p "$(dirname "$file")"
+        (umask 077 && printf '{"fake_password": "%s", "nonce": "%s-%s"}\n' "$pw" "$RANDOM" "$RANDOM" >"$file.new")
+        mv -f "$file.new" "$file"
+        [ "$generate" = 0 ] || echo "$pw" ;;
       *) echo "serving" ;;
     esac ;;
 

@@ -17,11 +17,12 @@ struct StatusPageTests {
     @Test("The page needs nothing but this server: the comma's hotspot has no internet")
     func offline() throws {
       let page = String(decoding: try StatusPage.page(), as: UTF8.self)
-      #expect(!page.contains("http://") && !page.contains("https://") && !page.contains("//cdn"))
-      #expect(page.range(of: #"(src|href)="(?!data:)"#, options: .regularExpression) == nil)
+      // Nothing loaded from elsewhere: every src and href is this server's or data.
+      #expect(page.range(of: #"(src|href)\s*=\s*["']?(https?:)?//"#, options: .regularExpression) == nil)
+      #expect(!page.contains("//cdn") && !page.contains("@import") && !page.contains("url(http"))
       #expect(page.contains("new EventSource('events')") && page.contains("fetch('logs'"))
       // It reads every event the feed relays, and the host's two.
-      for name in ["host", "hello", "server", "link", "engine", "inventory", "stats", "hw"] {
+      for name in ["host", "hello", "server", "link", "engine", "inventory", "stats", "hw", "catalog", "download", "benchmark"] {
         #expect(page.contains("case '\(name)':"), "\(name)")
       }
       #expect(!page.contains("\u{2014}"))

@@ -51,7 +51,9 @@ struct PageFeedTests {
 
     let stream = try #require(feed.open())
     let replayed = take(feed, stream)
-    #expect(replayed.map { $0["event"] as? String } == ["hello", "server", "link", "engine", "inventory", "stats", "stats", "stats", "stats"])
+    // the catalog and a download only come after a signed-in page asked for them
+    #expect(
+      replayed.map { $0["event"] as? String } == ["hello", "server", "link", "engine", "inventory", "catalog", "download", "stats", "stats", "stats", "stats"])
     #expect(replayed[2]["state"] as? String == "connected" && replayed[2]["medium"] as? String == "usb3")
     // the first stats came 130 s before the page: past the chart's two minutes
     #expect(replayed.compactMap { $0["frames"] as? Int } == [2, 3, 4, 5])

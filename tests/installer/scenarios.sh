@@ -353,14 +353,28 @@ export JETLINK_TEST_TRT_SHA256
 scenario "JetPack 7.2 Jetson, always-on power, fresh install"
 reset_box; jetson 39 2.1
 # questions: power (1 = always on), let the comma shut it down, turn off the
-# desktop, the status page's port (Enter), go ahead
-run_installer curl '1\ny\ny\n\ny\n'
+# desktop, the web page's port (Enter), its password (too short, then typed
+# differently the second time, then right), go ahead
+run_installer curl '1\ny\ny\n\nshort\nhunter2-long\nhunter2-other\nhunter2-long\nhunter2-long\ny\n'
 expect_rc 0
 expect_out "Orin Nano"
 expect_out "JetPack 7 (Jetson Linux 39.2.1)"
 expect_out "Does the Jetson's power stay on when the car is off?"
 expect_out "Turn off the desktop?"
-expect_out "Which port for the status page?"
+expect_out "Which port for the web page?"
+expect_out "Which password should the web page ask for?"
+expect_out "Please use 8 to 128 characters."
+expect_out "The two did not match; please type it again."
+expect_out "Serve the web page on port 5600 (with the password you chose)"
+expect_out "Sign in with the password you chose; sudo jetlink password sets a new one."
+# the server wrote it, from stdin: on no command line, in no log, never shown
+expect_in /etc/jetlink/web-auth.json '"fake_password": "hunter2-long"'
+check "the password file is not root's alone" test "$(stat -c '%a %U' /etc/jetlink/web-auth.json)" = "600 root"
+expect_ran "jetlink-server web-password --file /etc/jetlink/web-auth.json"
+expect_not_ran "hunter2"
+expect_not_in /var/log/jetlink-install.log "hunter2"
+expect_no_out "hunter2"
+expect_in "$UNITS/jetlink-server.service" "--web-auth /etc/jetlink/web-auth.json"
 # the desktop goes at the next start, not under the installer
 expect_out "Turn off the desktop (from the next restart)"
 expect_ran "systemctl set-default multi-user.target"
@@ -370,7 +384,7 @@ expect_in /etc/jetlink/install.conf "JETLINK_DESKTOP_OFF=1"
 expect_out "Install NVIDIA TensorRT from JetPack's package source"
 expect_no_out "fastest power mode ("
 expect_out "Jetlink is installed and running"
-expect_out "Status page:"
+expect_out "Web page: http://"
 expect_ran "$(apt_install "libnvinfer10 libnvonnxparsers10 libnvinfer-plugin10")"
 # the plugins came with it
 expect_not_ran "libnvinfer-plugin10="
@@ -448,8 +462,8 @@ jetlink status >/tmp/status.txt 2>&1
 expect_in /tmp/status.txt "Jetlink is running"
 expect_in /tmp/status.txt "server         0.10.0 (TensorRT 10.16.2.10)"
 expect_in /tmp/status.txt "comma          not connected"
-expect_in /tmp/status.txt "status page    http://"
-expect_in /tmp/status.txt ".local:5600"
+expect_in /tmp/status.txt "web page       http://"
+expect_in /tmp/status.txt ".local:5600 (sign in with the web page's password)"
 expect_in /tmp/status.txt "always on: sleeps while parked; the comma can turn it off"
 jetlink models list >/dev/null 2>&1
 expect_ran "jetlink-server models list --cache /mnt/data/jetlink"
@@ -457,7 +471,7 @@ jetlink models --help >/dev/null 2>&1
 expect_ran "jetlink-server models --help"
 # the installed unit's command line, with server.env's settings
 jetlink run --log-level debug >/dev/null 2>&1
-expect_ran "jetlink-server --usb --backend trt --cache /mnt/data/jetlink --sleep-after 120 --status-port 5600 --poweroff --log-level debug"
+expect_ran "jetlink-server --usb --backend trt --cache /mnt/data/jetlink --sleep-after 120 --status-port 5600 --web-auth /etc/jetlink/web-auth.json --poweroff --log-level debug"
 systemctl start jetlink-server
 
 scenario "update keeps the answers and asks nothing"
@@ -611,6 +625,215 @@ expect_in /etc/jetlink/install.conf "JETLINK_POWER=always"
 expect_in /etc/jetlink/install.conf "JETLINK_POWEROFF_WITH_COMMA=1"
 expect_in /etc/jetlink/server.env "JETLINK_STATUS_PORT=5600"
 
+# a made password as the server makes it, in groups of four
+made_password() { grep -qxE '[2-9a-z]{4}-[2-9a-z]{4}-[2-9a-z]{4}' <<<"$1"; }
+# the one the finish screen shows
+shown_password() { sed -n 's/^ *Password: \([^ ]*\) (change it with: sudo jetlink password)$/\1/p' "$OUT"; }
+
+scenario "without a terminal the web page gets a password made for it, shown once at the end"
+reset_box; jetson 39 2.1
+run_installer curl '' --yes
+expect_rc 0
+expect_out "Serve the web page on port 5600 (with a new password, shown at the end)"
+expect_ran "jetlink-server web-password --file /etc/jetlink/web-auth.json --generate"
+# once the new server is up, so a run that fails leaves no password nobody saw
+expect_before "systemctl restart jetlink-server" "jetlink-server web-password"
+expect_out "Web page password set"
+check "the password file is not root's alone" test "$(stat -c '%a %U' /etc/jetlink/web-auth.json)" = "600 root"
+pw="$(shown_password)"
+check "no made password at the end: '$pw'" made_password "$pw"
+expect_in /etc/jetlink/web-auth.json "\"fake_password\": \"$pw\""
+expect_not_in /var/log/jetlink-install.log "$pw"
+jetlink status >/tmp/status.txt 2>&1
+expect_in /tmp/status.txt "(sign in with the web page's password)"
+
+scenario "an update keeps the web page's password; one from before the sign-in gets one made"
+cp /etc/jetlink/web-auth.json /tmp/web-auth.before
+cli update
+expect_rc 0
+expect_not_ran "web-password"
+check "the update changed the password file" cmp -s /tmp/web-auth.before /etc/jetlink/web-auth.json
+expect_out "Serve the web page on port 5600 (with the password it has)"
+expect_out "Sign in with its password, as before; sudo jetlink password sets a new one."
+expect_no_out "Password:"
+# an install from before the sign-in has no password file: its page shows the
+# status only until the update makes one
+rm /etc/jetlink/web-auth.json
+jetlink status >/tmp/status.txt 2>&1
+expect_in /tmp/status.txt "(status only until it has a password: jetlink password)"
+: >"$FAKE_LOG"
+run_installer curl '' --update
+expect_rc 0
+expect_no_out "Which password"
+expect_ran "jetlink-server web-password --file /etc/jetlink/web-auth.json --generate"
+pw="$(shown_password)"
+check "no made password at the end: '$pw'" made_password "$pw"
+expect_in /etc/jetlink/web-auth.json "\"fake_password\": \"$pw\""
+
+scenario "jetlink password sets a new one, typed twice or made, and says when the web page is off"
+cp /etc/jetlink/web-auth.json /tmp/web-auth.before
+printf 'short\nshort\nnew-secret-1\nnew-secret-2\nnew-secret-1\nnew-secret-1\n' | jetlink password >"$OUT" 2>&1; RC=$?
+expect_rc 0
+expect_out "The password needs at least 8 characters."
+expect_out "The two did not match; please type it again."
+expect_out "The web page has a new password."
+expect_out "Devices signed in to it are signed out, and sign in again with the new one."
+expect_in /etc/jetlink/web-auth.json '"fake_password": "new-secret-1"'
+check "the password file is not root's alone" test "$(stat -c '%a %U' /etc/jetlink/web-auth.json)" = "600 root"
+expect_not_ran "new-secret"
+expect_no_out "new-secret"
+cli password --generate
+expect_rc 0
+pw="$(sed -n "s/^The web page's new password: //p" "$OUT")"
+check "no made password shown: '$pw'" made_password "$pw"
+expect_in /etc/jetlink/web-auth.json "\"fake_password\": \"$pw\""
+# nothing typed, nothing changed
+cp /etc/jetlink/web-auth.json /tmp/web-auth.before
+jetlink password </dev/null >"$OUT" 2>&1; RC=$?
+expect_rc 1
+expect_out "Nothing changed."
+check "the password file changed" cmp -s /tmp/web-auth.before /etc/jetlink/web-auth.json
+# with the page off, there is nothing to sign in to
+sed -i 's/^JETLINK_STATUS_PORT=.*/JETLINK_STATUS_PORT=0/' /etc/jetlink/server.env
+cli password --generate
+expect_rc 1
+expect_out "The web page is off. To turn it on, give it a port in: jetlink setup"
+check "the password file changed" cmp -s /tmp/web-auth.before /etc/jetlink/web-auth.json
+sed -i 's/^JETLINK_STATUS_PORT=.*/JETLINK_STATUS_PORT=5600/' /etc/jetlink/server.env
+
+scenario "jetlink setup offers to keep the web page's password; no sets a new one"
+cp /etc/jetlink/web-auth.json /tmp/web-auth.before
+# questions: power, the comma may shut it down, the desktop, the port (Enter
+# for each), keep the password (y), go ahead
+answers '\n\n\n\ny\ny\n'
+JETLINK_INPUT=/tmp/answers jetlink setup >"$OUT" 2>&1; RC=$?
+expect_rc 0
+expect_out "Keep the web page's password?"
+expect_no_out "Which password should the web page ask for?"
+expect_not_ran "web-password"
+check "the password file changed" cmp -s /tmp/web-auth.before /etc/jetlink/web-auth.json
+# the same, but no, and Enter for a new one made
+: >"$FAKE_LOG"
+answers '\n\n\n\nn\n\ny\n'
+JETLINK_INPUT=/tmp/answers jetlink setup >"$OUT" 2>&1; RC=$?
+expect_rc 0
+expect_out "Which password should the web page ask for?"
+expect_ran "jetlink-server web-password --file /etc/jetlink/web-auth.json --generate"
+refute "the password file is as it was" cmp -s /tmp/web-auth.before /etc/jetlink/web-auth.json
+pw="$(shown_password)"
+check "no made password at the end: '$pw'" made_password "$pw"
+
+scenario "a first install that fails sets no password"
+reset_box; jetson 39 2.1
+FAKE_SERVER_CRASHLOOP=1 run_installer curl '' --yes
+expect_rc 1
+expect_not_ran "web-password"
+expect_no_file /etc/jetlink/web-auth.json
+expect_no_out "Password:"
+
+scenario "jetlink setup --set changes answers with no terminal and no network, and keeps the server and the password"
+reset_box; jetson 39 2.1
+run_installer curl '' --yes
+cp /etc/jetlink/web-auth.json /tmp/web-auth.before
+head_before="$(git -C /opt/jetlink/src rev-parse HEAD)"
+# no GitHub, no repository to fetch from, and a newer TensorRT that must not come
+mv /tmp/repo /tmp/repo.away
+unset FAKE_LATEST
+: >"$FAKE_LOG"
+FAKE_TRT10=10.16.3.1-1+cuda13.2 cli setup --set power=switched </dev/null
+mv /tmp/repo.away /tmp/repo
+expect_rc 0
+expect_no_out "A few questions"
+expect_no_out "Go ahead?"
+expect_out "Keep the Jetlink server that is installed"
+expect_out "Jetlink is installed and running"
+refute "it used the network" grep -qE '^(curl|apt-get|apt-cache) ' "$FAKE_LOG"
+check "the source moved" test "$(git -C /opt/jetlink/src rev-parse HEAD)" = "$head_before"
+expect_link /opt/jetlink/current /opt/jetlink/0.10.0
+expect_in /etc/jetlink/install.conf "JETLINK_VERSION=v0.10.0"
+expect_in /etc/jetlink/install.conf "JETLINK_POWER=switched"
+expect_in /etc/jetlink/install.conf "JETLINK_POWEROFF_WITH_COMMA=0"
+expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=0"
+expect_in /etc/jetlink/server.env 'JETLINK_POWEROFF=""'
+expect_no_file /etc/udev/rules.d/99-jetlink-usb-wakeup.rules
+# the other answers as they were, and the server restarted with them
+expect_in /etc/jetlink/install.conf "JETLINK_DESKTOP_OFF=1"
+expect_in /etc/jetlink/server.env "JETLINK_STATUS_PORT=5600"
+expect_ran "jetlink-server started: native, sleep 0"
+expect_not_ran "web-password"
+check "the password file changed" cmp -s /tmp/web-auth.before /etc/jetlink/web-auth.json
+expect_out "Sign in with its password, as before"
+# every answer that applies, as the web page sends them: the ones the install
+# already has change nothing
+: >"$FAKE_LOG"
+cli setup --set power=switched --set comma_poweroff=no --set desktop=off </dev/null
+expect_rc 0
+expect_not_ran "systemctl set-default"
+expect_no_out "Restart this computer once"
+expect_in /etc/jetlink/install.conf "JETLINK_POWER=switched"
+expect_in /etc/jetlink/install.conf "JETLINK_DESKTOP_OFF=1"
+# back to always on, with the sleep the Jetson can do; the power comes first
+# whatever the order
+cli setup --set comma_poweroff=yes --set power=always </dev/null
+expect_rc 0
+expect_in /etc/jetlink/install.conf "JETLINK_POWER=always"
+expect_in /etc/jetlink/install.conf "JETLINK_POWEROFF_WITH_COMMA=1"
+expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=120"
+expect_in /etc/jetlink/server.env 'JETLINK_POWEROFF="--poweroff"'
+expect_file /etc/udev/rules.d/99-jetlink-usb-wakeup.rules
+# the desktop back, from the next restart
+: >"$FAKE_LOG"
+cli setup --set desktop=on </dev/null
+expect_rc 0
+expect_ran "systemctl set-default graphical.target"
+expect_out "Restart this computer once to bring the desktop back: sudo reboot"
+expect_in /etc/jetlink/install.conf "JETLINK_DESKTOP_OFF=0"
+
+scenario "--set with an unknown key, a bad value or the other computer's key fails and changes nothing"
+cp /etc/jetlink/install.conf /tmp/install.conf.before
+: >"$FAKE_LOG"
+cli setup --set colour=blue </dev/null
+expect_rc 1
+expect_out "--set does not know 'colour'."
+expect_out "On a Jetson: power=always|switched, comma_poweroff=yes|no, desktop=on|off. On a PC: autostart=yes|no."
+cli setup --set power=sometimes </dev/null
+expect_rc 1
+expect_out "--set power takes always or switched, not 'sometimes'."
+cli setup --set comma_poweroff=maybe </dev/null
+expect_rc 1
+expect_out "--set comma_poweroff takes yes or no, not 'maybe'."
+cli setup --set power </dev/null
+expect_rc 1
+expect_out "--set takes KEY=VALUE, not 'power'."
+cli setup --set autostart=no </dev/null
+expect_rc 1
+expect_out "--set autostart is for a PC: a Jetson always starts Jetlink."
+run_installer curl '' --update --set power=always
+expect_rc 1
+expect_out "--set does not go with --update, --uninstall, --ref or --binary."
+check "the answers changed" cmp -s /tmp/install.conf.before /etc/jetlink/install.conf
+expect_not_ran "systemctl restart"
+expect_not_ran "systemctl stop"
+# on a PC: nothing to change before an install, a Jetson's key refused, its own taken
+reset_box; pc 580.95.05
+run_installer curl '' --set autostart=no
+expect_rc 1
+expect_out "Jetlink is not installed here, so --set has nothing to change."
+expect_no_file /etc/jetlink
+run_installer curl '' --yes
+expect_rc 0
+cli setup --set power=always </dev/null
+expect_rc 1
+expect_out "--set power is for a Jetson, and this computer is a PC."
+: >"$FAKE_LOG"
+cli setup --set autostart=no </dev/null
+expect_rc 0
+expect_out "Start Jetlink now (not at every boot)"
+expect_in /etc/jetlink/install.conf "JETLINK_AUTOSTART=0"
+expect_ran "systemctl disable jetlink-server"
+expect_not_ran "pypi.nvidia.com"
+expect_not_ran "releases/download"
+
 scenario "a server that cannot use the GPU fails with advice, before anything changes"
 reset_box; jetson 39 2.1
 FAKE_GPU_BROKEN=1 run_installer curl '' --yes
@@ -758,10 +981,12 @@ expect_no_file "$UNITS/jetlink-server.service"
 
 scenario "JetPack 6.2 Jetson, switched power"
 reset_box; jetson 36 4.3
-# questions: power (2 = switched), keep the desktop, the status page's port
-# (Enter), go ahead (Enter)
-run_installer curl '2\nn\n\n\n'
+# questions: power (2 = switched), keep the desktop, the web page's port
+# (Enter), its password (Enter makes one), go ahead (Enter)
+run_installer curl '2\nn\n\n\n\n'
 expect_rc 0
+expect_ran "jetlink-server web-password --file /etc/jetlink/web-auth.json --generate"
+expect_out "Serve the web page on port 5600 (with a new password, shown at the end)"
 expect_out "JetPack 6 (Jetson Linux 36.4.3)"
 expect_not_ran "systemctl set-default"
 expect_no_out "Turn off the desktop (from"
@@ -785,7 +1010,7 @@ expect_in /etc/jetlink/install.conf "JETLINK_UEFI_TIMEOUT_PREV=5"
 expect_quiet_added
 expect_file "$EXTLINUX.jetlink-bak"
 
-scenario "jetlink setup changes the answers: power, the desktop off, and the status page off"
+scenario "jetlink setup changes the answers: power, the desktop off, and the web page off"
 # questions: power (1 = always on), the comma may shut it down, turn off the
 # desktop, port 0, go ahead
 answers '1\ny\ny\n0\ny\n'
@@ -794,15 +1019,16 @@ expect_rc 0
 expect_out "Does the Jetson's power stay on when the car is off?"
 expect_ran "systemctl set-default multi-user.target"
 expect_in /etc/jetlink/install.conf "JETLINK_DESKTOP_OFF=1"
-expect_no_out "Show a read-only status page"
-expect_no_out "Status page:"
+expect_no_out "Serve the web page"
+expect_no_out "Web page:"
+expect_no_out "Keep the web page's password?"
 expect_in /etc/jetlink/install.conf "JETLINK_POWER=always"
 expect_in /etc/jetlink/server.env "JETLINK_SLEEP_AFTER=120"
 expect_in /etc/jetlink/server.env "JETLINK_STATUS_PORT=0"
 expect_in /etc/jetlink/server.env 'JETLINK_POWEROFF="--poweroff"'
 expect_file /etc/udev/rules.d/99-jetlink-usb-wakeup.rules
 jetlink status >/tmp/status.txt 2>&1
-expect_not_in /tmp/status.txt "status page"
+expect_not_in /tmp/status.txt "web page"
 # the file an earlier installer wrote for "no" goes; one made by hand stays
 echo "Written by the Jetlink installer: the comma may not power this computer off." >/mnt/data/jetlink/poweroff-dry-run
 run_installer curl '' --update
@@ -820,11 +1046,12 @@ expect_rc 0
 # one restart for both, the power mode and the desktop --yes turns off
 expect_out "Restart this computer once to finish switching the power mode and turn the desktop off: sudo reboot"
 
-scenario "uninstall on a Jetson puts its boot back as it was"
+scenario "uninstall on a Jetson puts its boot back as it was, and takes the web page's password"
 reset_box; jetson 39 2.1
 run_installer curl '' --yes
 expect_rc 0
 expect_in "$FAKE_STATE/default-target" multi-user.target
+expect_file /etc/jetlink/web-auth.json
 # questions: remove?, delete the models?
 run_installer checkout 'y\nn\n' --uninstall
 expect_rc 0
@@ -837,12 +1064,14 @@ expect_extlinux_as_was
 expect_no_file "$EXTLINUX.jetlink-bak"
 expect_ran "systemctl disable jetlink-clocks.service"
 expect_no_file "$UNITS/jetlink-clocks.service"
+expect_no_file /etc/jetlink/web-auth.json
 
 scenario "a Jetson that starts no desktop is not asked, and uninstall leaves it that way"
 reset_box; jetson 39 2.1
 echo multi-user.target >"$FAKE_STATE/default-target"
-# questions: power (Enter), the comma may shut it down (Enter), the port (Enter), go ahead
-run_installer curl '\n\n\ny\n'
+# questions: power (Enter), the comma may shut it down (Enter), the port
+# (Enter), the password (Enter), go ahead
+run_installer curl '\n\n\n\ny\n'
 expect_rc 0
 expect_no_out "Turn off the desktop?"
 expect_not_ran "systemctl set-default"
@@ -967,8 +1196,9 @@ expect_no_file /etc/jetlink/server.env
 scenario "PC ready to go"
 reset_box; pc 580.95.05
 export FAKE_NO_CURL=1
-# questions: start at boot, the status page's port (Enter), go ahead
-run_installer curl 'y\n\ny\n'
+# questions: start at boot, the web page's port (Enter), its password
+# (Enter), go ahead
+run_installer curl 'y\n\n\ny\n'
 expect_rc 0
 expect_out "NVIDIA driver 580.95.05"
 expect_no_out "Does the Jetson's power stay on"
@@ -1006,7 +1236,7 @@ jetlink status >/tmp/status.txt 2>&1
 expect_in /tmp/status.txt "server         0.10.0 (TensorRT $PC_TRT)"
 # the unit's command line, and a prepare, with the PC's TensorRT
 jetlink run >/dev/null 2>&1
-expect_ran "jetlink-server --usb --backend trt --cache /var/lib/jetlink --sleep-after 0 --status-port 5600 --tensorrt-libs $PC_TRT_DIR"
+expect_ran "jetlink-server --usb --backend trt --cache /var/lib/jetlink --sleep-after 0 --status-port 5600 --web-auth /etc/jetlink/web-auth.json --tensorrt-libs $PC_TRT_DIR"
 jetlink models prepare some-model >/dev/null 2>&1
 expect_ran "jetlink-server models prepare --cache /var/lib/jetlink --tensorrt-libs $PC_TRT_DIR some-model"
 systemctl start jetlink-server
@@ -1355,10 +1585,11 @@ expect_link /opt/jetlink/current /opt/jetlink/0.10.0
 expect_in "$UNITS/jetlink-server.service" "/opt/jetlink/current/bin/jetlink-server"
 check "the source moved" test "$(git -C /opt/jetlink/src rev-parse HEAD)" = "$head_before"
 # questions: power, the comma may shut it down, the desktop (Enter keeps the
-# answer), the port, go ahead
-answers '1\ny\n\n\ny\n'
+# answer), the port, keep the web page's password, go ahead
+answers '1\ny\n\n\ny\ny\n'
 FAKE_LATEST=v0.6.0 JETLINK_INPUT=/tmp/answers jetlink setup >"$OUT" 2>&1; RC=$?
 expect_rc 0
+expect_out "Keep the web page's password?"
 expect_out "Keep the Jetlink server that is installed"
 expect_in "$UNITS/jetlink-server.service" "/opt/jetlink/current/bin/jetlink-server"
 # nor to a release older than the server here

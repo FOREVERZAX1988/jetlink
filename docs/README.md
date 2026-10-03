@@ -12,7 +12,7 @@ New? Start with the [quick start](../README.md#quick-start).
 | Try the Android app (experimental) | [Jetlink for Android](android-app.md) |
 | Set up a Linux PC, WSL2, or a source install | [Platform setup](platforms.md) |
 | Understand icons, startup, and model switching | [Using Jetlink](using-jetlink.md) |
-| Watch a Jetson or PC from a phone | [Status page](using-jetlink.md#status-page) |
+| Watch and set up a Jetson or PC from a phone | [Web page](using-jetlink.md#web-page) |
 | Choose a model or prepare one ahead of time | [Model management](models.md) |
 | Update or roll back | [Updates and rollback](releasing.md) |
 | Choose a cable, or set up power and sleep | [Cables, networking, and power](transport.md) |
@@ -29,7 +29,7 @@ then your platform guide's troubleshooting.
 | Run `jetlink-server` by hand: commands, options, `server.env` | [The server command](installation-reference.md#the-server-command) |
 | Use the model CLI | [Commands, identifiers, and cache files](model-cli.md) |
 | Understand how the comma and the server talk | [Link protocol](transport.md#link-protocol) |
-| Understand how the apps and the status page talk to the server | [Control protocol](control-protocol.md) |
+| Understand how the apps and the web page talk to the server | [Control protocol](control-protocol.md) |
 | Choose or investigate an inference backend | [Backends and measurements](backends.md) |
 | Mac benchmarks and implementation | [Mac performance](mac-performance.md) |
 | Test a server without a comma | [Benchmark setup](platforms.md#test-without-a-comma) |

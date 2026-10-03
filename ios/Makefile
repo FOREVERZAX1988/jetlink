@@ -5,8 +5,8 @@
 #   make typecheck compile and link the app's sources for iOS through SwiftPM,
 #                  which needs only the SDK Xcode ships with
 #   make open      open the project in Xcode; pick a team, then run on a phone
-#   make testflight archive and upload to App Store Connect (scripts/testflight.sh
-#                  lists what it needs)
+#   make testflight archive, upload to App Store Connect and wait while Apple
+#                  processes it (scripts/testflight.sh lists what it needs)
 SHELL := /usr/bin/env bash
 .SHELLFLAGS := -euo pipefail -c
 

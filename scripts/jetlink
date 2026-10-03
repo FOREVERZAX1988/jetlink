@@ -7,6 +7,8 @@ set -euo pipefail
 ETC_DIR=/etc/jetlink
 CONF="$ETC_DIR/install.conf"
 ENV_FILE="$ETC_DIR/server.env"
+# the web page's password, which the server writes and reads
+AUTH_FILE="$ETC_DIR/web-auth.json"
 SERVER=/opt/jetlink/current/bin/jetlink-server
 UNIT=jetlink-server
 UNIT_FILE=/etc/systemd/system/$UNIT.service
@@ -32,8 +34,9 @@ ${B}jetlink${N}: manage the Jetlink server on this computer
   ${B}jetlink restart${N}     restart the server
   ${B}jetlink stop${N}        stop it until the next restart or ${B}jetlink start${N}
   ${B}jetlink run${N} ...     run it in this terminal instead, with any flags added (for a bench)
-  ${B}jetlink update${N}      update Jetlink, keeping your settings
+  ${B}jetlink update${N}      update Jetlink, keeping your settings (${B}--check${N} only names the newest)
   ${B}jetlink setup${N}       answer the setup questions again
+  ${B}jetlink password${N}    set the web page's password (${B}--generate${N} makes one)
   ${B}jetlink models${N} ...  list, download or prepare models (${B}jetlink models --help${N})
   ${B}jetlink caffeinate${N}  keep it awake until Ctrl-C (or ${B}-t${N} SECONDS, or while COMMAND runs)
   ${B}jetlink uninstall${N}   remove Jetlink from this computer
@@ -105,11 +108,12 @@ server_line() {
   echo "${version:-missing from $SERVER}${trt:+ ${D}(TensorRT ${trt%%-*})${N}}"
 }
 
-# The status page, by name and by address: a phone often cannot resolve .local.
+# The web page, by name and by address: a phone often cannot resolve .local.
 page_lines() {
-  local port="${JETLINK_STATUS_PORT:-0}" ip
+  local port="${JETLINK_STATUS_PORT:-0}" ip how="sign in with the web page's password"
   [ "$port" != 0 ] || return 0
-  echo "  status page    http://$(hostname 2>/dev/null || uname -n).local:$port ${D}(read-only, any browser on this network)${N}"
+  [ -f "$AUTH_FILE" ] || how="status only until it has a password: jetlink password"
+  echo "  web page       http://$(hostname 2>/dev/null || uname -n).local:$port ${D}($how)${N}"
   # Docker's and the Jetson's USB bridges are no use to a phone
   for ip in $(ip -4 -o addr show scope global 2>/dev/null \
       | awk '$2 !~ /^(docker|br-|veth|l4tbr|virbr)/ {sub(/\/.*/, "", $4); print $4}'); do
@@ -212,6 +216,45 @@ cmd_caffeinate() {
       wait "$!"
     done
   fi
+}
+
+# A new password for the web page. The server writes the file, since it knows
+# the format, and reads it again when it changes: a new password also means a
+# new key for the sign-ins, so every device signed in is signed out.
+cmd_password() {
+  load
+  if [ "${JETLINK_STATUS_PORT:-0}" = 0 ]; then
+    echo "The web page is off. To turn it on, give it a port in: jetlink setup"
+    exit 1
+  fi
+  local pw again
+  case "${1:-}" in
+    --generate)
+      pw="$("$SERVER" web-password --file "$AUTH_FILE" --generate)" || exit 1
+      echo "The web page's new password: ${B}$pw${N}" ;;
+    '')
+      # the server says what it takes, 8 to 128 characters, and why not;
+      # the password goes on stdin, where ps cannot see it
+      while :; do
+        read_secret pw "New password for the web page (8 to 128 characters): " || { echo "Nothing changed."; exit 1; }
+        read_secret again "Once more: " || { echo "Nothing changed."; exit 1; }
+        if [ "$pw" != "$again" ]; then
+          echo "The two did not match; please type it again."
+          continue
+        fi
+        printf '%s\n' "$pw" | "$SERVER" web-password --file "$AUTH_FILE" && break
+      done
+      echo "The web page has a new password." ;;
+    *) echo "Usage: jetlink password [--generate]"; exit 2 ;;
+  esac
+  echo "Devices signed in to it are signed out, and sign in again with the new one."
+}
+
+# read_secret VAR PROMPT: a line from the terminal without echo
+read_secret() {
+  IFS= read -rs -p "$2" "$1" || return 1
+  # the Enter typed does not show either
+  [ ! -t 0 ] || echo >&2
 }
 
 # The newest release's tag, or nothing, found as install.sh's latest_release
@@ -330,8 +373,20 @@ main() {
       ;;
     models|model) as_root models "$@"; cmd_models "$@" ;;
     caffeinate) cmd_caffeinate "$@" ;;
-    update|upgrade) as_root update "$@"; run_installer --update "$@" ;;
+    update|upgrade)
+      # the newest release's tag alone, as an update would find it: the web
+      # page's "Check for updates"
+      if [ "${1:-}" = --check ]; then
+        load
+        local tag
+        tag="$(latest_release "${JETLINK_SOURCE_DIR:-}")"
+        [ -n "$tag" ] || { echo "Could not look up the newest release." >&2; exit 1; }
+        echo "$tag"
+        exit 0
+      fi
+      as_root update "$@"; run_installer --update "$@" ;;
     setup|configure|reconfigure) as_root setup "$@"; run_installer --reconfigure "$@" ;;
+    password|passwd) as_root password "$@"; cmd_password "$@" ;;
     uninstall|remove) as_root uninstall "$@"; run_installer --uninstall "$@" ;;
     *) echo "Unknown command: $cmd"; echo; usage; exit 2 ;;
   esac

@@ -1,6 +1,6 @@
 # Control protocol
 
-How the apps and the status page talk to the server. There is no socket: each
+How the apps and the web page talk to the server. There is no socket: each
 runs the server in its own process and uses `ServerController` (in
 `JetlinkKit/Sources/JetlinkServer`) directly.
 
@@ -8,7 +8,7 @@ runs the server in its own process and uses `ServerController` (in
 | --- | --- |
 | Mac and iPhone apps | Swift calls: `handle(_:)` runs a `ControlCommand`, `events` delivers each `ControlEvent` |
 | Android app | Each command as a JSON object through JNI (`Native.command`), a JSON reply back; the screens draw a snapshot built from the events |
-| Status page (Jetson, PC) | Listens only, never sends a command; relays events to browsers as Server-Sent Events |
+| Web page (Jetson, PC) | Relays events to browsers as Server-Sent Events; a signed-in page sends some commands as JSON over HTTP |
 
 It has no version number: every caller is built with the server it talks to.
 The JSON below is what
@@ -17,19 +17,57 @@ snake_case keys, sorted. An optional field with no value is left out, and a
 reader takes a missing key as `null`; the examples below show such fields as
 `<value>|null`.
 
-## The status page
+<a id="the-status-page"></a>
+## The web page
 
-`jetlink-server --status-port P` (the installed service uses 5600) serves, to
-any browser on the network, read-only and without a login:
+`jetlink-server --status-port P --web-auth FILE` (the installed service uses
+5600 and `/etc/jetlink/web-auth.json`) serves a page to any browser on the
+network. With the password file, everything but the page and the sign-in needs
+the sign-in cookie; without it the page is read-only and the `/api/` controls
+answer 403.
 
 | Path | What |
 | --- | --- |
-| `/` | the page |
-| `/events` | Server-Sent Events: on connect the latest `hello`, `server`, `link`, `engine` and `inventory`, the last two minutes of `stats`, then `host` and one `hw` a second while a page is open |
-| `/logs` | the server's last 300 log lines, as text |
+| `GET /` | the page |
+| `GET /api/session` | `{"auth": "none"\|"required", "signed_in"}`; renews a cookie over a day old |
+| `POST /api/login` | `{"password"}`: sets the cookie, or 401; 429 with `retry_after` while held up |
+| `POST /api/logout` | clears the cookie on this browser |
+| `POST /api/logout-all` | a new signing key: every other browser signs in again |
+| `POST /api/password` | `{"current", "new"}`: a new password and key, a new cookie for this browser |
+| `GET /events` | Server-Sent Events: on connect the latest `hello`, `server`, `link`, `engine`, `inventory`, `catalog`, `download` and `benchmark`, the last two minutes of `stats`, then `host` and one `hw` a second while a page is open |
+| `GET /logs` | the server's last 300 log lines, as text |
+| `POST /api/command` | one of the [commands](#commands) below: `status`, `catalog`, `download`, `cancel_download`, `prepare`, `forget`, `inventory`, `benchmark`, `cancel_benchmark`; the reply's `ok` false is a 409 |
+| `GET /api/system` | `settings`: the installer's answers that apply here, in its words; the version, keep-awake, the last run |
+| `POST /api/settings` | `{"power": "always"\|"switched", "comma_poweroff": "yes"\|"no", "desktop": "on"\|"off", "autostart": "yes"\|"no"}`, only those that apply: runs `jetlink setup --set ...` |
+| `POST /api/action` | `{"action": "restart"\|"reboot"\|"poweroff"\|"update"\|"check_update"\|"keep_awake", "seconds"}` |
+| `GET /api/task` | the settings or update run: `kind`, `state` (`running`, `done`, `failed`, `lost`), `exit`, its last lines |
+
+- **Cookie:** `jetlink_session`, HttpOnly, SameSite=Strict, 400 days. It is an
+  expiry, a nonce and an HMAC-SHA256 under the file's key, so the server keeps
+  nothing and a restart signs nobody out.
+- **Password file:** root's, 0600: PBKDF2-HMAC-SHA256 (210,000 rounds) of the
+  password, its salt, and the 32-byte signing key. The server reads it again
+  when it changes. `jetlink-server web-password --file F [--generate]` writes
+  one.
+- **Guessing:** five tries an address, then a wait that doubles up to five
+  minutes; two password checks a second at most from everyone together, one
+  at a time.
+- **Other sites:** a POST needs `Content-Type: application/json`, the header
+  `X-Jetlink: 1` (no other site can send it without a preflight, which is never
+  answered) and, when the browser sends one, an `Origin` naming this host.
+- **Driving:** while the comma is connected and frames came in the last 10 s,
+  `prepare`, `download`, `forget`, `benchmark`, settings, updates, restarts,
+  reboots and power-off answer 409.
+- **Runs:** settings and updates run the installer as the transient unit
+  `jetlink-web-task` (`systemd-run`, nice 10), outside the server's own unit,
+  since they restart it. Its output and exit status are in `/run/jetlink-web/`.
+  Keep-awake is `jetlink caffeinate -t` as `jetlink-web-awake`, so it outlasts
+  a restart too; Check for updates is `jetlink update --check`.
 
 ```bash
-curl -N http://<name>.local:5600/events
+curl -c jar -H 'X-Jetlink: 1' -H 'Content-Type: application/json' \
+  -d '{"password": "<password>"}' http://<name>.local:5600/api/login
+curl -b jar -N http://<name>.local:5600/events
 ```
 
 `host` (hostname, board, OS, kernel, GPU) and `hw` (CPU, memory, GPU,
@@ -97,7 +135,7 @@ angle brackets.
 // The comma asked a phone or Mac to power off; the apps refuse and say so.
 
 {"event":"hello","t":0,"version":"0.7.0"}
-// The status page's first event: the server's version, as
+// The web page's first event: the server's version, as
 // `jetlink-server --version` prints it.
 ```
 

@@ -1,8 +1,9 @@
 # Jetlink for iPhone and iPad
 
 **Experimental.** Runs the Jetlink server in an iOS app, connected to the comma
-by one USB cable. You build it from source. Run the [Benchmark](#benchmark)
-before you drive to see if your phone keeps up.
+by one USB cable. Install it from
+[TestFlight](https://testflight.apple.com/join/DAsYk5sP). Run the
+[Benchmark](#benchmark) before you drive to see if your phone keeps up.
 
 On an iPad with USB-C, read iPad wherever this page says iPhone or phone.
 
@@ -17,13 +18,25 @@ Mac: [Jetlink for Mac](macos-app.md). Jetson or PC: [README](../README.md#quick-
 - A powered USB-C hub between them keeps the phone charging (it runs the model
   20 times a second).
 - About 3 GB free per model.
-- A Mac with Xcode 26 and the iOS 26 platform. There is no App Store or
-  TestFlight build. A free Apple account is enough.
 - A comma running a zoompilot build with Jetlink, set up per the
   [README](../README.md#comma-setup-all-platforms), with **Accelerator Link**
   on **iOS**.
 
 ## Install
+
+<a href="https://testflight.apple.com/join/DAsYk5sP"><img src="images/testflight-badge.svg" alt="Available on TestFlight" height="40"></a>
+
+1. On the iPhone, open **[the Jetlink beta](https://testflight.apple.com/join/DAsYk5sP)**.
+2. Install **TestFlight** from the App Store if it asks, then tap **Accept** and
+   **Install**.
+
+TestFlight installs new builds as they come out. A build expires 90 days after
+it was released; by then there is a newer one.
+
+### Build from source
+
+Needs a Mac with Xcode 26 and the iOS 26 platform. A free Apple account is
+enough.
 
 1. In Xcode, open **Settings > Components** and install the **iOS 26**
    platform if it is missing.
@@ -60,11 +73,27 @@ Building and testing without a phone: [iPhone development](../ios/README.md).
 
 - There is nothing to type: the app finds the comma itself.
 - Open the app before plugging in. Opened later, it still connects, just later.
-- A direct cable to a phone is untried. If the comma restarts when you plug in,
-  use a powered USB-C hub.
+- On a direct USB-C cable both ends can be the host, and the comma has to keep
+  its USB device side on for the phone. It sorts both out by itself in up to
+  about 15 seconds. If the title never reaches **Connected**,
+  or the comma restarts when you plug in, use a powered USB-C hub, or a USB-C
+  to USB-A adapter and a USB-A to USB-C cable; then
+  [send the comma's report](#if-a-direct-cable-does-not-connect).
 - The app has these steps under Settings > **Help > Connecting the Comma**.
 
 How the link works: [what the comma presents](transport.md#what-the-comma-presents).
+
+### If a direct cable does not connect
+
+Over SSH on the comma, with the phone plugged straight in for 30 seconds:
+
+```bash
+sudo /data/openpilot/jetlink_repo/scripts/comma/jetlink-root.sh check
+grep 'USB-C' /data/log/jetlink-owner.log | tail -n 40
+sudo dmesg | grep -iE 'usbpd|type-?c|swap|weak charger|reverse boost' | tail -n 60
+```
+
+Send the output with your phone model, and say whether the comma restarted.
 
 ### USB 3 matters
 
@@ -160,7 +189,7 @@ A hot phone slows down and frames miss 50 ms.
 - **The comma cannot power the phone off.** The app refuses and tells you the
   comma asked.
 - **One comma at a time.** A new connection replaces the current one.
-- **A free account's install expires after 7 days.** Run it again from Xcode.
+- **A build from Xcode with a free account expires after 7 days.** Run it again from Xcode.
 
 ## Settings
 
