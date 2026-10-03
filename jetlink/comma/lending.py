@@ -19,9 +19,13 @@ killed returns it by dying. There is no "give it back" message: the socket
 closing is the only signal, because it is the only one a killed process sends.
 
 An iPhone cannot take the endpoint files: it is on the gadget's network
-interface and dials the owner (CableListener). The loan then carries the
-accepted socket instead, sent over the same unix socket with SCM_RIGHTS, and
-the owner closes its copy when the loan ends so the phone dials again.
+interface and dials the comma at CABLE_ADDR. Whoever holds the loan listens
+for that dial: the owner while nobody does (CableListener), so a parked phone
+shows connected and a dial is news that starts a provisioning run, and the
+borrower while it holds the loan (Loan.accept), for the drive or the run. The
+handshake is the handover: the owner closes its listener and the dial it
+holds before it says yes, and listens again once the loan ends. No socket
+changes hands, and nothing shares one.
 """
 from __future__ import annotations
 
@@ -58,7 +62,7 @@ def _send(conn: socket.socket, msg: dict) -> None:
   conn.sendall(json.dumps(msg).encode() + b'\n')
 
 
-def _recv_line(conn: socket.socket, buf: bytearray, deadline: float, fds: list[int] | None = None) -> dict | None:
+def _recv_line(conn: socket.socket, buf: bytearray, deadline: float) -> dict | None:
   """One json message off the socket, or None if the deadline passes first.
 
   Both ends speak newline-delimited json over a stream, so a message can arrive
@@ -68,9 +72,6 @@ def _recv_line(conn: socket.socket, buf: bytearray, deadline: float, fds: list[i
 
   The peer going away raises, because that is the one thing neither end may
   read as "nothing yet": for the lender it is the whole lease ending.
-
-  With `fds`, file descriptors sent along with the bytes land there: a plain
-  recv would have the kernel close them unseen.
   """
   while time.monotonic() < deadline:
     if b'\n' in buf:
@@ -78,11 +79,7 @@ def _recv_line(conn: socket.socket, buf: bytearray, deadline: float, fds: list[i
       buf[:] = rest
       return json.loads(line)
     try:
-      if fds is None:
-        chunk = conn.recv(4096)
-      else:
-        chunk, got, _, _ = socket.recv_fds(conn, 4096, 4)
-        fds.extend(got)
+      chunk = conn.recv(4096)
     except TimeoutError:
       continue
     if not chunk:
@@ -92,7 +89,8 @@ def _recv_line(conn: socket.socket, buf: bytearray, deadline: float, fds: list[i
 
 
 class Loan:
-  """The right to do endpoint IO on a gadget the owner holds.
+  """The right to do endpoint IO on a gadget the owner holds, or on the
+  cable the right to listen for the phone's dial (accept).
 
   Held for the length of a drive: modeld is stopped at every ignition-off and
   SIGKILLed if it lingers, so the socket closing is how the link is handed
@@ -100,14 +98,17 @@ class Loan:
   """
 
   def __init__(self, conn: socket.socket, buf: bytearray, mount: str, udc: str,
-               sock: socket.socket | None = None, name: str = 'modeld'):
+               cable: bool = False, name: str = 'modeld'):
     self.conn = conn
     self.mount = mount
     self.udc = udc
     self.name = name
-    # a phone's dial, accepted by the owner: the link rides on this and the
-    # endpoint files are left alone. None on a USB link
-    self.sock = sock
+    # a phone is the host: the link is its dial, taken by accept, and the
+    # endpoint files are left alone
+    self.cable = cable
+    # the cable listener, bound on the first accept and kept for the loan
+    self._srv: socket.socket | None = None
+    self.bound: tuple | None = None
     self._buf = buf
     self._lock = threading.Lock()
     self._closed = False
@@ -164,55 +165,72 @@ class Loan:
         return False
     return bool(reply.get('ok'))
 
-  def renew(self, timeout: float = BORROW_TIMEOUT) -> bool:
-    """Ask again which link this loan is for, before another attempt at a join.
+  def accept(self, timeout: float) -> socket.socket:
+    """The phone's next dial, within `timeout` s: the link on the cable.
 
-    The owner answers as it would a new borrower. The loan lasts the drive and
-    the answer changes under it: a phone that dialed after the first answer was
-    never used, and a dial whose session ended with the last attempt is spent.
-    Without this a borrower that took the endpoint files once wrote a hello to
-    a phone every attempt, 15 s and a bounce each, and every bounce took the
-    phone's network interface down before it could dial.
-
-    False when the owner gave no link in time or refused; the loan is closed
-    only when the owner is gone.
+    The listener is bound on the first call and kept for the loan's life, so a
+    phone that dials again after a lost link is taken here, with nobody else
+    involved. The newest dial wins, as on the owner's listener: the app may
+    have restarted behind an older one. Raises TimeoutError with no dial in
+    time, and OSError when the address could not be bound for the whole wait:
+    the owner lets go of it before it says yes, but a run before us may still
+    be exiting.
     """
-    with self._lock:
-      if self._closed:
-        return False
-      spent, self.sock = self.sock, None
-      _close(spent)   # the client that used it closed it too; closing twice is harmless
-      reply = self._take(timeout)
-      if reply is not None and (self.sock is None) != (spent is None):
-        gadget.log.warning("jetlink: the loan is now %s", _what_was_lent(reply))
-      return reply is not None
+    if not self.cable:
+      raise RuntimeError('this loan is the endpoint files, not the cable')
+    deadline = time.monotonic() + timeout
+    while self._srv is None:
+      try:
+        srv = _listen()
+      except OSError:
+        if time.monotonic() >= deadline:
+          raise
+        time.sleep(RETRY)
+        continue
+      self._srv, self.bound = srv, srv.getsockname()
+    conn = None
+    while True:
+      wait = 0.0 if conn is not None else max(0.0, deadline - time.monotonic())
+      if select.select([self._srv], [], [], wait)[0]:
+        try:
+          newer, _ = self._srv.accept()
+        except (BlockingIOError, InterruptedError):
+          newer = None
+        if newer is not None:
+          _close(conn)
+          conn = newer
+          continue
+      if conn is not None:
+        conn.setblocking(True)
+        return conn
+      if time.monotonic() >= deadline:
+        raise TimeoutError(f'no phone dialed in {timeout:.0f} s')
 
   def _take(self, timeout: float) -> dict | None:
-    """Ask the owner for the link until it lends one or `timeout` passes; on a
-    lend, what this loan carries now and the reply that lent it. The loan is
-    closed when the owner is gone."""
+    """Ask the owner for the link until it lends one or `timeout` passes; the
+    reply that lent it. The loan is closed when the owner is gone."""
     try:
-      got = _ask(self.conn, self._buf, self.name, time.monotonic() + timeout)
+      reply = _ask(self.conn, self._buf, self.name, time.monotonic() + timeout)
     except (OSError, ValueError, KeyError):
       if not self._closed:   # a close() from another thread wakes the ask this way
         gadget.log.exception("jetlink: could not ask the owner for the link")
       self._closed = True
       _close(self.conn)
       return None
-    if got is None:
+    if reply is None:
       return None
-    reply, self.sock = got
     self.mount, self.udc = str(reply['mount']), str(reply['udc'])
+    self.cable = bool(reply.get('cable'))
     return reply
 
   def close(self) -> None:
-    # not behind the lock: a renewal holds it through a whole hold, and the
-    # shutdown is what wakes that renewal
+    # not behind the lock: the shutdown is what wakes an ask on another thread
     self._closed = True
     _shut(self.conn)
     with self._lock:
       _close(self.conn)
-      _close(self.sock)
+      srv, self._srv, self.bound = self._srv, None, None
+      _close(srv)
 
 
 def borrow(name: str = 'modeld', timeout: float = BORROW_TIMEOUT, path: Path | None = None) -> Loan | None:
@@ -237,38 +255,26 @@ def borrow(name: str = 'modeld', timeout: float = BORROW_TIMEOUT, path: Path | N
   return loan
 
 
-def _ask(conn: socket.socket, buf: bytearray, name: str,
-         deadline: float) -> tuple[dict, socket.socket | None] | None:
+def _ask(conn: socket.socket, buf: bytearray, name: str, deadline: float) -> dict | None:
   """Ask for the link until the owner lends it or `deadline` passes: the reply
-  that lent it and, on the cable, the phone's socket. None when out of time or
-  refused. For a first borrow and a renewal alike."""
-  fds: list[int] = []
-  try:
-    while time.monotonic() < deadline:
-      _send(conn, {'op': 'borrow', 'name': name})
-      reply = _recv_line(conn, buf, deadline, fds)
-      if reply is None:
-        return None   # out of time
-      if reply.get('ok'):
-        if not reply.get('cable'):
-          return reply, None
-        if not fds:
-          gadget.log.warning("jetlink: the owner lent the cable link without its socket")
-          return None
-        return reply, socket.socket(fileno=fds.pop(0))
-      if not reply.get('retry'):
-        gadget.log.warning("jetlink: the owner would not lend the gadget (%s)", reply.get('detail'))
-        return None
-      time.sleep(RETRY)
-    return None
-  finally:
-    for fd in fds:
-      os.close(fd)
+  that lent it. None when out of time or refused."""
+  while time.monotonic() < deadline:
+    _send(conn, {'op': 'borrow', 'name': name})
+    reply = _recv_line(conn, buf, deadline)
+    if reply is None:
+      return None   # out of time
+    if reply.get('ok'):
+      return reply
+    if not reply.get('retry'):
+      gadget.log.warning("jetlink: the owner would not lend the gadget (%s)", reply.get('detail'))
+      return None
+    time.sleep(RETRY)
+  return None
 
 
 def _what_was_lent(reply: dict) -> str:
   if reply.get('cable'):
-    return f"the cable link ({reply.get('peer')})"
+    return "the cable link"
   return f"the gadget (udc {reply.get('udc')})"
 
 
@@ -278,14 +284,31 @@ def _what_was_lent(reply: dict) -> str:
 CABLE_BIND_BACKOFF = 5.0
 
 
+def _listen() -> socket.socket:
+  """A listener on CABLE_ADDR, non-blocking, or OSError: the address is
+  usb0's, which may not exist yet, or another process still has it."""
+  srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+  try:
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(gadget.CABLE_ADDR)
+    srv.listen(2)
+    srv.setblocking(False)
+  except OSError:
+    srv.close()
+    raise
+  return srv
+
+
 class CableListener:
   """The owner's ear for a phone: one accept socket on CABLE_ADDR, open while
-  the gadget is presented, holding at most one dial at a time.
+  the gadget is presented and nobody holds the loan, holding at most one dial
+  at a time.
 
   A dial is accepted from the owner's step, never read: what it proves is that
-  a phone is on the cable, and the bytes belong to whoever borrows the link.
-  A newer dial replaces an older one, so a phone whose app restarted is not
-  stuck behind its own dead connection.
+  a phone is on the cable, and whether its app is running. A newer dial
+  replaces an older one, so a phone whose app restarted is not stuck behind
+  its own dead connection. A borrower takes the port over (vacate) and
+  listens for the phone itself.
   """
 
   def __init__(self):
@@ -320,14 +343,9 @@ class CableListener:
     if now < self.next_open:
       return False
     self.next_open = now + CABLE_BIND_BACKOFF
-    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-      srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-      srv.bind(gadget.CABLE_ADDR)
-      srv.listen(2)
-      srv.setblocking(False)
+      srv = _listen()
     except OSError as e:
-      srv.close()
       why = ('usb0 has no address yet' if e.errno == errno.EADDRNOTAVAIL else str(e))
       if why != self._last_error:
         self._last_error = why
@@ -371,16 +389,20 @@ class CableListener:
     gadget.log.warning("jetlink: the phone hung up")
     _close(sock)
 
-  def lend(self, conn: socket.socket, msg: dict) -> bool:
-    """Send the held dial along with `msg` on the lend connection. False
-    with nothing held. From the lender's thread."""
+  def vacate(self) -> None:
+    """Stop listening and let the held dial go, for a borrower that listens
+    itself: the port is free when the owner's yes lands, and the phone dials
+    again in a moment, to the borrower. Its dial after the loan is the same
+    phone coming back, not news. From the lender's thread."""
     with self._lock:
-      sock = self._sock
-      if sock is None:
-        return False
-      msg = {**msg, 'cable': True, 'peer': self.peer}
-      socket.send_fds(conn, [json.dumps(msg).encode() + b'\n'], [sock.fileno()])
-      return True
+      sock, self._sock = self._sock, None
+      srv, self._srv = self._srv, None
+      self.peer = None
+      self.bound = None
+      self.next_open = 0.0   # listen again on the first step after the loan ends
+      self.redial_expected = sock is not None
+    _close(sock)
+    _close(srv)
 
   def release(self, expect_redial: bool = False) -> None:
     """Close the held dial. The phone dials again and the next accept
@@ -436,23 +458,22 @@ class Lender:
 
   `lendable` says whether the gadget is in the state a borrower can take over
   from, bound with no endpoint file open here; while it is not, a borrow is
-  answered "retry" and the daemon's own loop puts it there. `holding` says the
-  host is a phone (Accelerator Link iOS): "retry" until it dials, so nobody
-  writes a hello over FunctionFS to a phone. With `cable` holding a dial, the
-  loan carries the phone's socket instead of the endpoint files. `server`
-  takes what a borrower passes on of the server's hello (Loan.note_server),
-  with the borrower's name, on this thread.
+  answered "retry" and the daemon's own loop puts it there. `cable` says the
+  host is a phone (Accelerator Link iOS): the loan is then the right to
+  listen for its dial, never the endpoint files, which a phone does not read,
+  and `vacate` frees the port first (CableListener.vacate). `server` takes
+  what a borrower passes on of the server's hello (Loan.note_server), with
+  the borrower's name, on this thread.
   """
 
   def __init__(self, lendable: Callable[[], bool], bounce: Callable[[], bool],
-               path: Path | None = None, holding: Callable[[], bool] | None = None,
-               cable: CableListener | None = None, server: Callable[[str, dict], None] | None = None):
+               path: Path | None = None, cable: Callable[[], bool] | None = None,
+               vacate: Callable[[], None] | None = None, server: Callable[[str, dict], None] | None = None):
     self._lendable = lendable
     self._bounce = bounce
-    self._holding = holding or (lambda: False)
-    self._cable = cable
+    self._cable = cable or (lambda: False)
+    self._vacate = vacate or (lambda: None)
     self._server = server
-    self._cable_lent = False
     # what this borrower was last told it has, so each change is logged once
     self._told = ''
     # as it is when made, for the same reason as borrow's
@@ -543,20 +564,11 @@ class Lender:
         conn.close()
         if self._lent.is_set():
           gadget.log.warning("jetlink: %s handed the %s back", self.borrower or 'the borrower',
-                             'cable link' if self._cable_lent else 'gadget')
-        # the phone's session ended with the borrower; let it dial again
-        self._release_cable()
+                             'cable link' if self._told == 'cable' else 'gadget')
+        # the owner's step listens for the phone again, now that the port is free
         self._told = ''
         self._lent.clear()
         self.borrower = ''
-
-  def _release_cable(self) -> None:
-    """Let a lent dial go, so the phone dials again: its session went with the
-    borrower, or with the attempt a renewal follows. The owner's hold keeps a
-    phone that has dialed from being lent the endpoint files meanwhile."""
-    if self._cable_lent and self._cable is not None:
-      self._cable.release(expect_redial=True)
-    self._cable_lent = False
 
   def _tell(self, what: str, *msg) -> None:
     """Log a lend when it is not what this borrower already had: a renewal
@@ -583,16 +595,13 @@ class Lender:
     if op == 'borrow':
       self.borrower = str(msg.get('name') or 'a borrower')
       self._lent.set()
-      # a renewal: the dial went with the attempt that used it
-      self._release_cable()
-      if self._cable is not None and self._cable.held:
-        # a phone: the link is its dial, and the endpoint files stay put
-        if self._cable.lend(conn, {'ok': True, 'udc': gadget.bound_udc() or '', 'mount': str(gadget.FFS_MOUNT)}):
-          self._cable_lent = True
-          self._tell('cable', "jetlink: lending the cable link to %s (%s)", self.borrower, self._cable.peer)
-          return
-      if self._holding():
-        _send(conn, {'ok': False, 'retry': True, 'detail': 'waiting for a phone to dial'})
+      if self._cable():
+        # a phone: the link is its dial, which the borrower listens for
+        # itself; the owner's listener and the dial it holds go first, so the
+        # port is free when this answer lands. The endpoint files stay put
+        self._vacate()
+        self._tell('cable', "jetlink: lending the cable link to %s", self.borrower)
+        _send(conn, {'ok': True, 'cable': True, 'udc': gadget.bound_udc() or '', 'mount': str(gadget.FFS_MOUNT)})
         return
       udc = gadget.bound_udc()
       if not (udc and self._lendable()):

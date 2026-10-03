@@ -309,7 +309,7 @@ class TestTheLoan(OpenpilotTest):
 
   def test_a_loan_is_opened_over(self):
     d = provision.ProvisioningRun(self.parts)
-    loan = mock.Mock(sock=None, mount='/dev/ffs-jetlink', udc='udc0')
+    loan = mock.Mock(cable=False, mount='/dev/ffs-jetlink', udc='udc0')
     with mock.patch.object(lending, 'borrow', return_value=loan) as borrow, \
          mock.patch.object(link, 'connect') as connect:
       assert d.open_link() is True

@@ -57,11 +57,11 @@ def set_logger(logger) -> None:
 # whose comma end is 192.168.60.1 (jetlink-root.sh gadget --ios, and net, which
 # also runs the DHCP server), and the phone dials CABLE_ADDR whenever it holds
 # a lease on that network.
-# The owner hands the accepted socket to whoever borrows the link; nothing
-# writes to the endpoint files, which a phone never reads. The setting, not a
-# guess, says which: a hello over FunctionFS to a phone blocks 15 s and bounces
-# the gadget, and waiting to see whether a phone dials cost every Jetson
-# reconnect 5 to 10 s.
+# Whoever holds the loan listens for the dial, the owner while nobody does;
+# nothing writes to the endpoint files, which a phone never reads. The setting,
+# not a guess, says which: a hello over FunctionFS to a phone blocks 15 s and
+# bounces the gadget, and waiting to see whether a phone dials cost every
+# Jetson reconnect 5 to 10 s.
 LINK = Path("/dev/shm/jetlink-link")        # "cable <peer ip>" while a phone is dialed in
 NET_STATUS = Path("/dev/shm/jetlink-net")   # jetlink-root.sh: "ok 192.168.60.1 <netdev>", "error: ...", "net: off" (USB)
 CABLE_ADDR = (CABLE_ADDRESS, DEFAULT_PORT)

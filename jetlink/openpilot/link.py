@@ -43,30 +43,38 @@ PRESENT_TIMEOUT = 5.0
 BUILD_TIMEOUT = 1800.0
 
 
-def connect(log, loan, deadline: float | None = None, name: str | None = None):
-  """Open the link over what jetlinkd lent (jetlink.comma.lending): a phone's
-  dial or the endpoint files, as the owner decided; JetlinkClient.open_loan
-  takes either. `deadline` is per frame, FRAME_TIMEOUT by default: modeld
-  blocks on a frame the way it blocks on a chestnut. `name` is what the server
-  logs this connection as: two comma processes share one gadget, and the
-  Jetson's journal has no clock to tell them apart by.
+def connect(log, loan, deadline: float | None = None, name: str | None = None, wait: float | None = None):
+  """Open the link over what jetlinkd lent (jetlink.comma.lending): the
+  endpoint files, or on the cable the phone's next dial, which the loan
+  listens for (Loan.accept) for up to `wait` s, BORROW_TIMEOUT by default.
+  `deadline` is per frame, FRAME_TIMEOUT by default: modeld blocks on a frame
+  the way it blocks on a chestnut. `name` is what the server logs this
+  connection as: two comma processes share one gadget, and the Jetson's
+  journal has no clock to tell them apart by.
   """
   from jetlink.client import FRAME_TIMEOUT, JetlinkClient
-  if loan.sock is not None:
-    log.warning("jetlink: connecting over the phone's dial (%s)", gadget.link_peer())
-  return JetlinkClient.open_loan(loan, deadline=FRAME_TIMEOUT if deadline is None else deadline, name=name)
+  from jetlink.comma import lending
+  deadline = FRAME_TIMEOUT if deadline is None else deadline
+  if loan.cable:
+    sock = loan.accept(lending.BORROW_TIMEOUT if wait is None else wait)
+    peer = sock.getpeername()[0]
+    # the panels name the phone; the owner records it only while it holds the dial itself
+    gadget.note_link('cable', peer)
+    log.warning("jetlink: the phone dialed in from %s", peer)
+    return JetlinkClient.open_socket(sock, deadline=deadline, name=name)
+  return JetlinkClient.open_borrowed_ffs(loan.mount, loan.udc, bounce=loan.bounce, deadline=deadline, name=name)
 
 
 class Link:
   """modeld's end of the gadget: the lease, and the client that rides on it.
 
-  Both are kept across join attempts. The lease lasts the drive, though which
-  link it carries is asked again before each new client (a phone may have
-  dialed, or its last dial be spent), and opening the gadget again per attempt
-  is an unplug as the Jetson sees it, which, while one boots and the join loop
-  asks every few seconds, is an unplug a cycle. So an attempt that cannot use
-  the link leaves it here rather than closing it, and only a deliberate close()
-  lets go.
+  Both are kept across join attempts. The lease lasts the drive, and opening
+  the gadget again per attempt is an unplug as the Jetson sees it, which,
+  while one boots and the join loop asks every few seconds, is an unplug a
+  cycle. So an attempt that cannot use the link leaves it here rather than
+  closing it, and only a deliberate close() lets go. On the cable the lease
+  is the listener, and a client that died is replaced by the phone's next
+  dial on it.
   """
 
   def __init__(self, log, name: str = 'modeld'):
@@ -84,7 +92,8 @@ class Link:
     if self.client is not None and self.client.dead:
       self.close()
     if self.client is None:
-      self.client = connect(self.log, name=self.name, loan=self._borrow(deadline))
+      wait = None if deadline is None else max(0.0, deadline - time.monotonic())
+      self.client = connect(self.log, name=self.name, loan=self._borrow(deadline), wait=wait)
     return self.client
 
   def adopt(self, client) -> bool:
@@ -128,12 +137,7 @@ class Link:
     # whole budget here has nothing left to open the link with
     timeout = lending.BORROW_TIMEOUT if deadline is None else max(0.0, deadline - time.monotonic())
     if self.loan is not None and not self.loan.closed:
-      # which link the loan is for is asked again every attempt (Loan.renew)
-      if self.loan.renew(timeout):
-        return self.loan
-      if not self.loan.closed:
-        # the owner is still holding for a phone
-        raise TimeoutError("jetlinkd has not lent the link yet")
+      return self.loan
     self.loan = lending.borrow(self.name, timeout=timeout)
     if self.loan is None:
       raise TimeoutError("jetlinkd lent no link")

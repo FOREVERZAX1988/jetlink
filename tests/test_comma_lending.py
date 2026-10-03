@@ -8,8 +8,8 @@ Handing the endpoints over without handing the gadget over.
 
 The owner holds ep0 and the UDC bind for as long as the link is enabled, so a
 drive starting or ending is no longer an unplug the Jetson has to recover from.
-What still changes hands is the right to read the endpoint files, and this is
-the handshake for it.
+What still changes hands is the right to read the endpoint files, or on the
+cable to listen for the phone's dial, and this is the handshake for it.
 """
 
 import shutil
@@ -44,14 +44,18 @@ class LendingTest(unittest.TestCase):
     p = mock.patch.object(lending.gadget, 'CABLE_ADDR', ('127.0.0.1', 0))
     self.addCleanup(p.stop)
     p.start()
-    self.holding = False
+    self.cable_mode = False   # the owner built the gadget for a phone
+    self.vacated = 0
 
-  def lender(self, cable: lending.CableListener | None = None, server=None) -> lending.Lender:
+  def lender(self, server=None, vacate=None) -> lending.Lender:
     lender = lending.Lender(lambda: self.free, self.bounce, path=self.path,
-                            holding=lambda: self.holding, cable=cable, server=server)
+                            cable=lambda: self.cable_mode, vacate=vacate or self.vacate, server=server)
     assert lender.start()
     self.addCleanup(lender.stop)
     return lender
+
+  def vacate(self) -> None:
+    self.vacated += 1
 
   def listener(self) -> lending.CableListener:
     listener = lending.CableListener()
@@ -130,14 +134,17 @@ class Borrowing(LendingTest):
     t.join(3.0)
     assert got and got[0] is not None
 
-  def test_during_the_hold_a_borrower_is_told_to_retry(self):
-    # a phone may still dial; a hello over FunctionFS to a phone blocks 15 s
-    self.holding = True
+  def test_a_phones_loan_is_the_port_and_the_owner_vacates_it_first(self):
+    # a hello over FunctionFS to a phone blocks 15 s: a phone's borrower is
+    # never lent the endpoint files, whatever they are doing, and the owner
+    # lets go of the port before it says yes
+    self.cable_mode = True
+    self.free = False
+    self.udc = None
     lender = self.lender()
-    self.refused(lender)
-    self.holding = False
     loan = self.take(timeout=1.0)
-    assert loan is not None and loan.sock is None
+    assert loan is not None and loan.cable
+    assert self.vacated == 1 and lender.lent
 
   def test_a_borrow_nobody_can_answer_gives_up_and_says_so(self):
     self.free = False
@@ -162,150 +169,148 @@ class Borrowing(LendingTest):
 
 
 class TheCable(LendingTest):
-  """A phone dials the owner; the loan carries its socket, over the same unix
-  socket, and the endpoint files stay where they are."""
+  """A phone dials the comma; the borrower listens for it on the loan, and the
+  endpoint files stay where they are. Nothing shares a socket."""
 
-  def test_a_loan_carries_the_phones_dial(self):
-    listener = self.listener()
-    phone = self.dial(listener)
-    lender = self.lender(cable=listener)
-    loan = self.take()
-    assert loan is not None and loan.sock is not None
-    assert lender.lent and lender.borrower == 'modeld'
-    phone.sendall(b'hello')
-    loan.sock.settimeout(3.0)
-    assert loan.sock.recv(5) == b'hello'
-    loan.sock.sendall(b'ready')
-    assert phone.recv(5) == b'ready'
+  def setUp(self):
+    super().setUp()
+    self.cable_mode = True
 
-  def test_the_phone_dials_again_when_the_loan_ends(self):
-    # the owner's copy of the dial goes with the loan, so a borrower that has
-    # finished, or died, does not leave the phone talking to nobody
-    listener = self.listener()
-    phone = self.dial(listener)
-    lender = self.lender(cable=listener)
-    loan = self.take()
-    loan.close()
-    assert self.until(lambda: not lender.lent)
-    assert self.until(lambda: not listener.held)
-    assert phone.recv(1) == b''
-    # and that redial is the same phone coming back, not a phone turning up
-    assert listener.redial_expected
-    self.dial(listener)
-    assert not listener.news
-    self.dial(listener)
-    assert listener.news, 'a dial replacing a held one is a phone turning up'
-
-  def test_a_dial_during_the_hold_ends_it_for_the_borrower(self):
-    listener = self.listener()
-    self.holding = True
-    self.lender(cable=listener)
+  def accepting(self, loan, timeout=3.0):
+    """A borrower waiting for the phone, on its own thread; what it got lands in the list."""
     got = []
-    t = threading.Thread(target=lambda: got.append(self.take(timeout=3.0)), daemon=True)
+
+    def accept():
+      try:
+        got.append(loan.accept(timeout))
+      except Exception as e:   # the test reads it
+        got.append(e)
+    t = threading.Thread(target=accept, daemon=True)
     t.start()
-    time.sleep(0.1)
-    assert not got, 'lent inside the hold'
-    self.dial(listener)
-    t.join(3.0)
-    assert got and got[0] is not None and got[0].sock is not None
+    assert self.until(lambda: loan.bound is not None), 'the loan never listened'
+    return t, got
 
-  def test_a_usb_loan_leaves_a_later_dial_for_the_next_borrower(self):
-    listener = self.listener()
-    lender = self.lender(cable=listener)
-    loan = self.take()
-    assert loan.sock is None
-    self.dial(listener)
-    loan.close()
-    assert self.until(lambda: not lender.lent)
-    assert listener.held, 'let a phone go that nobody had borrowed'
+  def phone(self, loan) -> socket.socket:
+    phone = socket.create_connection(loan.bound[:2], timeout=3.0)
+    self.addCleanup(phone.close)
+    return phone
 
-  def test_a_dial_is_lent_whatever_the_endpoints_are_doing(self):
-    # the endpoint files are not what a phone's borrower uses
-    self.free = False
-    self.udc = None
-    listener = self.listener()
-    self.dial(listener)
-    self.lender(cable=listener)
-    loan = self.take(timeout=1.0)
-    assert loan is not None and loan.sock is not None
-
-
-class Renewing(LendingTest):
-  """The loan lasts the drive; which link it is for is asked again before
-  every attempt at a join. On the bench a borrower that took the endpoint
-  files once wrote a hello to a phone on every attempt, and each bounce that
-  freed the write took the phone's network interface down before it dialed."""
-
-  def test_a_phone_that_dialed_after_the_loan_is_what_a_renewal_gets(self):
-    listener = self.listener()
-    self.lender(cable=listener)
-    loan = self.take()
-    assert loan.sock is None
-    self.dial(listener)
-    assert loan.renew(timeout=3.0)
-    assert loan.sock is not None
-
-  def test_a_renewal_with_nothing_new_keeps_the_endpoint_files(self):
-    self.lender()
-    loan = self.take()
-    assert loan.renew(timeout=1.0)
-    assert loan.sock is None and loan.udc == 'udc0'
-
-  def test_a_spent_dial_is_let_go_and_the_phones_next_one_lent(self):
-    listener = self.listener()
-    phone = self.dial(listener)
-    self.lender(cable=listener)
-    loan = self.take()
-    first = loan.sock
-    self.holding = True   # the owner, for a host that has dialed: a phone
-    got = []
-    t = threading.Thread(target=lambda: got.append(loan.renew(timeout=3.0)), daemon=True)
-    t.start()
-    # the session went with the attempt: the phone hears so, and dials again
-    phone.settimeout(3.0)
-    assert phone.recv(1) == b''
-    assert not got, 'lent the endpoint files to a phone'
-    self.dial(listener)
-    t.join(3.0)
-    assert got == [True] and loan.sock is not None and loan.sock is not first
-    assert not listener.news, 'the phone coming back is not a phone turning up'
-
-  def test_after_a_spent_dial_the_owners_hold_decides(self):
-    # the lender keeps no clock of its own: with no hold, the endpoint files
-    listener = self.listener()
-    self.dial(listener)
-    self.lender(cable=listener)
-    loan = self.take()
-    assert loan.renew(timeout=2.0)
-    assert loan.sock is None
-
-  def test_closing_a_loan_wakes_a_renewal_waiting_out_the_hold(self):
-    # modeld shutting down must not sit behind a renewal for the whole hold
-    self.lender()
-    loan = self.take()
-    self.holding = True
-    got = []
-    t = threading.Thread(target=lambda: got.append(loan.renew(timeout=5.0)), daemon=True)
-    t.start()
-    time.sleep(0.1)
-    started = time.monotonic()
-    loan.close()
-    t.join(3.0)
-    assert got == [False] and time.monotonic() - started < 1.0
-
-  def test_a_renewal_during_the_hold_waits_and_keeps_the_loan(self):
-    self.lender()
-    loan = self.take()
-    self.holding = True
-    assert not loan.renew(timeout=0.2)
-    assert not loan.closed
-
-  def test_an_owner_that_is_gone_ends_the_loan(self):
+  def test_the_borrower_takes_the_phones_dial_on_the_loan(self):
     lender = self.lender()
     loan = self.take()
-    lender.stop()
-    assert not loan.renew(timeout=1.0)
-    assert loan.closed
+    assert loan.cable and lender.lent and lender.borrower == 'modeld'
+    t, got = self.accepting(loan)
+    phone = self.phone(loan)
+    t.join(3.0)
+    sock = got[0]
+    assert isinstance(sock, socket.socket), got
+    self.addCleanup(sock.close)
+    phone.sendall(b'hello')
+    sock.settimeout(3.0)
+    assert sock.recv(5) == b'hello'
+    sock.sendall(b'ready')
+    assert phone.recv(5) == b'ready'
+
+  def test_the_next_dial_is_taken_on_the_same_listener(self):
+    # a link lost mid-drive: the phone dials again, and nobody else is involved
+    self.lender()
+    loan = self.take()
+    t, got = self.accepting(loan)
+    bound = loan.bound
+    self.phone(loan)
+    t.join(3.0)
+    got[0].close()
+    t, got = self.accepting(loan)
+    assert loan.bound == bound
+    self.phone(loan)
+    t.join(3.0)
+    assert isinstance(got[0], socket.socket), got
+    got[0].close()
+
+  def test_the_newest_dial_wins(self):
+    # the app restarted behind its own dead connection
+    self.lender()
+    loan = self.take()
+    with self.assertRaises(TimeoutError):
+      loan.accept(0.05)   # bound now, and nothing dialed
+    first = self.phone(loan)
+    second = self.phone(loan)
+    time.sleep(0.05)   # both handshakes done on the loopback
+    sock = loan.accept(1.0)
+    self.addCleanup(sock.close)
+    first.settimeout(3.0)
+    assert first.recv(1) == b''
+    sock.sendall(b'x')
+    second.settimeout(3.0)
+    assert second.recv(1) == b'x'
+
+  def test_no_dial_in_time_is_a_timeout_and_the_listener_stays(self):
+    self.lender()
+    loan = self.take()
+    with self.assertRaises(TimeoutError):
+      loan.accept(0.1)
+    assert loan.bound is not None
+    self.phone(loan)   # still listening
+
+  def test_an_address_still_held_is_tried_until_the_wait_runs_out(self):
+    # the owner lets go of the port before it says yes, but a run before us
+    # may still be exiting
+    holder = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    self.addCleanup(holder.close)
+    holder.bind(('127.0.0.1', 0))
+    holder.listen(1)
+    with mock.patch.object(lending.gadget, 'CABLE_ADDR', holder.getsockname()):
+      self.lender()
+      loan = self.take()
+      with self.assertRaises(OSError) as held:
+        loan.accept(0.3)
+      assert not isinstance(held.exception, TimeoutError)
+      assert loan.bound is None
+      holder.close()
+      t, got = self.accepting(loan)
+      self.phone(loan)
+      t.join(3.0)
+      assert isinstance(got[0], socket.socket), got
+      got[0].close()
+
+  def test_closing_the_loan_closes_its_listener(self):
+    self.lender()
+    loan = self.take()
+    with self.assertRaises(TimeoutError):
+      loan.accept(0.05)
+    bound = loan.bound
+    loan.close()
+    assert loan.bound is None
+    with self.assertRaises(OSError):
+      socket.create_connection(bound[:2], timeout=1.0)
+
+  def test_a_usb_loan_has_no_listener(self):
+    self.cable_mode = False
+    self.lender()
+    loan = self.take()
+    assert not loan.cable
+    with self.assertRaises(RuntimeError):
+      loan.accept(0.1)
+
+  def test_the_owner_vacates_the_port_before_it_says_yes(self):
+    # the owner was listening and holding the phone's dial; both go, and the
+    # borrower binds the same address. The phone, hung up on, dials again
+    listener = self.listener()
+    phone = self.dial(listener)
+    bound = listener.bound[:2]
+    with mock.patch.object(lending.gadget, 'CABLE_ADDR', bound):
+      self.lender(vacate=listener.vacate)
+      loan = self.take()
+      assert not listener.listening and not listener.held
+      assert listener.redial_expected, 'the next dial is the same phone coming back'
+      phone.settimeout(3.0)
+      assert phone.recv(1) == b''
+      t, got = self.accepting(loan)
+      assert loan.bound[:2] == bound, 'the borrower did not get the same address'
+      self.phone(loan)
+      t.join(3.0)
+      assert isinstance(got[0], socket.socket), got
+      got[0].close()
 
 
 class TheListener(LendingTest):
@@ -321,6 +326,24 @@ class TheListener(LendingTest):
     phone = self.dial(listener)
     phone.close()
     assert self.until(lambda: listener.poll() is None and not listener.held)
+
+  def test_vacating_frees_the_port_and_expects_the_phone_back(self):
+    listener = self.listener()
+    phone = self.dial(listener)
+    bound = listener.bound[:2]
+    listener.vacate()
+    assert not listener.listening and not listener.held and listener.redial_expected
+    phone.settimeout(3.0)
+    assert phone.recv(1) == b''
+    taken = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    taken.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    taken.bind(bound)   # the port is free
+    taken.close()
+    # and the owner listens again on its next step, not after the bind backoff
+    assert listener.open() and listener.listening
+    # with nothing held there is nothing to expect back
+    listener.vacate()
+    assert not listener.redial_expected
 
   def test_nothing_waiting_is_nothing(self):
     listener = self.listener()
@@ -378,7 +401,6 @@ class TellingTheOwner(LendingTest):
                                  'sleep_after': 0.0})]
     # the answer was read, so the next exchange on the loan gets its own
     assert loan.bounce() is True and self.bounced == 1
-    assert loan.renew(timeout=1.0)
 
   def test_an_older_owner_answering_unknown_op_is_ignored(self):
     lender = self.lender()   # no `server`: answered as an owner from before the op
@@ -418,7 +440,7 @@ class TellingTheOwner(LendingTest):
       assert loan.note_server(self.HELLO) is False
     assert loan.closed
     assert 'letting the loan go' in log.warning.call_args.args[0]
-    assert loan.renew(timeout=0.5) is False and loan.bounce() is False
+    assert loan.bounce() is False
     release.set()
     assert self.until(lambda: not lender.lent), 'the owner never saw the lease end'
     again = self.take()

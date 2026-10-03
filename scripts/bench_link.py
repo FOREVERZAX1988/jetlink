@@ -88,9 +88,11 @@ def open_loan(timeout: float = LOAN_TIMEOUT):
   if loan is None:
     raise SystemExit(f"no loan from the gadget owner in {timeout:g}s: is jetlinkd running, "
                      "and is modeld or jetlink_hold.py holding it?")
-  print(f"borrowed the {'cable link' if loan.sock is not None else 'gadget'}: udc {loan.udc}, mount {loan.mount}")
+  print(f"borrowed the {'cable link' if loan.cable else 'gadget'}: udc {loan.udc}, mount {loan.mount}")
   try:
-    return loan, JetlinkClient.open_loan(loan)
+    if loan.cable:
+      return loan, JetlinkClient.open_socket(loan.accept(timeout))
+    return loan, JetlinkClient.open_borrowed_ffs(loan.mount, loan.udc, bounce=loan.bounce)
   except BaseException:
     loan.close()
     raise

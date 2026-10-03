@@ -133,59 +133,26 @@ class BorrowingTheGadget(OpenpilotTest):
     assert connect.call_args.kwargs['loan'] is loan
     assert connect.call_args.kwargs['name'] == 'modeld'
 
-  def test_the_lease_is_borrowed_once_and_renewed_every_attempt(self):
-    # a phone may have dialed since the last attempt, or its dial be spent
+  def test_the_lease_is_borrowed_once_and_reused_every_attempt(self):
     loan = mock.Mock(closed=False)
-    loan.renew.return_value = True
     with mock.patch.object(lending, 'borrow', return_value=loan) as borrow, \
          mock.patch.object(link, 'connect') as connect:
       self.link.open()
       self.link.client = None
       self.link.open()
     borrow.assert_called_once()
-    loan.renew.assert_called_once()
-    assert connect.call_args.kwargs['loan'] is loan
+    assert all(c.kwargs['loan'] is loan for c in connect.call_args_list)
 
   def test_a_dead_client_is_replaced_not_reused(self):
     # a big model retired after a link loss closes its client; the next
     # attempt reused it and failed on EBADF, a whole retry after every loss
     dead = mock.Mock(dead=True)
     loan = mock.Mock(closed=False)
-    loan.renew.return_value = True
     self.link.client, self.link.loan = dead, loan
     with mock.patch.object(link, 'connect') as connect:
       assert self.link.open() is connect.return_value
     dead.close.assert_called_once()
-    loan.renew.assert_called_once()
-
-  def test_a_renewal_still_on_hold_is_not_an_open_of_our_own(self):
-    # the owner is holding for a phone; opening the endpoints here would
-    # write a hello to it
-    loan = mock.Mock(closed=False)
-    loan.renew.return_value = False
-    self.link.loan = loan
-    with mock.patch.object(lending, 'borrow') as borrow, \
-         mock.patch.object(link, 'connect') as connect:
-      with self.assertRaises(TimeoutError):
-        self.link.open()
-    borrow.assert_not_called()
-    connect.assert_not_called()
-
-  def test_a_renewal_that_finds_the_owner_gone_borrows_afresh(self):
-    loan = mock.Mock(closed=False)
-
-    def gone(timeout):
-      loan.closed = True
-      return False
-
-    loan.renew.side_effect = gone
-    self.link.loan = loan
-    fresh = mock.Mock(closed=False)
-    with mock.patch.object(lending, 'borrow', return_value=fresh) as borrow, \
-         mock.patch.object(link, 'connect') as connect:
-      self.link.open()
-    borrow.assert_called_once()
-    assert connect.call_args.kwargs['loan'] is fresh
+    assert connect.call_args.kwargs['loan'] is loan
 
   def test_a_lease_that_ended_is_asked_for_again(self):
     with mock.patch.object(lending, 'borrow', return_value=mock.Mock(closed=True)) as borrow, \
@@ -209,36 +176,48 @@ class BorrowingTheGadget(OpenpilotTest):
     # PRESENT_TIMEOUT blocks modeld's main thread, and a borrow that outlasts
     # it leaves nothing to open the link with
     with mock.patch.object(lending, 'borrow', return_value=mock.Mock(closed=False)) as borrow, \
-         mock.patch.object(link, 'connect'):
+         mock.patch.object(link, 'connect') as connect:
       self.link.open(deadline=link.time.monotonic() + 1.5)
     assert borrow.call_args.kwargs['timeout'] <= 1.5
+    assert connect.call_args.kwargs['wait'] <= 1.5, 'and nor does the wait for the phone'
 
 
 class TestConnect(unittest.TestCase):
-  """Which transport the client is opened over: whatever the owner lent, a
-  phone's dial or the endpoint files. Never the gadget itself. The choice is
-  JetlinkClient.open_loan's, which both borrowers go through."""
+  """Which transport the client is opened over: whatever the owner lent, the
+  endpoint files or on the cable the phone's next dial. Never the gadget
+  itself. Both borrowers go through this."""
 
   def setUp(self):
     from jetlink.client import JetlinkClient
     self.client = mock.Mock(name='JetlinkClient')
     for name in ('open_socket', 'open_borrowed_ffs', 'open_ffs'):
       setattr(self.client, name, mock.patch.object(JetlinkClient, name).start())
+    self.note_link = mock.patch.object(gadget, 'note_link').start()
     self.addCleanup(mock.patch.stopall)
     self.log = RecordingLog()
 
-  def test_a_loan_with_a_dial_is_opened_over_the_socket(self):
+  def test_a_cable_loan_takes_the_phones_next_dial(self):
     sock = mock.Mock(name='sock')
-    with mock.patch.object(gadget, 'link_peer', return_value='192.168.60.3'):
-      link.connect(self.log, deadline=2.0, name='modeld', loan=mock.Mock(sock=sock))
+    sock.getpeername.return_value = ('192.168.60.3', 50000)
+    loan = mock.Mock(cable=True)
+    loan.accept.return_value = sock
+    link.connect(self.log, deadline=2.0, name='modeld', loan=loan)
+    loan.accept.assert_called_once_with(lending.BORROW_TIMEOUT)
     self.client.open_socket.assert_called_once_with(sock, deadline=2.0, name='modeld')
     self.client.open_borrowed_ffs.assert_not_called()
-    assert self.log.has("connecting over the phone's dial (192.168.60.3)")
+    self.note_link.assert_called_once_with('cable', '192.168.60.3')
+    assert self.log.has("the phone dialed in from 192.168.60.3")
+
+  def test_the_wait_for_the_phone_is_the_callers(self):
+    loan = mock.Mock(cable=True)
+    loan.accept.return_value = mock.Mock(**{'getpeername.return_value': ('192.168.60.3', 1)})
+    link.connect(self.log, loan=loan, wait=1.5)
+    loan.accept.assert_called_once_with(1.5)
 
   def test_a_loan_of_the_endpoints_is_opened_over_them(self):
     # whatever the link record says: the owner decided once, when it lent, and
     # the record is for the panels
-    loan = mock.Mock(sock=None, mount='/dev/ffs-jetlink', udc='udc0')
+    loan = mock.Mock(cable=False, mount='/dev/ffs-jetlink', udc='udc0')
     with mock.patch.object(gadget, 'link_kind', return_value='cable') as kind:
       link.connect(self.log, name='modeld', loan=loan)
     self.client.open_borrowed_ffs.assert_called_once()
@@ -250,7 +229,7 @@ class TestConnect(unittest.TestCase):
 
   def test_the_deadline_is_a_frames_unless_it_is_given(self):
     from jetlink.client import FRAME_TIMEOUT
-    link.connect(self.log, loan=mock.Mock(sock=None))
+    link.connect(self.log, loan=mock.Mock(cable=False))
     assert self.client.open_borrowed_ffs.call_args.kwargs['deadline'] == FRAME_TIMEOUT
 
 

@@ -138,8 +138,11 @@ def link_transport(mode: str | None = None, live: dict | None = None) -> str:
     if live is not None and live.get('link') in ('usb', 'cable'):
       kind, peer = live['link'], live.get('peer')
     else:
-      kind = gadget.link_kind(mode)
-      peer = gadget.link_peer() if kind == 'cable' else None
+      kind, peer = gadget.link_kind(mode), None
+    if kind == 'cable' and not peer:
+      # the owner records the phone while it holds the dial; a borrower that
+      # took the dial itself noted it in the link record
+      peer = gadget.link_peer()
     if kind == 'cable':
       return f"iOS over USB ({peer})" if peer else "iOS over USB"
   except Exception:

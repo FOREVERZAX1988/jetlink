@@ -51,10 +51,10 @@ FORK_IMPORTS = {
 }
 # What jetlink.openpilot calls on a client and reads off one, off a loan, and
 # off the transport a client rides on: the comma's side of the link
-CLIENT_CALLS = ('open_socket', 'open_borrowed_ffs', 'open_ffs', 'open_loan', 'hello', 'ensure_engine', 'infer_begin',
-                'infer_end', 'ping', 'shutdown', 'rebind', 'close')
+CLIENT_CALLS = ('open_socket', 'open_borrowed_ffs', 'open_ffs', 'hello', 'ensure_engine', 'infer_begin',
+                'infer_end', 'ping', 'shutdown', 'leave', 'rebind', 'close')
 CLIENT_FIELDS = ('t', 'dead', 'deadline', 'last_timings', 'last_state')
-LOAN_MEMBERS = ('sock', 'mount', 'udc', 'bounce', 'closed', 'renew', 'note_server', 'close')
+LOAN_MEMBERS = ('cable', 'mount', 'udc', 'bounce', 'accept', 'closed', 'note_server', 'close')
 TRANSPORT_CALLS = ('link_info',)
 # and the rest of what runs there
 COMMA_MODULES = tuple(dict.fromkeys((*FORK_IMPORTS, 'jetlink.protocol', 'jetlink.comma.gadget', 'jetlink.comma.lending',

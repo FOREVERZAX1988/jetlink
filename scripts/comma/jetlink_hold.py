@@ -114,7 +114,7 @@ def main(argv: list[str] | None = None, path: Path = lending.SOCKET) -> int:
       say(f'no loan from the owner within {args.timeout:g} s; is modeld or a bench holding it?')
     return 1
   try:
-    link = f"the cable link ({gadget.link_peer() or 'a phone'})" if loan.sock is not None else 'the gadget'
+    link = 'the cable link' if loan.cable else 'the gadget'
     say(f'holding {link}: udc {loan.udc}, mount {loan.mount}')
     return hold(loan, args.seconds, command)
   finally:

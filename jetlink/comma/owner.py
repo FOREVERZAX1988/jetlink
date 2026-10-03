@@ -217,7 +217,7 @@ class Owner:
     self.born: float | None = None
     self.port = port.Port(chestnut_ids)
     self.cable = lending.CableListener()
-    self.lender = lending.Lender(self.lendable, self.bounce_gadget, holding=self.holding, cable=self.cable,
+    self.lender = lending.Lender(self.lendable, self.bounce_gadget, cable=self.cable_mode, vacate=self.cable.vacate,
                                  server=self.note_server)
 
   # -- the gadget -----------------------------------------------------------
@@ -240,10 +240,10 @@ class Owner:
     """Is the gadget in a state a borrower can take the endpoints over from?"""
     return self.transport is not None and self.transport.lendable
 
-  def holding(self) -> bool:
-    """Should a borrower wait rather than take the endpoint files? On a gadget
+  def cable_mode(self) -> bool:
+    """Is the link a phone's dial rather than the endpoint files? On a gadget
     built for iOS, always: the host is a phone, which never reads them, so a
-    borrower waits for its dial (the lender hands that over first). The build,
+    borrower listens for its dial instead (lending.Loan.accept). The build,
     not the setting: a setting moved while somebody borrowed waits for them."""
     return bool(self.built_ios)
 
@@ -720,8 +720,9 @@ class Owner:
     """The edges of the USB link, and for iOS the phone's dial.
 
     For iOS the gadget's network comes up after each bind and the owner
-    listens for the phone; an accepted dial is the link. The host going away
-    takes the dial with it, so the next one is looked at afresh.
+    listens for the phone while nobody holds the loan; a borrower listens
+    for it itself, and the owner listens again once the loan ends. The host
+    going away takes the dial with it, so the next one is looked at afresh.
     """
     if self.attached and not self.configured:
       gadget.log.warning("jetlink: a host configured us at %s", gadget.usb_speed() or 'an unknown speed')
@@ -734,6 +735,8 @@ class Owner:
     if not self.built_ios:
       return
     self.ensure_net()
+    if self.lender.lent:
+      return   # the borrower listens for the phone; the port is its
     if self.transport is not None and self.net_ready and not self.cable.listening:
       self.cable.open()   # not before: the bind to 192.168.60.1 fails without usb0
     peer = self.cable.poll()
@@ -758,7 +761,7 @@ class Owner:
     A switch waits for the car to park: the panels lock the setting while
     driving, and one written some other way waits too. Building the mode that
     is set is never held back, onroad included. Parked, leaving iOS is not held
-    back either: an iOS gadget lends nobody the endpoint files (holding), so
+    back either: an iOS gadget lends nobody the endpoint files (cable_mode), so
     nothing of a borrower's is under the rebuild, and a borrower waiting for a
     phone that never dials, or a run stuck with a silent one, kept the comma on
     iOS until a power cycle. Entering iOS unplugs a USB host whose endpoint
