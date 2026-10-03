@@ -64,9 +64,10 @@
 
   /// `config` is JSON: cache (a directory), backend ("ort", the default, or
   /// "litert") and its device ("htp", "htp-whole", "gpu", "cpu" for
-  /// onnxruntime; "gpu", "cpu" for LiteRT), keep_alive, keep_cpu_warm,
-  /// listen, port, usb, preload, chip (Build.SOC_MODEL) and
-  /// native_library_dir. Returns nil, or why the server could not start.
+  /// onnxruntime; "gpu", "cpu", "npu" for LiteRT), keep_alive, keep_cpu_warm,
+  /// listen, port, usb, preload, chip (Build.SOC_MODEL), firmware
+  /// (Build.FINGERPRINT) and native_library_dir. Returns nil, or why the
+  /// server could not start.
   @_cdecl("Java_io_zoompilot_jetlink_server_Native_start")
   public func nativeStart(_ env: Env, _ cls: jclass?, _ config: jstring?) -> jstring? {
     do {
@@ -218,9 +219,11 @@
           throw HostFailure("LiteRT has no device \(device ?? "")")
         }
         let libraries = (config["native_library_dir"] as? String).flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true) }
-        let backend = LiteRtBackend(profile: profile, preparer: ONNXPreparer(), libraries: libraries, chip: chip)
-        // libLiteRt.so and its GPU accelerator, from the app's own libraries:
-        // a phone LiteRT cannot run on says so now, not at the first build.
+        let backend = LiteRtBackend(
+          profile: profile, preparer: ONNXPreparer(), libraries: libraries, chip: chip, firmware: config["firmware"] as? String)
+        // libLiteRt.so, its GPU accelerator and for the NPU Google Tensor's
+        // libraries, from the app's own and the system's: a phone LiteRT
+        // cannot run on says so now, not at the first build.
         try backend.open()
         return backend
       case "ort":

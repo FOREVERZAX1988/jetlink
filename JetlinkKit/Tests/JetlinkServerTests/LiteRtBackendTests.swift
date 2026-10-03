@@ -201,13 +201,78 @@ struct LiteRtBackendTests {
 struct LiteRtProfileTests {
   @Test("The profiles are the apps' device names, and the tag names the chip")
   func profiles() {
-    #expect(LiteRtProfile.allCases.map(\.rawValue) == ["gpu", "cpu"])
+    #expect(LiteRtProfile.allCases.map(\.rawValue) == ["gpu", "cpu", "npu"])
     let backend = LiteRtBackend(profile: .gpu, preparer: ONNXPreparer(), chip: "Tensor G5")
     #expect(backend.name == "litert" && backend.suffix == ".litertcache")
     #expect(backend.deviceTag() == "gpu-Tensor_G5")
     #expect(backend.tag() == "litert2.2.0.gpu-Tensor_G5")
     #expect(LiteRtBackend(profile: .cpu, preparer: ONNXPreparer()).deviceTag() == sanitize("cpu-\(HostChip.name())"))
     #expect(LiteRtBackend(profile: .gpu, preparer: ONNXPreparer(), chip: "").deviceTag() == "gpu-unknown")
+    #expect(LiteRtBackend(profile: .npu, preparer: ONNXPreparer(), chip: "Tensor G5").deviceTag() == "npu-Tensor_G5")
+  }
+
+  @Test("The NPU's profile is the GPU's without a directory for the compiled model")
+  func npuOptions() {
+    let compiled = URL(fileURLWithPath: "/tmp/npu-cache")
+    guard case .npu(let directory, let gpu) = LiteRtProfile.npu.options(compiled: compiled) else {
+      Issue.record("not the NPU's options")
+      return
+    }
+    #expect(directory == compiled && gpu == nil)
+    guard case .gpu = LiteRtProfile.npu.options() else {
+      Issue.record("not the GPU's options")
+      return
+    }
+  }
+
+  @Test("LiteRT's copy of the model compiled for the NPU is found where its cache files it")
+  func keptNPUModel() throws {
+    let temp = try TemporaryDirectory()
+    #expect(!LiteRtArtifact.keptNPUModel(temp.url))
+    // litert/core/cache/compilation_cache.cc: <dir>/<model name>/<content hash>/<config hash>.tflite
+    let filed = temp.url.appending(path: "npu-cache/model/1234", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: filed, withIntermediateDirectories: true)
+    #expect(!LiteRtArtifact.keptNPUModel(temp.url))
+    try Data([0]).write(to: filed.appending(path: "5678.tflite"))
+    #expect(LiteRtArtifact.keptNPUModel(temp.url))
+  }
+
+  @Test("What runs the model names the chip for the NPU")
+  func labels() {
+    let backend = LiteRtBackend(profile: .npu, preparer: ONNXPreparer(), chip: "Tensor G4")
+    #expect(backend.label(.npu) == "NPU(Tensor G4)")
+    #expect(backend.label(.gpu) == "GPU(fp16)")
+  }
+
+  @Test("The NPU's profile says where it runs, and that a Mac is not it")
+  func npuOpens() {
+    #if !os(Android)
+      #expect(throws: LiteRtError.self) { try LiteRtBackend(profile: .npu, preparer: ONNXPreparer()).open() }
+    #endif
+  }
+
+  @Test("A compile for the NPU that never returned is remembered for its system build only")
+  func npuAttempt() throws {
+    let temp = try TemporaryDirectory()
+    let artifact = temp.url.appending(path: "abc.litert2.2.0.npu-Tensor_G5.litertcache")
+    let attempt = NPUAttempt(artifact: artifact, firmware: "google/rango/rango:17/CP3A.260905.009", stage: .compile)
+    #expect(attempt.url.lastPathComponent == "abc.litert2.2.0.npu-Tensor_G5.npu-compiling")
+    // a load's mark is its own, which a build does not read as its compile's
+    #expect(NPUAttempt(artifact: artifact, firmware: attempt.firmware, stage: .load).url.lastPathComponent == "abc.litert2.2.0.npu-Tensor_G5.npu-loading")
+    #expect(!attempt.diedBefore)
+    // a compile that returns leaves no mark, even one that throws
+    #expect(try attempt.during(true) { attempt.diedBefore })
+    #expect(!attempt.diedBefore)
+    #expect(throws: LiteRtError.self) { try attempt.during(true) { throw LiteRtError("no") } }
+    #expect(!attempt.diedBefore)
+    // one that killed the app leaves it, which a system update forgets
+    try Data(attempt.firmware.utf8).write(to: attempt.url)
+    #expect(attempt.diedBefore)
+    #expect(!NPUAttempt(artifact: artifact, firmware: "google/rango/rango:17/CP3A.261005.001", stage: .compile).diedBefore)
+    #expect(!NPUAttempt(artifact: artifact, firmware: attempt.firmware, stage: .load).diedBefore)
+    // the GPU's and the CPU's compiles are not marked
+    try FileManager.default.removeItem(at: attempt.url)
+    _ = try attempt.during(false) { #expect(!FileManager.default.fileExists(atPath: attempt.url.path)) }
   }
 }
 
@@ -229,8 +294,11 @@ struct LiteRtBenchTests {
     let profile = LiteRtProfile(rawValue: environment["JETLINK_LITERT_BENCH_DEVICE"] ?? "") ?? .gpu
     let total = Int(environment["JETLINK_LITERT_BENCH_FRAMES"] ?? "") ?? 200
     try LiteRtRuntime.load()
+    let compiled = directory.appending(path: "npu-cache", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: compiled, withIntermediateDirectories: true)
     let compileStarted = DispatchTime.now()
-    let engine = try LiteRtEngine(model: directory.appending(path: "model.tflite"), options: profile.options(), device: "bench", label: profile.label)
+    let engine = try LiteRtEngine(
+      model: directory.appending(path: "model.tflite"), options: profile.options(compiled: compiled), device: "bench", label: { $0.rawValue })
     defer { engine.close() }
     let compileMs = Double(DispatchTime.now().uptimeNanoseconds - compileStarted.uptimeNanoseconds) / 1e6
     #expect(engine.fullyAccelerated || profile == .cpu)

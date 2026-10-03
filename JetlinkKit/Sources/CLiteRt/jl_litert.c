@@ -33,6 +33,7 @@
   X(LiteRtGetDefaultLogger)                                   \
   X(LiteRtSetMinLoggerSeverity)                               \
   X(LiteRtCreateEnvironment)                                  \
+  X(LiteRtDestroyEnvironment)                                 \
   X(LiteRtGetNumAccelerators)                                 \
   X(LiteRtGetAccelerator)                                     \
   X(LiteRtGetAcceleratorName)                                 \
@@ -78,8 +79,16 @@ static struct {
 
 static pthread_mutex_t opening = PTHREAD_MUTEX_INITIALIZER;
 static LiteRtEnvironment environment;
+// The directory LiteRT was opened from, NULL for the loader's path: kept for
+// the life of the process, as the environment is.
+static char *runtime_dir;
 
 struct jl_litert_model {
+  // A model for an NPU's own environment, NULL for the process's.
+  LiteRtEnvironment environment;
+  // The directory that environment keeps the NPU's compiled model in, which
+  // outlives it.
+  char *npu_cache_dir;
   LiteRtModel model;
   LiteRtOptions options;
   LiteRtCompiledModel compiled;
@@ -181,9 +190,8 @@ char *jl_litert_open(const char *directory) {
   lrt.LiteRtSetMinLoggerSeverity(lrt.LiteRtGetDefaultLogger(), kLiteRtLogSeverityWarning);
 
   // The GPU accelerator is a library of its own, which LiteRT opens from the
-  // runtime library directory. The CPU and the GPU only: an NPU's dispatch
-  // libraries are looked for otherwise, and none ship with jetlink yet.
-  static char *runtime_dir;
+  // runtime library directory. The CPU and the GPU only: a model for an NPU
+  // gets an environment of its own (npu_environment).
   LiteRtEnvOption options[2];
   int n_options = 0;
   options[n_options].tag = kLiteRtEnvOptionTagAutoRegisterAccelerators;
@@ -191,7 +199,6 @@ char *jl_litert_open(const char *directory) {
   options[n_options].value.int_value = kLiteRtHwAcceleratorCpu | kLiteRtHwAcceleratorGpu;
   n_options++;
   if (named) {
-    // kept for the life of the process, as the environment is
     runtime_dir = copy(directory);
     options[n_options].tag = kLiteRtEnvOptionTagRuntimeLibraryDir;
     options[n_options].value.type = kLiteRtAnyTypeString;
@@ -306,6 +313,40 @@ static char *cpu_toml(int threads) {
   return format("num_threads = %d\n", threads);
 }
 
+// Google Tensor's NPU held at high performance, the mode for low-latency
+// interactive work (litert_google_tensor_options_type.h); its runtime ignores
+// it before the phone's southbound API 0.18. The plugin's compile options are
+// not set: the compiler in the phone's system takes none from an app.
+static char *google_tensor_toml(void) {
+  return format("performance_mode = %d\n", 3);
+}
+
+// An environment for one model on an NPU: LiteRT finds the vendor's dispatch
+// library and compiler plugin in the directory it was opened from, and keeps
+// the model it compiles in `cache_dir`, where the next load finds it. LiteRT
+// keys that copy by the model's bytes, the options and the phone's build
+// fingerprint, so a system update compiles again.
+static char *npu_environment(const char *cache_dir, LiteRtEnvironment *out) {
+  if (runtime_dir == NULL) {
+    return copy("an NPU's libraries are looked for in the directory LiteRT was opened from, and it was opened from the loader's path");
+  }
+  LiteRtEnvOption options[] = {
+      {kLiteRtEnvOptionTagAutoRegisterAccelerators, {.type = kLiteRtAnyTypeInt}},
+      {kLiteRtEnvOptionTagRuntimeLibraryDir, {.type = kLiteRtAnyTypeString, .str_value = runtime_dir}},
+      {kLiteRtEnvOptionTagDispatchLibraryDir, {.type = kLiteRtAnyTypeString, .str_value = runtime_dir}},
+      {kLiteRtEnvOptionTagCompilerPluginLibraryDir, {.type = kLiteRtAnyTypeString, .str_value = runtime_dir}},
+      {kLiteRtEnvOptionTagCompilerCacheDir, {.type = kLiteRtAnyTypeString, .str_value = cache_dir}},
+  };
+  options[0].value.int_value = kLiteRtHwAcceleratorCpu | kLiteRtHwAcceleratorGpu | kLiteRtHwAcceleratorNpu;
+  TRY(LiteRtCreateEnvironment, (int)(sizeof(options) / sizeof(options[0])), options, out);
+  return NULL;
+}
+
+// The environment `model` runs in.
+static LiteRtEnvironment environment_of(const jl_litert_model *model) {
+  return model->environment != NULL ? model->environment : environment;
+}
+
 // ONNX's numbering, which the Swift side's ElementType uses; 0 for a type it
 // does not stage.
 static int onnx_type(LiteRtElementType type) {
@@ -338,6 +379,10 @@ void jl_litert_model_release(jl_litert_model *model) {
   if (model->model != NULL) {
     lrt.LiteRtDestroyModel(model->model);
   }
+  if (model->environment != NULL) {
+    lrt.LiteRtDestroyEnvironment(model->environment);
+  }
+  free(model->npu_cache_dir);
   free(model->names);
   free(model->types);
   free(model);
@@ -385,13 +430,28 @@ static char *describe(jl_litert_model *m) {
 }
 
 static char *compile(jl_litert_model *m, const char *path, const jl_litert_options *o) {
-  TRY(LiteRtCreateModelFromFile, environment, path, &m->model);
-  char *error = describe(m);
+  char *error = NULL;
+  if (o->npu) {
+    if (o->npu_cache_dir == NULL) {
+      return copy("a model for the NPU needs a directory for the model compiled for it");
+    }
+    m->npu_cache_dir = copy(o->npu_cache_dir);
+    error = m->npu_cache_dir != NULL ? npu_environment(m->npu_cache_dir, &m->environment) : copy("out of memory");
+    if (error != NULL) {
+      return error;
+    }
+  }
+  TRY(LiteRtCreateModelFromFile, environment_of(m), path, &m->model);
+  error = describe(m);
   if (error != NULL) {
     return error;
   }
   TRY(LiteRtCreateOptions, &m->options);
-  TRY(LiteRtSetOptionsHardwareAccelerators, m->options, o->gpu ? kLiteRtHwAcceleratorGpu : kLiteRtHwAcceleratorCpu);
+  LiteRtHwAcceleratorSet hardware = o->gpu ? kLiteRtHwAcceleratorGpu : kLiteRtHwAcceleratorCpu;
+  if (o->npu) {
+    hardware |= kLiteRtHwAcceleratorNpu;
+  }
+  TRY(LiteRtSetOptionsHardwareAccelerators, m->options, hardware);
   if (o->gpu) {
     // LrtGetGpuOptionsIdentifier()
     error = add_toml(m->options, "gpu_options", gpu_toml(o));
@@ -399,10 +459,14 @@ static char *compile(jl_litert_model *m, const char *path, const jl_litert_optio
     // LrtGetCpuOptionsIdentifier()
     error = add_toml(m->options, "xnnpack", cpu_toml(o->cpu_threads));
   }
+  if (error == NULL && o->npu) {
+    // LrtGoogleTensorOptionsGetIdentifier()
+    error = add_toml(m->options, "google_tensor", google_tensor_toml());
+  }
   if (error != NULL) {
     return error;
   }
-  TRY(LiteRtCreateCompiledModel, environment, m->model, m->options, &m->compiled);
+  TRY(LiteRtCreateCompiledModel, environment_of(m), m->model, m->options, &m->compiled);
   return NULL;
 }
 
@@ -472,7 +536,9 @@ static char *requirements(const jl_litert_model *model, int output, size_t index
   return NULL;
 }
 
-char *jl_litert_model_input_host(const jl_litert_model *model, size_t index, int *host) {
+// The kind of buffer the compiled model reads input `index` from best.
+static char *preferred(const jl_litert_model *model, size_t index, LiteRtTensorBufferType *type) {
+  *type = kLiteRtTensorBufferTypeUnknown;
   if (slot(model, 0, index) < 0) {
     return copy("no such input");
   }
@@ -483,12 +549,38 @@ char *jl_litert_model_input_host(const jl_litert_model *model, size_t index, int
   }
   int n = 0;
   TRY(LiteRtGetNumTensorBufferRequirementsSupportedBufferTypes, req, &n);
-  LiteRtTensorBufferType preferred = kLiteRtTensorBufferTypeUnknown;
   if (n > 0) {
-    TRY(LiteRtGetTensorBufferRequirementsSupportedTensorBufferType, req, 0, &preferred);
+    TRY(LiteRtGetTensorBufferRequirementsSupportedTensorBufferType, req, 0, type);
   }
-  *host = preferred == kLiteRtTensorBufferTypeHostMemory ? 1 : 0;
   return NULL;
+}
+
+char *jl_litert_model_input_host(const jl_litert_model *model, size_t index, int *host) {
+  LiteRtTensorBufferType type;
+  char *error = preferred(model, index, &type);
+  *host = type == kLiteRtTensorBufferTypeHostMemory ? 1 : 0;
+  return error;
+}
+
+char *jl_litert_model_hardware(const jl_litert_model *model, int *hardware) {
+  LiteRtTensorBufferType type;
+  char *error = preferred(model, 0, &type);
+  switch (type) {
+    case kLiteRtTensorBufferTypeAhwb:
+    case kLiteRtTensorBufferTypeIon:
+    case kLiteRtTensorBufferTypeDmaBuf:
+    case kLiteRtTensorBufferTypeFastRpc:
+      *hardware = JL_LITERT_NPU;
+      break;
+    case kLiteRtTensorBufferTypeHostMemory:
+    case kLiteRtTensorBufferTypeUnknown:
+      *hardware = JL_LITERT_CPU;
+      break;
+    default:
+      *hardware = JL_LITERT_GPU;
+      break;
+  }
+  return error;
 }
 
 char *jl_litert_buffer_wrap(jl_litert_model *model, int output, size_t index, void *data, size_t nbytes,
@@ -504,19 +596,19 @@ char *jl_litert_buffer_wrap(jl_litert_model *model, int output, size_t index, vo
   return NULL;
 }
 
-char *jl_litert_buffer_create(jl_litert_model *model, size_t index, jl_litert_buffer **out) {
+char *jl_litert_buffer_create(jl_litert_model *model, int output, size_t index, jl_litert_buffer **out) {
   *out = NULL;
-  ptrdiff_t i = slot(model, 0, index);
+  ptrdiff_t i = slot(model, output, index);
   if (i < 0) {
-    return copy("no such input");
+    return copy("no such input or output");
   }
   LiteRtTensorBufferRequirements req = NULL;
-  char *error = requirements(model, 0, index, &req);
+  char *error = requirements(model, output, index, &req);
   if (error != NULL) {
     return error;
   }
   LiteRtTensorBuffer buffer = NULL;
-  TRY(LiteRtCreateManagedTensorBufferFromRequirements, environment, &model->types[i], req, &buffer);
+  TRY(LiteRtCreateManagedTensorBufferFromRequirements, environment_of(model), &model->types[i], req, &buffer);
   error = jl_litert_buffer_write((jl_litert_buffer *)buffer, NULL, 0);
   if (error != NULL) {
     lrt.LiteRtDestroyTensorBuffer(buffer);

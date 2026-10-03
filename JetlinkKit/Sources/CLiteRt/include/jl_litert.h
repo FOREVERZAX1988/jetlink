@@ -1,14 +1,16 @@
 // A few plain C calls over LiteRT's C API, so Swift never holds LiteRT's
 // handles or writes its accelerators' options. Only what the server needs: the
-// process's environment, a model compiled for the CPU or the GPU, its inputs
-// and outputs, tensor buffers over caller memory or the accelerator's own, and
-// runs.
+// process's environment, a model compiled for the CPU, the GPU or an NPU, its
+// inputs and outputs, tensor buffers over caller memory or the accelerator's
+// own, and runs.
 //
 // LiteRT is opened at run time everywhere, from a directory the caller names
 // or else the loader's path: on a Mac the ai-edge-litert wheel's
 // libLiteRt.dylib, on Android the LiteRT AAR's libLiteRt.so from the app's
 // nativeLibraryDir. LiteRT then opens its GPU accelerator from the same
-// directory (libLiteRtMetalAccelerator.dylib, libLiteRtClGlAccelerator.so).
+// directory (libLiteRtMetalAccelerator.dylib, libLiteRtClGlAccelerator.so),
+// and for an NPU the vendor's dispatch library and compiler plugin
+// (libLiteRtDispatch_GoogleTensor.so, libLiteRtCompilerPlugin_google_tensor.so).
 // The build needs only the 2.2.0 headers in vendor/.
 //
 // Every call that can fail returns NULL on success, or a message the caller
@@ -27,6 +29,7 @@ extern "C" {
 enum {
   JL_LITERT_CPU = 1,
   JL_LITERT_GPU = 2,
+  JL_LITERT_NPU = 4,
 };
 
 typedef struct jl_litert_model jl_litert_model;
@@ -36,12 +39,22 @@ typedef struct {
   // The GPU alone, in fp16 (1), so an op it cannot run fails the compile
   // rather than run on the CPU; or the CPU alone (0).
   int gpu;
+  // The NPU first (1), the model compiled for it on the device: LiteRT hands
+  // it to the vendor's compiler plugin, which hands it to the compiler in the
+  // phone's system. Where the plugin cannot take the model, LiteRT runs it on
+  // what `gpu` names instead. The model gets an environment of its own, as
+  // the compiled model's directory is an environment's option.
+  int npu;
   // XNNPACK's pool on the CPU; 0 leaves LiteRT's default.
   int cpu_threads;
   // Where the GPU keeps the programs it compiled between runs, under a key
   // naming the model; NULL for no cache.
   const char *cache_dir;
   const char *cache_key;
+  // With npu: an existing directory where LiteRT keeps the model it compiled
+  // for the NPU, which the next load with the same directory reads back
+  // rather than compile again.
+  const char *npu_cache_dir;
 } jl_litert_options;
 
 // Opens LiteRT from `directory`, NULL or "" for the loader's path, and makes
@@ -62,6 +75,12 @@ void jl_litert_model_release(jl_litert_model *model);
 // CPU kernels.
 char *jl_litert_model_fully_accelerated(const jl_litert_model *model, int *fully);
 
+// What runs the model, by the memory its first input is read from:
+// JL_LITERT_NPU for memory shared with an NPU (an AHardwareBuffer, DMA-BUF,
+// ION or FastRPC buffer), JL_LITERT_GPU for a GPU's, JL_LITERT_CPU for the
+// host's. Tells an NPU compile that worked from one LiteRT fell back from.
+char *jl_litert_model_hardware(const jl_litert_model *model, int *hardware);
+
 // output 0 counts the first signature's inputs, 1 its outputs.
 size_t jl_litert_model_io_count(const jl_litert_model *model, int output);
 
@@ -81,9 +100,11 @@ char *jl_litert_model_input_host(const jl_litert_model *model, size_t index, int
 char *jl_litert_buffer_wrap(jl_litert_model *model, int output, size_t index, void *data, size_t nbytes,
                             jl_litert_buffer **out);
 
-// A buffer of the kind the accelerator works in for input `index` (GPU
-// memory on a GPU), zeroed: the looped state's, which an output writes too.
-char *jl_litert_buffer_create(jl_litert_model *model, size_t index, jl_litert_buffer **out);
+// A buffer of the kind the accelerator works in for input or output `index`
+// (GPU memory on a GPU, an AHardwareBuffer on an NPU), zeroed: the looped
+// state's, which an output writes too, and on an NPU every input's and
+// output's.
+char *jl_litert_buffer_create(jl_litert_model *model, int output, size_t index, jl_litert_buffer **out);
 
 // Copies `nbytes` into or out of a buffer. Writing NULL zeroes it.
 char *jl_litert_buffer_write(jl_litert_buffer *buffer, const void *data, size_t nbytes);

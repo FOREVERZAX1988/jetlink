@@ -31,7 +31,9 @@
     @Test func litertIsNamedAndTakesGpuOrCpu() throws {
       let serve = try #require(try root(["--backend", "litert", "--device", "cpu"]) as? Serve)
       #expect(serve.chosen.backend == .litert && serve.chosen.device == "cpu")
-      #expect { try BackendOptions(device: "npu").litert() } throws: { "\($0)".contains("gpu or cpu") }
+      #expect { try BackendOptions(device: "tpu").litert() } throws: { "\($0)".contains("gpu or cpu or npu") }
+      // the NPU's profile is a phone's
+      #expect { try BackendOptions(device: "npu").litert() } throws: { "\($0)".contains("runs on Android") }
     }
 
     @Test func tensorrtDefaultsToLibBesideBinWhenThere() throws {

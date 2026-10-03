@@ -15,36 +15,53 @@ public enum LiteRtProfile: String, CaseIterable, Sendable {
   /// XNNPACK on the CPU: for tests, the emulator, and phones LiteRT drives no
   /// GPU on. Nowhere near the frame budget with a real model.
   case cpu
+  /// A Google Tensor's NPU (G3, the Pixel 8, and later), the model compiled
+  /// for it on the phone: LiteRT's Google Tensor plugin hands the converted
+  /// model to the compiler in the phone's system, and LiteRT keeps what it
+  /// compiles with the artifact. A model the NPU's compiler cannot take runs
+  /// on the GPU instead, as the gpu profile runs it. Android only.
+  case npu
 
   /// What the log and the benchmark's report call it.
   var label: String {
     switch self {
     case .gpu: "GPU(fp16)"
     case .cpu: "CPU(\(HostChip.cpuThreads) threads)"
+    case .npu: "NPU"
     }
   }
 
   /// How the profile compiles a model; on the GPU, its programs cached in
-  /// `cache` when there is one.
-  func options(cache: (directory: URL, key: String)? = nil) -> LiteRtCompileOptions {
+  /// `cache` when there is one. The NPU keeps the model it compiled in
+  /// `compiled`; without one it is the GPU's profile.
+  func options(cache: (directory: URL, key: String)? = nil, compiled: URL? = nil) -> LiteRtCompileOptions {
     switch self {
     case .gpu: .gpu(cache: cache)
     case .cpu: .cpu(threads: HostChip.cpuThreads)
+    case .npu: compiled.map { .npu(compiled: $0, gpu: cache) } ?? .gpu(cache: cache)
     }
   }
 }
 
-/// LiteRT in process, on the GPU or the CPU: the backend for phones
-/// onnxruntime's QNN does not drive. The artifact is a directory holding the
-/// converted model and the GPU's compile cache (LiteRtArtifact).
+/// LiteRT in process, on the GPU, the CPU or a Google Tensor's NPU: the
+/// backend for phones onnxruntime's QNN does not drive. The artifact is a
+/// directory holding the converted model, the GPU's compile cache and the
+/// model compiled for the NPU (LiteRtArtifact).
 ///
 /// Nothing here has run on a phone yet: the GPU path is Metal's on a Mac,
-/// and Android's OpenCL one follows LiteRT 2.2.0's documentation and source.
+/// Android's OpenCL one follows LiteRT 2.2.0's documentation and source, and
+/// the NPU's follows LiteRT's source, the Pixel system library it calls
+/// (seen in Pixel 8, 9 and 10 Pro Fold factory images), and Google's
+/// compiler for Tensor, which compiles every op of Cinque Terre V3 as the
+/// conversion writes it for a G5.
 public final class LiteRtBackend: EngineBackend {
   /// A first GPU compile with no earlier build to go by: 7 to 12 s for
   /// Cinque Terre V3 on an M1 Pro's Metal; a phone's OpenCL compile is
   /// unmeasured.
   static let expectedCompileSeconds = 60.0
+  /// A first compile for the NPU: unmeasured on a phone. Google's compiler
+  /// for Tensor took minutes for Cinque Terre V3 on a PC.
+  static let expectedNPUCompileSeconds = 300.0
   /// What JetlinkONNX's LiteRTPreparation writes now: an artifact converted
   /// under another version rebuilds.
   static let conversionVersion = 1
@@ -58,6 +75,9 @@ public final class LiteRtBackend: EngineBackend {
   public let libraries: URL?
   private let preparer: any ModelPreparer
   private let chip: String
+  /// The phone's build fingerprint, which a model compiled for the NPU is
+  /// good for; "" where the app names none.
+  private let firmware: String
   private let log = ServerLog(category: "litert")
 
   /// `libraries` is the directory holding libLiteRt and its GPU
@@ -65,11 +85,14 @@ public final class LiteRtBackend: EngineBackend {
   /// $JETLINK_LITERT_DIR. `chip` names what the artifacts are valid for: on
   /// Android the SoC's model, "Tensor G5" (Build.SOC_MODEL), which a GPU's
   /// compiled programs are for; nil is HostChip's name for this machine.
-  public init(profile: LiteRtProfile, preparer: any ModelPreparer, libraries: URL? = nil, chip: String? = nil) {
+  /// `firmware` is Android's Build.FINGERPRINT: the NPU's compiler is part
+  /// of the system, so a system update compiles for it again.
+  public init(profile: LiteRtProfile, preparer: any ModelPreparer, libraries: URL? = nil, chip: String? = nil, firmware: String? = nil) {
     self.profile = profile
     self.preparer = preparer
     self.libraries = libraries
     self.chip = HostChip.resolve(chip)
+    self.firmware = firmware ?? ""
   }
 
   /// The GPU accelerator's library, which LiteRT opens from beside its own.
@@ -87,8 +110,12 @@ public final class LiteRtBackend: EngineBackend {
   /// starts, so a phone LiteRT cannot run on says so at once rather than
   /// after converting a model.
   public func open() throws {
+    if profile == .npu {
+      try LiteRtBackend.checkNPU(libraries: libraries)
+    }
     try LiteRtRuntime.load(directory: libraries)
-    if profile == .gpu {
+    // the NPU's profile runs on the GPU what the NPU cannot take
+    if profile != .cpu {
       let (gpu, names) = try LiteRtRuntime.accelerators()
       guard gpu else {
         throw LiteRtError(
@@ -96,6 +123,25 @@ public final class LiteRtBackend: EngineBackend {
             + "it has \(names.isEmpty ? "no accelerators" : names)")
       }
     }
+  }
+
+  /// Throws what keeps this process from the NPU: LiteRT's Google Tensor
+  /// libraries missing beside libLiteRt, or no Tensor NPU library in the
+  /// phone's system.
+  static func checkNPU(libraries: URL?) throws {
+    #if os(Android)
+      guard let libraries else { throw LiteRtError("the NPU's libraries are looked for beside libLiteRt, and the app named no directory") }
+      if let missing = LiteRtRuntime.googleTensorLibraries.first(where: { !FileManager.default.fileExists(atPath: libraries.appending(path: $0).path) }) {
+        throw LiteRtError("\(missing) is not in the app's libraries, so LiteRT cannot reach the NPU")
+      }
+      guard LiteRtRuntime.hasGoogleTensorNPU else {
+        throw LiteRtError(
+          "this phone's system gives apps no \(LiteRtRuntime.googleTensorSystemLibrary), the Google Tensor NPU's library (Pixel 8 and later); "
+            + "the GPU profile runs on any phone")
+      }
+    #else
+      throw LiteRtError("LiteRT's NPU profile runs on Android, on a Google Tensor G3 (Pixel 8) or later")
+    #endif
   }
 
   public var runtimeVersion: String { LiteRtRuntime.version }
@@ -108,17 +154,28 @@ public final class LiteRtBackend: EngineBackend {
     try preparer.readSpec(model: model, sha256: sha256, nbytes: nbytes, frameSkip: frameSkip)
   }
 
+  /// What the log and the benchmark's report call what runs the model.
+  func label(_ hardware: LiteRtHardware) -> String {
+    switch hardware {
+    case .npu: "NPU(\(chip))"
+    case .gpu: LiteRtProfile.gpu.label
+    case .cpu: LiteRtProfile.cpu.label
+    }
+  }
+
   /// The model in `directory`, an artifact or its staging, compiled for the
-  /// profile. On the GPU every op must be the GPU's: a model that runs
-  /// partly on the CPU is a build that failed.
-  func engine(_ directory: URL, cacheKey: String) throws -> LiteRtEngine {
+  /// profile; for the NPU's, on the NPU when `npu`, else on the GPU alone.
+  /// On the GPU or the NPU every op must be the accelerator's: a model that
+  /// runs partly on the CPU is a build that failed.
+  func engine(_ directory: URL, cacheKey: String, npu: Bool = true) throws -> LiteRtEngine {
     let engine: LiteRtEngine
+    let compiled = profile == .npu && npu ? directory.appending(path: LiteRtArtifact.npuCache, directoryHint: .isDirectory) : nil
     do {
       engine = try LiteRtEngine(
         model: directory.appending(path: LiteRtArtifact.model),
-        options: profile.options(cache: (directory.appending(path: LiteRtArtifact.cache, directoryHint: .isDirectory), cacheKey)),
-        device: deviceTag(), label: profile.label)
-    } catch let error as LiteRtError where profile == .gpu {
+        options: profile.options(cache: (directory.appending(path: LiteRtArtifact.cache, directoryHint: .isDirectory), cacheKey), compiled: compiled),
+        device: deviceTag(), label: label)
+    } catch let error as LiteRtError where profile != .cpu {
       #if os(Android)
         if !LiteRtRuntime.hasOpenCL {
           throw LiteRtError(
@@ -131,9 +188,10 @@ public final class LiteRtBackend: EngineBackend {
         "LiteRT could not compile the model for the GPU on \(chip) (\(error.description)); LiteRT's log names any op the GPU cannot run, "
           + "and the CPU profile runs every op")
     }
-    if profile == .gpu && !engine.fullyAccelerated {
+    if profile != .cpu && !engine.fullyAccelerated {
+      let what = engine.hardware == .npu ? "NPU" : "GPU"
       engine.close()
-      throw LiteRtError("LiteRT's GPU on \(chip) cannot run every op of this model; LiteRT's log names them, and the CPU profile runs every op")
+      throw LiteRtError("LiteRT's \(what) on \(chip) cannot run every op of this model; LiteRT's log names them, and the CPU profile runs every op")
     }
     return engine
   }
@@ -158,26 +216,52 @@ public final class LiteRtBackend: EngineBackend {
       guard converted.url.lastPathComponent == LiteRtArtifact.model else {
         throw HostError.failed("the conversion wrote \(converted.url.lastPathComponent), expected \(LiteRtArtifact.model)")
       }
-      try FileManager.default.createDirectory(
-        at: staged.appending(path: LiteRtArtifact.cache, directoryHint: .isDirectory), withIntermediateDirectories: true)
+      for cache in [LiteRtArtifact.cache, LiteRtArtifact.npuCache] {
+        try FileManager.default.createDirectory(at: staged.appending(path: cache, directoryHint: .isDirectory), withIntermediateDirectories: true)
+      }
 
       // One compile on the profile's accelerator proves the model runs there
-      // whole, and leaves the GPU's cache for every load after. No run: the
-      // compile writes the cache (Metal's whole-graph one appears before any
-      // run), and the host's warm-up runs the loaded model anyway.
-      let what = profile == .gpu ? "compiling for the GPU" : "compiling for the CPU"
-      let took = (expect["compile_seconds"] as? NSNumber)?.doubleValue ?? (profile == .gpu ? LiteRtBackend.expectedCompileSeconds : 0)
+      // whole, and leaves the GPU's cache or the NPU's model for every load
+      // after. No run: the compile writes the cache (Metal's whole-graph one
+      // appears before any run), and the host's warm-up runs the loaded
+      // model anyway. A compile for the NPU that killed the app last time is
+      // not tried again on this system build: the GPU's alone instead.
+      let attempt = NPUAttempt(artifact: artifact, firmware: firmware, stage: .compile)
+      let npu = profile == .npu && !attempt.diedBefore
+      if profile == .npu && !npu {
+        log.warning("the last compile for the NPU on this system build never finished, so \(model.lastPathComponent) runs on the GPU")
+      }
+      let what = npu ? "compiling for the NPU" : profile == .cpu ? "compiling for the CPU" : "compiling for the GPU"
+      let expected = npu ? LiteRtBackend.expectedNPUCompileSeconds : profile == .cpu ? 0 : LiteRtBackend.expectedCompileSeconds
+      let took = (expect["compile_seconds"] as? NSNumber)?.doubleValue ?? expected
       report("compile", 0, what)
       let compileStarted = Date()
-      try Ticker.during(interval: 1, Ticker.paced("compile", what, took: took, report: report)) {
-        try self.engine(staged, cacheKey: LiteRtArtifact.cacheKey(artifact)).close()
+      let hardware = try attempt.during(npu) {
+        try Ticker.during(interval: 1, Ticker.paced("compile", what, took: took, report: report)) {
+          let engine = try self.engine(staged, cacheKey: LiteRtArtifact.cacheKey(artifact), npu: npu)
+          defer { engine.close() }
+          return engine.hardware
+        }
       }
       let compileSeconds = Date().timeIntervalSince(compileStarted)
       report("compile", 1, "compiled in \(Int(compileSeconds.rounded())) s")
+      if npu && hardware != .npu {
+        log.warning(
+          "the NPU's compiler could not take \(model.lastPathComponent), so it runs on the GPU; "
+            + "logcat's litert lines say why")
+      }
       var meta = LiteRtArtifact.meta(self, model: model, started: started)
+      meta["accelerator"] = label(hardware)
       meta["convert_seconds"] = pythonRound(convertSeconds, 1)
       meta["compile_seconds"] = pythonRound(compileSeconds, 1)
       meta["artifact_bytes"] = Files.size(of: staged)
+      if profile == .npu {
+        meta["hardware"] = hardware.rawValue
+        meta["firmware"] = firmware
+        // LiteRT keeps no copy of a compile it cannot serialize; then every
+        // load compiles again, and the load's estimate has to say so.
+        meta["npu_kept"] = hardware == .npu && LiteRtArtifact.keptNPUModel(staged)
+      }
       return meta
     }
   }
@@ -186,10 +270,69 @@ public final class LiteRtBackend: EngineBackend {
 
   public func load(artifact: URL, report: @escaping ProgressFn) throws -> any Engine {
     let meta = try LiteRtArtifact.open(artifact)
+    // What the build found runs the model: the NPU, or the GPU when it could
+    // not take it, which a load does not ask again.
+    let npu = profile == .npu && meta["hardware"] as? String == LiteRtHardware.npu.rawValue
+    if profile == .npu {
+      if meta["firmware"] as? String != firmware {
+        throw ArtifactInvalid("\(artifact.lastPathComponent): compiled under another system build, whose NPU compiler may differ")
+      }
+      if npu && meta["npu_kept"] as? Bool == true && !LiteRtArtifact.keptNPUModel(artifact) {
+        throw ArtifactInvalid("\(artifact.lastPathComponent): the model compiled for the NPU is missing")
+      }
+    }
+    // LiteRT reads the compiled model back rather than compile again. A load
+    // that never finished prepares the model again, whose own compile is
+    // marked: one that got the app killed then leaves the NPU to the GPU.
+    let attempt = NPUAttempt(artifact: artifact, firmware: firmware, stage: .load)
+    if npu && attempt.diedBefore {
+      throw ArtifactInvalid("\(artifact.lastPathComponent): the last load for the NPU never finished")
+    }
     let (engine, seconds) = try Artifact.load(artifact, meta: meta, what: "the model", report: report) {
-      try self.engine(artifact, cacheKey: LiteRtArtifact.cacheKey(artifact))
+      try attempt.during(npu) {
+        try self.engine(artifact, cacheKey: LiteRtArtifact.cacheKey(artifact), npu: npu)
+      }
+    }
+    if npu && engine.hardware != .npu {
+      log.warning("\(artifact.lastPathComponent) was compiled for the NPU but loaded on the GPU; logcat's litert lines say why")
     }
     log.info("LiteRT on \(profile.rawValue) in \(String(format: "%.1f", seconds)) s: \(engine.label)")
     return engine
+  }
+}
+
+/// A compile or a load for the NPU under way, marked by a file beside the
+/// artifact that names the system build, removed when it returns. The
+/// phone's compiler runs in the app's process: one that runs out of memory
+/// gets the app killed, and Android starts it again into the same build.
+/// A compile's file still there on the same system build says so, and the
+/// next build runs on the GPU rather than die again. Removing the model's
+/// prepared files, or a system update, tries the NPU again.
+struct NPUAttempt {
+  enum Stage: String {
+    case compile = "npu-compiling"
+    case load = "npu-loading"
+  }
+
+  let url: URL
+  let firmware: String
+
+  init(artifact: URL, firmware: String, stage: Stage) {
+    url = artifact.deletingPathExtension().appendingPathExtension(stage.rawValue)
+    self.firmware = firmware
+  }
+
+  /// Whether one on this system build never returned.
+  var diedBefore: Bool {
+    (try? String(contentsOf: url, encoding: .utf8)) == firmware
+  }
+
+  /// Runs `body` marked when `npu`, the mark removed once it returns or
+  /// throws.
+  func during<T>(_ npu: Bool, _ body: () throws -> T) throws -> T {
+    guard npu else { return try body() }
+    try Data(firmware.utf8).write(to: url)
+    defer { try? FileManager.default.removeItem(at: url) }
+    return try body()
   }
 }
