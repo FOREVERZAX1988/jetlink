@@ -246,7 +246,10 @@ class StreamTransport(Transport):
 
     The deadline is per message, not per read, or one response could take
     several times the caller's budget. Partial reads are kept, so a missed
-    deadline costs a frame and leaves the stream in sync.
+    deadline costs a frame and leaves the stream in sync. A deadline that has
+    passed still gets one read that does not wait, so a timeout of 0 takes
+    whatever has already arrived and nothing else: that is how a caller
+    polls for a reply without blocking (JetlinkClient.drain).
     """
     self.rx.reserve(need + self.read_slack)
     end = None if timeout is None else time.monotonic() + timeout
@@ -257,14 +260,12 @@ class StreamTransport(Transport):
         # while the peer blocks. read_slack is too small; say so, do not hang.
         raise LinkError(f"no room to read the rest of a {need} byte message "
                          f"({self.rx.available} in hand); read_slack too small")
-      remaining = None
-      if end is not None:
-        remaining = end - time.monotonic()
-        if remaining <= 0:
-          raise LinkTimeout(f"only {self.rx.available} of {need} bytes arrived in time")
+      remaining = None if end is None else max(0.0, end - time.monotonic())
       n = self._read_into(dest, remaining)
       if n:
         self.rx.committed(n)
+      elif remaining == 0.0:
+        raise LinkTimeout(f"only {self.rx.available} of {need} bytes arrived in time")
 
   def _read_limit(self, missing: int) -> int:
     """`missing` bytes of the current message, rounded up to a whole packet.

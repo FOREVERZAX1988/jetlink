@@ -268,6 +268,37 @@ def test_infer_round_trip(queued):
   assert gpu_us >= 0 and queue_us >= 0 and total_us >= gpu_us
 
 
+def test_frames_sent_without_waiting_are_answered_in_order_and_drained(queued):
+  """What the comma does while the small model drives: every frame goes out,
+  none is waited for, and the answers are read a frame later. The server
+  cannot tell them from driven frames: the history advances the same way."""
+  spec = queued.spec
+  frames = queued_frames(6, seed=3)
+  for i, (w, p) in enumerate(frames[:4]):
+    queued.infer_begin(w, p, frame_id=i + 1, reset=i == 0)
+  assert queued.unanswered == 4
+  deadline = time.monotonic() + 10.0
+  while queued.unanswered and time.monotonic() < deadline:
+    queued.drain()
+    time.sleep(0.01)
+  assert queued.unanswered == 0 and not queued.dead
+  want = queued_reference(frames)
+  close_enough(outside(queued.last_output, spec), outside(want[3], spec), atol=0.02)
+  # the frames after them are the server's fifth and sixth of the same history
+  outs = [queued.infer(w, p, frame_id=i + 5) for i, (w, p) in enumerate(frames[4:])]
+  for got, w in zip(outs, want[4:], strict=True):
+    close_enough(outside(got, spec), outside(w, spec), atol=0.02)
+  # and a frame given up on is read quietly by the next one's wait
+  w, p = queued_frames(1, seed=4)[0]
+  seq = queued.infer_begin(w, p, frame_id=7)
+  held = queued.infer_end(seq, hold=0.0)
+  if held is None:
+    assert queued.unanswered == 1 and not queued.dead
+  out = queued.infer(w, p, frame_id=8)
+  assert queued.unanswered == 0
+  close_enough(outside(out, spec), outside(queued_reference(frames + [(w, p), (w, p)])[7], spec), atol=0.02)
+
+
 def test_hidden_state_feeds_back_into_the_queues(queued):
   """Each frame's hidden state comes back as features_buffer on the next,
   exactly the server's own: the reference fed the values WANT_HIDDEN returned

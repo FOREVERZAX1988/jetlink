@@ -98,8 +98,10 @@ class TcpTransport(StreamTransport):
     self._set_timeout(timeout)
     try:
       n = self.sock.recv_into(dest, dest.nbytes)
-    except TimeoutError:
-      return 0  # recv_into delivers nothing on timeout; _fill owns the deadline
+    except (TimeoutError, BlockingIOError):
+      # nothing in time, or nothing at all on a read that may not wait (a
+      # timeout of 0 makes the socket non-blocking); _fill owns the deadline
+      return 0
     except OSError as e:
       raise LinkError(f"recv failed: {e}") from e
     if n == 0:
