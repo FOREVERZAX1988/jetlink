@@ -37,13 +37,31 @@ android {
         ndk { abiFilters += "arm64-v8a" }
     }
 
+    signingConfigs {
+        // The key the APKs on the releases page are signed with, which the
+        // Release workflow writes from its secrets (docs/publishing.md).
+        // Android installs an update only over an app signed with the same
+        // key, so every release has to use this one.
+        fun env(name: String) = providers.environmentVariable(name).orNull?.takeIf(String::isNotEmpty)
+        env("JETLINK_ANDROID_KEYSTORE")?.let { keystore ->
+            create("release") {
+                storeFile = file(keystore)
+                storePassword = env("JETLINK_ANDROID_KEYSTORE_PASSWORD") ?: error("JETLINK_ANDROID_KEYSTORE_PASSWORD is not set")
+                // keytool's PKCS12 keystore has one password, the key's too
+                keyPassword = storePassword
+                keyAlias = env("JETLINK_ANDROID_KEY_ALIAS") ?: error("JETLINK_ANDROID_KEY_ALIAS is not set")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // Sideloaded, never on a store: the debug key, so a release build
-            // installs over a debug one. Replace it to publish.
-            signingConfig = signingConfigs.getByName("debug")
+            // Sideloaded, never on a store. Without the release key, the debug
+            // key: a fork or a local build still builds, and a local release
+            // build installs over a debug one.
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
     }
 
