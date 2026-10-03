@@ -1,3 +1,12 @@
+Jetlink v0.8.1
+==============
+**iPhone & iPad link**
+* **Fewer dropouts:** A big model that fell behind rejoins in a second over the same connection, instead of hanging up and waiting 5 to 60 s.
+* **Simpler on the comma:** Whoever uses the link listens for the phone. No more passing the phone's connection between processes.
+* **Logs that say why:** The comma tells the phone why it stopped using the link, with the timings only the comma can see. The phone logs what each session served.
+* **Docs:** A direct USB-C cable is not reliable yet; use a hub or an adapter until it is.
+* **Update the comma:** zoompilot's `jetson-trt` branch pins Jetlink v0.8.1.
+
 Jetlink v0.8.0
 ==============
 **iPhone & iPad on TestFlight!**

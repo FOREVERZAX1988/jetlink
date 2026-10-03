@@ -45,8 +45,9 @@ settings):
 - Changing the setting rebuilds the gadget (an unplug), so it changes only
   offroad.
 - Comma side: the `jetlink.comma` package. The owner holds the gadget and lends
-  modeld its endpoints or the phone's dial; every root step goes through
-  `scripts/comma/jetlink-root.sh`. See the
+  modeld its endpoints, or on the cable the right to take the phone's dial:
+  whoever holds the loan listens for it, the owner while nobody does. Every
+  root step goes through `scripts/comma/jetlink-root.sh`. See the
   [installation reference](installation-reference.md#custom-usb-integrations).
 
 ### Bus speed
