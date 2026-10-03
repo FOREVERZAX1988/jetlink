@@ -8,7 +8,9 @@
 version: 2
 updates:
   - package-ecosystem: github-actions
-    directory: /
+    # the workflows, and the composite actions they share, which "/" alone
+    # does not reach
+    directories: ["/", "/.github/actions/*"]
     schedule:
       interval: weekly
     commit-message:
