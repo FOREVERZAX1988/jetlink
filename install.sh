@@ -2351,7 +2351,7 @@ finish() {
   fi
   say ""
   say "  ${B}Next, on your comma:${N}"
-  say "    1. Settings > Software > Target Branch: choose ${B}jetson-trt${N} (zoompilot),"
+  say "    1. Settings > Software > Target Branch: choose ${B}develop${N} (zoompilot),"
   say "       and let it update and restart."
   say "    2. Settings > Models: set ${B}Accelerator Link${N} to ${B}USB${N}."
   if [ "$JETSON" = 1 ]; then

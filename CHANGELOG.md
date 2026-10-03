@@ -16,7 +16,8 @@ Jetlink v0.8.1
 * Google has not allowed Jetlink on the Pixel NPU yet, so Pixels use the GPU for now.
 
 **General Updates & Fixes**
-* **Update the comma:** zoompilot's `jetson-trt` branch pins Jetlink v0.8.1.
+* Turning on the Accelerator Link turns ADB off. They share the USB port.
+* **Update the comma:** zoompilot's `develop` branch pins Jetlink v0.8.1.
 
 Jetlink v0.8.0
 ==============

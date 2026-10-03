@@ -9,7 +9,7 @@
 </p>
 
 **Jetlink is experimental.** It needs zoompilot's
-[`jetson-trt` branch](https://github.com/zoompilot/zoompilot/tree/jetson-trt);
+[`develop` branch](https://github.com/zoompilot/zoompilot/tree/develop);
 a release that changes the protocol says so, and then the comma and Jetlink
 update together.
 If the link drops or lags while engaged, the comma says **TAKE CONTROL** and
@@ -108,8 +108,8 @@ Not yet run on a phone. You need:
 ## Comma setup (all platforms)
 
 1. **Install zoompilot with Jetlink.** After resetting the comma, enter
-   **`zoompilot/jetson-trt`** as the install URL (works from any fork).
-   Already on zoompilot? Select **jetson-trt** in
+   **`zoompilot/develop`** as the install URL (works from any fork).
+   Already on zoompilot? Select **develop** in
    **Settings > Software > Target Branch > Non-Prebuilt Branches**.
    Let it finish installing, rebooting, and building.
 2. **Enable Jetlink.** Set **Settings > Models > Accelerator Link** to **USB**
@@ -138,11 +138,11 @@ More: [daily use and icon meanings](docs/using-jetlink.md).
 
 | Problem | First check |
 | --- | --- |
-| No Accelerator Link setting | Confirm the `jetson-trt` branch in Settings > Software. |
+| No Accelerator Link setting | Confirm the `develop` branch in Settings > Software. |
 | Server stays waiting; icon never pulses | Check the server is running. Try another USB 3 data cable. |
 | Model list is empty | Connect the comma to the internet, then use Refresh Model List. |
 | Setup alert or orange icon | Read the alert. Check internet, then set Accelerator Link to Off and back to USB or iOS. |
-| Alert says **no warp built for this camera** | Update or reinstall the `jetson-trt` branch. |
+| Alert says **no warp built for this camera** | Update or reinstall the `develop` branch. |
 | Comma stays on its small model after an update | Update both the comma and Jetlink: [updates](docs/releasing.md). |
 | Link drops repeatedly | Check the cable, separate power, cooling, and computer sleep. |
 

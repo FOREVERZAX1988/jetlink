@@ -80,8 +80,8 @@ on its next `jetlink update`, keeping its answers, models and prepared engines.
 ## 3. Connect the comma
 
 1. **Install zoompilot.** After resetting the comma, enter
-   **`zoompilot/jetson-trt`** as the install URL. Already on zoompilot? Select
-   **jetson-trt** in **Settings > Software > Target Branch >
+   **`zoompilot/develop`** as the install URL. Already on zoompilot? Select
+   **develop** in **Settings > Software > Target Branch >
    Non-Prebuilt Branches**. Wait for installation and any reboot.
 2. **Enable Jetlink.** Set **Settings > Models > Accelerator Link** to **USB**.
    Leave **Big Model** at its default.
