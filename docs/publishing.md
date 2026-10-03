@@ -72,7 +72,8 @@ shasum -a 256 -c --ignore-missing SHA256SUMS
 Releases are signed with a Developer ID and notarized, and the APK with the
 Android release key. A fork without these secrets gets an ad hoc signed ZIP
 and no DMG, and an APK signed with the runner's debug key; the workflow steps
-"Report the signing mode" say which mode ran.
+"Report the signing mode" say which mode ran. zoompilot/jetlink's release stops
+instead of shipping a debug-signed APK.
 
 | Secret | What |
 | --- | --- |
@@ -121,8 +122,10 @@ gh secret set ANDROID_KEY_ALIAS --repo zoompilot/jetlink --body jetlink
 - Keep the keystore and its password backed up outside the repository. A lost
   key means a new one, and every phone then has to uninstall Jetlink, models
   and all, to take the next release.
-- The workflow's "Check the APK" step fails a build that has the secrets but
-  came out with the debug key, or whose version is not the tag's.
+- The workflow's "Check the APK's key" step fails a release whose APK is not
+  signed with this key's certificate, `RELEASE_CERT_SHA256` in
+  `.github/workflows/release.yml` (`keytool -list -v` prints it). A new key
+  means a new value there, and every phone uninstalling.
 - To sign a local build with it, set `JETLINK_ANDROID_KEYSTORE` (an absolute
   path), `JETLINK_ANDROID_KEYSTORE_PASSWORD` and `JETLINK_ANDROID_KEY_ALIAS`
   before `./gradlew :app:assembleRelease`.

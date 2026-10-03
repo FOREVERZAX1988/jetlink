@@ -7,11 +7,14 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
-/** jetlink's version, from the Python package as the Mac and iPhone apps read it. */
+/**
+ * jetlink's version, from the Python package as the Mac and iPhone apps read
+ * it: the release workflow's check ties the tag to the same line.
+ */
 val jetlinkVersion: String =
     Regex("""__version__ = '([^']+)'""")
         .find(rootDir.resolve("../jetlink/__init__.py").readText())
-        ?.groupValues?.get(1) ?: "0.0.0"
+        ?.groupValues?.get(1) ?: error("no __version__ = '...' in jetlink/__init__.py")
 
 /** 0.5.0 is 500: releases only go up. */
 val jetlinkVersionCode: Int =
@@ -154,6 +157,7 @@ abstract class SwiftBuild @Inject constructor(private val exec: ExecOperations) 
         val out = outputDir.get().asFile
         val prebuiltDir = prebuilt.orNull
         if (prebuiltDir != null) {
+            check(File(prebuiltDir, "arm64-v8a/libjetlink.so").isFile) { "$prebuiltDir has no arm64-v8a/libjetlink.so" }
             File(prebuiltDir).copyRecursively(out, overwrite = true)
             return
         }

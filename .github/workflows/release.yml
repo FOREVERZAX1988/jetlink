@@ -9,7 +9,8 @@
 # Signing and notarizing need six secrets (docs/publishing.md lists them). With
 # none of them the build still runs and produces an ad hoc signed zip labelled
 # unsigned, so a fork can cut its own release. The APK's key is three more;
-# without them it is signed with the runner's debug key, and the notes say so.
+# without them a fork's APK is signed with the runner's debug key, and the
+# notes say so, while zoompilot/jetlink's release stops.
 name: Release
 
 on:
@@ -183,8 +184,6 @@ jobs:
           cd macos/build
           VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Jetlink.app/Contents/Info.plist)"
           rm -f "Jetlink-$VERSION-macOS.dmg"
-          shasum -a 256 "Jetlink-$VERSION-macOS.zip" > SHA256SUMS
-          cat SHA256SUMS
 
       - name: Delete the temporary keychain
         if: always()
@@ -203,40 +202,27 @@ jobs:
           path: |
             macos/build/Jetlink-*.dmg
             macos/build/Jetlink-*.zip
-            macos/build/SHA256SUMS
 
   android-swift:
     name: Swift server for Android
     needs: check
-    runs-on: ubuntu-24.04
-    container: swift:6.4-noble
-    steps:
-      - name: Check out the repository
-        uses: actions/checkout@v4
-
-      - name: Build libjetlink.so
-        uses: ./.github/actions/android-swift
-        with:
-          out: swift-out
-        # The build CI tests; the job below packages it, as CI's app job does.
-
-      - name: Upload the library
-        uses: actions/upload-artifact@v4
-        with:
-          name: libjetlink-arm64-v8a
-          path: swift-out
-          if-no-files-found: error
-          retention-days: 7
+    uses: ./.github/workflows/android-swift.yml
 
   android-app:
     name: Android app
     needs: android-swift
     runs-on: ubuntu-24.04
     env:
-      HAVE_SIGNING: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' && secrets.ANDROID_KEYSTORE_PASSWORD != '' && secrets.ANDROID_KEY_ALIAS != '' }}
+      # Gradle stops the build when the keystore comes without its password
+      # or alias.
+      HAVE_SIGNING: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+      UPSTREAM: ${{ github.repository == 'zoompilot/jetlink' }}
+      # The release key's certificate (docs/publishing.md): Android installs
+      # an update only over an app signed with the same key.
+      RELEASE_CERT_SHA256: ab49203553fbfdc9b296ea19bc39a2b8e8a6543037e4e77c7023c69926cd2a8f
     outputs:
       # for the release notes, which warn about a debug key
-      release-key: ${{ steps.mode.outputs.release-key }}
+      release-key: ${{ env.HAVE_SIGNING }}
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
@@ -246,6 +232,9 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      # Gradle and the app's dependencies, from main's last CI run
+      - uses: gradle/actions/setup-gradle@v4
+
       - name: Download the Swift server
         uses: actions/download-artifact@v4
         with:
@@ -253,17 +242,17 @@ jobs:
           path: swift-out
 
       - name: Report the signing mode
-        id: mode
         run: |
-          # Android installs an update only over an app signed with the same
-          # key, and each runner makes a new debug key, so a debug-signed APK
-          # cannot update the last release's.
+          # Each runner makes a new debug key, so a debug-signed APK updates
+          # no earlier release: a fork's may, jetlink's may not.
           if [ "$HAVE_SIGNING" = "true" ]; then
             echo "signing with the release key"
+          elif [ "$UPSTREAM" = "true" ]; then
+            echo "error: no ANDROID_KEYSTORE_BASE64 secret (docs/publishing.md#android-release-key)" >&2
+            exit 1
           else
             echo "no signing secrets: this APK will be signed with the runner's debug key"
           fi
-          echo "release-key=$HAVE_SIGNING" >> "$GITHUB_OUTPUT"
 
       - name: Write the release key
         if: env.HAVE_SIGNING == 'true'
@@ -280,42 +269,22 @@ jobs:
           JETLINK_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           JETLINK_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: ./gradlew --no-daemon :app:assembleRelease -Pjetlink.prebuiltSwift="$GITHUB_WORKSPACE/swift-out"
-        # The release key when JETLINK_ANDROID_KEYSTORE is set
-        # (app/build.gradle.kts), the debug key otherwise.
 
-      - name: Check the APK
+      - name: Check the APK's key
         run: |
           set -euo pipefail
           APK=android/app/build/outputs/apk/release/app-release.apk
-          VERSION="${GITHUB_REF_NAME#v}"
           # the runner's newest build tools
           TOOLS="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
           CERTS="$("$TOOLS/apksigner" verify --print-certs "$APK")"
           printf '%s\n' "$CERTS"
-          if [ "$HAVE_SIGNING" = true ] && [[ $CERTS == *"CN=Android Debug"* ]]; then
-            echo "error: the signing secrets are set but the APK has the debug key" >&2
-            exit 1
-          fi
-          # Gradle reads the version from jetlink/__init__.py on its own, and
-          # falls back to 0.0.0 when it cannot
-          PACKAGE="$("$TOOLS/aapt2" dump badging "$APK" | grep '^package:')"
-          printf '%s\n' "$PACKAGE"
-          if [[ $PACKAGE != *"versionName='$VERSION'"* ]]; then
-            echo "error: the APK's version is not $VERSION" >&2
-            exit 1
-          fi
-          # the server, packaged from the job above rather than built here
-          if ! unzip -l "$APK" | grep -E 'lib/arm64-v8a/libjetlink\.so$' >/dev/null; then
-            echo "error: the APK has no libjetlink.so" >&2
+          DIGEST="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' <<<"$CERTS")"
+          if [ "$UPSTREAM" = true ] && [ "$DIGEST" != "$RELEASE_CERT_SHA256" ]; then
+            echo "error: signed with $DIGEST, not the release key $RELEASE_CERT_SHA256" >&2
             exit 1
           fi
           mkdir -p dist
-          cp "$APK" "dist/Jetlink-$VERSION-Android.apk"
-          ls -l dist
-
-      - name: Delete the release key
-        if: always()
-        run: rm -f "$RUNNER_TEMP/release.keystore"
+          cp "$APK" "dist/Jetlink-${GITHUB_REF_NAME#v}-Android.apk"
 
       - name: Upload the APK
         uses: actions/upload-artifact@v4
@@ -323,6 +292,9 @@ jobs:
           name: android-app
           path: dist/Jetlink-*-Android.apk
           if-no-files-found: error
+          # the release carries it; an APK is a zip already
+          retention-days: 7
+          compression-level: 0
 
   linux-server:
     name: Linux server (${{ matrix.flavor }})
@@ -480,13 +452,16 @@ jobs:
           path: artifacts/linux-server
           merge-multiple: true
 
-      - name: Add the APK to SHA256SUMS
+      - name: Write SHA256SUMS
         run: |
-          # SHA256SUMS is for the apps people download by hand: the macOS job
-          # wrote the DMG's line, or the zip's, and the APK's joins it. The
-          # Linux tarballs keep their own .sha256, which install.sh reads.
-          (cd artifacts/android-app && sha256sum Jetlink-*-Android.apk) >> artifacts/macos-app/SHA256SUMS
-          cat artifacts/macos-app/SHA256SUMS
+          # For the apps people download by hand: the DMG, or the zip of an
+          # unsigned build, and the APK. The Linux tarballs keep their own
+          # .sha256, which install.sh reads.
+          mkdir -p artifacts/sums
+          for app in artifacts/macos-app/Jetlink-* artifacts/android-app/Jetlink-*; do
+            (cd "$(dirname "$app")" && sha256sum "$(basename "$app")")
+          done > artifacts/sums/SHA256SUMS
+          cat artifacts/sums/SHA256SUMS
 
       - name: List what is being released
         run: find artifacts -type f -exec ls -lh {} +
@@ -535,7 +510,7 @@ jobs:
             MAC="$(find artifacts/macos-app -name 'Jetlink-*-macOS.dmg' | head -1)"
             [ -n "$MAC" ] || MAC="$(find artifacts/macos-app -name 'Jetlink-*-macOS.zip' | head -1)"
             MAC="$(basename "$MAC")"
-            APK="$(basename "$(find artifacts/android-app -name 'Jetlink-*-Android.apk' | head -1)")"
+            APK="Jetlink-$VERSION-Android.apk"
             printf '## Install\n\n'
             printf 'Mac (Apple silicon): [%s](https://github.com/%s/releases/download/%s/%s)\n\n' "$MAC" "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" "$MAC"
             printf 'iPhone and iPad:\n\n[![Available on TestFlight](https://zoompilot.ai/jetlink/assets/testflight-badge.svg)](https://testflight.apple.com/join/DAsYk5sP)\n\n'
