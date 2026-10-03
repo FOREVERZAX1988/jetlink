@@ -2,19 +2,21 @@
 
 # Choose and prepare models
 
-Pick a model on the comma under **Settings > Models > Big Model**, offroad and
-online (in or out of the car). The comma downloads it, sends it to the server,
-and waits while the server prepares it. Start with the default. Changing and
-switching models: [daily use](using-jetlink.md#choose-a-model).
+While offroad and online, open **Settings > Models > Big Model** on the comma.
+Start with the default. The comma downloads it and the server prepares it.
+The small model drives until it is ready; see [when it switches](using-jetlink.md#what-to-expect-when-driving).
+
+If the list is empty, use **Refresh Model List**. On Jetson, the 766 MB models
+leave more time in the 50 ms frame budget than the 1.7 GB Lebowski.
 
 ## Prepare ahead of time (optional)
 
 Download on the server's internet connection before connecting the comma. This
 saves time when the comma is on LTE.
 
-On a Mac, open **Models**, click **Use Model**, and wait for **In Use**. Then pick
-the same model on the comma. See the [Mac guide](macos-app.md#use-a-model-before-you-drive).
-The iPhone and Android apps: **Get** under **Models**.
+On Mac, open **Models**, click **Use Model**, and wait for **In Use**.
+On iPhone, iPad, or Android, open **Models** and tap **Get**. Keep the iPhone
+app open until it finishes. Pick the same model on the comma.
 
 ### On a Jetson or an installed PC
 
@@ -52,9 +54,7 @@ The same commands on a built `jetlink-server`: `jetlink-server models list
 - A download is the ONNX model, most about 766 MB.
 - A prepared engine is built for your backend and device. Jetlink keeps both.
 - A runtime update may prepare again; the download is kept.
-- On a Mac, allow about 3 GB per model with the default backend. Each Mac
-  `--device` (`ane`, `coreml`, `ane-whole`) has its own prepared engine; see
-  [backends](backends.md#runtime-comparison).
+- On a Mac, allow about 3 GB per model with the default backend.
 
 | Installation | Default cache folder |
 | --- | --- |
@@ -76,10 +76,6 @@ inventory`, or **Models** in the apps.
 
 Listing, fetching, importing, preparing and deleting models:
 [model command reference](model-cli.md#commands).
-
-## Developer reference
-
-[Model CLI](model-cli.md) and [control protocol](control-protocol.md).
 
 <a id="model-identifiers-and-storage"></a>
 <a id="the-protocol"></a>

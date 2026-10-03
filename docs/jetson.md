@@ -1,7 +1,6 @@
 # Set up Jetlink on a Jetson
 
-About an hour the first time, mostly downloads. Set up in or out of the car,
-offroad. Keep the Jetson and comma powered and online.
+Allow about an hour. Set up offroad with the Jetson and comma powered and online.
 
 ## What you need
 
@@ -34,11 +33,8 @@ Socket turns off a few minutes after parking? Choose **Switched**.
 - **No:** the Jetson stays in deep sleep while parked, with no
   battery-protection shutdown.
 
-**Turn off the desktop** (installer question, asked when the Jetson starts its
-desktop): **Yes**, recommended unless you use the desktop, leaves more memory
-free for the models and starts the Jetson a little faster. It takes effect at
-the next restart; the screen then shows a text login. `jetlink setup` turns it
-back on.
+**Turn off the desktop:** choose **Yes** unless you need it. After restarting,
+the screen shows a text login. Use `jetlink setup` to restore the desktop.
 
 <a id="1-put-jetpack-on-the-jetson"></a>
 <a id="2-run-the-installer"></a>
@@ -72,29 +68,24 @@ On the Jetson, open **Terminal** and paste:
 curl -fsSL https://raw.githubusercontent.com/zoompilot/jetlink/main/install.sh | bash
 ```
 
-It installs the latest release, and JetPack's TensorRT if it is missing (a
-2.3 GB download). Answer the questions as above. Takes 10–30 minutes;
-leave it running. An install from Jetlink 0.6.0 or earlier moves out of Docker
-on its next `jetlink update`, keeping its answers, models and prepared engines.
+Answer the power questions as above. Installation takes 10–30 minutes; leave
+it running. To use the web page from your phone, choose a port and password
+when prompted. Port **5600** is the default; **0** disables it.
 
 ## 3. Connect the comma
 
 1. **Install zoompilot.** After resetting the comma, enter
    **`zoompilot/develop`** as the install URL. Already on zoompilot? Select
    **develop** in **Settings > Software > Target Branch >
-   Non-Prebuilt Branches**. Wait for installation and any reboot.
+   Non-Prebuilt Branches**. Wait for installation, rebooting, and building to finish.
 2. **Enable Jetlink.** Set **Settings > Models > Accelerator Link** to **USB**.
    Leave **Big Model** at its default.
 3. **Connect the cable.** Jetson **USB-A** → comma **USB-C**.
-4. **Wait for the green icon.** The model downloads itself; the first prepare
-   takes about 3 minutes.
+4. **Wait for the green home-button icon.** Stay offroad and online while the
+   model downloads and prepares. The first prepare takes about 3 minutes.
 
-Always-on power: leave both cables connected. The Jetson sleeps when parked and
-wakes when you start the car.
-
-Read [daily use](using-jetlink.md) before driving. Watch it from your phone:
-[web page](using-jetlink.md#web-page). Frame times per model on a Jetson:
-[performance](status.md#measured-performance).
+Read [daily use](using-jetlink.md) before driving.
+[Open the web page](using-jetlink.md#web-page) to check it from your phone.
 
 <a id="troubleshooting"></a>
 
@@ -107,10 +98,11 @@ Read [daily use](using-jetlink.md) before driving. Watch it from your phone:
 | Jetson will not wake | After a full shutdown, press its power button or reconnect power. Otherwise check **Always on** with `jetlink setup`. |
 | Jetson sleeps while you work on it over SSH | Run `jetlink caffeinate` and keep it running. |
 | Model fails to prepare or keeps disconnecting | Run `jetlink logs`. Check storage space, power, cable, and cooling. |
-| Comma stays on its small model after an update | [Update both the comma and Jetlink](releasing.md). |
+
+[More troubleshooting and logs](troubleshooting.md).
 
 <details>
-<summary>Commands and reporting a problem</summary>
+<summary>Everyday commands</summary>
 
 <a id="everyday-use"></a>
 <a id="reporting-a-problem"></a>
@@ -125,14 +117,6 @@ jetlink password    # set a new password for the web page
 jetlink models      # list, download or prepare models (jetlink models --help)
 jetlink caffeinate  # keep it awake until Ctrl-C (-t SECONDS, or while a command runs)
 jetlink uninstall   # remove Jetlink
-```
-
-Asking for help? Include `jetlink status` output, the model name, the exact
-alert, and when it happened. Installer log: `/var/log/jetlink-install.log`.
-Server log:
-
-```bash
-sudo journalctl -u jetlink-server -b --no-pager > jetson.log
 ```
 
 </details>

@@ -1,16 +1,7 @@
-# Platform setup
+# Source installs and testing
 
-Run Jetlink on a Mac, a Linux PC, or a Windows PC with WSL2. Set up the comma
-per the [README](../README.md#quick-start). Jetson: [Jetson guide](jetson.md).
-
-Set up outside the car or in the car while offroad. Keep the comma and computer
-online, and the computer powered and awake.
-
-- [Mac app](macos-app.md): no terminal commands.
-- [Linux installer](#linux-nvidia-gpu): an NVIDIA PC on Ubuntu.
-- [Windows WSL2](#windows-nvidia-gpu): untested.
-- [From a checkout](#from-a-checkout), [CPU only](#cpu-only),
-  [test without a comma](#test-without-a-comma): development.
+For normal installation, use the [setup guides](README.md#set-up).
+This page covers terminal installs, WSL2, and testing without a comma.
 
 <a id="before-running-from-source"></a>
 <a id="mac-apple-silicon"></a>
@@ -57,38 +48,8 @@ Performance: [backends](backends.md#mac-measured).
 
 ## Linux (NVIDIA GPU)
 
-For a GeForce RTX 20 series or newer GPU, on Ubuntu 22.04 or 24.04 (tested
-by users), or on Debian 12, Fedora, Arch or openSUSE Tumbleweed (the installer
-supports them; untested on hardware):
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/zoompilot/jetlink/main/install.sh | bash
-```
-
-- Needs NVIDIA driver 580 or newer. On Ubuntu and Arch, and the derivatives
-  on their repositories (Mint, Pop!_OS, EndeavourOS, CachyOS), the installer
-  can install it; restart and rerun the installer when it says so. Elsewhere it
-  prints the distribution's own steps (NVIDIA's repository on Debian and RHEL,
-  RPM Fusion on Fedora, NVIDIA's on openSUSE) and stops until the driver is in.
-- Needs systemd, and glibc 2.35 or newer, Ubuntu 22.04's, which the server is
-  built on: Debian 11 and RHEL 9 are too old. Derivatives (Mint, Pop!_OS,
-  EndeavourOS, CachyOS, Rocky, Alma) work as their base does. Fedora Atomic
-  (Bazzite) has no dnf, so the installer takes the path for an unknown package
-  manager: it installs when curl, git, unzip and libcurl are already there,
-  which they are, and the driver is the image's. Untried.
-- Takes `curl`, `git`, `unzip` and libcurl from the distribution's package
-  manager (apt, dnf, pacman or zypper); with another, it says what is missing.
-- Puts NVIDIA's TensorRT 11.3.0.99 in `/opt/jetlink/tensorrt` (a 3.8 GB
-  download, 2.7 GB on disk) rather than installing a system package; only the
-  driver comes from the system. Models and engines go in `/var/lib/jetlink`.
-- An install from Jetlink 0.6.0 or earlier moves out of Docker on its next
-  `jetlink update`. It keeps the same TensorRT build, so its engines should
-  load; one that does not is prepared again, once.
-- Asks whether to start Jetlink with the computer.
-- Check it with `jetlink status`. Logs, updates, uninstalling:
-  [everyday commands](jetson.md#everyday-use).
-- Plug the comma into a USB-A port. Keep the computer powered and awake while
-  driving: sleep drops the link.
+Use the [Linux PC installer guide](linux-pc.md). To build the server yourself,
+see [From a checkout](#from-a-checkout).
 
 <a id="docker-nvidia-laptops-and-desktops"></a>
 
@@ -106,7 +67,7 @@ Untested. Run the Linux installer in Ubuntu 22.04 or 24.04 on WSL2:
    systemd=true
    ```
 
-3. Run the installer in Ubuntu.
+3. Run the [Linux installer](linux-pc.md#1-install-jetlink) in Ubuntu.
 4. Attach the comma to WSL with
    [usbipd-win](https://learn.microsoft.com/windows/wsl/connect-usb).
 
@@ -192,4 +153,4 @@ python3 scripts/bench_link.py --host 127.0.0.1 --onnx /path/to/big_model.onnx --
 | Link drops when the laptop sleeps | Keep it awake, powered, and open. |
 
 Cache folders: [model management](models.md#downloads-prepared-engines-and-disk-space).
-Comma-side alerts: [README](../README.md#if-something-is-wrong).
+Comma-side alerts: [troubleshooting](troubleshooting.md).

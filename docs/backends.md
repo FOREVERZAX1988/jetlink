@@ -2,7 +2,7 @@
 
 A backend prepares and runs the model. Every platform runs the same Swift
 server: TensorRT on a Jetson or NVIDIA PC, ONNX Runtime everywhere else. Setup:
-[platform setup](platforms.md). Mac detail:
+[setup guides](README.md#set-up). Mac detail:
 [performance reference](mac-performance.md).
 
 ## Runtime comparison

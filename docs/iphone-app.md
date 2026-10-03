@@ -1,114 +1,98 @@
-# Jetlink for iPhone and iPad
+# Set up Jetlink on iPhone or iPad
 
-**Experimental.** Runs the Jetlink server in an iOS app, connected to the comma
-by one USB cable. Install it from
-[TestFlight](https://testflight.apple.com/join/DAsYk5sP). Run the
-[Benchmark](#benchmark) before you drive to see if your phone keeps up.
+**Experimental.** Set up offroad with the comma and phone online.
 
-On an iPad with USB-C, read iPad wherever this page says iPhone or phone.
+<a id="requirements"></a>
 
-Mac: [Jetlink for Mac](macos-app.md). Jetson or PC: [README](../README.md#quick-start).
+## What you need
 
-## Requirements
-
-- An iPhone with USB-C on iOS 26.1 or later, or an iPad with USB-C on iPadOS
-  26.1 or later. iPads with Lightning are not supported.
-- Ideally a USB 3 model: see [USB 3 matters](#usb-3-matters).
-- A USB 3 USB-C cable.
-- A powered USB-C hub between them keeps the phone charging (it runs the model
-  20 times a second).
+- A USB-C iPhone on iOS 26.1 or later, or USB-C iPad on iPadOS 26.1 or later.
+  Use a USB 3 model; see [compatible devices](#usb-3-matters).
 - About 3 GB free per model.
-- A comma running a zoompilot build with Jetlink, set up per the
-  [README](../README.md#comma-setup-all-platforms), with **Accelerator Link**
-  on **iOS**.
+- A comma 3X or comma 4, powered separately.
+- A powered USB 3 USB-C hub and USB 3 data cable. Direct USB-C connections
+  can be unreliable; use the hub to connect and keep the phone charging.
 
-## Install
+<a id="install"></a>
+
+## 1. Install Jetlink
 
 <a href="https://testflight.apple.com/join/DAsYk5sP"><img src="images/testflight-badge.svg" alt="Available on TestFlight" height="40"></a>
 
-1. On the iPhone, open **[the Jetlink beta](https://testflight.apple.com/join/DAsYk5sP)**.
-2. Install **TestFlight** from the App Store if it asks, then tap **Accept** and
-   **Install**.
+1. Open **[the Jetlink beta](https://testflight.apple.com/join/DAsYk5sP)** on the phone.
+2. Install **TestFlight** if prompted, then tap **Accept** and **Install**.
 
-TestFlight installs new builds as they come out. A build expires 90 days after
-it was released; by then there is a newer one.
+<a id="connect-the-comma"></a>
 
-### Build from source
+## 2. Connect the comma
 
-Needs a Mac with Xcode 26 and the iOS 26 platform. A free Apple account is
-enough.
+1. **Install zoompilot.** After resetting the comma, enter
+   **`zoompilot/develop`** as the install URL. Already on zoompilot? Select
+   **develop** in **Settings > Software > Target Branch > Non-Prebuilt Branches**.
+   Wait for installation, rebooting, and building to finish.
+2. Set **Settings > Models > Accelerator Link** to **iOS**.
+   Leave **Big Model** at its default.
+3. Open Jetlink on the phone and allow **Local Network** access.
+4. Connect the phone to the comma through the powered hub.
+5. Keep Jetlink on screen and wait for **Connected over USB 3**.
 
-1. In Xcode, open **Settings > Components** and install the **iOS 26**
-   platform if it is missing.
-2. Under **Settings > Accounts**, add your Apple ID. A free account shows as a
-   **Personal Team**, with the ten-character team ID beside it.
-3. In a checkout, copy `ios/Config/Local.xcconfig.example` to
-   `ios/Config/Local.xcconfig` and set your team ID and your own bundle
-   identifier. Git ignores the file. Do not set them under Signing &
-   Capabilities (that writes them into the project file).
-4. On the iPhone, turn on **Settings > Privacy & Security > Developer Mode** and
-   restart. The switch appears once the phone has been plugged into a Mac with
-   Xcode open.
-5. Install xcodegen (`brew install xcodegen`) and run `make -C ios open`.
-   Connect the iPhone, select it as the run destination and click **Run**. The
-   first build fetches onnxruntime.
-6. Trust the developer before the first launch: on the iPhone,
-   **Settings > General > VPN & Device Management**, your Apple ID, **Trust**.
+Stay offroad and online until the comma's home-button icon turns **green**.
+It pulses while the model downloads and prepares.
 
-A free account's install stops opening after **7 days**. Click **Run** again to
-renew it; models and settings are kept. A paid membership's install lasts a year.
+<a id="status"></a>
 
-Building and testing without a phone: [iPhone development](../ios/README.md).
+Check for a rate near **20 frames per second** and **zero slow frames**.
+Run the benchmark below before use. Read [daily use](using-jetlink.md) before driving.
 
-## Connect the comma
+<a id="benchmark"></a>
 
-1. On the comma, while offroad, set **Accelerator Link** to **iOS** in the
-   models settings. **USB** is for a Jetson, Linux PC or Mac.
-2. Open Jetlink. The first time, allow **Local Network** access.
-3. Connect the phone to the comma with a USB 3 USB-C cable. A powered USB-C
-   hub between them keeps it charging.
-4. The title reads **Connected over USB 3**. **USB 2** (orange title, and on the
-   Link tile) means the phone, hub or cable is not USB 3. See
-   [USB 3 matters](#usb-3-matters).
+## 3. Check performance
 
-- There is nothing to type: the app finds the comma itself.
-- Open the app before plugging in. Opened later, it still connects, just later.
-- A direct USB-C cable is not reliable yet. On one, both ends can be the host,
-  and the comma has to keep its USB device side on for the phone; it tries to
-  sort both out by itself, and a tester connected with an e-marked
-  Thunderbolt cable where a plain cable failed. Until it is proven, use a
-  powered USB-C hub, or a USB-C to USB-A adapter and a USB-A to USB-C cable.
-  If a direct cable does not connect, or the comma restarts when you plug in,
-  [send the comma's report](#if-a-direct-cable-does-not-connect).
-- The app has these steps under Settings > **Help > Connecting the Comma**.
+1. Leave the model loaded and disconnect the comma.
+2. Put the phone in its car mount with charging connected.
+3. Open **Benchmark** and tap **1 Minute**.
 
-How the link works: [what the comma presents](transport.md#what-the-comma-presents).
+**Fast Enough** leaves time for the cable and comma. **Tight** leaves little
+margin; **Too Slow** cannot sustain 20 frames per second. Run **10 Minutes**
+to check for slowdowns as the phone heats up. Repeat after changing the model
+or processor.
 
-### If a direct cable does not connect
+The benchmark excludes cable latency. Passing does not validate operation
+with the comma connected.
 
-Over SSH on the comma, with the phone plugged straight in for 30 seconds:
+<a id="limits"></a>
+<a id="heat"></a>
 
-```bash
-sudo /data/openpilot/jetlink_repo/scripts/comma/jetlink-root.sh check
-grep 'USB-C' /data/log/jetlink-owner.log | tail -n 40
-sudo dmesg | grep -iE 'usbpd|type-?c|swap|weak charger|reverse boost' | tail -n 60
-```
+## While using Jetlink
 
-Send the output with your phone model, your comma model, the cable, and say
-whether the comma restarted. Do it once for each way round the cable can go.
+Keep the app on screen and the phone unlocked. Switching apps or locking the
+phone drops the link. Keep the phone out of direct sun and thick cases to
+reduce overheating.
 
-### If the big model comes and goes
+<a id="prepare-a-model-before-you-drive"></a>
 
-Open **Logs** in the app after the drive. Each time the comma stops using the
-link it says why (behind, lost, stopped) with what it measured: the whole
-frame as the comma waited on it, which the phone cannot see from its side,
-how many frames it held (a reply that came too late, the previous plan kept
-for one frame) and how many the phone ran while the small model was driving.
-Send that log with the comma's:
+To download a model ahead of time, see [Models](models.md#prepare-ahead-of-time-optional).
 
-```bash
-tail -n 200 /data/log/jetlink-owner.log
-```
+<a id="if-a-direct-cable-does-not-connect"></a>
+<a id="if-the-big-model-comes-and-goes"></a>
+
+## Troubleshooting
+
+| Problem | First step |
+| --- | --- |
+| Build expired | Install the newest available build in TestFlight. Builds expire after 90 days. |
+| App cannot find the comma | Allow **Local Network** access and check **Accelerator Link** is **iOS**. |
+| Direct cable fails or comma restarts | Use a powered USB 3 hub. |
+| Connection says **USB 2** | Check that the phone, cable, and hub all support USB 3. |
+| Slow frames or repeated fallbacks | Let the phone cool, repeat the 10-minute benchmark, and save the logs. |
+
+<a id="logs"></a>
+
+Logs: **Settings > Help > Logs**. Use the share button when
+[asking for help](troubleshooting.md#get-help).
+
+<details>
+<summary>USB 3 devices</summary>
 
 ### USB 3 matters
 
@@ -122,102 +106,21 @@ Every hop must be USB 3: the phone, the cable and any hub.
 Sources: [Apple, iPhone](https://support.apple.com/en-us/105099),
 [Identify your iPad model](https://support.apple.com/en-us/108043).
 
-- Over a USB 2 link the app shows a **USB 2 Link** banner on the Status tab,
-  in both orientations, saying which of the two it can be: the cable or hub,
-  or the device itself.
-- USB 2 adds an estimated 4 to 6 ms a frame (not yet measured).
-- To check the speed on the comma, run `sudo scripts/comma/jetlink-root.sh check`:
-  `super-speed` is USB 3, `high-speed` is USB 2.
+</details>
 
-## Prepare a model before you drive
-
-Open **Models** and tap **Get** on your comma's model. It downloads, prepares
-and loads in one step.
-
-- The download needs Wi-Fi or cellular data.
-- Keep Jetlink open until it finishes: iOS suspends background downloads.
-- If you skip this, the comma sends its model on connect and drives on its small
-  model until the phone has it ready.
-- You can also copy a model file in from the Finder or Files app, or use **Add
-  Model File**.
-
-## Benchmark
-
-Run it before the first drive, and after a new model or a **Processor** change.
-
-1. Load a model and leave the comma disconnected.
-2. Set the phone up as in the car (charging, in its mount).
-3. Open **Benchmark** and tap **1 Minute**.
-
-It runs the model 20 times a second on made-up frames and times the phone's
-share of each frame (not the cable).
-
-- **Verdict:** **Fast Enough** (green) is a P99 at or under 35 ms with nothing
-  over 50. **Tight** (orange) is a P99 under 50 ms. **Too Slow** (red) misses
-  20 frames a second, or did not finish a frame in the whole run.
-- **Totals:** frames, frames over 50 ms (and over 35), the phone's temperature
-  at start and end, and the model alone.
-- **Over Time:** P99 and temperature per 10 seconds. A phone that slows as it
-  heats shows here.
-- **10 Minutes** heats the phone: compare the first and last windows.
-- The share button copies the report or puts it in a note.
-
-For the frame times the car will see, cable included, run
-`jetlink_repo/scripts/comma/jetlink_live_bench.sh 180` on the comma over SSH,
-offroad, with **Accelerator Link** on **iOS** and the phone connected. Frames
-over 50 ms should be 0.
-
-## Status
-
-Mount the phone where you can see it, in either orientation. The screen stays on
-while Jetlink is open. The subtitle shows the state: **Connected over USB 3** (or
-**USB 2**, or **Wi-Fi**), **Waiting for Comma**, **Preparing Model**,
-**Disconnected**, or what is wrong.
-
-| Tile | Shows |
-| --- | --- |
-| **Headroom** | Room left in the 50 ms frame budget at P99 over the last 10 seconds. Green **Good**, orange **Tight** (under 10 ms left), red **Over Budget**. The comma's time and the cable come out of the same 50 ms. |
-| **Latency** | The average frame: Input, Model, Other and Send. |
-| **History** | The slowest frames of every 5 seconds, over the last 2 minutes. |
-| **Link** | Frame rate (the comma sends 20 a second), slow frames, and USB 3, USB 2, or Wi-Fi for a bench tool. |
-| **iPhone** (**iPad**) | Temperature, battery, memory and link. A hot phone slows down, and it shows here first. Memory turns orange under 1 GB, where preparing a model may not fit. |
-
-- An orange banner means the app left the screen while serving: iOS suspends it.
-- On other tabs, tap the bar at the bottom to return.
-
-## Logs
-
-**Settings > Help > Logs**, or the document button on Status. Warnings are orange
-and errors red. The share button sends the whole text; **Clear** empties the view.
-
-## Heat
-
-A hot phone slows down and frames miss 50 ms.
-
-- Keep the phone out of the sun and out of a thick case.
-- The 10-minute benchmark shows how your phone and mount fare.
-- On the road, the Temperature tile and the logs show throttling.
-
-## Limits
-
-- **Keep Jetlink on screen.** iOS suspends it in the background or when the
-  phone locks. The comma then drives on its small model and, if engaged, asks
-  you to take over. Do not use other apps on the phone while driving.
-- **Heat.** See [Heat](#heat).
-- **The comma cannot power the phone off.** The app refuses and tells you the
-  comma asked.
-- **One comma at a time.** A new connection replaces the current one.
-- **A build from Xcode with a free account expires after 7 days.** Run it again from Xcode.
+<details>
+<summary>Optional settings</summary>
 
 ## Settings
 
-| Setting | What it does |
-| --- | --- |
-| Link | USB 3 or USB 2 while connected (Wi-Fi for a bench tool), Connecting while it dials the comma |
-| Port | The TCP port for `verify_parity.py` from a Mac, 5599 by default |
-| Wi-Fi | The phone's Wi-Fi address and port, for a Mac's bench tools |
-| Processor | **Neural Engine + GPU** (default): the vision layers on the Neural Engine, the rest on the GPU, as a Mac runs it (14 ms a frame on an iPhone 18 Pro). **GPU**: when another app keeps the Neural Engine busy. **CPU**: the Simulator only. Changing it prepares the model again |
-| Keep CPU Awake | On by default. Keeps a CPU core busy between frames so the next frame starts sooner. Uses some power |
-| Keep GPU Awake | Keeps the GPU from slowing down between frames. Uses some power |
-| Keep Screen On | On by default. Off, auto-lock suspends Jetlink |
-| Help | How to connect the comma, and the logs |
+Keep **Processor** on **Neural Engine + GPU**. **GPU** is an alternative when
+another app keeps the Neural Engine busy. Changing it prepares the model again.
+
+Keep **Keep Screen On** enabled. **Keep CPU Awake** and **Keep GPU Awake** can
+reduce delays between frames but use more power.
+
+</details>
+
+<a id="build-from-source"></a>
+
+Building your own app: [iPhone development](../ios/README.md#install-on-a-device-from-source).

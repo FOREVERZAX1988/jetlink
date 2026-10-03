@@ -1,7 +1,7 @@
 # Installation reference
 
 Normal setup: [Jetson guide](jetson.md), [Mac app](macos-app.md),
-[PC guide](platforms.md). This page: what the installer does, manual installs,
+[PC guide](linux-pc.md). This page: what the installer does, manual installs,
 the [server command](#the-server-command) and custom integrations.
 
 <a id="jetson-installation"></a>
@@ -287,7 +287,7 @@ The cache is `--cache DIR`, else `$JETLINK_CACHE`, else:
   against 2.0 ms of transport, p50); off, the idle link drew 0.18 W more, so it
   is not off for the whole park. Deep sleep and USB wake are unaffected.
   `JETLINK_USB_LPM=1` leaves it on.
-- How the link carries a frame: [link protocol](transport.md#link-protocol).
+- How the link carries a frame: [link protocol](link-protocol.md).
 - Nothing on the comma runs by hand. The owner builds the gadget on its first
   step, USB or iOS per the comma's Accelerator Link setting, and rebuilds it
   when the setting changes with the car off (the setting is locked while

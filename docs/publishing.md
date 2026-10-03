@@ -176,3 +176,15 @@ shows Apple's verdict on an upload, ITMS errors included, which the builds
 list in App Store Connect leaves out.
 
 <a id="the-container-images"></a>
+
+## Comma and server release versions
+
+The comma takes Jetlink as a git pin: zoompilot's `develop`,
+`danger-unstable` and `jetson-trt` pin a commit on `main`, driven on
+`danger-unstable` first, and it may lie between releases. A `v*` release is
+cut when the apps, the server or the wire changed, not for the comma's side
+alone; its notes list what changed on the comma since the last release too.
+
+Releasing: [release steps](#publish-a-release). A version bump in
+`jetlink/__init__.py` means running `JetlinkKit/Scripts/make_pins.py` again;
+each release attaches the Linux server tarballs the installer downloads.
