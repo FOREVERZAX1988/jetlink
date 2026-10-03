@@ -10,12 +10,12 @@ class ProcessorTest {
     @Test
     fun aSnapdragonOffersQnn() {
         assertEquals(
-            listOf(Processor.Auto, Processor.NpuGpu, Processor.Npu, Processor.Gpu),
+            listOf(Processor.Auto, Processor.Npu, Processor.Gpu, Processor.NpuGpu),
             Processor.choices(qualcomm = true, tensorNpu = false, emulator = false, current = Processor.NpuGpu),
         )
         // the CPU once chosen, so it can be chosen away from
         assertEquals(
-            listOf(Processor.Auto, Processor.NpuGpu, Processor.Npu, Processor.Gpu, Processor.Cpu),
+            listOf(Processor.Auto, Processor.Npu, Processor.Gpu, Processor.NpuGpu, Processor.Cpu),
             Processor.choices(qualcomm = true, tensorNpu = false, emulator = false, current = Processor.Cpu),
         )
     }
@@ -69,9 +69,9 @@ class ProcessorTest {
 
     @Test
     fun onlyOnnxruntimesNpuAndGpuChoicesNeedQnn() {
-        assertEquals(listOf(Processor.NpuGpu, Processor.Npu), Processor.entries.filter { it.usesQnn })
+        assertEquals(listOf(Processor.Npu, Processor.NpuGpu), Processor.entries.filter { it.usesQnn })
         assertEquals(
-            listOf(Backend.Ort, Backend.Ort, Backend.LiteRt, Backend.LiteRt, Backend.Ort),
+            listOf(Backend.Ort, Backend.LiteRt, Backend.LiteRt, Backend.Ort, Backend.Ort),
             Processor.entries.filter { it != Processor.Auto }.map { it.backend },
         )
     }

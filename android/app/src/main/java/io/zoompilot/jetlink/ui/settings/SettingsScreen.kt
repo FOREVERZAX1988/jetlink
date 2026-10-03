@@ -346,7 +346,7 @@ private fun SettingsPreview() {
                     runtime = "1.29.0",
                     chip = "Snapdragon 8 Gen 3",
                     version = "0.5.0",
-                    processors = listOf(Processor.Auto, Processor.NpuGpu, Processor.Npu, Processor.Gpu),
+                    processors = listOf(Processor.Auto, Processor.Npu, Processor.Gpu, Processor.NpuGpu),
                 ),
                 SettingsActions(),
             )

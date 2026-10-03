@@ -178,7 +178,7 @@ A hot phone slows down and frames miss 50 ms.
 | Link | USB 3 or USB 2 while connected (Wi-Fi for a bench tool) |
 | Port | The TCP port for `verify_parity.py` from a Mac, 5599 by default |
 | Wi-Fi | The phone's Wi-Fi address and port, for a Mac's bench tools |
-| Processor | **Automatic** (default): the NPU on a Pixel 8 or later, else the GPU. **GPU**: the whole model on the GPU through LiteRT. On a Pixel 8 or later, also **NPU**: the whole model on the Tensor NPU, or on the GPU when the NPU cannot take it. On a Snapdragon, also **NPU + GPU**: the vision model on the NPU, the rest on the GPU, as a Mac splits it; and **NPU**: the whole model on the NPU. **CPU**: for the emulator, seconds a frame. Changing it prepares the model again |
+| Processor | **Automatic** (default): the NPU on a Pixel 8 or later, else the GPU. **GPU**: the whole model on the GPU through LiteRT. On a Pixel 8 or later, also **NPU**: the whole model on the Tensor NPU, or on the GPU when the NPU cannot take it. On a Snapdragon, also **NPU**: the whole model on the NPU, the fastest on the first Snapdragon measured; and **NPU + GPU**: the vision model on the NPU, the rest on the GPU, as a Mac splits it, the slowest there. **CPU**: for the emulator, seconds a frame. Changing it prepares the model again |
 | Keep NPU Awake | With a Snapdragon's NPU, on by default. Holds the NPU at full speed between frames. Uses some power |
 | Keep CPU Awake | Holds the CPU's clocks up between frames, through Android's performance hints, or a busy core on a phone without them. Uses some power |
 | Keep Screen On | On by default |

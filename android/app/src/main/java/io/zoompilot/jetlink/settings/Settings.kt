@@ -22,10 +22,10 @@ enum class Processor(val backend: Backend, val device: String, val title: String
     /** The phone's NPU where Jetlink has one for it, else the GPU ([automatic]). */
     Auto(Backend.LiteRt, "auto", "Automatic"),
 
-    /** The vision trunk on the NPU, the rest on the GPU: the Mac's split. QNN, a Snapdragon's. */
-    NpuGpu(Backend.Ort, "htp", "NPU + GPU"),
-
-    /** The whole model on the NPU, prepared as the iPhone's. QNN, a Snapdragon's. */
+    /**
+     * The whole model on the NPU, prepared as the iPhone's. QNN, a Snapdragon's: the fastest
+     * choice on the first one measured (an 8+ Gen 1, 2026-10-03), several times the GPU's speed.
+     */
     Npu(Backend.Ort, "htp-whole", "NPU"),
 
     /**
@@ -37,6 +37,12 @@ enum class Processor(val backend: Backend, val device: String, val title: String
 
     /** The whole model on the GPU through LiteRT, which drives any phone's: Adreno, Mali, PowerVR. */
     Gpu(Backend.LiteRt, "gpu", "GPU"),
+
+    /**
+     * The vision trunk on the NPU, the rest on the GPU: the Mac's split. QNN, a Snapdragon's.
+     * Listed after the GPU: on the first phone measured it was the slowest of the three.
+     */
+    NpuGpu(Backend.Ort, "htp", "NPU + GPU"),
 
     /** The CPU: the emulator and tests. Seconds a frame with a real model. */
     Cpu(Backend.Ort, "cpu", "CPU");
