@@ -35,9 +35,23 @@ from collections.abc import Callable
 import numpy as np
 
 from jetlink.openpilot.warp import call_warp
+from jetlink.transport.base import LinkError
 
 SEND_RAW_PRED = os.getenv('SEND_RAW_PRED')
 SLOW_FRAME = 0.05  # the full 20 Hz budget, not just the largest outliers
+# How far into a frame run() waits for the reply before publishing the
+# previous frame's output again (a held frame). Past this the camera frame
+# would be dropped: modeld's own work around run() takes the rest of the 50 ms.
+# A held frame is a plan one frame old, which the 10 s plan and the actuator
+# delay both dwarf, where a dropped frame is the same stale plan plus a count
+# toward selfdrived's modeldLagging. The joining model bounds how often
+# (joining.HOLDS_ALLOWED). None waits the client's deadline, as before
+HOLD_FRAME = 0.046
+# A host that has answered nothing for this long while the small model drove
+# is gone, not slow: the frames keep going out, so a quiet host shows here
+# before any frame waits on it. Under the cable's 4 MB socket buffer, which
+# holds ten frames, or the send would block the frame thread first
+SHADOW_TIMEOUT = 0.4
 # frames between asks for the server's telemetry, which rides on the response:
 # every second one, as modeld sent a chestnut's state (20 Hz over 10 Hz)
 TELEMETRY_EVERY = 2
@@ -57,6 +71,8 @@ class Trips:
   def __init__(self):
     self.frames = 0
     self.over = 0            # frames past SLOW_FRAME, the whole 20 Hz budget
+    self.held = 0            # frames whose reply was late and published the previous one
+    self.shadowed = 0        # frames sent while the small model drove, never waited for
     self.started = time.monotonic()
     self._whole_ms: deque[float] = deque(maxlen=TRIPS_KEPT)
     self._server_ms: deque[float] = deque(maxlen=TRIPS_KEPT)
@@ -69,9 +85,10 @@ class Trips:
     self._server_ms.append(server_us / 1e3)
 
   def summary(self) -> dict:
-    """frames, over, held_s, and over the frames kept: p50_ms, p99_ms, max_ms
-    of the whole frame and server_ms, the server's mean total."""
-    out = {'frames': self.frames, 'over': self.over, 'held_s': round(time.monotonic() - self.started, 1)}
+    """frames, over, held, shadowed, held_s, and over the frames kept: p50_ms,
+    p99_ms, max_ms of the whole frame and server_ms, the server's mean total."""
+    out = {'frames': self.frames, 'over': self.over, 'held': self.held, 'shadowed': self.shadowed,
+           'held_s': round(time.monotonic() - self.started, 1)}
     if self._whole_ms:
       whole = sorted(self._whole_ms)
       out.update(p50_ms=round(whole[len(whole) // 2], 1), p99_ms=round(whole[int(0.99 * (len(whole) - 1))], 1),
@@ -154,6 +171,8 @@ class JetlinkModelState:
     self._frame_id = 0
     self._last_logged = 0.0
     self.trips = Trips()
+    # whether the last run() published the frame before it (HOLD_FRAME)
+    self.frame_held = False
 
   def slice_outputs(self, model_outputs: np.ndarray, output_slices: dict[str, slice]) -> dict[str, np.ndarray]:
     return {k: model_outputs[np.newaxis, v] for k, v in output_slices.items()}
@@ -171,8 +190,7 @@ class JetlinkModelState:
     self._last_logged = now
     self._event("jetlinkTelemetry", dead=bool(self.client.dead), **telemetry)
 
-  def run(self, bufs: dict, transforms: dict[str, np.ndarray],
-          inputs: dict[str, np.ndarray], after_enqueue: Callable[[], None] | None = None) -> dict[str, np.ndarray]:
+  def _take_inputs(self, bufs: dict, transforms: dict[str, np.ndarray], inputs: dict[str, np.ndarray]) -> None:
     for key in bufs.keys():
       ptr = np.frombuffer(bufs[key].data, dtype=np.uint8).ctypes.data
       cache_key = (key, ptr)
@@ -191,7 +209,9 @@ class JetlinkModelState:
     self.npy['tfm'][:, :] = transforms['img'][:, :]
     self.npy['big_tfm'][:, :] = transforms['big_img'][:, :]
 
-    t0 = time.perf_counter()
+  def _warp(self):
+    """The warped frame as the wire takes it, and when the warp and the
+    readback each finished."""
     warped = call_warp(self.warp, **self.warp_inputs, frame=self.full_frames['img'], big_frame=self.full_frames['big_img'])
     t1 = time.perf_counter()
     # .data() rather than .numpy(): same ~2.5 ms mean (a write-combined GPU
@@ -202,36 +222,82 @@ class JetlinkModelState:
       data = warped._buffer().as_memoryview(allow_zero_copy=True)
     else:
       data = warped.data()
-    t2 = time.perf_counter()
+    return data, t1, time.perf_counter()
 
+  def _send(self, data, want_telemetry: bool) -> tuple[int, bool]:
+    """This frame to the host. Its seq, and whether it asked for the server's
+    telemetry: on the frames modeld would have sent a chestnut's state on,
+    its own callback's, or every TELEMETRY_EVERY-th."""
     self._frame_id += 1
-    # the telemetry is asked for on the frames modeld would have sent a
-    # chestnut's state on: its own callback's, or every TELEMETRY_EVERY-th
-    telemetry = after_enqueue is not None or self._frame_id % TELEMETRY_EVERY == 0
+    telemetry = want_telemetry or self._frame_id % TELEMETRY_EVERY == 0
     seq = self.client.infer_begin(data, self.packed, self._frame_id, reset=self._need_reset, want_state=telemetry)
-    t3 = time.perf_counter()
     self._need_reset = False
+    return seq, telemetry
+
+  def shadow(self, bufs: dict, transforms: dict[str, np.ndarray], inputs: dict[str, np.ndarray]) -> None:
+    """This frame to the host, without waiting for its answer: what the
+    joining model does with every frame the small model drives, from the join
+    on and after a hand-back. The host's model sees every frame, so its
+    history and hidden state are current and warm at the swap, where a model
+    that sat idle cost 110 to 120 ms on its first frame after every rejoin
+    (an iPad, 2026-10-03). The answers are read here, a frame later, and
+    dropped, bar the newest, which the first driving frame may hold. The
+    frame thread's cost is the warp and the send, 5 to 7 ms. Raises LinkError
+    when the host has answered nothing for SHADOW_TIMEOUT."""
+    self.client.drain()
+    waiting = self.client.waiting_for()
+    if waiting > SHADOW_TIMEOUT:
+      raise LinkError(f"the host has answered nothing for {waiting * 1e3:.0f} ms; link abandoned")
+    self._take_inputs(bufs, transforms, inputs)
+    t0 = time.perf_counter()
+    data, t1, t2 = self._warp()
+    _, telemetry = self._send(data, False)
+    t3 = time.perf_counter()
+    self.trips.shadowed += 1
+    if telemetry:
+      self.log_telemetry()
+    if self.trips.shadowed <= 3 or t3 - t0 > SLOW_FRAME / 2:
+      self._log.warning("jetlink: shadow frame %d warp %.1f data %.1f send %.1f ms; %d frames unanswered",
+                        self._frame_id, (t1 - t0) * 1e3, (t2 - t1) * 1e3, (t3 - t2) * 1e3,
+                        self.client.unanswered)
+
+  def run(self, bufs: dict, transforms: dict[str, np.ndarray],
+          inputs: dict[str, np.ndarray], after_enqueue: Callable[[], None] | None = None) -> dict[str, np.ndarray]:
+    self._take_inputs(bufs, transforms, inputs)
+    t0 = time.perf_counter()
+    data, t1, t2 = self._warp()
+    seq, telemetry = self._send(data, after_enqueue is not None)
+    t3 = time.perf_counter()
     # publish health while the Jetson works
     if after_enqueue is not None:
       after_enqueue()
     elif telemetry:
       self.log_telemetry()
     callback_done = time.perf_counter()
-    # blocks like a chestnut frame; a long frame is a dropped camera frame.
+    # blocks like a chestnut frame, but not past HOLD_FRAME once there is an
+    # output to publish again: a frame that long is a dropped camera frame.
     # Only a stall past the client's deadline raises, into the joining
     # state's demotion to the small model
-    model_output = self.client.infer_end(seq)
+    hold = None
+    if HOLD_FRAME and self.client.last_output is not None:
+      hold = HOLD_FRAME - (callback_done - t0)
+    model_output = self.client.infer_end(seq, hold=hold)
     t4 = time.perf_counter()
+    self.frame_held = model_output is None
+    if self.frame_held:
+      self.trips.held += 1
+      model_output = self.client.last_output
     self.trips.record(t4 - t0, self.client.last_timings[2])
     # a frame past the budget is a dropped camera frame and three in a row
     # are modeldLagging; send against reply says which end it was
-    if self._frame_id <= 3 or t4 - t0 > SLOW_FRAME:
+    if self._frame_id <= 3 or t4 - t0 > SLOW_FRAME or self.frame_held:
       # persisted on the comma so a drive can separate server execution from
       # receive stalls once the Jetson is offline; server total excludes USB
       gpu_us, queue_us, total_us = self.client.last_timings
-      self._log.warning("jetlink: frame %d warp %.1f data %.1f send %.1f reply %.1f ms; "
+      self._log.warning("jetlink: frame %d warp %.1f data %.1f send %.1f reply %.1f ms%s; "
                         "server gpu %.1f queue %.1f total %.1f ms", self._frame_id,
                         (t1 - t0) * 1e3, (t2 - t1) * 1e3, (t3 - t2) * 1e3, (t4 - t3) * 1e3,
+                        ' held, the previous output again' if self.frame_held else '',
                         gpu_us / 1e3, queue_us / 1e3, total_us / 1e3)
       receive = getattr(self.client.t, 'last_receive', {})
       self._log.warning("jetlink: frame %d health %.1f wait %.1f ms; "

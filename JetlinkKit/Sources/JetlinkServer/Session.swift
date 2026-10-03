@@ -527,6 +527,10 @@ final class Session: @unchecked Sendable {
       }
       if let server = number("server_ms") { line += ", server \(server) ms" }
       if let over = number("over") { line += ", \(Int(over)) over 50 ms" }
+      // a frame whose reply was late published the one before it again; a
+      // shadowed frame went out with the small model driving, never waited for
+      if let held = number("held"), held > 0 { line += ", \(Int(held)) held" }
+      if let shadowed = number("shadowed"), shadowed > 0 { line += "; \(Int(shadowed)) more ran with the small model driving" }
     }
     if let drops = number("drops"), let lags = number("lags") {
       line += "; handed back for a lost link \(Int(drops)) and for lag \(Int(lags)) times this drive"

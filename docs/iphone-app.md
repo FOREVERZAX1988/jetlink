@@ -101,7 +101,9 @@ whether the comma restarted. Do it once for each way round the cable can go.
 
 Open **Logs** in the app after the drive. Each time the comma stops using the
 link it says why (behind, lost, stopped) with what it measured: the whole
-frame as the comma waited on it, which the phone cannot see from its side.
+frame as the comma waited on it, which the phone cannot see from its side,
+how many frames it held (a reply that came too late, the previous plan kept
+for one frame) and how many the phone ran while the small model was driving.
 Send that log with the comma's:
 
 ```bash

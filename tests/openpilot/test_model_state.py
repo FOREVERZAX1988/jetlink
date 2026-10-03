@@ -61,14 +61,42 @@ class FakeClient:
     self.t = SimpleNamespace(link_info=lambda: {'kind': kind})
     self.output = np.zeros(18452, np.float32)
     self.output[slice(*SLICES['hidden_state'])] = 0.5
+    self.last_output = None
+    self._in_flight = []
+    # frames (by seq) whose reply is not back within the hold, and the holds
+    # run() asked for
+    self.late = set()
+    self.holds = []
+    self.drains = 0
+    self.waiting = 0.0
 
   def infer_begin(self, data, packed, frame_id, reset=False, want_state=False):
     self.sent.append((np.frombuffer(bytes(data), np.uint8).copy(), np.array(packed, copy=True), frame_id, reset))
     self.asked.append(want_state)
+    self._in_flight.append(frame_id)
     return frame_id
 
-  def infer_end(self, seq):
+  def infer_end(self, seq, hold=None):
+    self.holds.append(hold)
+    if hold is not None and seq in self.late:
+      return None
+    self._in_flight.remove(seq)
+    self.last_output = self.output
     return self.output
+
+  def drain(self):
+    self.drains += 1
+    answered, self._in_flight = len(self._in_flight), []
+    if answered:
+      self.last_output = self.output
+    return answered
+
+  def waiting_for(self):
+    return self.waiting
+
+  @property
+  def unanswered(self):
+    return len(self._in_flight)
 
 
 class ModelStateTest(unittest.TestCase):
@@ -85,21 +113,33 @@ class ModelStateTest(unittest.TestCase):
     return model_state.JetlinkModelState(1928, 1208, client, spec, object(), face=face, log=self.log,
                                          event=lambda name, **fields: self.events.append((name, fields)))
 
-  def run_frames(self, inputs: dict, n: int = 3, client=None, warp_output=None, after_enqueue=None):
+  def run_frames(self, inputs: dict, n: int = 3, client=None, warp_output=None, after_enqueue=None, shadow: int = 0):
+    """`shadow` frames sent without waiting, then `n` driven. Returns the
+    spec, the state, the client and the warped frame every frame carried."""
     spec = spec_for(inputs)
     client = client or FakeClient()
     warped = np.arange(np.prod(spec.warped_shape), dtype=np.uint64).astype(np.uint8)
     warp_output = warp_output or SimpleNamespace(data=lambda: warped)
     with mock.patch.object(model_state, 'call_warp', return_value=warp_output):
       state = self.make(spec, client)
-      bufs = {k: SimpleNamespace(data=np.zeros(8, np.uint8)) for k in ('img', 'big_img')}
-      for i in range(n):
-        desire = np.zeros(8, np.float32)
-        desire[3] = 1.0 if i >= 1 else 0.0   # held from frame 1: a pulse on 1 only
-        state.run(bufs, {'img': np.eye(3), 'big_img': np.eye(3)},
-                  {'desire_pulse': desire, 'traffic_convention': np.array([1, 0], np.float32),
-                   'action_t': np.array([0.1, 0.2], np.float32)}, after_enqueue)
+      self.frames(state, n, after_enqueue, shadow)
     return spec, state, client, warped
+
+  @staticmethod
+  def frames(state, n: int, after_enqueue=None, shadow: int = 0) -> list:
+    bufs = {k: SimpleNamespace(data=np.zeros(8, np.uint8)) for k in ('img', 'big_img')}
+    outs = []
+    for i in range(shadow + n):
+      desire = np.zeros(8, np.float32)
+      desire[3] = 1.0 if i >= 1 else 0.0   # held from frame 1: a pulse on 1 only
+      args = (bufs, {'img': np.eye(3), 'big_img': np.eye(3)},
+              {'desire_pulse': desire, 'traffic_convention': np.array([1, 0], np.float32),
+               'action_t': np.array([0.1, 0.2], np.float32)})
+      if i < shadow:
+        state.shadow(*args)
+      else:
+        outs.append(state.run(*args, after_enqueue))
+    return outs
 
 
 class TestWire(ModelStateTest):
@@ -151,7 +191,7 @@ class TestWire(ModelStateTest):
     self.assertEqual((summary['frames'], summary['over']), (100, 1))
     self.assertEqual((summary['p50_ms'], summary['max_ms'], summary['server_ms']), (30.0, 200.0, 25.0))
     self.assertEqual(summary['p99_ms'], 30.0, 'p99 is the 99th of a hundred, as the server takes it')
-    self.assertEqual(model_state.Trips().summary(), {'frames': 0, 'over': 0, 'held_s': 0.0})
+    self.assertEqual(model_state.Trips().summary(), {'frames': 0, 'over': 0, 'held': 0, 'shadowed': 0, 'held_s': 0.0})
 
   def test_usb_keeps_the_host_copy(self):
     _, state, _, _ = self.run_frames(STATEFUL)
@@ -183,6 +223,80 @@ class TestWire(ModelStateTest):
     self.run_frames(STATEFUL, n=4)
     timed = [line for line in self.log.lines('warning') if ' warp ' in line]
     self.assertEqual([line.split()[2] for line in timed], ['1', '2', '3'])
+
+
+class TestShadow(ModelStateTest):
+  """Frames sent while the small model drives: the host runs every one, so it
+  is warm and current at the swap, and nothing waits for it."""
+
+  def test_a_shadow_frame_is_sent_and_never_waited_for(self):
+    spec, state, client, warped = self.run_frames(STATEFUL, n=0, shadow=3)
+    self.assertEqual([f[2] for f in client.sent], [1, 2, 3])
+    self.assertEqual([f[3] for f in client.sent], [True, False, False], 'the first frame carries the reset')
+    for data, *_ in client.sent:
+      np.testing.assert_array_equal(data, warped)
+    self.assertEqual(client.holds, [], 'a shadow frame waits for nothing')
+    self.assertEqual(client.drains, 3, 'what came back is read before each send')
+    self.assertEqual((state.trips.shadowed, state.trips.frames), (3, 0))
+    self.assertEqual(state.trips.summary()['shadowed'], 3)
+
+  def test_the_first_driving_frame_after_shadows_carries_no_reset_and_is_held_if_late(self):
+    client = FakeClient()
+    client.late = {3}
+    _, state, client, _ = self.run_frames(STATEFUL, n=1, client=client, shadow=2)
+    self.assertEqual([f[3] for f in client.sent], [True, False, False])
+    # the newest shadow reply is the output a late first frame publishes
+    self.assertTrue(state.frame_held)
+    self.assertEqual(state.trips.held, 1)
+
+  def test_a_host_that_answers_nothing_is_abandoned(self):
+    client = FakeClient()
+    client.waiting = model_state.SHADOW_TIMEOUT + 0.1
+    from jetlink.transport.base import LinkError
+    with self.assertRaises(LinkError):
+      self.run_frames(STATEFUL, n=0, client=client, shadow=1)
+    self.assertEqual(client.sent, [], 'nothing more goes to a host that has gone quiet')
+
+  def test_the_first_shadow_frames_are_timed_in_the_log(self):
+    self.run_frames(STATEFUL, n=0, shadow=4)
+    timed = [line for line in self.log.lines('warning') if 'shadow frame' in line]
+    self.assertEqual([line.split()[3] for line in timed], ['1', '2', '3'])
+
+
+class TestHold(ModelStateTest):
+  """A reply not back HOLD_FRAME into the frame is not waited for: the
+  previous output goes out again and the camera frame is not dropped."""
+
+  def test_a_late_reply_publishes_the_previous_output_once(self):
+    client = FakeClient()
+    client.late = {2}
+    spec = spec_for(STATEFUL)
+    warped = SimpleNamespace(data=lambda: np.zeros(np.prod(spec.warped_shape), np.uint8))
+    with mock.patch.object(model_state, 'call_warp', return_value=warped):
+      state = self.make(spec, client)
+      client.output[slice(*SLICES['plan'])] = 1.0
+      first, = self.frames(state, 1)
+      client.output = client.output.copy()
+      client.output[slice(*SLICES['plan'])] = 2.0
+      held, after = self.frames(state, 2)
+    self.assertTrue((first['plan'] == 1.0).all())
+    self.assertTrue((held['plan'] == 1.0).all(), 'the frame before, again')
+    self.assertTrue((after['plan'] == 2.0).all(), 'and the next frame its own')
+    self.assertEqual(state.trips.held, 1)
+    self.assertFalse(state.frame_held)
+    self.assertTrue(any('held' in line for line in self.log.lines('warning')))
+
+  def test_the_hold_is_the_rest_of_the_frame_budget(self):
+    _, state, client, _ = self.run_frames(STATEFUL, n=3)
+    self.assertIsNone(client.holds[0], 'nothing to publish again yet: the first frame waits')
+    for hold in client.holds[1:]:
+      self.assertGreater(hold, 0.0)
+      self.assertLessEqual(hold, model_state.HOLD_FRAME)
+
+  def test_with_the_hold_off_every_frame_waits(self):
+    with mock.patch.object(model_state, 'HOLD_FRAME', None):
+      _, _, client, _ = self.run_frames(STATEFUL, n=3)
+    self.assertEqual(client.holds, [None, None, None])
 
 
 class TestTheFace(ModelStateTest):

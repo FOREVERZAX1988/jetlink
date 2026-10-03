@@ -35,12 +35,22 @@ class FakeModel:
     self.raises = None
     self.closed = False
     self.warmed = False
+    # the large model's: frames sent while the small model drove, and whether
+    # the last run() published the frame before it
+    self.shadows = 0
+    self.shadow_raises = None
+    self.frame_held = False
 
   def run(self, bufs, transforms, inputs, after_enqueue=None):
     self.calls += 1
     if self.raises is not None:
       raise self.raises
     return {'from': self.name}
+
+  def shadow(self, bufs, transforms, inputs):
+    self.shadows += 1
+    if self.shadow_raises is not None:
+      raise self.shadow_raises
 
   def warmup(self):
     self.warmed = True
@@ -112,11 +122,12 @@ class JoiningBase(unittest.TestCase):
       t.join(5)
 
   def _wait_joined(self, s, timeout=5.0):
-    # connect() returning is not publication: wait for the owner to hand off.
+    # connect() returning is not publication: wait for the owner to hand off,
+    # or for a frame to have taken the join up and built the large model
     deadline = time.monotonic() + timeout
-    while s._joined is None and time.monotonic() < deadline:
+    while s._joined is None and s._big is None and time.monotonic() < deadline:
       time.sleep(0.001)
-    self.assertIsNotNone(s._joined)
+    self.assertTrue(s._joined is not None or s._big is not None, 'never joined')
 
   def _run(self, s):
     s._engagement_updated = time.monotonic()
@@ -652,6 +663,79 @@ class JoiningTest(JoiningBase):
     self.assertEqual(s.big_model_state, 'retrying')
 
 
+class ShadowTest(JoiningBase):
+  """From the join on, every frame goes to the large model; the small model
+  drives until the window opens, and the swap changes only whose output is
+  published."""
+
+  def test_every_frame_goes_to_the_large_model_from_the_join_on(self):
+    booted = threading.Event()
+    connect = self._connect
+
+    def after_boot(should_stop=None):
+      booted.wait(5)
+      return connect()
+
+    self._connect = after_boot
+    s = self._state()
+    self.addCleanup(booted.set)
+    self.assertEqual(self._run(s), {'from': 'small'})
+    self.assertEqual(self.big.shadows, 0, 'nothing to send to before the join')
+    booted.set()
+    self._wait_joined(s)
+    for n in (1, 2, 3):
+      self.assertEqual(self._run(s), {'from': 'small'})
+      self.assertEqual(self.big.shadows, n)
+    self.assertEqual(s.big_model_state, 'ready')
+    s._engaged = False
+    self.assertEqual(self._run(s), {'from': 'big'})
+    self.assertEqual(self.big.shadows, 3, 'a driving model is not shadowed')
+    self.assertEqual(self.big.calls, 1)
+
+  def test_the_build_is_on_the_frame_after_the_join_and_the_swap_builds_nothing(self):
+    build = mock.Mock(wraps=self._build)
+    s = self._make(self.small, self._connect, build)
+    self.addCleanup(self._close, s)
+    self._wait_joined(s)
+    self.assertEqual(self._run(s), {'from': 'small'})
+    build.assert_called_once()
+    self.assertIsNone(s._joined)
+    self.assertTrue(s.big_model_available)
+    s._engaged = False
+    self.assertEqual(self._run(s), {'from': 'big'})
+    build.assert_called_once()
+    self.assertFalse(self.big.warmed)
+    self.assertTrue(any('every frame from here' in line for line in self.log.lines('warning')))
+
+  def test_a_link_that_fails_with_the_small_model_driving_is_lost_not_handed_back(self):
+    s = self._state()
+    self._wait_joined(s)
+    self.assertEqual(self._run(s), {'from': 'small'})
+    self.big.shadow_raises = RuntimeError('peer closed the connection')
+    handovers = s.handovers
+    self.assertEqual(self._run(s), {'from': 'small'})
+    self.assertEqual(s.handovers, handovers, 'the small model drove throughout')
+    self.assertEqual((s._drops, s._lags), (1, 0))
+    self.assertFalse(s.big_model_available)
+    self.assertEqual(s.big_model_state, 'retrying')
+    for _ in range(200):
+      if self.big.closed:
+        break
+      time.sleep(0.01)
+    self.assertTrue(self.big.closed)
+    self.assertGreater(s._rejoin_at, 0.0)
+
+  def test_closing_closes_a_large_model_that_is_not_driving(self):
+    s = self._state()
+    self._wait_joined(s)
+    self.assertEqual(self._run(s), {'from': 'small'})
+    self.big.client = mock.Mock(dead=False)
+    s.close()
+    s.close()
+    self.assertTrue(self.big.closed)
+    self.big.client.leave.assert_called_once_with('stopped', drops=0, lags=0)
+
+
 class LagTest(JoiningBase):
   """A large model that answers, but late, is handed back as if it were lost.
 
@@ -733,6 +817,15 @@ class LagTest(JoiningBase):
     self.frame(took=joining.LATE_FRAME + 0.01)
     self.frame()
 
+  def hold(self):
+    """One frame whose reply was late: the large model published the frame
+    before it again (model_state.HOLD_FRAME), inside the budget."""
+    self.big.frame_held = True
+    try:
+      return self.frame(took=0.046)
+    finally:
+      self.big.frame_held = False
+
   def assert_big_drives(self):
     self.assertEqual(self.frame(), {'from': 'big'})
     self.assertTrue(self.s.chestnut)
@@ -792,6 +885,66 @@ class LagTest(JoiningBase):
     self.frame(took=joining.SLOW_FRAME + 0.005)
     self.assert_big_drives()
     self.reset.assert_not_called()
+
+  def test_a_held_frame_is_published_and_forgiven(self):
+    handovers = self.s.handovers
+    self.assertEqual(self.hold(), {'from': 'big'})
+    self.assert_big_drives()
+    self.assertEqual(self.s.handovers, handovers)
+    self.assertEqual(self.s._lags, 0)
+
+  def test_holds_in_a_row_hand_back(self):
+    for _ in range(joining.HOLDS_IN_A_ROW):
+      self.assertEqual(self.hold(), {'from': 'big'})
+    self.assertEqual(self.frame(), {'from': 'small'})
+    self.assertEqual((self.s._lags, self.s._drops), (1, 0))
+    self.assertTrue(any('held' in line for line in self.log.lines('warning')))
+
+  def test_holds_spread_over_the_window_hand_back_past_the_allowance(self):
+    for _ in range(joining.HOLDS_ALLOWED):
+      self.assertEqual(self.hold(), {'from': 'big'})
+      self.assert_big_drives()   # never in a row
+      self.skew += 0.1
+    self.assertEqual(self.hold(), {'from': 'big'}, 'the one past the allowance is published as it came')
+    self.assertEqual(self.frame(), {'from': 'small'})
+    self.assertEqual(self.s._lags, 1)
+
+  def test_holds_further_apart_than_the_window_allows_are_weather(self):
+    for _ in range(joining.HOLDS_ALLOWED * 2):
+      self.assertEqual(self.hold(), {'from': 'big'})
+      self.assert_big_drives()
+      self.skew += joining.LAG_WINDOW / joining.HOLDS_ALLOWED * 1.1
+    self.assertEqual(self.s._lags, 0)
+
+  def test_the_next_large_model_starts_with_no_holds_against_it(self):
+    for _ in range(joining.HOLDS_ALLOWED):
+      self.hold()
+      self.assert_big_drives()
+    self.hand_back()
+    self.rejoin()
+    for _ in range(joining.HOLDS_ALLOWED):
+      self.assertEqual(self.hold(), {'from': 'big'})
+      self.assert_big_drives()
+    self.assertEqual(self.s._lags, 1)
+
+  def test_the_large_model_runs_every_frame_again_after_a_hand_back(self):
+    shadows = self.big.shadows
+    self.hand_back()
+    self.assertEqual(self.frame(), {'from': 'small'})
+    self.assertEqual(self.big.shadows, shadows, 'a model handed back is retired, not shadowed')
+    self.s._rejoin_at = 0.0
+    self.s._rejoin.set()
+    self._wait_joined(self.s)
+    # engaged through the rejoin: the new large model runs every frame
+    # without driving, and swaps in with no build when the window opens
+    self.s._engaged = True
+    for _ in range(3):
+      self.assertEqual(self.frame(), {'from': 'small'})
+    self.assertEqual(self.big.shadows, shadows + 3)
+    self.assertEqual(self.s.big_model_state, 'ready')
+    self.s._engaged = False
+    self.swap()
+    self.settle()
 
   def test_lag_never_blames_the_cable(self):
     for _ in range(joining.DROPS_TO_BLAME_CABLE):
