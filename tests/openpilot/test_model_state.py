@@ -131,6 +131,28 @@ class TestWire(ModelStateTest):
     for data, *_ in client.sent:
       np.testing.assert_array_equal(data, frame)
 
+  def test_every_frame_is_measured_for_the_leave(self):
+    # the whole frame as modeld waits on it, against the server's own total;
+    # the phone's log carries only the latter without this
+    spec, state, client, warped = self.run_frames(STATEFUL)
+    self.assertEqual(state.trips.frames, 3)
+    summary = state.trips.summary()
+    self.assertEqual(summary['frames'], 3)
+    self.assertEqual(summary['over'], 0)
+    for key in ('held_s', 'p50_ms', 'p99_ms', 'max_ms', 'server_ms'):
+      self.assertIn(key, summary)
+
+  def test_trips_summarise_the_frames_kept(self):
+    trips = model_state.Trips()
+    for _ in range(99):
+      trips.record(0.030, 25_000)
+    trips.record(0.200, 25_000)
+    summary = trips.summary()
+    self.assertEqual((summary['frames'], summary['over']), (100, 1))
+    self.assertEqual((summary['p50_ms'], summary['max_ms'], summary['server_ms']), (30.0, 200.0, 25.0))
+    self.assertEqual(summary['p99_ms'], 30.0, 'p99 is the 99th of a hundred, as the server takes it')
+    self.assertEqual(model_state.Trips().summary(), {'frames': 0, 'over': 0, 'held_s': 0.0})
+
   def test_usb_keeps_the_host_copy(self):
     _, state, _, _ = self.run_frames(STATEFUL)
     self.assertFalse(state.send_from_gpu)

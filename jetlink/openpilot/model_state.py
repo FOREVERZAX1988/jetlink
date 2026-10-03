@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import os
 import time
+from collections import deque
 from collections.abc import Callable
 
 import numpy as np
@@ -42,6 +43,40 @@ SLOW_FRAME = 0.05  # the full 20 Hz budget, not just the largest outliers
 TELEMETRY_EVERY = 2
 # telemetry goes to the log at most this often
 TELEMETRY_PERIOD = 1.0
+# frames Trips keeps the timings of: a minute at 20 Hz
+TRIPS_KEPT = 1200
+
+
+class Trips:
+  """What the comma measures of its frames over the link: the whole run, warp
+  to parsed output, which is the frame as modeld waits on it, against the
+  server's own total, which is all the server can see. Summarised for the
+  leave (JetlinkClient.leave), so a phone's log carries the half of the frame
+  budget it cannot measure. Bounded to the last TRIPS_KEPT frames."""
+
+  def __init__(self):
+    self.frames = 0
+    self.over = 0            # frames past SLOW_FRAME, the whole 20 Hz budget
+    self.started = time.monotonic()
+    self._whole_ms: deque[float] = deque(maxlen=TRIPS_KEPT)
+    self._server_ms: deque[float] = deque(maxlen=TRIPS_KEPT)
+
+  def record(self, whole_s: float, server_us: int) -> None:
+    self.frames += 1
+    if whole_s > SLOW_FRAME:
+      self.over += 1
+    self._whole_ms.append(whole_s * 1e3)
+    self._server_ms.append(server_us / 1e3)
+
+  def summary(self) -> dict:
+    """frames, over, held_s, and over the frames kept: p50_ms, p99_ms, max_ms
+    of the whole frame and server_ms, the server's mean total."""
+    out = {'frames': self.frames, 'over': self.over, 'held_s': round(time.monotonic() - self.started, 1)}
+    if self._whole_ms:
+      whole = sorted(self._whole_ms)
+      out.update(p50_ms=round(whole[len(whole) // 2], 1), p99_ms=round(whole[int(0.99 * (len(whole) - 1))], 1),
+                 max_ms=round(whole[-1], 1), server_ms=round(sum(self._server_ms) / len(self._server_ms), 1))
+    return out
 
 
 class JetlinkModelState:
@@ -118,6 +153,7 @@ class JetlinkModelState:
     self._need_reset = True
     self._frame_id = 0
     self._last_logged = 0.0
+    self.trips = Trips()
 
   def slice_outputs(self, model_outputs: np.ndarray, output_slices: dict[str, slice]) -> dict[str, np.ndarray]:
     return {k: model_outputs[np.newaxis, v] for k, v in output_slices.items()}
@@ -186,6 +222,7 @@ class JetlinkModelState:
     # state's demotion to the small model
     model_output = self.client.infer_end(seq)
     t4 = time.perf_counter()
+    self.trips.record(t4 - t0, self.client.last_timings[2])
     # a frame past the budget is a dropped camera frame and three in a row
     # are modeldLagging; send against reply says which end it was
     if self._frame_id <= 3 or t4 - t0 > SLOW_FRAME:

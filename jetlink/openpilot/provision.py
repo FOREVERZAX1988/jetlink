@@ -59,6 +59,8 @@ class ProvisioningRun:
     client, self.client = self.client, None
     if client is not None:
       try:
+        if not client.dead:
+          client.leave('provisioned')
         client.close()
       except Exception:
         self.log.exception("jetlink: error closing the link")

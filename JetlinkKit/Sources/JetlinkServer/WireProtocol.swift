@@ -55,6 +55,9 @@ public enum Wire {
     case pong = 16
     case shutdownReq = 17
     case shutdownResp = 18
+    /// The client stops using the link and says why, with what it measured;
+    /// no reply. The connection may stay for a later hello.
+    case leave = 19
   }
 
   public struct Flag: OptionSet, Sendable {

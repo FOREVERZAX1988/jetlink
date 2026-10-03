@@ -294,6 +294,19 @@ class TestTheLoan(OpenpilotTest):
     assert client.method_calls == []
     assert d.client is None
 
+  def test_closing_the_link_says_the_run_is_done_while_it_can(self):
+    d = provision.ProvisioningRun(self.parts)
+    d.client = mock.Mock(dead=False)
+    client = d.client
+    d.close_link()
+    client.leave.assert_called_once_with('provisioned')
+    client.close.assert_called_once()
+    d.client = mock.Mock(dead=True)
+    client = d.client
+    d.close_link()
+    client.leave.assert_not_called()
+    client.close.assert_called_once()
+
   def test_a_loan_is_opened_over(self):
     d = provision.ProvisioningRun(self.parts)
     loan = mock.Mock(sock=None, mount='/dev/ffs-jetlink', udc='udc0')

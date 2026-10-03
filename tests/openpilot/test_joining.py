@@ -414,6 +414,62 @@ class JoiningTest(JoiningBase):
     self.assertEqual(s._drops, 2)
     self._wait_reported(s, 'waiting for the accelerator; link dropped 2 times this drive, check the USB cable')
 
+  def test_a_lag_demote_says_why_over_the_live_link_before_closing_it(self):
+    # the phone's log carried no reason and none of the comma's numbers: a
+    # session there was the big model's time plus the backoff, and nothing
+    # said which. The leave goes first, with what the comma measured
+    s = self._state()
+    self._wait_joined(s)
+    s._engaged = False
+    self._run(s)
+    self.big.client = mock.Mock(dead=False)
+    self.big.trips = mock.Mock(summary=lambda: {'frames': 7, 'p50_ms': 41.5})
+    s.frame_drop_ratio = joining.DROP_LIMIT * 2
+    self.assertEqual(self._run(s), {'from': 'small'})
+    for _ in range(200):
+      if self.big.closed:
+        break
+      time.sleep(0.01)
+    self.assertTrue(self.big.closed)
+    self.big.client.leave.assert_called_once_with('behind', drops=0, lags=1, frames=7, p50_ms=41.5)
+
+  def test_a_lost_link_cannot_carry_a_leave(self):
+    s = self._state()
+    self._wait_joined(s)
+    s._engaged = False
+    self._run(s)
+    self.big.client = mock.Mock(dead=True)
+    self.big.raises = RuntimeError('link gone')
+    self._run(s)
+    for _ in range(200):
+      if self.big.closed:
+        break
+      time.sleep(0.01)
+    self.assertTrue(self.big.closed)
+    self.big.client.leave.assert_not_called()
+
+  def test_closing_says_stopped_once_to_whatever_holds_the_link(self):
+    # a link waiting for a window, and a large model driving: each hears
+    # modeld stop, once, however many times close() runs
+    s = self._state()
+    self._wait_joined(s)
+    pending = s._joined[0]
+    pending.dead = False
+    s.close()
+    s.close()
+    pending.leave.assert_called_once_with('stopped', drops=0, lags=0)
+    pending.close.assert_called()
+
+    s = self._state()
+    self._wait_joined(s)
+    s._engaged = False
+    self._run(s)
+    self.big.client = mock.Mock(dead=False)
+    s.close()
+    s.close()
+    self.big.client.leave.assert_called_once_with('stopped', drops=0, lags=0)
+    self.assertTrue(self.big.closed)
+
   def test_the_frame_that_loses_the_link_does_not_report_or_read_the_port(self):
     # the frame thread is SCHED_FIFO on modeld's core; params and sysfs are
     # for the join thread. The drop is only counted here
@@ -892,7 +948,7 @@ class ReplugTest(JoiningBase):
   def test_a_host_back_before_the_backoff_began_was_still_replugged(self):
     # the teardown between the loss and the backoff can take longer than a replug
     self.attached = False
-    with mock.patch.object(self.s, '_close_retired', side_effect=lambda: setattr(self, 'attached', True)):
+    with mock.patch.object(self.s, '_close_retired', side_effect=lambda *why: setattr(self, 'attached', True)):
       self.lose_the_link()
       self.assertTrue(self.connects_within(1.0))
 

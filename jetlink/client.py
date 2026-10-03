@@ -92,6 +92,8 @@ class JetlinkClient:
     self._infer_started = 0.0
     self._infer_frame_id: int | None = None
     self._infer_flags = 0
+    # seqs sent with no reply wanted (leave): an ERROR to one is not this link's
+    self._unanswered: set[int] = set()
 
   # -- construction ---------------------------------------------------------
 
@@ -176,6 +178,11 @@ class JetlinkClient:
         self._engine_state = state
     elif msg.msg_type == P.Msg.ERROR:
       e = json.loads(bytes(msg.payload))
+      if msg.seq in self._unanswered:
+        # an older server answering a message it does not know; see leave()
+        self._unanswered.discard(msg.seq)
+        log.info("the server did not take seq %d (%s: %s)", msg.seq, e.get('error'), e.get('detail'))
+        return
       raise LinkError(f"server error: {e.get('error')}: {e.get('detail')}")
 
   def _expect(self, msg_type: int, seq: int, timeout: float | None) -> Message:
@@ -233,6 +240,22 @@ class JetlinkClient:
     seq = self._next_seq()
     self.t.send_json(P.Msg.SHUTDOWN_REQ, seq, {'reason': reason})
     return json.loads(bytes(self._expect(P.Msg.SHUTDOWN_RESP, seq, timeout).payload))
+
+  def leave(self, reason: str, timeout: float = 0.5, **measured) -> None:
+    """Say why this client stops using the link, and what it measured over it
+    (JetlinkModelState.trips): the server logs both next to its own numbers,
+    which are the half the comma cannot see, and the other way round. No reply
+    is read, and the connection stays: a later hello starts a new session over
+    it. An older server answers ERROR unknown_message, which _dispatch discards
+    by this seq. Never raises; a send that fails leaves the link as dead as it
+    found it."""
+    seq = self._next_seq()
+    self._unanswered.add(seq)
+    try:
+      self.t.send(P.Msg.LEAVE, seq, (json.dumps({'reason': reason, **measured}).encode(),), timeout=timeout)
+    except LinkError as e:
+      self.dead = True
+      log.warning("could not say why the link is left (%s)", e)
 
   # -- model provisioning ---------------------------------------------------
 

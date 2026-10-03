@@ -17,6 +17,8 @@ final class Session: @unchecked Sendable {
   private var lastSeq: UInt32 = 0
   private(set) var request: Request?
   private(set) var frames = 0
+  /// The frames this session served, for its summary when it ends.
+  private var trips = SessionTrips()
   /// Has this connection reported a link? At once for a connection someone
   /// made, on the first message over USB (`MessageLink.connectsOnOpen`). A
   /// session that ends unannounced was a gadget nobody on the comma served.
@@ -59,6 +61,11 @@ final class Session: @unchecked Sendable {
   }
 
   var peer: String { transport.peer }
+  /// Who said hello here, as the log names them.
+  var who: String { client.isEmpty ? "an unnamed client" : client }
+
+  /// One line on what this session served, or nil when it served nothing.
+  var summary: String? { trips.summary }
 
   // MARK: plumbing
 
@@ -180,6 +187,7 @@ final class Session: @unchecked Sendable {
     case .uploadDone: try onUploadDone(message)
     case .stateReq: try onState(message)
     case .shutdownReq: try onShutdown(message)
+    case .leave: onLeave(message)
     default: try error(message.seq, "unknown_message", "type \(message.msgType)")
     }
   }
@@ -362,6 +370,7 @@ final class Session: @unchecked Sendable {
     guard reply.ran else { return }
     let sendUs = microseconds(since: sendStarted)
     frames += 1
+    trips.record(totalUs: reply.totalUs)
     if reply.totalUs > FrameStats.slowUs || sendUs > 10_000 {
       log.warning(
         "slow frame \(reply.frameID): gpu \(Double(reply.gpuUs) / 1000) queue \(Double(reply.queueUs) / 1000) total \(Double(reply.totalUs) / 1000) send \(Double(sendUs) / 1000) ms"
@@ -494,6 +503,38 @@ final class Session: @unchecked Sendable {
     host.emit(.shutdownRequested(reason: reason))
   }
 
+  /// The comma says why it stops using the link, and what it measured over
+  /// it: the whole frame as modeld waited on it, which this end never sees.
+  /// Logged next to this session's own numbers; nothing is sent back.
+  private func onLeave(_ message: Message) {
+    let d = JSONLine.decode(message.payload) ?? [:]
+    let reason: String
+    switch d["reason"] as? String {
+    case "behind": reason = "modeld fell behind the large model"
+    case "lost": reason = "the comma lost the link"
+    case "stopped": reason = "modeld stopped"
+    case "provisioned": reason = "the provisioning run finished"
+    case let other?: reason = other
+    case nil: reason = "no reason given"
+    }
+    var line = "\(who) is leaving: \(reason)"
+    func number(_ key: String) -> Double? { (d[key] as? NSNumber)?.doubleValue }
+    if let frames = number("frames") {
+      line += "; the comma measured \(Int(frames)) frames"
+      if let held = number("held_s") { line += " in \(held) s" }
+      if let p50 = number("p50_ms"), let p99 = number("p99_ms"), let max = number("max_ms") {
+        line += ": whole frame p50 \(p50) p99 \(p99) max \(max) ms"
+      }
+      if let server = number("server_ms") { line += ", server \(server) ms" }
+      if let over = number("over") { line += ", \(Int(over)) over 50 ms" }
+    }
+    if let drops = number("drops"), let lags = number("lags") {
+      line += "; handed back for a lost link \(Int(drops)) and for lag \(Int(lags)) times this drive"
+    }
+    log.warning(line)
+    if let summary { log.info("this session served \(summary)") }
+  }
+
   private func onState(_ message: Message) throws {
     let (sha, skip) = wanted()
     let status = host.status(sha, frameSkip: skip)
@@ -503,6 +544,41 @@ final class Session: @unchecked Sendable {
     response["loaded"] = host.loadedSHA() ?? NSNull()
     response["frames_served"] = frames
     try sendJSON(.stateResp, seq: message.seq, response)
+  }
+}
+
+/// The frames one session served: a count, the slow ones, and a 1 ms
+/// histogram of the server's total, so p50 and p99 cost a bucket increment a
+/// frame and nothing on the hot path allocates.
+struct SessionTrips {
+  private var buckets = [UInt32](repeating: 0, count: 1001)
+  private var count = 0
+  private var slow = 0
+  private var maxUs: UInt32 = 0
+  private let started = ProcessInfo.processInfo.systemUptime
+
+  mutating func record(totalUs: UInt32) {
+    count += 1
+    if totalUs > FrameStats.slowUs { slow += 1 }
+    if totalUs > maxUs { maxUs = totalUs }
+    buckets[min(1000, Int(totalUs / 1000))] += 1
+  }
+
+  /// The value at `fraction` of the sorted frames, as FrameStats takes p99.
+  private func percentile(_ fraction: Double) -> Int {
+    let wanted = Int(fraction * Double(count - 1)) + 1
+    var seen = 0
+    for (ms, n) in buckets.enumerated() {
+      seen += Int(n)
+      if seen >= wanted { return ms }
+    }
+    return 1000
+  }
+
+  var summary: String? {
+    guard count > 0 else { return nil }
+    let held = Int((ProcessInfo.processInfo.systemUptime - started).rounded())
+    return "\(count) frames in \(held) s, total p50 \(percentile(0.5)) p99 \(percentile(0.99)) max \(maxUs / 1000) ms, \(slow) slow"
   }
 }
 

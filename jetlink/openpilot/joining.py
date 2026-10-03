@@ -87,6 +87,9 @@ PING_TIMEOUT = 2.0
 # why a demote happened, as the log and the UI say it
 LOST = 'lost the accelerator'
 BEHIND = 'the accelerator fell behind'
+# and as the leave says it to the server (protocol.Msg.LEAVE); 'stopped' is
+# modeld's exit
+LEAVING = {LOST: 'lost', BEHIND: 'behind'}
 
 
 class JoiningModelState:
@@ -395,14 +398,34 @@ class JoiningModelState:
     if self._reset_small is not None:
       self._reset_small()
 
-  def _close_retired(self) -> None:
+  def _close_retired(self, why: str | None = None) -> None:
     with self._lock:
       retired, self._retired = self._retired, None
-    if retired is not None:
-      try:
-        retired.close()
-      except Exception:
-        self._log.exception('jetlink: closing the retired link')
+    if retired is None:
+      return
+    if why is not None:
+      self._leave(retired, LEAVING.get(why, why))
+    try:
+      retired.close()
+    except Exception:
+      self._log.exception('jetlink: closing the retired link')
+
+  def _leave(self, model, reason: str) -> None:
+    """Tell the server why the large model `model` stops using its link, with
+    what the comma measured over it (model_state.Trips). Off the frame thread."""
+    self._say_leaving(getattr(model, 'client', None), reason, getattr(model, 'trips', None))
+
+  def _say_leaving(self, client, reason: str, trips=None) -> None:
+    """JetlinkClient.leave, where the link is still up to carry it: a lost one
+    is not, and says nothing."""
+    leave = getattr(client, 'leave', None)
+    if leave is None or getattr(client, 'dead', True):
+      return
+    measured = trips.summary() if trips is not None else {}
+    try:
+      leave(reason, drops=self._drops, lags=self._lags, **measured)
+    except Exception:
+      self._log.exception("jetlink: could not say why the link is left")
 
   def _back_off(self) -> None:
     """Push the next attempt out, further each time one fails on its heels.
@@ -469,6 +492,7 @@ class JoiningModelState:
       # no timeout: once joined there is nothing to poll for, and close() sets
       # this. An idle wake per second is not free on modeld's core
       self._rejoin.wait()
+      why = None
       if self._demoted and not self._stop.is_set():
         # before the teardown below, which can block: the port is read about
         # when it let go. Not after close(), which has cleared the progress
@@ -476,7 +500,7 @@ class JoiningModelState:
         self._note_link_loss(why)
       # unbind and reader joins can block; only this thread does teardown,
       # and it finishes before opening another link
-      self._close_retired()
+      self._close_retired(why)
       if self._stop.is_set():
         return
       self._rejoin.clear()
@@ -570,6 +594,7 @@ class JoiningModelState:
       self._engagement_updated = time.monotonic()
 
   def close(self) -> None:
+    first = not self._stop.is_set()   # the leave is said once; cleanups close twice
     self._stop.set()
     self._available = False
     self._rejoin.set()
@@ -577,9 +602,13 @@ class JoiningModelState:
     with self._lock:
       joined, self._joined = self._joined, None
     if joined is not None:
+      if first:
+        self._say_leaving(joined[0], 'stopped')
       joined[0].close()
     close = getattr(self._active, 'close', None)
     if close is not None and self._active is not self._small:
+      if first:
+        self._leave(self._active, 'stopped')
       close()
 
 

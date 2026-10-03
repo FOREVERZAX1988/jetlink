@@ -107,10 +107,14 @@ class TcpTransport(StreamTransport):
     return n
 
   def close(self) -> None:
-    try:
-      self.sock.close()
-    except OSError:
-      pass
+    # shut down first: a close alone keeps the connection up while another
+    # process holds a copy of the socket (the comma's gadget owner holds the
+    # phone's dial), and the peer hears nothing until that copy goes too
+    for let_go in (lambda: self.sock.shutdown(socket.SHUT_RDWR), self.sock.close):
+      try:
+        let_go()
+      except OSError:
+        pass
 
 
 def _tune(sock: socket.socket) -> None:
