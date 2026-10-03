@@ -20,16 +20,18 @@ object Chip {
         get() = manufacturer.equals("QTI", ignoreCase = true) || manufacturer.equals("Qualcomm", ignoreCase = true)
 
     /** A Google Tensor whose NPU LiteRT compiles for: "Tensor G3" (the Pixel 8) or later. */
-    val hasTensorNpu: Boolean get() = (tensorGeneration(model) ?: 0) >= 3
+    val hasTensorNpu: Boolean by lazy { (tensorGeneration(model) ?: 0) >= 3 }
+
+    private val tensorModel = Regex("^Tensor G(\\d+)$")
 
     /** 5 for "Tensor G5", as Build.SOC_MODEL names a Pixel's SoC; null for any other. */
-    fun tensorGeneration(model: String): Int? = Regex("^Tensor G(\\d+)$").find(model.trim())?.groupValues?.get(1)?.toIntOrNull()
+    fun tensorGeneration(model: String): Int? = tensorModel.find(model.trim())?.groupValues?.get(1)?.toIntOrNull()
 
     /** What this phone's Settings offer. */
     fun processors(current: Processor): List<Processor> = Processor.choices(isQualcomm, hasTensorNpu, isEmulator, current)
 
     /** What Automatic runs on here. */
-    val automatic: Processor get() = Processor.automatic(hasTensorNpu, isEmulator)
+    val automatic: Processor by lazy { Processor.automatic(hasTensorNpu, isEmulator) }
 
     val isEmulator: Boolean
         get() = Build.HARDWARE.contains("ranchu") || Build.HARDWARE.contains("goldfish") || Build.PRODUCT.contains("sdk")

@@ -48,10 +48,11 @@ class ProcessorTest {
     @Test
     fun theOldDefaultBecomesAutomatic() {
         // every phone's default before Automatic; chosen choices stay
-        assertEquals(Processor.Auto, Processor.migrated(Processor.Gpu))
-        assertEquals(Processor.NpuGpu, Processor.migrated(Processor.NpuGpu))
-        assertEquals(Processor.Cpu, Processor.migrated(Processor.Cpu))
-        assertEquals(null, Processor.migrated(null))
+        assertEquals("auto", Settings.migratedProcessor("gpu"))
+        assertEquals("auto", Settings.migratedProcessor("litert-gpu"))
+        assertEquals(null, Settings.migratedProcessor("htp"))
+        assertEquals(null, Settings.migratedProcessor("cpu"))
+        assertEquals(null, Settings.migratedProcessor(null))
     }
 
     @Test

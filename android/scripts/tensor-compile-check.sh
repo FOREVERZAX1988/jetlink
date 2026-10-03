@@ -51,14 +51,13 @@ if [[ ! -f "$ENV_DIR/venv/installed" ]]; then
     ai-edge-litert-sdk-google-tensor==$SDK_PACKAGE ai-edge-litert==$LITERT && touch /env/venv/installed"
 fi
 
-for soc in "${SOCS[@]}"; do
-  echo "== $soc"
-  run "cd /env/tmp && /env/venv/bin/python - /env/tmp/check/model.tflite '$soc'" <<'PYTHON'
+# One after another, as aot_compile runs them: two at once would need twice
+# the memory.
+run "cd /env/tmp && /env/venv/bin/python - /env/tmp/check/model.tflite ${SOCS[*]}" <<'PYTHON'
 import sys
 from ai_edge_litert.aot import aot_compile
 from ai_edge_litert.aot.vendors.google_tensor import target
 
-result = aot_compile.aot_compile(sys.argv[1], target=[target.Target(target.SocModel(sys.argv[2]))], keep_going=True)
-print(result.compilation_report())
+targets = [target.Target(target.SocModel(soc)) for soc in sys.argv[2:]]
+print(aot_compile.aot_compile(sys.argv[1], target=targets, keep_going=True).compilation_report())
 PYTHON
-done

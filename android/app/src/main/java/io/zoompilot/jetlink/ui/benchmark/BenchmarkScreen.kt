@@ -114,7 +114,8 @@ fun BenchmarkScreen(graph: AppGraph) {
     val settings by graph.settings.values.collectAsStateWithLifecycle()
     var refusal by remember { mutableStateOf<String?>(null) }
     var starting by remember { mutableStateOf(false) }
-    val chip = remember(settings.processor) { ChipInfo.current(settings.processor.resolved(Chip.automatic)) }
+    val processor = settings.processor.resolved()
+    val chip = remember(processor) { ChipInfo.current(processor) }
     val actions = BenchmarkActions(
         start = { seconds ->
             refusal = null
@@ -153,7 +154,7 @@ fun BenchmarkScreen(graph: AppGraph) {
         BenchmarkContent(
             snapshot = snapshot,
             runState = runState,
-            processor = settings.processor.resolved(Chip.automatic).title,
+            processor = processor.title,
             chip = chip,
             refusal = refusal,
             starting = starting,

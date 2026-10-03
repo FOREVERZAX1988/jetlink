@@ -71,11 +71,6 @@ public enum LiteRtRuntime {
   #endif
 }
 
-/// What runs a compiled model.
-public enum LiteRtHardware: String, Sendable {
-  case cpu, gpu, npu
-}
-
 public struct LiteRtError: Error, CustomStringConvertible {
   public let description: String
 
@@ -100,7 +95,7 @@ enum LiteRtCompileOptions: Sendable {
   /// The NPU, the model compiled for it on the phone and kept in `compiled`,
   /// an existing directory, for the next load with the same one. Where the
   /// NPU's compiler cannot take the model, the GPU runs it as `.gpu(cache:)`
-  /// would: `hardware` tells which one did.
+  /// would: `LiteRtModel.hardware` tells which one did.
   case npu(compiled: URL, gpu: (directory: URL, key: String)?)
   /// XNNPACK on the CPU, with a pool of `threads`.
   case cpu(threads: Int)
@@ -117,41 +112,40 @@ final class LiteRtModel: @unchecked Sendable {
   init(model: URL, options: LiteRtCompileOptions) throws {
     var shim = jl_litert_options()
     var cache: (directory: URL, key: String)?
-    var compiled: URL?
+    var npuCache: URL?
     switch options {
     case .gpu(let programs):
       shim.gpu = 1
       cache = programs
     case .npu(let directory, let programs):
       shim.gpu = 1
-      shim.npu = 1
       cache = programs
-      compiled = directory
+      npuCache = directory
     case .cpu(let threads):
       shim.cpu_threads = Int32(threads)
     }
     let cacheDirectory = cache.flatMap { strdup($0.directory.path) }
     let cacheKey = cache.flatMap { strdup($0.key) }
-    let compiledDirectory = compiled.flatMap { strdup($0.path) }
+    let npuCacheDirectory = npuCache.flatMap { strdup($0.path) }
     defer {
       free(cacheDirectory)
       free(cacheKey)
-      free(compiledDirectory)
+      free(npuCacheDirectory)
     }
     shim.cache_dir = UnsafePointer(cacheDirectory)
     shim.cache_key = UnsafePointer(cacheKey)
-    shim.npu_cache_dir = UnsafePointer(compiledDirectory)
-    var made: OpaquePointer?
+    shim.npu_cache_dir = UnsafePointer(npuCacheDirectory)
+    var compiled: OpaquePointer?
     try model.path.withCString { path in
-      try LiteRtError.check(jl_litert_model_create(path, &shim, &made))
+      try LiteRtError.check(jl_litert_model_create(path, &shim, &compiled))
     }
-    guard let made else { throw LiteRtError("LiteRT returned no compiled model for \(model.lastPathComponent)") }
-    pointer = made
+    guard let compiled else { throw LiteRtError("LiteRT returned no compiled model for \(model.lastPathComponent)") }
+    pointer = compiled
     do {
-      inputs = try LiteRtModel.describe(made, output: false)
-      outputs = try LiteRtModel.describe(made, output: true)
+      inputs = try LiteRtModel.describe(compiled, output: false)
+      outputs = try LiteRtModel.describe(compiled, output: true)
     } catch {
-      jl_litert_model_release(made)
+      jl_litert_model_release(compiled)
       throw error
     }
   }
@@ -171,24 +165,25 @@ final class LiteRtModel: @unchecked Sendable {
 
   /// What runs the model: on an NPU compile, the NPU, or the GPU when the
   /// NPU's compiler could not take it.
-  var hardware: LiteRtHardware {
-    get throws {
-      var hardware: Int32 = 0
-      try LiteRtError.check(jl_litert_model_hardware(pointer, &hardware))
-      switch hardware {
-      case Int32(JL_LITERT_NPU): return .npu
-      case Int32(JL_LITERT_GPU): return .gpu
-      default: return .cpu
-      }
-    }
+  var hardware: LiteRtProfile {
+    get throws { try reads(input: 0) }
   }
 
   /// Whether the accelerator reads input `index` straight from host memory,
-  /// as the CPU does, where a GPU wants its own.
+  /// as the CPU does, where a GPU or an NPU wants its own.
   func readsHostMemory(input index: Int) throws -> Bool {
-    var host: Int32 = 0
-    try LiteRtError.check(jl_litert_model_input_host(pointer, index, &host))
-    return host != 0
+    try reads(input: index) == .cpu
+  }
+
+  /// Whose memory input `index` is read from best.
+  private func reads(input index: Int) throws -> LiteRtProfile {
+    var hardware: Int32 = 0
+    try LiteRtError.check(jl_litert_model_input_hardware(pointer, index, &hardware))
+    switch hardware {
+    case Int32(JL_LITERT_NPU): return .npu
+    case Int32(JL_LITERT_GPU): return .gpu
+    default: return .cpu
+    }
   }
 
   private static func describe(_ model: OpaquePointer, output: Bool) throws -> [TensorSpec] {

@@ -45,7 +45,7 @@ enum class Processor(val backend: Backend, val device: String, val title: String
     val usesQnn: Boolean get() = backend == Backend.Ort && device != Cpu.device
 
     /** The choice the server runs: Automatic's pick for this phone, or this one. */
-    fun resolved(automatic: Processor): Processor = if (this == Auto) automatic else this
+    fun resolved(automatic: Processor = Chip.automatic): Processor = if (this == Auto) automatic else this
 
     companion object {
         /**
@@ -84,14 +84,6 @@ enum class Processor(val backend: Backend, val device: String, val title: String
             else -> Gpu
         }
 
-        /**
-         * A choice stored before Automatic: `gpu` was every phone's default
-         * then, the only other choice off a Snapdragon was the CPU, and
-         * Automatic runs a Snapdragon on the GPU too, so it becomes
-         * Automatic. Anything else was chosen and stays.
-         */
-        fun migrated(stored: Processor?): Processor? = if (stored == Gpu) Auto else stored
-
     }
 }
 
@@ -109,7 +101,7 @@ data class SettingsValues(
 )
 
 class Settings(context: Context) {
-    private val prefs: SharedPreferences = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+    private val prefs: SharedPreferences = context.getSharedPreferences("settings", Context.MODE_PRIVATE).also(::migrate)
     private val state = MutableStateFlow(read())
     val values: StateFlow<SettingsValues> = state.asStateFlow()
 
@@ -118,7 +110,6 @@ class Settings(context: Context) {
         prefs.edit()
             .putInt(PORT, next.port)
             .putString(PROCESSOR, next.processor.device)
-            .putBoolean(PROCESSOR_AUTOMATIC, true)
             .putBoolean(KEEP_NPU_AWAKE, next.keepNpuAwake)
             .putBoolean(KEEP_CPU_AWAKE, next.keepCpuAwake)
             .putBoolean(KEEP_SCREEN_ON, next.keepScreenOn)
@@ -129,12 +120,11 @@ class Settings(context: Context) {
     private fun read(): SettingsValues {
         val defaults = SettingsValues()
         val port = prefs.getInt(PORT, defaults.port)
-        val stored = Processor.of(prefs.getString(PROCESSOR, null))
         return SettingsValues(
             port = if (port in 1..65535) port else defaults.port,
             // a QNN choice from before a phone without a Snapdragon was told apart
-            processor = (if (prefs.getBoolean(PROCESSOR_AUTOMATIC, false)) stored else Processor.migrated(stored))
-                ?.takeIf { it in Processor.choices(Chip.isQualcomm, Chip.hasTensorNpu, Chip.isEmulator, it) }
+            processor = Processor.of(prefs.getString(PROCESSOR, null))
+                ?.takeIf { it in Chip.processors(it) }
                 ?: defaults.processor,
             keepNpuAwake = prefs.getBoolean(KEEP_NPU_AWAKE, defaults.keepNpuAwake),
             keepCpuAwake = prefs.getBoolean(KEEP_CPU_AWAKE, defaults.keepCpuAwake),
@@ -142,13 +132,31 @@ class Settings(context: Context) {
         )
     }
 
-    private companion object {
-        const val PORT = "port"
-        const val PROCESSOR = "processor"
-        /** Set once the processor is stored by an app that has Automatic. */
-        const val PROCESSOR_AUTOMATIC = "processorAutomatic"
-        const val KEEP_NPU_AWAKE = "keepNpuAwake"
-        const val KEEP_CPU_AWAKE = "keepCpuAwake"
-        const val KEEP_SCREEN_ON = "keepScreenOn"
+    companion object {
+        private const val VERSION = "version"
+        private const val PORT = "port"
+        private const val PROCESSOR = "processor"
+        private const val KEEP_NPU_AWAKE = "keepNpuAwake"
+        private const val KEEP_CPU_AWAKE = "keepCpuAwake"
+        private const val KEEP_SCREEN_ON = "keepScreenOn"
+
+        /** Settings from before Automatic are version 1. */
+        private const val CURRENT = 2
+
+        /** Brings settings stored by an older app up to [CURRENT], once. */
+        private fun migrate(prefs: SharedPreferences) {
+            if (prefs.getInt(VERSION, 1) >= CURRENT) return
+            val edit = prefs.edit().putInt(VERSION, CURRENT)
+            migratedProcessor(prefs.getString(PROCESSOR, null))?.let { edit.putString(PROCESSOR, it) }
+            edit.apply()
+        }
+
+        /**
+         * A processor stored before Automatic: `gpu` was every phone's
+         * default then, the only other choice off a Snapdragon was the CPU,
+         * and Automatic runs a Snapdragon on the GPU too, so it becomes
+         * Automatic. Null leaves what is stored.
+         */
+        fun migratedProcessor(stored: String?): String? = if (Processor.of(stored) == Processor.Gpu) Processor.Auto.device else null
     }
 }

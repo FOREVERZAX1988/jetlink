@@ -24,29 +24,33 @@ public final class LiteRtEngine: EngineCore, @unchecked Sendable {
   public let label: String
   /// What runs the model: on an NPU compile, the NPU, or the GPU where the
   /// NPU's compiler could not take it.
-  public let hardware: LiteRtHardware
+  public let hardware: LiteRtProfile
   /// Whether the accelerator runs every op, none left to LiteRT's own CPU
   /// kernels.
   public let fullyAccelerated: Bool
   /// Whether the looped state stays in the accelerator's memory.
   public var stateOnDevice: Bool { !deviceState.isEmpty }
-  public override var notes: String { stateOnDevice ? "state on the \(hardware == .npu ? "NPU" : "GPU")" : "" }
+  public override var notes: String { stateOnDevice ? "state on the \(hardware.name)" : "" }
 
   private var model: LiteRtModel?
   /// Every buffer a run reads or writes, alive as long as the sets below.
   private var buffers: [LiteRtBuffer] = []
-  /// [set][signature index]: the buffers' pointers, one set without a loop,
-  /// two with one.
-  private var inputSets: [[OpaquePointer?]] = []
-  private var outputSets: [[OpaquePointer?]] = []
+  /// One set without a loop, two with one.
+  private var sets: [Binding] = []
   /// A looped pair's two GPU buffers, by its state_ input's name.
   private var deviceState: [String: [LiteRtBuffer]] = [:]
   /// Which of the GPU buffers the next run reads.
   private var phase = 0
-  /// On an NPU, per set: the host buffers copied into the NPU's own before a
-  /// run, and out of them after.
-  private var copiesIn: [[Copy]] = []
-  private var copiesOut: [[Copy]] = []
+
+  /// What one run reads and writes: the buffers' pointers in signature
+  /// order, and on an NPU the host buffers copied into the NPU's own before
+  /// the run and out of them after.
+  private struct Binding {
+    var inputs: [OpaquePointer?] = []
+    var outputs: [OpaquePointer?] = []
+    var copiesIn: [Copy] = []
+    var copiesOut: [Copy] = []
+  }
 
   private struct Copy {
     let buffer: LiteRtBuffer
@@ -56,7 +60,7 @@ public final class LiteRtEngine: EngineCore, @unchecked Sendable {
 
   /// Loads and compiles `model`. LiteRT must be open (`LiteRtRuntime.load`).
   /// `label` names what runs it, given what does.
-  init(model: URL, options: LiteRtCompileOptions, device: String, label: (LiteRtHardware) -> String) throws {
+  init(model: URL, options: LiteRtCompileOptions, device: String, label: (LiteRtProfile) -> String) throws {
     let compiled = try LiteRtModel(model: model, options: options)
     self.model = compiled
     self.device = device
@@ -111,79 +115,71 @@ public final class LiteRtEngine: EngineCore, @unchecked Sendable {
   private func rebind(_ pairs: [(input: String, output: String)]) throws {
     guard let model else { return }
     // The old wraps point into host memory that may be about to go.
-    inputSets = []
-    outputSets = []
-    copiesIn = []
-    copiesOut = []
+    sets = []
     buffers = []
     let inputOf = Dictionary(uniqueKeysWithValues: pairs.map { ($0.output, $0.input) })
-    var own: [String: LiteRtBuffer] = [:]
-    var copiesIn: [[Copy]] = []
-    var copiesOut: [[Copy]] = []
-    func host(_ spec: TensorSpec, output: Bool, index: Int, _ memory: UnsafeMutableRawPointer) throws -> OpaquePointer? {
+    // the NPU's own buffers, one per input and per output whichever set copies
+    var ownIn: [Int: LiteRtBuffer] = [:]
+    var ownOut: [Int: LiteRtBuffer] = [:]
+    func host(
+      _ spec: TensorSpec, output: Bool, index: Int, _ memory: UnsafeMutableRawPointer, into binding: inout Binding
+    ) throws -> OpaquePointer? {
       guard hardware == .npu else {
         let wrapped = try LiteRtBuffer(model, output: output, index: index, wrapping: memory, bytes: spec.byteCount)
         buffers.append(wrapped)
         return wrapped.pointer
       }
-      // one of the NPU's per tensor, whichever host buffer a set copies
-      let key = "\(output ? "out" : "in") \(spec.name)"
-      let buffer = try own[key] ?? LiteRtBuffer(model, output: output, index: index)
-      if own[key] == nil {
-        own[key] = buffer
+      let buffer: LiteRtBuffer
+      if let made = output ? ownOut[index] : ownIn[index] {
+        buffer = made
+      } else {
+        buffer = try LiteRtBuffer(model, output: output, index: index)
         buffers.append(buffer)
+        if output { ownOut[index] = buffer } else { ownIn[index] = buffer }
       }
       let copy = Copy(buffer: buffer, host: memory, bytes: spec.byteCount)
       if output {
-        copiesOut[copiesOut.count - 1].append(copy)
+        binding.copiesOut.append(copy)
       } else {
-        copiesIn[copiesIn.count - 1].append(copy)
+        binding.copiesIn.append(copy)
       }
       return buffer.pointer
     }
-    var inputSets: [[OpaquePointer?]] = []
-    var outputSets: [[OpaquePointer?]] = []
+    var sets: [Binding] = []
     for set in 0..<(pairs.isEmpty ? 1 : 2) {
-      copiesIn.append([])
-      copiesOut.append([])
-      var ins: [OpaquePointer?] = []
+      var binding = Binding()
       for (index, spec) in model.inputs.enumerated() {
         if let state = deviceState[spec.name] {
-          ins.append(state[set].pointer)
+          binding.inputs.append(state[set].pointer)
         } else {
-          ins.append(try host(spec, output: false, index: index, buffer(spec.name, parity: set)!))
+          binding.inputs.append(try host(spec, output: false, index: index, buffer(spec.name, parity: set)!, into: &binding))
         }
       }
-      var outs: [OpaquePointer?] = []
       for (index, spec) in model.outputs.enumerated() {
         if let input = inputOf[spec.name] {
           // writes what the state_ input reads next run
           if let state = deviceState[input] {
-            outs.append(state[set ^ 1].pointer)
+            binding.outputs.append(state[set ^ 1].pointer)
           } else {
-            outs.append(try host(spec, output: true, index: index, buffer(input, parity: set ^ 1)!))
+            binding.outputs.append(try host(spec, output: true, index: index, buffer(input, parity: set ^ 1)!, into: &binding))
           }
         } else {
-          outs.append(try host(spec, output: true, index: index, buffer(spec.name, parity: set)!))
+          binding.outputs.append(try host(spec, output: true, index: index, buffer(spec.name, parity: set)!, into: &binding))
         }
       }
-      inputSets.append(ins)
-      outputSets.append(outs)
+      sets.append(binding)
     }
-    self.inputSets = inputSets
-    self.outputSets = outputSets
-    self.copiesIn = copiesIn
-    self.copiesOut = copiesOut
+    self.sets = sets
   }
 
   public override func execute() throws {
     guard let model else { throw HostError.failed("engine is closed") }
-    let set = stateOnDevice ? phase : parity
-    for copy in copiesIn[set] {
+    let binding = sets[stateOnDevice ? phase : parity]
+    for copy in binding.copiesIn {
       try copy.buffer.write(from: copy.host, bytes: copy.bytes)
     }
-    try model.run(inputs: inputSets[set], outputs: outputSets[set])
-    for copy in copiesOut[set] {
+    try model.run(inputs: binding.inputs, outputs: binding.outputs)
+    for copy in binding.copiesOut {
       try copy.buffer.read(into: copy.host, bytes: copy.bytes)
     }
     if stateOnDevice {
@@ -222,10 +218,7 @@ public final class LiteRtEngine: EngineCore, @unchecked Sendable {
   public override func close() {
     guard !isClosed else { return }
     // They wrap the buffers the core frees.
-    inputSets = []
-    outputSets = []
-    copiesIn = []
-    copiesOut = []
+    sets = []
     buffers = []
     deviceState = [:]
     model = nil

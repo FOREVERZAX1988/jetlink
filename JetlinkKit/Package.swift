@@ -94,7 +94,7 @@ let package = Package(
     .target(
       name: "JetlinkORT", dependencies: ["JetlinkKit", "JetlinkONNX", "JetlinkServer", "COrt"],
       linkerSettings: [.linkedFramework("Metal", .when(platforms: apple))]),
-    .target(name: "JetlinkLiteRT", dependencies: ["CLiteRt", "JetlinkKit", "JetlinkONNX", "JetlinkRegistry", "JetlinkServer"]),
+    .target(name: "JetlinkLiteRT", dependencies: ["CLiteRt", "JetlinkKit", "JetlinkONNX", "JetlinkRegistry", "JetlinkServer", crypto]),
     .target(
       name: "CTrt",
       exclude: [tensorRT == nil ? "jl_trt.cpp" : "jl_trt_fake.c"],

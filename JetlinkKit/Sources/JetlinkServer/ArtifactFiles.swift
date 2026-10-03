@@ -9,7 +9,13 @@ import JetlinkRegistry
 package enum Artifact {
   /// `<artifact>.json`, whichever kind the artifact is.
   package static func sidecarURL(_ artifact: URL) -> URL {
-    artifact.deletingLastPathComponent().appending(path: artifact.deletingPathExtension().lastPathComponent + ".json")
+    beside(artifact, "json")
+  }
+
+  /// `<artifact>.<ext>`: a file of the artifact's own beside it, which
+  /// removing the model's prepared files removes with it.
+  package static func beside(_ artifact: URL, _ ext: String) -> URL {
+    artifact.deletingLastPathComponent().appending(path: artifact.deletingPathExtension().lastPathComponent + "." + ext)
   }
 
   /// The sidecar, or empty when there is none.

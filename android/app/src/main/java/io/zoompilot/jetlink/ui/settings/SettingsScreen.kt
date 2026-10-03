@@ -83,8 +83,6 @@ data class SettingsInfo(
     val processors: List<Processor>,
     /** A Snapdragon, whose NPU and GPU QNN can drive. */
     val snapdragon: Boolean = true,
-    /** A Google Tensor G3 or later, whose NPU LiteRT compiles for. */
-    val tensorNpu: Boolean = false,
     /** What Automatic runs on here. */
     val automatic: Processor = Processor.Gpu,
 )
@@ -125,7 +123,6 @@ fun SettingsScreen(graph: AppGraph, openConnect: () -> Unit, openLogs: () -> Uni
         version = BuildConfig.VERSION_NAME,
         processors = Chip.processors(values.processor),
         snapdragon = Chip.isQualcomm || Chip.isEmulator,
-        tensorNpu = Chip.hasTensorNpu,
         automatic = Chip.automatic,
     )
     val actions = SettingsActions(
@@ -248,7 +245,7 @@ private fun Performance(values: SettingsValues, info: SettingsInfo, actions: Set
     var choosing by remember { mutableStateOf(false) }
     val choices = info.processors
     val footer = when {
-        info.tensorNpu ->
+        info.automatic == Processor.TensorNpu ->
             "Automatic runs the model on the Tensor NPU, which prepares it the first time. " +
                 "A model the NPU cannot take runs on the GPU. Changing the processor prepares models again."
         info.snapdragon -> "Automatic runs the model on the GPU for now. Changing the processor prepares models again."

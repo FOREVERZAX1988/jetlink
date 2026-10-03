@@ -431,10 +431,7 @@ static char *describe(jl_litert_model *m) {
 
 static char *compile(jl_litert_model *m, const char *path, const jl_litert_options *o) {
   char *error = NULL;
-  if (o->npu) {
-    if (o->npu_cache_dir == NULL) {
-      return copy("a model for the NPU needs a directory for the model compiled for it");
-    }
+  if (o->npu_cache_dir != NULL) {
     m->npu_cache_dir = copy(o->npu_cache_dir);
     error = m->npu_cache_dir != NULL ? npu_environment(m->npu_cache_dir, &m->environment) : copy("out of memory");
     if (error != NULL) {
@@ -448,7 +445,7 @@ static char *compile(jl_litert_model *m, const char *path, const jl_litert_optio
   }
   TRY(LiteRtCreateOptions, &m->options);
   LiteRtHwAcceleratorSet hardware = o->gpu ? kLiteRtHwAcceleratorGpu : kLiteRtHwAcceleratorCpu;
-  if (o->npu) {
+  if (o->npu_cache_dir != NULL) {
     hardware |= kLiteRtHwAcceleratorNpu;
   }
   TRY(LiteRtSetOptionsHardwareAccelerators, m->options, hardware);
@@ -459,7 +456,7 @@ static char *compile(jl_litert_model *m, const char *path, const jl_litert_optio
     // LrtGetCpuOptionsIdentifier()
     error = add_toml(m->options, "xnnpack", cpu_toml(o->cpu_threads));
   }
-  if (error == NULL && o->npu) {
+  if (error == NULL && o->npu_cache_dir != NULL) {
     // LrtGoogleTensorOptionsGetIdentifier()
     error = add_toml(m->options, "google_tensor", google_tensor_toml());
   }
@@ -536,9 +533,8 @@ static char *requirements(const jl_litert_model *model, int output, size_t index
   return NULL;
 }
 
-// The kind of buffer the compiled model reads input `index` from best.
-static char *preferred(const jl_litert_model *model, size_t index, LiteRtTensorBufferType *type) {
-  *type = kLiteRtTensorBufferTypeUnknown;
+char *jl_litert_model_input_hardware(const jl_litert_model *model, size_t index, int *hardware) {
+  *hardware = JL_LITERT_CPU;
   if (slot(model, 0, index) < 0) {
     return copy("no such input");
   }
@@ -547,24 +543,14 @@ static char *preferred(const jl_litert_model *model, size_t index, LiteRtTensorB
   if (error != NULL) {
     return error;
   }
+  // The first type the accelerator lists is the one it reads best; with
+  // none, LiteRT treats the input as the CPU's.
   int n = 0;
   TRY(LiteRtGetNumTensorBufferRequirementsSupportedBufferTypes, req, &n);
+  LiteRtTensorBufferType type = kLiteRtTensorBufferTypeHostMemory;
   if (n > 0) {
-    TRY(LiteRtGetTensorBufferRequirementsSupportedTensorBufferType, req, 0, type);
+    TRY(LiteRtGetTensorBufferRequirementsSupportedTensorBufferType, req, 0, &type);
   }
-  return NULL;
-}
-
-char *jl_litert_model_input_host(const jl_litert_model *model, size_t index, int *host) {
-  LiteRtTensorBufferType type;
-  char *error = preferred(model, index, &type);
-  *host = type == kLiteRtTensorBufferTypeHostMemory ? 1 : 0;
-  return error;
-}
-
-char *jl_litert_model_hardware(const jl_litert_model *model, int *hardware) {
-  LiteRtTensorBufferType type;
-  char *error = preferred(model, 0, &type);
   switch (type) {
     case kLiteRtTensorBufferTypeAhwb:
     case kLiteRtTensorBufferTypeIon:
@@ -580,7 +566,7 @@ char *jl_litert_model_hardware(const jl_litert_model *model, int *hardware) {
       *hardware = JL_LITERT_GPU;
       break;
   }
-  return error;
+  return NULL;
 }
 
 char *jl_litert_buffer_wrap(jl_litert_model *model, int output, size_t index, void *data, size_t nbytes,

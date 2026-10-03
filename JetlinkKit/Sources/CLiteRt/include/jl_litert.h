@@ -39,21 +39,19 @@ typedef struct {
   // The GPU alone, in fp16 (1), so an op it cannot run fails the compile
   // rather than run on the CPU; or the CPU alone (0).
   int gpu;
-  // The NPU first (1), the model compiled for it on the device: LiteRT hands
-  // it to the vendor's compiler plugin, which hands it to the compiler in the
-  // phone's system. Where the plugin cannot take the model, LiteRT runs it on
-  // what `gpu` names instead. The model gets an environment of its own, as
-  // the compiled model's directory is an environment's option.
-  int npu;
   // XNNPACK's pool on the CPU; 0 leaves LiteRT's default.
   int cpu_threads;
   // Where the GPU keeps the programs it compiled between runs, under a key
   // naming the model; NULL for no cache.
   const char *cache_dir;
   const char *cache_key;
-  // With npu: an existing directory where LiteRT keeps the model it compiled
-  // for the NPU, which the next load with the same directory reads back
-  // rather than compile again.
+  // The NPU first, when set: an existing directory where LiteRT keeps the
+  // model it compiled for the NPU, which the next load with the same
+  // directory reads back rather than compile again. LiteRT hands the model
+  // to the vendor's compiler plugin, which hands it to the compiler in the
+  // phone's system; where the plugin cannot take it, LiteRT runs it on what
+  // `gpu` names instead. The model gets an environment of its own, as this
+  // directory is an environment's option.
   const char *npu_cache_dir;
 } jl_litert_options;
 
@@ -75,11 +73,7 @@ void jl_litert_model_release(jl_litert_model *model);
 // CPU kernels.
 char *jl_litert_model_fully_accelerated(const jl_litert_model *model, int *fully);
 
-// What runs the model, by the memory its first input is read from:
-// JL_LITERT_NPU for memory shared with an NPU (an AHardwareBuffer, DMA-BUF,
-// ION or FastRPC buffer), JL_LITERT_GPU for a GPU's, JL_LITERT_CPU for the
-// host's. Tells an NPU compile that worked from one LiteRT fell back from.
-char *jl_litert_model_hardware(const jl_litert_model *model, int *hardware);
+
 
 // output 0 counts the first signature's inputs, 1 its outputs.
 size_t jl_litert_model_io_count(const jl_litert_model *model, int output);
@@ -91,9 +85,12 @@ size_t jl_litert_model_io_count(const jl_litert_model *model, int output);
 char *jl_litert_model_io_info(const jl_litert_model *model, int output, size_t index, char *name, size_t name_cap,
                               int *elem_type, int64_t *dims, size_t dims_cap, size_t *rank);
 
-// Whether the accelerator reads input `index` in host memory itself (the
-// CPU), so a buffer over the caller's memory costs no copy.
-char *jl_litert_model_input_host(const jl_litert_model *model, size_t index, int *host);
+// Whose memory the accelerator reads input `index` from best: JL_LITERT_CPU
+// for the host's, where a buffer over the caller's memory costs no copy;
+// JL_LITERT_GPU for a GPU's; JL_LITERT_NPU for memory shared with an NPU (an
+// AHardwareBuffer, DMA-BUF, ION or FastRPC buffer). For input 0, what runs
+// the model: an NPU compile that worked, or one LiteRT fell back from.
+char *jl_litert_model_input_hardware(const jl_litert_model *model, size_t index, int *hardware);
 
 // A buffer for an input or output over `nbytes` of caller memory, 64-byte
 // aligned, which must outlive it.

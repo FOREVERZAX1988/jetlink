@@ -151,8 +151,8 @@ converted model to `EdgeTpuCompilerCompileFlatbuffer` in the Pixel's
 `/vendor/lib64/libedgetpu_litert.so`. The September 2026 system images of the
 Pixel 8, 9 and 10 Pro Fold all export it, and list the library as public to
 apps. LiteRT keeps the compiled model in the artifact's `npu-cache/`, keyed by
-the phone's build fingerprint, and the artifact records the fingerprint too, so
-a system update prepares the model again.
+the phone's build fingerprint, and the artifact's name carries a digest of the
+fingerprint, so a system update prepares the model again.
 
 The first phone a user ran it on was a Pixel 10 Pro Fold (Google Tensor G5,
 2026-10-01). QNN cannot drive a Tensor: every op fell to onnxruntime's CPU
