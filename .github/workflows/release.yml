@@ -278,7 +278,8 @@ jobs:
           TOOLS="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
           CERTS="$("$TOOLS/apksigner" verify --print-certs "$APK")"
           printf '%s\n' "$CERTS"
-          DIGEST="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' <<<"$CERTS")"
+          # "Signer #1 certificate ..." or, with one v2 signer, "V2 Signer: certificate ..."
+          DIGEST="$(sed -n 's/^.*[Ss]igner.* certificate SHA-256 digest: //p' <<<"$CERTS" | head -1)"
           if [ "$UPSTREAM" = true ] && [ "$DIGEST" != "$RELEASE_CERT_SHA256" ]; then
             echo "error: signed with $DIGEST, not the release key $RELEASE_CERT_SHA256" >&2
             exit 1
