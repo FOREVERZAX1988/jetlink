@@ -122,6 +122,9 @@ Every hop must be USB 3: the phone, the cable and any hub.
 Sources: [Apple, iPhone](https://support.apple.com/en-us/105099),
 [Identify your iPad model](https://support.apple.com/en-us/108043).
 
+- Over a USB 2 link the app shows a **USB 2 Link** banner on the Status tab,
+  in both orientations, saying which of the two it can be: the cable or hub,
+  or the device itself.
 - USB 2 adds an estimated 4 to 6 ms a frame (not yet measured).
 - To check the speed on the comma, run `sudo scripts/comma/jetlink-root.sh check`:
   `super-speed` is USB 3, `high-speed` is USB 2.
