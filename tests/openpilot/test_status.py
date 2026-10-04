@@ -374,6 +374,13 @@ class TestProgress(OpenpilotTest):
       self.assertEqual(put.call_count, 3)
     self.assertEqual(self.parts.progress.read(), {'stage': 'build', 'frac': 1.0, 'msg': '', 'drops': 0})
 
+  def test_a_report_with_no_fraction_always_goes_through(self):
+    # 2026-10-04 tester drive: a rejoin's 're-engage to switch' came 50 ms after its
+    # 'waiting for jetlink', was held, and the panel said waiting for the whole drive
+    self.parts.progress.report('connect', 0.0, 'waiting for jetlink')
+    self.parts.progress.report('connect', 0.0, 're-engage to switch')
+    self.assertEqual(self.parts.progress.read()['msg'], 're-engage to switch')
+
   def test_clearing_removes_it(self):
     self.parts.progress.report('build', 1.0)
     self.parts.progress.clear()
