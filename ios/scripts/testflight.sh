@@ -64,7 +64,7 @@ fi
 ASC=(/usr/bin/python3 "$SCRIPT_DIR/asc.py")
 PUBLISH=(--notes "${TESTFLIGHT_NOTES:-"Jetlink $VERSION: https://github.com/zoompilot/jetlink/releases/tag/v$VERSION
 
-Load a model and run Benchmark, then set Accelerator Link to iOS on the comma and connect with a USB 3 cable. Send feedback with a screenshot from TestFlight."}")
+Load a model and run Benchmark, then set Jetlink to iOS on the comma and connect with a USB 3 cable. Send feedback with a screenshot from TestFlight."}")
 if [ -n "${TESTFLIGHT_GROUP:-}" ]; then
   PUBLISH+=(--group "$TESTFLIGHT_GROUP")
 fi

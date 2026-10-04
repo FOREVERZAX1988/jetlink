@@ -28,7 +28,7 @@ Set up offroad. Keep the comma and Mac online, and the Mac powered and awake.
    **`zoompilot/develop`** as the install URL. Already on zoompilot? Select
    **develop** in **Settings > Software > Target Branch > Non-Prebuilt Branches**.
    Wait for installation, rebooting, and building to finish.
-2. Set **Settings > Models > Accelerator Link** to **USB**.
+2. Set **Settings > Models > Jetlink** to **USB**.
    Leave **Big Model** at its default.
 3. Connect the Mac to the comma with the USB cable.
 
@@ -53,7 +53,7 @@ To download a model ahead of time, see [Models](models.md#prepare-ahead-of-time-
 | Model takes minutes to load | Close large apps. In **Models**, right-click the model, choose **Delete Prepared Engines…**, then use it again. On an M1 Pro, preparing takes about 20 seconds and loading up to 10. |
 | Link drops when the Mac sleeps | Enable **Keep the Mac awake while serving** and keep it on power. |
 | Slow frames | Check the cable and port, then close other apps using the GPU or Neural Engine. |
-| Network settings show a **jetlink** service | Set the comma's **Accelerator Link** to **USB**. |
+| Network settings show a **jetlink** service | Set the comma's **Jetlink** setting to **USB**. |
 
 [More troubleshooting and logs](troubleshooting.md).
 

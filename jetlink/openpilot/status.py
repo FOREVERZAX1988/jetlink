@@ -97,7 +97,7 @@ class Progress:
 # the offroad alert for a link that is on while nobody holds the gadget: the
 # owner's heartbeat stopped. manager starts it again, and its crash-loop
 # backoff says so in its record's error while it waits
-STOPPED = "accelerator service stopped"
+STOPPED = "service stopped"
 
 
 def owner_record() -> tuple[dict | None, dict | None]:
@@ -200,7 +200,7 @@ def reason(parts, mode: str) -> str | None:
 class Status(NamedTuple):
   """Everything a reader shows, taken at once. Fields are only ever added."""
   enabled: bool                 # the setting is on and no chestnut is fitted
-  mode: str                     # the Accelerator Link setting, one of MODES
+  mode: str                     # the Jetlink setting, one of MODES
   transport: str                # 'USB', or 'iOS over USB (<peer>)'
   present: bool                 # a host is on the gadget now, or asleep and known to be there
   port: str | None              # 'host' or 'empty' off the CC pin; None where the kernel does not say

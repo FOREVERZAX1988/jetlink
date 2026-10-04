@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-# the Accelerator Link setting: off; a Jetson, a Linux PC or a Mac on USB; an
+# the Jetlink setting: off; a Jetson, a Linux PC or a Mac on USB; an
 # iPhone on the cable. The INT param holds the index
 MODES = ('off', 'usb', 'ios')
 # what a joining model reports as big_model_state, by the names of the fork's
@@ -41,7 +41,7 @@ STATES = ('none', 'joining', 'retrying', 'ready', 'running', 'unavailable')
 @dataclass(frozen=True)
 class Keys:
   """The params the fork declares for jetlink, by name: jetlink itself knows no param name."""
-  link: str                      # INT, an index into MODES: the Accelerator Link setting
+  link: str                      # INT, an index into MODES: the Jetlink setting
   offroad: str                   # BOOL: is the car parked (manager's IsOffroad)
   progress: str                  # JSON {stage, frac, msg}: provisioning and join progress
   spec: str                      # JSON: the built model's spec and whether its engine is built

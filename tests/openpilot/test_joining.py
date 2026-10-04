@@ -380,7 +380,7 @@ class JoiningTest(JoiningBase):
     self.assertFalse(s.chestnut)
     self.assertEqual(s.big_model_state, 'retrying')
     # reported from the join thread, not the frame that lost the link
-    self._wait_reported(s, 'lost the accelerator, reconnecting')
+    self._wait_reported(s, 'lost jetlink, reconnecting')
 
     s.close()
     self.assertEqual(s.big_model_state, 'unavailable')
@@ -396,7 +396,7 @@ class JoiningTest(JoiningBase):
     s._joined_at = time.monotonic() - (STABLE_SECONDS + 1)
     self.big.raises = RuntimeError("host dropped the gadget configuration (udc: not attached)")
     self._run(s)
-    self._wait_reported(s, 'lost the accelerator, reconnecting')
+    self._wait_reported(s, 'lost jetlink, reconnecting')
     self.assertEqual(s._drops, 1)
     first = [c for c in self.progress.report.call_args_list if c.args[2].startswith('lost')]
     self.assertNotIn('cable', first[-1].args[2])
@@ -408,9 +408,9 @@ class JoiningTest(JoiningBase):
     s._joined_at = time.monotonic() - (STABLE_SECONDS + 1)
     self.big.raises = RuntimeError("gadget write failed: [Errno 19] No such device (udc: default)")
     self._run(s)
-    self._wait_reported(s, 'lost the accelerator, reconnecting; link dropped 2 times this drive, check the USB cable')
+    self._wait_reported(s, 'lost jetlink, reconnecting; link dropped 2 times this drive, check the USB cable')
     self.assertEqual(s._drops, 2)
-    self._wait_reported(s, 'waiting for the accelerator; link dropped 2 times this drive, check the USB cable')
+    self._wait_reported(s, 'waiting for jetlink; link dropped 2 times this drive, check the USB cable')
 
   def test_a_lag_demote_says_why_over_the_live_link(self):
     # the phone's log carried no reason and none of the comma's numbers: a
@@ -807,7 +807,7 @@ class LagTest(JoiningBase):
     self.assertEqual((self.s._lags, self.s._drops), (1, 0))
     self.assertEqual(self.s.big_model_state, 'retrying')
     self.assertGreater(self.s._rejoin_at, joining.time.monotonic())
-    self._wait_reported(self.s, 'the accelerator fell behind, reconnecting')
+    self._wait_reported(self.s, 'jetlink fell behind, reconnecting')
     for _ in range(100):
       if self.big.closed:
         break
@@ -873,7 +873,7 @@ class LagTest(JoiningBase):
     for _ in range(joining.DROPS_TO_BLAME_CABLE):
       self.hand_back()
       self.rejoin()
-    self._wait_reported(self.s, 'the accelerator fell behind, reconnecting')
+    self._wait_reported(self.s, 'jetlink fell behind, reconnecting')
     self.assertFalse(any('cable' in c.args[2] for c in self.progress.report.call_args_list))
 
   def test_the_next_large_model_starts_with_no_strike_and_settles_again(self):

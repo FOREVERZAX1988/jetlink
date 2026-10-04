@@ -38,7 +38,7 @@ There is no Play Store build.
    **`zoompilot/develop`** as the install URL. Already on zoompilot? Select
    **develop** in **Settings > Software > Target Branch > Non-Prebuilt Branches**.
    Wait for installation, rebooting, and building to finish.
-2. Set **Settings > Models > Accelerator Link** to **USB**.
+2. Set **Settings > Models > Jetlink** to **USB**.
    Leave **Big Model** at its default.
 3. Connect the phone to the hub and plug the charger into the hub.
 4. Connect the hub's **USB-A** port to the comma's **USB-C** port.

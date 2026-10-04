@@ -5,7 +5,7 @@ Copyright (c) 2026-, Zeph Leggett.
 This file is part of jetlink and is licensed under the MIT License.
 See the LICENSE file in the root directory for more details.
 
-Replay a recorded segment through the real modeld, on the accelerator, via process_replay
+Replay a recorded segment through the real modeld, over Jetlink, via process_replay
 so the code under test is the shipped modeld. Runs on the device against a segment
 already in /data/media, no network needed.
 
@@ -115,7 +115,7 @@ def jetlink_params() -> dict:
   the small model, which passes everything except modelV2.big."""
   from openpilot.common.params import Params
   params = Params()
-  out: dict = {'JetlinkLink': 1}   # Accelerator Link USB
+  out: dict = {'JetlinkLink': 1}   # Jetlink USB
   # the selection is the big-model slot and the identity its pointer, both params
   for key in ('JetlinkSpec', 'JetlinkModelPointers',
               'ModelManager_ActiveBundleChestnut', 'ModelManager_ModelsCache_Chestnut'):
@@ -211,7 +211,7 @@ def summarise(msgs, dump_path: str | None = None) -> int:
   if bad:
     print("\nFAIL: " + "; ".join(bad))
     return 1
-  print("\nOK: every frame ran on the accelerator, inside the frame budget, with finite outputs")
+  print("\nOK: every frame ran over Jetlink, inside the frame budget, with finite outputs")
   return 0
 
 

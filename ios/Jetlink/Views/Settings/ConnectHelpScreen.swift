@@ -9,7 +9,7 @@ struct ConnectHelpScreen: View {
     let device = ThisDevice.name
     List {
       Section {
-        step(1, "On the comma, set Accelerator Link to iOS.")
+        step(1, "On the comma, set Jetlink to iOS.")
         step(2, "Open Jetlink and allow Local Network access.")
         step(3, "Connect your \(device) to the comma with a USB 3 USB-C cable.")
         step(4, "Wait for Connected.")

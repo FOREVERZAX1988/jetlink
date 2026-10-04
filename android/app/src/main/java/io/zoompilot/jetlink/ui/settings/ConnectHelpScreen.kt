@@ -32,7 +32,7 @@ import io.zoompilot.jetlink.ui.components.RowDivider
 private const val GUIDE = "https://github.com/zoompilot/jetlink/blob/main/docs/android-app.md#connect-the-comma"
 
 private val steps = listOf(
-    "On the comma, set Accelerator Link to USB, offroad.",
+    "On the comma, set Jetlink to USB, offroad.",
     "Plug a USB 3 hub with power pass-through into the phone.",
     "Connect the hub to the comma with a USB-A to USB-C cable.",
     "Plug a charger into the hub.",

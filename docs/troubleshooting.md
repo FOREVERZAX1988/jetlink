@@ -5,11 +5,11 @@ on the small model. Investigate the connection while offroad.
 
 | Symptom | First step | If it continues |
 | --- | --- | --- |
-| No **Accelerator Link** setting | Check **Settings > Software** for the `develop` branch. | Follow your [setup guide](README.md#set-up). |
-| Waiting for comma; icon never pulses | Check Jetlink is running and **Accelerator Link** is **USB** (**iOS** for iPhone or iPad). | Try another USB 3 data cable. Use a USB-A port on Jetson or Linux PC, and a powered hub for a phone. |
+| No **Jetlink** setting | Older builds call it **Accelerator Link**. Check **Settings > Software** for the `develop` branch. | Follow your [setup guide](README.md#set-up). |
+| Waiting for comma; icon never pulses | Check Jetlink is running and the comma's **Jetlink** setting is **USB** (**iOS** for iPhone or iPad). | Try another USB 3 data cable. Use a USB-A port on Jetson or Linux PC, and a powered hub for a phone. |
 | Pulsing icon | Wait while the model downloads and prepares. | Check internet access and [logs](#get-help). |
 | Dimmed green icon | Disengage cruise and lateral control fully to let the model switch. | Wait for **Big Model Active**, then engage again. See [daily use](using-jetlink.md#what-to-expect-when-driving). |
-| Orange icon or setup alert | Read the alert and check internet access. | Set **Accelerator Link** to **Off**, then back to **USB** or **iOS**. |
+| Orange icon or setup alert | Read the alert and check internet access. | Set **Jetlink** to **Off**, then back to **USB** or **iOS**. |
 | Model list is empty | Connect to the internet and choose **Refresh Model List**. | In the Mac app, use **Models > Refresh**. |
 | **no warp built for this camera** | Update or reinstall the `develop` branch. | Include the exact alert when asking for help. |
 | Repeated link drops | Check the cable and separate power supplies. | Check cooling and sleep settings; keep the iPhone app on screen. |

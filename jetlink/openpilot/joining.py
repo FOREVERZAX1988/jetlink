@@ -99,8 +99,8 @@ SETTLING_FRAMES = 3
 # driven from frame one. Nothing is in control at a modeld start
 SMALL_WARMUP_FRAMES = 3
 # why a demote happened, as the log and the UI say it
-LOST = 'lost the accelerator'
-BEHIND = 'the accelerator fell behind'
+LOST = 'lost jetlink'
+BEHIND = 'jetlink fell behind'
 # and as the leave says it to the server (protocol.Msg.LEAVE)
 LEAVING = {LOST: P.LEAVE_LOST, BEHIND: P.LEAVE_BEHIND}
 
@@ -583,7 +583,7 @@ class JoiningModelState:
       self._rejoin.clear()
       if self._wait_out_back_off():
         return
-      self._report('connect', 'waiting for the accelerator')
+      self._report('connect', 'waiting for jetlink')
       try:
         # the connect can take minutes when the picked model still has to be
         # built, so it is handed the flag close() sets rather than polled

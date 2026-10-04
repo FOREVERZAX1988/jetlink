@@ -19,7 +19,7 @@ prepare the model again.
 
 ## Rolling back
 
-To stop using Jetlink, set **Settings > Models > Accelerator Link** to **Off**.
+To stop using Jetlink, set **Settings > Models > Jetlink** to **Off**.
 Across a protocol change, roll back both the comma and server. Keep the model cache.
 
 On an installed Jetson or Linux PC, replace `v0.7.0` with the release you need:

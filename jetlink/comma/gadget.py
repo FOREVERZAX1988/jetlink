@@ -51,7 +51,7 @@ def set_logger(logger) -> None:
 
 
 # -- what carries the link ------------------------------------------------
-# The Accelerator Link setting names the host: USB (a Jetson or a Mac on the
+# The Jetlink setting names the host: USB (a Jetson or a Mac on the
 # FunctionFS vendor interface) or iOS (an iPhone, which gives apps no USB
 # access). For iOS the gadget is composite, with a CDC-NCM network interface
 # whose comma end is 192.168.60.1 (jetlink-root.sh gadget --ios, and net, which
@@ -101,7 +101,7 @@ def link_state() -> tuple[str | None, str | None]:
 
 
 def link_kind(mode: str | None = None) -> str:
-  """link_state's kind, or a stand-in: `mode`, the Accelerator Link setting as
+  """link_state's kind, or a stand-in: `mode`, the Jetlink setting as
   the caller read it, stands in only until the owner has said: it may have
   moved and be waiting for the car to park. Without either, 'usb'."""
   kind, _ = link_state()

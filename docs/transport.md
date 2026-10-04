@@ -20,7 +20,7 @@ Jetlink and chestnut at the same time.
 
 ## Connection setting
 
-Set **Settings > Models > Accelerator Link** while offroad:
+Set **Settings > Models > Jetlink** while offroad:
 
 - **USB:** Jetson, Linux PC, Mac, or Android.
 - **iOS:** iPhone or iPad.

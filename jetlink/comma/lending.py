@@ -457,7 +457,7 @@ class Lender:
   `lendable` says whether the gadget is in the state a borrower can take over
   from, bound with no endpoint file open here; while it is not, a borrow is
   answered "retry" and the daemon's own loop puts it there. `cable` says the
-  host is a phone (Accelerator Link iOS): the loan is then the right to
+  host is a phone (Jetlink iOS): the loan is then the right to
   listen for its dial, never the endpoint files, which a phone does not read,
   and `vacate` frees the port first (CableListener.vacate). `server` takes
   what a borrower passes on of the server's hello (Loan.note_server), with

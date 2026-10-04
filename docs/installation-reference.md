@@ -289,7 +289,7 @@ The cache is `--cache DIR`, else `$JETLINK_CACHE`, else:
   `JETLINK_USB_LPM=1` leaves it on.
 - How the link carries a frame: [link protocol](link-protocol.md).
 - Nothing on the comma runs by hand. The owner builds the gadget on its first
-  step, USB or iOS per the comma's Accelerator Link setting, and rebuilds it
+  step, USB or iOS per the comma's Jetlink setting, and rebuilds it
   when the setting changes with the car off (the setting is locked while
   driving).
 
@@ -299,7 +299,7 @@ The cache is `--cache DIR`, else `$JETLINK_CACHE`, else:
 | Subcommand | Does |
 | --- | --- |
 | `gadget` | Creates the gadget configuration: the vendor interface alone. The owner then opens `ep0`, writes the FunctionFS descriptors and binds the USB device controller (binding needs the descriptors first). |
-| `gadget --ios` | Accelerator Link iOS: composite, adds a network interface for an iPhone. |
+| `gadget --ios` | Jetlink iOS: composite, adds a network interface for an iPhone. |
 | `net` | Run by the owner after each iOS bind (the interface exists only from the first bind). |
 | `port hold`, `port off` | Keeps the USB-C port the device end of a USB link. |
 | `port device`, `port reset` | Asks the far end over USB PD to take the host role (a data role swap), or resets USB PD. |

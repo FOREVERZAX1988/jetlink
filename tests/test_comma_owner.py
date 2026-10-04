@@ -649,7 +649,7 @@ class TestVmTuning(OwnerTest):
 
 
 class TestUsb(OwnerTest):
-  """Accelerator Link USB: a Jetson or a Mac. The plain gadget, lent at once;
+  """Jetlink USB: a Jetson or a Mac. The plain gadget, lent at once;
   nothing waits for a phone and nothing of the phone's runs."""
 
   def test_borrowers_are_lent_the_endpoint_files(self):
@@ -667,7 +667,7 @@ class TestUsb(OwnerTest):
 
 
 class IosTest(OwnerTest):
-  """Accelerator Link iOS: an iPhone on the gadget's network interface."""
+  """Jetlink iOS: an iPhone on the gadget's network interface."""
 
   def setUp(self):
     super().setUp()
@@ -1401,7 +1401,7 @@ class TestTheStatusRecord(OwnerTest):
     worker.kill.assert_called_once()
 
   def test_a_record_that_cannot_be_written_is_said_once_and_not_left_stale(self):
-    # a stale record under a live owner reads as "accelerator service stopped"
+    # a stale record under a live owner reads as "service stopped"
     o = self.owner()
     o.publish_status()
     published = o.published

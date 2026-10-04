@@ -2353,7 +2353,7 @@ finish() {
   say "  ${B}Next, on your comma:${N}"
   say "    1. Settings > Software > Target Branch: choose ${B}develop${N} (zoompilot),"
   say "       and let it update and restart."
-  say "    2. Settings > Models: set ${B}Accelerator Link${N} to ${B}USB${N}."
+  say "    2. Settings > Models: set ${B}Jetlink${N} to ${B}USB${N}."
   if [ "$JETSON" = 1 ]; then
     say "    3. Connect the comma's USB-C port to one of this Jetson's ${B}USB-A${N} ports"
   else

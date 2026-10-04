@@ -124,7 +124,7 @@ class ProvisioningRun:
 
     self.log.warning("jetlink: provisioning %s (%d MB, sha %s)",
                      entry.get('name', sha256[:16]), nbytes >> 20, sha256[:16])
-    parts.progress.report('connect', 0.0, 'talking to the accelerator')
+    parts.progress.report('connect', 0.0, 'talking to jetlink')
 
     def ensure(path):
       return link.ensure(parts, self.client, sha256, nbytes, path, progress=parts.progress.report_with_eta,

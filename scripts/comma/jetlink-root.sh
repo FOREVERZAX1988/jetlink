@@ -22,7 +22,7 @@
 # in and no modules to load.
 # The 3X is assumed from the kernel it shares with the four; only the four has been on the bench.
 #
-# gadget: the USB gadget, chosen by the comma's Accelerator Link setting. The
+# gadget: the USB gadget, chosen by the comma's Jetlink setting. The
 # comma is the USB device and the host runs the model; docs/transport.md says
 # why. For a Jetson or a Mac (USB), the FunctionFS vendor interface alone. For
 # an iPhone (iOS, with --ios), a composite: the vendor interface first, so it

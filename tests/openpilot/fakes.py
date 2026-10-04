@@ -186,7 +186,7 @@ class FakeOpenpilot:
   # -- what a test sets --------------------------------------------------------
 
   def set_mode(self, mode: str | None) -> None:
-    """The Accelerator Link setting as the panels write it; None unsets it."""
+    """The Jetlink setting as the panels write it; None unsets it."""
     path = self.store_dir / self.keys.link
     if mode is None:
       path.unlink(missing_ok=True)

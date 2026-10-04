@@ -121,7 +121,7 @@ only 43.5 ms. Then use `--device coreml` (**CoreML on the GPU** in the Mac app).
 | `scripts/bench_link.py --rate 20` | round-trip latency through the server over TCP loopback; use 20 Hz results for the driving frame budget ([test without a comma](platforms.md#test-without-a-comma)) |
 | `jetlink-server bench` | runs a prepared engine at the comma's pace with no comma and no link, and reports its times |
 | `scripts/comma/jetlink_live_bench.sh` | on the comma: the big model's frame times as the car sees them |
-| `scripts/comma/jetlink_replay.py` | on the comma: replays a recorded segment through the real modeld on the accelerator |
+| `scripts/comma/jetlink_replay.py` | on the comma: replays a recorded segment through the real modeld over Jetlink |
 
 ## Keeping the Mac GPU responsive between frames
 

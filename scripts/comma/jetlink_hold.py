@@ -108,7 +108,7 @@ def main(argv: list[str] | None = None, path: Path = lending.SOCKET) -> int:
   loan = lending.borrow('hold', timeout=args.timeout, path=path) if path.exists() else None
   if loan is None:
     if time.monotonic() - started < min(1.0, args.timeout / 2):   # refused at once, not timed out
-      why = gadget.gadget_error() or 'is the Accelerator Link on and jetlinkd running?'
+      why = gadget.gadget_error() or 'is Jetlink on and jetlinkd running?'
       say(f'no gadget owner is listening on {path}: {why}')
     else:
       say(f'no loan from the owner within {args.timeout:g} s; is modeld or a bench holding it?')

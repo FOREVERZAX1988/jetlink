@@ -30,7 +30,7 @@
    **`zoompilot/develop`** as the install URL. Already on zoompilot? Select
    **develop** in **Settings > Software > Target Branch > Non-Prebuilt Branches**.
    Wait for installation, rebooting, and building to finish.
-2. Set **Settings > Models > Accelerator Link** to **iOS**.
+2. Set **Settings > Models > Jetlink** to **iOS**.
    Leave **Big Model** at its default.
 3. Open Jetlink on the phone and allow **Local Network** access.
 4. Connect the phone to the comma through the powered hub.
@@ -81,7 +81,7 @@ To download a model ahead of time, see [Models](models.md#prepare-ahead-of-time-
 | Problem | First step |
 | --- | --- |
 | Build expired | Install the newest available build in TestFlight. Builds expire after 90 days. |
-| App cannot find the comma | Allow **Local Network** access and check **Accelerator Link** is **iOS**. |
+| App cannot find the comma | Allow **Local Network** access and check the comma's **Jetlink** setting is **iOS**. |
 | Direct cable fails or comma restarts | Use a powered USB 3 hub. |
 | Connection says **USB 2** | Check that the phone, cable, and hub all support USB 3. |
 | Slow frames or repeated fallbacks | Let the phone cool, repeat the 10-minute benchmark, and save the logs. |

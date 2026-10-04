@@ -31,7 +31,7 @@ Port **5600** is the default; **0** disables it.
    **`zoompilot/develop`** as the install URL. Already on zoompilot? Select
    **develop** in **Settings > Software > Target Branch > Non-Prebuilt Branches**.
    Wait for installation, rebooting, and building to finish.
-2. Set **Settings > Models > Accelerator Link** to **USB**.
+2. Set **Settings > Models > Jetlink** to **USB**.
    Leave **Big Model** at its default.
 3. Connect the PC's **USB-A** port to the comma's **USB-C** port.
 
@@ -48,7 +48,7 @@ Read [daily use](using-jetlink.md) before driving.
 | Installer stopped | Follow its error message, then run it again. |
 | GPU or driver rejected | Check for an RTX 20 series or newer GPU and driver 580 or newer. |
 | Server stopped | Run `jetlink logs` and check the error. |
-| Comma does not connect | Run `jetlink status`, then check the cable and **Accelerator Link** setting. |
+| Comma does not connect | Run `jetlink status`, then check the cable and the comma's **Jetlink** setting. |
 
 [More troubleshooting](troubleshooting.md) · [Updates](releasing.md) ·
 [Web page](using-jetlink.md#web-page)

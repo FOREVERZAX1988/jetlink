@@ -12,7 +12,7 @@ onroad and offroad alike, and no other process ever holds ep0. Whoever wants
 to move bytes borrows the endpoint files over a unix socket (lending.py) and
 the gadget never leaves the bus.
 
-The Accelerator Link setting names the host. For USB (a Jetson or a Mac) the
+The Jetlink setting names the host. For USB (a Jetson or a Mac) the
 gadget is FunctionFS alone and the endpoint files are lent at once. For iOS
 the gadget is composite: the phone is on its network interface and dials this
 process (lending.CableListener), and the loan carries its socket; the endpoint
@@ -545,7 +545,7 @@ class Owner:
       gadget.write_record(gadget.STATUS, self.status_record())
     except Exception as e:
       # the last record would go stale under a live owner and read as
-      # "accelerator service stopped"; without one the readers go back to
+      # "service stopped"; without one the readers go back to
       # the gadget's files, which are still right
       self.forget_status()
       error = f"{type(e).__name__}: {e}"
@@ -802,7 +802,7 @@ class Owner:
           # gadget from under it, so it waits for the borrower to let go, when
           # the kernel unbinds
           if not self.switch_waiting:
-            gadget.log.warning("jetlink: Accelerator Link is now iOS; the gadget is still bound for a borrower "
+            gadget.log.warning("jetlink: the setting is now iOS; the gadget is still bound for a borrower "
                                "from before this owner, rebuilding it once that lets go")
             self.switch_waiting = True
           return False
@@ -810,7 +810,7 @@ class Owner:
     if time.monotonic() < self.next_gadget_attempt and ios == self.failed_ios:
       return True   # this mode's last build failed; build() says when to try again
     self.stop_worker()   # bounded: WORKER_GRACE, then SIGKILL
-    gadget.log.warning("jetlink: Accelerator Link is now %s, rebuilding the gadget", 'iOS' if ios else 'USB')
+    gadget.log.warning("jetlink: the setting is now %s, rebuilding the gadget", 'iOS' if ios else 'USB')
     self.close_link()
     self.dialed = False
     self.build(ios)
@@ -847,7 +847,7 @@ class Owner:
 
     A power-off request ends it: hardwared waits 25 s for the owner to take
     one, and the Jetson on its own supply stays on otherwise."""
-    self.backing_off = (f"the accelerator service keeps stopping ({died} times in {CRASH_WINDOW / 60:.0f} min), "
+    self.backing_off = (f"the service keeps stopping ({died} times in {CRASH_WINDOW / 60:.0f} min), "
                         f"waiting {until - time.monotonic():.0f} s before starting it again")
     gadget.log.warning("jetlink: %s", self.backing_off)
     self.publish_status()

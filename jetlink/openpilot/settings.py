@@ -5,7 +5,7 @@ This file is part of jetlink and is licensed under the MIT License.
 See the LICENSE file in the root directory for more details.
 
 The two settings every jetlink process reads, straight off openpilot's params
-files: the Accelerator Link setting and whether the car is parked.
+files: the Jetlink setting and whether the car is parked.
 
 The owner cannot construct openpilot's Params: it imports swaglog, which costs
 28 MB and brings numpy, capnp and zmq with it. So the fork's adapter says where
@@ -75,7 +75,7 @@ class Settings:
     self._watched = {k: str(params.path(k)) for k in watched if k}
 
   def mode(self) -> str:
-    """Accelerator Link, one of MODES. Unset or unreadable is 'off'; manager
+    """The Jetlink setting, one of MODES. Unset or unreadable is 'off'; manager
     writes the default before anything runs."""
     index = self.params.get_int(self.keys.link)
     return MODES[index] if index is not None and 0 <= index < len(MODES) else 'off'

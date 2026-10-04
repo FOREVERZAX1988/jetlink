@@ -45,7 +45,7 @@ reconnect power; starting the car will not restart it.
 
 - [Choose or prepare a model](models.md).
 - [Update or roll back](releasing.md).
-- Stop using Jetlink: set **Settings > Models > Accelerator Link** to **Off**.
+- Stop using Jetlink: set **Settings > Models > Jetlink** to **Off**.
 
 <details>
 <summary>Use the Jetson or Linux PC web page</summary>

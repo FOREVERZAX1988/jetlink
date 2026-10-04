@@ -63,7 +63,7 @@ Measured on the bench Jetson: [performance](status.md#measured-performance).
 
 ### What the comma presents
 
-One of two USB gadgets, per the comma's **Accelerator Link** setting (models
+One of two USB gadgets, per the comma's **Jetlink** setting (models
 settings):
 
 | Setting | For | Gadget |

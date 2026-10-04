@@ -78,7 +78,7 @@ when prompted. Port **5600** is the default; **0** disables it.
    **`zoompilot/develop`** as the install URL. Already on zoompilot? Select
    **develop** in **Settings > Software > Target Branch >
    Non-Prebuilt Branches**. Wait for installation, rebooting, and building to finish.
-2. **Enable Jetlink.** Set **Settings > Models > Accelerator Link** to **USB**.
+2. **Enable Jetlink.** Set **Settings > Models > Jetlink** to **USB**.
    Leave **Big Model** at its default.
 3. **Connect the cable.** Jetson **USB-A** → comma **USB-C**.
 4. **Wait for the green home-button icon.** Stay offroad and online while the
