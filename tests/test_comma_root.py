@@ -22,7 +22,7 @@ import pytest
 
 from jetlink.comma import root
 from tests.comma_fakes import (STOCK, TUNED, dual_role, pe_params, proc_sys, read_all, read_sys, record, run_script,
-                                udc_glue, usbpd, voter)
+                                udc_glue, usb_icl, usbpd, voter)
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -198,13 +198,19 @@ def test_vm_apply_fails_when_a_key_will_not_take(tmp_path):
   assert read_sys(tmp_path, 'vm.dirty_bytes') == TUNED['vm.dirty_bytes']
 
 
-def test_port_hold_forces_the_voter_and_off_lets_it_go(tmp_path):
-  lever = voter(tmp_path)
+@pytest.mark.parametrize('lever, force, value', [
+  (voter, ('port', 'hold'), '1'),
+  # the input current limit: 0 suspends the input
+  (usb_icl, ('draw', 'off'), '0'),
+])
+def test_a_voter_is_forced_and_let_go(tmp_path, lever, force, value):
+  lever = lever(tmp_path)
   lever.mkdir()
-  assert run_script(tmp_path, 'port', 'hold').returncode == 0
-  assert (lever / 'force_val').read_text().strip() == '1'
+  assert run_script(tmp_path, *force).returncode == 0
+  assert (lever / 'force_val').read_text().strip() == value
   assert (lever / 'force_active').read_text().strip() == '1'
-  assert run_script(tmp_path, 'port', 'off').returncode == 0
+  release = {'hold': 'off', 'off': 'on'}[force[1]]
+  assert run_script(tmp_path, force[0], release).returncode == 0
   assert (lever / 'force_active').read_text().strip() == '0'
   assert (lever / 'force_val').read_text().strip() == '0'
 
@@ -215,6 +221,8 @@ def test_port_hold_forces_the_voter_and_off_lets_it_go(tmp_path):
   # a refusal, or PD not ready, is a failed write; so is a missing class
   (('port', 'device'), None, 'did not take the host role'),
   (('port', 'reset'), None, 'could not reset USB PD'),
+  (('draw', 'off'), None, 'could not force'),
+  (('draw', 'on'), None, 'could not release'),
   (('udc', 'start'), None, 'could not start the USB device controller'),
   (('udc', 'stop'), None, 'could not stop the USB device controller'),
   # a kernel without the glue's knob still gets the policy engine's
@@ -254,7 +262,8 @@ def test_udc_apply_keeps_the_device_and_restore_puts_it_back(tmp_path):
 
 
 @pytest.mark.parametrize('args', [(), ('setup',), ('--ios',), ('gadget', '--net'), ('port',), ('port', 'on'), ('udc',),
-                                  ('udc', 'on'), ('vm',), ('vm', 'undo')])
+                                  ('udc', 'on'), ('vm',), ('vm', 'undo'),
+                                  ('draw',), ('draw', 'cut')])
 def test_anything_else_is_usage(tmp_path, args):
   result = run_script(tmp_path, *args)
   assert result.returncode == 2

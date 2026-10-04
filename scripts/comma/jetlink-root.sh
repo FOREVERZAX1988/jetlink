@@ -16,6 +16,7 @@
 #   sudo scripts/comma/jetlink-root.sh udc apply|restore # the USB device controller kept a device, or stock
 #   sudo scripts/comma/jetlink-root.sh udc start|stop    # its device side turned on, or off
 #   sudo scripts/comma/jetlink-root.sh vm apply|restore  # the link's VM tuning, or the stock values
+#   sudo scripts/comma/jetlink-root.sh draw off|on       # no current drawn from the port (iOS), or the charger's own
 #
 # For the comma four and the comma 3X only. Both are SDM845 on the same AGNOS
 # kernel (4.9, dwc3 at a600000.dwc3), with configfs, FunctionFS and NCM built
@@ -85,6 +86,16 @@ UDC_GLUE=${JETLINK_UDC_GLUE:-/sys/devices/platform/soc/a600000.ssusb}
 PE_PARAMS=${JETLINK_PE_PARAMS:-/sys/module/policy_engine/parameters}
 USB_PSY=${JETLINK_USB_PSY:-/sys/class/power_supply/usb}
 
+# draw: the charger's USB_ICL voter, the input current limit on the port. As
+# the sink the charger draws up to 900 mA from whatever powers the port, though
+# the comma runs on its own supply. An iPhone powers what it plugs into with
+# little current; under that draw its supply sags, the charger's weak-charger
+# and reverse-boost handlers cut and restore the input in a loop, and the phone
+# never sees a device. Forced to 0 the input is suspended: the port still reads
+# present and the roles still settle, and those handlers stand down at 25 mA or
+# less. As the source the kernel votes the input to 0 itself.
+USB_ICL_VOTER=${JETLINK_USB_ICL_VOTER:-/sys/kernel/debug/pmic-votable/USB_ICL}
+
 # vm: loggerd's dirty pages pile up until the kernel reclaims them
 # synchronously, right while a FunctionFS transfer allocates its buffer: gadget
 # reads stalled 200-350 ms and the big model fell back. Capping dirty memory
@@ -101,7 +112,7 @@ PROC_SYS=${JETLINK_PROC_SYS:-/proc/sys}
 SYSCTL_PREV=${JETLINK_SYSCTL_PREV:-/dev/shm/jetlink-sysctl-prev}
 
 usage() {
-  echo "usage: $0 gadget [--ios] | net | check | teardown | port hold|off|device|reset | udc apply|restore|start|stop | vm apply|restore" >&2
+  echo "usage: $0 gadget [--ios] | net | check | teardown | port hold|off|device|reset | udc apply|restore|start|stop | vm apply|restore | draw off|on" >&2
   exit 2
 }
 
@@ -425,6 +436,9 @@ cmd_check() {
   if [[ "$(cat "$POWER_ROLE_VOTER/force_active" 2>/dev/null || true)" == 1 ]]; then
     echo "USB-C port: held as the device (port hold)"
   fi
+  if [[ "$(cat "$USB_ICL_VOTER/force_active" 2>/dev/null || true)" == 1 ]]; then
+    echo "USB-C port: no current drawn from it (draw off)"
+  fi
   if [[ -d "$UDC_GLUE" ]]; then
     echo "USB device controller: $(cat "$UDC_GLUE/mode" 2>/dev/null || echo unknown), charger detection $(cat "$USB_PSY/real_type" 2>/dev/null || echo unknown), kept a device $(cat "$PE_PARAMS/usb_compliance_mode" 2>/dev/null || echo '?')/$(cat "$UDC_GLUE/usb_compliance_mode" 2>/dev/null || echo '?')"
   fi
@@ -450,14 +464,9 @@ cmd_check() {
 # the roles their power gives them: a sink is the device.
 cmd_port() {
   case "${1:-}" in
-    hold)
-      # force_val first: forcing applies whatever force_val holds at that moment
-      { echo 1 > "$POWER_ROLE_VOTER/force_val" && echo 1 > "$POWER_ROLE_VOTER/force_active"; } 2>/dev/null ||
-        { echo "jetlink: could not force $POWER_ROLE_VOTER to hold the port" >&2; exit 1; } ;;
-    off)
-      # letting go applies the voters' own result, which is dual role
-      { echo 0 > "$POWER_ROLE_VOTER/force_active" && echo 0 > "$POWER_ROLE_VOTER/force_val"; } 2>/dev/null ||
-        { echo "jetlink: could not release $POWER_ROLE_VOTER" >&2; exit 1; } ;;
+    hold) force_voter "$POWER_ROLE_VOTER" 1 "to hold the port" || exit 1 ;;
+    # letting go applies the voters' own result, which is dual role
+    off) release_voter "$POWER_ROLE_VOTER" || exit 1 ;;
     # the kernel sends the DR_Swap and waits 100 ms for it; a refusal, or PD not
     # ready yet, is a failed write
     device) put device "$DUAL_ROLE/data_role" "the far end did not take the host role ($DUAL_ROLE/data_role)" || exit 1 ;;
@@ -497,6 +506,18 @@ put() {
     echo "jetlink: $3" >&2
     return 1
   fi
+}
+
+# A charger voter under debugfs forced to a value, and let go: force_val first,
+# since forcing applies whatever force_val holds at that moment.
+force_voter() {
+  { echo "$2" > "$1/force_val" && echo 1 > "$1/force_active"; } 2>/dev/null ||
+    { echo "jetlink: could not force $1 $3" >&2; return 1; }
+}
+
+release_voter() {
+  { echo 0 > "$1/force_active" && echo 0 > "$1/force_val"; } 2>/dev/null ||
+    { echo "jetlink: could not release $1" >&2; return 1; }
 }
 
 # One key per write, so a value the kernel rejects does not take the rest with it.
@@ -565,6 +586,17 @@ cmd_vm() {
   esac
 }
 
+# The port's input current while the link is iOS; see USB_ICL_VOTER. off forces
+# the limit to 0 and on gives the charger its own limit back. Like udc and vm,
+# undone only by on, never at an exit; a reboot clears it.
+cmd_draw() {
+  case "${1:-}" in
+    off) force_voter "$USB_ICL_VOTER" 0 "to stop drawing from the port" || exit 1 ;;
+    on) release_voter "$USB_ICL_VOTER" || exit 1 ;;
+    *) usage ;;
+  esac
+}
+
 cmd=${1:-}
 if [[ $# -gt 0 ]]; then shift; fi
 case "$cmd" in
@@ -575,5 +607,6 @@ case "$cmd" in
   port) cmd_port "$@" ;;
   udc) cmd_udc "$@" ;;
   vm) cmd_vm "$@" ;;
+  draw) cmd_draw "$@" ;;
   *) usage ;;
 esac

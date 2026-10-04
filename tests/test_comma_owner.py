@@ -648,6 +648,44 @@ class TestVmTuning(OwnerTest):
     self.assertFalse(comma_fakes.record(self.tmp).exists(), 'the restore never ran')
 
 
+class TestDraw(OwnerTest):
+  """No current drawn from the port while the link is iOS, kept on exit like the tuning."""
+
+  def test_usb_leaves_it_alone(self):
+    o = self.owner()
+    o.step()
+    o.step()
+    self.assertEqual(self.root_calls('draw'), [])
+
+  def test_ios_cuts_it_once_and_an_exit_keeps_it(self):
+    self.write('JetlinkLink', b'2')
+    o = self.owner()
+    o.step()
+    o.step()
+    o.stop = True
+    o.run()
+    self.assertEqual(self.root_calls('draw'), ['off'])
+
+  def test_leaving_ios_gives_it_back(self):
+    for setting in (b'1', b'0'):
+      with self.subTest(setting=setting):
+        self.root_run.reset_mock()
+        self.write('JetlinkLink', b'2')
+        o = self.owner()
+        o.step()
+        self.write('JetlinkLink', setting)
+        o.step()
+        self.assertEqual(self.root_calls('draw'), ['off', 'on'])
+
+  def test_a_failure_is_not_retried_every_step(self):
+    self.write('JetlinkLink', b'2')
+    self.root_run.return_value = False
+    o = self.owner()
+    o.step()
+    o.step()
+    self.assertEqual(self.root_calls('draw'), ['off'])
+
+
 class TestUsb(OwnerTest):
   """Jetlink USB: a Jetson or a Mac. The plain gadget, lent at once;
   nothing waits for a phone and nothing of the phone's runs."""

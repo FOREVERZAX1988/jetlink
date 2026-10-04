@@ -55,6 +55,11 @@ def voter(tmp: Path) -> Path:
   return tmp / 'voter'
 
 
+def usb_icl(tmp: Path) -> Path:
+  """The charger's USB_ICL voter; the script finds none until it is made."""
+  return tmp / 'usb_icl'
+
+
 def usbpd(tmp: Path) -> Path:
   """The policy engine's usbpd0 directory; the script finds none until it is made."""
   return tmp / 'usbpd0'
@@ -82,6 +87,7 @@ def run_script(tmp: Path, *args: str, timeout: float | None = None) -> subproces
     'JETLINK_PROC_SYS': str(tmp / 'sys'),
     'JETLINK_SYSCTL_PREV': str(record(tmp)),
     'JETLINK_POWER_ROLE_VOTER': str(voter(tmp)),
+    'JETLINK_USB_ICL_VOTER': str(usb_icl(tmp)),
     'JETLINK_USBPD': str(usbpd(tmp)),
     'JETLINK_DUAL_ROLE': str(dual_role(tmp)),
     'JETLINK_UDC_GLUE': str(udc_glue(tmp)),

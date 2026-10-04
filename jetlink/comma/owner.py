@@ -172,7 +172,8 @@ class Owner:
     self.transport = None
     self.stop = False
     self.dormant = False
-    self.tuned = False
+    # the link mode the root tuning was applied for, None while stock
+    self.tuned: str | None = None
     # when there was last something to do. The hold runs from here, not from
     # process start: this daemon is not restarted at ignition any more, so a
     # hold measured from its birth expires once and never applies again, and
@@ -604,20 +605,31 @@ class Owner:
       if self.tuned:
         root.run('vm', 'restore')
         root.run('udc', 'restore')
-        self.tuned = False
+        if self.tuned == 'ios':
+          root.run('draw', 'on', timeout=root.PORT_TIMEOUT)
+        self.tuned = None
       self.port.off()
       return
     self.link_step(mode == 'ios')
-    if not self.tuned:
+    if self.tuned != mode:
       # jetlink-root.sh vm: the recording VM tuning the gadget's reads need;
       # udc: the USB device side kept on for a host that powers the port
-      # (port.py). While the link is on. After the step, so the first gadget
-      # does not wait on them. Put back only when the link is turned off, never
-      # on exit: manager stops this at ignition, just as the contention starts,
-      # and a phone plugged in before it is back should still come up
-      root.run('vm', 'apply')
-      root.run('udc', 'apply')
-      self.tuned = True
+      # (port.py); draw, iOS only: no current drawn from the port, which an
+      # iPhone cannot supply. While the link is on. After the step, so the
+      # first gadget does not wait on them. Put back only when the link is
+      # turned off or leaves iOS, never on exit: manager stops this at
+      # ignition, just as the contention starts, and a phone plugged in before
+      # it is back should still come up. A start assumes the draw stock, so a
+      # cut a dead iOS owner left lasts until the reboot that clears it
+      if self.tuned is None:
+        root.run('vm', 'apply')
+        root.run('udc', 'apply')
+      if mode == 'ios':
+        if root.run('draw', 'off', timeout=root.PORT_TIMEOUT):
+          gadget.log.info("jetlink: drawing no current from the USB-C port, for an iPhone")
+      elif self.tuned == 'ios':
+        root.run('draw', 'on', timeout=root.PORT_TIMEOUT)
+      self.tuned = mode
 
   def ensure_lender(self) -> None:
     """Listen for borrowers, or say why not and try again later.
