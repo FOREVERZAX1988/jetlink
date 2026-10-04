@@ -90,6 +90,10 @@ public final class EngineHost: @unchecked Sendable {
   var session: Session?
   /// A benchmark owns the engine: frames from a comma are answered NOT_READY.
   var benchmarking = false
+  /// When the comma last did something, a frame, a hello or the load it
+  /// asked for: `warmIfIdle` goes by it.
+  var lastSeenAt: TimeInterval = 0
+  private var warmFailed = false
   let frameStats = FrameStats()
   let log = ServerLog(category: "server")
 
@@ -354,6 +358,8 @@ public final class EngineHost: @unchecked Sendable {
       engine = nil
       lock.lock()
       self.loaded = loaded
+      lastSeenAt = ProcessInfo.processInfo.systemUptime
+      warmFailed = false
       job.state = .ready
       job.detail = ""
       lock.unlock()
@@ -419,6 +425,14 @@ public final class EngineHost: @unchecked Sendable {
     try checkShapes(engine, spec: spec)
     let staging = try Staging.forModel(spec, engine: engine)
     // Warm on zeros, so the first real frame pays for nothing lazy.
+    try Self.stageZeros(staging, spec: spec)
+    let warmed = try engine.warm()
+    log.info("\(warmed)")
+    staging.reset()
+    return Loaded(sha256: spec.sha256, spec: spec, engine: engine, staging: staging)
+  }
+
+  private static func stageZeros(_ staging: any FrameStaging, spec: ModelSpec) throws {
     let warped = [UInt8](repeating: 0, count: spec.warpedBytes)
     let packed = [Float](repeating: 0, count: spec.packedCount)
     try warped.withUnsafeBytes { w in
@@ -426,10 +440,40 @@ public final class EngineHost: @unchecked Sendable {
         try staging.stage(warped: w.baseAddress!, packed: p.baseAddress!)
       }
     }
-    let warmed = try engine.warm()
-    log.info("\(warmed)")
-    staging.reset()
-    return Loaded(sha256: spec.sha256, spec: spec, engine: engine, staging: staging)
+  }
+
+  // MARK: keeping warm between sessions
+
+  /// Warm runs start this long after the comma was last seen: a joined comma
+  /// that hears nothing for 0.2 s hands back, so it has left, and a run on
+  /// zeros stays out of a drive's history. A hello waits out the gap too, so
+  /// its first frame never queues behind a warm run.
+  static let warmIdleAfter: TimeInterval = 5
+  /// And stop this long after: its rejoin backs off to 60 s, and a parked
+  /// comma should not cost the battery all night.
+  static let warmFor: TimeInterval = 120
+
+  /// One run on zeros between sessions, at the server's tick, so the next
+  /// join's first frame finds an accelerator that cools when idle awake: an
+  /// iPad's Neural Engine left idle for 20 to 60 s took 67 to 123 ms on that
+  /// frame against about 30 after it, and the comma holds a frame past 46 ms.
+  /// Returns whether it ran.
+  @discardableResult
+  func warmIfIdle(now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    guard let loaded, loaded.engine.coolsWhenIdle, !benchmarking, !warmFailed,
+      (Self.warmIdleAfter...Self.warmFor).contains(now - lastSeenAt)
+    else { return false }
+    do {
+      try Self.stageZeros(loaded.staging, spec: loaded.spec)
+      try loaded.engine.run()
+    } catch {
+      warmFailed = true
+      log.error("stopped keeping the engine warm between sessions: \(String(describing: error))")
+    }
+    loaded.staging.reset()
+    return !warmFailed
   }
 
   /// Release the engine on a client's say-so.

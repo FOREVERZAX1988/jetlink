@@ -200,6 +200,47 @@ struct ServerTests {
     }
   }
 
+  @Test("Between sessions an engine that cools runs on zeros, and the next comma still gets the Python outputs",
+    arguments: ["tiny_queued", "tiny_stateful"])
+  func keptWarmBetweenSessions(_ name: String) throws {
+    let golden = try Golden(name)
+    try serve(backend: FlakyBackend(coolsWhenIdle: true)) { server, client in
+      _ = try client.ensureEngine(model: golden.model, sha256: golden.sha256)
+      let host = server.host
+      let seen = ProcessInfo.processInfo.systemUptime
+      #expect(!host.warmIfIdle(now: seen + 1), "a comma seen a second ago may be about to send a frame")
+      #expect(host.warmIfIdle(now: seen + EngineHost.warmIdleAfter + 1))
+      #expect(!host.warmIfIdle(now: seen + EngineHost.warmFor + 5), "long after the comma was last seen")
+      // the warm run left nothing in the history the comma's frames meet
+      #expect(try client.replay(golden).frames == 8)
+      #expect(host.warmIfIdle(now: ProcessInfo.processInfo.systemUptime + EngineHost.warmIdleAfter + 1))
+      #expect(try client.replay(golden).frames == 8)
+    }
+  }
+
+  @Test("An engine that keeps warm by itself is never run between sessions")
+  func onlyCoolingEnginesAreWarmed() throws {
+    let golden = try Golden("tiny_stateful")
+    try serve { server, client in
+      _ = try client.ensureEngine(model: golden.model, sha256: golden.sha256)
+      #expect(!server.host.warmIfIdle(now: ProcessInfo.processInfo.systemUptime + EngineHost.warmIdleAfter + 1))
+    }
+  }
+
+  @Test("A warm run that fails stops the keeping warm until the next load")
+  func failedWarmStops() throws {
+    let golden = try Golden("tiny_stateful")
+    let backend = FlakyBackend(coolsWhenIdle: true)
+    try serve(backend: backend) { server, client in
+      _ = try client.ensureEngine(model: golden.model, sha256: golden.sha256)
+      let idle = ProcessInfo.processInfo.systemUptime + EngineHost.warmIdleAfter + 1
+      backend.failRuns(with: HostError.failed("test"))
+      #expect(!server.host.warmIfIdle(now: idle))
+      backend.failRuns(with: nil)
+      #expect(!server.host.warmIfIdle(now: idle + 1))
+    }
+  }
+
   @Test("The engine outlives the connection, and the next comma gets it loaded")
   func engineOutlivesConnection() throws {
     let golden = try Golden("tiny_stateful")

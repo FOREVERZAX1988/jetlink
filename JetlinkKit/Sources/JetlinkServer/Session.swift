@@ -234,6 +234,7 @@ final class Session: @unchecked Sendable {
     frames = 0
     host.lock.lock()
     host.loaded?.staging.newClient()
+    host.lastSeenAt = ProcessInfo.processInfo.systemUptime
     host.lock.unlock()
     log.info("hello from \(self.who) (seq \(message.seq))")
   }
@@ -427,6 +428,7 @@ final class Session: @unchecked Sendable {
   /// The frame itself: stage, run, read the output back. Caller holds `host.lock`.
   private func infer(_ loaded: Loaded, _ message: Message) -> InferReply {
     let started = DispatchTime.now().uptimeNanoseconds
+    host.lastSeenAt = ProcessInfo.processInfo.systemUptime
     let layout = loaded.staging.layout
     guard message.payload.count == layout.requestBytes else {
       // The offsets below come from the spec, not the wire: a client on

@@ -557,12 +557,14 @@ public final class Server: @unchecked Sendable {
 
   private var lastTick = ProcessInfo.processInfo.systemUptime
 
-  /// A frame summary a second while a comma is connected and sending. The
-  /// window is the time since the last tick, so no frame falls between two.
+  /// A frame summary a second while a comma is connected and sending, and
+  /// between sessions a warm run for an engine that cools. The window is the
+  /// time since the last tick, so no frame falls between two.
   private func tick() {
     let now = ProcessInfo.processInfo.systemUptime
     let window = now - lastTick
     lastTick = now
+    host.warmIfIdle(now: now)
     lock.lock()
     let connected = link.state == .connected
     let frames = current?.session.frames ?? 0

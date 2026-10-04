@@ -71,12 +71,14 @@ public final class OrtEngine: EngineCore, @unchecked Sendable {
   /// Android's performance hints.
   public var keepsCPUWarm: Bool { keepWarm != nil || hint != nil }
   public override var notes: String { "CPU keep-warm \(keepsCPUWarm ? "on" : "off")" }
+  public override var coolsWhenIdle: Bool { usesNeuralEngine }
 
   private let chain: [OrtSession]
   private var bindings: [[OrtBinding]] = []  // [parity][session]
   private let keepAlive: MetalKeepAlive?
   private let keepWarm: CPUKeepWarm?
   private let hint: PerformanceHint?
+  private let usesNeuralEngine: Bool
 
   /// `keepAlive` keeps the GPU clocked up between frames, `keepCPUWarm` the
   /// CPU; each only where a plan runs on that unit.
@@ -115,7 +117,8 @@ public final class OrtEngine: EngineCore, @unchecked Sendable {
     }
     self.keepAlive = keepAlive && plans.contains(where: \.usesGPU) ? MetalKeepAlive.make() : nil
     // Android holds the clocks up when told each frame's time; elsewhere a core spins.
-    let warmCPU = keepCPUWarm && plans.contains(where: \.usesNeuralEngine)
+    usesNeuralEngine = plans.contains(where: \.usesNeuralEngine)
+    let warmCPU = keepCPUWarm && usesNeuralEngine
     let hint = warmCPU ? PerformanceHint.make() : nil
     self.hint = hint
     self.keepWarm = warmCPU && hint == nil ? CPUKeepWarm() : nil

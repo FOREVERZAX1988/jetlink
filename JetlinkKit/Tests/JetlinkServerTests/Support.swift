@@ -56,9 +56,12 @@ final class FlakyBackend: EngineBackend, @unchecked Sendable {
   private var built = 0
   private var loaded = 0
   private let fields: [String: String]
+  private let coolsWhenIdle: Bool
 
-  init(describing fields: [String: String] = [:]) {
+  /// `coolsWhenIdle`: its engines say they do, as a Neural Engine one does.
+  init(describing fields: [String: String] = [:], coolsWhenIdle: Bool = false) {
     self.fields = fields
+    self.coolsWhenIdle = coolsWhenIdle
   }
 
   func describe() -> [String: String] { inner.describe().merging(fields) { $1 } }
@@ -102,17 +105,21 @@ final class FlakyBackend: EngineBackend, @unchecked Sendable {
       return loadFailure
     }
     if let failure { throw failure }
-    return FailingEngine(try inner.load(artifact: artifact, report: report)) { [weak self] in self?.lock.withLock { self?.runFailure } }
+    return FailingEngine(try inner.load(artifact: artifact, report: report), coolsWhenIdle: coolsWhenIdle) { [weak self] in
+      self?.lock.withLock { self?.runFailure }
+    }
   }
 }
 
 /// The engine it loads: the real one, whose run throws when told to.
 final class FailingEngine: Engine {
   let inner: any Engine
+  let coolsWhenIdle: Bool
   let failure: () -> (any Error)?
 
-  init(_ inner: any Engine, failure: @escaping () -> (any Error)?) {
+  init(_ inner: any Engine, coolsWhenIdle: Bool = false, failure: @escaping () -> (any Error)?) {
     self.inner = inner
+    self.coolsWhenIdle = coolsWhenIdle
     self.failure = failure
   }
 

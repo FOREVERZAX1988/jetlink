@@ -40,6 +40,9 @@ public protocol Engine: AnyObject {
   /// What runs the model when the backend's device does not say it all:
   /// LiteRT's NPU profile falls back to the GPU. Empty otherwise.
   var accelerator: String { get }
+  /// Its first run after a long idle is slow, so the host runs it on zeros
+  /// between sessions (`EngineHost.warmIfIdle`): Apple's Neural Engine.
+  var coolsWhenIdle: Bool { get }
   /// Where the host writes an input. For every input but a looped pair's
   /// state_ one the pointer stays the same from load to close, as does
   /// `output`'s for every output the engine does not loop: staging looks
@@ -81,6 +84,7 @@ public protocol EngineBackend: AnyObject, Sendable {
 extension Engine {
   public var notes: String { "" }
   public var accelerator: String { "" }
+  public var coolsWhenIdle: Bool { false }
   public func flushTiming() {}
 }
 
