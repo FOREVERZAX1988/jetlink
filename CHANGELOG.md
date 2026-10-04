@@ -1,13 +1,13 @@
 Jetlink v0.8.2
 ==============
 **Mac**
-* **Updates:** Jetlink offers each new release and installs it when you agree. **Check for Updates…** looks now. From 0.8.1, replace the app by hand one last time.
-* **Lid Closed:** A new setting keeps serving with the lid closed. Thanks Nick (@mzdnick)!
+* **Updates:** The app now updates itself. From 0.8.1, replace it by hand one last time.
+* **Lid Closed:** New setting to keep serving with the lid closed. Thanks Nick (@mzdnick)!
 
 **General Updates & Fixes**
-* **Named Jetlink:** The comma's setting is now **Settings > Models > Jetlink** (was Accelerator Link).
-* **Cable Hint:** The comma 4's models card says to check the cable after repeated drops.
-* **TCP Port:** Hidden, it is not used to drive. iPhone & Android: tap Version seven times.
+* The comma's setting is now called **Jetlink** (was Accelerator Link).
+* The comma 4 says to check the cable after repeated drops.
+* Removed TCP debugging from the UI.
 * **Update the comma:** zoompilot's `develop` branch pins Jetlink v0.8.2.
 
 Jetlink v0.8.1
