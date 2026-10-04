@@ -90,7 +90,6 @@ struct SettingsScreen: View {
   /// never uses it: over the cable the phone dials the comma.
   private var developer: some View {
     Section {
-      Toggle("Developer", isOn: Bindable(app.settings).developer)
       LabeledContent("Port") {
         TextField("5599", text: $portText)
           .keyboardType(.numberPad)

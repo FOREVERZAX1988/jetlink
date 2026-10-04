@@ -13,7 +13,6 @@ extension PreviewData {
     runtimeVersion: "1.29.0",
     device: "coreml-Apple_M1_Pro",
     cache: "/Users/me/Library/Application Support/Jetlink/cache",
-    transport: "usb",
     port: nil
   )
 

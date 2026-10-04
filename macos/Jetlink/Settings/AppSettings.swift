@@ -31,8 +31,7 @@ enum BackendChoice: String, CaseIterable, Codable, Sendable {
 }
 
 /// How the comma reaches the server: its USB gadget, or TCP for a bench client.
-/// Settings shows no choice: TCP is a developer switch, `developerTransport`.
-enum TransportChoice: String, CaseIterable, Codable, Sendable {
+enum TransportChoice: String, Sendable {
   case usb, tcp
 }
 
@@ -82,9 +81,8 @@ final class AppSettings {
     // A stored "tinygrad" (the removed Python backend) or "ane" (an older name
     // for the split) reads as Automatic.
     backend = BackendChoice(rawValue: defaults.string(forKey: Key.backend) ?? "") ?? .auto
-    // Settings used to offer TCP under "transport". With the picker gone a
-    // stored "tcp" would leave the app on TCP with no way back, so it goes.
-    defaults.removeObject(forKey: "transport")
+    // Not "transport": that is what the removed Settings picker stored, and a
+    // stored "tcp" there must not keep the app off USB.
     transport = TransportChoice(rawValue: defaults.string(forKey: Key.developerTransport) ?? "") ?? .usb
     let storedPort = defaults.integer(forKey: Key.tcpPort)
     tcpPort = storedPort > 0 ? storedPort : AppSettings.defaultTCPPort

@@ -63,7 +63,6 @@ struct ServerStoreTests {
     // What the removed Connection picker stored stays behind and means USB.
     defaults.set("tcp", forKey: "transport")
     #expect(AppSettings(defaults: defaults).transport == .usb)
-    #expect(defaults.object(forKey: "transport") == nil)
     defaults.set("tcp", forKey: AppSettings.Key.developerTransport)
     #expect(AppSettings(defaults: defaults).transport == .tcp)
   }

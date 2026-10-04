@@ -195,8 +195,10 @@ public final class Server: @unchecked Sendable {
     return listener != nil
   }
 
-  /// Listens again after the old socket was taken away. The engine stays loaded.
+  /// Listens again after the old socket was taken away. The engine stays
+  /// loaded. A server configured not to listen stays that way.
   public func reopenListener() throws {
+    guard configuration.listen else { return }
     lock.lock()
     let old = listener
     let isStopped = stopped

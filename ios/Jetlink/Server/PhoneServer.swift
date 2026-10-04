@@ -160,7 +160,7 @@ final class PhoneServer: ServerControlling {
 
   /// iOS takes a suspended app's listening socket; listen again on the way back.
   func becameActive() {
-    guard runState == .serving, settings.developer, let server, !server.isListening else { return }
+    guard runState == .serving, let server, !server.isListening else { return }
     do {
       try server.reopenListener()
       log.info("listening again after the app was suspended")

@@ -121,8 +121,8 @@ reduce delays between frames but use more power.
 
 Tap **Version** under **About** seven times to show **Developer** settings: a
 port that bench tools on a Mac can reach the phone on over Wi-Fi. Driving does
-not use it; the phone dials the comma over the cable. Turn **Developer** off,
-or tap **Version** seven times again, to hide it and close the port.
+not use it; the phone dials the comma over the cable. Tap **Version** seven
+times again to hide it and close the port.
 
 </details>
 

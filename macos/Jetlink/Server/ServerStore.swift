@@ -13,7 +13,6 @@ struct ServerInfo: Equatable, Sendable {
   var runtimeVersion: String
   var device: String
   let cache: String
-  let transport: String
   let port: Int?
 }
 
@@ -108,8 +107,7 @@ final class ServerStore: ServerControlling {
     let choice = settings.backend
     // The controller's first .server event fills in the backend fields.
     let seed = ServerInfo(
-      version: ServerStore.appVersion, choice: settings.backend, runtimeVersion: "", device: "", cache: settings.cacheDirectory.path(percentEncoded: false),
-      transport: settings.transport.rawValue, port: configuration.listen ? Int(configuration.port) : nil)
+      version: ServerStore.appVersion, choice: settings.backend, runtimeVersion: "", device: "", cache: settings.cacheDirectory.path(percentEncoded: false), port: configuration.listen ? Int(configuration.port) : nil)
     // Creating the cache, the engine cache's first look at the disk and the
     // first inventory are file work the main thread should not wait on.
     startTask = Task { [weak self] in

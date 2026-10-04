@@ -126,7 +126,8 @@ data class SettingsValues(
     val keepScreenOn: Boolean = true,
     /**
      * Seven taps on Version turn it on: the Developer section, and the server
-     * listening on [port] for bench tools. The comma needs neither.
+     * listening on [port] for bench tools. The comma needs neither. The
+     * emulator, with no USB host, starts with it on.
      */
     val developer: Boolean = false,
 )
@@ -161,7 +162,7 @@ class Settings(context: Context) {
             keepNpuAwake = prefs.getBoolean(KEEP_NPU_AWAKE, defaults.keepNpuAwake),
             keepCpuAwake = prefs.getBoolean(KEEP_CPU_AWAKE, defaults.keepCpuAwake),
             keepScreenOn = prefs.getBoolean(KEEP_SCREEN_ON, defaults.keepScreenOn),
-            developer = prefs.getBoolean(DEVELOPER, defaults.developer),
+            developer = prefs.getBoolean(DEVELOPER, Chip.isEmulator),
         )
     }
 

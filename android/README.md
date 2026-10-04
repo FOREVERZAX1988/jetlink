@@ -102,9 +102,9 @@ for bit, and is held to `verify_parity`'s correlation there instead.
 
 An Android emulator on an Apple silicon Mac runs arm64, so the APK runs there on
 the CPU (Settings > Processor > CPU). It has no USB host, so a bench tool on the
-Mac stands in for the comma over TCP. The emulator always listens on the port; a
-phone listens only with the developer setting on (tap Version in Settings >
-About seven times):
+Mac stands in for the comma over TCP. Jetlink listens on the port only with the
+developer setting on, which the emulator starts with (tap Version in Settings >
+About seven times to toggle it):
 
 ```
 adb forward tcp:5599 tcp:5599
