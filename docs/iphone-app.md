@@ -10,8 +10,8 @@
   Use a USB 3 model; see [compatible devices](#usb-3-matters).
 - About 3 GB free per model.
 - A comma 3X or comma 4, powered separately.
-- A powered USB 3 USB-C hub and USB 3 data cable. Direct USB-C connections
-  can be unreliable; use the hub to connect and keep the phone charging.
+- A USB 3 USB-C data cable. The comma charges the phone over it. A powered
+  USB 3 hub also works.
 
 <a id="install"></a>
 
@@ -33,7 +33,7 @@
 2. Set **Settings > Models > Jetlink** to **iOS**.
    Leave **Big Model** at its default.
 3. Open Jetlink on the phone and allow **Local Network** access.
-4. Connect the phone to the comma through the powered hub.
+4. Connect the phone to the comma with the cable.
 5. Keep Jetlink on screen and wait for **Connected over USB 3**.
 
 Stay offroad and online until the comma's home-button icon turns **green**.
@@ -82,7 +82,7 @@ To download a model ahead of time, see [Models](models.md#prepare-ahead-of-time-
 | --- | --- |
 | Build expired | Install the newest available build in TestFlight. Builds expire after 90 days. |
 | App cannot find the comma | Allow **Local Network** access and check the comma's **Jetlink** setting is **iOS**. |
-| Direct cable fails or comma restarts | Use a powered USB 3 hub. |
+| Direct cable fails or comma restarts | Update the comma, or use a powered USB 3 hub. |
 | Connection says **USB 2** | Check that the phone, cable, and hub all support USB 3. |
 | Slow frames or repeated fallbacks | Let the phone cool, repeat the 10-minute benchmark, and save the logs. |
 

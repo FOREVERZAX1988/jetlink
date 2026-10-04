@@ -1,3 +1,14 @@
+Jetlink v0.8.3
+==============
+**iPhone & iPad**
+* **USB-C to C Cable:** Works without a hub, and the comma charges the phone.
+* Frames reach the phone faster over the cable.
+
+**General Updates & Fixes**
+* The Neural Engine stays warm between sessions, so the first frame after a rejoin is on time (iPhone, iPad, Mac).
+* The comma 4 no longer gets stuck on "waiting for jetlink" after a rejoin.
+* **Update the comma:** zoompilot's `develop` branch pins Jetlink v0.8.3.
+
 Jetlink v0.8.2
 ==============
 **Mac**
