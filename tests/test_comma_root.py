@@ -133,7 +133,8 @@ def test_the_script_passes_shellcheck():
 # what apply records for restore: stock AGNOS runs the dirty limits in ratio
 # mode and the kernel drops a 0 written to a *_bytes key, so their ratio keys
 # stand in for them
-RECORDED = ('vm.dirty_ratio', 'vm.dirty_background_ratio')
+# the dirty limits by their ratio keys (stock is ratio mode), the socket caps as they are
+RECORDED = ('vm.dirty_ratio', 'vm.dirty_background_ratio', 'net.core.wmem_max', 'net.core.rmem_max')
 
 
 def test_vm_apply_records_the_stock_values_once_and_applies_ours(tmp_path):

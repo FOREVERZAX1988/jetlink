@@ -23,10 +23,12 @@ STOCK = {
   'vm.dirty_background_bytes': '0',
   'vm.dirty_ratio': '20',
   'vm.dirty_background_ratio': '10',
+  'net.core.wmem_max': '229376',
+  'net.core.rmem_max': '229376',
 }
 # what vm apply writes, read off the script so the values are said once
 TUNED = dict(pair.split('=') for pair in
-             re.search(r'^VM_SYSCTLS=\((.*)\)$', root.SCRIPT.read_text(), re.M).group(1).split())
+             re.search(r'^VM_SYSCTLS=\((.*?)\)$', root.SCRIPT.read_text(), re.M | re.S).group(1).split())
 
 
 def proc_sys(tmp: Path, values: dict[str, str]) -> None:
