@@ -48,17 +48,53 @@ For CI releases and signing secrets, see [publishing](../docs/publishing.md).
 SIGN_IDENTITY="Developer ID Application: Name (TEAMID)" make -C macos app
 NOTARY_KEY_ID=... NOTARY_ISSUER_ID=... NOTARY_KEY_PATH=AuthKey_XXXX.p8 make -C macos notarize
 SIGN_IDENTITY="Developer ID Application: Name (TEAMID)" make -C macos dmg
+SPARKLE_ED_KEY_FILE=jetlink-ed25519-private.key make -C macos appcast
 ```
 
 `SIGN_IDENTITY` defaults to `-` (ad hoc), which is all a machine without a
 Developer ID certificate can do; such a build runs locally but Gatekeeper will
-not accept it on another Mac. The hardened runtime is on either way.
+not accept it on another Mac. The hardened runtime is on either way. An ad hoc
+build is signed with library validation off: it checks that the app and
+Sparkle share a Team ID, and an ad hoc signature has none. A Debug build, from
+Xcode or `make test`, has no hardened runtime for the same reason.
+
+## Updates
+
+The app updates itself from GitHub releases with
+[Sparkle](https://sparkle-project.org) (`Jetlink/App/UpdateStore.swift`,
+pinned in `project.yml`). Only a release build checks: a version from a tag,
+a Team ID signature, and a feed and key in `Info.plist`. A `make app` build
+(`0.8.1-3-gabc1234`, ad hoc) shows **This build does not update itself** in
+Settings.
+
+`make appcast` signs the DMG and writes `build/appcast.xml`, the feed the
+release carries ([publishing](../docs/publishing.md#mac-updates)). To try an
+update locally, sign both builds with a Team ID (an Apple Development
+identity will do), point them at a feed of your own and a throwaway key, and
+serve the folder:
+
+```
+export JETLINK_UPDATE_FEED_URL=http://127.0.0.1:8765/appcast.xml JETLINK_UPDATE_PUBLIC_KEY=<test public key>
+JETLINK_VERSION=0.8.0 JETLINK_BUILD=9000 SIGN_IDENTITY="Apple Development: ..." make -C macos app   # copy it out: the old one
+export JETLINK_VERSION=0.8.1 JETLINK_BUILD=9001
+SIGN_IDENTITY="Apple Development: ..." make -C macos app dmg
+SPARKLE_ED_KEY_FILE=test.key UPDATE_DOWNLOAD_BASE=http://127.0.0.1:8765 make -C macos appcast
+```
+
+Then put the DMG and `appcast.xml` in one folder, serve it with
+`python3 -m http.server 8765 --bind 127.0.0.1`, and open the old copy. A
+scheduled check shows its window only once the app is in front, as Sparkle
+does for any app with a Dock icon. The new build's version has to have a
+`CHANGELOG.md` section for the notes to show; without one the window links
+to the release page. `defaults delete io.zoompilot.jetlink SULastCheckTime`
+makes the next launch check again.
 
 ## Outputs
 
-Everything lands in `macos/build/`: `Jetlink.app`, `DerivedData/`, and from
+Everything lands in `macos/build/`: `Jetlink.app`, `DerivedData/`, from
 `make dmg` the `Jetlink-<version>-macOS.dmg` and `SHA256SUMS` (plus a `.zip`
-for an ad hoc build). None of it is committed.
+for an ad hoc build), and from `make appcast` the `appcast.xml`. None of it is
+committed.
 
 The app icon is generated once by `scripts/make-icon.swift` and its output is
 committed under `Resources/Assets.xcassets`.

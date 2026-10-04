@@ -8,11 +8,15 @@
 # Gotchas:
 #   - codesign --deep is not used for signing: it would sign any nested code
 #     with the app's entitlements. The frameworks the app embeds (the Swift
-#     server's onnxruntime) are signed here first, deepest first; any other
-#     nested code stops the script.
+#     server's onnxruntime, Sparkle) are signed here first, deepest first; any
+#     other nested code stops the script.
 #   - Ad hoc ("-") cannot carry a secure timestamp, so --timestamp is dropped
 #     in that case. --options runtime stays on either way so a local build
 #     behaves like a release one.
+#   - The hardened runtime's library validation lets the app load Sparkle only
+#     when both carry the same Team ID, and an ad hoc signature has none. An
+#     ad hoc app is signed with library validation off; a Developer ID one
+#     keeps it.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -28,6 +32,11 @@ TIMESTAMP=--timestamp
 if [ "$SIGN_IDENTITY" = "-" ]; then
   TIMESTAMP=--timestamp=none
   echo "==> signing ad hoc; this build is for local use only"
+  ADHOC_ENTITLEMENTS="$(mktemp -t jetlink-entitlements)"
+  trap 'rm -f "$ADHOC_ENTITLEMENTS"' EXIT
+  cp "$APP_ENTITLEMENTS" "$ADHOC_ENTITLEMENTS"
+  /usr/libexec/PlistBuddy -c "Add :com.apple.security.cs.disable-library-validation bool true" "$ADHOC_ENTITLEMENTS" >/dev/null
+  APP_ENTITLEMENTS="$ADHOC_ENTITLEMENTS"
 fi
 
 NESTED="$(find "$APP/Contents" \( -path "$APP/Contents/MacOS" -o -path "$APP/Contents/Frameworks" \) -prune -o -type f \( -name '*.dylib' -o -name '*.so' \) -print)"
@@ -46,6 +55,20 @@ if [ -d "$FRAMEWORKS" ]; then
   while IFS= read -r -d '' f; do
     codesign --force --options runtime "$TIMESTAMP" --sign "$SIGN_IDENTITY" "$f"
   done < <(find "$FRAMEWORKS" -type f -name '*.dylib' -print0)
+  # Sparkle's two helpers, before the framework that seals them, in the order
+  # Sparkle's documentation gives. Its XPC services would need their
+  # entitlements kept; Jetlink is not sandboxed, so build-app.sh removes them.
+  SPARKLE="$FRAMEWORKS/Sparkle.framework"
+  if [ -d "$SPARKLE" ]; then
+    if [ -n "$(find "$SPARKLE" -name '*.xpc' -print -quit)" ]; then
+      echo "error: Sparkle's XPC services are in the bundle; build-app.sh should have removed them" >&2
+      exit 1
+    fi
+    for helper in "$SPARKLE/Versions/B/Autoupdate" "$SPARKLE/Versions/B/Updater.app"; do
+      [ -e "$helper" ] || { echo "error: no $helper; has Sparkle's layout changed?" >&2; exit 1; }
+      codesign --force --options runtime "$TIMESTAMP" --sign "$SIGN_IDENTITY" "$helper"
+    done
+  fi
   for f in "$FRAMEWORKS"/*.framework; do
     [ -e "$f" ] || continue
     codesign --force --options runtime "$TIMESTAMP" --sign "$SIGN_IDENTITY" "$f"

@@ -12,6 +12,7 @@ final class AppState {
   let models: ModelStore
   let logs: LogBuffer
   let loginItem: LoginItem
+  let updates: UpdateStore
 
   @ObservationIgnored private let log = Logger(subsystem: "io.zoompilot.jetlink", category: "app")
   @ObservationIgnored private var launched = false
@@ -25,6 +26,7 @@ final class AppState {
     self.server = server
     self.models = ModelStore(server: server)
     self.loginItem = LoginItem()
+    self.updates = UpdateStore(isCommaConnected: { [weak server] in server?.link.state == .connected })
   }
 
   /// Called once, when the app has finished launching.

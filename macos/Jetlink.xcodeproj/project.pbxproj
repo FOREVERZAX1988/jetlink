@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		03412F52376FDE14C44E2B97 /* SleepAssertion.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAD2FD13D959DA5181B293AD /* SleepAssertion.swift */; };
 		092E93B3AA9F1FB05797B5C1 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 844E85B73DDDBD015303585D /* AppState.swift */; };
+		0E3A8801C432A8BA4E8A6345 /* UpdateStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE571201745E3892BE597FEA /* UpdateStoreTests.swift */; };
 		15023ACD3AC6BCE6E2D2CD0A /* JetlinkKit in Frameworks */ = {isa = PBXBuildFile; productRef = EE168AFAF92FF522E4DD799C /* JetlinkKit */; };
 		16F27CC89C19E59E5F00C3FC /* LogFileWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3D152F2F5F59D549213C13E /* LogFileWriter.swift */; };
 		1BA2A83D1E8AB9FCB9B9737F /* MenuBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C3E6AEE6E1472D196F90143 /* MenuBarView.swift */; };
@@ -22,6 +23,7 @@
 		58B18912208E84CE63333B27 /* LoginItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BC689149B8F0405427AAC4C /* LoginItem.swift */; };
 		5F2C446BE10555BEBEF9A9AF /* ModelsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C6279207493AD7D245284F1 /* ModelsView.swift */; };
 		6386F65E1957704F8DB80A89 /* LogFileWriterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D092AAA6AC91B0C7C9DAA915 /* LogFileWriterTests.swift */; };
+		8352E7FC2CE0A3FF763EF8D0 /* UpdateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D78E720472943E329B54F269 /* UpdateStore.swift */; };
 		8B167F9986DACB4E316DC397 /* JetlinkApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 868D0C6D327E8A2A54106C5C /* JetlinkApp.swift */; };
 		94AF22CB55B2A7E5A27FE804 /* ServerStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E1CDBA7777C9F3DFCE54F56 /* ServerStoreTests.swift */; };
 		A16EA313C504C7BBDDCED9CC /* StatusView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3047F8C242F98154043E594 /* StatusView.swift */; };
@@ -29,6 +31,7 @@
 		B3053E7EB6D907079B40FBE5 /* MenuBarGlyph.swift in Sources */ = {isa = PBXBuildFile; fileRef = B65A2518EE35072CBA30DA60 /* MenuBarGlyph.swift */; };
 		BC2C8BEE97C8C36333DCE538 /* JetlinkServer in Frameworks */ = {isa = PBXBuildFile; productRef = 18188F707063EC9D73EC6510 /* JetlinkServer */; };
 		C17ECDB8A4833CBCF16B9746 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6B71A2709AC0F259D4486CB6 /* Assets.xcassets */; };
+		C5A26CB41E0083A447B027D2 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 44FD00D75D4A6091AC78684E /* Sparkle */; };
 		C5BD297534DB35414E8EE4A4 /* LogsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C8A278FA961C026335DCFD8 /* LogsView.swift */; };
 		C97C593B2028CC112617A42C /* JetlinkORT in Frameworks */ = {isa = PBXBuildFile; productRef = 278B898DF1DED4B7671FF5F5 /* JetlinkORT */; };
 		D670F7279D6E2E827E607299 /* JetlinkUI in Frameworks */ = {isa = PBXBuildFile; productRef = 95031BC76E32EFCF41AB88C6 /* JetlinkUI */; };
@@ -68,11 +71,13 @@
 		CED6B0A4A42A9AD8B7FD9EE1 /* FormattingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FormattingTests.swift; sourceTree = "<group>"; };
 		D092AAA6AC91B0C7C9DAA915 /* LogFileWriterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogFileWriterTests.swift; sourceTree = "<group>"; };
 		D2C148B355E2F23FF9FA6846 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		D78E720472943E329B54F269 /* UpdateStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateStore.swift; sourceTree = "<group>"; };
 		DAD2FD13D959DA5181B293AD /* SleepAssertion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SleepAssertion.swift; sourceTree = "<group>"; };
 		DE2AA8426482FBAC83449100 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		E3D152F2F5F59D549213C13E /* LogFileWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogFileWriter.swift; sourceTree = "<group>"; };
 		EF0AFDE7D421142462A1EAC2 /* MainWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainWindow.swift; sourceTree = "<group>"; };
 		F3F05DFEF6D33AC14D49161F /* JetlinkKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = JetlinkKit; path = ../JetlinkKit; sourceTree = SOURCE_ROOT; };
+		FE571201745E3892BE597FEA /* UpdateStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateStoreTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -84,6 +89,7 @@
 				D670F7279D6E2E827E607299 /* JetlinkUI in Frameworks */,
 				BC2C8BEE97C8C36333DCE538 /* JetlinkServer in Frameworks */,
 				C97C593B2028CC112617A42C /* JetlinkORT in Frameworks */,
+				C5A26CB41E0083A447B027D2 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -104,6 +110,7 @@
 				CED6B0A4A42A9AD8B7FD9EE1 /* FormattingTests.swift */,
 				D092AAA6AC91B0C7C9DAA915 /* LogFileWriterTests.swift */,
 				8E1CDBA7777C9F3DFCE54F56 /* ServerStoreTests.swift */,
+				FE571201745E3892BE597FEA /* UpdateStoreTests.swift */,
 			);
 			path = JetlinkTests;
 			sourceTree = "<group>";
@@ -143,6 +150,7 @@
 				D2C148B355E2F23FF9FA6846 /* AppDelegate.swift */,
 				844E85B73DDDBD015303585D /* AppState.swift */,
 				868D0C6D327E8A2A54106C5C /* JetlinkApp.swift */,
+				D78E720472943E329B54F269 /* UpdateStore.swift */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -231,6 +239,7 @@
 				95031BC76E32EFCF41AB88C6 /* JetlinkUI */,
 				18188F707063EC9D73EC6510 /* JetlinkServer */,
 				278B898DF1DED4B7671FF5F5 /* JetlinkORT */,
+				44FD00D75D4A6091AC78684E /* Sparkle */,
 			);
 			productName = Jetlink;
 			productReference = C8ECBD9F702381594E2513CB /* Jetlink.app */;
@@ -283,6 +292,7 @@
 			mainGroup = 53612B9A74E54171CC9B3001;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				44ECF3B25C9CBE34391079F1 /* XCRemoteSwiftPackageReference "Sparkle" */,
 				7DDDD6E168B195356BC49814 /* XCLocalSwiftPackageReference "../JetlinkKit" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -315,6 +325,7 @@
 				3C9F2035F85C05A1F01D36AC /* FormattingTests.swift in Sources */,
 				6386F65E1957704F8DB80A89 /* LogFileWriterTests.swift in Sources */,
 				94AF22CB55B2A7E5A27FE804 /* ServerStoreTests.swift in Sources */,
+				0E3A8801C432A8BA4E8A6345 /* UpdateStoreTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -341,6 +352,7 @@
 				3D4B2EF59A059605926C4E6A /* SettingsView.swift in Sources */,
 				03412F52376FDE14C44E2B97 /* SleepAssertion.swift in Sources */,
 				A16EA313C504C7BBDDCED9CC /* StatusView.swift in Sources */,
+				8352E7FC2CE0A3FF763EF8D0 /* UpdateStore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -362,8 +374,11 @@
 				CODE_SIGN_ENTITLEMENTS = Resources/Jetlink.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
 				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = NO;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				INFOPLIST_FILE = Resources/Info.plist;
+				JETLINK_UPDATE_FEED_URL = "https://github.com/zoompilot/jetlink/releases/latest/download/appcast.xml";
+				JETLINK_UPDATE_PUBLIC_KEY = "Fy8Q4q7tZqdU91t94/uVb6M5aeHp9z3oOLsfO4/NNY4=";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -399,6 +414,8 @@
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				INFOPLIST_FILE = Resources/Info.plist;
+				JETLINK_UPDATE_FEED_URL = "https://github.com/zoompilot/jetlink/releases/latest/download/appcast.xml";
+				JETLINK_UPDATE_PUBLIC_KEY = "Fy8Q4q7tZqdU91t94/uVb6M5aeHp9z3oOLsfO4/NNY4=";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -602,6 +619,17 @@
 		};
 /* End XCLocalSwiftPackageReference section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+		44ECF3B25C9CBE34391079F1 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = exactVersion;
+				version = 2.10.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
 /* Begin XCSwiftPackageProductDependency section */
 		18188F707063EC9D73EC6510 /* JetlinkServer */ = {
 			isa = XCSwiftPackageProductDependency;
@@ -610,6 +638,11 @@
 		278B898DF1DED4B7671FF5F5 /* JetlinkORT */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = JetlinkORT;
+		};
+		44FD00D75D4A6091AC78684E /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 44ECF3B25C9CBE34391079F1 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
 		};
 		95031BC76E32EFCF41AB88C6 /* JetlinkUI */ = {
 			isa = XCSwiftPackageProductDependency;

@@ -10,7 +10,7 @@ can be updated separately.
 | --- | --- |
 | Comma | Update in **Settings > Software** and let it reboot. |
 | Jetson or Linux PC | Run `jetlink update`. Settings are kept; a failed update restores the previous server. |
-| Mac | Quit Jetlink, replace it with the new release, and reopen it. |
+| Mac | Jetlink offers each new release and installs it when you agree. **Check for Updates…** looks now. Version 0.8.1 and earlier: quit Jetlink, replace it with the new release, and reopen it. |
 | iPhone or iPad | Install the newest build in TestFlight, or enable automatic updates. |
 | Android | Install the new release's APK over the old one. Models and settings are kept. |
 

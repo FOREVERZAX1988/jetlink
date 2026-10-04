@@ -10,7 +10,9 @@
 # none of them the build still runs and produces an ad hoc signed zip labelled
 # unsigned, so a fork can cut its own release. The APK's key is three more;
 # without them a fork's APK is signed with the runner's debug key, and the
-# notes say so, while zoompilot/jetlink's release stops.
+# notes say so, while zoompilot/jetlink's release stops. The Mac app's update
+# feed needs one more, SPARKLE_ED_PRIVATE_KEY: a fork without it ships no feed,
+# and zoompilot/jetlink's release stops.
 name: Release
 
 on:
@@ -148,6 +150,9 @@ jobs:
           echo "NOTARY_KEY_PATH=$RUNNER_TEMP/AuthKey.p8" >> "$GITHUB_ENV"
 
       - name: Build and sign the app
+        env:
+          # The feed installed copies check: this repository's latest release.
+          JETLINK_UPDATE_FEED_URL: https://github.com/${{ github.repository }}/releases/latest/download/appcast.xml
         run: |
           # SIGN_IDENTITY is in the environment only when the step above ran;
           # the scripts default it to "-" (ad hoc) otherwise.
@@ -174,6 +179,26 @@ jobs:
           # release artifact and it matches the upload pattern.
           rm -f macos/build/Jetlink-notarize.zip
           make -C macos dmg
+
+      - name: Write the update feed
+        # An unsigned build does not update itself, so it has no feed.
+        if: env.HAVE_SIGNING == 'true'
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+          UPSTREAM: ${{ github.repository == 'zoompilot/jetlink' }}
+        run: |
+          # appcast.xml goes on the release with the DMG. Installed copies
+          # find it at releases/latest/download/appcast.xml, so without it no
+          # one would be offered this release.
+          if [ -z "$SPARKLE_ED_PRIVATE_KEY" ]; then
+            if [ "$UPSTREAM" = true ]; then
+              echo "error: SPARKLE_ED_PRIVATE_KEY is not set; installed copies would never see this release" >&2
+              exit 1
+            fi
+            echo "::warning::no SPARKLE_ED_PRIVATE_KEY, so this release has no update feed"
+            exit 0
+          fi
+          make -C macos appcast
 
       - name: Label an unsigned build
         if: env.HAVE_SIGNING != 'true'
@@ -202,6 +227,7 @@ jobs:
           path: |
             macos/build/Jetlink-*.dmg
             macos/build/Jetlink-*.zip
+            macos/build/appcast.xml
 
   android-swift:
     name: Swift server for Android
@@ -481,15 +507,10 @@ jobs:
             exit 1
           fi
           # The notes are the tag's section of CHANGELOG.md, less the heading
-          # the release title repeats and any trailing blank lines. A tag
-          # without a section gets GitHub's generated notes.
-          awk -v heading="Jetlink $GITHUB_REF_NAME" '
-            section && /^Jetlink v[0-9]/ { exit }
-            section && /^=+$/ { next }
-            section && /^$/ { if (started) blank = blank "\n"; next }
-            section { printf "%s%s\n", blank, $0; blank = ""; started = 1 }
-            $0 == heading { section = 1 }
-          ' CHANGELOG.md > changelog.md
+          # the release title repeats. A tag without a section gets GitHub's
+          # generated notes. The Mac app's update window shows the same
+          # sections (macos/scripts/make-appcast.sh).
+          python3 scripts/changelog.py notes "$GITHUB_REF_NAME" > changelog.md
           if [ -s changelog.md ]; then
             ARGS=(--notes-file changelog.md --title "Jetlink $GITHUB_REF_NAME")
           else

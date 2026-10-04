@@ -64,6 +64,7 @@ extension View {
       .environment(appState.server)
       .environment(appState.models)
       .environment(appState.logs)
+      .environment(appState.updates)
   }
 }
 
@@ -72,6 +73,12 @@ struct AppCommands: Commands {
   let navigation: Navigation
 
   var body: some Commands {
+    CommandGroup(after: .appInfo) {
+      if appState.updates.isAvailable {
+        Button("Check for Updates…") { appState.updates.checkForUpdates() }
+          .disabled(!appState.updates.canCheckForUpdates)
+      }
+    }
     CommandGroup(replacing: .newItem) {}
     CommandGroup(after: .sidebar) {
       Divider()

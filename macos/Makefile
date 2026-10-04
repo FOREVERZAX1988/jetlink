@@ -2,6 +2,7 @@
 #
 #   make app      the whole thing: project, build, sign
 #   make smoke    launch the built app and talk to its server over TCP
+#   make appcast  sign the DMG for Sparkle and write its update feed
 #   make dev      open the project in Xcode
 #
 # Every recipe runs under bash with `set -euo pipefail`, so a failing command
@@ -25,7 +26,7 @@ SIGN_IDENTITY ?= -
 export JETLINK_VERSION
 export JETLINK_BUILD
 
-.PHONY: all project app sign notarize dmg test smoke dev clean
+.PHONY: all project app sign notarize dmg appcast test smoke dev clean
 
 all: app
 
@@ -49,6 +50,10 @@ notarize:
 dmg:
 	SIGN_IDENTITY="$(SIGN_IDENTITY)" $(MACOS_DIR)/scripts/make-dmg.sh $(APP)
 
+# After dmg. Needs SPARKLE_ED_PRIVATE_KEY or SPARKLE_ED_KEY_FILE.
+appcast:
+	$(MACOS_DIR)/scripts/make-appcast.sh $(APP)
+
 test: project
 	xcodebuild test -project $(MACOS_DIR)/Jetlink.xcodeproj -scheme Jetlink \
 	  -destination 'platform=macOS' -derivedDataPath $(BUILD)/DerivedData \
@@ -67,4 +72,4 @@ dev: project
 # gone since this release, left behind; clean takes them too.
 clean:
 	rm -rf $(BUILD)/Jetlink.app $(BUILD)/DerivedData $(BUILD)/python $(BUILD)/downloads $(BUILD)/dmg-stage
-	rm -f $(BUILD)/Jetlink-*.dmg $(BUILD)/Jetlink-*.zip $(BUILD)/SHA256SUMS $(BUILD)/icon.png
+	rm -f $(BUILD)/Jetlink-*.dmg $(BUILD)/Jetlink-*.zip $(BUILD)/SHA256SUMS $(BUILD)/icon.png $(BUILD)/appcast.xml

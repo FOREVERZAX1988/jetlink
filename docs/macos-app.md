@@ -68,7 +68,13 @@ To download a model ahead of time, see [Models](models.md#prepare-ahead-of-time-
 | Prevent sleep while server is running | Prevent idle sleep on power. On battery, keep the lid open. |
 | Prevent sleep with the lid closed | Also on battery, with the lid open or closed. Normal sleep returns when the server stops. |
 | Cache folder | Choose where models are stored. Restart the server to apply. |
+| Check for updates automatically | Look for a new release once a day. **Check for Updates…**, in the Jetlink menu or the menu bar menu, looks now. |
+| Download and install automatically | Download a new release in the background and install it when Jetlink quits. |
 | Connection | Keep **USB** for driving. **TCP** is for testing. |
+
+Jetlink never shows an update while a comma is connected. A release found then
+waits in the menu bar menu as **Update to Jetlink X…**, and appears the next
+time you open Jetlink with the comma disconnected.
 
 <a id="backends"></a>
 <a id="the-server"></a>

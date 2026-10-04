@@ -49,6 +49,14 @@ XCODEBUILD_ARGS=(
   "CODE_SIGN_IDENTITY=-"
   CODE_SIGNING_ALLOWED=YES
 )
+# Sparkle's feed and public key default to zoompilot/jetlink's (project.yml).
+# The release workflow points the feed at its own repository; a test build can
+# point both at a feed and key of its own.
+for setting in JETLINK_UPDATE_FEED_URL JETLINK_UPDATE_PUBLIC_KEY; do
+  if [ -n "${!setting:-}" ]; then
+    XCODEBUILD_ARGS+=("$setting=${!setting}")
+  fi
+done
 xcodebuild "${XCODEBUILD_ARGS[@]}"
 
 PRODUCT="$MACOS_DIR/build/DerivedData/Build/Products/Release/Jetlink.app"
@@ -56,6 +64,10 @@ PRODUCT="$MACOS_DIR/build/DerivedData/Build/Products/Release/Jetlink.app"
 
 rm -rf "$MACOS_DIR/build/Jetlink.app"
 ditto "$PRODUCT" "$MACOS_DIR/build/Jetlink.app"
+# Sparkle's XPC services are for sandboxed apps, and Jetlink is not one. Without
+# them sign.sh has two helpers to sign, and none that need entitlements kept.
+SPARKLE="$MACOS_DIR/build/Jetlink.app/Contents/Frameworks/Sparkle.framework"
+rm -rf "$SPARKLE/XPCServices" "$SPARKLE/Versions/B/XPCServices"
 # ditto keeps the product's dates, and Xcode never updates the bundle folder's
 # own, so every build looked like the first one: the Dock went on showing the
 # icon that bundle had then.

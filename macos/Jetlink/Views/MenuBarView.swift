@@ -3,11 +3,12 @@ import JetlinkKit
 import JetlinkUI
 import SwiftUI
 
-/// The menu behind the menu bar icon: what is happening, and the two things
-/// worth doing without opening the window.
+/// The menu behind the menu bar icon: what is happening, and the things worth
+/// doing without opening the window.
 struct MenuBarView: View {
   @Environment(ServerStore.self) private var server
   @Environment(ModelStore.self) private var models
+  @Environment(UpdateStore.self) private var updates
   @Environment(\.openWindow) private var openWindow
 
   var body: some View {
@@ -28,6 +29,11 @@ struct MenuBarView: View {
     Button("Open Jetlink") {
       openWindow(id: "main")
       NSApp.activate(ignoringOtherApps: true)
+    }
+    if updates.isAvailable {
+      // Sparkle brings the app forward for a check the user asked for.
+      Button(updates.heldUpdate.map { "Update to Jetlink \($0)…" } ?? "Check for Updates…") { updates.checkForUpdates() }
+        .disabled(!updates.canCheckForUpdates)
     }
     Divider()
     Button("Quit Jetlink") { NSApp.terminate(nil) }

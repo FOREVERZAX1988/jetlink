@@ -19,10 +19,12 @@ struct SettingsView: View {
 struct GeneralSettingsView: View {
   @Environment(AppSettings.self) private var settings
   @Environment(ServerStore.self) private var server
+  @Environment(UpdateStore.self) private var updates
   @State private var loginItem = LoginItem()
 
   var body: some View {
     @Bindable var settings = settings
+    @Bindable var updates = updates
     Form {
       Section {
         Toggle("Start server when Jetlink opens", isOn: $settings.startServerOnLaunch)
@@ -69,6 +71,32 @@ struct GeneralSettingsView: View {
             .font(.callout)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
+        }
+      }
+
+      Section("Updates") {
+        if updates.isAvailable {
+          Toggle("Check for updates automatically", isOn: $updates.automaticallyChecks)
+          VStack(alignment: .leading, spacing: 4) {
+            Toggle("Download and install automatically", isOn: $updates.automaticallyDownloads)
+              .disabled(!updates.automaticallyChecks)
+            Text("Downloads in the background and installs when Jetlink quits.")
+              .font(.callout)
+              .foregroundStyle(.secondary)
+          }
+        }
+        HStack {
+          Text("Jetlink \(updates.version)")
+          Spacer()
+          if updates.isAvailable {
+            Button("Check Now") { updates.checkForUpdates() }
+              .disabled(!updates.canCheckForUpdates)
+          }
+        }
+        if !updates.isAvailable {
+          Text("This build does not update itself. Releases are on [GitHub](https://github.com/zoompilot/jetlink/releases).")
+            .font(.callout)
+            .foregroundStyle(.secondary)
         }
       }
     }
@@ -149,6 +177,7 @@ struct ServerSettingsView: View {
 #Preview("General") {
   GeneralSettingsView()
     .environment(AppSettings.preview())
+    .environment(UpdateStore(isCommaConnected: { false }))
     .environment(ServerStore.preview(runState: .serving, info: PreviewData.serverInfo, link: PreviewData.linkWaiting, engine: PreviewData.engineReady))
     .frame(width: 540, height: 420)
 }

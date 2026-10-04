@@ -36,11 +36,11 @@ git push origin v0.7.0
    sign it with the [release key](#android-release-key); each Linux server
    builds on a native runner for its architecture with
    `scripts/build-linux.sh`.
-4. Check the release page: `Jetlink-0.7.0-macOS.dmg`,
-   `Jetlink-0.7.0-Android.apk`, `SHA256SUMS` (both apps),
-   `jetlink-server-0.7.0-linux-aarch64.tar.gz` and `-linux-x86_64.tar.gz`
-   with their `.sha256`, and notes made of the changelog section and the
-   install commands.
+4. Check the release page: `Jetlink-0.7.0-macOS.dmg`, `appcast.xml` (the
+   Mac app's [update feed](#mac-updates)), `Jetlink-0.7.0-Android.apk`,
+   `SHA256SUMS` (both apps), `jetlink-server-0.7.0-linux-aarch64.tar.gz` and
+   `-linux-x86_64.tar.gz` with their `.sha256`, and notes made of the
+   changelog section and the install commands.
 5. The **TestFlight** job starts once the release is out and waits while
    Apple processes the upload, usually 5 to 30 minutes. Then the build is in
    the internal group and waiting for Beta App Review in the public one
@@ -87,6 +87,7 @@ instead of shipping a debug-signed APK.
 | `ANDROID_KEYSTORE_BASE64` | the Android release keystore, base64 encoded ([below](#android-release-key)) |
 | `ANDROID_KEYSTORE_PASSWORD` | its password, which is also the key's |
 | `ANDROID_KEY_ALIAS` | the key's alias in it |
+| `SPARKLE_ED_PRIVATE_KEY` | the Mac app's update signing key ([below](#mac-update-key)) |
 
 - Notary key: a Team key made under **Users and Access > Integrations** in App
   Store Connect. The Developer role notarizes; give it Admin if the same key
@@ -129,6 +130,45 @@ gh secret set ANDROID_KEY_ALIAS --repo zoompilot/jetlink --body jetlink
 - To sign a local build with it, set `JETLINK_ANDROID_KEYSTORE` (an absolute
   path), `JETLINK_ANDROID_KEYSTORE_PASSWORD` and `JETLINK_ANDROID_KEY_ALIAS`
   before `./gradlew :app:assembleRelease`.
+
+### Mac update key
+
+The Mac app takes an update only when the DMG and the feed are signed with
+this Ed25519 key. Its public half is `JETLINK_UPDATE_PUBLIC_KEY` in
+`macos/project.yml`, built into every copy as `SUPublicEDKey`; the private
+half is the secret, base64 of the 32-byte seed (the format of Sparkle's
+`generate_keys -x`):
+
+```bash
+gh secret set SPARKLE_ED_PRIVATE_KEY --repo zoompilot/jetlink < jetlink-ed25519-private.key
+```
+
+- Keep the key backed up outside the repository. Losing it is slow to
+  recover from: the feed is signed too, so a release signed with a new key
+  reaches installed copies only after 20 days of failed checks, and without
+  its notes. Sparkle then takes the new key because the DMG keeps the same
+  Developer ID; it never accepts a new key and a new Developer ID at once.
+- "Write the update feed" checks the signature against the public key inside
+  the app it built, so a secret that is not that key's other half stops the
+  release instead of shipping an update no copy accepts.
+- Sparkle's `generate_keys` makes a key in the keychain; `generate_keys -x`
+  exports it in the secret's format.
+
+## Mac updates
+
+The Mac app checks `releases/latest/download/appcast.xml` once a day, so the
+newest release that is not a prerelease is the one it offers.
+`macos/scripts/make-appcast.sh` writes that feed during the release: one
+item, the DMG, with the release notes taken from `CHANGELOG.md`, this
+release's section and the ones before it. The app shows only the sections
+newer than the version it has, so write each section as the notes for people
+updating from the one before.
+
+- An unsigned build (a fork without the signing secrets) has no feed and does
+  not update itself; a fork's signed build reads its own repository's feed.
+- To stop a bad release reaching more Macs, delete its `appcast.xml` asset
+  (`gh release delete-asset v0.7.0 appcast.xml`). Copies that already updated
+  keep it; Sparkle never offers an older version, so the fix is a new release.
 
 ## iPhone app on TestFlight
 
