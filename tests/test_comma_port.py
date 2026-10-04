@@ -9,7 +9,9 @@ leaves alone. A USB-A host and a chestnut must see no change at all; a C-to-C
 host that lost the toss gets one hold, and only for as long as it is plugged
 in; one that powers the comma and still came out the device is asked over USB
 PD to host, a few times a plug. And a sink that is the device has its device
-side on, whatever the charger detection made of the far end.
+side on, whatever the charger detection made of the far end. On iOS, a phone
+that powers the comma over USB PD is asked to charge from it instead, once a
+plug, unless the comma is hot.
 """
 import tempfile
 import unittest
@@ -78,10 +80,10 @@ class PortTest(unittest.TestCase):
       (d / 'idVendor').write_text(f'{ids[0]:04x}\n')
       (d / 'idProduct').write_text(f'{ids[1]:04x}\n')
 
-  def run_for(self, seconds: float, configured: bool = False) -> None:
+  def run_for(self, seconds: float, configured: bool = False, ios: bool = False) -> None:
     end = self.now + seconds
     while self.now < end:
-      self.port.update(now=self.now, configured=configured)
+      self.port.update(now=self.now, configured=configured, ios=ios)
       self.now += 0.5
 
   def commands(self, script: mock.Mock | None = None) -> list[str]:
@@ -418,6 +420,133 @@ class TestTheLink(PortTest):
     self.assertEqual(self.commands(), ['off'])
 
 
+class TestChargingThePhone(PortTest):
+  """An iPhone on a direct cable comes back from a hold as the source and the
+  host. On iOS it is asked once a plug, over USB PD, to charge from the comma."""
+
+  ASKED = ['off', 'hold', 'off', 'source']
+
+  def setUp(self):
+    super().setUp()
+    self.contract = self.tmp / 'contract'
+    self.contract.write_text('explicit\n')
+    self.thermal = self.tmp / 'thermal'
+    self.zone('thermal_zone0', 'cpu2-gold-usr', 60.0)
+    self.zone('thermal_zone1', 'pm8998_tz', 50.0)
+    self.zone('thermal_zone2', 'battery', 120.0)   # not one hardwared looks at
+    self.script.side_effect = self.swap
+
+  def zone(self, name: str, kind: str, temp: float) -> None:
+    d = self.thermal / name
+    d.mkdir(parents=True, exist_ok=True)
+    (d / 'type').write_text(kind + '\n')
+    (d / 'temp').write_text(f'{int(temp * 1000)}\n')
+
+  def swap(self, command: str) -> bool:
+    """jetlink-root.sh port: a PR_Swap the phone accepts leaves the comma the
+    source and still the device."""
+    if command == 'source':
+      self.plug('source', 'ufp')
+    return True
+
+  def held_iphone(self, ios: bool = True) -> None:
+    """Plugged in, held, back as the source and the host, the gadget configured."""
+    self.plug('source')
+    self.run_for(SWAP + 1)
+    self.plug('sink', 'ufp')
+    self.run_for(SWAP + 1, configured=True, ios=ios)
+
+  def lines(self) -> list[str]:
+    return [c.args[0] % c.args[1:] for c in self.log.warning.call_args_list]
+
+  def test_it_is_asked_to_charge_and_then_left_alone(self):
+    self.held_iphone()
+    self.assertEqual(self.commands(), self.ASKED, "the hold let go first: the voter gates the swap")
+    self.assertFalse(self.port.held)
+    self.run_for(60, configured=True, ios=True)
+    self.assertEqual(self.commands(), self.ASKED, "the source that is the device is never held")
+    self.assertIn("jetlink: charging the iPhone", self.lines())
+
+  def test_it_waits_for_the_gadget(self):
+    self.plug('sink', 'ufp')
+    self.mode.write_text('peripheral\n')
+    self.run_for(60, ios=True)
+    self.assertNotIn('source', self.commands())
+    self.run_for(SWAP + 1, configured=True, ios=True)
+    self.assertEqual(self.commands(), ['off', 'source'])
+
+  def test_without_usb_pd_it_is_never_asked(self):
+    self.contract.write_text('implicit\n')
+    self.held_iphone()
+    self.run_for(60, configured=True, ios=True)
+    self.assertNotIn('source', self.commands())
+
+  def test_on_usb_it_is_never_asked(self):
+    self.held_iphone(ios=False)
+    self.run_for(60, configured=True)
+    self.assertEqual(self.commands(), ['off', 'hold'])
+
+  def test_a_refusal_is_asked_once_a_plug(self):
+    self.script.side_effect = lambda command: command != 'source'
+    self.held_iphone()
+    self.run_for(60, configured=True, ios=True)
+    self.assertEqual(self.commands(), self.ASKED)
+    self.assertIn("jetlink: the iPhone kept the source role; not asking again until the next plug", self.lines())
+
+  def test_a_phone_that_takes_the_power_back_is_not_asked_again(self):
+    self.held_iphone()
+    self.plug('sink', 'ufp')
+    self.run_for(60, configured=True, ios=True)
+    self.assertEqual(self.commands(), self.ASKED, "the two ends would swap in a loop")
+    self.assertIn("jetlink: the iPhone took the source role back; not asking again until the next plug",
+                  self.lines())
+
+  def test_the_next_plug_is_asked_afresh(self):
+    self.held_iphone()
+    self.plug('none')
+    self.run_for(port.UNPLUGGED + 0.5)
+    self.plug('sink', 'ufp')   # dual role again since the swap, it may come back as the source
+    self.run_for(SWAP + 1, configured=True, ios=True)
+    self.assertEqual(self.commands(), self.ASKED + ['source'])
+
+  def test_a_hot_comma_waits_until_it_cools(self):
+    self.zone('thermal_zone0', 'cpu2-gold-usr', port.HOT_C + 5)
+    self.held_iphone()
+    self.run_for(60, configured=True, ios=True)
+    self.assertEqual(self.commands(), ['off', 'hold'])
+    hot = [line for line in self.lines() if 'waits until it is below' in line]
+    self.assertEqual(len(hot), 1, "said once")
+    self.zone('thermal_zone0', 'cpu2-gold-usr', port.HOT_C - 5)
+    self.run_for(1, configured=True, ios=True)
+    self.assertEqual(self.commands(), ['off', 'hold'], "smoothed: one cooler reading is not enough")
+    self.run_for(10, configured=True, ios=True)
+    self.assertEqual(self.commands(), self.ASKED)
+
+  def test_a_spike_does_not_hold_it_up_for_long(self):
+    self.zone('thermal_zone0', 'cpu2-gold-usr', port.HOT_C + 5)
+    self.plug('source')
+    self.run_for(SWAP + 1)
+    self.plug('sink', 'ufp')
+    self.run_for(SWAP + 0.5, configured=True, ios=True)   # one hot reading
+    self.zone('thermal_zone0', 'cpu2-gold-usr', 70.0)
+    self.run_for(5, configured=True, ios=True)
+    self.assertEqual(self.commands(), self.ASKED)
+
+  def test_no_thermal_zones_is_not_hot(self):
+    import shutil
+    shutil.rmtree(self.thermal)
+    self.held_iphone()
+    self.assertEqual(self.commands(), self.ASKED)
+
+  def test_a_link_lost_while_charging_is_said(self):
+    self.held_iphone()
+    self.run_for(5, configured=True, ios=True)
+    self.run_for(5, ios=True)
+    dropped = [line for line in self.lines() if 'the link went down' in line]
+    self.assertEqual(len(dropped), 1, self.lines())
+    self.assertEqual(self.commands(), self.ASKED)
+
+
 class TestTheScript(unittest.TestCase):
   def test_it_runs_the_root_script_on_the_short_timeout(self):
     # short: the owner lets the port go before it closes FunctionFS, inside
@@ -425,3 +554,8 @@ class TestTheScript(unittest.TestCase):
     with mock.patch.object(root, 'run', return_value=True) as run:
       self.assertTrue(port.run_script('hold'))
     run.assert_called_once_with('port', 'hold', timeout=root.PORT_TIMEOUT)
+
+  def test_a_power_role_swap_gets_the_time_the_kernel_waits(self):
+    with mock.patch.object(root, 'run', return_value=True) as run:
+      self.assertTrue(port.run_script('source'))
+    run.assert_called_once_with('port', 'source', timeout=root.SWAP_TIMEOUT)

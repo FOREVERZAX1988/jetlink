@@ -56,6 +56,17 @@ the VM tuning), a sink that is the device with the device side still off a few
 seconds into a plug has it turned on, and an empty port with it still on has it
 turned off.
 
+An iPhone on a direct cable ends up powering the comma: after a hold it is the
+source and the host. It can be the host and charge from the comma instead, and
+it negotiates USB PD, so with the link set to iOS the comma asks it once a
+plug for the source role (a PR_Swap, jetlink-root.sh port source), once the
+gadget is configured. The swap leaves the data roles and the link as they are.
+The comma's own sink capabilities never invite the phone to offer it. Being
+the source and still the device is left alone: only the host role is judged.
+Charging the phone adds up to 7.5 W through the comma's boost converter, so a
+comma that runs hot waits to ask until it has cooled. A phone that takes the
+source role back is not asked again until the next plug.
+
 Every change of the port's roles is a line in the owner's log, so a plug that
 did not connect can be read afterwards.
 """
@@ -77,6 +88,16 @@ CHARGER = USB_PSY / 'real_type'
 # dwc3's glue for usb0: 'peripheral' while the device side is on
 UDC_MODE = Path('/sys/devices/platform/soc/a600000.ssusb/mode')
 USB_DEVICES = Path('/sys/bus/usb/devices')
+THERMAL = Path('/sys/devices/virtual/thermal')
+# the zones hardwared takes the comma's temperature from (its ThermalConfig's
+# cpu, gpu, memory and pmic), the same names on the four and the 3X
+HOT_ZONES = frozenset([f'cpu{i}-{c}-usr' for c in ('silver', 'gold') for i in range(4)] +
+                      ['gpu0-usr', 'gpu1-usr', 'ddr-usr', 'pm8998_tz', 'pm8005_tz'])
+# a comma this hot, the hottest zone smoothed over a few seconds, does not
+# start charging a phone. Above the fan's setpoints (75 C on the four, 80 C on
+# the 3X) and below openpilot's overheated bands (100 C and 96 C)
+HOT_C = 90.0
+HOT_SMOOTHING = 0.2   # of each half-second reading
 # how long the comma hosts the far end before judging it. A chestnut enumerates
 # well inside this, and a far end that powers us and wants the host role has
 # asked for it by then
@@ -107,6 +128,30 @@ def data_role() -> str | None:
   return gadget.read(DATA_ROLE) or None
 
 
+def thermal_zones() -> list[Path]:
+  """The temp files of HOT_ZONES; none off a comma."""
+  try:
+    names = os.listdir(THERMAL)
+  except OSError:
+    return []
+  zones = []
+  for name in names:
+    if name.startswith('thermal_zone') and gadget.read(THERMAL / name / 'type') in HOT_ZONES:
+      zones.append(THERMAL / name / 'temp')
+  return zones
+
+
+def hottest(zones: list[Path]) -> float | None:
+  """The hottest of `zones` in degrees C, or None when none reads."""
+  temps = []
+  for zone in zones:
+    try:
+      temps.append(int(gadget.read(zone)) / 1000)
+    except ValueError:
+      continue
+  return max(temps, default=None)
+
+
 def chestnut_attached(chestnut_ids: frozenset[tuple[int, int]]) -> bool:
   """Is a chestnut enumerated, running or in its ROM? It can only be on this port."""
   try:
@@ -126,11 +171,11 @@ def chestnut_attached(chestnut_ids: frozenset[tuple[int, int]]) -> bool:
 
 
 def run_script(command: str) -> bool:
-  """jetlink-root.sh port hold|off|device|reset. Both commas have the levers,
-  so a False is a failure, and root.run has logged why. Its timeout is short
-  because the off in the owner's finally comes before the FunctionFS close,
-  inside manager's 5 s."""
-  return root.run('port', command, timeout=root.PORT_TIMEOUT)
+  """jetlink-root.sh port hold|off|device|reset|source. Both commas have the
+  levers, so a False is a failure, and root.run has logged why. Its timeout is
+  short because the off in the owner's finally comes before the FunctionFS
+  close, inside manager's 5 s; source waits for the far end's PR_Swap."""
+  return root.run('port', command, timeout=root.SWAP_TIMEOUT if command == 'source' else root.PORT_TIMEOUT)
 
 
 def run_udc(command: str) -> bool:
@@ -150,6 +195,7 @@ class Port:
     # them over (OwnerConfig.chestnut_ids), so a chestnut being flashed is
     # never taken for a host
     self.chestnut_ids = frozenset(chestnut_ids)
+    self.zones: list[Path] | None = None   # thermal_zones(), found on first use
     self._reset()
 
   def _reset(self) -> None:
@@ -169,10 +215,19 @@ class Port:
     self.asks = 0          # this plug's: SWAP_TRIES DR_Swaps, then a hard reset
     self.next_ask = 0.0
     self.next_start = 0.0
+    # this plug's phone charging: asked for (once a plug), the swap went
+    # through, said once that the comma is too hot to ask yet, and the
+    # smoothed temperature while waiting to ask
+    self.charge_asked = False
+    self.charging = False
+    self.charge_since = 0.0
+    self.said_hot = False
+    self.temp: float | None = None
 
-  def update(self, now: float | None = None, configured: bool = False) -> None:
+  def update(self, now: float | None = None, configured: bool = False, ios: bool = False) -> None:
     """configured: a host had the gadget configured at the last cycle, so the
-    device side is on."""
+    device side is on. ios: the link is set to iOS, so a host that powers the
+    comma is asked to charge from it instead."""
     if not self.cleared:
       # whatever an owner killed mid-hold left behind. Not under a live link:
       # an owner started after one that died can find a borrower still on the
@@ -192,6 +247,9 @@ class Port:
     if (role, data) != self.roles:
       if role is not None:
         self._note(role, data)
+      if self.charging and (role, data) == ('sink', 'ufp'):
+        gadget.log.warning("jetlink: the iPhone took the source role back; not asking again until the next plug")
+        self.charging = False
       self.roles, self.roles_since = (role, data), now
     if role != self.role:
       self.role, self.role_since = role, now
@@ -200,8 +258,15 @@ class Port:
       self.plugged = True
     elif self.plugged and lasted >= UNPLUGGED:
       self._unplugged()
-    if role == 'sink' and data == 'ufp' and not configured:
-      self._keep_the_device_on(now)
+    if role == 'sink' and data == 'ufp':
+      if not configured:
+        self._keep_the_device_on(now)
+      elif ios and not self.charge_asked and now - self.roles_since >= SWAP_AFTER:
+        self._charge_the_phone(now)
+    if self.charging and not configured and role == 'source':
+      # what a swap must never cost; said once a plug
+      gadget.log.warning("jetlink: the link went down %.0f s into charging the iPhone", now - self.charge_since)
+      self.charging = False
     if self.held:
       if role == 'sink':
         self.settled = False   # a host came back
@@ -209,9 +274,10 @@ class Port:
         self._release()
         # the accessory reattaches in a moment; time the gap afresh
         self.role_since, self.plugged = now, True
-    elif role == 'source' or data == 'dfp':
+    elif data == 'dfp' or (role == 'source' and data != 'ufp'):
       # the comma is the host, which only a chestnut should make it. The
-      # source is held at sink; a sink is asked over USB PD
+      # source is held at sink; a sink is asked over USB PD. A source that is
+      # the device got there by a swap, and is what charging a phone looks like
       hosted = now - self.roles_since
       if not self.settled and hosted >= SWAP_AFTER and now >= self.next_ask:
         if self.asks == 0 and chestnut_attached(self.chestnut_ids):
@@ -232,6 +298,8 @@ class Port:
   def _unplugged(self) -> None:
     self.plugged = False
     self.asks = 0            # the next plug is asked afresh
+    self.charge_asked = self.charging = self.said_hot = False
+    self.temp = None
     # the policy engine turns off only a device side it turned on itself, so
     # one turned on here, by this owner or one before it, is turned off here
     if gadget.read(UDC_MODE) == 'peripheral':
@@ -249,6 +317,34 @@ class Port:
                        "(charger detection %s); turning its device side on", mode, gadget.read(CHARGER) or 'unknown')
     self.next_start = now + RESTART_AFTER
     run_udc('start')
+
+  def _charge_the_phone(self, now: float) -> None:
+    """The phone powers the comma and hosts it over a USB PD contract: ask it
+    for the source role, unless the comma is hot. See the module's docstring."""
+    if gadget.read(CONTRACT) != 'explicit':
+      return   # a PR_Swap needs USB PD; a phone without it is left powering us
+    if self.zones is None:
+      self.zones = thermal_zones()
+    temp = hottest(self.zones)
+    if temp is not None:
+      self.temp = temp if self.temp is None else self.temp + (temp - self.temp) * HOT_SMOOTHING
+      if self.temp >= HOT_C:
+        if not self.said_hot:
+          gadget.log.warning("jetlink: the comma is at %.0f C; charging the iPhone waits until it is below %.0f C",
+                             self.temp, HOT_C)
+          self.said_hot = True
+        return
+    self.charge_asked = True
+    if self.held:
+      # the voter gates every power role change
+      self.held = False
+      run_script('off')
+    gadget.log.warning("jetlink: the iPhone powers the comma; asking it over USB PD to charge from it instead")
+    if run_script('source'):
+      gadget.log.warning("jetlink: charging the iPhone")
+      self.charging, self.charge_since = True, now
+    else:
+      gadget.log.warning("jetlink: the iPhone kept the source role; not asking again until the next plug")
 
   def _ask_for_a_host(self, now: float) -> None:
     """The far end powers the comma and is still its device; see the module's

@@ -661,7 +661,7 @@ class Owner:
     """A step with the link on, for an iPhone or not."""
     self.ensure_lender()
     # before anything is presented: a C-to-C host has to find a device here
-    self.port.update(configured=self.configured)
+    self.port.update(configured=self.configured, ios=ios)
 
     offroad = self.settings.offroad()
     if self.switch_mode(offroad, ios):

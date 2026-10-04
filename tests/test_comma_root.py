@@ -193,7 +193,8 @@ def test_vm_apply_fails_when_a_key_will_not_take(tmp_path):
     pytest.skip('running as root')
   result = run_script(tmp_path, 'vm', 'apply')
   assert result.returncode == 1
-  assert result.stderr.strip().splitlines()[-1] == f'jetlink: could not set vm.dirty_background_bytes={TUNED["vm.dirty_background_bytes"]}'
+  assert result.stderr.strip().splitlines()[-1] == \
+    f'jetlink: could not set vm.dirty_background_bytes={TUNED["vm.dirty_background_bytes"]}: Permission denied'
   # the others still took
   assert read_sys(tmp_path, 'vm.dirty_bytes') == TUNED['vm.dirty_bytes']
 
@@ -220,6 +221,7 @@ def test_a_voter_is_forced_and_let_go(tmp_path, lever, force, value):
   (('port', 'off'), None, 'could not release'),
   # a refusal, or PD not ready, is a failed write; so is a missing class
   (('port', 'device'), None, 'did not take the host role'),
+  (('port', 'source'), None, 'did not give up the source role'),
   (('port', 'reset'), None, 'could not reset USB PD'),
   (('draw', 'off'), None, 'could not force'),
   (('draw', 'on'), None, 'could not release'),
@@ -242,6 +244,8 @@ def test_a_lever_the_kernel_lacks_fails(tmp_path, args, made, says):
 @pytest.mark.parametrize('args, where, name, value', [
   # the kernel turns this write into a USB PD DR_Swap
   (('port', 'device'), dual_role, 'data_role', 'device'),
+  # and this one into a PR_Swap: the far end charges from the comma
+  (('port', 'source'), dual_role, 'power_role', 'source'),
   (('port', 'reset'), usbpd, 'hard_reset', '1'),
   (('udc', 'start'), udc_glue, 'mode', 'peripheral'),
   (('udc', 'stop'), udc_glue, 'mode', 'none'),
@@ -250,6 +254,17 @@ def test_a_lever_is_one_write(tmp_path, args, where, name, value):
   where(tmp_path).mkdir()
   assert run_script(tmp_path, *args).returncode == 0
   assert (where(tmp_path) / name).read_text().strip() == value
+
+
+def test_a_refusal_says_why(tmp_path):
+  # the kernel's errno is what tells PD not ready from a refusal
+  dual_role(tmp_path).mkdir()
+  (dual_role(tmp_path) / 'power_role').mkdir()   # a write fails, as a refused one does
+  result = run_script(tmp_path, 'port', 'source')
+  assert result.returncode == 1
+  line = result.stderr.strip().splitlines()[-1]
+  assert line.startswith('jetlink: the far end did not give up the source role')
+  assert line.endswith(': Is a directory'), line
 
 
 def test_udc_apply_keeps_the_device_and_restore_puts_it_back(tmp_path):

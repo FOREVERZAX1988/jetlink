@@ -13,6 +13,7 @@
 #   sudo scripts/comma/jetlink-root.sh teardown
 #   sudo scripts/comma/jetlink-root.sh port hold|off     # the USB-C port held as the device, or let go
 #   sudo scripts/comma/jetlink-root.sh port device|reset # ask the far end to host over USB PD, or reset PD
+#   sudo scripts/comma/jetlink-root.sh port source       # ask the far end for the source role: the comma charges it
 #   sudo scripts/comma/jetlink-root.sh udc apply|restore # the USB device controller kept a device, or stock
 #   sudo scripts/comma/jetlink-root.sh udc start|stop    # its device side turned on, or off
 #   sudo scripts/comma/jetlink-root.sh vm apply|restore  # the link's VM tuning, or the stock values
@@ -112,7 +113,7 @@ PROC_SYS=${JETLINK_PROC_SYS:-/proc/sys}
 SYSCTL_PREV=${JETLINK_SYSCTL_PREV:-/dev/shm/jetlink-sysctl-prev}
 
 usage() {
-  echo "usage: $0 gadget [--ios] | net | check | teardown | port hold|off|device|reset | udc apply|restore|start|stop | vm apply|restore | draw off|on" >&2
+  echo "usage: $0 gadget [--ios] | net | check | teardown | port hold|off|device|reset|source | udc apply|restore|start|stop | vm apply|restore | draw off|on" >&2
   exit 2
 }
 
@@ -461,7 +462,10 @@ cmd_check() {
 # device asks the far end over USB PD to take the host role (a DR_Swap): for a
 # far end that powers the comma and still came out the device, which hold
 # cannot change. reset is a USB PD hard reset, which puts both ends back to
-# the roles their power gives them: a sink is the device.
+# the roles their power gives them: a sink is the device. source asks a far end
+# that powers the comma for the source role (a PR_Swap), which leaves the data
+# roles as they are: an iPhone that hosts the comma stays the host and charges
+# from it. The voter gates it, so port off comes first.
 cmd_port() {
   case "${1:-}" in
     hold) force_voter "$POWER_ROLE_VOTER" 1 "to hold the port" || exit 1 ;;
@@ -471,6 +475,9 @@ cmd_port() {
     # ready yet, is a failed write
     device) put device "$DUAL_ROLE/data_role" "the far end did not take the host role ($DUAL_ROLE/data_role)" || exit 1 ;;
     reset) put 1 "$USBPD/hard_reset" "could not reset USB PD ($USBPD/hard_reset)" || exit 1 ;;
+    # the kernel sends the PR_Swap and waits up to 2 s for it; only with a USB PD
+    # contract, so a write before one, or a refusal, fails
+    source) put source "$DUAL_ROLE/power_role" "the far end did not give up the source role ($DUAL_ROLE/power_role)" || exit 1 ;;
     *) usage ;;
   esac
 }
@@ -499,11 +506,12 @@ udc_compliance() {
   return $failed
 }
 
-# One value into one kernel file; a line on stderr and a failure when the kernel
-# refuses it. Not fail(): that is the gadget's record.
+# One value into one kernel file; a line on stderr, with the kernel's reason,
+# and a failure when the kernel refuses it. Not fail(): that is the gadget's record.
 put() {
-  if ! { echo "$1" > "$2"; } 2>/dev/null; then
-    echo "jetlink: $3" >&2
+  local err
+  if ! err=$( { echo "$1" > "$2"; } 2>&1 ); then
+    echo "jetlink: $3${err:+: ${err##*: }}" >&2
     return 1
   fi
 }

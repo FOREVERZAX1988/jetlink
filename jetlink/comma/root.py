@@ -36,6 +36,8 @@ TIMEOUT = 30.0
 # sudo and two echos take tens of ms. Short, because the owner lets the port go
 # before it closes FunctionFS, inside manager's 5 s
 PORT_TIMEOUT = 2.0
+# port source: the kernel waits up to 2 s for the far end's PR_Swap
+SWAP_TIMEOUT = 4.0
 
 
 def run(*args: str, timeout: float = TIMEOUT) -> bool:

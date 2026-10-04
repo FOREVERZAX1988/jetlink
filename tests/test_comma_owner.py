@@ -578,7 +578,14 @@ class TestTheToggle(OwnerTest):
   def test_the_port_is_kept_a_device_while_the_link_is_on(self):
     o = self.owner()
     o.step()
-    o.port.update.assert_called_once_with(configured=False)
+    o.port.update.assert_called_once_with(configured=False, ios=False)
+
+  def test_on_ios_the_port_is_told_so(self):
+    # so a phone that powers the comma is asked to charge from it
+    self.write('JetlinkLink', b'2')
+    o = self.owner()
+    o.step()
+    o.port.update.assert_called_once_with(configured=False, ios=True)
 
   def test_turning_it_off_gives_the_port_back(self):
     o = self.owner()
