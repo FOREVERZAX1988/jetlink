@@ -115,7 +115,7 @@ enum class Processor(val backend: Backend, val device: String, val title: String
 
 /** The few things worth changing on a phone, kept in SharedPreferences. */
 data class SettingsValues(
-    /** Where bench tools such as `bench_link.py --host` reach the phone. */
+    /** Where bench tools such as `bench_link.py --host` reach the phone, with [developer] on. */
     val port: Int = 5599,
     val processor: Processor = Processor.Auto,
     /** The NPU held in burst mode between frames rather than let it settle. */
@@ -124,6 +124,11 @@ data class SettingsValues(
     val keepCpuAwake: Boolean = false,
     /** The screen stays on while Jetlink is on screen. */
     val keepScreenOn: Boolean = true,
+    /**
+     * Seven taps on Version turn it on: the Developer section, and the server
+     * listening on [port] for bench tools. The comma needs neither.
+     */
+    val developer: Boolean = false,
 )
 
 class Settings(context: Context) {
@@ -139,6 +144,7 @@ class Settings(context: Context) {
             .putBoolean(KEEP_NPU_AWAKE, next.keepNpuAwake)
             .putBoolean(KEEP_CPU_AWAKE, next.keepCpuAwake)
             .putBoolean(KEEP_SCREEN_ON, next.keepScreenOn)
+            .putBoolean(DEVELOPER, next.developer)
             .apply()
         state.value = next
     }
@@ -155,6 +161,7 @@ class Settings(context: Context) {
             keepNpuAwake = prefs.getBoolean(KEEP_NPU_AWAKE, defaults.keepNpuAwake),
             keepCpuAwake = prefs.getBoolean(KEEP_CPU_AWAKE, defaults.keepCpuAwake),
             keepScreenOn = prefs.getBoolean(KEEP_SCREEN_ON, defaults.keepScreenOn),
+            developer = prefs.getBoolean(DEVELOPER, defaults.developer),
         )
     }
 
@@ -165,6 +172,7 @@ class Settings(context: Context) {
         private const val KEEP_NPU_AWAKE = "keepNpuAwake"
         private const val KEEP_CPU_AWAKE = "keepCpuAwake"
         private const val KEEP_SCREEN_ON = "keepScreenOn"
+        private const val DEVELOPER = "developer"
 
         /** Settings from before Automatic are version 1. */
         private const val CURRENT = 2

@@ -1,5 +1,6 @@
 package io.zoompilot.jetlink.ui.settings
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -29,6 +30,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -163,7 +165,7 @@ fun SettingsContent(values: SettingsValues, info: SettingsInfo, actions: Setting
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
-        Connection(values, info, actions)
+        Connection(info)
         Performance(values, info, actions)
         FormSection("Display", footer = { FormFooter("Jetlink keeps serving with the screen off.") }) {
             SwitchRow("Keep Screen On", values.keepScreenOn, { on -> actions.update { it.copy(keepScreenOn = on) } })
@@ -184,12 +186,28 @@ fun SettingsContent(values: SettingsValues, info: SettingsInfo, actions: Setting
             RowDivider()
             ActionRow("Logs", actions.openLogs)
         }
-        About(info, actions)
+        if (values.developer) {
+            Developer(values, info, actions)
+        }
+        About(values, info, actions)
     }
 }
 
 @Composable
-private fun Connection(values: SettingsValues, info: SettingsInfo, actions: SettingsActions) {
+private fun Connection(info: SettingsInfo) {
+    val link = info.snapshot.medium?.title
+        ?: if (info.usb is UsbState.Attached) "Connecting" else "Not Connected"
+    FormSection("Connection") {
+        ValueRow("Link", link)
+    }
+}
+
+/**
+ * The port bench tools reach the server on, and where on Wi-Fi. Shown, and
+ * the port open, only with the developer setting on.
+ */
+@Composable
+private fun Developer(values: SettingsValues, info: SettingsInfo, actions: SettingsActions) {
     val colors = JetlinkTheme.colors
     val focus = LocalFocusManager.current
     var portText by remember(values.port) { mutableStateOf(values.port.toString()) }
@@ -202,11 +220,8 @@ private fun Connection(values: SettingsValues, info: SettingsInfo, actions: Sett
         }
         focus.clearFocus()
     }
-    val link = info.snapshot.medium?.title
-        ?: if (info.usb is UsbState.Attached) "Connecting" else "Not Connected"
-    FormSection("Connection", footer = { FormFooter("The port is only for testing from a Mac over Wi-Fi.") }) {
-        ValueRow("Link", link)
-        RowDivider()
+    val footer = "For bench tools on a Mac over Wi-Fi or adb. The comma does not use this port. Tap Version 7 times to hide this."
+    FormSection("Developer", footer = { FormFooter(footer) }) {
         Row(
             Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -303,8 +318,20 @@ private fun Performance(values: SettingsValues, info: SettingsInfo, actions: Set
 }
 
 @Composable
-private fun About(info: SettingsInfo, actions: SettingsActions) {
+private fun About(values: SettingsValues, info: SettingsInfo, actions: SettingsActions) {
     val colors = JetlinkTheme.colors
+    val context = LocalContext.current
+    // seven taps on Version show or hide the Developer section, as Android's build number does
+    var taps by remember { mutableIntStateOf(0) }
+    val tapVersion = {
+        taps += 1
+        if (taps >= DEVELOPER_TAPS) {
+            taps = 0
+            val on = !values.developer
+            actions.update { it.copy(developer = on) }
+            Toast.makeText(context, if (on) "Developer settings on" else "Developer settings off", Toast.LENGTH_SHORT).show()
+        }
+    }
     val server = when (info.runState) {
         RunState.Stopped -> "Stopped"
         RunState.Starting -> "Starting"
@@ -312,7 +339,7 @@ private fun About(info: SettingsInfo, actions: SettingsActions) {
         is RunState.Failed -> "Failed"
     }
     FormSection("About") {
-        ValueRow("Version", info.version)
+        ValueRow("Version", info.version, Modifier.clickable(onClick = tapVersion))
         RowDivider()
         ValueRow("Runtime", info.runtime?.let { "onnxruntime $it" } ?: "onnxruntime")
         RowDivider()
@@ -331,13 +358,15 @@ private fun About(info: SettingsInfo, actions: SettingsActions) {
     }
 }
 
-@Preview(showBackground = true, heightDp = 1300)
+private const val DEVELOPER_TAPS = 7
+
+@Preview(showBackground = true, heightDp = 1500)
 @Composable
 private fun SettingsPreview() {
     JetlinkTheme {
         Column(Modifier.background(JetlinkTheme.colors.grouped)) {
             SettingsContent(
-                SettingsValues(),
+                SettingsValues(developer = true),
                 SettingsInfo(
                     snapshot = PreviewData.serving,
                     runState = RunState.Serving,

@@ -79,7 +79,7 @@ def run(app_path: Path) -> None:
     raise SmokeError(f"no app binary at {binary}; run make -C macos app")
   port = free_port()
   with tempfile.TemporaryDirectory(prefix='jetlink-smoke-') as cache:
-    args = [str(binary), '-transport', 'tcp', '-tcpPort', str(port), '-cacheDirectory', cache,
+    args = [str(binary), '-developerTransport', 'tcp', '-tcpPort', str(port), '-cacheDirectory', cache,
             '-startServerOnLaunch', 'YES']
     app = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
     try:

@@ -8,11 +8,18 @@ import Observation
 final class PhoneSettings {
   private let defaults: UserDefaults
 
-  /// The TCP port the server listens on, where bench tools such as
-  /// `bench_link.py --host` reach the phone over Wi-Fi. Over the cable the
-  /// phone dials the comma instead.
+  /// The TCP port the server listens on while `developer` is on, where bench
+  /// tools such as `bench_link.py --host` reach the phone over Wi-Fi. Over
+  /// the cable the phone dials the comma instead.
   var port: UInt16 {
     didSet { defaults.set(Int(port), forKey: Keys.port) }
+  }
+
+  /// Developer settings shown, and the server listening on `port`. Off, the
+  /// phone only dials the comma, which is all driving needs. Seven taps on
+  /// the version turn it on or off.
+  var developer: Bool {
+    didSet { defaults.set(developer, forKey: Keys.developer) }
   }
 
   /// The trunk on the Neural Engine and the rest on the GPU (14 ms a frame on an
@@ -43,6 +50,7 @@ final class PhoneSettings {
     self.defaults = defaults
     let port = defaults.integer(forKey: Keys.port)
     self.port = port > 0 && port < 65_536 ? UInt16(port) : 5599
+    self.developer = defaults.bool(forKey: Keys.developer)
     self.device = defaults.string(forKey: Keys.device).flatMap(OrtProfile.init(rawValue:)) ?? .ane
     self.keepGPUAwake = defaults.object(forKey: Keys.keepGPUAwake) as? Bool ?? true
     self.keepCPUWarm = defaults.object(forKey: Keys.keepCPUWarm) as? Bool ?? true
@@ -58,6 +66,7 @@ final class PhoneSettings {
 
   private enum Keys {
     static let port = "port"
+    static let developer = "developer"
     static let device = "device"
     static let keepGPUAwake = "keepGPUAwake"
     static let keepCPUWarm = "keepCPUWarm"

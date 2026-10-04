@@ -107,7 +107,8 @@ final class PhoneServer: ServerControlling {
     do {
       let root = try PhoneServer.prepareCacheDirectory()
       let embedded = try EmbeddedServer(
-        configuration: Server.Configuration(port: settings.port, cacheRoot: root, keepPlans: 2),
+        // The listener is only for bench tools over Wi-Fi; the comma never dials the phone.
+        configuration: Server.Configuration(port: settings.port, cacheRoot: root, listen: settings.developer, keepPlans: 2),
         backend: OrtBackend(
           profile: settings.device, preparer: ONNXPreparer(), keepAlive: settings.keepGPUAwake, keepCPUWarm: settings.keepCPUWarm))
       self.embedded = embedded
@@ -122,7 +123,7 @@ final class PhoneServer: ServerControlling {
       runState = .serving
       startRecentTicker()
       updateDial()
-      log.info("serving on port \(server.port ?? 0)")
+      log.info("serving\(server.port.map { " on port \($0)" } ?? ", not listening")")
     } catch {
       fail("Jetlink could not start its server: \(error)")
     }
@@ -150,7 +151,7 @@ final class PhoneServer: ServerControlling {
     resetLiveState()
   }
 
-  /// A change of port or compute device takes a new server; the engine is
+  /// A change of port, listening or compute device takes a new server; the engine is
   /// loaded again, or prepared again for a new device.
   func restart() {
     stop()
@@ -159,7 +160,7 @@ final class PhoneServer: ServerControlling {
 
   /// iOS takes a suspended app's listening socket; listen again on the way back.
   func becameActive() {
-    guard runState == .serving, let server, !server.isListening else { return }
+    guard runState == .serving, settings.developer, let server, !server.isListening else { return }
     do {
       try server.reopenListener()
       log.info("listening again after the app was suspended")

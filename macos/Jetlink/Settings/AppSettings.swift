@@ -31,6 +31,7 @@ enum BackendChoice: String, CaseIterable, Codable, Sendable {
 }
 
 /// How the comma reaches the server: its USB gadget, or TCP for a bench client.
+/// Settings shows no choice: TCP is a developer switch, `developerTransport`.
 enum TransportChoice: String, CaseIterable, Codable, Sendable {
   case usb, tcp
 }
@@ -40,7 +41,7 @@ enum TransportChoice: String, CaseIterable, Codable, Sendable {
 final class AppSettings {
   enum Key {
     static let backend = "backend"
-    static let transport = "transport"
+    static let developerTransport = "developerTransport"
     static let tcpPort = "tcpPort"
     static let cacheDirectory = "cacheDirectory"
     static let startServerOnLaunch = "startServerOnLaunch"
@@ -54,13 +55,11 @@ final class AppSettings {
     didSet { defaults.set(backend.rawValue, forKey: Key.backend) }
   }
 
-  var transport: TransportChoice {
-    didSet { defaults.set(transport.rawValue, forKey: Key.transport) }
-  }
+  /// Read once at launch, never written: only `defaults write` or a launch
+  /// argument (-developerTransport tcp -tcpPort 5599) turns TCP on.
+  let transport: TransportChoice
 
-  var tcpPort: Int {
-    didSet { defaults.set(tcpPort, forKey: Key.tcpPort) }
-  }
+  let tcpPort: Int
 
   var cacheDirectory: URL {
     didSet { defaults.set(cacheDirectory.path(percentEncoded: false), forKey: Key.cacheDirectory) }
@@ -83,7 +82,10 @@ final class AppSettings {
     // A stored "tinygrad" (the removed Python backend) or "ane" (an older name
     // for the split) reads as Automatic.
     backend = BackendChoice(rawValue: defaults.string(forKey: Key.backend) ?? "") ?? .auto
-    transport = TransportChoice(rawValue: defaults.string(forKey: Key.transport) ?? "") ?? .usb
+    // Settings used to offer TCP under "transport". With the picker gone a
+    // stored "tcp" would leave the app on TCP with no way back, so it goes.
+    defaults.removeObject(forKey: "transport")
+    transport = TransportChoice(rawValue: defaults.string(forKey: Key.developerTransport) ?? "") ?? .usb
     let storedPort = defaults.integer(forKey: Key.tcpPort)
     tcpPort = storedPort > 0 ? storedPort : AppSettings.defaultTCPPort
     if let stored = defaults.string(forKey: Key.cacheDirectory), !stored.isEmpty {

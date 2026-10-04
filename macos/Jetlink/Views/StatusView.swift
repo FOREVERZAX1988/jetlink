@@ -162,23 +162,16 @@ struct StatusView: View {
     case .waiting:
       return "Waiting for comma"
     case .connected:
-      let medium = server.link.connectedMedium ?? .usb
-      guard medium == .tcp, let peer = server.link.peer, !peer.isEmpty else { return "Connected over \(medium.title)" }
-      return "Connected over TCP from \(peer)"
+      return "Connected over \((server.link.connectedMedium ?? .usb).title)"
     case .disconnected:
       return "Disconnected"
     }
   }
 
-  /// The disconnect reason, and the address a TCP server is listening on. The
-  /// USB "waiting for a jetlink gadget" line only repeats the badge.
+  /// The disconnect reason. The waiting line ("waiting for a jetlink gadget",
+  /// or a TCP listening address) only repeats the badge.
   private var showsLinkDetail: Bool {
-    guard !server.link.detail.isEmpty else { return false }
-    switch server.link.state {
-    case .disconnected: return true
-    case .waiting: return server.info?.transport == "tcp"
-    case .connected: return false
-    }
+    server.link.state == .disconnected && !server.link.detail.isEmpty
   }
 
   private var linkTone: StatusBadge.Tone {

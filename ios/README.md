@@ -63,6 +63,9 @@ JetlinkKit/.build/release/jetlink-server --cache /tmp/jetlink-cache
 python3 scripts/bench_link.py --host 127.0.0.1 --onnx big_driving_supercombo.onnx --rate 20
 ```
 
+The app listens the same way only with its developer settings on (seven taps
+on **Version** in Settings); the address and port are listed there.
+
 ## TestFlight
 
 Uploading a build to App Store Connect: [publishing](../docs/publishing.md#iphone-app-on-testflight).

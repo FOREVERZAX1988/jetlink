@@ -56,6 +56,18 @@ struct ServerStoreTests {
     #expect(configuration.port == 5601)
   }
 
+  @MainActor @Test func tcpIsOnlyTheDeveloperSwitch() throws {
+    let suite = "io.zoompilot.jetlink.tests.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    // What the removed Connection picker stored stays behind and means USB.
+    defaults.set("tcp", forKey: "transport")
+    #expect(AppSettings(defaults: defaults).transport == .usb)
+    #expect(defaults.object(forKey: "transport") == nil)
+    defaults.set("tcp", forKey: AppSettings.Key.developerTransport)
+    #expect(AppSettings(defaults: defaults).transport == .tcp)
+  }
+
   @Test(arguments: [
     (BackendChoice.auto, OrtProfile.ane),
     (BackendChoice.coreml, OrtProfile.coreml),
@@ -89,9 +101,9 @@ struct ServerStoreTests {
     defer { defaults.removePersistentDomain(forName: suite) }
     let cache = FileManager.default.temporaryDirectory.appending(path: "jetlink-store-\(UUID().uuidString)", directoryHint: .isDirectory)
     defer { try? FileManager.default.removeItem(at: cache) }
+    defaults.set("tcp", forKey: AppSettings.Key.developerTransport)
+    defaults.set(Int.random(in: 50_000..<60_000), forKey: AppSettings.Key.tcpPort)
     let settings = AppSettings(defaults: defaults)
-    settings.transport = .tcp
-    settings.tcpPort = Int.random(in: 50_000..<60_000)
     settings.cacheDirectory = cache
     let store = ServerStore(settings: settings, logs: LogBuffer(), logFile: nil)
     try await store.startIfNeeded()

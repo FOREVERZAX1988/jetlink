@@ -7,6 +7,7 @@ import SwiftUI
 struct SettingsScreen: View {
   @Environment(AppModel.self) private var app
   @State private var portText = ""
+  @State private var versionTaps = 0
   @State private var path: [Destination] = SettingsScreen.initialPath
 
   enum Destination: Hashable {
@@ -54,6 +55,9 @@ struct SettingsScreen: View {
         storage
         help
         about
+        if settings.developer {
+          developer
+        }
       }
       .readableWidth()
       .navigationTitle("Settings")
@@ -67,14 +71,26 @@ struct SettingsScreen: View {
       .onChange(of: settings.device) { app.server.restart() }
       .onChange(of: settings.keepGPUAwake) { app.server.restart() }
       .onChange(of: settings.keepCPUWarm) { app.server.restart() }
+      .onChange(of: settings.developer) { app.server.restart() }
+      .sensoryFeedback(.success, trigger: settings.developer)
     }
   }
 
   // MARK: connection
 
   private var connection: some View {
-    Section {
+    Section("Connection") {
       LabeledContent("Link", value: app.server.linkMedium?.phoneTitle ?? (app.network.cable == nil ? "Not Connected" : "Connecting"))
+    }
+  }
+
+  // MARK: developer
+
+  /// The port bench tools on a Mac reach the phone on over Wi-Fi. Driving
+  /// never uses it: over the cable the phone dials the comma.
+  private var developer: some View {
+    Section {
+      Toggle("Developer", isOn: Bindable(app.settings).developer)
       LabeledContent("Port") {
         TextField("5599", text: $portText)
           .keyboardType(.numberPad)
@@ -85,8 +101,8 @@ struct SettingsScreen: View {
       if portChanged {
         Button("Use Port \(portText)", action: applyPort)
       }
-      // Where a Mac's bench tools reach the phone. The cable's address is
-      // the comma's to hand out and the phone's to dial; nobody types it.
+      // The cable's address is the comma's to hand out and the phone's to
+      // dial; nobody types it.
       ForEach(app.network.addresses.filter { $0.kind != .cable }) { address in
         LabeledContent {
           Text("\(address.address):\(app.server.port.map(String.init) ?? portText)")
@@ -97,9 +113,9 @@ struct SettingsScreen: View {
         }
       }
     } header: {
-      Text("Connection")
+      Text("Developer")
     } footer: {
-      Text("The port is only for testing from a Mac over Wi-Fi.")
+      Text("Lets bench tools on a Mac reach the phone over Wi-Fi. Driving does not need it.")
     }
   }
 
@@ -144,6 +160,8 @@ struct SettingsScreen: View {
   private var about: some View {
     Section("About") {
       LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")
+        .contentShape(Rectangle())
+        .onTapGesture(perform: tapVersion)
       LabeledContent("Runtime", value: "onnxruntime \(app.server.state.server?.runtimeVersion ?? OrtRuntime.version)")
       if let device = app.server.state.server?.device {
         LabeledContent("Chip", value: SettingsScreen.chip(device))
@@ -151,6 +169,17 @@ struct SettingsScreen: View {
       LabeledContent("Server", value: serverText)
     }
   }
+
+  /// Seven taps on the version turn the developer settings on or off, as a
+  /// build number does on Android.
+  private func tapVersion() {
+    versionTaps += 1
+    guard versionTaps >= SettingsScreen.developerTaps else { return }
+    versionTaps = 0
+    app.settings.developer.toggle()
+  }
+
+  static let developerTaps = 7
 
   /// "Apple A17 Pro" from "ane-Apple_A17_Pro".
   static func chip(_ device: String) -> String {

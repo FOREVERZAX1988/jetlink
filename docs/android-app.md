@@ -107,4 +107,9 @@ use more power. Turn off **Keep NPU Awake** to reduce heat if performance allows
 Use **Restart Server** to restart with the same settings, or **Stop Server**
 to stop until you choose **Start Server**.
 
+Tap **Version** under **About** seven times to show **Developer**, with the
+port and Wi-Fi address that bench tools on a Mac use. Jetlink listens on that
+port only while **Developer** shows. The comma does not need it. Tap
+**Version** seven times again to hide it.
+
 </details>

@@ -102,7 +102,9 @@ for bit, and is held to `verify_parity`'s correlation there instead.
 
 An Android emulator on an Apple silicon Mac runs arm64, so the APK runs there on
 the CPU (Settings > Processor > CPU). It has no USB host, so a bench tool on the
-Mac stands in for the comma over TCP:
+Mac stands in for the comma over TCP. The emulator always listens on the port; a
+phone listens only with the developer setting on (tap Version in Settings >
+About seven times):
 
 ```
 adb forward tcp:5599 tcp:5599
@@ -128,7 +130,8 @@ Nothing of this has run on a phone yet. What to check first, in order:
    whose GPU cannot run it all fails the build with that said, rather than fall
    back to the CPU.
 3. Benchmark 1 Minute, then 10 Minutes while charging in the car mount.
-4. `scripts/verify_parity.py` from a Mac on the same Wi-Fi, which must end with
+4. `scripts/verify_parity.py` from a Mac on the same Wi-Fi (developer setting
+   on, see above, for the port), which must end with
    OK before a drive, then the comma's live bench
    (`jetlink_repo/scripts/comma/jetlink_live_bench.sh 180`).
 5. On a Snapdragon, the same for **NPU + GPU**: the log names the sessions it

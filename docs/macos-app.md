@@ -70,7 +70,6 @@ To download a model ahead of time, see [Models](models.md#prepare-ahead-of-time-
 | Cache folder | Choose where models are stored. Restart the server to apply. |
 | Check for updates automatically | Look for a new release once a day. **Check for Updates…**, in the Jetlink menu or the menu bar menu, looks now. |
 | Download and install automatically | Download a new release in the background and install it when Jetlink quits. |
-| Connection | Keep **USB** for driving. **TCP** is for testing. |
 
 Jetlink never shows an update while a comma is connected. A release found then
 waits in the menu bar menu as **Update to Jetlink X…**, and appears the next
@@ -83,6 +82,24 @@ Keep **Backend** on **Automatic**. If another app keeps the Neural Engine busy,
 try **CoreML (GPU)**. Click **Restart Server** after changing settings.
 
 **Benchmark** (Command-3) tests the loaded model without a comma connected.
+
+### Bench clients over TCP
+
+Jetlink serves the comma over USB. For bench work it can listen for a
+TCP client on every interface instead, with no setting in the app. Quit
+Jetlink, then:
+
+```sh
+defaults write io.zoompilot.jetlink developerTransport tcp
+defaults write io.zoompilot.jetlink tcpPort -int 5599
+```
+
+`defaults delete io.zoompilot.jetlink developerTransport` goes back to USB.
+For one launch only, pass the same keys as arguments:
+
+```sh
+/Applications/Jetlink.app/Contents/MacOS/Jetlink -developerTransport tcp -tcpPort 5599
+```
 
 </details>
 

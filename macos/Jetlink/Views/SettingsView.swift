@@ -141,13 +141,6 @@ struct ServerSettingsView: View {
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
         }
-        Picker("Connection", selection: $settings.transport) {
-          Text("USB (comma)").tag(TransportChoice.usb)
-          Text("TCP (bench client)").tag(TransportChoice.tcp)
-        }
-        if settings.transport == .tcp {
-          TextField("Port", value: $settings.tcpPort, format: .number.grouping(.never))
-        }
       } footer: {
         HStack {
           Text("Changes apply when the server restarts.")

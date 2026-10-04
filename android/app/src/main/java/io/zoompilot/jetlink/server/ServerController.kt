@@ -90,8 +90,9 @@ class ServerController(private val context: Context, private val scope: Coroutin
         put("keep_alive", settings.keepNpuAwake)
         put("keep_cpu_warm", settings.keepCpuAwake)
         put("port", settings.port)
-        // bench tools reach the server over Wi-Fi or `adb forward`
-        put("listen", true)
+        // Bench tools reach the server over Wi-Fi or `adb forward`; the comma
+        // comes over USB. The emulator has no USB host, so it always listens.
+        put("listen", settings.developer || Chip.isEmulator)
         put("usb", true)
         put("preload", true)
         put("chip", Chip.model)
