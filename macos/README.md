@@ -54,23 +54,25 @@ SPARKLE_ED_KEY_FILE=jetlink-ed25519-private.key make -C macos appcast
 `SIGN_IDENTITY` defaults to `-` (ad hoc), which is all a machine without a
 Developer ID certificate can do; such a build runs locally but Gatekeeper will
 not accept it on another Mac. The hardened runtime is on either way. An ad hoc
-build is signed with library validation off: it checks that the app and
-Sparkle share a Team ID, and an ad hoc signature has none. A Debug build, from
-Xcode or `make test`, has no hardened runtime for the same reason.
+build, and a Debug build from Xcode or `make test`, takes
+`Resources/Jetlink-AdHoc.entitlements`, which turn library validation off: it
+checks that the app and Sparkle share a Team ID, and an ad hoc signature has
+none.
 
 ## Updates
 
 The app updates itself from GitHub releases with
 [Sparkle](https://sparkle-project.org) (`Jetlink/App/UpdateStore.swift`,
-pinned in `project.yml`). Only a release build checks: a version from a tag,
-a Team ID signature, and a feed and key in `Info.plist`. A `make app` build
-(`0.8.1-3-gabc1234`, ad hoc) shows **This build does not update itself** in
-Settings.
+pinned in `project.yml`). Only a build with a feed checks, and
+`JETLINK_UPDATE_FEED_URL` is empty unless the release workflow signs with the
+update key, so a `make app` build shows **This build does not update itself**
+in Settings.
 
-`make appcast` signs the DMG and writes `build/appcast.xml`, the feed the
-release carries ([publishing](../docs/publishing.md#mac-updates)). To try an
-update locally, sign both builds with a Team ID (an Apple Development
-identity will do), point them at a feed of your own and a throwaway key, and
+`make appcast` runs Sparkle's `generate_appcast` on the DMG and writes
+`build/appcast.xml`, the feed the release carries
+([publishing](../docs/publishing.md#mac-updates)). To try an update locally,
+point two builds at a feed of your own and a throwaway key, sign both with a
+Team ID (an Apple Development identity will do; that is how it was tried), and
 serve the folder:
 
 ```

@@ -29,6 +29,10 @@ permissions:
   contents: write
   id-token: write
 
+env:
+  # zoompilot/jetlink's release stops where a fork's carries on without a key.
+  UPSTREAM: ${{ github.repository == 'zoompilot/jetlink' }}
+
 jobs:
   changes:
     name: What changed
@@ -102,6 +106,7 @@ jobs:
     runs-on: macos-26
     env:
       HAVE_SIGNING: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 != '' && secrets.NOTARY_KEY_ID != '' }}
+      HAVE_UPDATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY != '' }}
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
@@ -151,8 +156,10 @@ jobs:
 
       - name: Build and sign the app
         env:
-          # The feed installed copies check: this repository's latest release.
-          JETLINK_UPDATE_FEED_URL: https://github.com/${{ github.repository }}/releases/latest/download/appcast.xml
+          # The feed installed copies check, this repository's latest release.
+          # Only a build signed with both keys gets one; without it the app
+          # does not update itself.
+          JETLINK_UPDATE_FEED_URL: ${{ env.HAVE_SIGNING == 'true' && env.HAVE_UPDATE_KEY == 'true' && format('https://github.com/{0}/releases/latest/download/appcast.xml', github.repository) || '' }}
         run: |
           # SIGN_IDENTITY is in the environment only when the step above ran;
           # the scripts default it to "-" (ad hoc) otherwise.
@@ -185,12 +192,11 @@ jobs:
         if: env.HAVE_SIGNING == 'true'
         env:
           SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
-          UPSTREAM: ${{ github.repository == 'zoompilot/jetlink' }}
         run: |
           # appcast.xml goes on the release with the DMG. Installed copies
           # find it at releases/latest/download/appcast.xml, so without it no
           # one would be offered this release.
-          if [ -z "$SPARKLE_ED_PRIVATE_KEY" ]; then
+          if [ "$HAVE_UPDATE_KEY" != true ]; then
             if [ "$UPSTREAM" = true ]; then
               echo "error: SPARKLE_ED_PRIVATE_KEY is not set; installed copies would never see this release" >&2
               exit 1
@@ -242,7 +248,6 @@ jobs:
       # Gradle stops the build when the keystore comes without its password
       # or alias.
       HAVE_SIGNING: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
-      UPSTREAM: ${{ github.repository == 'zoompilot/jetlink' }}
       # The release key's certificate (docs/publishing.md): Android installs
       # an update only over an app signed with the same key.
       RELEASE_CERT_SHA256: ab49203553fbfdc9b296ea19bc39a2b8e8a6543037e4e77c7023c69926cd2a8f

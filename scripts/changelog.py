@@ -13,9 +13,9 @@ Each release is a `Jetlink vX.Y.Z` line underlined with `=`, newest first.
     # the release's notes: its section without the heading
     python3 scripts/changelog.py notes v0.8.1
 
-    # the update window's notes: this release and the ones before it, each
+    # the update window's notes: this release and the nine before it, each
     # under its heading, which the app cuts at the release it has installed
-    python3 scripts/changelog.py history v0.8.1 --count 10
+    python3 scripts/changelog.py history v0.8.1
 
 A tag with no section prints nothing and exits 0: the release then gets
 GitHub's generated notes, and the feed a link to the release page.
@@ -50,7 +50,7 @@ def notes(text: str, tag: str) -> str:
   return next((body for name, body in sections(text) if name == tag), '')
 
 
-def history(text: str, tag: str, count: int) -> str:
+def history(text: str, tag: str, count: int = 10) -> str:
   """Markdown of `tag`'s section and up to `count - 1` older ones, each under a
   `## Jetlink vX.Y.Z` heading. '' when `tag` has no section."""
   releases = sections(text)
@@ -64,11 +64,9 @@ def main(argv: list[str] | None = None) -> int:
   parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
   parser.add_argument('mode', choices=['notes', 'history'])
   parser.add_argument('tag', help='the release tag, like v0.8.1')
-  parser.add_argument('--count', type=int, default=10, help='history: how many releases, this one included')
-  parser.add_argument('--changelog', type=Path, default=CHANGELOG)
   args = parser.parse_args(argv)
-  text = args.changelog.read_text(encoding='utf-8')
-  out = notes(text, args.tag) if args.mode == 'notes' else history(text, args.tag, args.count)
+  text = CHANGELOG.read_text(encoding='utf-8')
+  out = notes(text, args.tag) if args.mode == 'notes' else history(text, args.tag)
   if out:
     sys.stdout.write(out + '\n')
   return 0

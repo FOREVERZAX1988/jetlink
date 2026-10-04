@@ -20,7 +20,9 @@ MACOS_DIR="$(dirname "$SCRIPT_DIR")"
 APP="${1:-$MACOS_DIR/build/Jetlink.app}"
 [ -d "$APP" ] || { echo "error: no app bundle at $APP" >&2; exit 1; }
 
-VERSION="${JETLINK_VERSION:-$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist" 2>/dev/null || echo 0.0.0)}"
+# The app's own version, not JETLINK_VERSION: the Makefile works that out from
+# git again on every make, and the DMG is named for what it holds.
+VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist" 2>/dev/null || echo 0.0.0)"
 SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 OUT_DIR="$MACOS_DIR/build"
 DMG="$OUT_DIR/Jetlink-$VERSION-macOS.dmg"

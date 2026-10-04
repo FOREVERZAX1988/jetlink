@@ -158,14 +158,17 @@ gh secret set SPARKLE_ED_PRIVATE_KEY --repo zoompilot/jetlink < jetlink-ed25519-
 
 The Mac app checks `releases/latest/download/appcast.xml` once a day, so the
 newest release that is not a prerelease is the one it offers.
-`macos/scripts/make-appcast.sh` writes that feed during the release: one
-item, the DMG, with the release notes taken from `CHANGELOG.md`, this
-release's section and the ones before it. The app shows only the sections
+`macos/scripts/make-appcast.sh` writes that feed during the release with
+Sparkle's `generate_appcast`: one item, the DMG, with the release notes taken
+from `CHANGELOG.md`, this release's section and the ones before it. The app shows only the sections
 newer than the version it has, so write each section as the notes for people
 updating from the one before.
 
-- An unsigned build (a fork without the signing secrets) has no feed and does
-  not update itself; a fork's signed build reads its own repository's feed.
+- Only a build the release signs with both the Developer ID and the update
+  key gets a feed. Any other build, a local one or a fork's without the key,
+  does not update itself. A fork with a key of its own also sets
+  `JETLINK_UPDATE_PUBLIC_KEY` in `macos/project.yml`, or the check stops its
+  release.
 - To stop a bad release reaching more Macs, delete its `appcast.xml` asset
   (`gh release delete-asset v0.7.0 appcast.xml`). Copies that already updated
   keep it; Sparkle never offers an older version, so the fix is a new release.

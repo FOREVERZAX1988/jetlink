@@ -14,8 +14,8 @@ options:
 packages:
   JetlinkKit:
     path: ../JetlinkKit
-  # Updates from GitHub releases. Pinned: sign.sh signs its helpers by path, and
-  # the release workflow signs with the sign_update this version ships.
+  # Updates from GitHub releases. Pinned: the release workflow writes the feed
+  # with the generate_appcast this version ships.
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
     exactVersion: 2.10.0
@@ -61,33 +61,30 @@ targets:
         NSSupportsSuddenTermination: false
         NSPrincipalClass: NSApplication
         CFBundleIconName: AppIcon
-        # Sparkle: the feed and its key are build settings (below), so a test
-        # build can point at a feed of its own. Checks run daily without the
-        # second-launch prompt; nothing installs unless the user says so.
+        # Sparkle: the feed and its key are build settings (below). Checks run
+        # daily without the second-launch prompt; nothing installs unless the
+        # user says so.
         SUFeedURL: $(JETLINK_UPDATE_FEED_URL)
         SUPublicEDKey: $(JETLINK_UPDATE_PUBLIC_KEY)
         SUEnableAutomaticChecks: true
         SUVerifyUpdateBeforeExtraction: true
         SURequireSignedFeed: true
-    entitlements:
-      path: Resources/Jetlink.entitlements
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.zoompilot.jetlink
+        CODE_SIGN_ENTITLEMENTS: Resources/Jetlink.entitlements
         ENABLE_APP_SANDBOX: NO
         ENABLE_USER_SCRIPT_SANDBOXING: NO
-        # The release workflow sets the feed to its own repository's releases.
-        # The key's private half is the SPARKLE_ED_PRIVATE_KEY secret
-        # (docs/publishing.md).
-        JETLINK_UPDATE_FEED_URL: https://github.com/zoompilot/jetlink/releases/latest/download/appcast.xml
+        # No feed, no updates: the release workflow sets it when it signs with
+        # the update key, so no other build offers to replace itself. The key's
+        # private half is the SPARKLE_ED_PRIVATE_KEY secret (docs/publishing.md).
+        JETLINK_UPDATE_FEED_URL: ""
         JETLINK_UPDATE_PUBLIC_KEY: Fy8Q4q7tZqdU91t94/uVb6M5aeHp9z3oOLsfO4/NNY4=
       configs:
-        # Xcode signs a Debug build (Run, `make test`) ad hoc, and the hardened
-        # runtime's library validation would then refuse Sparkle: an ad hoc
-        # signature has no Team ID to match. Release builds are re-signed by
-        # sign.sh, which handles the ad hoc case itself.
+        # Xcode signs a Debug build (Run, `make test`) ad hoc, so it needs the
+        # ad hoc entitlements to load Sparkle (Jetlink-AdHoc.entitlements).
         Debug:
-          ENABLE_HARDENED_RUNTIME: NO
+          CODE_SIGN_ENTITLEMENTS: Resources/Jetlink-AdHoc.entitlements
   JetlinkTests:
     type: bundle.unit-test
     platform: macOS

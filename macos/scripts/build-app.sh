@@ -64,8 +64,8 @@ PRODUCT="$MACOS_DIR/build/DerivedData/Build/Products/Release/Jetlink.app"
 
 rm -rf "$MACOS_DIR/build/Jetlink.app"
 ditto "$PRODUCT" "$MACOS_DIR/build/Jetlink.app"
-# Sparkle's XPC services are for sandboxed apps, and Jetlink is not one. Without
-# them sign.sh has two helpers to sign, and none that need entitlements kept.
+# Sparkle's XPC services are for sandboxed apps, and Jetlink is not one; its
+# documentation allows removing them when the framework is copied in.
 SPARKLE="$MACOS_DIR/build/Jetlink.app/Contents/Frameworks/Sparkle.framework"
 rm -rf "$SPARKLE/XPCServices" "$SPARKLE/Versions/B/XPCServices"
 # ditto keeps the product's dates, and Xcode never updates the bundle folder's

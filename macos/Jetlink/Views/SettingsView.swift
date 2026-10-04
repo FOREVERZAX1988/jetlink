@@ -84,19 +84,17 @@ struct GeneralSettingsView: View {
               .font(.callout)
               .foregroundStyle(.secondary)
           }
-        }
-        HStack {
-          Text("Jetlink \(updates.version)")
-          Spacer()
-          if updates.isAvailable {
+          LabeledContent("Jetlink \(ServerStore.appVersion)") {
             Button("Check Now") { updates.checkForUpdates() }
               .disabled(!updates.canCheckForUpdates)
           }
-        }
-        if !updates.isAvailable {
-          Text("This build does not update itself. Releases are on [GitHub](https://github.com/zoompilot/jetlink/releases).")
-            .font(.callout)
-            .foregroundStyle(.secondary)
+        } else {
+          VStack(alignment: .leading, spacing: 4) {
+            Text("Jetlink \(ServerStore.appVersion)")
+            Text("This build does not update itself. Releases are on [GitHub](https://github.com/zoompilot/jetlink/releases).")
+              .font(.callout)
+              .foregroundStyle(.secondary)
+          }
         }
       }
     }

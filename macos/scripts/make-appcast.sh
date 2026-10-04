@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Sign the DMG for Sparkle and write the update feed for it:
+# Write the update feed for the DMG with Sparkle's generate_appcast:
 #
 #   build/appcast.xml   one signed item: this version's DMG on its GitHub release
 #
@@ -12,16 +12,18 @@
 #   SPARKLE_ED_KEY_FILE=path/to/key scripts/make-appcast.sh build/Jetlink.app
 #
 # The notes are CHANGELOG.md's, this release and the ones before it
-# (scripts/changelog.py history). The download URL is GITHUB_REPOSITORY's
-# release (zoompilot/jetlink's outside CI); UPDATE_DOWNLOAD_BASE puts the DMG
-# somewhere else, for a test feed.
+# (scripts/changelog.py history), which the app cuts at the version it has. The
+# download URL is GITHUB_REPOSITORY's release (zoompilot/jetlink's outside CI);
+# UPDATE_DOWNLOAD_BASE puts the DMG somewhere else, for a test feed.
 #
 # Gotchas:
-#   - The signature is checked against the SUPublicEDKey inside the app before
-#     anything is written: a secret that is not that key's other half would
-#     publish an update every installed copy refuses.
-#   - sign_update is the one the Sparkle package brought into DerivedData, so
-#     it is the version the app embeds; `make app` has to have run.
+#   - generate_appcast only warns when the key is not the other half of the
+#     app's SUPublicEDKey, and leaves the DMG unsigned. The signature it wrote
+#     is checked against that key here, so the release stops instead of
+#     publishing an update every installed copy refuses.
+#   - generate_appcast reads a whole folder, so it gets one holding only this
+#     DMG and its notes. It is the copy the Sparkle package brought into
+#     DerivedData, the version the app embeds: `make app` has to have run.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -31,58 +33,49 @@ REPO_ROOT="$(dirname "$MACOS_DIR")"
 APP="${1:-$MACOS_DIR/build/Jetlink.app}"
 [ -d "$APP" ] || { echo "error: no app bundle at $APP" >&2; exit 1; }
 
-# The DMG's name follows make-dmg.sh: JETLINK_VERSION (the Makefile sets it
-# from the tag), else the app's own. The feed takes its versions from the app.
-APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
-VERSION="${JETLINK_VERSION:-$APP_VERSION}"
-if [ "$VERSION" != "$APP_VERSION" ]; then
-  echo "error: the app is $APP_VERSION, not $VERSION; build it again before make appcast" >&2
-  exit 1
-fi
+VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
 PUBLIC_KEY="$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$APP/Contents/Info.plist")"
 TAG="v$VERSION"
 DMG="$MACOS_DIR/build/Jetlink-$VERSION-macOS.dmg"
 OUT="$MACOS_DIR/build/appcast.xml"
 REPO="${GITHUB_REPOSITORY:-zoompilot/jetlink}"
 DOWNLOAD_BASE="${UPDATE_DOWNLOAD_BASE:-https://github.com/$REPO/releases/download/$TAG}"
-SIGN_UPDATE="$MACOS_DIR/build/DerivedData/SourcePackages/artifacts/sparkle/Sparkle/bin/sign_update"
+GENERATE_APPCAST="$MACOS_DIR/build/DerivedData/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_appcast"
 
 [ -f "$DMG" ] || { echo "error: no $DMG; run make dmg first" >&2; exit 1; }
-[ -x "$SIGN_UPDATE" ] || { echo "error: no sign_update at $SIGN_UPDATE; run make app first" >&2; exit 1; }
+[ -x "$GENERATE_APPCAST" ] || { echo "error: no generate_appcast at $GENERATE_APPCAST; run make app first" >&2; exit 1; }
 if [ -z "${SPARKLE_ED_PRIVATE_KEY:-}" ] && [ -z "${SPARKLE_ED_KEY_FILE:-}" ]; then
   echo "error: set SPARKLE_ED_PRIVATE_KEY or SPARKLE_ED_KEY_FILE" >&2
   exit 1
 fi
 
-# The key goes to sign_update on stdin, never on a command line.
-key() {
-  if [ -n "${SPARKLE_ED_PRIVATE_KEY:-}" ]; then
-    printf '%s\n' "$SPARKLE_ED_PRIVATE_KEY"
-  else
-    cat "$SPARKLE_ED_KEY_FILE"
-  fi
-}
-
-echo "==> signing $(basename "$DMG") for Sparkle"
-SIGNATURE="$(key | "$SIGN_UPDATE" --ed-key-file - -p "$DMG")"
-
-echo "==> checking it against the app's SUPublicEDKey"
-xcrun swift "$SCRIPT_DIR/check-update-signature.swift" "$PUBLIC_KEY" "$SIGNATURE" "$DMG"
-
-NOTES="$(mktemp -t jetlink-notes)"
-trap 'rm -f "$NOTES"' EXIT
+STAGE="$(mktemp -d -t jetlink-appcast)"
+trap 'rm -rf "$STAGE"' EXIT
+cp "$DMG" "$STAGE/"
+NOTES="$STAGE/$(basename "$DMG" .dmg).md"
 python3 "$REPO_ROOT/scripts/changelog.py" history "$TAG" > "$NOTES"
 if [ ! -s "$NOTES" ]; then
   echo "warning: CHANGELOG.md has no $TAG section; the update window links to the release page instead"
+  printf 'See the [release notes](https://github.com/%s/releases/tag/%s).\n' "$REPO" "$TAG" > "$NOTES"
 fi
 
 echo "==> writing $OUT"
-python3 "$SCRIPT_DIR/make-appcast.py" \
-  --app "$APP" --archive "$DMG" --signature "$SIGNATURE" \
-  --url "$DOWNLOAD_BASE/$(basename "$DMG")" \
-  --release-page "https://github.com/$REPO/releases/tag/$TAG" \
-  --history "https://github.com/$REPO/releases" \
-  --notes "$NOTES" --output "$OUT"
+rm -f "$OUT"
+# The key goes in on stdin, never on a command line.
+if [ -n "${SPARKLE_ED_PRIVATE_KEY:-}" ]; then
+  printf '%s\n' "$SPARKLE_ED_PRIVATE_KEY"
+else
+  cat "$SPARKLE_ED_KEY_FILE"
+fi | "$GENERATE_APPCAST" --ed-key-file - --embed-release-notes \
+  --download-url-prefix "$DOWNLOAD_BASE/" \
+  --link "https://github.com/$REPO/releases/tag/$TAG" \
+  --full-release-notes-url "https://github.com/$REPO/releases" \
+  -o "$OUT" "$STAGE"
 
-echo "==> signing the feed"
-key | "$SIGN_UPDATE" --ed-key-file - "$OUT"
+echo "==> checking the DMG's signature against the app's SUPublicEDKey"
+SIGNATURE="$(sed -n 's/.*sparkle:edSignature="\([^"]*\)".*/\1/p' "$OUT")"
+if [ -z "$SIGNATURE" ]; then
+  echo "error: the feed has no signature for the DMG; is the private key the other half of the app's SUPublicEDKey?" >&2
+  exit 1
+fi
+xcrun swift "$SCRIPT_DIR/check-update-signature.swift" "$PUBLIC_KEY" "$SIGNATURE" "$DMG"

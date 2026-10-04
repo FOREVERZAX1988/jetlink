@@ -4,9 +4,9 @@ import Observation
 import os
 
 /// Updates from the GitHub releases, through Sparkle: a check a day, Check for
-/// Updates in the menus, and the two settings. Only a release build has them
-/// (`isAvailable`), so a `make app` build never offers to replace itself with
-/// a release.
+/// Updates in the menus, and the two settings. Only a build with a feed has
+/// them, and the release workflow gives one only to a build it signs with the
+/// update key, so a `make app` build never offers to replace itself.
 ///
 /// Nothing installs without the user: Sparkle asks, or with automatic updates
 /// on, installs when Jetlink quits. A check that finds an update while a comma
@@ -14,10 +14,8 @@ import os
 /// never gets an update alert.
 @MainActor
 @Observable
-final class UpdateStore {
-  /// A release build with a Team ID signature (Developer ID for a real one),
-  /// a feed and a key to check it with.
-  private(set) var isAvailable: Bool
+final class UpdateStore: NSObject {
+  var isAvailable: Bool { controller != nil }
   /// False while a check is running.
   private(set) var canCheckForUpdates = false
   /// The version a scheduled check found while a comma was connected. The
@@ -47,35 +45,25 @@ final class UpdateStore {
     }
   }
 
-  let version: String
-
   @ObservationIgnored private var controller: SPUStandardUpdaterController?
-  @ObservationIgnored private let delegate = UserDriverDelegate()
   @ObservationIgnored private let isCommaConnected: @MainActor () -> Bool
   @ObservationIgnored private var canCheckObservation: NSKeyValueObservation?
-  @ObservationIgnored private var activeObserver: NSObjectProtocol?
   @ObservationIgnored private let log = Logger(subsystem: "io.zoompilot.jetlink", category: "updates")
 
-  init(isCommaConnected: @escaping @MainActor () -> Bool, bundle: Bundle = .main) {
+  init(isCommaConnected: @escaping @MainActor () -> Bool) {
     self.isCommaConnected = isCommaConnected
-    version = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
-    isAvailable = UpdateStore.isReleaseBuild(
-      version: version,
-      feedURL: bundle.object(forInfoDictionaryKey: "SUFeedURL") as? String,
-      publicKey: bundle.object(forInfoDictionaryKey: "SUPublicEDKey") as? String,
-      teamID: UpdateStore.signingTeam()
-    )
-    guard isAvailable else {
-      log.info("updates are off: \(self.version, privacy: .public) is not a signed release build")
+    super.init()
+    let feed = Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String ?? ""
+    let key = Bundle.main.object(forInfoDictionaryKey: "SUPublicEDKey") as? String ?? ""
+    guard !feed.isEmpty, !key.isEmpty else {
+      log.info("updates are off: this build has no update feed")
       return
     }
-    delegate.store = self
-    let controller = SPUStandardUpdaterController(startingUpdater: false, updaterDelegate: nil, userDriverDelegate: delegate)
+    let controller = SPUStandardUpdaterController(startingUpdater: false, updaterDelegate: nil, userDriverDelegate: self)
     do {
       try controller.updater.start()
     } catch {
       log.error("the updater did not start: \(error.localizedDescription, privacy: .public)")
-      isAvailable = false
       return
     }
     self.controller = controller
@@ -83,7 +71,7 @@ final class UpdateStore {
       let value = change.newValue ?? false
       MainActor.assumeIsolated { self?.canCheckForUpdates = value }
     }
-    activeObserver = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) {
+    _ = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) {
       [weak self] _ in
       MainActor.assumeIsolated { self?.showHeldUpdateIfClear() }
     }
@@ -100,97 +88,41 @@ final class UpdateStore {
     checkForUpdates()
   }
 
-  // MARK: - Sparkle's user driver
+  /// The feed's notes are the changelog from the new release back several
+  /// releases, each under a `Jetlink vX.Y.Z` heading. Cut at the installed
+  /// release's heading so only what is new shows; nil keeps them all, when
+  /// that heading is not there or comes first.
+  nonisolated static func notesNewer(than installed: String, in notes: NSAttributedString) -> NSAttributedString? {
+    // the whole line, so v0.8.1 does not cut at v0.8.10, and the blank lines before it
+    let heading = #"\s*^[ \t]*"# + NSRegularExpression.escapedPattern(for: "Jetlink v\(installed)") + #"[ \t]*$"#
+    guard let regex = try? NSRegularExpression(pattern: heading, options: .anchorsMatchLines),
+      let match = regex.firstMatch(in: notes.string, range: NSRange(location: 0, length: notes.length)),
+      match.range.location > 0
+    else { return nil }
+    return notes.attributedSubstring(from: NSRange(location: 0, length: match.range.location))
+  }
+}
 
-  fileprivate func shouldSparkleShowScheduledUpdate() -> Bool {
+/// Sparkle's standard user driver calls these on the main thread.
+extension UpdateStore: @preconcurrency SPUStandardUserDriverDelegate {
+  var supportsGentleScheduledUpdateReminders: Bool { true }
+
+  func standardUserDriverShouldHandleShowingScheduledUpdate(_ update: SUAppcastItem, andInImmediateFocus immediateFocus: Bool) -> Bool {
     !isCommaConnected()
   }
 
-  fileprivate func willShowUpdate(_ update: SUAppcastItem, handledBySparkle: Bool) {
-    guard !handledBySparkle else { return }
+  func standardUserDriverWillHandleShowingUpdate(_ handleShowingUpdate: Bool, forUpdate update: SUAppcastItem, state: SPUUserUpdateState) {
+    guard !handleShowingUpdate else { return }
     log.info("holding update \(update.displayVersionString, privacy: .public) while a comma is connected")
     heldUpdate = update.displayVersionString
   }
 
-  fileprivate func updateGotAttention() {
+  func standardUserDriverDidReceiveUserAttention(forUpdate update: SUAppcastItem) {
     heldUpdate = nil
   }
 
-  // MARK: - Rules
-
-  /// Only a release checks for updates: a version from a release tag, a feed
-  /// and a key in Info.plist, and a Team ID signature. A development
-  /// build (0.0.0, `0.8.1-3-gabc1234`, `-dirty`) or an ad hoc one has nothing
-  /// to update from, and a fork's unsigned build has no feed of its own.
-  nonisolated static func isReleaseBuild(version: String, feedURL: String?, publicKey: String?, teamID: String?) -> Bool {
-    guard version.wholeMatch(of: /\d+\.\d+\.\d+(-?(a|b|rc)\d+)?/) != nil, version != "0.0.0" else { return false }
-    guard let feedURL, !feedURL.isEmpty, let publicKey, !publicKey.isEmpty else { return false }
-    guard let teamID, !teamID.isEmpty else { return false }
-    return true
-  }
-
-  /// The team of the running app's signature; nil when it is ad hoc.
-  nonisolated static func signingTeam() -> String? {
-    var code: SecCode?
-    guard SecCodeCopySelf([], &code) == errSecSuccess, let code else { return nil }
-    var staticCode: SecStaticCode?
-    guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode else { return nil }
-    var info: CFDictionary?
-    guard SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
-      let info = info as? [String: Any]
-    else { return nil }
-    return info[kSecCodeInfoTeamIdentifier as String] as? String
-  }
-
-  /// The feed's notes are the changelog from the new release back several
-  /// releases, each under a `Jetlink vX.Y.Z` heading. Cut at the installed
-  /// release's heading so only what is new shows; nil keeps them all, when
-  /// that heading is not there.
-  nonisolated static func notesNewer(than installed: String, in notes: NSAttributedString) -> NSAttributedString? {
-    let text = notes.string as NSString
-    let heading = "Jetlink v\(installed)"
-    var searchStart = 0
-    while searchStart < text.length {
-      let found = text.range(of: heading, range: NSRange(location: searchStart, length: text.length - searchStart))
-      guard found.location != NSNotFound else { return nil }
-      let line = text.lineRange(for: found)
-      // the whole line, so v0.8.1 does not cut at v0.8.10
-      if text.substring(with: line).trimmingCharacters(in: .whitespacesAndNewlines) == heading {
-        guard line.location > 0 else { return nil }
-        var end = line.location
-        while end > 0, let scalar = UnicodeScalar(text.character(at: end - 1)), CharacterSet.whitespacesAndNewlines.contains(scalar) {
-          end -= 1
-        }
-        return notes.attributedSubstring(from: NSRange(location: 0, length: end))
-      }
-      searchStart = NSMaxRange(found)
-    }
-    return nil
-  }
-}
-
-/// Sparkle's delegates are Objective-C protocols, which need an NSObject. It
-/// calls them on the main thread.
-@MainActor
-private final class UserDriverDelegate: NSObject, @preconcurrency SPUStandardUserDriverDelegate {
-  weak var store: UpdateStore?
-
-  var supportsGentleScheduledUpdateReminders: Bool { true }
-
-  func standardUserDriverShouldHandleShowingScheduledUpdate(_ update: SUAppcastItem, andInImmediateFocus immediateFocus: Bool) -> Bool {
-    store?.shouldSparkleShowScheduledUpdate() ?? true
-  }
-
-  func standardUserDriverWillHandleShowingUpdate(_ handleShowingUpdate: Bool, forUpdate update: SUAppcastItem, state: SPUUserUpdateState) {
-    store?.willShowUpdate(update, handledBySparkle: handleShowingUpdate)
-  }
-
-  func standardUserDriverDidReceiveUserAttention(forUpdate update: SUAppcastItem) {
-    store?.updateGotAttention()
-  }
-
   func standardUserDriverWillFinishUpdateSession() {
-    store?.updateGotAttention()
+    heldUpdate = nil
   }
 
   func standardUserDriverWillShowReleaseNotesText(
