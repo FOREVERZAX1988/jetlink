@@ -64,6 +64,12 @@ TELEMETRY_EVERY = 2
 TELEMETRY_PERIOD = 1.0
 # frames Trips keeps the timings of: a minute at 20 Hz
 TRIPS_KEPT = 1200
+# shadow frames in a row that would not have been held (check_shadow) before
+# the large model may drive (joining reads `keeping_up`): a second at 20 Hz.
+# A host cold from a reconnect proves itself with the small model driving,
+# not at the wheel, where an iPhone's every return was a soft disable
+# within a second (2026-10-04)
+PROVING_FRAMES = 20
 
 
 class Trips:
@@ -206,6 +212,8 @@ class JetlinkModelState:
     self._holds: deque[float] = deque()
     self._holds_in_a_row = 0
     self.behind: str | None = None
+    # shadow frames in a row that would not have been held
+    self._kept_up = 0
 
   def slice_outputs(self, model_outputs: np.ndarray, output_slices: dict[str, slice]) -> dict[str, np.ndarray]:
     return {k: model_outputs[np.newaxis, v] for k, v in output_slices.items()}
@@ -331,6 +339,27 @@ class JetlinkModelState:
     self.prepare(bufs, transforms, inputs)
     self.send(after_enqueue is not None)
     return self.end(after_enqueue)
+
+  @property
+  def keeping_up(self) -> bool:
+    """Would the host have driven the last PROVING_FRAMES shadow frames
+    without a hold? What the joining model swaps on; nothing while it drives."""
+    return self._kept_up >= PROVING_FRAMES
+
+  def check_shadow(self) -> None:
+    """Score the shadow frame just sent as end() would have, now that the
+    small model's own frame is done: kept up when its reply is already back,
+    HOLD_FRAME or less after its warp began. The joining model calls this
+    once per shadow frame; a reply not back yet is read by the next prepare()
+    as before, and starts the proof over. Later than end() would have waited,
+    so a host that passes here does not hold at the wheel; a comma whose own
+    frame runs past the hold cannot pass, and would hold every frame driving."""
+    frame = self._frame
+    if frame is None or frame.seq is None:
+      return
+    self.client.drain()
+    kept = not self.client.unanswered and time.perf_counter() - frame.t0 <= (HOLD_FRAME or SLOW_FRAME)
+    self._kept_up = self._kept_up + 1 if kept else 0
 
   def _note_hold(self, held: bool) -> str | None:
     """Why the large model should hand back after this frame, if it should:

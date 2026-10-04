@@ -18,8 +18,12 @@ modeld re-reads `model` every frame, and `modelV2.big` keeps its meaning.
 From the join on, every frame goes to the Jetson whether or not it drives:
 the small model drives on, and the large model's history and hidden state are
 current and warm when the swap comes, so its first driving frame costs what
-every frame costs. The swap itself changes which model's output is published
-and nothing else. While it drives, a reply that is not back in time is not
+every frame costs. Those shadow frames are also the proof: the large model
+is offered only once the host has answered the last PROVING_FRAMES of them
+in time (model_state.keeping_up), so a host cold from a reconnect, or one
+that is simply too slow, proves itself with the small model driving and not
+at the wheel. The swap itself changes which model's output is published and
+nothing else. While it drives, a reply that is not back in time is not
 waited for: the previous frame's output is published again (a held frame,
 model_state.HOLD_FRAME) and the camera frame is not dropped. Too many holds
 hand the drive back to the small model, as a lost link does.
@@ -98,6 +102,15 @@ SETTLING_FRAMES = 3
 # fallback frame paid (25 dropped frames, commIssue) when the large model had
 # driven from frame one. Nothing is in control at a modeld start
 SMALL_WARMUP_FRAMES = 3
+# shadowing this long without keeping up, the panel says the link is too slow
+# to drive rather than 'checking' for the drive. The proof goes on: a host
+# that warms up late still gets offered
+SLOW_LINK_AFTER = 10.0
+# the panel's line while the large model shadows: once it is built, once it
+# keeps up, and once it has not for SLOW_LINK_AFTER
+CHECKING = 'checking the link keeps up'
+PROVEN = 're-engage to switch'
+SLOW = 'too slow to drive'
 # why a demote happened, as the log says it
 LOST = 'lost jetlink'
 BEHIND = 'jetlink fell behind'
@@ -175,6 +188,11 @@ class JoiningModelState:
     # since it swapped in
     self._small_frames = 0
     self._big_frames = 0
+    # the panel's last line about the large model shadowing (CHECKING, PROVEN
+    # or SLOW), and when the shadowing began. A report is a param write on
+    # the frame thread, so only a change is reported
+    self._proving = CHECKING
+    self._proving_since = 0.0
     # whether the host had let go of the gadget when the last link was lost,
     # and whether this failure streak has already skipped a backoff for a replug
     self._host_left = False
@@ -209,10 +227,14 @@ class JoiningModelState:
 
   @property
   def big_model_available(self) -> bool:
-    """Connected and waiting to switch, running every frame meanwhile: what
-    big_model_state calls ready."""
-    return (not self._stop.is_set() and self._active is self._small
-            and (self._big is not None or self._joined is not None))
+    """Built, keeping up with the frames it shadows, and waiting to switch:
+    what big_model_state calls ready, and what the driver is offered."""
+    return not self._stop.is_set() and self._shadowing and self._big.keeping_up
+
+  @property
+  def _shadowing(self) -> bool:
+    # a large model built and fed every frame, with the small model driving
+    return self._big is not None and self._active is self._small
 
   @property
   def chestnut(self) -> bool:
@@ -311,6 +333,7 @@ class JoiningModelState:
       self._log.warning("jetlink: modeld dropped %.2f %% of camera frames behind the large model, "
                         "the small model drives from this one", self._frame_drop_ratio * 100)
       self._demote(BEHIND)
+    self._note_proving()
     self._maybe_swap()
     if self._active is self._small:
       self._small_frames += 1
@@ -347,6 +370,12 @@ class JoiningModelState:
       # a small model that did not call back; send now
       try:
         big.send()
+      except Exception as e:
+        failed.append(e)
+    if not failed:
+      # the proof: would this frame have been held? (model_state.check_shadow)
+      try:
+        big.check_shadow()
       except Exception as e:
         failed.append(e)
     if failed:
@@ -438,11 +467,30 @@ class JoiningModelState:
       self._back_off()
       return
     self._big = big
+    self._proving = CHECKING   # the join thread said so at link ready
+    self._proving_since = time.monotonic()
+
+  def _note_proving(self) -> None:
+    """The panel's line while the large model shadows, on a change only:
+    PROVEN once it keeps up, SLOW once it has not for SLOW_LINK_AFTER, and
+    CHECKING again after a hand-back. The first driven frame clears it."""
+    if not self._shadowing:
+      return
+    if self._big.keeping_up:
+      line = PROVEN
+    elif time.monotonic() - self._proving_since > SLOW_LINK_AFTER:
+      line = SLOW
+    else:
+      line = CHECKING
+    if line != self._proving:
+      self._proving = line
+      self._log.warning("jetlink: large model %s", line)
+      self._report('connect', line)
 
   def _maybe_swap(self) -> None:
-    if self._big is None or self._active is self._big:
+    if not self._shadowing:
       return
-    if not self._window_open or self._small_frames < SMALL_WARMUP_FRAMES:
+    if not self._big.keeping_up or not self._window_open or self._small_frames < SMALL_WARMUP_FRAMES:
       return
     # nothing to build and nothing to reset (the module docstring says why)
     self._big_frames = 0
@@ -603,8 +651,8 @@ class JoiningModelState:
           client.close()
           return
         self._joined = (client, spec)
-      self._log.warning("jetlink: link ready, waiting for a window to swap")
-      self._report('connect', 're-engage to switch')
+      self._log.warning("jetlink: link ready, the large model shadows from the next frame")
+      self._report('connect', CHECKING)
 
   def _wait_out_back_off(self) -> bool:
     """Until the next attempt is due, or a host configures the gadget again

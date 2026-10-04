@@ -44,6 +44,13 @@ class FakeModel:
     self.prepare_raises = None
     self.sent = False
     self.behind = None
+    # the large model's proof: would the host have driven its shadow frames
+    # without a hold (keeping_up), scored once per shadow frame (check_shadow)
+    self.keeping_up = True
+    self.checks = 0
+
+  def check_shadow(self):
+    self.checks += 1
 
   def run(self, bufs, transforms, inputs, after_enqueue=None):
     self.calls += 1
@@ -161,6 +168,18 @@ class JoiningBase(unittest.TestCase):
     self.big.client = mock.Mock(dead=dead)
     return s
 
+  def _built(self):
+    """A state whose large model the frame thread has built; engaged, so the
+    small model drives on and the large one shadows."""
+    s = self._state()
+    self._wait_joined(s)
+    self.assertEqual(self._run(s), {'from': 'small'})
+    return s
+
+  def _said(self):
+    """The panel's lines so far, in order."""
+    return [c.args[2] for c in self.progress.report.call_args_list if c.args[0] == 'connect']
+
   def _wait_reported(self, s, msg, drops=0, timeout=2.0):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -213,8 +232,9 @@ class JoiningTest(JoiningBase):
     self.assertEqual(self._run(s), {'from': 'small'})
     booted.set()
     self._wait_joined(s)
-    self.assertTrue(s.big_model_available)
+    self.assertFalse(s.big_model_available, 'not built yet, nothing has shadowed')
     self.assertEqual(self._run(s), {'from': 'small'})
+    self.assertTrue(s.big_model_available)
     self.assertEqual(s.big_model_state, 'ready')
     s._engaged = False
     self.assertEqual(self._run(s), {'from': 'big'})
@@ -222,8 +242,7 @@ class JoiningTest(JoiningBase):
     self.assertEqual(s.big_model_state, 'running')
 
   def test_close_with_pending_model_clears_availability(self):
-    s = self._state()
-    self._wait_joined(s)
+    s = self._built()
     self.assertTrue(s.big_model_available)
     s.close()
     self.assertFalse(s.big_model_available)
@@ -363,10 +382,8 @@ class JoiningTest(JoiningBase):
   def test_state_travels_in_the_message_not_in_params(self):
     # a chestnut's load is over once; this never is, so selfdrived's edge is
     # modelV2.big turning true and the UI reads acceleratorState
-    s = self._state()
+    s = self._built()
     self.assertFalse(s.chestnut)
-
-    self._wait_joined(s)
     # up and only a swap window away, which the icon draws steady rather than
     # pulsing "loading" for the rest of a drive with no stop in it
     self.assertEqual(s.big_model_state, 'ready')
@@ -605,6 +622,72 @@ class JoiningTest(JoiningBase):
     self.big.raises = RuntimeError("link gone")
     self._run(s)
     self.assertEqual(s.big_model_state, 'retrying')
+
+
+class ProvingTest(JoiningBase):
+  """The large model is offered, and swapped in, only once the host has kept
+  up with the frames it shadows (model_state.keeping_up). The panel says
+  what the proof is doing; each line once."""
+
+  def test_a_host_that_is_not_keeping_up_is_neither_offered_nor_swapped_in(self):
+    self.big.keeping_up = False
+    s = self._built()
+    s._engaged = False
+    for _ in range(3):
+      self.assertEqual(self._run(s), {'from': 'small'}, 'an open window is not enough')
+    self.assertFalse(s.big_model_available)
+    self.assertEqual(s.big_model_state, 'joining', 'the icon loads, no offer goes out')
+    self.assertEqual((self.big.shadows, self.big.checks), (4, 4), 'it shadows, and is scored, every frame meanwhile')
+
+  def test_once_it_keeps_up_it_is_offered_and_swaps_on_the_window(self):
+    self.big.keeping_up = False
+    s = self._built()
+    self.assertEqual(self._said()[-1], joining.CHECKING)
+    self.assertEqual(self._said().count(joining.CHECKING), 1, 'the join thread said it; the build does not again')
+    self.big.keeping_up = True
+    self.assertEqual(self._run(s), {'from': 'small'}, 'engaged: offered, not swapped')
+    self.assertTrue(s.big_model_available)
+    self.assertEqual(s.big_model_state, 'ready')
+    self.assertEqual(self._said()[-1], joining.PROVEN)
+    s._engaged = False
+    self.assertEqual(self._run(s), {'from': 'big'})
+    self.assertEqual(self._said().count(joining.PROVEN), 1, 'said once, not every frame')
+
+  def test_a_host_too_slow_for_long_is_named_on_the_panel_once_and_still_proves(self):
+    self.big.keeping_up = False
+    with mock.patch.object(joining, 'SLOW_LINK_AFTER', 0.0):
+      s = self._built()
+      self._run(s)
+      self._run(s)
+      self.assertEqual(self._said()[-1], joining.SLOW)
+      self.assertEqual(self._said().count(joining.SLOW), 1)
+      self.assertTrue(self.log.has(joining.SLOW, 'warning'))
+      self.big.keeping_up = True
+      s._engaged = False
+      self.assertEqual(self._run(s), {'from': 'big'}, 'a host that warms up late still drives')
+
+  def test_a_link_that_fails_the_check_is_lost_like_any_other(self):
+    s = self._built()
+    self.big.check_shadow = mock.Mock(side_effect=RuntimeError('socket closed'))
+    self.assertEqual(self._run(s), {'from': 'small'})
+    self.assertIsNone(s._big)
+    self.assertTrue(self.log.has('link failed with the small model driving', 'error'))
+
+  def test_the_next_large_model_proves_itself_again(self):
+    s = self._built()
+    s._engaged = False
+    self.assertEqual(self._run(s), {'from': 'big'})
+    with mock.patch.object(joining, 'REJOIN_DELAY_QUICK', 0.05):
+      self.big.raises = RuntimeError('link gone')
+      self._run(s)
+      self.assertEqual(s.big_model_state, 'retrying')
+      self.big = FakeModel('big', chestnut=True, client=object())
+      self.big.keeping_up = False
+      self.joined.clear()
+      self._wait_joined(s)
+    self._run(s)
+    self.assertFalse(s.big_model_available, 'the new one has not kept up yet')
+    self.assertEqual(self._said()[-1], joining.CHECKING)
 
 
 class ShadowTest(JoiningBase):

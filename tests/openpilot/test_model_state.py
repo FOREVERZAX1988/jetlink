@@ -69,6 +69,8 @@ class FakeClient:
     self.late = set()
     self.holds = []
     self.drains = 0
+    # frames (by frame_id) a drain leaves unanswered: a reply not back yet
+    self.keep: set[int] = set()
     # what a reply asked for telemetry carries, when the server has any
     self.telemetry = None
 
@@ -89,11 +91,12 @@ class FakeClient:
 
   def drain(self):
     self.drains += 1
-    answered, self._in_flight = len(self._in_flight), []
-    if answered:
+    taken = [f for f in self._in_flight if f not in self.keep]
+    self._in_flight = [f for f in self._in_flight if f in self.keep]
+    if taken:
       self.last_output = self.output
       self._piggyback()
-    return answered
+    return len(taken)
 
   def _piggyback(self):
     if self.telemetry is not None and self.asked[-1]:
@@ -131,6 +134,11 @@ class ModelStateTest(unittest.TestCase):
     return spec, state, client, warped
 
   @staticmethod
+  def warping(warped):
+    """The warp mocked, for frames run after run_frames() returned."""
+    return mock.patch.object(model_state, 'call_warp', return_value=SimpleNamespace(data=lambda: warped))
+
+  @staticmethod
   def frames(state, n: int, after_enqueue=None, shadow: int = 0) -> list:
     bufs = {k: SimpleNamespace(data=np.zeros(8, np.uint8)) for k in ('img', 'big_img')}
     outs = []
@@ -143,6 +151,7 @@ class ModelStateTest(unittest.TestCase):
       if i < shadow:
         state.prepare(*args)
         state.send()
+        state.check_shadow()   # as the joining model does once the small model's frame is done
       else:
         outs.append(state.run(*args, after_enqueue))
     return outs
@@ -242,7 +251,7 @@ class TestShadow(ModelStateTest):
     for data, *_ in client.sent:
       np.testing.assert_array_equal(data, warped)
     self.assertEqual(client.holds, [], 'a shadow frame waits for nothing')
-    self.assertEqual(client.drains, 3, 'what came back is read before each send')
+    self.assertEqual(client.drains, 6, 'what came back is read before each send, and again when the frame is scored')
     self.assertEqual((state.trips.sent, state.trips.frames), (3, 0))
     self.assertEqual(state.trips.summary()['shadowed'], 3)
 
@@ -259,6 +268,46 @@ class TestShadow(ModelStateTest):
     self.run_frames(STATEFUL, n=0, shadow=4)
     timed = [line for line in self.log.lines('warning') if 'shadow frame' in line]
     self.assertEqual([line.split()[3] for line in timed], ['1', '2', '3'])
+
+
+class TestProving(ModelStateTest):
+  """The shadow frames are the proof the joining model swaps on: the host
+  keeps up once the last PROVING_FRAMES of them, scored where the small
+  model's frame ends, were back within the hold end() would have given."""
+
+  def test_it_keeps_up_once_the_last_proving_frames_would_not_have_been_held(self):
+    n = model_state.PROVING_FRAMES
+    _, state, _, _ = self.run_frames(STATEFUL, n=0, shadow=n - 1)
+    self.assertFalse(state.keeping_up)
+    _, state, _, _ = self.run_frames(STATEFUL, n=0, shadow=n)
+    self.assertTrue(state.keeping_up)
+
+  def test_a_reply_past_the_hold_starts_the_proof_over(self):
+    n = model_state.PROVING_FRAMES
+    with mock.patch.object(model_state, 'HOLD_FRAME', 1e-9):   # every reply is past it
+      _, state, _, _ = self.run_frames(STATEFUL, n=0, shadow=n + 3)
+    self.assertEqual(state._kept_up, 0)
+    with mock.patch.object(model_state, 'HOLD_FRAME', 1e-9):
+      _, state, client, warped = self.run_frames(STATEFUL, n=0, shadow=3)
+    with self.warping(warped):   # back to a hold the fakes meet
+      self.frames(state, 0, shadow=n)
+    self.assertTrue(state.keeping_up, 'the frames after it count again')
+
+  def test_a_reply_not_back_yet_starts_the_proof_over_and_is_read_by_the_next_frame(self):
+    client = FakeClient()
+    client.keep = {4}
+    _, state, _, warped = self.run_frames(STATEFUL, n=0, client=client, shadow=5)
+    self.assertEqual(state._kept_up, 0, 'with 4 still out, nothing after it counts either')
+    self.assertEqual(client.unanswered, 1)
+    client.keep.clear()
+    with self.warping(warped):
+      self.frames(state, 0, shadow=model_state.PROVING_FRAMES)
+    self.assertTrue(state.keeping_up)
+
+  def test_a_driven_frame_is_not_scored(self):
+    _, state, client, _ = self.run_frames(STATEFUL, n=1, shadow=2)
+    state.check_shadow()   # nothing prepared and unsent: a no-op
+    self.assertEqual(state._kept_up, 2)
 
 
 class TestHold(ModelStateTest):
