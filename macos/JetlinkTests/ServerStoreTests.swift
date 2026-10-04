@@ -25,6 +25,17 @@ struct ServerStoreTests {
     #expect(AppSettings(defaults: defaults).backend == .coreml)
   }
 
+  /// Keeping a closed Mac awake is opt-in.
+  @MainActor @Test func lidClosedKeepAwakeIsOffUntilChosen() throws {
+    let suite = "io.zoompilot.jetlink.tests.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let settings = AppSettings(defaults: defaults)
+    #expect(!settings.keepAwakeLidClosed)
+    settings.keepAwakeLidClosed = true
+    #expect(AppSettings(defaults: defaults).keepAwakeLidClosed)
+  }
+
   /// The scheme's test action passes -startServerOnLaunch NO, so the app
   /// hosting these tests opens no USB link and loads no engine.
   @MainActor @Test func theTestHostStartsNoServer() {

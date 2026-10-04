@@ -4,7 +4,7 @@ import IOKit.pwr_mgt
 import os
 
 /// Keeps the Mac awake while the server is serving on AC power, the same rule
-/// caffeinate -s follows. No subprocess.
+/// caffeinate -s follows, and with the lid closed when asked. No subprocess.
 @MainActor
 final class SleepAssertion {
   private var assertionID: IOPMAssertionID = IOPMAssertionID(0)
@@ -25,6 +25,11 @@ final class SleepAssertion {
   }
 
   var isHoldingAssertion: Bool { isActive }
+
+  /// Saved because the kernel keeps the lid flag after this process exits:
+  /// the first update after a crash clears what it left set.
+  private var isLidSleepDisabled = UserDefaults.standard.bool(forKey: SleepAssertion.lidSleepDisabledKey)
+  private static let lidSleepDisabledKey = "lidSleepDisabled"
 
   func setActive(_ active: Bool) {
     guard active != isActive else { return }
@@ -48,6 +53,33 @@ final class SleepAssertion {
       isActive = false
       log.info("released the sleep assertion")
     }
+  }
+
+  /// Keeps a lid close from sleeping the Mac: the IOPMrootDomain call behind
+  /// Amphetamine's Closed-Display Mode, which needs no privileges.
+  func setLidSleepDisabled(_ disabled: Bool) {
+    // Sent again on every update while held: powerd clears the same flag
+    // when an external display or charger comes and goes.
+    guard disabled || isLidSleepDisabled else { return }
+    guard Self.setClamshellSleepDisabled(disabled) else {
+      log.error("could not change sleep on lid close")
+      return
+    }
+    guard disabled != isLidSleepDisabled else { return }
+    isLidSleepDisabled = disabled
+    UserDefaults.standard.set(disabled, forKey: Self.lidSleepDisabledKey)
+    log.info("\(disabled ? "keeping the Mac awake with the lid closed" : "a closed lid sleeps the Mac again", privacy: .public)")
+  }
+
+  private static func setClamshellSleepDisabled(_ disabled: Bool) -> Bool {
+    let rootDomain = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPMrootDomain"))
+    guard rootDomain != IO_OBJECT_NULL else { return false }
+    defer { IOObjectRelease(rootDomain) }
+    var connect = io_connect_t(0)
+    guard IOServiceOpen(rootDomain, mach_task_self_, 0, &connect) == KERN_SUCCESS else { return false }
+    defer { IOServiceClose(connect) }
+    var input: UInt64 = disabled ? 1 : 0
+    return IOConnectCallScalarMethod(connect, UInt32(kPMSetClamshellSleepState), &input, 1, nil, nil) == KERN_SUCCESS
   }
 
   func startObservingPowerSource() {

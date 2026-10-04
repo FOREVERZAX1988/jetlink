@@ -51,7 +51,7 @@ To download a model ahead of time, see [Models](models.md#prepare-ahead-of-time-
 | --- | --- |
 | Server failed to start | Open **Logs**. Check that another Jetlink server is not running and the cache folder is writable. |
 | Model takes minutes to load | Close large apps. In **Models**, right-click the model, choose **Delete Prepared Engines…**, then use it again. On an M1 Pro, preparing takes about 20 seconds and loading up to 10. |
-| Link drops when the Mac sleeps | Enable **Keep the Mac awake while serving** and keep it on power. |
+| Link drops when the Mac sleeps | Enable **Prevent sleep while server is running** and keep it on power, or also enable **Prevent sleep with the lid closed**. |
 | Slow frames | Check the cable and port, then close other apps using the GPU or Neural Engine. |
 | Network settings show a **jetlink** service | Set the comma's **Jetlink** setting to **USB**. |
 
@@ -65,7 +65,8 @@ To download a model ahead of time, see [Models](models.md#prepare-ahead-of-time-
 | Setting | Use |
 | --- | --- |
 | Open Jetlink at login | Start the app automatically. |
-| Keep the Mac awake while serving | Prevent idle sleep on power. On battery, keep the lid open. |
+| Prevent sleep while server is running | Prevent idle sleep on power. On battery, keep the lid open. |
+| Prevent sleep with the lid closed | Also on battery, with the lid open or closed. Normal sleep returns when the server stops. |
 | Cache folder | Choose where models are stored. Restart the server to apply. |
 | Connection | Keep **USB** for driving. **TCP** is for testing. |
 
@@ -73,7 +74,7 @@ To download a model ahead of time, see [Models](models.md#prepare-ahead-of-time-
 <a id="the-server"></a>
 
 Keep **Backend** on **Automatic**. If another app keeps the Neural Engine busy,
-try **CoreML on the GPU**. Click **Restart Server** after changing settings.
+try **CoreML (GPU)**. Click **Restart Server** after changing settings.
 
 **Benchmark** (Command-3) tests the loaded model without a comma connected.
 

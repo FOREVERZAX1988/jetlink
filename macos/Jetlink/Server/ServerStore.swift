@@ -37,7 +37,9 @@ enum ServerStoreError: Error, LocalizedError, Equatable {
 @MainActor
 @Observable
 final class ServerStore: ServerControlling {
-  private(set) var runState: ServerRunState = .stopped
+  private(set) var runState: ServerRunState = .stopped {
+    didSet { updateSleepAssertion() }
+  }
   private(set) var info: ServerInfo?
   /// What the screens show of the server, kept from its events.
   let state = ServerViewState()
@@ -75,6 +77,8 @@ final class ServerStore: ServerControlling {
     if isLive {
       sleepAssertion.onPowerSourceChange = { [weak self] in self?.updateSleepAssertion() }
       sleepAssertion.startObservingPowerSource()
+      // stopped, so this clears a lid flag a crashed run left set
+      updateSleepAssertion()
     }
   }
 
@@ -140,7 +144,6 @@ final class ServerStore: ServerControlling {
         self.lastFailure = detail
         self.runState = .failed(detail)
       }
-      self.updateSleepAssertion()
     }
   }
 
@@ -163,7 +166,6 @@ final class ServerStore: ServerControlling {
     }
     tearDown()
     runState = .stopped
-    updateSleepAssertion()
   }
 
   private func tearDown() {
@@ -250,16 +252,15 @@ final class ServerStore: ServerControlling {
 
   private func updateSleepAssertion() {
     guard isLive else { return }
-    let wanted: Bool
-    if case .serving = runState {
-      wanted = settings.keepAwakeWhileServing && sleepAssertion.isOnACPower
-    } else {
-      wanted = false
-    }
-    sleepAssertion.setActive(wanted)
+    let serving = runState == .serving && settings.keepAwakeWhileServing
+    // a closed lid idles the Mac on any power source, so that mode holds the
+    // assertion on battery too
+    let lidClosed = serving && settings.keepAwakeLidClosed
+    sleepAssertion.setActive(serving && (lidClosed || sleepAssertion.isOnACPower))
+    sleepAssertion.setLidSleepDisabled(lidClosed)
   }
 
-  /// Called by the settings view when keepAwakeWhileServing changes.
+  /// Called by the settings view when a keep-awake setting changes.
   func keepAwakeSettingChanged() {
     updateSleepAssertion()
   }
