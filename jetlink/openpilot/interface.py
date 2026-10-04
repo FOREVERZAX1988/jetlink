@@ -43,7 +43,7 @@ class Keys:
   """The params the fork declares for jetlink, by name: jetlink itself knows no param name."""
   link: str                      # INT, an index into MODES: the Jetlink setting
   offroad: str                   # BOOL: is the car parked (manager's IsOffroad)
-  progress: str                  # JSON {stage, frac, msg}: provisioning and join progress
+  progress: str                  # JSON {stage, frac, msg, drops}: provisioning and join progress
   spec: str                      # JSON: the built model's spec and whether its engine is built
   pointers: str                  # JSON: catalog ref -> {oid, size}
   # sunnypilot's model manager: the big-model pick, JSON {ref, displayName},

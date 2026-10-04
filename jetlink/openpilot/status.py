@@ -57,16 +57,18 @@ class Progress:
       return None
     return value if isinstance(value, dict) else None
 
-  def report(self, stage: str, frac: float, msg: str = '') -> None:
+  def report(self, stage: str, frac: float, msg: str = '', drops: int = 0) -> None:
     """Never raises: called from except handlers. Held to 4 Hz within a stage;
-    the end of one always goes through, so the panel's last word is never dropped."""
+    the end of one always goes through, so the panel's last word is never dropped.
+    `msg` is the panel's one short line; `drops`, once the link has dropped often
+    enough to blame the cable, is the panel's to word."""
     last_stage, last_at = self._last
     now = time.monotonic()
     if frac < 1.0 and stage == last_stage and now - last_at < PROGRESS_MIN_INTERVAL:
       return
     self._last = (stage, now)
     try:
-      self.op.put(self.op.keys.progress, {'stage': stage, 'frac': round(frac, 4), 'msg': msg})
+      self.op.put(self.op.keys.progress, {'stage': stage, 'frac': round(frac, 4), 'msg': msg, 'drops': drops})
     except Exception:
       self.op.log.exception("jetlink: could not report progress")
 

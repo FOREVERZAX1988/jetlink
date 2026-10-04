@@ -372,7 +372,7 @@ class TestProgress(OpenpilotTest):
       self.parts.progress.report('build', 0.0)
       self.parts.progress.report('build', 1.0)
       self.assertEqual(put.call_count, 3)
-    self.assertEqual(self.parts.progress.read(), {'stage': 'build', 'frac': 1.0, 'msg': ''})
+    self.assertEqual(self.parts.progress.read(), {'stage': 'build', 'frac': 1.0, 'msg': '', 'drops': 0})
 
   def test_clearing_removes_it(self):
     self.parts.progress.report('build', 1.0)

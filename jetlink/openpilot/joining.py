@@ -98,11 +98,15 @@ SETTLING_FRAMES = 3
 # fallback frame paid (25 dropped frames, commIssue) when the large model had
 # driven from frame one. Nothing is in control at a modeld start
 SMALL_WARMUP_FRAMES = 3
-# why a demote happened, as the log and the UI say it
+# why a demote happened, as the log says it
 LOST = 'lost jetlink'
 BEHIND = 'jetlink fell behind'
+# why a built model was let go before it drove
+NOT_UP = 'could not bring up the large model'
 # and as the leave says it to the server (protocol.Msg.LEAVE)
 LEAVING = {LOST: P.LEAVE_LOST, BEHIND: P.LEAVE_BEHIND}
+# and as the panel's one line says it while the join tries again
+RECONNECTING = {LOST: 'reconnecting', BEHIND: 'fell behind, reconnecting', NOT_UP: 'load failed, reconnecting'}
 
 
 class JoiningModelState:
@@ -430,7 +434,7 @@ class JoiningModelState:
     except Exception:
       self._log.exception("jetlink: could not bring up the large model, staying small")
       with self._lock:
-        self._retired = (client, 'could not bring up the large model')
+        self._retired = (client, NOT_UP)
       self._back_off()
       return
     self._big = big
@@ -535,9 +539,7 @@ class JoiningModelState:
     # the count is the diagnosis. A link that runs for minutes and then goes,
     # again and again, is the cable, and the cable is the one thing the
     # driver can do something about
-    if self._drops >= DROPS_TO_BLAME_CABLE:
-      msg = f"{msg}; link dropped {self._drops} times this drive, check the USB cable or the phone app"
-    self._progress.report(stage, 0.0, msg)
+    self._progress.report(stage, 0.0, msg, drops=self._drops if self._drops >= DROPS_TO_BLAME_CABLE else 0)
 
   def _note_link_loss(self, why: str) -> None:
     """Off the frame thread: what the comma's USB-C port sees now, next to the
@@ -552,7 +554,7 @@ class JoiningModelState:
     # has still been replugged
     self._host_left = not gadget.host_attached()
     self._log.warning("jetlink: %s, %s; drop %d, lag %d this drive", why, port, self._drops, self._lags)
-    self._report('connect', f'{why}, reconnecting')
+    self._report('connect', RECONNECTING[why])
 
   def _join_loop(self) -> None:
     """Open the link and get the engine ready. No tinygrad in here."""
@@ -602,7 +604,7 @@ class JoiningModelState:
           return
         self._joined = (client, spec)
       self._log.warning("jetlink: link ready, waiting for a window to swap")
-      self._report('connect', 'ready; re-engage to switch models')
+      self._report('connect', 're-engage to switch')
 
   def _wait_out_back_off(self) -> bool:
     """Until the next attempt is due, or a host configures the gadget again

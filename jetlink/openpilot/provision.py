@@ -93,7 +93,7 @@ class ProvisioningRun:
       return None
     try:
       path = self.parts.models.fetch_shipped_model(
-        progress=lambda frac: self.parts.progress.report('download', frac, 'downloading the large model'),
+        progress=lambda frac: self.parts.progress.report('download', frac, 'downloading'),
         should_stop=lambda: self.stop,
       )
     except Exception:
@@ -124,7 +124,7 @@ class ProvisioningRun:
 
     self.log.warning("jetlink: provisioning %s (%d MB, sha %s)",
                      entry.get('name', sha256[:16]), nbytes >> 20, sha256[:16])
-    parts.progress.report('connect', 0.0, 'talking to jetlink')
+    parts.progress.report('connect', 0.0, 'connecting')
 
     def ensure(path):
       return link.ensure(parts, self.client, sha256, nbytes, path, progress=parts.progress.report_with_eta,

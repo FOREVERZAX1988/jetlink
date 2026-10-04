@@ -115,7 +115,7 @@ class TestProvisionCost(OpenpilotTest):
     resolve.assert_called_once_with('f' * 40)
     args = d.client.ensure_engine.call_args.args
     assert args[0] == 'deadbeef' and args[1] == 4096
-    self.progress.report.assert_any_call('connect', 0.0, 'looking up the model')
+    self.progress.report.assert_any_call('connect', 0.0, 'finding model')
 
   def test_a_pointer_that_cannot_be_looked_up_is_a_failed_provision(self):
     # the ordinary failure path: logged, backed off, tried again next poll
@@ -266,7 +266,7 @@ class TestFetching(OpenpilotTest):
     with mock.patch.object(self.parts.models, 'fetch_shipped_model', return_value=Path('/x')) as fetch:
       self.assertEqual(d.fetch_model(), Path('/x'))
     fetch.call_args.kwargs['progress'](0.5)
-    progress.report.assert_called_once_with('download', 0.5, 'downloading the large model')
+    progress.report.assert_called_once_with('download', 0.5, 'downloading')
     self.assertFalse(fetch.call_args.kwargs['should_stop']())
     d.request_stop()
     self.assertTrue(fetch.call_args.kwargs['should_stop']())

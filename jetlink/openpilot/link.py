@@ -218,7 +218,7 @@ def identity(parts, entry: dict) -> tuple[str, int]:
   sha256, nbytes = entry.get('oid'), entry.get('size')
   if sha256 and nbytes:
     return sha256, int(nbytes)
-  parts.progress.report('connect', 0.0, 'looking up the model')
+  parts.progress.report('connect', 0.0, 'finding model')
   return parts.models.resolve_pointer(entry['ref'])
 
 
