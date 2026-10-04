@@ -4,8 +4,9 @@ Copyright (c) 2026-, Zeph Leggett.
 This file is part of jetlink and is licensed under the MIT License.
 See the LICENSE file in the root directory for more details.
 
-The two settings every jetlink process reads, straight off openpilot's params
-files: the Jetlink setting and whether the car is parked.
+The settings jetlink reads straight off openpilot's params files: the Jetlink
+setting and whether the car is parked, which every process reads, and whether
+the owner charges an iPhone.
 
 The owner cannot construct openpilot's Params: it imports swaglog, which costs
 28 MB and brings numpy, capnp and zmq with it. So the fork's adapter says where
@@ -86,6 +87,12 @@ class Settings:
     is manager not having written one yet, which reads as parked."""
     value = self.params.get_bool(self.keys.offroad)
     return True if value is None else value
+
+  def charge_phone(self) -> bool:
+    """Is an iPhone on a direct cable asked to charge from the comma? Off when
+    the param is unset or the fork declares none."""
+    key = self.keys.charge_phone
+    return bool(key) and self.params.get_bool(key) is True
 
   def marks(self) -> dict[str, int]:
     """When each watched param last changed, by key; 0 for one that is unset."""

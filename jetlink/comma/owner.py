@@ -660,8 +660,10 @@ class Owner:
   def link_step(self, ios: bool) -> None:
     """A step with the link on, for an iPhone or not."""
     self.ensure_lender()
-    # before anything is presented: a C-to-C host has to find a device here
-    self.port.update(configured=self.configured, ios=ios)
+    # before anything is presented: a C-to-C host has to find a device here.
+    # The charging param is read every step; turned off, a phone already
+    # charging keeps charging until the next plug
+    self.port.update(configured=self.configured, charge=ios and self.settings.charge_phone())
 
     offroad = self.settings.offroad()
     if self.switch_mode(offroad, ios):

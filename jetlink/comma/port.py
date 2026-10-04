@@ -58,14 +58,20 @@ turned off.
 
 An iPhone on a direct cable ends up powering the comma: after a hold it is the
 source and the host. It can be the host and charge from the comma instead, and
-it negotiates USB PD, so with the link set to iOS the comma asks it once a
-plug for the source role (a PR_Swap, jetlink-root.sh port source), once the
-gadget is configured. The swap leaves the data roles and the link as they are.
-The comma's own sink capabilities never invite the phone to offer it. Being
-the source and still the device is left alone: only the host role is judged.
-Charging the phone adds up to 7.5 W through the comma's boost converter, so a
-comma that runs hot waits to ask until it has cooled. A phone that takes the
-source role back is not asked again until the next plug.
+it negotiates USB PD, so with the link set to iOS and phone charging turned on
+the comma asks it once a plug for the source role (a PR_Swap, jetlink-root.sh
+port source), once the gadget is configured. The swap leaves the data roles
+and the link as they are. The comma's own sink capabilities never invite the
+phone to offer it. Being the source and still the device is left alone: only
+the host role is judged.
+
+Phone charging is off unless the fork's param turns it on (Keys.charge_phone):
+some iPhones lose the link once the comma powers them. The link comes first,
+so a link that goes down while the comma charges the phone has the source role
+handed back (port sink), and the phone powers the port again. Charging the
+phone adds up to 7.5 W through the comma's boost converter, so a comma that
+runs hot waits to ask until it has cooled. A phone that takes the source role
+back, or is handed it, is not asked again until the next plug.
 
 Every change of the port's roles is a line in the owner's log, so a plug that
 did not connect can be read afterwards.
@@ -171,11 +177,11 @@ def chestnut_attached(chestnut_ids: frozenset[tuple[int, int]]) -> bool:
 
 
 def run_script(command: str) -> bool:
-  """jetlink-root.sh port hold|off|device|reset|source. Both commas have the
-  levers, so a False is a failure, and root.run has logged why. Its timeout is
-  short because the off in the owner's finally comes before the FunctionFS
-  close, inside manager's 5 s; source waits for the far end's PR_Swap."""
-  return root.run('port', command, timeout=root.SWAP_TIMEOUT if command == 'source' else root.PORT_TIMEOUT)
+  """jetlink-root.sh port hold|off|device|reset|source|sink. Both commas have
+  the levers, so a False is a failure, and root.run has logged why. Its timeout
+  is short because the off in the owner's finally comes before the FunctionFS
+  close, inside manager's 5 s; source and sink wait for the far end's PR_Swap."""
+  return root.run('port', command, timeout=root.SWAP_TIMEOUT if command in ('source', 'sink') else root.PORT_TIMEOUT)
 
 
 def run_udc(command: str) -> bool:
@@ -224,10 +230,10 @@ class Port:
     self.said_hot = False
     self.temp: float | None = None
 
-  def update(self, now: float | None = None, configured: bool = False, ios: bool = False) -> None:
+  def update(self, now: float | None = None, configured: bool = False, charge: bool = False) -> None:
     """configured: a host had the gadget configured at the last cycle, so the
-    device side is on. ios: the link is set to iOS, so a host that powers the
-    comma is asked to charge from it instead."""
+    device side is on. charge: the link is set to iOS with phone charging on,
+    so a host that powers the comma is asked to charge from it instead."""
     if not self.cleared:
       # whatever an owner killed mid-hold left behind. Not under a live link:
       # an owner started after one that died can find a borrower still on the
@@ -261,12 +267,10 @@ class Port:
     if role == 'sink' and data == 'ufp':
       if not configured:
         self._keep_the_device_on(now)
-      elif ios and not self.charge_asked and now - self.roles_since >= SWAP_AFTER:
+      elif charge and not self.charge_asked and now - self.roles_since >= SWAP_AFTER:
         self._charge_the_phone(now)
     if self.charging and not configured and role == 'source':
-      # what a swap must never cost; said once a plug
-      gadget.log.warning("jetlink: the link went down %.0f s into charging the iPhone", now - self.charge_since)
-      self.charging = False
+      self._stop_charging(now)
     if self.held:
       if role == 'sink':
         self.settled = False   # a host came back
@@ -345,6 +349,18 @@ class Port:
       self.charging, self.charge_since = True, now
     else:
       gadget.log.warning("jetlink: the iPhone kept the source role; not asking again until the next plug")
+
+  def _stop_charging(self, now: float) -> None:
+    """The link went down with the comma charging the phone: what a swap must
+    never cost. Hand the phone the source role back, so it powers the port as
+    it does with charging off, and leave this plug alone from then on."""
+    self.charging = False   # before the swap, whose sink+ufp would read as the phone taking it back
+    gadget.log.warning("jetlink: the link went down %.0f s into charging the iPhone; giving it the source role back",
+                       now - self.charge_since)
+    if run_script('sink'):
+      gadget.log.warning("jetlink: the iPhone powers the comma again; not charging it until the next plug")
+    else:
+      gadget.log.warning("jetlink: the iPhone kept charging from the comma; unplug the cable to start over")
 
   def _ask_for_a_host(self, now: float) -> None:
     """The far end powers the comma and is still its device; see the module's

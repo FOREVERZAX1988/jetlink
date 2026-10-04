@@ -10,8 +10,8 @@
   Use a USB 3 model; see [compatible devices](#usb-3-matters).
 - About 3 GB free per model.
 - A comma 3X or comma 4, powered separately.
-- A USB 3 USB-C data cable. The comma charges the phone over it. A powered
-  USB 3 hub also works.
+- A USB 3 USB-C data cable. The comma does not charge the phone over it; a
+  powered USB 3 hub keeps the phone charging.
 
 <a id="install"></a>
 

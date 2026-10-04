@@ -51,6 +51,9 @@ class Keys:
   # jetlink runs its own default big model
   big_model: str | None = None
   catalog: str | None = None
+  # BOOL: an iPhone on a direct cable is asked to charge from the comma
+  # (comma.port). Off when unset, and without the key
+  charge_phone: str | None = None
 
 
 @dataclass(frozen=True)

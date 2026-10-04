@@ -53,7 +53,7 @@ SIDES = {'StatusSide': READERS, 'WorkerSide': WORKER, 'ModelSide': MODELD, 'Buil
          'Openpilot': {**MODELD, **BUILD}}
 
 FIELDS = {
-  'Keys': ['link', 'offroad', 'progress', 'spec', 'pointers', 'big_model', 'catalog'],
+  'Keys': ['link', 'offroad', 'progress', 'spec', 'pointers', 'big_model', 'catalog', 'charge_phone'],
   'OwnerConfig': ['params_dir', 'keys', 'chestnut_ids', 'adapter', 'cwd', 'env', 'log_file'],
   'ModelFace': ['parser', 'frame_size', 'desire_len', 'constants', 'lat_smooth_seconds', 'long_smooth_seconds',
                 'get_action_from_model'],

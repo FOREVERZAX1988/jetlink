@@ -578,14 +578,26 @@ class TestTheToggle(OwnerTest):
   def test_the_port_is_kept_a_device_while_the_link_is_on(self):
     o = self.owner()
     o.step()
-    o.port.update.assert_called_once_with(configured=False, ios=False)
+    o.port.update.assert_called_once_with(configured=False, charge=False)
 
-  def test_on_ios_the_port_is_told_so(self):
-    # so a phone that powers the comma is asked to charge from it
+  def test_on_ios_the_phone_is_not_charged_without_its_param(self):
     self.write('JetlinkLink', b'2')
     o = self.owner()
     o.step()
-    o.port.update.assert_called_once_with(configured=False, ios=True)
+    o.port.update.assert_called_once_with(configured=False, charge=False)
+
+  def test_charging_the_phone_waits_for_its_param(self):
+    self.write('JetlinkLink', b'2')
+    self.write('JetlinkChargePhone', b'1')
+    o = self.owner()
+    o.step()
+    o.port.update.assert_called_once_with(configured=False, charge=True)
+
+  def test_charging_is_only_for_ios(self):
+    self.write('JetlinkChargePhone', b'1')
+    o = self.owner()
+    o.step()
+    o.port.update.assert_called_once_with(configured=False, charge=False)
 
   def test_turning_it_off_gives_the_port_back(self):
     o = self.owner()

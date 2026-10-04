@@ -121,7 +121,7 @@ PROC_SYS=${JETLINK_PROC_SYS:-/proc/sys}
 SYSCTL_PREV=${JETLINK_SYSCTL_PREV:-/dev/shm/jetlink-sysctl-prev}
 
 usage() {
-  echo "usage: $0 gadget [--ios] | net | check | teardown | port hold|off|device|reset|source | udc apply|restore|start|stop | vm apply|restore | draw off|on" >&2
+  echo "usage: $0 gadget [--ios] | net | check | teardown | port hold|off|device|reset|source|sink | udc apply|restore|start|stop | vm apply|restore | draw off|on" >&2
   exit 2
 }
 
@@ -473,7 +473,8 @@ cmd_check() {
 # the roles their power gives them: a sink is the device. source asks a far end
 # that powers the comma for the source role (a PR_Swap), which leaves the data
 # roles as they are: an iPhone that hosts the comma stays the host and charges
-# from it. The voter gates it, so port off comes first.
+# from it. The voter gates it, so port off comes first. sink is the swap back,
+# for a phone whose link went down once it charged.
 cmd_port() {
   case "${1:-}" in
     hold) force_voter "$POWER_ROLE_VOTER" 1 "to hold the port" || exit 1 ;;
@@ -486,6 +487,7 @@ cmd_port() {
     # the kernel sends the PR_Swap and waits up to 2 s for it; only with a USB PD
     # contract, so a write before one, or a refusal, fails
     source) put source "$DUAL_ROLE/power_role" "the far end did not give up the source role ($DUAL_ROLE/power_role)" || exit 1 ;;
+    sink) put sink "$DUAL_ROLE/power_role" "the far end did not take the source role back ($DUAL_ROLE/power_role)" || exit 1 ;;
     *) usage ;;
   esac
 }

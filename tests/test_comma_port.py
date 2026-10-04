@@ -9,9 +9,10 @@ leaves alone. A USB-A host and a chestnut must see no change at all; a C-to-C
 host that lost the toss gets one hold, and only for as long as it is plugged
 in; one that powers the comma and still came out the device is asked over USB
 PD to host, a few times a plug. And a sink that is the device has its device
-side on, whatever the charger detection made of the far end. On iOS, a phone
-that powers the comma over USB PD is asked to charge from it instead, once a
-plug, unless the comma is hot.
+side on, whatever the charger detection made of the far end. With phone
+charging turned on, an iPhone that powers the comma over USB PD is asked to
+charge from it instead, once a plug, unless the comma is hot, and handed the
+source role back if the link goes down while it charges.
 """
 import tempfile
 import unittest
@@ -80,10 +81,13 @@ class PortTest(unittest.TestCase):
       (d / 'idVendor').write_text(f'{ids[0]:04x}\n')
       (d / 'idProduct').write_text(f'{ids[1]:04x}\n')
 
+  # the phone charging param, as the owner reads it every step
+  charge = False
+
   def run_for(self, seconds: float, configured: bool = False, ios: bool = False) -> None:
     end = self.now + seconds
     while self.now < end:
-      self.port.update(now=self.now, configured=configured, ios=ios)
+      self.port.update(now=self.now, configured=configured, charge=ios and self.charge)
       self.now += 0.5
 
   def commands(self, script: mock.Mock | None = None) -> list[str]:
@@ -425,6 +429,7 @@ class TestChargingThePhone(PortTest):
   host. On iOS it is asked once a plug, over USB PD, to charge from the comma."""
 
   ASKED = ['off', 'hold', 'off', 'source']
+  charge = True
 
   def setUp(self):
     super().setUp()
@@ -447,6 +452,8 @@ class TestChargingThePhone(PortTest):
     source and still the device."""
     if command == 'source':
       self.plug('source', 'ufp')
+    elif command == 'sink':
+      self.plug('sink', 'ufp')
     return True
 
   def held_iphone(self, ios: bool = True) -> None:
@@ -466,6 +473,25 @@ class TestChargingThePhone(PortTest):
     self.run_for(60, configured=True, ios=True)
     self.assertEqual(self.commands(), self.ASKED, "the source that is the device is never held")
     self.assertIn("jetlink: charging the iPhone", self.lines())
+
+  def test_off_keeps_a_working_iphone_link_in_its_negotiated_power_role(self):
+    self.charge = False
+    self.held_iphone()
+    self.run_for(60, configured=True, ios=True)
+    self.assertEqual(self.commands(), ['off', 'hold'])
+    self.assertTrue(self.port.held)
+    self.assertFalse(self.port.charge_asked)
+    # A transient loss and reconfiguration must not enable charging either.
+    self.run_for(5, ios=True)
+    self.run_for(60, configured=True, ios=True)
+    self.assertEqual(self.commands(), ['off', 'hold'])
+
+  def test_off_leaves_a_phone_already_charging_as_it_is(self):
+    self.charge = False
+    self.plug('source', 'ufp')
+    with mock.patch.object(port.gadget, 'host_attached', return_value=True):
+      self.run_for(60, configured=True, ios=True)
+    self.assertEqual(self.commands(), [])
 
   def test_it_waits_for_the_gadget(self):
     self.plug('sink', 'ufp')
@@ -538,13 +564,33 @@ class TestChargingThePhone(PortTest):
     self.held_iphone()
     self.assertEqual(self.commands(), self.ASKED)
 
-  def test_a_link_lost_while_charging_is_said(self):
+  def test_a_link_lost_while_charging_hands_the_phone_the_source_role_back(self):
     self.held_iphone()
     self.run_for(5, configured=True, ios=True)
     self.run_for(5, ios=True)
+    self.assertEqual(self.commands(), self.ASKED + ['sink'])
     dropped = [line for line in self.lines() if 'the link went down' in line]
     self.assertEqual(len(dropped), 1, self.lines())
+    self.assertIn("jetlink: the iPhone powers the comma again; not charging it until the next plug", self.lines())
+    self.assertFalse(any('took the source role back' in line for line in self.lines()),
+                     "the swap back is the comma's, not the phone's")
+    # the link comes back with the phone powering the port, and stays that way
+    self.run_for(60, configured=True, ios=True)
+    self.assertEqual(self.commands(), self.ASKED + ['sink'])
+
+  def test_a_refused_swap_back_is_said_and_not_retried(self):
+    self.script.side_effect = lambda command: self.swap(command) if command != 'sink' else False
+    self.held_iphone()
+    self.run_for(5, configured=True, ios=True)
+    self.run_for(10, ios=True)
+    self.assertEqual(self.commands(), self.ASKED + ['sink'])
+    self.assertIn("jetlink: the iPhone kept charging from the comma; unplug the cable to start over", self.lines())
+
+  def test_a_link_that_stays_up_keeps_charging(self):
+    self.held_iphone()
+    self.run_for(120, configured=True, ios=True)
     self.assertEqual(self.commands(), self.ASKED)
+    self.assertTrue(self.port.charging)
 
 
 class TestTheScript(unittest.TestCase):
@@ -558,4 +604,6 @@ class TestTheScript(unittest.TestCase):
   def test_a_power_role_swap_gets_the_time_the_kernel_waits(self):
     with mock.patch.object(root, 'run', return_value=True) as run:
       self.assertTrue(port.run_script('source'))
-    run.assert_called_once_with('port', 'source', timeout=root.SWAP_TIMEOUT)
+      self.assertTrue(port.run_script('sink'))
+    self.assertEqual(run.call_args_list, [mock.call('port', 'source', timeout=root.SWAP_TIMEOUT),
+                                          mock.call('port', 'sink', timeout=root.SWAP_TIMEOUT)])

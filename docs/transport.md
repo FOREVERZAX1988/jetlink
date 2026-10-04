@@ -16,6 +16,12 @@ A USB-C to USB-A adapter with a USB-A to USB-C cable is an alternative for a
 phone, but does not keep it charging. The comma's USB-C port cannot serve
 Jetlink and chestnut at the same time.
 
+On a direct cable the comma does not charge an iPhone unless you turn it on:
+some iPhones lose the link once the comma powers them. To try it, run
+`echo -n 1 > /data/params/d/JetlinkChargePhone` on the comma and replug the
+cable. If the link goes down while the phone charges, the comma stops
+charging it until the next plug. A powered hub charges the phone without it.
+
 <a id="what-the-comma-presents"></a>
 
 ## Connection setting
