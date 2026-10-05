@@ -224,7 +224,10 @@ struct ExportPointerTests {
     ("Use 0badc0de for the precompiled eGPU driving model", "no folder"),
   ])
   func aSubjectThatLeadsNowhereSaysSo(subject: String, match: String) async throws {
-    let net = MockNet(exportRoutes(subject: subject))
+    var routes = exportRoutes(subject: subject)
+    // the pull request a squash merge names carries no model either
+    routes[LFS.pullPatchURL(number: "38933")] = .body(patchHead("Update tinygrad and use retargetable model artifacts"))
+    let net = MockNet(routes)
     let error = await #expect(throws: RegistryError.self) {
       try await LFS.fetchPointer(ref: v3Ref, http: HTTP(session: net.session))
     }
@@ -249,5 +252,74 @@ struct ExportPointerTests {
     #expect(LFS.exportIDs(in: "deadbeefcafe f78ED37d _f78ed37d f78ed37d_") == [])
     #expect(LFS.stripPatchTag("[PATCH 2/3]   Use it") == "Use it")
     #expect(LFS.pythonQuote("a b/c?d") == "a%20b/c%3Fd")
+  }
+}
+
+// MARK: - a commit that compiles the ONNX away
+// ResAction (#39037), as github served it on 2026-10-05: 2fb4ac4aa0 adds the
+// ONNX, 219f4e7ba3 ("compiled") swaps it for the pkl.
+
+let resCompiled = "219f4e7ba38cda8788cc31f2d0a5ca49d9566231"
+let resPointer = Pointer(oid: "1563b85f6bd00d9e2edf50bdb69646f0d95d5ac0f218d5abe3fe54a13427d71b", size: 792_485_215)
+let squash = String(repeating: "f", count: 40)
+
+func compiledRoutes(_ ref: String, _ patch: Data) -> [String: MockNet.Reply] {
+  [LFS.pointerURL(ref: ref): .status(404), LFS.commitPatchURL(ref: ref): .body(patch)]
+}
+
+struct CompiledCommitTests {
+  @Test func aCommitThatCompilesTheONNXAwayResolvesToTheOneItDeleted() async throws {
+    let net = MockNet(compiledRoutes(resCompiled, RegistryFixture.data("patch_219f4e7b.patch")))
+    #expect(try await LFS.fetchPointer(ref: resCompiled, http: HTTP(session: net.session)) == resPointer)
+    #expect(!net.urls.contains(LFS.drivingModelsTreeURL), "'compiled' names no export to look up")
+  }
+
+  @Test func aSquashMergeResolvesToTheLastONNXItsPullRequestCarried() async throws {
+    var routes = compiledRoutes(squash, patchHead("ResAction (#39037)"))
+    routes[LFS.pullPatchURL(number: "39037")] = .body(RegistryFixture.data("pull_39037.patch"))
+    #expect(try await LFS.fetchPointer(ref: squash, http: HTTP(session: MockNet(routes).session)) == resPointer)
+  }
+
+  @Test func aSquashMergeOfAPrecompiledPullRequestFollowsTheExportItNamed() async throws {
+    var routes = exportRoutes().merging(compiledRoutes(squash, patchHead("Cinque v3 (#38932)"))) { _, new in new }
+    routes[LFS.pullPatchURL(number: "38932")] = .body(patchHead("Use f78ed37d for the precompiled eGPU driving model"))
+    #expect(try await LFS.fetchPointer(ref: squash, http: HTTP(session: MockNet(routes).session)) == Pointer(oid: v3OID, size: v3Size))
+  }
+
+  @Test func anOutageReadingThePullRequestIsAFailure() async throws {
+    var routes = compiledRoutes(squash, patchHead("ResAction (#39037)"))
+    routes[LFS.pullPatchURL(number: "39037")] = .status(503)
+    let error = await #expect(throws: RegistryError.self) {
+      try await LFS.fetchPointer(ref: squash, http: HTTP(session: MockNet(routes).session))
+    }
+    #expect(error?.isNetwork == true)
+  }
+
+  @Test func diffPointerTakesTheModelsPointerAndNothingElse() {
+    func diff(_ path: String, _ old: Pointer?, _ new: Pointer?) -> String {
+      var lines = ["diff --git a/\(path) b/\(path)", "--- a/\(path)", "+++ b/\(path)", "@@ -1,3 +1,3 @@"]
+      if let old { lines += ["-version https://git-lfs.github.com/spec/v1", "-oid sha256:\(old.oid)", "-size \(old.size)"] }
+      if let new { lines += ["+version https://git-lfs.github.com/spec/v1", "+oid sha256:\(new.oid)", "+size \(new.size)"] }
+      return lines.joined(separator: "\n") + "\n"
+    }
+    let model = "openpilot/selfdrive/modeld/models/big_driving_supercombo.onnx"
+    let a = Pointer(oid: String(repeating: "a", count: 64), size: 1)
+    let b = Pointer(oid: String(repeating: "b", count: 64), size: 2)
+    #expect(LFS.diffPointer(diff(model, a, b)) == b, "a changed model is the new one")
+    #expect(LFS.diffPointer(diff(model, a, nil)) == a, "a deleted model is the one it was")
+    #expect(LFS.diffPointer(diff(model, nil, a) + diff(model, a, b)) == b, "the last diff wins")
+    #expect(LFS.diffPointer(diff("openpilot/selfdrive/modeld/models/big_driving_tinygrad.pkl", a, b)) == nil)
+    #expect(LFS.diffPointer(diff(model + ".bak", a, b)) == nil)
+    #expect(LFS.diffPointer(diff(model, a, nil) + diff("README.md", nil, nil)) == a)
+    #expect(LFS.diffPointer("") == nil && LFS.diffPointer("not a patch") == nil)
+  }
+
+  @Test func aSquashMergeIsTheSubjectThatEndsWithItsPullRequest() {
+    #expect(LFS.pullNumber(in: "ResAction (#39037)") == "39037")
+    #expect(LFS.pullNumber(in: "two (#1) (#2)") == "2")
+    #expect(LFS.pullNumber(in: "ResAction (#39037) again") == nil)
+    #expect(LFS.pullNumber(in: "(#)") == nil)
+    #expect(LFS.pullNumber(in: "(#12a)") == nil)
+    #expect(LFS.pullNumber(in: "compiled") == nil)
   }
 }

@@ -20,9 +20,9 @@ from pathlib import Path
 
 import pytest
 
-from jetlink.registry.catalog import NetworkError, RegistryError, VerifyError, parse_catalog
-from jetlink.registry.lfs import (COMMIT_PATCH_URL, DRIVING_MODELS_TREE_URL, LFS_ENDPOINTS, POINTER_URL, Pointer, fetch_pointer,
-                                  lfs_download, lfs_resolve, parse_pointer_text)
+from jetlink.registry.catalog import EXTRA_CATALOG_URL, NetworkError, RegistryError, VerifyError, parse_catalog
+from jetlink.registry.lfs import (COMMIT_PATCH_URL, DRIVING_MODELS_TREE_URL, LFS_ENDPOINTS, POINTER_URL, PULL_PATCH_URL, Pointer,
+                                  diff_pointer, fetch_pointer, lfs_download, lfs_resolve, parse_pointer_text)
 
 FIXTURES = Path(__file__).parent / 'fixtures'
 REF = 'f877d7a0ccc3cce943c76e285214c020cd65c899'
@@ -56,7 +56,7 @@ class FakeResponse:
 class FakeOpener:
   """A urlopen that serves fixtures and refuses everything else. A catalog
   version it has no fixture for is a 404, as it is on GitHub: the newest one
-  sunnypilot has published is the last to come back."""
+  sunnypilot has published is the last to come back. So is the extra list."""
 
   def __init__(self, routes: dict):
     self.routes = routes
@@ -68,7 +68,7 @@ class FakeOpener:
     body = self.routes.get(url)
     if body is None:
       from jetlink.registry.catalog import CATALOG_URL_TEMPLATE
-      if url.startswith(CATALOG_URL_TEMPLATE.split('{version}')[0]):
+      if url.startswith(CATALOG_URL_TEMPLATE.split('{version}')[0]) or url == EXTRA_CATALOG_URL:
         raise not_found(url)
       raise urllib.error.URLError(f"no route for {url}")
     if isinstance(body, Exception):
@@ -161,7 +161,7 @@ class TestNewerCatalogs:
                          self.url(v + 2): {'bundles': [_bundle(fresh, 99, '20')]},
                          self.url(v + 3): not_found(self.url(v + 3))})
     assert [b['ref'] for b in fetch_catalogs(opener=opener)['bundles']] == [fresh]
-    assert opener.calls == [self.url(v), self.url(v + 1), self.url(v + 2), self.url(v + 3)]
+    assert opener.calls == [self.url(v), self.url(v + 1), self.url(v + 2), self.url(v + 3), EXTRA_CATALOG_URL]
 
   def test_an_outage_past_the_pin_is_a_failure_not_a_short_list(self):
     from jetlink.registry.catalog import CATALOG_VERSION, fetch_catalogs
@@ -186,6 +186,45 @@ class TestNewerCatalogs:
     assert by_ref[c]['minimum_selector_version'] == '19' and by_ref[c]['models'] == []
     assert by_ref[c]['overrides'] == {'folder': 'Master Models'}
     assert [m.ref for m in parse_catalog(merged)] == [c, b, a]
+
+
+class TestExtraModels:
+  """zoompilot's own list, after sunnypilot's: catalog/extra_big_models.json."""
+
+  def routes(self, extra) -> dict:
+    from jetlink.registry.catalog import CATALOG_URL
+    return {CATALOG_URL: {'tinygrad_ref': 'pinned', 'bundles': [_bundle('a' * 40, 13)]}, EXTRA_CATALOG_URL: extra}
+
+  def test_an_extra_model_is_listed_after_sunnypilots(self):
+    from jetlink.registry.catalog import fetch_catalogs
+    preview = _bundle('b' * 40, 14, name='A preview', models=[])
+    merged = fetch_catalogs(opener=FakeOpener(self.routes({'bundles': [preview]})))
+    assert merged['tinygrad_ref'] == 'pinned'
+    assert [b['ref'] for b in merged['bundles']] == ['a' * 40, 'b' * 40]
+    assert merged['bundles'][1] == preview
+
+  def test_sunnypilots_entry_for_the_same_commit_wins(self):
+    from jetlink.registry.catalog import fetch_catalogs
+    ours = _bundle('a' * 40, 14, name='Our name', models=[])
+    merged = fetch_catalogs(opener=FakeOpener(self.routes({'bundles': [ours]})))
+    assert len(merged['bundles']) == 1 and merged['bundles'][0]['models']
+
+  def test_a_missing_list_adds_nothing_and_an_outage_fails(self):
+    from jetlink.registry.catalog import fetch_catalogs
+    assert len(fetch_catalogs(opener=FakeOpener(self.routes(not_found(EXTRA_CATALOG_URL))))['bundles']) == 1
+    with pytest.raises(NetworkError):
+      fetch_catalogs(opener=FakeOpener(self.routes(urllib.error.URLError('down'))))
+
+  def test_the_list_in_this_checkout_is_one_the_comma_can_parse(self):
+    """The fields the fork's ModelParser._parse_bundle indexes: one missing and
+    the comma drops every catalog it merged this into."""
+    data = json.loads((Path(__file__).parents[1] / 'catalog' / 'extra_big_models.json').read_text())
+    for bundle in data['bundles']:
+      int(bundle['index']), int(bundle['generation']), int(bundle['minimum_selector_version'])
+      assert bundle['short_name'] and bundle['display_name'] and bundle['environment'] and bundle['runner']
+      assert bundle['is_big'] is True and bundle['models'] == []
+      assert isinstance(bundle['overrides'], dict) and all(isinstance(v, str) for v in bundle['overrides'].values())
+    assert [m.ref for m in parse_catalog(data)] == [b['ref'] for b in sorted(data['bundles'], key=lambda b: -int(b['index']))]
 
 
 # --- lfs ---------------------------------------------------------------------
@@ -308,8 +347,65 @@ def test_a_folded_subject_is_read_whole_and_the_diffstat_is_not():
   ('Use 0badc0de for the precompiled eGPU driving model', 'no folder'),
 ])
 def test_a_subject_that_leads_nowhere_says_so(subject, match):
+  routes = export_routes(subject=subject)
+  # the pull request a squash merge names carries no model either
+  routes[PULL_PATCH_URL.format(number=38933)] = patch_head('Update tinygrad and use retargetable model artifacts')
   with pytest.raises(RegistryError, match=match):
-    fetch_pointer(V3_REF, opener=FakeOpener(export_routes(subject=subject)))
+    fetch_pointer(V3_REF, opener=FakeOpener(routes))
+
+
+# ResAction (#39037), as github served it on 2026-10-05: 2fb4ac4aa0 adds the
+# ONNX, 219f4e7ba3 ("compiled") swaps it for the pkl.
+RES_COMPILED = '219f4e7ba38cda8788cc31f2d0a5ca49d9566231'
+RES_POINTER = Pointer('1563b85f6bd00d9e2edf50bdb69646f0d95d5ac0f218d5abe3fe54a13427d71b', 792485215)
+SQUASH = 'f' * 40
+
+
+def compiled_routes(ref: str, patch: bytes) -> dict:
+  url = POINTER_URL.format(ref=ref)
+  return {url: not_found(url), COMMIT_PATCH_URL.format(ref=ref): patch}
+
+
+def test_a_commit_that_compiles_the_onnx_away_resolves_to_the_one_it_deleted():
+  opener = FakeOpener(compiled_routes(RES_COMPILED, fixture('patch_219f4e7b.patch')))
+  assert fetch_pointer(RES_COMPILED, opener=opener) == RES_POINTER
+  assert DRIVING_MODELS_TREE_URL not in opener.calls, "'compiled' names no export to look up"
+
+
+def test_a_squash_merge_resolves_to_the_last_onnx_its_pull_request_carried():
+  routes = compiled_routes(SQUASH, patch_head('ResAction (#39037)'))
+  routes[PULL_PATCH_URL.format(number=39037)] = fixture('pull_39037.patch')
+  assert fetch_pointer(SQUASH, opener=FakeOpener(routes)) == RES_POINTER
+
+
+def test_a_squash_merge_of_a_precompiled_pull_request_follows_the_export_it_named():
+  routes = {**export_routes(), **compiled_routes(SQUASH, patch_head('Cinque v3 (#38932)'))}
+  routes[PULL_PATCH_URL.format(number=38932)] = patch_head('Use f78ed37d for the precompiled eGPU driving model')
+  assert fetch_pointer(SQUASH, opener=FakeOpener(routes)) == Pointer(V3_OID, V3_SIZE)
+
+
+def test_an_outage_reading_the_pull_request_is_a_failure():
+  routes = compiled_routes(SQUASH, patch_head('ResAction (#39037)'))
+  routes[PULL_PATCH_URL.format(number=39037)] = urllib.error.HTTPError('x', 503, 'Unavailable', {}, None)
+  with pytest.raises(NetworkError):
+    fetch_pointer(SQUASH, opener=FakeOpener(routes))
+
+
+def test_diff_pointer_takes_the_models_pointer_and_nothing_else():
+  def diff(path: str, old: Pointer | None, new: Pointer | None) -> str:
+    lines = [f"diff --git a/{path} b/{path}", '--- a/' + path, '+++ b/' + path, '@@ -1,3 +1,3 @@']
+    lines += ['-version https://git-lfs.github.com/spec/v1', f"-oid sha256:{old.oid}", f"-size {old.size}"] if old else []
+    lines += ['+version https://git-lfs.github.com/spec/v1', f"+oid sha256:{new.oid}", f"+size {new.size}"] if new else []
+    return '\n'.join(lines) + '\n'
+  model = 'openpilot/selfdrive/modeld/models/big_driving_supercombo.onnx'
+  a, b = Pointer('a' * 64, 1), Pointer('b' * 64, 2)
+  assert diff_pointer(diff(model, a, b)) == b, "a changed model is the new one"
+  assert diff_pointer(diff(model, a, None)) == a, "a deleted model is the one it was"
+  assert diff_pointer(diff(model, None, a) + diff(model, a, b)) == b, "the last diff wins"
+  assert diff_pointer(diff('openpilot/selfdrive/modeld/models/big_driving_tinygrad.pkl', a, b)) is None
+  assert diff_pointer(diff(model + '.bak', a, b)) is None
+  assert diff_pointer(diff(model, a, None) + diff('README.md', None, None)) == a
+  assert diff_pointer('') is None and diff_pointer('not a patch') is None
 
 
 def test_only_a_missing_file_falls_back_and_an_outage_does_not():

@@ -65,6 +65,24 @@ struct RegistryConformanceTests {
     }
   }
 
+  @Test func diffsGiveThePointerPythonFindsInThem() throws {
+    let cases = try #require(fixture["diff_pointers"]?.array)
+    #expect(cases.count > 10)
+    for c in cases {
+      let name = c["name"]?.string ?? "?"
+      let text = try c["patch_file"]?.string.map { String(decoding: RegistryFixture.data($0), as: UTF8.self) } ?? #require(c["text"]?.string)
+      let expected = c["expected"]?.object.map { Pointer(oid: $0["oid"]!.string!, size: $0["size"]!.int64!) }
+      #expect(LFS.diffPointer(text) == expected, "\(name)")
+    }
+  }
+
+  @Test func squashMergesAreReadAsPythonReadsThem() throws {
+    for c in try #require(fixture["pull_numbers"]?.array) {
+      let subject = try #require(c["subject"]?.string)
+      #expect(LFS.pullNumber(in: subject) == c["expected"]?.string, "\(subject)")
+    }
+  }
+
   /// The cache directory the Python registry was shown, written again here.
   private func writeTree(_ tree: JSONObject, under root: URL) throws {
     for (relative, content) in tree {

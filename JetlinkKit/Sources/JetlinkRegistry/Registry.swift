@@ -99,10 +99,11 @@ public final class Registry: Sendable {
     if refresh || raw == nil || fetchedAt == nil || Date().timeIntervalSince1970 - (fetchedAt ?? 0) > maxAge {
       do {
         // The pinned catalog and whatever sunnypilot has published since: the
-        // server runs any of their commits.
+        // server runs any of their commits. Then zoompilot's extra models.
         let pinned = try await fetchCatalog(Catalog.url)
         let newer = try await newerCatalogs(after: Catalog.url)
-        let fresh = JSON.object(Catalog.merge([pinned] + newer))
+        let extra = try await extraCatalog()
+        let fresh = JSON.object(Catalog.merge([pinned] + newer + extra))
         let now = Date().timeIntervalSince1970
         raw = fresh
         fetchedAt = now
@@ -133,6 +134,16 @@ public final class Registry: Sendable {
   /// The catalog JSON. Every failure, transport or content, is a network error.
   func fetchCatalog(_ url: String) async throws(RegistryError) -> JSONObject {
     try await http.getJSON(url, timeout: Catalog.timeout, shape: .object).object ?? JSONObject()
+  }
+
+  /// zoompilot's extra list, or nothing when it is not there. Any other
+  /// failure throws, as `newerCatalogs` does.
+  func extraCatalog() async throws(RegistryError) -> [JSONObject] {
+    do {
+      return [try await fetchCatalog(Catalog.extraURL)]
+    } catch  where error.kind == .notFound {
+      return []
+    }
   }
 
   /// Every catalog sunnypilot has published after the one at `url`, oldest

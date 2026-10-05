@@ -160,6 +160,42 @@ struct NewerCatalogTests {
   }
 }
 
+/// zoompilot's own list, after sunnypilot's: catalog/extra_big_models.json.
+struct ExtraModelTests {
+  @Test func anExtraModelIsListedAfterSunnypilots() async throws {
+    let preview = String(repeating: "b", count: 40)
+    let extra: JSON = ["bundles": [bundle(preview, 99, name: "A preview")]]
+    let net = MockNet(RegistryFixture.catalogRoutes([Catalog.extraURL: .body(extra.data())]))
+    let tmp = try TemporaryDirectory()
+    let models = await Registry(layout: tmp.layout, session: net.session).catalog().models
+    #expect(models.count == 14)
+    #expect(models.first?.ref == preview && models.first?.name == "A preview")
+    #expect(net.urls.last == Catalog.extraURL)
+  }
+
+  @Test func sunnypilotsEntryForTheSameCommitWins() async throws {
+    let extra: JSON = ["bundles": [bundle(RegistryFixture.ref, 99, name: "Our name")]]
+    let net = MockNet(RegistryFixture.catalogRoutes([Catalog.extraURL: .body(extra.data())]))
+    let tmp = try TemporaryDirectory()
+    let models = await Registry(layout: tmp.layout, session: net.session).catalog().models
+    #expect(models.count == 13)
+    #expect(!models.contains { $0.name == "Our name" })
+  }
+
+  @Test func anOutageOfTheListKeepsThePreviousOne() async throws {
+    let tmp = try TemporaryDirectory()
+    _ = await Registry(layout: tmp.layout, session: MockNet(RegistryFixture.catalogRoutes()).session).catalog()
+    let down = MockNet(RegistryFixture.catalogRoutes([Catalog.extraURL: .failure]))
+    let payload = await Registry(layout: tmp.layout, session: down.session).catalog(refresh: true)
+    #expect(payload.error?.contains(Catalog.extraURL) == true)
+    #expect(payload.models.count == 13)
+  }
+
+  @Test func theListIsOnMain() {
+    #expect(Catalog.extraURL == "https://raw.githubusercontent.com/zoompilot/jetlink/refs/heads/main/catalog/extra_big_models.json")
+  }
+}
+
 struct CatalogPayloadTests {
   @Test func isCachedUntilItGoesStale() async throws {
     let net = MockNet(RegistryFixture.catalogRoutes())

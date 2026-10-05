@@ -362,6 +362,38 @@ POINTER_TEXTS = [
 ]
 
 
+def _lfs_diff(path: str, old: str | None, new: str | None, sep: str = ' ') -> str:
+  lines = [f"diff --git a/{path}{sep}b/{path}", f"--- a/{path}", f"+++ b/{path}", '@@ -1,3 +1,3 @@']
+  lines += ['-version https://git-lfs.github.com/spec/v1', f"-oid sha256:{old}", '-size 12'] if old else []
+  lines += ['+version https://git-lfs.github.com/spec/v1', f"+oid sha256:{new}", '+size 34'] if new else []
+  return '\n'.join(lines) + '\n'
+
+
+MODEL_PATH = 'openpilot/selfdrive/modeld/models/big_driving_supercombo.onnx'
+SHA_B = 'b' * 64
+
+DIFF_PATCHES = [
+  ('compiled', None),   # tests/fixtures/patch_219f4e7b.patch
+  ('pull', None),       # tests/fixtures/pull_39037.patch
+  ('modified', _lfs_diff(MODEL_PATH, SHA_A, SHA_B)),
+  ('deleted', _lfs_diff(MODEL_PATH, SHA_A, None)),
+  ('added_then_modified', _lfs_diff(MODEL_PATH, None, SHA_A) + _lfs_diff(MODEL_PATH, SHA_A, SHA_B)),
+  ('deleted_then_other_file', _lfs_diff(MODEL_PATH, SHA_A, None) + _lfs_diff('README.md', SHA_B, None)),
+  ('pkl_only', _lfs_diff('openpilot/selfdrive/modeld/models/big_driving_tinygrad.pkl', SHA_A, SHA_B)),
+  ('longer_name', _lfs_diff(MODEL_PATH + '.bak', SHA_A, SHA_B)),
+  ('tab_after_path', _lfs_diff(MODEL_PATH, SHA_A, SHA_B, sep='\t')),
+  ('older_tree', _lfs_diff('selfdrive/modeld/models/big_driving_supercombo.onnx', SHA_A, SHA_B)),
+  ('crlf', _lfs_diff(MODEL_PATH, SHA_A, SHA_B).replace('\n', '\r\n')),
+  ('next_commit_ends_it', _lfs_diff(MODEL_PATH, SHA_A, None)
+   + 'From 0000 Mon Sep 17 00:00:00 2001\n+oid sha256:' + SHA_B + '\n+size 34\n'),
+  ('not_a_pointer', _lfs_diff(MODEL_PATH, None, None) + '+oid sha256:nothex\n+size 3\n'),
+  ('empty', ''),
+]
+
+PULL_SUBJECTS = ['ResAction (#39037)', 'two (#1) (#2)', 'ResAction (#39037) again', '(#)', '(#12a)', 'compiled',
+                 'Cinque v3 (#38932)', '(#١٢)', 'x (#007)']
+
+
 def _catalog_cases(catalog: dict) -> list[tuple[str, object]]:
   bundles = catalog['bundles']
   first = dict(bundles[0])
@@ -391,7 +423,7 @@ def _catalog_cases(catalog: dict) -> list[tuple[str, object]]:
 
 def registry(root: Path) -> None:
   from jetlink.registry.catalog import is_ref, is_sha256, merge_catalogs, parse_catalog
-  from jetlink.registry.lfs import parse_pointer_text
+  from jetlink.registry.lfs import _PULL, diff_pointer, parse_pointer_text
 
   # frozen: the Python server's registry wrote it, and nothing here makes it now
   frozen = json.loads((ROOT / REGISTRY).read_text())['cache']
@@ -416,11 +448,27 @@ def registry(root: Path) -> None:
      'short_name': 'ON', 'index': 99, 'build_time': '2026-09-20T00:00:00Z', 'models': [{'x': 1}]},
     {'ref': 'd' * 40, 'is_big': False, 'minimum_selector_version': '20', 'index': 98},
   ]}
+  # zoompilot's extra list: one of its own, and one sunnypilot already lists
+  extra = {'bundles': [
+    {'ref': 'c' * 40, 'is_big': True, 'minimum_selector_version': '19', 'display_name': 'A preview',
+     'short_name': 'AP', 'index': 100, 'build_time': '2026-10-05T00:00:00Z', 'models': []},
+    {**catalog['bundles'][0], 'display_name': 'our name for it', 'models': []},
+  ]}
   merges = [{'name': name, 'catalogs': cats, 'expected': merge_catalogs(cats)}
-            for name, cats in (('one', [catalog]), ('with_newer', [catalog, newer]), ('none', []))]
+            for name, cats in (('one', [catalog]), ('with_newer', [catalog, newer]), ('with_extra', [catalog, newer, extra]),
+                               ('none', []))]
+
+  diff_pointers = []
+  for name, text in DIFF_PATCHES:
+    patch_file = {'compiled': 'patch_219f4e7b.patch', 'pull': 'pull_39037.patch'}.get(name)
+    p = diff_pointer(text if patch_file is None else (ROOT / 'tests/fixtures' / patch_file).read_text())
+    diff_pointers.append({'name': name, **({'patch_file': patch_file} if patch_file else {'text': text}),
+                          'expected': None if p is None else {'oid': p.oid, 'size': p.size}})
+  pull_numbers = [{'subject': s, 'expected': m.group(1) if (m := _PULL.search(s)) else None} for s in PULL_SUBJECTS]
 
   out.write_text(dump({
-    'pointers': pointers, 'identities': identities, 'parses': parses, 'merges': merges, 'cache': frozen,
+    'pointers': pointers, 'identities': identities, 'parses': parses, 'merges': merges,
+    'diff_pointers': diff_pointers, 'pull_numbers': pull_numbers, 'cache': frozen,
   }))
 
 

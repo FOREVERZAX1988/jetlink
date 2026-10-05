@@ -74,9 +74,9 @@ public final class MockNet: Sendable {
   public func count(_ url: String) -> Int { urls.filter { $0 == url }.count }
 
   /// A numbered JSON file with no route, "..._v27.json", is a 404, as
-  /// GitHub answers for a catalog version not published yet.
+  /// GitHub answers for a catalog version not published yet. So is the extra list.
   static func isNumberedJSON(_ url: String) -> Bool {
-    Catalog.version(of: url) != nil
+    Catalog.version(of: url) != nil || url == Catalog.extraURL
   }
 }
 

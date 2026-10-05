@@ -9,6 +9,10 @@ The small model drives until it is ready; see [when it switches](using-jetlink.m
 If the list is empty, use **Refresh Model List**. On Jetson, the 766 MB models
 leave more time in the 50 ms frame budget than the 1.7 GB Lebowski.
 
+**Preview Models** are comma models that are not merged into openpilot yet.
+comma may still change or withdraw one. When a preview leaves the list, a comma
+that had picked it goes back to the default.
+
 ## Prepare ahead of time (optional)
 
 Download on the server's internet connection before connecting the comma. This

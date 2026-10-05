@@ -20,6 +20,11 @@ public enum Catalog {
   /// probed up to the first that is not there, so a model published later is
   /// listed without a release of this package. See `merge`.
   public static let probeLimit = 10
+  /// zoompilot's own big models: ones sunnypilot does not list (yet), such as
+  /// previews from comma's open pull requests, in the catalog's shape. Merged
+  /// after sunnypilot's catalogs, so their entry for the same commit wins. An
+  /// edit on main reaches every server within the hour, with no release.
+  public static let extraURL = "https://raw.githubusercontent.com/zoompilot/jetlink/refs/heads/main/catalog/extra_big_models.json"
   /// The selector version the fork requires (REQUIRED_JSON_VERSION on the
   /// comma). It is a string in the JSON; bundles at any other version describe
   /// fields we would misread.

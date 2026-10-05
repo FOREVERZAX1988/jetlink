@@ -12,8 +12,12 @@ model before a drive, start with [model management](models.md).
 - A **SHA-256** is the 64-character hash of the ONNX file. One ref resolves to
   exactly one SHA-256, and that never changes.
 - The catalog updates on its own, so new models appear without a Jetlink update.
+- Jetlink adds the models in [`catalog/extra_big_models.json`](../catalog/README.md),
+  such as previews sunnypilot does not list yet. A comma with a chestnut does not
+  show them.
 - From Cinque Terre V3 on, the ONNX comes from comma's model repo on Hugging
-  Face (`commaai/openpilot_driving_models`).
+  Face (`commaai/openpilot_driving_models`). A commit that names no model
+  there resolves to the ONNX its own diff, or its pull request's, last had.
 
 | Path | What is in it |
 | --- | --- |

@@ -33,6 +33,11 @@ CATALOG_URL = CATALOG_URL_TEMPLATE.format(version=CATALOG_VERSION)
 # the first that is not there, so a model published later is listed without a
 # release of this package. See merge_catalogs.
 PROBE_LIMIT = 10
+# zoompilot's own big models: ones sunnypilot does not list (yet), such as
+# previews from comma's open pull requests, in the catalog's shape. Merged
+# after sunnypilot's catalogs, so their entry for the same commit wins. An
+# edit on main reaches every comma within the hour, with no release.
+EXTRA_CATALOG_URL = 'https://raw.githubusercontent.com/zoompilot/jetlink/refs/heads/main/catalog/extra_big_models.json'
 # The selector version the fork requires (REQUIRED_JSON_VERSION on the comma).
 # It is a string in the JSON; bundles at any other version describe fields we
 # would misread.
@@ -137,8 +142,9 @@ def fetch_catalog(url: str = CATALOG_URL, timeout: float = CATALOG_TIMEOUT, open
 
 def fetch_catalogs(opener=None) -> dict:
   """The pinned catalog merged with every one sunnypilot has published since,
-  whose commits the server runs too. The probe stops at the first version that
-  is not there. Any other failure raises: a short list would drop a model
+  whose commits the server runs too, and then zoompilot's extra models. The
+  probe stops at the first version that is not there, and a missing extra list
+  adds nothing. Any other failure raises: a short list would drop a model
   found only past it from whatever the caller caches, so the caller keeps its
   last complete one instead."""
   found = [fetch_catalog(CATALOG_URL, opener=opener)]
@@ -147,6 +153,10 @@ def fetch_catalogs(opener=None) -> dict:
       found.append(fetch_catalog(CATALOG_URL_TEMPLATE.format(version=v), opener=opener))
     except NotFound:
       break
+  try:
+    found.append(fetch_catalog(EXTRA_CATALOG_URL, opener=opener))
+  except NotFound:
+    pass
   return merge_catalogs(found)
 
 
