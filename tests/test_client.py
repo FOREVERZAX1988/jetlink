@@ -93,9 +93,10 @@ class FramesInFlight(SocketPairTest):
     self.client.spec = _spec()
     self.client.deadline = 0.5
 
-  def send(self, frame_id: int) -> int:
+  def send(self, frame_id: int, silence: float | None = None) -> int:
     spec = self.client.spec
-    return self.client.infer_begin(bytes(spec.warped_nbytes), bytes(spec.packed_nbytes), frame_id=frame_id)
+    return self.client.infer_begin(bytes(spec.warped_nbytes), bytes(spec.packed_nbytes), frame_id=frame_id,
+                                   silence=silence)
 
   def answer(self, status=P.Status.OK) -> None:
     """The far end takes one request and answers it with its frame id in
@@ -164,6 +165,17 @@ class FramesInFlight(SocketPairTest):
       self.send(2)
     self.assertIn('no answer to 1 frames', str(quiet.exception))
     self.assertTrue(self.client.dead)
+
+  def test_a_frame_may_give_a_quiet_host_longer_than_the_deadline(self):
+    # a shadow frame's: nothing waits on it, and a phone's first frames are warm-up
+    self.client.deadline = 0.05
+    self.send(1, silence=0.5)
+    time.sleep(0.06)
+    self.send(2, silence=0.5)
+    self.assertFalse(self.client.dead)
+    with self.assertRaises(LinkError) as quiet:
+      self.send(3)   # back to the deadline
+    self.assertIn('no answer to 2 frames in 0.1s', str(quiet.exception))
 
   def test_a_frame_the_server_failed_fails_the_link_when_drained(self):
     self.send(1)

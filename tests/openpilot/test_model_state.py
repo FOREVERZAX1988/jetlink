@@ -55,6 +55,7 @@ class FakeClient:
   def __init__(self, kind: str = 'usb'):
     self.sent = []
     self.asked = []
+    self.silences = []
     self.last_timings = (0, 0, 0)
     self.last_state = None
     self.dead = False
@@ -74,15 +75,16 @@ class FakeClient:
     # what a reply asked for telemetry carries, when the server has any
     self.telemetry = None
 
-  def infer_begin(self, data, packed, frame_id, reset=False, want_state=False):
+  def infer_begin(self, data, packed, frame_id, reset=False, want_state=False, silence=None):
     self.sent.append((np.frombuffer(bytes(data), np.uint8).copy(), np.array(packed, copy=True), frame_id, reset))
     self.asked.append(want_state)
+    self.silences.append(silence)
     self._in_flight.append(frame_id)
     return frame_id
 
   def infer_end(self, seq, hold=None):
     self.holds.append(hold)
-    if hold is not None and seq in self.late:
+    if hold is not None and (seq in self.late or seq in self.keep):
       return None
     self._in_flight.remove(seq)
     self.last_output = self.output
@@ -90,9 +92,10 @@ class FakeClient:
     return self.output
 
   def drain(self):
+    # replies come in order: none past the first that is not back yet
     self.drains += 1
-    taken = [f for f in self._in_flight if f not in self.keep]
-    self._in_flight = [f for f in self._in_flight if f in self.keep]
+    back = next((i for i, f in enumerate(self._in_flight) if f in self.keep), len(self._in_flight))
+    taken, self._in_flight = self._in_flight[:back], self._in_flight[back:]
     if taken:
       self.last_output = self.output
       self._piggyback()
@@ -122,7 +125,7 @@ class ModelStateTest(unittest.TestCase):
                                          event=lambda name, **fields: self.events.append((name, fields)))
 
   def run_frames(self, inputs: dict, n: int = 3, client=None, warp_output=None, after_enqueue=None, shadow: int = 0):
-    """`shadow` frames sent without waiting, then `n` driven. Returns the
+    """`shadow` frames sent and scored, then `n` driven. Returns the
     spec, the state, the client and the warped frame every frame carried."""
     spec = spec_for(inputs)
     client = client or FakeClient()
@@ -242,15 +245,15 @@ class TestWire(ModelStateTest):
 
 class TestShadow(ModelStateTest):
   """Frames sent while the small model drives: the host runs every one, so it
-  is warm and current at the swap, and nothing waits for it."""
+  is warm and current at the swap, and nothing waits for it past the hold."""
 
-  def test_a_shadow_frame_is_sent_and_never_waited_for(self):
+  def test_a_shadow_frame_already_answered_is_not_waited_for(self):
     spec, state, client, warped = self.run_frames(STATEFUL, n=0, shadow=3)
     self.assertEqual([f[2] for f in client.sent], [1, 2, 3])
     self.assertEqual([f[3] for f in client.sent], [True, False, False], 'the first frame carries the reset')
     for data, *_ in client.sent:
       np.testing.assert_array_equal(data, warped)
-    self.assertEqual(client.holds, [], 'a shadow frame waits for nothing')
+    self.assertEqual(client.holds, [], 'every reply was back when the small model was done')
     self.assertEqual(client.drains, 6, 'what came back is read before each send, and again when the frame is scored')
     self.assertEqual((state.trips.sent, state.trips.frames), (3, 0))
     self.assertEqual(state.trips.summary()['shadowed'], 3)
@@ -272,8 +275,9 @@ class TestShadow(ModelStateTest):
 
 class TestProving(ModelStateTest):
   """The shadow frames are the proof the joining model swaps on: the host
-  keeps up once the last PROVING_FRAMES of them, scored where the small
-  model's frame ends, were back within the hold end() would have given."""
+  keeps up once the last PROVING_FRAMES of them were back within the hold
+  end() would have given, waited for up to it once the small model's frame
+  is done."""
 
   def test_it_keeps_up_once_the_last_proving_frames_would_not_have_been_held(self):
     n = model_state.PROVING_FRAMES
@@ -285,8 +289,9 @@ class TestProving(ModelStateTest):
   def test_a_reply_past_the_hold_starts_the_proof_over(self):
     n = model_state.PROVING_FRAMES
     with mock.patch.object(model_state, 'HOLD_FRAME', 1e-9):   # every reply is past it
-      _, state, _, _ = self.run_frames(STATEFUL, n=0, shadow=n + 3)
+      _, state, client, _ = self.run_frames(STATEFUL, n=0, shadow=n + 3)
     self.assertEqual(state._kept_up, 0)
+    self.assertEqual(client.holds, [], 'nothing left of the hold to wait for')
     with mock.patch.object(model_state, 'HOLD_FRAME', 1e-9):
       _, state, client, warped = self.run_frames(STATEFUL, n=0, shadow=3)
     with self.warping(warped):   # back to a hold the fakes meet
@@ -298,11 +303,35 @@ class TestProving(ModelStateTest):
     client.keep = {4}
     _, state, _, warped = self.run_frames(STATEFUL, n=0, client=client, shadow=5)
     self.assertEqual(state._kept_up, 0, 'with 4 still out, nothing after it counts either')
-    self.assertEqual(client.unanswered, 1)
+    self.assertEqual(client.unanswered, 2, '5 is behind it')
     client.keep.clear()
     with self.warping(warped):
       self.frames(state, 0, shadow=model_state.PROVING_FRAMES)
     self.assertTrue(state.keeping_up)
+
+  def test_a_reply_inside_the_hold_counts_though_it_lands_after_the_small_models_frame(self):
+    # scored where the small model's frame ended, a reply on its way back
+    # inside the hold failed every frame (2026-10-04): it is waited for now
+    client = FakeClient()
+    client.drain = lambda: 0   # back only to a wait, as a reply still in flight is
+    _, state, _, _ = self.run_frames(STATEFUL, n=0, client=client, shadow=model_state.PROVING_FRAMES)
+    self.assertTrue(state.keeping_up)
+    self.assertEqual(len(client.holds), model_state.PROVING_FRAMES)
+    self.assertTrue(all(0 < h <= model_state.HOLD_FRAME for h in client.holds), 'never past the hold')
+
+  def test_a_frame_behind_older_ones_is_not_waited_for(self):
+    # replies come in order: waiting would only hold the small model's output
+    client = FakeClient()
+    client.keep = {1}
+    _, state, _, _ = self.run_frames(STATEFUL, n=0, client=client, shadow=3)
+    self.assertEqual(len(client.holds), 1, 'frame 1 is waited for; 2 and 3 are behind it')
+    self.assertEqual(state._kept_up, 0)
+
+  def test_a_shadow_frame_gives_a_quiet_host_longer_than_a_driven_one(self):
+    client = FakeClient()
+    self.run_frames(STATEFUL, n=1, client=client, shadow=2)
+    self.assertEqual(client.silences, [model_state.SHADOW_SILENCE, model_state.SHADOW_SILENCE, None],
+                     'a driven frame keeps the client deadline')
 
   def test_a_driven_frame_is_not_scored(self):
     _, state, client, _ = self.run_frames(STATEFUL, n=1, shadow=2)

@@ -774,6 +774,32 @@ class ShadowTest(JoiningBase):
       self.assertGreater(s._rejoin_at, 0.0)
       self._close(s)
 
+  def test_a_link_lost_while_shadowing_is_retried_soon_however_long_the_streak(self):
+    # no swap, demote or alert to pay for: a phone that drops its first frames
+    # again and again pulsed the icon 1 to 60 s between tries (2026-10-04)
+    s = self._built()
+    s._failures = 7   # a streak a driving failure would retry in 60 s
+    self.big.send = mock.Mock(side_effect=RuntimeError('no answer to 4 frames in 0.2s'))
+    t = time.monotonic()
+    self.assertEqual(self._run(s), {'from': 'small'})
+    self.assertEqual(round(s._rejoin_at - t), joining.SHADOW_REJOIN_DELAY)
+    self.assertEqual((s._failures, s.big_model_state), (8, 'retrying'))
+    t = time.monotonic()
+    s._back_off()
+    self.assertEqual(round(s._rejoin_at - t), 60, 'a driving failure still climbs the streak')
+
+  def test_a_shadow_that_held_starts_a_new_streak(self):
+    # the link is held from the build: a shadow that ran for minutes was
+    # 'link held 0 s', and its streak climbed to 60 s (2026-10-04)
+    s = self._built()
+    self.assertGreater(s._joined_at, 0.0)
+    s._failures = 7
+    s._joined_at = time.monotonic() - (STABLE_SECONDS + 1)
+    t = time.monotonic()
+    s._back_off()
+    self.assertEqual(round(s._rejoin_at - t), round(REJOIN_DELAY_QUICK))
+    self.assertEqual(s._failures, 1)
+
 
 class LagTest(JoiningBase):
   """A large model that answers, but late, is handed back as if it were lost.

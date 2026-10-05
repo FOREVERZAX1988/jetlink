@@ -57,6 +57,12 @@ HOLD_FRAME = 0.046
 HOLDS_IN_A_ROW = 5
 HOLDS_ALLOWED = 20
 HOLD_WINDOW = 10.0
+# How long a host may answer none of its shadow frames before the link is
+# abandoned, where a driving one gets the client's deadline
+# (link.INFERENCE_TIMEOUT, 0.2 s). The small model drives meanwhile, and a
+# phone's first frames after a join are Neural Engine warm-up: at 0.2 s an
+# iPhone 18 Pro lost 11 of 18 joins inside 0.33 s (2026-10-04)
+SHADOW_SILENCE = 1.0
 # frames between asks for the server's telemetry, which rides on the response:
 # every second one, as modeld sent a chestnut's state (20 Hz over 10 Hz)
 TELEMETRY_EVERY = 2
@@ -80,7 +86,7 @@ class Trips:
   budget it cannot measure. Bounded to the last TRIPS_KEPT frames."""
 
   def __init__(self):
-    self.sent = 0            # frames sent; the ones never waited for ran with the small model driving
+    self.sent = 0            # frames sent; the ones never ended ran with the small model driving
     self.frames = 0          # frames waited for and published
     self.over = 0            # frames past SLOW_FRAME, the whole 20 Hz budget
     self.held = 0            # frames whose reply was late and published the previous one
@@ -238,7 +244,7 @@ class JetlinkModelState:
     driving (a shadow frame); its timings reach the log here, at the next."""
     frame = self._frame
     if frame is not None and frame.seq is not None and (self._frame_id <= 3 or frame.sent - frame.t0 > SLOW_FRAME / 2):
-      # the frame before was sent and never waited for: a shadow frame
+      # the frame before was sent and never ended: a shadow frame
       self._log.warning("jetlink: shadow frame %d warp %.1f data %.1f send %.1f ms; %d unanswered", self._frame_id,
                         (frame.t1 - frame.t0) * 1e3, (frame.t2 - frame.t1) * 1e3, (frame.sent - frame.t2) * 1e3,
                         self.client.unanswered)
@@ -276,15 +282,17 @@ class JetlinkModelState:
       data = warped.data()
     self._frame = Frame(t0, t1, time.perf_counter(), data)
 
-  def send(self, want_telemetry: bool = False) -> None:
+  def send(self, want_telemetry: bool = False, silence: float | None = SHADOW_SILENCE) -> None:
     """The prepared frame to the host. It asks for the server's telemetry
     when the log is due for it, or when told to: modeld asks on the frames it
-    would have sent a chestnut's state on."""
+    would have sent a chestnut's state on. Sent from outside, it is a shadow
+    frame and a quiet host has `silence`; run() sends with the client's
+    deadline."""
     frame = self._frame
     self._frame_id += 1
     frame.telemetry = want_telemetry or time.monotonic() - self._last_logged >= TELEMETRY_PERIOD
     frame.seq = self.client.infer_begin(frame.data, self.packed, self._frame_id, reset=self._need_reset,
-                                        want_state=frame.telemetry)
+                                        want_state=frame.telemetry, silence=silence)
     frame.sent = time.perf_counter()
     frame.data = None
     self._need_reset = False
@@ -307,7 +315,7 @@ class JetlinkModelState:
     waiting_from = time.perf_counter()
     hold = None
     if HOLD_FRAME and self.client.last_output is not None:
-      hold = HOLD_FRAME - (waiting_from - frame.t0)
+      hold = self._hold_left(frame)
     model_output = self.client.infer_end(frame.seq, hold=hold)
     t4 = time.perf_counter()
     held = model_output is None
@@ -337,7 +345,7 @@ class JetlinkModelState:
   def run(self, bufs: dict, transforms: dict[str, np.ndarray],
           inputs: dict[str, np.ndarray], after_enqueue: Callable[[], None] | None = None) -> dict[str, np.ndarray]:
     self.prepare(bufs, transforms, inputs)
-    self.send(after_enqueue is not None)
+    self.send(after_enqueue is not None, silence=None)
     return self.end(after_enqueue)
 
   @property
@@ -348,18 +356,31 @@ class JetlinkModelState:
 
   def check_shadow(self) -> None:
     """Score the shadow frame just sent as end() would have, now that the
-    small model's own frame is done: kept up when its reply is already back,
-    HOLD_FRAME or less after its warp began. The joining model calls this
-    once per shadow frame; a reply not back yet is read by the next prepare()
-    as before, and starts the proof over. Later than end() would have waited,
-    so a host that passes here does not hold at the wheel; a comma whose own
-    frame runs past the hold cannot pass, and would hold every frame driving."""
+    small model's own frame is done: kept up when its reply is back HOLD_FRAME
+    or less after its warp began, waited for until then as end() waits. The
+    joining model calls this once per shadow frame; a reply not back by then
+    is read by the next prepare(), and starts the proof over. The shadow
+    frame went out after the small model's work was queued, later than a
+    driven one, so a host that passes here does not hold at the wheel."""
     frame = self._frame
     if frame is None or frame.seq is None:
       return
     self.client.drain()
-    kept = not self.client.unanswered and time.perf_counter() - frame.t0 <= (HOLD_FRAME or SLOW_FRAME)
+    left = self._hold_left(frame)
+    if not self.client.unanswered:
+      kept = left >= 0
+    elif self.client.unanswered == 1 and left > 0:
+      kept = self.client.infer_end(frame.seq, hold=left) is not None
+    else:
+      # past the hold, or behind older frames: replies come in order, so
+      # this one cannot make it, and waiting would only hold the small model
+      kept = False
     self._kept_up = self._kept_up + 1 if kept else 0
+
+  @staticmethod
+  def _hold_left(frame) -> float:
+    """What is left of the hold for `frame`, from its warp's start."""
+    return (HOLD_FRAME or SLOW_FRAME) - (time.perf_counter() - frame.t0)
 
   def _note_hold(self, held: bool) -> str | None:
     """Why the large model should hand back after this frame, if it should:

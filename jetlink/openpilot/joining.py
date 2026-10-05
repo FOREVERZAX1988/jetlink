@@ -65,6 +65,10 @@ REJOIN_DELAY_QUICK = 1.0
 # five times in nine minutes on an iPad (2026-10-03). A link that fails on
 # its heels this many times is backed off as before
 QUICK_RETRIES = 3
+# after a link lost while it only shadowed: no swap, demote or alert to pay
+# for, so no doubling. A phone that dropped its first frames again and again
+# pulsed the icon for 1 to 60 s between tries (2026-10-04)
+SHADOW_REJOIN_DELAY = 2.0
 # how often a backoff looks at the gadget. A host that configures it again
 # after it went away is a replug, which the backoff is not for: one waited 16 s
 # for a Jetson that was back in 0.4 (2026-09-29)
@@ -189,10 +193,9 @@ class JoiningModelState:
     self._small_frames = 0
     self._big_frames = 0
     # the panel's last line about the large model shadowing (CHECKING, PROVEN
-    # or SLOW), and when the shadowing began. A report is a param write on
-    # the frame thread, so only a change is reported
+    # or SLOW). A report is a param write on the frame thread, so only a
+    # change is reported
     self._proving = CHECKING
-    self._proving_since = 0.0
     # whether the host had let go of the gadget when the last link was lost,
     # and whether this failure streak has already skipped a backoff for a replug
     self._host_left = False
@@ -343,9 +346,9 @@ class JoiningModelState:
   def _run_small(self, bufs, transforms, inputs, after_enqueue):
     """The small model's frame, and the large model's too when there is one:
     warped now, sent once the small model's own work is on the GPU (its
-    after_enqueue), so the send overlaps it, and never waited for. A link
-    that fails here is lost before it drove: let go and reopened, with the
-    small model's frame unharmed."""
+    after_enqueue), so the send overlaps it. A link that fails here is lost
+    before it drove: let go and reopened, with the small model's frame
+    unharmed."""
     big = self._big
     if big is None:
       return self._small.run(bufs, transforms, inputs, after_enqueue)
@@ -411,7 +414,6 @@ class JoiningModelState:
     if self._loading:
       # a connected engine can still fail its first inference; only announce
       # readiness after a frame the caller can publish
-      self._joined_at = time.monotonic()
       self._loading = False
       self._progress.clear()
       self._log.warning("jetlink: large model joined mid-drive, modelV2.big is now true")
@@ -468,7 +470,9 @@ class JoiningModelState:
       return
     self._big = big
     self._proving = CHECKING   # the join thread said so at link ready
-    self._proving_since = time.monotonic()
+    # the link is held from here, shadowing or driving: a shadow that ran for
+    # minutes and then went starts a new streak, as a drive that did
+    self._joined_at = time.monotonic()
 
   def _note_proving(self) -> None:
     """The panel's line while the large model shadows, on a change only:
@@ -478,7 +482,7 @@ class JoiningModelState:
       return
     if self._big.keeping_up:
       line = PROVEN
-    elif time.monotonic() - self._proving_since > SLOW_LINK_AFTER:
+    elif time.monotonic() - self._joined_at > SLOW_LINK_AFTER:
       line = SLOW
     else:
       line = CHECKING
@@ -502,10 +506,10 @@ class JoiningModelState:
     """Back to the small model, from a reset history. On the frame thread, so
     nothing here waits: the join thread reads the port, reports and closes
     the link, moments later."""
+    self._retire(why)   # while _shadowing still tells a drive from a shadow
     self._active = self._small
     self._handovers += 1
     self._loading = True
-    self._retire(why)
     if self._reset_small is not None:
       self._reset_small()
 
@@ -513,6 +517,7 @@ class JoiningModelState:
     """Let the large model go, driving or not, for the join thread to say
     goodbye to and close or keep (_close_retired). Counted as a lost link or
     a hand-back for lag, and backed off."""
+    shadow = self._shadowing
     big, self._big = self._big, None
     if why == BEHIND:
       self._lags += 1
@@ -520,7 +525,7 @@ class JoiningModelState:
       self._drops += 1
     with self._lock:
       self._retired = (big, why)
-    self._back_off()
+    self._back_off(shadow)
 
   def _close_retired(self, retired, why: str) -> None:
     """Say goodbye over the retired large model's link, then close it if it
@@ -552,13 +557,14 @@ class JoiningModelState:
     except Exception:
       self._log.exception("jetlink: could not say why the link is left")
 
-  def _back_off(self) -> None:
+  def _back_off(self, shadow: bool = False) -> None:
     """Push the next attempt out, further each time one fails on its heels.
 
     Each failed cycle is a swap frame, a demote frame and the alerts that go
     with them. The first QUICK_RETRIES failures of a streak are retried in
     REJOIN_DELAY_QUICK; the ones after double from REJOIN_DELAY. A join that
-    held for STABLE_SECONDS starts a new streak.
+    held for STABLE_SECONDS starts a new streak. A link lost while it only
+    shadowed waits SHADOW_REJOIN_DELAY.
     """
     held = time.monotonic() - self._joined_at if self._joined_at else 0.0
     stable = bool(self._joined_at) and held > STABLE_SECONDS
@@ -566,7 +572,9 @@ class JoiningModelState:
     if stable:
       self._replugged = False   # a new streak may skip a backoff for a replug again
     self._joined_at = 0.0
-    if self._failures <= QUICK_RETRIES:
+    if shadow:
+      delay = SHADOW_REJOIN_DELAY
+    elif self._failures <= QUICK_RETRIES:
       delay = REJOIN_DELAY_QUICK
     else:
       delay = min(REJOIN_DELAY * 2 ** (self._failures - QUICK_RETRIES - 1), REJOIN_DELAY_MAX)
