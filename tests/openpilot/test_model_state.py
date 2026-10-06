@@ -212,6 +212,29 @@ class TestWire(ModelStateTest):
     self.assertEqual(summary['p99_ms'], 30.0, 'p99 is the 99th of a hundred, as the server takes it')
     self.assertEqual(model_state.Trips().summary(), {'frames': 0, 'over': 0, 'held': 0, 'span_s': 0.0})
 
+  def test_a_coherent_warp_output_goes_out_without_a_copy(self):
+    # warp.coherent_output: sent from where the GPU wrote it once it is done,
+    # over USB as well, with no host copy and no realize to find the buffer
+    spec = spec_for(STATEFUL)
+    frame = np.arange(np.prod(spec.warped_shape), dtype=np.uint64).astype(np.uint8)
+    ret = SimpleNamespace(_buffer=mock.Mock(side_effect=AssertionError('realized to find the buffer')))
+    sync = mock.Mock(name='synchronize')
+    with mock.patch.object(model_state, 'coherent_view', return_value=(ret, memoryview(frame), sync)):
+      _, state, client, _ = self.run_frames(STATEFUL, warp_output=ret)
+    self.assertEqual(sync.call_count, 3)
+    self.assertIsNone(state._readback_data)
+    self.assertEqual(len(client.sent), 3)
+    for data, *_ in client.sent:
+      np.testing.assert_array_equal(data, frame)
+
+  def test_a_warp_returning_another_tensor_is_read_back_as_before(self):
+    sync = mock.Mock(name='synchronize')
+    with mock.patch.object(model_state, 'coherent_view', return_value=(object(), memoryview(bytearray(8)), sync)):
+      _, state, client, warped = self.run_frames(STATEFUL)
+    sync.assert_not_called()
+    for data, *_ in client.sent:
+      np.testing.assert_array_equal(data, warped)
+
   def test_usb_keeps_the_host_copy(self):
     _, state, _, _ = self.run_frames(STATEFUL)
     self.assertFalse(state.send_from_gpu)

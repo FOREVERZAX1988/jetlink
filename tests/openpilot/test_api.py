@@ -273,7 +273,7 @@ class TestTheJoinFactory(OpenpilotTest):
     client.t.link_info.return_value = {'kind': 'usb'}
     big = s._build(client, spec())
     self.assertIs(big.face, self.op.face)
-    self.assertIs(big.warp, self.loaded.return_value)
+    self.assertIs(big.warp.jit, self.loaded.return_value)
 
   def test_a_server_model_of_another_geometry_is_refused(self):
     s = self.join()

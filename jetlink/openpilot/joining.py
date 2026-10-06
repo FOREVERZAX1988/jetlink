@@ -674,7 +674,7 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
   link = links.Link(parts.log)
 
   def prepare():
-    from jetlink.openpilot.warp import prepare_reset, warm
+    from jetlink.openpilot.warp import coherent_output, prepare_reset, warm
     # the gadget first, so the Jetson enumerates while the warp loads. Left to
     # the join thread the bind landed ~3 s later, behind the small model's
     # first frame, and one ignition had a 655 ms frame during the bind
@@ -688,6 +688,7 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
     try:
       ready['reset_small'] = prepare_reset(small)
       warp = parts.warps.load(cam_w, cam_h, *geometry)
+      coherent_output(warp, parts.log)   # before its first call
       warm(warp, face.frame_size(cam_w, cam_h))
     except Exception:
       link.close()
