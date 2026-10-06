@@ -82,13 +82,10 @@ WRITE_TIMEOUT = 15.0
 # 459 KB, so a frame may go out behind one the host has not finished, and a
 # third may not (try_send refuses it). The one behind covers a completion the
 # kernel has not posted yet as well: FunctionFS posts each from a SCHED_OTHER
-# kworker. Uploads stream through it in windows. At most 32 order-3 kernel
-# buffers, which the 1 Hz samples of the 2026-10-06 recording bench always had
-# (at least 124 free).
+# kworker. Uploads stream through it in windows.
 QUEUED_LIMIT = 1 << 20
-# AIO requests in flight at once: QUEUED_LIMIT in the smallest request a
-# shrink allows
-AIO_DEPTH = QUEUED_LIMIT // (16 * P.USB_MAX_PACKET)
+# AIO requests in flight at once: QUEUED_LIMIT in write_chunk requests
+AIO_DEPTH = QUEUED_LIMIT // (8 << 10)
 # How long closing waits for queued writes to reach the host (a LEAVE) before
 # it drops the gadget to complete them, and how long it then waits for that.
 # An endpoint file whose request is still queued stays open in the kernel, and
@@ -173,12 +170,15 @@ class FfsTransport(StreamTransport):
   the gadget, under its deadline.
   """
   read_chunk = READ_CHUNK
-  # FunctionFS kmallocs one contiguous buffer per request. A whole frame in one
-  # needs order-7 pages, which recording rollover leaves none of (the route's
-  # stalls); 32 KB is order 3 on AGNOS (kmalloc tracing), the largest the page
-  # allocator treats as cheap. Every request but none is a whole number of
-  # 16 KB bursts, so none ends on a short packet.
-  write_chunk = 2 * P.GADGET_TX_ALIGN
+  # FunctionFS kmallocs one contiguous buffer per request, and AIO holds a
+  # frame's worth at once. A whole frame in one needs order-7 pages, which
+  # recording rollover leaves none of (the route's stalls); 57 x 32 KB needs
+  # 15 order-3 blocks at once, and an aged comma had as few as 3 free: io_submit
+  # stalled 94 ms in compaction (2026-10-06 bench). 8 KB is the largest size
+  # SLUB serves from a slab cache (kmalloc-8192), which never compacts: it
+  # falls back to order-1 slabs. A whole number of 1 KB packets, so no request
+  # ends on a short packet.
+  write_chunk = P.GADGET_TX_ALIGN // 2
   tx_align = P.GADGET_TX_ALIGN
 
   def __init__(self, mount: str = MOUNT, gadget: str | None = None,
@@ -896,8 +896,8 @@ def _open_aio(fd: int, depth: int):
 def _requests(spans: list[tuple[int, int]], start: int, size: int) -> list[tuple[int, list[tuple[int, int]]]]:
   """The message from byte `start` on, as requests of `size` bytes: (bytes,
   [(address, length), ...]) each, gathered from `spans` without copying. The
-  message is a whole number of 16 KB bursts and `size` one of 16 KB, so every
-  request is too."""
+  message is a whole number of 16 KB bursts and `size` divides 16 KB, so every
+  request is `size` bytes."""
   out: list[tuple[int, list[tuple[int, int]]]] = []
   req: list[tuple[int, int]] = []
   filled = pos = 0

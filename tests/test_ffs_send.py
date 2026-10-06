@@ -44,7 +44,7 @@ def _payload(size: int) -> bytes:
 
 
 @pytest.mark.parametrize('size', [0, 1, 16352, 16384, 32768, 393216, FRAME, 4 << 20])
-@pytest.mark.parametrize('quantum', [16384, 32768])
+@pytest.mark.parametrize('quantum', [8192, 16384, 32768])
 def test_a_message_crosses_whole_in_aligned_requests(sender, size, quantum):
   t, aio = sender
   t.write_chunk = quantum
@@ -56,8 +56,10 @@ def test_a_message_crosses_whole_in_aligned_requests(sender, size, quantum):
   assert wire[P.HEADER_SIZE:P.HEADER_SIZE + size] == payload
   assert not any(wire[P.HEADER_SIZE + size:]), 'padding is zeros'
   assert len(wire) % P.GADGET_TX_ALIGN == 0
-  # never a short packet: every request a whole number of 16 KB bursts
-  assert all(0 < n <= quantum and n % P.GADGET_TX_ALIGN == 0 for n in aio.requests)
+  # never a short packet: every request but the last `quantum` bytes, and the
+  # last a whole number of packets too
+  assert all(n == quantum for n in aio.requests[:-1])
+  assert 0 < aio.requests[-1] <= quantum and aio.requests[-1] % P.USB_MAX_PACKET == 0
   if len(wire) <= ffs.QUEUED_LIMIT:
     assert aio.submits == 1, 'a message that fits goes in one io_submit'
   assert t.last_send['bytes'] == len(wire) and t.last_send['requests'] == len(aio.requests)
@@ -132,6 +134,7 @@ def test_a_write_the_host_did_not_complete_fails_the_next_send(sender):
 
 def test_enomem_halves_the_request_size_and_repeats_nothing(sender):
   t, aio = sender
+  t.write_chunk = 2 * P.GADGET_TX_ALIGN
   aio.fail.append(errno.ENOMEM)
   payload = _payload(100000)
   t.send(P.Msg.INFER_REQ, 1, (payload,))
@@ -147,8 +150,7 @@ def test_enomem_halves_the_request_size_and_repeats_nothing(sender):
 
 def test_enomem_at_the_smallest_size_is_a_link_error(sender):
   t, aio = sender
-  t.write_chunk = P.GADGET_TX_ALIGN
-  aio.fail.append(errno.ENOMEM)
+  aio.fail.append(errno.ENOMEM)   # 8 KB is already under the 16 KB floor
   with pytest.raises(LinkError, match='gadget write failed'):
     t.send(P.Msg.PING, 1)
   assert t.last_send['errno'] == errno.ENOMEM
