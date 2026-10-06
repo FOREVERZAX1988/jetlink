@@ -84,7 +84,7 @@ struct StatusAccessory: View {
   }
 
   private var detail: String {
-    if let recent = state.recent, state.isServingFrames {
+    if let recent = state.servedStats {
       return FrameBudgetView.headroomText(p99: recent.servedMs.p99)
     }
     return state.modelName ?? ""

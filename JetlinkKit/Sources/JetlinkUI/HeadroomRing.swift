@@ -11,11 +11,10 @@
   /// the track is a lighter step of the same colour, so the state reads across
   /// the whole ring, and the state is also spelled out underneath with its icon.
   public struct HeadroomRing: View {
-    let p99: Double?
+    let p99: Double
     let lineWidth: CGFloat
 
-    /// `p99` nil draws an empty track: no frames to measure yet.
-    public init(p99: Double?, lineWidth: CGFloat = 22) {
+    public init(p99: Double, lineWidth: CGFloat = 22) {
       self.p99 = p99
       self.lineWidth = lineWidth
     }
@@ -24,23 +23,21 @@
     static let sweep = 0.75
 
     public var body: some View {
-      let room = p99.map { FrameBudgetView.Room(headroomMs: FrameBudgetView.budgetMs - $0) }
-      let tint = room?.tone.color ?? .secondary
-      let fraction = p99.map { min(max($0 / FrameBudgetView.budgetMs, 0), 1) } ?? 0
+      let room = FrameBudgetView.Room(headroomMs: FrameBudgetView.budgetMs - p99)
+      let tint = room.tone.color
+      let fraction = min(max(p99 / FrameBudgetView.budgetMs, 0), 1)
       ZStack {
         arc(to: HeadroomRing.sweep)
-          .stroke(tint.opacity(p99 == nil ? 0.15 : 0.22), style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
-        if p99 != nil {
-          // A shade deeper where the fill starts, as the Activity rings draw theirs.
-          arc(to: HeadroomRing.sweep * max(fraction, 0.001))
-            .stroke(
-              AngularGradient(
-                colors: [tint.mix(with: .black, by: 0.15), tint], center: .center,
-                startAngle: .degrees(135), endAngle: .degrees(135 + 360 * HeadroomRing.sweep * max(fraction, 0.001))),
-              style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
-            )
-            .animation(.smooth(duration: 0.6), value: fraction)
-        }
+          .stroke(tint.opacity(0.22), style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+        // A shade deeper where the fill starts, as the Activity rings draw theirs.
+        arc(to: HeadroomRing.sweep * max(fraction, 0.001))
+          .stroke(
+            AngularGradient(
+              colors: [tint.mix(with: .black, by: 0.15), tint], center: .center,
+              startAngle: .degrees(135), endAngle: .degrees(135 + 360 * HeadroomRing.sweep * max(fraction, 0.001))),
+            style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
+          )
+          .animation(.smooth(duration: 0.6), value: fraction)
         center(room: room)
         Text("\(Int(FrameBudgetView.budgetMs)) ms")
           .font(.footnote.weight(.semibold))
@@ -59,40 +56,29 @@
         .rotation(.degrees(135))
     }
 
-    @ViewBuilder
-    private func center(room: FrameBudgetView.Room?) -> some View {
-      VStack(spacing: 4) {
-        if let p99, let room {
-          let headroom = FrameBudgetView.budgetMs - p99
-          HStack(alignment: .firstTextBaseline, spacing: 4) {
-            Text(abs(headroom).formatted(.number.precision(.fractionLength(1))))
-              .font(.system(size: 64, weight: .bold, design: .rounded))
-              .contentTransition(.numericText(value: headroom))
-              .animation(.smooth, value: headroom)
-            Text(headroom >= 0 ? "ms" : "ms over")
-              .font(.system(.title3, design: .rounded, weight: .semibold))
-              .foregroundStyle(.secondary)
-          }
-          .minimumScaleFactor(0.5)
-          .lineLimit(1)
-          Label(room.title, systemImage: room.symbol)
-            .font(.headline)
-            .foregroundStyle(room.tone.color)
-        } else {
-          Text("--")
+    private func center(room: FrameBudgetView.Room) -> some View {
+      let headroom = FrameBudgetView.budgetMs - p99
+      return VStack(spacing: 4) {
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+          Text(abs(headroom).formatted(.number.precision(.fractionLength(1))))
             .font(.system(size: 64, weight: .bold, design: .rounded))
-            .foregroundStyle(.tertiary)
-          Text("No Frames")
-            .font(.headline)
+            .contentTransition(.numericText(value: headroom))
+            .animation(.smooth, value: headroom)
+          Text(headroom >= 0 ? "ms" : "ms over")
+            .font(.system(.title3, design: .rounded, weight: .semibold))
             .foregroundStyle(.secondary)
         }
+        .minimumScaleFactor(0.5)
+        .lineLimit(1)
+        Label(room.title, systemImage: room.symbol)
+          .font(.headline)
+          .foregroundStyle(room.tone.color)
       }
       .padding(.horizontal, lineWidth * 1.5)
     }
 
-    private func accessibilityText(_ room: FrameBudgetView.Room?) -> String {
-      guard let p99, let room else { return "No frames yet" }
-      return "\(FrameBudgetView.headroomText(p99: p99)) of \(Int(FrameBudgetView.budgetMs)) milliseconds. \(room.title)."
+    private func accessibilityText(_ room: FrameBudgetView.Room) -> String {
+      "\(FrameBudgetView.headroomText(p99: p99)) of \(Int(FrameBudgetView.budgetMs)) milliseconds. \(room.title)."
     }
   }
 
@@ -106,7 +92,6 @@
     HStack {
       HeadroomRing(p99: 44.2)
       HeadroomRing(p99: 58.3)
-      HeadroomRing(p99: nil)
     }
     .padding()
   }

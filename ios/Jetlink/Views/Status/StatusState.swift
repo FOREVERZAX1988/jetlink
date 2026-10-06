@@ -33,14 +33,22 @@ struct StatusState: Equatable {
   /// The scene is not in front while serving: iOS will suspend the app.
   var needsForeground = false
 
-  var isServingFrames: Bool {
-    link.state == .connected && engine.state == .ready && recent != nil
+  /// The comma's frames, while the main card shows them.
+  var servedStats: StatsEvent? {
+    if case .budget(let stats) = hero { stats } else { nil }
   }
 
   /// What the main card shows.
   enum Hero: Equatable {
-    /// The comma is connected to a loaded model; nil until its first frames land.
-    case budget(StatsEvent?)
+    /// The comma is connected to a loaded model and sending it frames.
+    case budget(StatsEvent)
+    /// The comma's drive holds the link, with no frames in the last ten
+    /// seconds: it keeps its own model while engaged and switches only once
+    /// nothing is, which is also where a lost link reconnects to mid-drive.
+    case smallModel
+    /// Connected to a loaded model with no drive on the link: the call the
+    /// comma holds while parked, or its model fetch.
+    case idle
     case progress(EngineEvent)
     case waiting
     case noModel
@@ -57,7 +65,8 @@ struct StatusState: Equatable {
     case .failed:
       return .failed(engine.detail.isEmpty ? "The model could not be prepared." : engine.detail)
     case .ready:
-      return link.state == .connected ? .budget(recent) : .waiting
+      guard link.state == .connected else { return .waiting }
+      return recent.map { .budget($0) } ?? (link.isDrive ? .smallModel : .idle)
     case .none:
       return hasPreparedModel ? .waiting : .noModel
     }

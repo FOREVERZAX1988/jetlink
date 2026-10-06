@@ -46,17 +46,26 @@ public struct LinkEvent: Codable, Sendable, Equatable {
   /// How a connected link is carried, as `LinkMedium` names it; nil from a
   /// server older than the field, or before it can tell.
   public let medium: String?
+  /// Who on the comma said hello on a connected link: "modeld" for the drive,
+  /// "provision" for the parked model fetch. Nil before any hello, as on the
+  /// phone's call the comma holds unread while parked.
+  public let client: String?
 
-  public init(state: LinkState, detail: String, peer: String?, medium: String? = nil) {
+  public init(state: LinkState, detail: String, peer: String?, medium: String? = nil, client: String? = nil) {
     self.state = state
     self.detail = detail
     self.peer = peer
     self.medium = medium
+    self.client = client
   }
 
   public static let waiting = LinkEvent(state: .waiting, detail: "", peer: nil)
 
   public var linkMedium: LinkMedium? { medium.flatMap(LinkMedium.init(rawValue:)) }
+
+  /// The comma's driving model holds the link, frames or not: the name
+  /// jetlink/openpilot/link.py's Link says in its hello.
+  public var isDrive: Bool { state == .connected && client == "modeld" }
 
   /// What a connected link is carried over, for display: the server's word,
   /// or for a server or comma older than the field, a guess from the peer.

@@ -26,8 +26,10 @@ final class Session: @unchecked Sendable {
   /// How the link is carried: the transport's view until the comma's hello
   /// says better.
   private(set) var medium: LinkMedium?
+  /// The name the comma's hello gave, for the link event.
+  private var helloName: String?
   /// Hears the link event when the session announces it (`first`), and
-  /// again when a later hello changes its medium.
+  /// again when a later hello changes its medium or name.
   var onLink: ((_ event: LinkEvent, _ first: Bool) -> Void)?
   /// Hears every message that arrives, before it is handled, and the push of
   /// a finished build (on the job's thread).
@@ -114,7 +116,7 @@ final class Session: @unchecked Sendable {
   // MARK: the loop
 
   var linkEvent: LinkEvent {
-    LinkEvent(state: .connected, detail: "", peer: peer, medium: medium?.rawValue)
+    LinkEvent(state: .connected, detail: "", peer: peer, medium: medium?.rawValue, client: helloName)
   }
 
   private func announce() {
@@ -135,7 +137,7 @@ final class Session: @unchecked Sendable {
           // Over USB the first message is the hello: the link is announced
           // once, with what it says, rather than twice.
           if message.msgType == Wire.Msg.helloReq.rawValue {
-            _ = adopt(helloMedium(message))
+            _ = adopt(hello: Session.helloClient(message))
           }
           announce()
         }
@@ -197,10 +199,18 @@ final class Session: @unchecked Sendable {
     return (request.sha256, request.frameSkip)
   }
 
-  /// What a hello's `client.link` says the link is, if anything.
-  private func helloMedium(_ message: Message) -> LinkMedium? {
-    let client = JSONLine.decode(message.payload)?["client"] as? [String: Any]
-    return LinkMedium(link: client?["link"] as? [String: Any])
+  /// A hello's `client`: who is calling and what its link is.
+  private static func helloClient(_ message: Message) -> [String: Any]? {
+    JSONLine.decode(message.payload)?["client"] as? [String: Any]
+  }
+
+  /// Takes a hello's name, and its link's medium (`adopt(_:)`). Whether
+  /// either changed.
+  private func adopt(hello client: [String: Any]?) -> Bool {
+    let name = (client?["name"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+    let renamed = name != helloName
+    helloName = name
+    return adopt(LinkMedium(link: client?["link"] as? [String: Any])) || renamed
   }
 
   /// Takes the hello's word on the link where it says more: the cable's
@@ -214,14 +224,13 @@ final class Session: @unchecked Sendable {
   }
 
   private func greet(_ message: Message) {
-    var who = ""
-    if let object = JSONLine.decode(message.payload), let d = object["client"] as? [String: Any] {
-      let name = (d["name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "client"
-      let nonce = d["nonce"].map { "\($0)" } ?? "?"
-      who = "\(name)/\(nonce)"
-    }
-    if adopt(helloMedium(message)), announced {
+    let hello = Session.helloClient(message)
+    if adopt(hello: hello), announced {
       onLink?(linkEvent, false)
+    }
+    var who = ""
+    if let hello {
+      who = "\(helloName ?? "client")/\(hello["nonce"].map { "\($0)" } ?? "?")"
     }
     let previous = client
     client = who

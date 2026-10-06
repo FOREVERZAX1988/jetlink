@@ -60,6 +60,22 @@ struct ServerTests {
     #expect(lines.contains { $0.contains("jetlink.server: the comma's hello says its link is USB 2") })
   }
 
+  @Test("The link names who said hello: nobody on a held call, then each hello's name")
+  func linkClient() throws {
+    try serve { server, client in
+      try client.send(.stateReq)
+      _ = try client.recv(.stateResp)
+      #expect(server.currentLink.state == .connected)
+      #expect(server.currentLink.client == nil)
+      _ = try client.hello(name: "provision")
+      #expect(server.currentLink.client == "provision")
+      #expect(!server.currentLink.isDrive)
+      // the same medium, a new name: announced again
+      _ = try client.hello(name: "modeld")
+      #expect(server.currentLink.isDrive)
+    }
+  }
+
   @Test("Progress is throttled within a stage, never across one")
   func progressStages() throws {
     try serve { server, _ in

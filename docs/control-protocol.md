@@ -85,10 +85,12 @@ angle brackets.
 // state: "serving" | "stopping". backend, runtime_version and device are what
 // the hello to the comma carries.
 
-{"event":"link","t":0,"state":"connected","detail":"","peer":"usb","medium":"usb3"}
+{"event":"link","t":0,"state":"connected","detail":"","peer":"usb","medium":"usb3","client":"modeld"}
 // state: "waiting" | "connected" | "disconnected". medium, when connected:
 // "usb3" | "usb2" | "usb1" | "usb" (speed unknown) | "tcp", from the comma's
-// hello (a phone's cable is TCP over USB). Transitions only.
+// hello (a phone's cable is TCP over USB). client: the hello's name, "modeld"
+// while driving or "provision" fetching the model; absent before a hello.
+// Transitions only.
 
 {"event":"engine","t":0,"state":"building","sha256":"<sha256>","detail":"",
  "stage":"build","frac":0.42,"msg":"","load_only":false}

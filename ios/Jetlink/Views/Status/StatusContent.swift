@@ -63,18 +63,13 @@ struct StatusContent: View {
     .frame(maxWidth: .infinity)
   }
 
-  /// The comma's frames, while there are any to show.
-  private var serving: StatsEvent? {
-    state.isServingFrames ? state.recent : nil
-  }
-
   @ViewBuilder
   private var cards: some View {
     switch arrangement {
     case .column:
       VStack(spacing: StatusContent.spacing) {
         HeroCard(state: state, actions: actions)
-        if let recent = serving {
+        if let recent = state.servedStats {
           latency(recent)
           if state.history.count > 1 {
             history
@@ -90,7 +85,7 @@ struct StatusContent: View {
         HeroCard(state: state, compact: true, actions: actions)
           .frame(width: 330)
         VStack(spacing: StatusContent.spacing) {
-          if let recent = serving {
+          if let recent = state.servedStats {
             latency(recent, compact: true)
             link(recent)
           } else {
@@ -104,12 +99,12 @@ struct StatusContent: View {
       HStack(alignment: .top, spacing: StatusContent.spacing) {
         VStack(spacing: StatusContent.spacing) {
           HeroCard(state: state, actions: actions)
-          if let recent = serving {
+          if let recent = state.servedStats {
             latency(recent)
           }
         }
         VStack(spacing: StatusContent.spacing) {
-          if let recent = serving {
+          if let recent = state.servedStats {
             if state.history.count > 1 {
               history
             }

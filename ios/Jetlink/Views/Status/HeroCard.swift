@@ -22,6 +22,10 @@ struct HeroCard: View {
     switch state.hero {
     case .budget(let stats):
       headroom(stats)
+    case .smallModel:
+      smallModel
+    case .idle:
+      idle
     case .progress(let engine):
       progress(engine)
     case .waiting:
@@ -39,18 +43,43 @@ struct HeroCard: View {
 
   // MARK: serving
 
-  private func headroom(_ stats: StatsEvent?) -> some View {
-    let room = stats.map { FrameBudgetView.Room(headroomMs: FrameBudgetView.budgetMs - $0.servedMs.p99) }
-    return SummaryCard(title: "Headroom", systemImage: "gauge.with.needle.fill", tint: room?.tone.color ?? .secondary, trailing: "Last 10 s") {
+  private func headroom(_ stats: StatsEvent) -> some View {
+    let room = FrameBudgetView.Room(headroomMs: FrameBudgetView.budgetMs - stats.servedMs.p99)
+    return SummaryCard(title: "Headroom", systemImage: "gauge.with.needle.fill", tint: room.tone.color, trailing: "Last 10 s") {
       VStack(spacing: compact ? 12 : 20) {
-        HeadroomRing(p99: stats?.servedMs.p99, lineWidth: compact ? 16 : 22)
+        HeadroomRing(p99: stats.servedMs.p99, lineWidth: compact ? 16 : 22)
           .frame(maxWidth: compact ? 210 : 290)
           .frame(maxWidth: .infinity)
         HStack(spacing: 0) {
-          Figure("P99", ms: stats?.servedMs.p99)
+          Figure("P99", ms: stats.servedMs.p99)
           Divider().frame(height: 32)
-          Figure("Max", ms: stats?.servedMs.max)
+          Figure("Max", ms: stats.servedMs.max)
         }
+      }
+    }
+  }
+
+  // MARK: connected, no frames
+
+  /// An empty ring here read as the big model still driving (an iPad tester,
+  /// 2026-10-04): say who drives and what switches it, as the comma's own
+  /// "Big Model Ready: Re-engage to switch" does.
+  private var smallModel: some View {
+    card {
+      ContentUnavailableView {
+        Label("Driving on Small Model", systemImage: "car")
+      } description: {
+        Text("Re-engage cruise to engage the big model.")
+      }
+    }
+  }
+
+  private var idle: some View {
+    card {
+      ContentUnavailableView {
+        Label("Ready", systemImage: "checkmark.circle")
+      } description: {
+        Text("The big model takes over when you drive.")
       }
     }
   }
