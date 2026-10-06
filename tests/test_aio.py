@@ -28,6 +28,42 @@ def test_an_empty_buffer_has_no_bytes():
   assert address(b'')[1] == 0
 
 
+def test_a_context_fills_its_structs_where_the_kernel_reads_them(monkeypatch):
+  # the real context only builds on Linux, so a mistake in its setup reached a
+  # comma with every test here green (2026-10-06: a view made before its array
+  # failed every link); this builds it anywhere, with the syscalls faked
+  from types import SimpleNamespace
+
+  from jetlink.transport import aio as module
+  monkeypatch.setattr(module.sys, 'platform', 'linux')
+  monkeypatch.setattr(module.platform, 'machine', lambda: 'aarch64')
+  monkeypatch.setattr(module.ctypes, 'CDLL', lambda *a, **k: SimpleNamespace(syscall=SimpleNamespace(restype=None)))
+  done = []
+
+  def call(self, nr, *args):
+    if nr == self._submit:
+      return args[1].value
+    if nr == self._getevents:
+      for i, (token, res) in enumerate(done):
+        self._events[i].data, self._events[i].res = token, res
+      return len(done)
+    return 0
+
+  monkeypatch.setattr(Aio, '_call', call)
+  a = Aio(7, 4)
+  payload = bytes(range(100))
+  addr, _ = address(payload)
+  assert a.submit(41, [[(addr, 60)], [(addr + 60, 30), (addr + 90, 10)]]) == 2
+  first, second = a._iocbs[0], a._iocbs[1]
+  assert (first.data, first.nbytes, first.fildes, first.opcode) == (41, 1, 7, 8)
+  assert (second.data, second.nbytes) == (42, 2)
+  iovecs = [(v.base, v.len) for v in a._iovecs[8:10]]
+  assert iovecs == [(addr + 60, 30), (addr + 90, 10)]
+  assert ctypes.string_at(a._iovecs[0].base, a._iovecs[0].len) == payload[:60]
+  done.extend([(41, 60), (42, -108)])
+  assert a.reap(2, 0.0) == [(41, 60), (42, -108)]
+
+
 @pytest.mark.real_aio
 @pytest.mark.skipif(sys.platform != 'linux', reason='Linux AIO')
 def test_requests_reach_the_fd_in_order_and_are_reaped():

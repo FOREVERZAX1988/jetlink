@@ -118,8 +118,8 @@ class Aio:
     # an event is (token, iocb, result, result2).
     self._iocb_words = memoryview(self._iocbs).cast('B').cast('Q')
     self._iovec_words = memoryview(self._iovecs).cast('B').cast('Q')
-    self._event_words = memoryview(self._events).cast('B').cast('q')
     self._events = (_Event * depth)()
+    self._event_words = memoryview(self._events).cast('B').cast('q')
     self._timeout = _Timespec()
 
   def _call(self, nr: int, *args) -> int:
