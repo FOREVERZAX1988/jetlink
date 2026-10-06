@@ -84,25 +84,53 @@ class ProvisioningRun:
   # -- provisioning ---------------------------------------------------------
 
   def fetch_model(self):
-    """Download the pinned large model, once.
+    """Download the picked large model, if the comma has not got it whole.
 
     Minutes on a slow link, so it reports progress and stops when the owner
-    stops the run; it is the one call in a run that blocks for long.
+    stops the run; it is the one call in a run that blocks for long. A stall is
+    retried within the run and resumed from where it stopped, by this run or
+    the next (Models.fetch_shipped_model); a run gives up only once those
+    retries are spent, and the .part waits for the next one.
     """
     if self.fetch_failed:
       return None
+    parts = self.parts
+    size = (parts.models.selected_model() or {}).get('size') or 0
+
+    def progress(frac: float) -> None:
+      parts.progress.report('download', frac, f"downloading {int(frac * size) >> 20} of {size >> 20} MB" if size
+                            else 'downloading')
+
+    def retrying(error, delay: float) -> None:
+      frac = (parts.progress.read() or {}).get('frac', 0.0)
+      parts.progress.report('download', frac, f"download stalled, retrying in {delay:.0f} s")
+
     try:
-      path = self.parts.models.fetch_shipped_model(
-        progress=lambda frac: self.parts.progress.report('download', frac, 'downloading'),
-        should_stop=lambda: self.stop,
-      )
+      path = parts.models.fetch_shipped_model(progress=progress, should_stop=lambda: self.stop, retrying=retrying)
     except Exception:
-      self.log.exception("jetlink: could not fetch the large model")
-      self.parts.progress.report('failed', 1.0, 'could not download the large model')
-      # one attempt per run; retrying a gigabyte on a loop is worse than staying small
+      if self.stop:
+        self.log.warning("jetlink: download stopped, the next run carries on from where it got to")
+      else:
+        # the owner starts another run after its backoff, which resumes the .part
+        self.log.exception("jetlink: could not fetch the large model")
+        parts.progress.report('failed', 1.0, 'download failed, retrying later')
       self.fetch_failed = True
       return None
     return path
+
+  def needs_download(self) -> bool:
+    """Does the comma have to fetch the picked model before a Jetson can build
+    it? Only while its engine is not known to be built and the file is not here.
+    Asked without the Jetson: a download needs only the internet, and a car
+    whose Jetson goes off with the ignition has no Jetson while parked."""
+    parts = self.parts
+    entry = parts.models.selected_model()
+    if entry is None:
+      return False
+    sha256, _ = link.identity(parts, entry)
+    if parts.spec.engine_ready_for(sha256):
+      return False
+    return parts.models.shipped_model_path() is None
 
   def provision(self) -> bool:
     """Make the Jetson ready for the selected model; a host is attached. The
@@ -229,10 +257,16 @@ class ProvisioningRun:
 
     finished = False
     try:
+      # the bytes first, and with no Jetson: a parked car whose Jetson is
+      # switched with the ignition never has one to wait for (2026-10-06)
+      if self.needs_download() and self.fetch_model() is None:
+        return False
       if not self.open_link():
         return False
       if not self.wait_for_jetson():
         self.log.warning("jetlink: no jetson within %.0f s, leaving it for the next run", WAKE_TIMEOUT)
+        if self.parts.models.shipped_model_path() is not None:
+          self.parts.progress.report('waiting', 0.0, 'downloaded, builds when the jetson is on')
         return False
       finished = self.provision()
     except Exception:

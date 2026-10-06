@@ -34,6 +34,7 @@ JETLINK = {
   'enabled': '()',
   'status': '()',
   'reason': '()',
+  'model_state': '(ref)',
   'prepare': '()',
   'attach': '(small, cam_w, cam_h)',
   'shutdown': "(reason='', timeout=25.0)",

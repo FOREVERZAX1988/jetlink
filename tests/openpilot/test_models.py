@@ -412,10 +412,53 @@ class TestFetchShippedModel(ModelsTest):
     self.assertEqual(download.call_args.args[:3], ('https://x/y', Pointer('a' * 64, 4096), dest))
     self.assertIs(download.call_args.kwargs['should_stop'], stop)
 
-  def test_nowhere_to_get_it_raises(self):
+  def no_waits(self):
+    from jetlink.openpilot import models
+    return mock.patch.object(models, 'DOWNLOAD_RETRY_DELAYS', (0.0,))
+
+  def test_nowhere_to_get_it_raises_once_the_attempts_are_spent(self):
+    from jetlink.openpilot import models
     from jetlink.registry.catalog import NetworkError
-    with mock.patch('jetlink.registry.lfs.lfs_resolve', return_value=None), self.assertRaises(NetworkError):
+    with mock.patch('jetlink.registry.lfs.lfs_resolve', return_value=None) as resolve, self.no_waits(), \
+         self.assertRaises(NetworkError):
       self.models.fetch_shipped_model()
+    self.assertEqual(resolve.call_count, models.DOWNLOAD_ATTEMPTS * len(self.models.lfs_endpoints()))
+
+  def test_a_failed_transfer_is_tried_again_and_told_of(self):
+    # a car's connection stalls; each attempt asks the LFS server for a fresh
+    # address, which expires, and carries on from the .part (lfs_download)
+    from jetlink.registry.catalog import NetworkError
+    waits = []
+    transfers = iter([NetworkError('read timed out'), None])
+
+    def download(href, pointer, dest, **kw):
+      if (e := next(transfers)) is not None:
+        raise e
+      return dest
+
+    with mock.patch('jetlink.registry.lfs.lfs_resolve', return_value='https://x/y') as resolve, \
+         mock.patch('jetlink.registry.lfs.lfs_download', side_effect=download), self.no_waits():
+      dest = self.models.fetch_shipped_model(retrying=lambda e, delay: waits.append((str(e), delay)))
+    self.assertEqual(dest.name, self.models.model_file_name(self.MODEL))
+    self.assertEqual(resolve.call_count, 2)
+    self.assertEqual(waits, [('read timed out', 0.0)])
+
+  def test_a_stopped_run_stops_waiting_to_try_again(self):
+    from jetlink.openpilot import models
+    from jetlink.registry.catalog import NetworkError
+    with mock.patch('jetlink.registry.lfs.lfs_resolve', return_value=None), \
+         mock.patch.object(models, 'DOWNLOAD_RETRY_DELAYS', (60.0,)), self.assertRaises(NetworkError):
+      self.models.fetch_shipped_model(should_stop=lambda: True)
+
+  def test_a_model_with_its_file_here_has_it(self):
+    self.assertFalse(self.models.has_file(self.MODEL))
+    dest = self.models.model_dir() / self.models.model_file_name(self.MODEL)
+    dest.parent.mkdir(parents=True)
+    dest.write_bytes(b'\0' * 100)
+    self.assertFalse(self.models.has_file(self.MODEL), 'a short file is not the model')
+    dest.write_bytes(b'\0' * 4096)
+    self.assertTrue(self.models.has_file(self.MODEL))
+    self.assertFalse(self.models.has_file({**self.MODEL, 'oid': None}))
 
   def test_nothing_chosen_is_nothing_fetched(self):
     with mock.patch.object(self.models, 'selected_model', return_value={**self.MODEL, 'oid': None}):

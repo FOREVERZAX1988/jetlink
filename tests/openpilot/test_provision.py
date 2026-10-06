@@ -279,7 +279,7 @@ class TestFetching(OpenpilotTest):
       self.assertIsNone(d.fetch_model())
       self.assertIsNone(d.fetch_model())
     fetch.assert_called_once()
-    progress.report.assert_called_once_with('failed', 1.0, 'could not download the large model')
+    progress.report.assert_called_once_with('failed', 1.0, 'download failed, retrying later')
 
 
 class TestTheLoan(OpenpilotTest):
@@ -373,6 +373,43 @@ class TestTheRun(OpenpilotTest):
     gadget.wait_for_host.return_value = False
     assert d.run() is False
     d.provision.assert_not_called()
+
+  def test_the_bytes_come_first_and_need_no_jetson(self):
+    # a car whose Jetson is switched with the ignition has none while parked,
+    # which is when there is time to download (2026-10-06)
+    d = self.worker()
+    order = []
+    self.patch(d, 'needs_download', mock.Mock(return_value=True))
+    self.patch(d, 'fetch_model', mock.Mock(side_effect=lambda: order.append('fetch') or Path('/m.onnx')))
+    d.open_link.side_effect = lambda: order.append('borrow') or True
+    assert d.run() is True
+    self.assertEqual(order, ['fetch', 'borrow'])
+
+  def test_a_download_that_fails_ends_the_round_before_the_link(self):
+    d = self.worker()
+    self.patch(d, 'needs_download', mock.Mock(return_value=True))
+    self.patch(d, 'fetch_model', mock.Mock(return_value=None))
+    assert d.run() is False
+    d.open_link.assert_not_called()
+
+  def test_downloaded_with_no_jetson_says_it_builds_when_one_is_on(self):
+    d = self.worker()
+    self.patch(d, 'needs_download', mock.Mock(return_value=True))
+    self.patch(d, 'fetch_model', mock.Mock(return_value=Path('/m.onnx')))
+    self.patch(self.parts.models, 'shipped_model_path', return_value=Path('/m.onnx'))
+    gadget.wait_for_host.return_value = False
+    assert d.run() is False
+    self.parts.progress.report.assert_called_with('waiting', 0.0, 'downloaded, builds when the jetson is on')
+
+  def test_only_a_pick_neither_built_nor_here_is_downloaded(self):
+    d = provision.ProvisioningRun(self.parts)
+    entry = {'name': 'ResAction', 'ref': 'r' * 40, 'oid': 'a' * 64, 'size': 10}
+    self.patch(self.parts.models, 'selected_model', return_value=entry)
+    for built, here, want in ((False, None, True), (True, None, False), (False, Path('/m.onnx'), False)):
+      with self.subTest(built=built, here=here):
+        with mock.patch.object(self.parts.spec, 'engine_ready_for', return_value=built), \
+             mock.patch.object(self.parts.models, 'shipped_model_path', return_value=here):
+          self.assertIs(d.needs_download(), want)
 
   def test_nothing_is_left_behind_in_dev_shm(self):
     # what the owner needs goes over the loan and in the exit status

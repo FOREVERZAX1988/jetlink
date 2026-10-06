@@ -46,9 +46,18 @@ class SpecRecord:
     d = self._raw()
     return bool(sha256) and d is not None and d.get('sha256') == sha256 and d.get('ready') is True
 
-  def clear_ready(self) -> None:
-    """The engine is no longer known to be built. The spec stays: it still
-    sizes the warp, and the next provisioning run asks again."""
+  def ready_spec(self):
+    """The last model whose engine the server built, whichever model is picked
+    now: what drives while a new pick is still being fetched or built. None
+    without one."""
     d = self._raw()
-    if d is not None and d.get('ready'):
+    return self.load() if d is not None and d.get('ready') is True else None
+
+  def clear_ready(self, sha256: str | None = None) -> None:
+    """The engine is no longer known to be built. The spec stays: it still
+    sizes the warp, and the next provisioning run asks again. With `sha256`,
+    only if the record is that model's: a new pick the server has nothing of
+    says nothing about the last model it built, which still drives."""
+    d = self._raw()
+    if d is not None and d.get('ready') and (sha256 is None or d.get('sha256') == sha256):
       self.op.put(self.op.keys.spec, {**d, 'ready': False})

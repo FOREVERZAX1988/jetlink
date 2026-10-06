@@ -272,43 +272,51 @@ def lfs_download(href: str, pointer: Pointer, dest: Path, progress: ProgressFn |
   """Stream to a .part file, hashing as we go, and only then take the name.
 
   A half-written model must never sit where the next start would hand it to a
-  backend to build from.
+  backend to build from. A transfer that stalls or is stopped keeps its .part,
+  and the next call carries on from it with a Range request: 755 MB over a
+  car's connection need not arrive in one go (2026-10-06, one 30 s stall 85 s
+  in threw a whole download away). Only bytes that prove wrong are dropped.
   """
   opener = opener or urllib.request.urlopen
   dest = Path(dest)
   dest.parent.mkdir(parents=True, exist_ok=True)
-  free = shutil.disk_usage(dest.parent).free
-  if free < pointer.size + FREE_SLACK:
-    raise RegistryError(f"need {pointer.size >> 20} MB for the model, {free >> 20} MB free")
-
   part = dest.with_name(dest.name + '.part')
   digest = hashlib.sha256()
-  written = 0
+  written = _resume_from(part, pointer.size, digest)
+  free = shutil.disk_usage(dest.parent).free
+  if free < pointer.size - written + FREE_SLACK:
+    raise RegistryError(f"need {(pointer.size - written) >> 20} MB more for the model, {free >> 20} MB free")
+
   # Whole percent only: a gigabyte at 4 MB a chunk would call this a few
   # hundred times and the callback may write a param or a socket line.
   reported = -1
-  try:
-    with opener(href, timeout=CONNECT_TIMEOUT) as response, open(part, 'wb') as out:
-      while True:
-        if should_stop is not None and should_stop():
-          raise RegistryError('download cancelled')
-        chunk = response.read(CHUNK)
-        if not chunk:
-          break
-        out.write(chunk)
-        digest.update(chunk)
-        written += len(chunk)
-        if progress is not None and pointer.size:
-          percent = int(100 * written / pointer.size)
-          if percent != reported:
-            reported = percent
-            progress(min(1.0, written / pointer.size))
-  except RegistryError:
-    part.unlink(missing_ok=True)
-    raise
-  except Exception as e:
-    part.unlink(missing_ok=True)
-    raise NetworkError(f"could not download {pointer.oid[:16]}: {e}") from e
+  if written < pointer.size:
+    request = urllib.request.Request(href, headers={'Range': f'bytes={written}-'}) if written else href
+    try:
+      with opener(request, timeout=CONNECT_TIMEOUT) as response:
+        if written and getattr(response, 'status', 200) != 206:
+          # the server ignored the Range and sends the whole object
+          log.warning("%s: no partial content, downloading from the start", pointer.oid[:16])
+          digest, written = hashlib.sha256(), 0
+        with open(part, 'ab' if written else 'wb') as out:
+          while True:
+            if should_stop is not None and should_stop():
+              raise RegistryError('download stopped')
+            chunk = response.read(CHUNK)
+            if not chunk:
+              break
+            out.write(chunk)
+            digest.update(chunk)
+            written += len(chunk)
+            if progress is not None and pointer.size:
+              percent = int(100 * written / pointer.size)
+              if percent != reported:
+                reported = percent
+                progress(min(1.0, written / pointer.size))
+    except RegistryError:
+      raise
+    except Exception as e:
+      raise NetworkError(f"could not download {pointer.oid[:16]}: {e}") from e
 
   if written != pointer.size:
     part.unlink(missing_ok=True)
@@ -321,3 +329,19 @@ def lfs_download(href: str, pointer: Pointer, dest: Path, progress: ProgressFn |
   if progress is not None:
     progress(1.0)
   return dest
+
+
+def _resume_from(part: Path, size: int, digest) -> int:
+  """How much of the model an earlier attempt left in `part`, hashed into
+  `digest`; 0, with the file gone, for anything that cannot be a prefix."""
+  try:
+    have = part.stat().st_size
+  except OSError:
+    return 0
+  if have > size:
+    part.unlink(missing_ok=True)
+    return 0
+  with open(part, 'rb') as f:
+    while chunk := f.read(CHUNK):
+      digest.update(chunk)
+  return have

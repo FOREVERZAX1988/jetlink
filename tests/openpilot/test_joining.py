@@ -208,6 +208,20 @@ class JoiningTest(JoiningBase):
     self.assertFalse(s.big_model_available)
     self.assertEqual(s.big_model_state, 'running')
 
+  def test_a_model_neither_end_has_is_asked_for_again_slowly_and_said(self):
+    # a hello and a gadget bounce every 7 s for a whole drive (2026-10-06):
+    # only a provisioning run's download changes the answer
+    from jetlink.client import EngineMissing
+    self.connect_error = EngineMissing('server has no engine for 1563b85f6bd00d9e (have 0 of the model)')
+    with mock.patch.object(joining, 'MODEL_WAIT', 0.05), mock.patch.object(joining, 'REJOIN_DELAY', 30.0):
+      s = self._state()
+      deadline = time.monotonic() + 5
+      while self.connect_calls < 2 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    self.assertGreaterEqual(self.connect_calls, 2, 'waited REJOIN_DELAY, not MODEL_WAIT')
+    self.progress.report.assert_any_call('connect', 0.0, 'big model not downloaded yet', drops=0)
+    self.assertFalse(s.big_model_available)
+
   def test_close_with_pending_model_clears_availability(self):
     s = self._ready()
     self.assertTrue(s.big_model_available)

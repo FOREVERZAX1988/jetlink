@@ -3,8 +3,15 @@
 # Choose and prepare models
 
 While offroad and online, open **Settings > Models > Big Model** on the comma.
-Start with the default. The comma downloads it and the server prepares it.
-The small model drives until it is ready; see [when it switches](using-jetlink.md#what-to-expect-when-driving).
+Start with the default. The comma downloads it on any connection, and picks
+up where it left off if the download is interrupted. The Jetson then prepares
+it, about 3 minutes, the next time it is on while the car is parked. Until a
+newly picked model is ready, the last model the Jetson prepared drives; with
+none yet, the small model does. See [when it switches](using-jetlink.md#what-to-expect-when-driving).
+
+If the Jetson only has power while the car is on, prepare a new model by
+starting the car, forcing offroad, and waiting for the Big Model panel to say
+it is ready.
 
 If the list is empty, use **Refresh Model List**. On Jetson, the 766 MB models
 leave more time in the 50 ms frame budget than the 1.7 GB Lebowski.

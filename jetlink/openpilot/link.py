@@ -302,23 +302,38 @@ def open_link(parts, link: Link, should_stop=None):
                    hello.get('engine_state'), str(hello.get('loaded'))[:16])
     link.note_server(hello)
     sha256, nbytes = identity(parts, selected)
+    path = parts.models.shipped_model_path()
     if not parts.spec.engine_ready_for(sha256):
-      parts.log.warning("jetlink: %s is not built yet, building it with the small model driving",
-                     selected.get('name', sha256[:16]))
+      standin = parts.spec.ready_spec()
+      if standin is not None and standin.sha256 != sha256:
+        # the user's choice (2026-10-06): the last model the Jetson built
+        # drives until the pick is fetched and built, which a provisioning run
+        # does parked, rather than the small model. Building here would unload
+        # it, and uploading would share the link with its frames
+        parts.log.warning("jetlink: %s is not ready yet, %s drives until it is", selected.get('name', sha256[:16]),
+                          parts.models.name_for(standin.sha256) or standin.sha256[:16])
+        sha256, nbytes, path = standin.sha256, standin.nbytes, None
+      else:
+        parts.log.warning("jetlink: %s is not built yet, building it with the small model driving",
+                          selected.get('name', sha256[:16]))
     try:
       # normally one round trip, since the provisioning run left the engine loaded. A
       # server that restarted reloads from the plan cache, 13 to 25 s; one
       # that has never seen this model builds it, 102 to 294 s
-      spec = ensure(parts, client, sha256, nbytes, parts.models.shipped_model_path(),
-                    progress=parts.progress.report_with_eta, should_stop=should_stop)
+      spec = ensure(parts, client, sha256, nbytes, path, progress=parts.progress.report_with_eta,
+                    should_stop=should_stop)
     except EngineMissing:
-      # neither end has the bytes. Fetching them needs the internet and a
-      # gigabyte of it, which is a parked job; clear the record so the next
-      # parked period provisions again
-      parts.spec.clear_ready()
+      # neither end has the bytes. Fetching them is a provisioning run's job;
+      # clear the record if it named this model, so the next one does
+      parts.spec.clear_ready(sha256)
       raise
     client.deadline = INFERENCE_TIMEOUT
     return client, spec
+  except EngineMissing:
+    # the link is fine and stays on `link`: closing it left a read queued that
+    # the next attempt's open had to bounce the gadget for, every 7 s for a
+    # whole drive (2026-10-06)
+    raise
   except BaseException:
     link.close()
     raise

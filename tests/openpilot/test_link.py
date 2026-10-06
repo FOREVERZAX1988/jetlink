@@ -310,6 +310,22 @@ class BuildingOnroad(OpenpilotTest):
     assert self.op.log.has('CTM v2 is not built yet, building it with the small model driving')
     assert self.op.log.has(f"orin trt 10.3, engine ready, loaded {'a' * 16}")
 
+  def test_the_last_model_built_drives_while_the_pick_is_not_ready(self):
+    # the user's choice (2026-10-06): not the small model. No upload and no
+    # build here: either would cost the model that is steering
+    standin = mock.Mock(sha256='b' * 64, nbytes=123)
+    self.patch(self.parts.spec, 'ready_spec', return_value=standin)
+    self.patch(self.parts.models, 'name_for', return_value='Cinque Terre V3')
+    self.patch(self.parts.models, 'shipped_model_path', return_value='/data/model.onnx')
+    link.open_link(self.parts, self.link)
+    self.assertEqual(self.ensure.call_args.args[2:5], ('b' * 64, 123, None))
+    assert self.op.log.has('CTM v2 is not ready yet, Cinque Terre V3 drives until it is')
+
+  def test_a_record_of_the_pick_itself_is_no_stand_in(self):
+    self.patch(self.parts.spec, 'ready_spec', return_value=mock.Mock(sha256=self.ENTRY['oid'], nbytes=1))
+    link.open_link(self.parts, self.link)
+    self.assertEqual(self.ensure.call_args.args[2:4], (self.ENTRY['oid'], self.ENTRY['size']))
+
   def test_the_frame_deadline_is_set_before_the_link_is_handed_over(self):
     # ensure_engine waits minutes; the frame path must not inherit that
     client, _ = link.open_link(self.parts, self.link)
@@ -352,15 +368,17 @@ class BuildingOnroad(OpenpilotTest):
 
   def test_bytes_neither_end_has_are_a_parked_job(self):
     # Downloading a gigabyte is the one part of provisioning that needs the
-    # internet, and it is not something to start mid-drive.
+    # internet, and it is not something to start mid-drive. The link is fine:
+    # closing it cost a gadget bounce per retry for a whole drive (2026-10-06)
     from jetlink.client import EngineMissing
     self.ensure.side_effect = EngineMissing('no engine')
     self.link.client = self.client
     with mock.patch.object(self.parts.spec, 'clear_ready') as cleared:
       with self.assertRaises(EngineMissing):
         link.open_link(self.parts, self.link)
-    cleared.assert_called_once_with()
-    self.client.close.assert_called_once()
+    cleared.assert_called_once_with(self.ensure.call_args.args[2])
+    self.client.close.assert_not_called()
+    self.assertIs(self.link.client, self.client)
 
 
 class FrameDeadline(unittest.TestCase):

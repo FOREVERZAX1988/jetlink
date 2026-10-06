@@ -100,6 +100,12 @@ class Jetlink:
     mode = self._mode()
     return self._read('the status', lambda: status.read(self._parts, mode), lambda error: status.failed(error, mode))
 
+  def model_state(self, ref: str) -> str | None:
+    """One catalog model for the picker's list: 'ready' (built on the Jetson),
+    'downloaded' (on the comma) or None. Asked when a list opens."""
+    from jetlink.openpilot import status
+    return self._read('a model\'s state', lambda: status.model_state(self._parts, ref), lambda error: None)
+
   def reason(self) -> str | None:
     """Why the link the user asked for cannot run: hardwared's offroad alert.
     None with the link off. The files the gadget and the build leave, nothing

@@ -39,6 +39,24 @@ class SelectionTest(OpenpilotTest):
                                 (self.parts.spec, 'load', SimpleNamespace(sha256=spec_sha) if spec_sha else None)):
       self.patch(target, name, return_value=value)
 
+  def test_the_last_model_built_stands_in_while_the_pick_is_not_ready(self):
+    # the user's choice (2026-10-06): it drives until the pick is fetched and built
+    self.configure(model='ResAction', spec_sha='b' * 64, ready=True)
+    self.patch(self.parts.models, 'name_for', return_value='Cinque Terre V3')
+    s = self.jl.status()
+    self.assertEqual((s.ready, s.model, s.standin), (False, 'ResAction', 'Cinque Terre V3'))
+
+  def test_no_stand_in_once_the_pick_is_built_or_with_nothing_built(self):
+    for spec_sha, ready in (('a' * 64, True), ('b' * 64, False), (None, False)):
+      with self.subTest(spec_sha=spec_sha, ready=ready):
+        self.configure(model='ResAction', spec_sha=spec_sha, ready=ready)
+        self.assertIsNone(self.jl.status().standin)
+
+  def test_a_model_the_catalog_does_not_name_stands_in_by_its_sha(self):
+    self.configure(model='ResAction', spec_sha='b' * 64, ready=True)
+    self.patch(self.parts.models, 'name_for', return_value=None)
+    self.assertEqual(self.jl.status().standin, 'b' * 12)
+
   def test_the_link_off_or_unset_is_disabled(self):
     for mode in (None, 'off'):
       with self.subTest(mode=mode):
@@ -476,7 +494,18 @@ class TestIcon(unittest.TestCase):
 class TestTheSnapshot(OpenpilotTest):
   def test_its_fields_are_only_ever_added(self):
     self.assertEqual(Status._fields, ('enabled', 'mode', 'transport', 'present', 'port', 'ready', 'reason', 'progress',
-                                      'model', 'default_model'))
+                                      'model', 'default_model', 'standin'))
+
+  def test_a_model_in_the_list_says_whether_it_is_built_or_downloaded(self):
+    models = [{'name': 'Built', 'ref': 'r1', 'oid': 'b' * 64, 'size': 10},
+              {'name': 'Fetched', 'ref': 'r2', 'oid': 'c' * 64, 'size': 10},
+              {'name': 'Neither', 'ref': 'r3', 'oid': 'd' * 64, 'size': 10},
+              {'name': 'Unresolved', 'ref': 'r4', 'oid': None, 'size': None}]
+    self.op.store['JetlinkSpec'] = {'sha256': 'b' * 64, 'ready': True}
+    with mock.patch.object(self.parts.models, 'model_index', return_value=models), \
+         mock.patch.object(self.parts.models, 'has_file', side_effect=lambda m: m['ref'] == 'r2'):
+      self.assertEqual([self.jl.model_state(r) for r in ('r1', 'r2', 'r3', 'r4', 'unlisted')],
+                       ['ready', 'downloaded', None, None, None])
 
   def test_it_reads_each_file_once(self):
     self.op.set_mode('usb')

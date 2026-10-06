@@ -268,11 +268,98 @@ def test_a_short_download_leaves_nothing_behind(tmp_path):
   assert not list((tmp_path / 'models').iterdir())
 
 
-def test_a_cancelled_download_leaves_nothing_behind(tmp_path):
-  stops = iter([False, True, True])
-  with pytest.raises(RegistryError, match='cancelled'):
-    download(tmp_path, should_stop=lambda: next(stops))
-  assert not list((tmp_path / 'models').iterdir())
+class RangeOpener:
+  """Serves BLOB from the Range a request asks for (206), or whole (200) when
+  `honour` is off; `cut` bytes in, the transfer stalls (a read timeout)."""
+
+  def __init__(self, blob: bytes = BLOB, honour: bool = True, cut: int | None = None):
+    self.blob, self.honour, self.cut = blob, honour, cut
+    self.ranges: list[str | None] = []
+
+  def __call__(self, request, timeout=None, **_):
+    rng = dict(request.header_items()).get('Range') if hasattr(request, 'header_items') else None
+    self.ranges.append(rng)
+    start = int(rng.split('=')[1].rstrip('-')) if rng and self.honour else 0
+    body, cut = self.blob[start:], self.cut
+    response = FakeResponse(body, 206 if rng and self.honour else 200)
+    if cut is not None:
+      read = response.read
+
+      def stalling(n=-1):
+        nonlocal cut
+        if cut <= 0:
+          raise TimeoutError('The read operation timed out')
+        chunk = read(min(n, cut) if n >= 0 else cut)
+        cut -= len(chunk)
+        return chunk
+      response.read = stalling
+    return response
+
+
+@pytest.fixture
+def small_chunks(monkeypatch):
+  from jetlink.registry import lfs
+  monkeypatch.setattr(lfs, 'CHUNK', 1024)
+
+
+def fetch(tmp_path, opener, **kw) -> Path:
+  return lfs_download(HREF, Pointer(BLOB_SHA, len(BLOB)), tmp_path / 'models' / 'model.onnx', opener=opener, **kw)
+
+
+def part_of(tmp_path) -> Path:
+  return tmp_path / 'models' / 'model.onnx.part'
+
+
+def test_a_stopped_download_keeps_its_part_for_the_next_one(tmp_path, small_chunks):
+  # the owner stops a run at ignition; the bytes it got are not thrown away
+  stops = iter([False, True])
+  with pytest.raises(RegistryError, match='stopped'):
+    fetch(tmp_path, RangeOpener(), should_stop=lambda: next(stops))
+  assert part_of(tmp_path).read_bytes() == BLOB[:1024]
+  assert not (tmp_path / 'models' / 'model.onnx').exists()
+
+
+def test_a_stalled_download_carries_on_from_its_part(tmp_path, small_chunks):
+  # 2026-10-06: a 30 s stall 85 s into 755 MB threw the whole download away
+  with pytest.raises(NetworkError, match='timed out'):
+    fetch(tmp_path, RangeOpener(cut=2048))
+  assert part_of(tmp_path).stat().st_size == 2048
+  opener = RangeOpener()
+  path = fetch(tmp_path, opener)
+  assert opener.ranges == ['bytes=2048-']
+  assert path.read_bytes() == BLOB and not part_of(tmp_path).exists()
+
+
+def test_a_server_that_ignores_the_range_starts_over(tmp_path, small_chunks):
+  with pytest.raises(NetworkError):
+    fetch(tmp_path, RangeOpener(cut=1024))
+  path = fetch(tmp_path, RangeOpener(honour=False))
+  assert path.read_bytes() == BLOB
+
+
+def test_a_part_that_was_never_this_model_fails_and_goes(tmp_path):
+  part_of(tmp_path).parent.mkdir(parents=True)
+  part_of(tmp_path).write_bytes(b'x' * 100)
+  with pytest.raises(VerifyError, match='hash'):
+    fetch(tmp_path, RangeOpener())
+  assert not part_of(tmp_path).exists()
+
+
+def test_a_part_longer_than_the_model_is_dropped_and_started_over(tmp_path):
+  part_of(tmp_path).parent.mkdir(parents=True)
+  part_of(tmp_path).write_bytes(BLOB + b'extra')
+  opener = RangeOpener()
+  assert fetch(tmp_path, opener).read_bytes() == BLOB
+  assert opener.ranges == [None]
+
+
+def test_a_whole_part_is_verified_without_asking_again(tmp_path):
+  # a run stopped between the last byte and taking the name
+  part_of(tmp_path).parent.mkdir(parents=True)
+  part_of(tmp_path).write_bytes(BLOB)
+  opener = RangeOpener()
+  assert fetch(tmp_path, opener).read_bytes() == BLOB
+  assert opener.ranges == []
 
 
 def test_a_failed_transfer_is_a_network_error(tmp_path):
