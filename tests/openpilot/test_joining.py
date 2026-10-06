@@ -211,9 +211,10 @@ class JoiningTest(JoiningBase):
   def test_a_model_neither_end_has_is_asked_for_again_slowly_and_said(self):
     # a hello and a gadget bounce every 7 s for a whole drive (2026-10-06):
     # only a provisioning run's download changes the answer
-    from jetlink.client import EngineMissing
-    self.connect_error = EngineMissing('server has no engine for 1563b85f6bd00d9e (have 0 of the model)')
-    with mock.patch.object(joining, 'MODEL_WAIT', 0.05), mock.patch.object(joining, 'REJOIN_DELAY', 30.0):
+    from jetlink.openpilot.link import ModelMissing
+    self.connect_error = ModelMissing('server has no engine for 1563b85f6bd00d9e (have 0 of the model)')
+    self.connect_error.retry_after = 0.05
+    with mock.patch.object(joining, 'REJOIN_DELAY', 30.0):
       s = self._state()
       deadline = time.monotonic() + 5
       while self.connect_calls < 2 and time.monotonic() < deadline:

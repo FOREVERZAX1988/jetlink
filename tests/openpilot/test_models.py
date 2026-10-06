@@ -417,12 +417,12 @@ class TestFetchShippedModel(ModelsTest):
     return mock.patch.object(models, 'DOWNLOAD_RETRY_DELAYS', (0.0,))
 
   def test_nowhere_to_get_it_raises_once_the_attempts_are_spent(self):
-    from jetlink.openpilot import models
     from jetlink.registry.catalog import NetworkError
     with mock.patch('jetlink.registry.lfs.lfs_resolve', return_value=None) as resolve, self.no_waits(), \
          self.assertRaises(NetworkError):
       self.models.fetch_shipped_model()
-    self.assertEqual(resolve.call_count, models.DOWNLOAD_ATTEMPTS * len(self.models.lfs_endpoints()))
+    # the one wait (no_waits) between two attempts
+    self.assertEqual(resolve.call_count, 2 * len(self.models.lfs_endpoints()))
 
   def test_a_failed_transfer_is_tried_again_and_told_of(self):
     # a car's connection stalls; each attempt asks the LFS server for a fresh

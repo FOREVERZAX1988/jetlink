@@ -248,7 +248,7 @@ def test_an_abort_drops_the_link_so_queued_writes_complete(mount, monkeypatch):
     unbound = []
     monkeypatch.setattr(t, 'unbind', lambda: unbound.append(True))
     t._abort_write()
-    assert t._write_aborted and unbound, "the abort must drop the link, not just flag it"
+    assert t._tx_error and unbound, "the abort must drop the link, not just flag it"
     t._ensure_epfiles()
     with pytest.raises(LinkError, match='link abandoned'):
       t.send(P.Msg.PING, 1)
@@ -282,7 +282,7 @@ def test_a_write_that_completes_leaves_the_link_alone(mount, monkeypatch):
     finally:
       os.close(host)
     assert not unbound
-    assert not t._write_aborted
+    assert not t._tx_error
   finally:
     t.close()
 
@@ -653,7 +653,7 @@ def test_a_stuck_borrowed_write_asks_the_owner_to_free_it(mount, tmp_path, monke
   try:
     monkeypatch.setattr(t, 'unbind', lambda *a: pytest.fail('a borrower took the gadget down'))
     t._abort_write()
-    assert t._write_aborted and asked == [True]
+    assert t._tx_error and asked == [True]
   finally:
     monkeypatch.undo()
     t.close()

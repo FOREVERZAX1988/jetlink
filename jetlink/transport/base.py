@@ -79,12 +79,12 @@ class Transport(ABC):
   def send(self, msg_type: int, seq: int, parts=(), flags: int = 0, timeout: float | None = None) -> None:
     """Send one message. `parts` is an iterable of buffers, sent as one message."""
 
-  def try_send(self, msg_type: int, seq: int, parts=(), flags: int = 0, timeout: float | None = None) -> bool:
+  def try_send(self, msg_type: int, seq: int, parts=()) -> bool:
     """send(), unless the link would first make the caller wait for the peer
     to take earlier messages: then False, and nothing was sent. Only a
     transport that queues its writes can tell (FfsTransport); the rest send
     and say True."""
-    self.send(msg_type, seq, parts, flags, timeout)
+    self.send(msg_type, seq, parts)
     return True
 
   @abstractmethod
@@ -184,9 +184,9 @@ class StreamTransport(Transport):
   # likewise; 0 uses the one-byte PADDED rule. See protocol.GADGET_TX_ALIGN.
   tx_align = 0
   rx_align = 0
-  # Largest single write. FunctionFS allocates a contiguous buffer per writev,
-  # so a 4 MB upload chunk hits ENOMEM on a fragmented device where a few
-  # hundred KB of inference does not. 0 means no cap (TCP).
+  # Largest single write, for a transport whose kernel allocates one buffer
+  # per write (FfsTransport sizes its AIO requests with it). 0 means no cap
+  # (TCP).
   write_chunk = 0
 
   def __init__(self, rx_size: int = 1 << 20):

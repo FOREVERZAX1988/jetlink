@@ -187,12 +187,6 @@ def unavailable(parts, record: dict | None) -> str | None:
   return None if parts.warps.built() else NO_WARP
 
 
-def _built_for_the_pick(parts, spec) -> bool:
-  selected = parts.models.selected_model()
-  return (spec is not None and selected is not None and spec.sha256 == selected['oid']
-          and parts.spec.engine_ready_for(spec.sha256))
-
-
 def reason(parts, mode: str) -> str | None:
   """Why the link cannot run, for someone who asked for it only: with it off,
   a device that cannot present the gadget simply does not offer the feature."""
@@ -216,9 +210,14 @@ class Status(NamedTuple):
   standin: str | None = None    # the last model built, which drives while the pick is not ready
 
   @property
+  def runnable(self) -> bool:
+    """Is a big model built to run: the pick, or the stand-in for it?"""
+    return self.ready or self.standin is not None
+
+  @property
   def active_model(self) -> str | None:
-    """model, once it can run."""
-    return self.model if self.ready else None
+    """The big model that runs: the pick once it is built, else the stand-in."""
+    return self.model if self.ready else self.standin
 
   def icon(self, started: bool, model_seen: bool, running_big: bool, state: str) -> str:
     """The chestnut icon's state for the link: a ChestnutState value.
@@ -234,7 +233,7 @@ class Status(NamedTuple):
         return 'disconnected'
       if stage and stage != 'ready':
         return 'failed' if stage == 'failed' else 'loading'
-      return 'ready' if self.ready else 'uncompiled'
+      return 'ready' if self.runnable else 'uncompiled'
 
     if model_seen and running_big:
       return 'active'
@@ -247,19 +246,11 @@ class Status(NamedTuple):
     # nothing is in control, so a driver who stays engaged keeps the small model
     if state == 'ready':
       return 'waiting'
-    if not self.ready:
+    if not self.runnable:
       return 'uncompiled'
     if state == 'running':
       return 'active'
     return 'failed'
-
-
-def _standin(parts, spec) -> str | None:
-  """The name of the model that drives while the pick is not ready: the last
-  one the server built, `spec` (link.open_link). Records only."""
-  if spec is None or not parts.spec.engine_ready_for(spec.sha256):
-    return None
-  return parts.models.name_for(spec.sha256) or spec.sha256[:12]
 
 
 def read(parts, mode: str) -> Status:
@@ -267,8 +258,11 @@ def read(parts, mode: str) -> Status:
   record, live = owner_record()
   enabled = parts.enabled(mode)
   reason = unavailable(parts, record) if enabled else None
-  spec = parts.spec.load() if enabled and reason is None else None
-  ready = spec is not None and _built_for_the_pick(parts, spec)
+  # the last model the server built; the pick's, or the stand-in that drives
+  # until the pick is built (link.open_link)
+  built = parts.spec.ready_spec() if enabled and reason is None else None
+  selected = parts.models.selected_model() if built is not None else None
+  ready = built is not None and selected is not None and built.sha256 == selected['oid']
   return Status(
     enabled=enabled,
     mode=mode,
@@ -280,7 +274,7 @@ def read(parts, mode: str) -> Status:
     progress=parts.progress.read(),
     model=parts.models.selected_model_name(),
     default_model=parts.models.default_model_name(),
-    standin=None if ready else _standin(parts, spec),
+    standin=parts.models.name_for(built.sha256) if built is not None and not ready else None,
   )
 
 

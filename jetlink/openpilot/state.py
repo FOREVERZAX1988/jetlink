@@ -27,11 +27,12 @@ class SpecRecord:
     value = self.op.get(self.op.keys.spec)
     return value if isinstance(value, dict) else None
 
-  def load(self):
-    """The recorded ModelSpec, or None if there is not a usable one."""
+  def load(self, d: dict | None = None):
+    """The recorded ModelSpec, or None if there is not a usable one. `d` is
+    the record, when the caller has read it already."""
     from jetlink.spec import ModelSpec
     try:
-      d = self._raw()
+      d = self._raw() if d is None else d
       return ModelSpec.from_dict(d) if d else None
     except Exception:
       self.op.log.exception("jetlink: cached spec is unreadable")
@@ -51,7 +52,7 @@ class SpecRecord:
     now: what drives while a new pick is still being fetched or built. None
     without one."""
     d = self._raw()
-    return self.load() if d is not None and d.get('ready') is True else None
+    return self.load(d) if d is not None and d.get('ready') is True else None
 
   def clear_ready(self, sha256: str | None = None) -> None:
     """The engine is no longer known to be built. The spec stays: it still

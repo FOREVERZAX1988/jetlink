@@ -43,7 +43,7 @@ class FakeAio:
   def outstanding(self) -> int:
     return len(self.done) + len(self.held)
 
-  def submit(self, requests) -> int:
+  def submit(self, first_token: int, requests) -> int:
     assert not self.closed, 'submit after close'
     assert len(requests) <= self.depth
     assert self.outstanding + len(requests) <= self.depth, 'more requests in flight than the context holds'
@@ -51,7 +51,7 @@ class FakeAio:
     if self.fail:
       err = self.fail.popleft()
       raise OSError(err, os.strerror(err))
-    for token, spans in requests:
+    for token, spans in enumerate(requests, first_token):
       data = b''.join(ctypes.string_at(addr, n) for addr, n in spans)
       self.requests.append(len(data))
       if self.fd is None:

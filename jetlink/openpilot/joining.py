@@ -55,8 +55,6 @@ from jetlink.transport.priority import background_thread
 # after a join fails or the large model dies mid-drive. Long enough not to
 # thrash a booting Jetson, short enough to catch one that finished a moment later
 REJOIN_DELAY = 5.0
-# between joins while neither end has the picked model and no other is built
-MODEL_WAIT = 60.0
 # doubled per consecutive failure, reset by a join that lasted STABLE_SECONDS.
 # A link that dies on its first frame every time must not cost a swap, a
 # demote and an alert every few seconds
@@ -562,13 +560,11 @@ class JoiningModelState:
       except Exception as e:
         # expected while the Jetson boots. Not exception(): a stack trace every
         # 5 s for the first minute of every drive is noise
-        delay = REJOIN_DELAY
-        if type(e).__name__ == 'EngineMissing':
-          # neither end has the picked model and nothing else is built: only a
-          # provisioning run's download changes that, so asking every 5 s is
-          # a drive of hellos for nothing
-          delay = MODEL_WAIT
-          self._report('connect', 'big model not downloaded yet')
+        # a failure that knows when it is worth asking again says so
+        # (link.ModelMissing), and what the panel should show meanwhile
+        delay = getattr(e, 'retry_after', REJOIN_DELAY)
+        if waiting := getattr(e, 'waiting', None):
+          self._report('connect', waiting)
         self._log.warning("jetlink: not joined yet (%s), retrying in %.0fs", e, delay)
         if self._stop.wait(delay):
           return

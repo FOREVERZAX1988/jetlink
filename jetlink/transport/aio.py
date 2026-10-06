@@ -87,12 +87,12 @@ class Aio:
   """A kernel AIO context of `depth` iocbs writing to `fd`, used from one
   thread at a time.
 
-  submit() takes requests as (token, [(address, length), ...]) and returns how
-  many the kernel queued; the kernel has copied those bytes, so the caller may
-  reuse its buffers at once. reap() returns (token, result) per finished
-  request, result being bytes written or a negative errno. The iocb and iovec
-  arrays are reused across submits: the kernel copies both before io_submit
-  returns.
+  submit() takes requests as [(address, length), ...] each, tokens counting
+  up from the one it is given, and returns how many the kernel queued; the
+  kernel has copied those bytes, so the caller may reuse its buffers at once.
+  reap() returns (token, result) per finished request, result being bytes
+  written or a negative errno. The iocb and iovec arrays are reused across
+  submits: the kernel copies both before io_submit returns.
   """
 
   def __init__(self, fd: int, depth: int):
@@ -112,6 +112,13 @@ class Aio:
     for i, cb in enumerate(self._iocbs):
       # everything but the token, the iovec count and the iovecs is fixed
       cb.opcode, cb.fildes, cb.buf = IOCB_CMD_PWRITEV, fd, iovecs + i * IOVECS * size
+    # The per-frame fields as 64-bit words: a ctypes field set costs a proxy
+    # object, ~4 a request, 58 requests a frame on modeld's frame thread. iocb
+    # word 0 is the token and 4 the iovec count; an iovec is (address, length);
+    # an event is (token, iocb, result, result2).
+    self._iocb_words = memoryview(self._iocbs).cast('B').cast('Q')
+    self._iovec_words = memoryview(self._iovecs).cast('B').cast('Q')
+    self._event_words = memoryview(self._events).cast('B').cast('q')
     self._events = (_Event * depth)()
     self._timeout = _Timespec()
 
@@ -124,23 +131,23 @@ class Aio:
 
   address = staticmethod(address)
 
-  def submit(self, requests: list[tuple[int, list[tuple[int, int]]]]) -> int:
-    """Queue requests, in order. Raises OSError only when the kernel took none
-    of them; a short count means the next one failed, and nothing of it, or of
-    any after it, was queued."""
+  def submit(self, first_token: int, requests: list[list[tuple[int, int]]]) -> int:
+    """Queue requests, in order, as tokens first_token, first_token + 1, ...
+    Raises OSError only when the kernel took none of them; a short count means
+    the next one failed, and nothing of it, or of any after it, was queued."""
     if not requests:
       return 0
     if len(requests) > self.depth:
       raise ValueError(f'{len(requests)} requests for a context of {self.depth}')
-    for i, (token, spans) in enumerate(requests):
+    cb, iov = self._iocb_words, self._iovec_words
+    for i, spans in enumerate(requests):
       if len(spans) > IOVECS:
         raise ValueError(f'a request gathers {len(spans)} buffers, more than {IOVECS}')
-      first = i * IOVECS
-      for j, (addr, n) in enumerate(spans):
-        iov = self._iovecs[first + j]
-        iov.base, iov.len = addr, n
-      cb = self._iocbs[i]
-      cb.data, cb.nbytes = token, len(spans)   # nbytes counts iovecs for PWRITEV
+      k = 2 * IOVECS * i
+      for addr, n in spans:
+        iov[k], iov[k + 1] = addr, n
+        k += 2
+      cb[8 * i], cb[8 * i + 4] = first_token + i, len(spans)   # nbytes counts iovecs for PWRITEV
     return self._call(self._submit, self._ctx, ctypes.c_long(len(requests)), self._ptrs)
 
   def reap(self, min_nr: int = 0, timeout: float | None = 0.0) -> list[tuple[int, int]]:
@@ -166,7 +173,8 @@ class Aio:
         if end is not None and time.monotonic() >= end:
           return []
         continue
-      return [(self._events[i].data, self._events[i].res) for i in range(n)]
+      ev = self._event_words
+      return [(ev[4 * i], ev[4 * i + 2]) for i in range(n)]
 
   def close(self) -> None:
     """Destroy the context. The kernel cancels what is still queued and waits,

@@ -86,6 +86,8 @@ WRITE_TIMEOUT = 15.0
 QUEUED_LIMIT = 1 << 20
 # AIO requests in flight at once: QUEUED_LIMIT in write_chunk requests
 AIO_DEPTH = QUEUED_LIMIT // (8 << 10)
+# what each message adds to the session's maxima (FfsTransport._count)
+_MAXIMA = (('submit_ms', 'max_submit_ms'), ('wait_ms', 'max_wait_ms'), ('backlog_ms', 'max_backlog_ms'))
 # How long closing waits for queued writes to reach the host (a LEAVE) before
 # it drops the gadget to complete them, and how long it then waits for that.
 # An endpoint file whose request is still queued stays open in the kernel, and
@@ -254,7 +256,6 @@ class FfsTransport(StreamTransport):
     self._closing = False
     self._had_host = False
     self._open_lock = threading.Lock()
-    self._write_aborted = False
     self.last_send: dict = {}
     self.send_totals: dict = {}
     self._reader: threading.Thread | None = None
@@ -404,7 +405,6 @@ class FfsTransport(StreamTransport):
       self._cv.notify_all()
     self.rx.start = self.rx.end = 0
     self._ready_deadline = None
-    self._write_aborted = False
     self._tx_error = None
     time.sleep(REBIND_SETTLE)
     self.bind(udc)
@@ -473,36 +473,16 @@ class FfsTransport(StreamTransport):
       _close_quietly(self._state_fd)
       self._state_fd = -1
 
-  def _shrink(self, attr: str) -> bool:
-    """Halve a transfer size after the kernel refused to allocate for one.
-
-    ENOMEM here is contiguous memory, so it tracks fragmentation: a size that
-    worked at boot can fail an hour in, which is what a 1.7 GB model does to a
-    comma. Slow beats broken, and both directions need it.
-    """
-    floor = (self.packet_size or P.USB_MAX_PACKET) * 16
-    current = getattr(self, attr)
-    if current <= floor:
-      return False
-    setattr(self, attr, max(floor, current // 2))
-    if attr == '_read_size':
-      self._free.clear()   # pooled buffers are the old, larger size now
-    log.warning("jetlink: gadget could not allocate for %s, dropping to %d KB",
-                attr, getattr(self, attr) >> 10)
-    return True
-
-  def _shrink_write(self) -> bool:
-    return self._shrink('write_chunk')
-
   def _abort_write(self, why: str = 'USB send exceeded its deadline') -> None:
     """Drop the gadget so the writes the host is not taking complete, with
     ESHUTDOWN, and the link with them. Nothing else completes a queued
     FunctionFS request (see WRITE_TIMEOUT), and one left queued holds its
     endpoint file open in the kernel under the next user of the gadget.
     """
-    self._write_aborted = True
     if self._tx_error is None:
       self._tx_error = f'{why}; link abandoned'
+    self.last_send['aborted'] = True
+    self.send_totals['aborts'] = self.send_totals.get('aborts', 0) + 1
     log.warning("jetlink: %s, dropping the gadget to free the queued writes", why)
     if self._bounce is None:
       return self.unbind()
@@ -517,12 +497,12 @@ class FfsTransport(StreamTransport):
 
   # -- writes: AIO ---------------------------------------------------------
 
-  def try_send(self, msg_type: int, seq: int, parts=(), flags: int = 0, timeout: float | None = None) -> bool:
+  def try_send(self, msg_type: int, seq: int, parts=()) -> bool:
     """Queue one message unless that means waiting for the host: False, and
     nothing sent, while writes it has not taken leave no room for this one
     (QUEUED_LIMIT). A frame waits for nothing here; the caller holds instead
     (JetlinkModelState)."""
-    bufs = self._frame(msg_type, seq, parts, flags)
+    bufs = self._frame(msg_type, seq, parts, 0)
     self._ensure_epfiles()
     return self._queue(bufs, None, wait=False)
 
@@ -539,10 +519,8 @@ class FfsTransport(StreamTransport):
     False says the message was not sent."""
     started = time.monotonic()
     deadline = started + WRITE_TIMEOUT if deadline is None else deadline
-    # the views in `bufs` keep these addresses valid until io_submit returns
-    spans = [self._aio.address(b) for b in bufs if b.nbytes] if self._aio is not None else []
-    total = sum(n for _, n in spans)
-    stats = self.last_send = {'bytes': total, 'requests': 0, 'enomem': 0, 'submit_ms': 0.0, 'wait_ms': 0.0,
+    total = sum(b.nbytes for b in bufs)
+    stats = self.last_send = {'bytes': total, 'requests': 0, 'submit_ms': 0.0, 'wait_ms': 0.0,
                               'backlog_kb': 0, 'backlog_ms': 0.0, 'chunk': self.write_chunk,
                               'refused': False, 'aborted': False, 'errno': None}
     try:
@@ -556,81 +534,78 @@ class FfsTransport(StreamTransport):
           # what the host had not taken when this message came: the measure
           # of a host falling behind, which nothing else on this end can see
           stats['backlog_kb'] = self._inflight_bytes >> 10
-          stats['backlog_ms'] = (started - min(at for _, at in self._inflight.values())) * 1e3
-        if not wait and self._inflight_bytes and self._inflight_bytes + total > QUEUED_LIMIT:
-          stats['refused'] = True
-          return False
-        self._submit_message(spans, total, deadline, stats)
+          stats['backlog_ms'] = (started - self._oldest()) * 1e3
+          if not wait and self._inflight_bytes + total > QUEUED_LIMIT:
+            stats['refused'] = True
+            return False
+        # the views in `bufs` keep these addresses valid until io_submit returns
+        spans = [self._aio.address(b) for b in bufs if b.nbytes]
+        self._submit_message(_requests(spans, self.write_chunk), deadline, stats)
         return True
     finally:
       self._count(stats)
 
-  def _submit_message(self, spans: list[tuple[int, int]], total: int, deadline: float, stats: dict) -> None:
-    queued = 0
-    while queued < total:
+  def _oldest(self) -> float:
+    """When the oldest write still queued went in: the first left, as they go
+    in in order."""
+    return next(iter(self._inflight.values()))[1]
+
+  def _submit_message(self, requests: list[tuple[int, list]], deadline: float, stats: dict) -> None:
+    """io_submit the requests as room allows. A failure past the first leaves
+    the host half a message, which only goes away with the link, so it drops
+    the gadget too."""
+    done = 0
+    while done < len(requests):
       room_bytes = QUEUED_LIMIT - self._inflight_bytes
-      room = self._aio.depth - len(self._inflight)
-      batch, size = [], 0
-      for nbytes, req in _requests(spans, queued, self.write_chunk):
-        if len(batch) == room or size + nbytes > room_bytes:
-          break
-        batch.append((nbytes, req))
-        size += nbytes
-      if not batch:
-        self._wait_for_room(deadline, stats, torn=queued > 0)
+      end, size = done, 0
+      limit = min(len(requests), done + self._aio.depth - len(self._inflight))
+      while end < limit and size + requests[end][0] <= room_bytes:
+        size += requests[end][0]
+        end += 1
+      if end == done:
+        self._wait_for_room(deadline, stats)
         continue
-      queued += self._submit(batch, deadline, stats, torn=queued > 0)
+      done += self._submit(requests[done:end], deadline, stats, torn=done > 0)
 
   def _submit(self, batch: list[tuple[int, list]], deadline: float, stats: dict, torn: bool) -> int:
-    """io_submit `batch`; the bytes it queued. 0 when it queued nothing and
-    the message may still go: a retry, or a request size halved after ENOMEM.
-    A failure past the first byte of a message leaves the host half a message,
-    which only goes away with the link, so it drops the gadget too."""
-    tokens = range(self._serial + 1, self._serial + 1 + len(batch))
-    self._serial += len(batch)
+    """io_submit `batch`; how many requests the kernel queued, 0 when it took
+    none and the message may still go."""
+    first = self._serial + 1
     t0 = time.monotonic()
     try:
-      n = self._aio.submit([(token, req) for token, (_, req) in zip(tokens, batch, strict=True)])
-      failure = OSError(errno.EAGAIN, 'io_submit queued nothing')
+      n = self._aio.submit(first, [spans for _, spans in batch])
     except OSError as e:
-      n, failure = 0, e
-    now = time.monotonic()
-    stats['submit_ms'] += (now - t0) * 1e3
-    if n:
+      failure = e
+    else:
+      now = time.monotonic()
+      stats['submit_ms'] += (now - t0) * 1e3
       stats['requests'] += n
-      for token, (nbytes, _) in zip(tokens[:n], batch[:n], strict=True):
+      self._serial += n
+      for token, (nbytes, _) in enumerate(batch[:n], first):
         self._inflight[token] = (nbytes, now)
         self._inflight_bytes += nbytes
       self._had_host = True
-      return sum(nbytes for nbytes, _ in batch[:n])
+      return n
     stats['errno'] = failure.errno
-    if now >= deadline:
+    if time.monotonic() >= deadline:
       raise self._fail_send(f"gadget write could not be queued in time: {failure}", torn) from failure
     if failure.errno == errno.EINTR:
       return 0   # nothing was queued, so nothing repeats
     if failure.errno == errno.EAGAIN and self._inflight:
-      self._wait_for_room(deadline, stats, torn)
+      self._wait_for_room(deadline, stats)
       return 0
-    if failure.errno == errno.ENOMEM:
-      stats['enomem'] += 1
-      if self._shrink_write():
-        return 0
     if failure.errno in _NOT_READY and not torn and not self._had_host and self._wait_for_host_ready():
       return 0
     raise self._fail_send(f"gadget write failed: {failure}{self._udc_note()}", torn) from failure
 
-  def _wait_for_room(self, deadline: float, stats: dict, torn: bool) -> None:
+  def _wait_for_room(self, deadline: float, stats: dict) -> None:
     """Wait for the host to take queued writes, until `deadline`."""
     now = time.monotonic()
     if now >= deadline:
-      stats['aborted'] = True
-      oldest = min((at for _, at in self._inflight.values()), default=now)
-      self._abort_write(f'the host took no USB data for {now - oldest:.2f} s')
+      self._abort_write(f'the host took no USB data for {now - self._oldest():.2f} s')
       raise LinkError(self._tx_error)
-    left = deadline - now
-    t0 = time.monotonic()
-    self._collect(1, left)
-    stats['wait_ms'] += (time.monotonic() - t0) * 1e3
+    self._collect(1, deadline - now)
+    stats['wait_ms'] += (time.monotonic() - now) * 1e3
     if self._tx_error is not None:
       raise LinkError(self._tx_error)
 
@@ -660,36 +635,31 @@ class FfsTransport(StreamTransport):
     """Session totals, which keep a slow send between the 1 Hz log samples."""
     totals = self.send_totals
     totals['messages'] = totals.get('messages', 0) + 1
-    for key in ('bytes', 'requests', 'enomem'):
+    for key in ('bytes', 'requests', 'refused'):
       totals[key] = totals.get(key, 0) + stats[key]
-    totals['refused'] = totals.get('refused', 0) + int(stats['refused'])
-    totals['aborts'] = totals.get('aborts', 0) + int(stats['aborted'])
-    for key in ('submit_ms', 'wait_ms', 'backlog_ms'):
-      totals[f'max_{key}'] = max(totals.get(f'max_{key}', 0.0), stats[key])
+    for key, top in _MAXIMA:
+      totals[top] = max(totals.get(top, 0.0), stats[key])
 
-  def _settle_writes(self, flush: float = CLOSE_FLUSH) -> None:
-    """Before the endpoint files go: give queued writes `flush` s to reach the
-    host (a LEAVE), drop the gadget to complete the rest, and destroy the AIO
-    context once nothing is left in it. io_destroy waits, uninterruptibly, for
-    what it cancels, and FunctionFS cannot cancel a request while the bus is
-    suspended (dwc3 refuses in LPM), so it is only called on an empty context;
-    otherwise the context is left to the process."""
+  def _settle_writes(self) -> None:
+    """Before the endpoint files go: give queued writes CLOSE_FLUSH to reach
+    the host (a LEAVE), drop the gadget to complete the rest, and destroy the
+    AIO context once nothing is left in it. io_destroy waits, uninterruptibly,
+    for what it cancels, and FunctionFS cannot cancel a request while the bus
+    is suspended (dwc3 refuses in LPM), so it is only called on an empty
+    context; otherwise the context is left to the process."""
     if self._aio is None:
       return
-    if not self._tx_lock.acquire(timeout=flush):
+    if not self._tx_lock.acquire(timeout=CLOSE_FLUSH):
       # a send is waiting for room the host is not making; this frees it
       self._abort_write('closing a link whose host stopped taking USB data')
       if not self._tx_lock.acquire(timeout=ABORT_DRAIN):
         log.error("jetlink: a send still holds the gadget's writes; leaving their AIO context to the process")
         return
     try:
-      for wait, then_abort in ((flush, True), (ABORT_DRAIN, False)):
-        end = time.monotonic() + wait
-        while self._inflight and time.monotonic() < end:
-          self._collect(1, end - time.monotonic())
-        if not self._inflight or not then_abort:
-          break
+      self._drain(CLOSE_FLUSH)
+      if self._inflight:
         self._abort_write(f'{len(self._inflight)} USB writes still queued at close')
+        self._drain(ABORT_DRAIN)
       if self._inflight:
         log.error("jetlink: %d USB writes never completed; leaving their AIO context to the process",
                   len(self._inflight))
@@ -700,6 +670,11 @@ class FfsTransport(StreamTransport):
       self._inflight_bytes = 0
     finally:
       self._tx_lock.release()
+
+  def _drain(self, seconds: float) -> None:
+    end = time.monotonic() + seconds
+    while self._inflight and (left := end - time.monotonic()) > 0:
+      self._collect(1, left)
 
   # -- the reader thread ---------------------------------------------------
 
@@ -728,7 +703,7 @@ class FfsTransport(StreamTransport):
       pass
 
   def _read_loop(self) -> None:
-    # As in _write: an interrupted read drops the packets it already took. This
+    # See _IO_SIGNALS: an interrupted read drops the packets it already took. This
     # thread handles no signals, so mask them for its whole life.
     signal.pthread_sigmask(signal.SIG_BLOCK, _IO_SIGNALS)
     self._widen_affinity()
@@ -765,8 +740,6 @@ class FfsTransport(StreamTransport):
         if self._closing:
           return
         if e.errno in _NOT_READY and self._wait_for_host_ready():
-          continue
-        if e.errno == errno.ENOMEM and self._shrink('_read_size'):
           continue
         self._fail(f"gadget read failed: {e}{self._udc_note()}")
         return
@@ -893,20 +866,16 @@ def _open_aio(fd: int, depth: int):
   return Aio(fd, depth)
 
 
-def _requests(spans: list[tuple[int, int]], start: int, size: int) -> list[tuple[int, list[tuple[int, int]]]]:
-  """The message from byte `start` on, as requests of `size` bytes: (bytes,
-  [(address, length), ...]) each, gathered from `spans` without copying. The
-  message is a whole number of 16 KB bursts and `size` divides 16 KB, so every
-  request is `size` bytes."""
+def _requests(spans: list[tuple[int, int]], size: int) -> list[tuple[int, list[tuple[int, int]]]]:
+  """The message as requests of `size` bytes: (bytes, [(address, length),
+  ...]) each, gathered from `spans` without copying. The message is a whole
+  number of 16 KB bursts and `size` divides 16 KB, so every request is `size`
+  bytes. Addresses, not memoryviews (base.take): each view would cost an
+  address() call per request."""
   out: list[tuple[int, list[tuple[int, int]]]] = []
   req: list[tuple[int, int]] = []
-  filled = pos = 0
+  filled = 0
   for addr, n in spans:
-    if pos + n <= start:
-      pos += n
-      continue
-    skip = max(0, start - pos)
-    addr, n, pos = addr + skip, n - skip, pos + n
     while n:
       take = min(n, size - filled)
       req.append((addr, take))

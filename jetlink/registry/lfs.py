@@ -341,7 +341,9 @@ def _resume_from(part: Path, size: int, digest) -> int:
   if have > size:
     part.unlink(missing_ok=True)
     return 0
+  buf = bytearray(CHUNK)
+  view = memoryview(buf)
   with open(part, 'rb') as f:
-    while chunk := f.read(CHUNK):
-      digest.update(chunk)
+    while n := f.readinto(buf):
+      digest.update(view[:n])
   return have

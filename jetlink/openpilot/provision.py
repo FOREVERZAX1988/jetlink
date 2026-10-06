@@ -95,15 +95,18 @@ class ProvisioningRun:
     if self.fetch_failed:
       return None
     parts = self.parts
-    size = (parts.models.selected_model() or {}).get('size') or 0
+    model = parts.models.selected_model() or {}
+    size = model.get('size') or 0
+    got = 0.0
 
     def progress(frac: float) -> None:
+      nonlocal got
+      got = frac
       parts.progress.report('download', frac, f"downloading {int(frac * size) >> 20} of {size >> 20} MB" if size
                             else 'downloading')
 
     def retrying(error, delay: float) -> None:
-      frac = (parts.progress.read() or {}).get('frac', 0.0)
-      parts.progress.report('download', frac, f"download stalled, retrying in {delay:.0f} s")
+      parts.progress.report('download', got, f"download stalled, retrying in {delay:.0f} s")
 
     try:
       path = parts.models.fetch_shipped_model(progress=progress, should_stop=lambda: self.stop, retrying=retrying)
@@ -116,6 +119,8 @@ class ProvisioningRun:
         parts.progress.report('failed', 1.0, 'download failed, retrying later')
       self.fetch_failed = True
       return None
+    if path is not None and model.get('oid'):
+      link.remember_hash(path, model['oid'])   # the download proved it; the upload need not read it again
     return path
 
   def needs_download(self) -> bool:
@@ -133,9 +138,10 @@ class ProvisioningRun:
     return parts.models.shipped_model_path() is None
 
   def provision(self) -> bool:
-    """Make the Jetson ready for the selected model; a host is attached. The
-    file is fetched only when the server asks for the bytes: the Jetson keeps
-    its own copy of every ONNX and never prunes it."""
+    """Make the Jetson ready for the selected model; a host is attached. run()
+    has fetched the file already unless the spec record said the model was
+    built; a server that lost it since asks for the bytes, and they are
+    fetched then."""
     from jetlink.client import EngineMissing
     parts = self.parts
     entry = parts.models.selected_model()

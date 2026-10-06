@@ -374,7 +374,7 @@ class BuildingOnroad(OpenpilotTest):
     self.ensure.side_effect = EngineMissing('no engine')
     self.link.client = self.client
     with mock.patch.object(self.parts.spec, 'clear_ready') as cleared:
-      with self.assertRaises(EngineMissing):
+      with self.assertRaises(link.ModelMissing):
         link.open_link(self.parts, self.link)
     cleared.assert_called_once_with(self.ensure.call_args.args[2])
     self.client.close.assert_not_called()

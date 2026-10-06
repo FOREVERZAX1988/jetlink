@@ -54,8 +54,16 @@ class SelectionTest(OpenpilotTest):
 
   def test_a_model_the_catalog_does_not_name_stands_in_by_its_sha(self):
     self.configure(model='ResAction', spec_sha='b' * 64, ready=True)
-    self.patch(self.parts.models, 'name_for', return_value=None)
-    self.assertEqual(self.jl.status().standin, 'b' * 12)
+    self.assertEqual(self.jl.status().standin, 'b' * 16)
+
+  def test_a_stand_in_is_what_runs_and_lights_the_icon(self):
+    # not "uncompiled": the last model built drives, so the big model is there
+    self.configure(model='ResAction', spec_sha='b' * 64, ready=True)
+    self.patch(self.parts.models, 'name_for', return_value='Cinque Terre V3')
+    s = self.jl.status()
+    self.assertEqual(s.active_model, 'Cinque Terre V3')
+    self.assertEqual(s._replace(present=True).icon(False, False, False, 'none'), 'ready')
+    self.assertEqual(s._replace(present=True).icon(True, True, False, 'ready'), 'waiting')
 
   def test_the_link_off_or_unset_is_disabled(self):
     for mode in (None, 'off'):
@@ -514,9 +522,9 @@ class TestTheSnapshot(OpenpilotTest):
          mock.patch.object(settings, 'mode', wraps=settings.mode) as mode, \
          mock.patch.object(gadget, 'link_kind', wraps=gadget.link_kind) as kind, \
          mock.patch.object(gadget, 'gadget_error', return_value=None) as error, \
-         mock.patch.object(self.parts.spec, 'load', return_value=None) as load:
+         mock.patch.object(self.parts.spec, '_raw', wraps=self.parts.spec._raw) as spec:
       self.jl.status()
-    self.assertEqual((mode.call_count, error.call_count, load.call_count), (1, 1, 1))
+    self.assertEqual((mode.call_count, error.call_count, spec.call_count), (1, 1, 1))
     # the transport's fallback is the setting already read, not a second read
     kind.assert_called_once_with('usb')
 

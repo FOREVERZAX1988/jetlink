@@ -464,14 +464,14 @@ class TestTelemetry(ModelStateTest):
   def test_send_diagnostics_include_session_maxima_without_extra_log_frequency(self):
     client = FakeClient()
     client.last_state = {'gpu_temp': 51.0}
-    client.t.last_send = {'elapsed_ms': 3.0, 'errno': None}
-    client.t.send_totals = {'messages': 100, 'max_elapsed_ms': 19.0}
+    client.t.last_send = {'submit_ms': 3.0, 'errno': None}
+    client.t.send_totals = {'messages': 100, 'max_submit_ms': 19.0}
     self.run_frames(STATEFUL, n=6, client=client)
     sends = [fields for name, fields in self.events if name == 'jetlinkSend']
     self.assertEqual(len(sends), 1)
     self.assertEqual(sends[0]['nonce'], 'test-session')
-    self.assertEqual(sends[0]['elapsed_ms'], 3.0)
-    self.assertEqual(sends[0]['totals']['max_elapsed_ms'], 19.0)
+    self.assertEqual(sends[0]['submit_ms'], 3.0)
+    self.assertEqual(sends[0]['totals']['max_submit_ms'], 19.0)
     client.t.send_totals['messages'] += 1
     self.assertEqual(sends[0]['totals']['messages'], 100)
 

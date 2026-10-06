@@ -36,7 +36,7 @@ def test_requests_reach_the_fd_in_order_and_are_reaped():
   try:
     payload = os.urandom(3000)
     addr, _ = address(payload)
-    assert aio.submit([(1, [(addr, 1000)]), (2, [(addr + 1000, 1500), (addr + 2500, 500)])]) == 2
+    assert aio.submit(1, [[(addr, 1000)], [(addr + 1000, 1500), (addr + 2500, 500)]]) == 2
     assert sorted(aio.reap(2, 1.0)) == [(1, 1000), (2, 2000)]
     assert os.read(r, 4000) == payload
     assert aio.reap(0, 0.0) == []
@@ -53,6 +53,6 @@ def test_a_bad_fd_fails_the_submit_and_queues_nothing():
   try:
     addr, _ = address(b'x' * 16)
     with pytest.raises(OSError):
-      aio.submit([(1, [(addr, 16)])])
+      aio.submit(1, [[(addr, 16)]])
   finally:
     aio.close()

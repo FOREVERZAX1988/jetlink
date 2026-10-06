@@ -243,8 +243,9 @@ def test_lfs_resolve_is_none_when_the_server_lacks_it_or_is_down():
 
 # --- download ----------------------------------------------------------------
 
-def download(tmp_path, blob: bytes = BLOB, oid: str = BLOB_SHA, size: int = len(BLOB), **kw) -> Path:
-  return lfs_download(HREF, Pointer(oid, size), tmp_path / 'models' / 'model.onnx', opener=FakeOpener({HREF: blob}), **kw)
+def download(tmp_path, blob: bytes = BLOB, oid: str = BLOB_SHA, size: int = len(BLOB), opener=None, **kw) -> Path:
+  return lfs_download(HREF, Pointer(oid, size), tmp_path / 'models' / 'model.onnx',
+                      opener=opener or FakeOpener({HREF: blob}), **kw)
 
 
 def test_a_download_takes_its_name_only_once_it_verifies(tmp_path):
@@ -302,10 +303,6 @@ def small_chunks(monkeypatch):
   monkeypatch.setattr(lfs, 'CHUNK', 1024)
 
 
-def fetch(tmp_path, opener, **kw) -> Path:
-  return lfs_download(HREF, Pointer(BLOB_SHA, len(BLOB)), tmp_path / 'models' / 'model.onnx', opener=opener, **kw)
-
-
 def part_of(tmp_path) -> Path:
   return tmp_path / 'models' / 'model.onnx.part'
 
@@ -314,7 +311,7 @@ def test_a_stopped_download_keeps_its_part_for_the_next_one(tmp_path, small_chun
   # the owner stops a run at ignition; the bytes it got are not thrown away
   stops = iter([False, True])
   with pytest.raises(RegistryError, match='stopped'):
-    fetch(tmp_path, RangeOpener(), should_stop=lambda: next(stops))
+    download(tmp_path, opener=RangeOpener(), should_stop=lambda: next(stops))
   assert part_of(tmp_path).read_bytes() == BLOB[:1024]
   assert not (tmp_path / 'models' / 'model.onnx').exists()
 
@@ -322,18 +319,18 @@ def test_a_stopped_download_keeps_its_part_for_the_next_one(tmp_path, small_chun
 def test_a_stalled_download_carries_on_from_its_part(tmp_path, small_chunks):
   # 2026-10-06: a 30 s stall 85 s into 755 MB threw the whole download away
   with pytest.raises(NetworkError, match='timed out'):
-    fetch(tmp_path, RangeOpener(cut=2048))
+    download(tmp_path, opener=RangeOpener(cut=2048))
   assert part_of(tmp_path).stat().st_size == 2048
   opener = RangeOpener()
-  path = fetch(tmp_path, opener)
+  path = download(tmp_path, opener=opener)
   assert opener.ranges == ['bytes=2048-']
   assert path.read_bytes() == BLOB and not part_of(tmp_path).exists()
 
 
 def test_a_server_that_ignores_the_range_starts_over(tmp_path, small_chunks):
   with pytest.raises(NetworkError):
-    fetch(tmp_path, RangeOpener(cut=1024))
-  path = fetch(tmp_path, RangeOpener(honour=False))
+    download(tmp_path, opener=RangeOpener(cut=1024))
+  path = download(tmp_path, opener=RangeOpener(honour=False))
   assert path.read_bytes() == BLOB
 
 
@@ -341,7 +338,7 @@ def test_a_part_that_was_never_this_model_fails_and_goes(tmp_path):
   part_of(tmp_path).parent.mkdir(parents=True)
   part_of(tmp_path).write_bytes(b'x' * 100)
   with pytest.raises(VerifyError, match='hash'):
-    fetch(tmp_path, RangeOpener())
+    download(tmp_path, opener=RangeOpener())
   assert not part_of(tmp_path).exists()
 
 
@@ -349,7 +346,7 @@ def test_a_part_longer_than_the_model_is_dropped_and_started_over(tmp_path):
   part_of(tmp_path).parent.mkdir(parents=True)
   part_of(tmp_path).write_bytes(BLOB + b'extra')
   opener = RangeOpener()
-  assert fetch(tmp_path, opener).read_bytes() == BLOB
+  assert download(tmp_path, opener=opener).read_bytes() == BLOB
   assert opener.ranges == [None]
 
 
@@ -358,7 +355,7 @@ def test_a_whole_part_is_verified_without_asking_again(tmp_path):
   part_of(tmp_path).parent.mkdir(parents=True)
   part_of(tmp_path).write_bytes(BLOB)
   opener = RangeOpener()
-  assert fetch(tmp_path, opener).read_bytes() == BLOB
+  assert download(tmp_path, opener=opener).read_bytes() == BLOB
   assert opener.ranges == []
 
 

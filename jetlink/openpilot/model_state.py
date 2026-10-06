@@ -300,8 +300,7 @@ class JetlinkModelState:
     frame.telemetry = want_telemetry or time.monotonic() - self._last_logged >= TELEMETRY_PERIOD
     try:
       frame.seq = self.client.infer_begin(frame.data, self.packed, self._frame_id, reset=self._need_reset,
-                                          want_state=frame.telemetry,
-                                          skip_if_busy=bool(HOLD_FRAME) and self.client.last_output is not None)
+                                          want_state=frame.telemetry, skip_if_busy=self._can_hold)
     except Exception:
       self._log.warning("jetlink: frame %d send failed: %s", self._frame_id, getattr(self.client.t, 'last_send', {}))
       raise
@@ -323,10 +322,7 @@ class JetlinkModelState:
     if frame.seq is None:
       model_output = None   # not sent (see send): held
     else:
-      hold = None
-      if HOLD_FRAME and self.client.last_output is not None:
-        hold = self._hold_left(frame)
-      model_output = self.client.infer_end(frame.seq, hold=hold)
+      model_output = self.client.infer_end(frame.seq, hold=self._hold_left(frame) if self._can_hold else None)
     t4 = time.perf_counter()
     held = model_output is None
     self.behind = self._note_hold(held)
@@ -359,6 +355,11 @@ class JetlinkModelState:
     self.prepare(bufs, transforms, inputs)
     self.send(after_enqueue is not None)
     return self.end(after_enqueue)
+
+  @property
+  def _can_hold(self) -> bool:
+    """Is there an output to publish again instead of waiting (HOLD_FRAME)?"""
+    return bool(HOLD_FRAME) and self.client.last_output is not None
 
   @staticmethod
   def _hold_left(frame) -> float:

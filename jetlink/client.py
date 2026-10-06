@@ -405,20 +405,17 @@ class JetlinkClient:
     flags = ((P.Flag.RESET_QUEUES if reset else 0) | (P.Flag.WANT_STATE if want_state else 0)
              | (P.Flag.WANT_HIDDEN if self.want_hidden else 0))
     parts = (P.pack_infer_req(frame_id, flags), warped, packed)
+    sent = Sent(seq, frame_id, flags, time.monotonic())
     try:
-      self._in_flight.append(Sent(seq, frame_id, flags, time.monotonic()))
       if skip_if_busy:
-        sent = self.t.try_send(P.Msg.INFER_REQ, seq, parts)
+        if not self.t.try_send(P.Msg.INFER_REQ, seq, parts):
+          return None   # the seq is skipped; replies are matched by seq, not counted
       else:
         self.t.send(P.Msg.INFER_REQ, seq, parts, timeout=self.deadline if deadline is None else deadline)
-        sent = True
     except LinkError:
       self.dead = True
       raise
-    if not sent:
-      self._in_flight.pop()
-      self.seq = (seq - 1) & 0xFFFFFFFF   # never on the wire
-      return None
+    self._in_flight.append(sent)
     return seq
 
   def infer_end(self, seq: int, deadline: float | None = None, hold: float | None = None) -> np.ndarray | None:

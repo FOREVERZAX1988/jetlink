@@ -34,10 +34,10 @@ _TRAILING_DATE = re.compile(r' \([A-Za-z]+ \d{1,2}, \d{4}\)$')
 # the index and the slot are JSON params, and the UI names the active model
 # every frame; the status line can lag a new pick by this long
 INDEX_TTL = 2.0
-# A big model's download over a car's connection: attempts per provisioning
-# run, and the waits between them. Each carries on from the .part the last
-# left, so a stall costs the wait, not the bytes (lfs.lfs_download)
-DOWNLOAD_ATTEMPTS = 6
+# A big model's download over a car's connection: the waits between the
+# attempts of one provisioning run, one more attempt than waits. Each carries
+# on from the .part the last left, so a stall costs the wait, not the bytes
+# (lfs.lfs_download)
 DOWNLOAD_RETRY_DELAYS = (5.0, 15.0, 30.0, 60.0, 120.0)
 
 
@@ -164,12 +164,9 @@ class Models:
     the in-tree pointer, which moves with upstream syncs; the size is the cheap
     check that the file is the one we mean."""
     model = self.selected_model()
-    if model is None or not model['oid']:
+    if model is None or not self.has_file(model):
       return None
-    path = self.model_dir() / self.model_file_name(model)
-    if path.is_file() and path.stat().st_size == model['size']:
-      return path
-    return None
+    return self.model_dir() / self.model_file_name(model)
 
   def lfs_endpoints(self) -> list[str]:
     """Where a model's bytes are asked for, nearest first: the LFS server this
@@ -203,16 +200,15 @@ class Models:
     if model is None or not model['oid']:
       return None
     dest = self.model_dir() / self.model_file_name(model)
-    if dest.is_file() and dest.stat().st_size == model['size']:
+    if self.has_file(model):
       return dest
     pointer = Pointer(model['oid'], int(model['size']))
-    for attempt in range(DOWNLOAD_ATTEMPTS):
+    for delay in (*DOWNLOAD_RETRY_DELAYS, None):
       try:
         return self._fetch_once(pointer, dest, progress, should_stop)
       except NetworkError as e:
-        if attempt + 1 == DOWNLOAD_ATTEMPTS:
+        if delay is None:
           raise
-        delay = DOWNLOAD_RETRY_DELAYS[min(attempt, len(DOWNLOAD_RETRY_DELAYS) - 1)]
         self.op.log.warning("jetlink: download of %s failed (%s), trying again in %.0f s", pointer.oid[:16], e, delay)
         if retrying is not None:
           retrying(e, delay)
@@ -221,7 +217,6 @@ class Models:
           if should_stop is not None and should_stop():
             raise
           time.sleep(min(1.0, end - time.monotonic()))
-    return None
 
   def _fetch_once(self, pointer, dest: Path, progress, should_stop) -> Path:
     from jetlink.registry.catalog import NetworkError
@@ -234,10 +229,10 @@ class Models:
       return lfs_download(href, pointer, dest, progress=progress, should_stop=should_stop)
     raise NetworkError(f"no LFS server has {pointer.oid[:16]}")
 
-  def name_for(self, oid: str | None) -> str | None:
-    """The catalog's name for the model with this oid, if it lists one we have
-    resolved."""
-    return next((m['name'] for m in self.model_index() if oid and m['oid'] == oid), None)
+  def name_for(self, oid: str) -> str:
+    """The catalog's name for the model with this oid, or the oid's first 16
+    characters when it lists none we have resolved."""
+    return next((m['name'] for m in self.model_index() if m['oid'] == oid), oid[:16])
 
   def has_file(self, model: dict) -> bool:
     """Is this model's ONNX on the comma, whole? Its size is the cheap check."""

@@ -132,25 +132,10 @@ def test_a_write_the_host_did_not_complete_fails_the_next_send(sender):
     t.try_send(P.Msg.PING, 3)
 
 
-def test_enomem_halves_the_request_size_and_repeats_nothing(sender):
+def test_enomem_is_a_link_error_and_queues_nothing(sender):
+  # an 8 KB request comes from the slab (write_chunk); failing that is a comma out of memory
   t, aio = sender
-  t.write_chunk = 2 * P.GADGET_TX_ALIGN
   aio.fail.append(errno.ENOMEM)
-  payload = _payload(100000)
-  t.send(P.Msg.INFER_REQ, 1, (payload,))
-  t.send(P.Msg.INFER_REQ, 2, (payload,))
-  assert t.write_chunk == P.GADGET_TX_ALIGN, 'the smaller size holds for the session'
-  wire = bytes(aio.wire)
-  half = len(wire) // 2
-  assert wire[P.HEADER_SIZE:P.HEADER_SIZE + len(payload)] == payload
-  assert wire[half + P.HEADER_SIZE:half + P.HEADER_SIZE + len(payload)] == payload
-  assert set(aio.requests) == {P.GADGET_TX_ALIGN}
-  assert t.send_totals['enomem'] == 1
-
-
-def test_enomem_at_the_smallest_size_is_a_link_error(sender):
-  t, aio = sender
-  aio.fail.append(errno.ENOMEM)   # 8 KB is already under the 16 KB floor
   with pytest.raises(LinkError, match='gadget write failed'):
     t.send(P.Msg.PING, 1)
   assert t.last_send['errno'] == errno.ENOMEM
@@ -172,11 +157,11 @@ def test_a_failure_past_the_first_byte_drops_the_gadget(sender):
   submit = aio.submit
   calls = []
 
-  def second_fails(requests):
+  def second_fails(first, requests):
     calls.append(len(requests))
     if len(calls) == 2:
       raise OSError(errno.EIO, 'I/O error')
-    return submit(requests)
+    return submit(first, requests)
 
   aio.submit = second_fails
   with pytest.raises(LinkError, match='gadget write failed'):
@@ -189,7 +174,7 @@ def test_close_lets_queued_writes_finish_then_destroys_the_context(sender):
   t.send(P.Msg.LEAVE, 1, (b'{}',))
   t._close_fds = lambda names, reader: None
   t.close()
-  assert aio.closed and not t._write_aborted and t._aio is None
+  assert aio.closed and not t.send_totals.get('aborts') and t._aio is None
 
 
 def test_close_drops_the_gadget_under_writes_the_host_never_takes(sender, monkeypatch):
@@ -199,7 +184,7 @@ def test_close_drops_the_gadget_under_writes_the_host_never_takes(sender, monkey
   t.send(P.Msg.INFER_REQ, 1, (_payload(FRAME),))
   t._close_fds = lambda names, reader: None
   t.close()
-  assert t._write_aborted and t._unbound, 'only the unbind completes them'
+  assert t.send_totals['aborts'] == 1 and t._unbound, 'only the unbind completes them'
   assert aio.closed, 'destroyed once they completed'
 
 
@@ -233,19 +218,17 @@ def test_send_totals_keep_the_maxima_between_log_samples(sender):
   assert {'max_submit_ms', 'max_wait_ms', 'max_backlog_ms'} <= totals.keys()
 
 
-@pytest.mark.parametrize('start', range(0, 7 * 16384, 16384))
-def test_requests_cover_the_message_from_any_start_without_overlap(start):
+def test_requests_cover_the_message_in_order_without_a_copy():
   spans = [(1000, 32), (5000, 5 * 16384), (900000, 2 * 16384 - 32)]
-  total = sum(n for _, n in spans)
-  reqs = ffs._requests(spans, start, 32768)
-  assert sum(n for n, _ in reqs) == total - start
+  reqs = ffs._requests(spans, 32768)
+  assert [n for n, _ in reqs] == [32768] * 3 + [16384]
   assert all(n == sum(length for _, length in req) for n, req in reqs)
-  assert all(n == 32768 for n, _ in reqs[:-1])
-  # the first byte asked for is the one at `start`
-  first = reqs[0][1][0][0]
-  at = 0
-  for addr, n in spans:
-    if at + n > start:
-      assert first == addr + start - at
-      break
-    at += n
+  # every byte once, in order: the gathered (address, length) runs rebuild the spans
+  runs = [run for _, req in reqs for run in req]
+  merged = []
+  for addr, n in runs:
+    if merged and merged[-1][0] + merged[-1][1] == addr:
+      merged[-1] = (merged[-1][0], merged[-1][1] + n)
+    else:
+      merged.append((addr, n))
+  assert merged == spans

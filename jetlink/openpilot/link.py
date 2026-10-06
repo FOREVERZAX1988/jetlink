@@ -34,6 +34,8 @@ CONNECT_DELAY = 0.5
 # long plus the small model's, inside modelV2's 0.5 s alive limit; 0.5 s here
 # flashed commIssue on top of the fallback
 INFERENCE_TIMEOUT = 0.2
+# between joins while neither end has the picked model and nothing else is built
+MODEL_WAIT = 60.0
 # how long the load may wait for the early gadget bind; a provisioning run may
 # still be letting go of the endpoints
 PRESENT_TIMEOUT = 5.0
@@ -41,6 +43,15 @@ PRESENT_TIMEOUT = 5.0
 # hardware; the ceiling is only there so a server that has stopped answering
 # does not hold the caller for the rest of the day.
 BUILD_TIMEOUT = 1800.0
+
+
+class ModelMissing(RuntimeError):
+  """Neither end has the picked model and nothing else is built: only a
+  provisioning run's download changes that, so the join asks again after
+  `retry_after` rather than every few seconds, and the panel says `waiting`
+  (joining._join_loop)."""
+  retry_after = MODEL_WAIT
+  waiting = 'big model not downloaded yet'
 
 
 def _left(deadline: float | None, default: float) -> float:
@@ -229,6 +240,13 @@ def identity(parts, entry: dict) -> tuple[str, int]:
 _hashed: dict[tuple[str, int, int], str] = {}
 
 
+def remember_hash(path: Path, sha256: str) -> None:
+  """A file whose hash is already proven, as a download's is on the way in:
+  its upload need not read the gigabyte again (verified_upload)."""
+  st = path.stat()
+  _hashed[(str(path), st.st_size, st.st_mtime_ns)] = sha256
+
+
 def verified_upload(log, model_path: Path | None, sha256: str, nbytes: int) -> Path | None:
   """The file to upload, once its hash is proven to match the registry: under
   a sha the bytes do not have, the Jetson's plan would lie about its contents."""
@@ -311,29 +329,26 @@ def open_link(parts, link: Link, should_stop=None):
         # does parked, rather than the small model. Building here would unload
         # it, and uploading would share the link with its frames
         parts.log.warning("jetlink: %s is not ready yet, %s drives until it is", selected.get('name', sha256[:16]),
-                          parts.models.name_for(standin.sha256) or standin.sha256[:16])
+                          parts.models.name_for(standin.sha256))
         sha256, nbytes, path = standin.sha256, standin.nbytes, None
       else:
         parts.log.warning("jetlink: %s is not built yet, building it with the small model driving",
                           selected.get('name', sha256[:16]))
-    try:
-      # normally one round trip, since the provisioning run left the engine loaded. A
-      # server that restarted reloads from the plan cache, 13 to 25 s; one
-      # that has never seen this model builds it, 102 to 294 s
-      spec = ensure(parts, client, sha256, nbytes, path, progress=parts.progress.report_with_eta,
-                    should_stop=should_stop)
-    except EngineMissing:
-      # neither end has the bytes. Fetching them is a provisioning run's job;
-      # clear the record if it named this model, so the next one does
-      parts.spec.clear_ready(sha256)
-      raise
+    # normally one round trip, since the provisioning run left the engine loaded. A
+    # server that restarted reloads from the plan cache, 13 to 25 s; one
+    # that has never seen this model builds it, 102 to 294 s
+    spec = ensure(parts, client, sha256, nbytes, path, progress=parts.progress.report_with_eta,
+                  should_stop=should_stop)
     client.deadline = INFERENCE_TIMEOUT
     return client, spec
-  except EngineMissing:
-    # the link is fine and stays on `link`: closing it left a read queued that
-    # the next attempt's open had to bounce the gadget for, every 7 s for a
-    # whole drive (2026-10-06)
-    raise
+  except EngineMissing as e:
+    # neither end has the bytes. Fetching them is a provisioning run's job;
+    # clear the record if it named this model, so the next one does. The link
+    # is fine and stays on `link`: closing it left a read queued that the next
+    # attempt's open had to bounce the gadget for, every 7 s for a whole drive
+    # (2026-10-06)
+    parts.spec.clear_ready(sha256)
+    raise ModelMissing(str(e)) from e
   except BaseException:
     link.close()
     raise
