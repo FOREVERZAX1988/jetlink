@@ -194,6 +194,8 @@ class JetlinkModelState:
     self.vision_input_names = ['img', 'big_img']
     self.full_frames: dict = {}
     self._blob_cache: dict = {}
+    self._readback_buffer = None
+    self._readback_data: memoryview | None = None
     self._need_reset = True
     self._frame_id = 0
     self._last_logged = 0.0
@@ -258,14 +260,21 @@ class JetlinkModelState:
     t0 = time.perf_counter()
     warped = call_warp(self.warp, **self.warp_inputs, frame=self.full_frames['img'], big_frame=self.full_frames['big_img'])
     t1 = time.perf_counter()
-    # .data() rather than .numpy(): same ~2.5 ms mean (a write-combined GPU
-    # mapping read), but no per-frame allocation and no 52 ms outlier. The
-    # mapping is safe to send: infer_begin returns only once the socket has
-    # copied all of it, before the next warp can write it
+    # USB needs a cached host copy: reading the GPU mapping from writev was
+    # slower. Reuse its destination instead of .data()'s bytearray per frame.
+    # Both paths stay valid until infer_begin finishes the synchronous send.
     if self.send_from_gpu:
       data = warped._buffer().as_memoryview(allow_zero_copy=True)
     else:
-      data = warped.data()
+      source = warped._buffer()
+      if self._readback_buffer is None:
+        from tinygrad.device import Buffer
+        self._readback_data = memoryview(bytearray(source.nbytes))
+        self._readback_buffer = Buffer('PYTHON', source.size, source.dtype, opaque=self._readback_data)
+      # copy_from performs the same GPU synchronization and copy as .data().
+      # It also checks byte lengths if a malformed warp changes its output.
+      self._readback_buffer.copy_from(source)
+      data = self._readback_data
     self._frame = Frame(t0, t1, time.perf_counter(), data)
 
   def send(self, want_telemetry: bool = False) -> None:

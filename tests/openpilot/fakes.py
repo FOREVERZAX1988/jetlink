@@ -277,6 +277,18 @@ class OpenpilotTest(unittest.TestCase):
 # The fork's tinygrad is not jetlink's to install. What jetlink calls of it is
 # small, and these stand-ins do it with numpy; the fork's tests run the real one.
 
+class FakeBuffer:
+  def __init__(self, device, size, dtype, opaque):
+    self.size, self.dtype = size, dtype
+    self.view = memoryview(opaque).cast('B')
+    self.nbytes = self.view.nbytes
+
+  def copy_from(self, source):
+    assert self.nbytes == source.nbytes
+    self.view[:] = source.view
+    return self
+
+
 class FakeTensor:
   def __init__(self, data=None, device=None, dtype=None):
     self.array = np.asarray(data) if data is not None else np.zeros(0)
@@ -291,6 +303,9 @@ class FakeTensor:
 
   def numpy(self):
     return self.array
+
+  def _buffer(self):
+    return FakeBuffer(self.device, self.array.size, self.array.dtype, self.array)
 
   @staticmethod
   def from_blob(ptr, shape, dtype=None, device=None):
@@ -323,7 +338,7 @@ def fake_tinygrad(get_worker_pool=None) -> dict[str, ModuleType]:
   return {
     'tinygrad': module('tinygrad', Tensor=FakeTensor, TinyJit=fake_jit, Device=FakeDevice),
     'tinygrad.tensor': module('tinygrad.tensor', Tensor=FakeTensor),
-    'tinygrad.device': module('tinygrad.device', Device=FakeDevice),
+    'tinygrad.device': module('tinygrad.device', Device=FakeDevice, Buffer=FakeBuffer),
     'tinygrad.engine': module('tinygrad.engine'),
     'tinygrad.engine.jit': module('tinygrad.engine.jit', TinyJit=fake_jit),
     'tinygrad.engine.worker': module('tinygrad.engine.worker',

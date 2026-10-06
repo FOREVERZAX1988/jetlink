@@ -56,10 +56,10 @@ EP_IN = 0x82   # device -> host
 READ_CHUNK = 16 * P.USB_MAX_PACKET
 # How much the reader may queue before it stops. Only bounds memory if the
 # consumer stalls: inference never needs more than one response.
-MAX_QUEUED = 8 << 20
+MAX_QUEUED = 512 << 10
 # Read buffers kept for reuse. Steady state has one or two in flight, so this is
-# only a ceiling for a transient backlog. 16 * 16 KB = 256 KB.
-FREE_BUFS = 16
+# only a ceiling for a transient backlog. 8 * 16 KB = 128 KB.
+FREE_BUFS = 8
 # Just below modeld's frame loop (54), so the loop wins a contended core and the
 # reader still preempts everything else. See _raise_reader_priority.
 READER_RT_PRIORITY = 51
@@ -207,9 +207,9 @@ class FfsTransport(StreamTransport):
   def _prepare(self, mount: str, gadget: str | None) -> None:
     # This end only receives replies: an INFER_RESP is 8 KB, or 74 KB when
     # WANT_HIDDEN asks for the whole output, and the upload goes the other way.
-    # 256 KB leaves margin the memory-tight comma can spare, and RxBuffer grows
+    # 128 KB leaves margin the memory-tight comma can spare, and RxBuffer grows
     # past it on demand.
-    super().__init__(rx_size=256 << 10)
+    super().__init__(rx_size=128 << 10)
     self.mount = mount
     self.gadget = gadget
     self.bound_udc: str | None = None

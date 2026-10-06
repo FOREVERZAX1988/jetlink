@@ -93,7 +93,8 @@ def test_data_written_by_the_host_arrives_through_the_reader(mount):
     t.close()
 
 
-def test_inference_reply_spans_bounded_kernel_reads(mount, monkeypatch):
+@pytest.mark.parametrize('nelem', [18452, (2 << 20) // 4])
+def test_inference_reply_spans_bounded_kernel_reads(mount, monkeypatch, nelem):
   from types import SimpleNamespace
 
   t = FfsTransport(str(mount))
@@ -109,7 +110,7 @@ def test_inference_reply_spans_bounded_kernel_reads(mount, monkeypatch):
   monkeypatch.setattr(ffs, 'os', SimpleNamespace(**{k: getattr(real_os, k) for k in dir(real_os) if k != 'readv'}, readv=readv))
   try:
     t._ensure_epfiles()
-    payload = np.arange(18452, dtype=np.float32).tobytes()
+    payload = np.arange(nelem, dtype=np.float32).tobytes()
     wire = P.pack_header(P.Msg.INFER_RESP, 7, len(payload)) + payload
     host = real_os.open(mount / 'ep1', real_os.O_WRONLY)
 
@@ -121,6 +122,12 @@ def test_inference_reply_spans_bounded_kernel_reads(mount, monkeypatch):
     writer = threading.Thread(target=write_all, daemon=True)
     writer.start()
     try:
+      if len(payload) > ffs.MAX_QUEUED:
+        # A paused consumer fills the bounded queue. Resuming must drain a
+        # larger message intact, rather than deadlock waiting for it to fit.
+        with t._cv:
+          assert t._cv.wait_for(lambda: t._queued >= ffs.MAX_QUEUED, timeout=5.0)
+          assert t._queued < ffs.MAX_QUEUED + ffs.READ_CHUNK
       msg = t.recv(timeout=5.0)
       writer.join(1.0)
       assert not writer.is_alive()
@@ -375,13 +382,11 @@ def test_reader_affinity_survives_a_platform_without_the_call(monkeypatch):
   monkeypatch.setattr(priority, 'os', SimpleNamespace(cpu_count=lambda: 8))  # no sched_* (macOS)
   _bare_transport()._widen_affinity()  # must not raise
 
-
 def test_gadget_receive_buffer_is_not_oversized(mount):
-  """The gadget only receives ~74 KB replies; a 2 MB start was resident memory
-  the memory-tight comma did not need. RxBuffer still grows on demand."""
+  """Normal replies are ~8 KB, or ~74 KB with hidden state. Larger replies grow."""
   t = FfsTransport(str(mount))
   try:
-    assert len(t.rx.buf) <= 256 << 10, "gadget receive buffer larger than a reply needs"
+    assert len(t.rx.buf) <= 128 << 10, "gadget receive buffer larger than a reply needs"
     t.rx.reserve(400 << 10)   # a hypothetical bigger message still fits after a grow
     assert len(t.rx.buf) >= 400 << 10
   finally:

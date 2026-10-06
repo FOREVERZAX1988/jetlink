@@ -11,6 +11,7 @@ For normal installation, use the [setup guides](README.md#set-up).
 | Understand communication with the comma | [Link protocol](link-protocol.md) |
 | Control a server from an app or script | [Control protocol](control-protocol.md) |
 | Investigate performance | [Backends](backends.md), [Mac measurements](mac-performance.md), [Jetson measurements](jetson-performance.md) |
+| Diagnose USB disconnects and comma resource use | [USB and recording benchmarks](usb-bench.md) |
 | Build an app | [Mac](../macos/README.md), [iPhone](../ios/README.md), [Android](../android/README.md) |
 | Keep the server compatible with the comma | [Conformance](conformance.md) |
 | Publish releases | [Publishing](publishing.md) |
