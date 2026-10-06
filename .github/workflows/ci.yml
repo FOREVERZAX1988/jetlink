@@ -11,6 +11,7 @@ on:
   push:
     branches: ["**"]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -24,7 +25,11 @@ jobs:
     name: What changed
     runs-on: ubuntu-24.04
     outputs:
-      apps: ${{ steps.filter.outputs.apps }}
+      # Upstream builds only what the push changed, measured against main.
+      # Here main and this branch can sit at the same commit, and that empty
+      # diff skips every build, the Android APK included, so this branch
+      # builds all of it. The filter below still reports what changed.
+      apps: "true"
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
@@ -199,7 +204,7 @@ jobs:
           path: |
             ~/.cache/jetlink-build
             JetlinkKit/.build
-          key: swift-linux-${{ matrix.arch }}-${{ hashFiles('scripts/build-linux.sh', 'JetlinkKit/Package.resolved') }}
+          key: swift-linux-v2-${{ matrix.arch }}-${{ hashFiles('scripts/build-linux.sh', 'JetlinkKit/Package.resolved') }}
 
       - name: Install curl
         run: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl

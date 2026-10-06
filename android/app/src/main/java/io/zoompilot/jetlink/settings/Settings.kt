@@ -2,6 +2,7 @@ package io.zoompilot.jetlink.settings
 
 import android.content.Context
 import android.content.SharedPreferences
+import io.zoompilot.jetlink.AppLocale
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -113,6 +114,20 @@ enum class Processor(val backend: Backend, val device: String, val title: String
     }
 }
 
+/** The app's colour scheme; System follows the phone (the default). */
+enum class AppTheme(val id: String) {
+    System("system"),
+    Light("light"),
+    Dark("dark");
+
+    companion object {
+        fun of(id: String?): AppTheme? = entries.firstOrNull { it.id == id }
+    }
+}
+
+/** The mirror a fresh install starts with; more can be added in the settings. */
+const val DEFAULT_MIRROR = "https://hf-mirror.com"
+
 /** The few things worth changing on a phone, kept in SharedPreferences. */
 data class SettingsValues(
     /** Where bench tools such as `bench_link.py --host` reach the phone, with [developer] on. */
@@ -130,6 +145,12 @@ data class SettingsValues(
      * emulator, with no USB host, starts with it on.
      */
     val developer: Boolean = false,
+    /** The UI language; System follows the phone (the default). */
+    val language: AppLocale = AppLocale.System,
+    /** The colour scheme; System follows the phone (the default). */
+    val theme: AppTheme = AppTheme.System,
+    /** Mirror bases the model catalog and downloads try first; the original hosts come last. */
+    val mirrors: List<String> = listOf(DEFAULT_MIRROR),
 )
 
 class Settings(context: Context) {
@@ -146,8 +167,20 @@ class Settings(context: Context) {
             .putBoolean(KEEP_CPU_AWAKE, next.keepCpuAwake)
             .putBoolean(KEEP_SCREEN_ON, next.keepScreenOn)
             .putBoolean(DEVELOPER, next.developer)
+            .putString(LANGUAGE, next.language.id)
+            .putString(THEME, next.theme.id)
+            .putString(MIRRORS, next.mirrors.joinToString("\n"))
             .apply()
         state.value = next
+    }
+
+    /** The stored mirror list, or the default one before the user has touched it. */
+    private fun readMirrors(): List<String> {
+        if (!prefs.contains(MIRRORS)) return listOf(DEFAULT_MIRROR)
+        val stored = prefs.getString(MIRRORS, "").orEmpty().split("\n")
+            .map { it.trim() }
+            .filter { it.startsWith("https://") || it.startsWith("http://") }
+        return stored.distinct()
     }
 
     private fun read(): SettingsValues {
@@ -163,6 +196,9 @@ class Settings(context: Context) {
             keepCpuAwake = prefs.getBoolean(KEEP_CPU_AWAKE, defaults.keepCpuAwake),
             keepScreenOn = prefs.getBoolean(KEEP_SCREEN_ON, defaults.keepScreenOn),
             developer = prefs.getBoolean(DEVELOPER, Chip.isEmulator),
+            language = AppLocale.of(prefs.getString(LANGUAGE, null)) ?: defaults.language,
+            theme = AppTheme.of(prefs.getString(THEME, null)) ?: defaults.theme,
+            mirrors = readMirrors(),
         )
     }
 
@@ -174,6 +210,9 @@ class Settings(context: Context) {
         private const val KEEP_CPU_AWAKE = "keepCpuAwake"
         private const val KEEP_SCREEN_ON = "keepScreenOn"
         private const val DEVELOPER = "developer"
+        private const val LANGUAGE = "language"
+        private const val THEME = "theme"
+        private const val MIRRORS = "mirrors"
 
         /** Settings from before Automatic are version 1. */
         private const val CURRENT = 2
@@ -185,6 +224,7 @@ class Settings(context: Context) {
             migratedProcessor(prefs.getString(PROCESSOR, null))?.let { edit.putString(PROCESSOR, it) }
             edit.apply()
         }
+
 
         /**
          * A processor stored before Automatic: `gpu` was every phone's

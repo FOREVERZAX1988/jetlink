@@ -200,7 +200,8 @@ struct ServerTests {
     }
   }
 
-  @Test("Between sessions an engine that cools runs on zeros, and the next comma still gets the Python outputs",
+  @Test(
+    "Between sessions an engine that cools runs on zeros, and the next comma still gets the Python outputs",
     arguments: ["tiny_queued", "tiny_stateful"])
   func keptWarmBetweenSessions(_ name: String) throws {
     let golden = try Golden(name)

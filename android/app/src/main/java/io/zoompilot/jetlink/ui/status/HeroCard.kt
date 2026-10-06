@@ -37,6 +37,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import io.zoompilot.jetlink.R
+import io.zoompilot.jetlink.l10n
 import io.zoompilot.jetlink.server.Engine
 import io.zoompilot.jetlink.server.Stats
 import io.zoompilot.jetlink.ui.Format
@@ -72,13 +74,13 @@ fun HeroCard(state: StatusState, modifier: Modifier = Modifier, compact: Boolean
             if (state.usb == UsbState.NeedsPermission) {
                 AllowUsb(modifier, compact, actions.askUsb)
             } else {
-                Waiting(state.waitingDescription, modifier, compact)
+                Waiting(state.waitingDescriptionRes, modifier, compact)
             }
         StatusState.Hero.NoModel -> NoModel(state, modifier, compact, actions)
         is StatusState.Hero.Failed -> Failed(hero.model, modifier, compact, actions.retry)
         StatusState.Hero.Stopped ->
-            EmptyState(Icons.Filled.StopCircle, "Jetlink Stopped", modifier, compact = compact) {
-                Button(onClick = actions.start) { Text("Start") }
+            EmptyState(Icons.Filled.StopCircle, l10n(R.string.hero_stopped), modifier, compact = compact) {
+                Button(onClick = actions.start) { Text(l10n(R.string.action_start)) }
             }
     }
 }
@@ -88,7 +90,7 @@ private fun Headroom(stats: Stats?, modifier: Modifier, compact: Boolean) {
     val colors = JetlinkTheme.colors
     val p99 = stats?.servedMs?.p99
     val tint = p99?.let { colors.tone(Room.forP99(it).tone) } ?: colors.secondaryText
-    SummaryCard("Headroom", Icons.Filled.Speed, tint, modifier, trailing = "Last 10 s") {
+    SummaryCard(l10n(R.string.card_headroom), Icons.Filled.Speed, tint, modifier, trailing = l10n(R.string.last_10s)) {
         Column(
             Modifier.fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -103,7 +105,7 @@ private fun Headroom(stats: Stats?, modifier: Modifier, compact: Boolean) {
             FigureRow(
                 listOf(
                     Triple("P99", p99, Color.Unspecified),
-                    Triple("Max", stats?.servedMs?.max, Color.Unspecified),
+                    Triple(l10n(R.string.label_max), stats?.servedMs?.max, Color.Unspecified),
                 ),
             )
         }
@@ -113,9 +115,9 @@ private fun Headroom(stats: Stats?, modifier: Modifier, compact: Boolean) {
 @Composable
 private fun Progress(engine: Engine, modelName: String?, modifier: Modifier) {
     val colors = JetlinkTheme.colors
-    val title = if (engine.state == "loading") "Loading" else "Preparing"
+    val title = if (engine.state == "loading") l10n(R.string.hero_loading) else l10n(R.string.hero_preparing)
     SummaryCard(title, Icons.Filled.Build, colors.info, modifier, trailing = Format.progressAmount(engine.frac, engine.msg)) {
-        Text(modelName ?: "Model", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Text(modelName ?: l10n(R.string.placeholder_model), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         // a step with no estimate moves rather than sit at 0%
         if (engine.frac > 0) {
             LinearProgressIndicator(
@@ -132,7 +134,7 @@ private fun Progress(engine: Engine, modelName: String?, modifier: Modifier) {
 }
 
 @Composable
-private fun Waiting(description: String, modifier: Modifier, compact: Boolean) {
+private fun Waiting(descriptionRes: Int, modifier: Modifier, compact: Boolean) {
     val pulse = rememberInfiniteTransition(label = "waiting").animateFloat(
         initialValue = 1f,
         targetValue = 0.35f,
@@ -141,9 +143,9 @@ private fun Waiting(description: String, modifier: Modifier, compact: Boolean) {
     )
     EmptyState(
         Icons.Filled.Cable,
-        "Waiting for Comma",
+        l10n(R.string.summary_waiting),
         modifier,
-        description = description,
+        description = l10n(descriptionRes),
         compact = compact,
         iconAlpha = { pulse.value },
     )
@@ -154,12 +156,12 @@ private fun Waiting(description: String, modifier: Modifier, compact: Boolean) {
 fun AllowUsb(modifier: Modifier = Modifier, compact: Boolean = false, askAgain: () -> Unit) {
     EmptyState(
         Icons.Filled.Usb,
-        "Allow USB",
+        l10n(R.string.summary_allow_usb),
         modifier,
-        description = "Tap OK when Android asks, and tick Always open.",
+        description = l10n(R.string.allow_usb_desc),
         compact = compact,
     ) {
-        Button(onClick = askAgain) { Text("Ask Again") }
+        Button(onClick = askAgain) { Text(l10n(R.string.action_ask_again)) }
     }
 }
 
@@ -168,19 +170,19 @@ private fun NoModel(state: StatusState, modifier: Modifier, compact: Boolean, ac
     val unavailable = state.catalogUnavailable
     EmptyState(
         Icons.Outlined.Inventory2,
-        "No Model",
+        l10n(R.string.summary_no_model),
         modifier,
-        description = if (unavailable) "Couldn't load models. Check your connection." else "Get a model before you drive.",
+        description = if (unavailable) l10n(R.string.no_model_catalog_error) else l10n(R.string.no_model_hint),
         compact = compact,
     ) {
         if (unavailable) {
-            OutlinedButton(onClick = actions.refreshCatalog) { Text("Try Again") }
+            OutlinedButton(onClick = actions.refreshCatalog) { Text(l10n(R.string.action_try_again)) }
         } else {
             val row = state.defaultModel
             if (row != null && row.canUse) {
-                Button(onClick = actions.useDefault) { Text("Get ${row.displayName}") }
+                Button(onClick = actions.useDefault) { Text(l10n(R.string.action_get_model, row.displayName)) }
             }
-            TextButton(onClick = actions.openModels) { Text("Browse Models") }
+            TextButton(onClick = actions.openModels) { Text(l10n(R.string.action_browse_models)) }
         }
     }
 }
@@ -190,12 +192,12 @@ private fun NoModel(state: StatusState, modifier: Modifier, compact: Boolean, ac
 private fun Failed(model: Boolean, modifier: Modifier, compact: Boolean, retry: () -> Unit) {
     EmptyState(
         Icons.Outlined.ReportProblem,
-        if (model) "Model Failed" else "Jetlink Stopped",
+        if (model) l10n(R.string.summary_model_failed) else l10n(R.string.hero_stopped),
         modifier,
-        description = if (model) "Couldn't prepare this model. See Logs for details." else "See Logs for details.",
+        description = if (model) l10n(R.string.model_failed_desc) else l10n(R.string.stopped_see_logs),
         compact = compact,
     ) {
-        OutlinedButton(onClick = retry) { Text("Try Again") }
+        OutlinedButton(onClick = retry) { Text(l10n(R.string.action_try_again)) }
     }
 }
 
