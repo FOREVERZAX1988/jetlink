@@ -19,7 +19,6 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-import time
 import unittest
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -118,7 +117,6 @@ class FakeOpenpilot:
     self.events: list[tuple[str, dict]] = []
     self.chestnut = chestnut
     self.geometry = camera
-    self.engaged = True
     self.put_error: Exception | None = None
     self.face = FACE
 
@@ -158,14 +156,6 @@ class FakeOpenpilot:
 
   def model_face(self) -> ModelFace:
     return self.face
-
-  def engagement(self):
-    def engaged(timeout_ms: int) -> bool:
-      # as SubMaster.update does, wait for news; a poller that returned at
-      # once would spin the thread that calls it
-      time.sleep(min(timeout_ms, 20) / 1000)
-      return self.engaged
-    return engaged
 
   def event(self, name: str, **fields) -> None:
     self.events.append((name, fields))

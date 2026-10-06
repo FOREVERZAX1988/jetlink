@@ -208,9 +208,8 @@ class TestTheJoinFactory(OpenpilotTest):
     self.reset = self.patch(warp, 'prepare_reset')
     self.warm = self.patch(warp, 'warm')
     self.loaded = self.patch(self.parts.warps, 'load')
-    # the join thread and the watcher are the joining state's; not here
+    # the join thread is the joining state's; not here
     self.patch(joining.JoiningModelState, '_join_loop', lambda s: None)
-    self.patch(joining.JoiningModelState, '_watch_engagement', lambda s: None)
 
   def join(self):
     s = joining.join(self.parts, 1928, 1208, self.small)
@@ -269,7 +268,6 @@ class TestTheJoinFactory(OpenpilotTest):
   def test_it_runs_the_adapters_face_and_reports_through_jetlink(self):
     s = self.join()
     self.assertIs(s._progress, self.parts.progress)
-    self.assertEqual(s._engagement, self.op.engagement)
     client = mock.Mock()
     client.t.link_info.return_value = {'kind': 'usb'}
     big = s._build(client, spec())

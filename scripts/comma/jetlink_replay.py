@@ -65,21 +65,16 @@ class HevcFrameReader:
 
 
 def disengaged(m):
-  """The joining state only swaps while disengaged, so an engaged segment would replay
-  entirely on the small model. The replay controls nothing."""
-  if m.which() == 'selfdriveState':
-    b = m.as_builder()
-    b.selfdriveState.enabled = False
-    return b.as_reader()
-  if m.which() == 'selfdriveStateSP':
-    b = m.as_builder()
-    b.selfdriveStateSP.mads.enabled = False
-    b.selfdriveStateSP.mads.active = False
-    return b.as_reader()
+  """The joining state only swaps while nothing is in control, so an engaged segment
+  would replay entirely on the small model. The replay controls nothing: clear what
+  the adapter's in_control reads."""
   if m.which() == 'carControl':
     b = m.as_builder()
-    b.carControl.latActive = False
-    b.carControl.longActive = False
+    b.carControl.enabled = False
+    return b.as_reader()
+  if m.which() == 'carControlSP':
+    b = m.as_builder()
+    b.carControlSP.mads.enabled = False
     return b.as_reader()
   return m
 
@@ -234,6 +229,7 @@ def main() -> int:
     replay_process,
   )
   from openpilot.tools.lib.logreader import LogReader
+  from openpilot.sunnypilot.jetlink_adapter import IN_CONTROL
 
   full = list(LogReader(str(rlog)))
   # process_replay's calibration and live-parameter snapshots are scattered through
@@ -262,9 +258,9 @@ def main() -> int:
     unpin()
 
   cfg = get_process_config('modeld')
-  # the joining state swaps only on a disengaged frame and assumes engaged until told;
-  # modeld never subscribes to selfdriveState, so process_replay would not deliver it
-  cfg = replace(cfg, pubs=list(dict.fromkeys([*cfg.pubs, 'selfdriveState', 'selfdriveStateSP', 'carState', 'carControl'])))
+  # the joining state swaps only while nothing is in control and assumes something is
+  # until told; process_replay's modeld config does not deliver carControlSP
+  cfg = replace(cfg, pubs=list(dict.fromkeys([*cfg.pubs, *IN_CONTROL])))
   out = replay_process(cfg, lr, frs, fingerprint=fingerprint, custom_params=custom)
   return summarise(out, args.dump)
 

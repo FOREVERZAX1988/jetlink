@@ -43,7 +43,6 @@ WORKER = {
 MODELD = {
   **WORKER,
   'model_face': '() -> ModelFace',
-  'engagement': '() -> Callable[[int], bool]',
   'event': '(name: str, **fields: Any) -> None',
 }
 BUILD = {
@@ -67,7 +66,7 @@ def described(protocol: type) -> dict[str, str | None]:
 
 class TestTheContract(unittest.TestCase):
   def test_the_api_version(self):
-    self.assertEqual(jo.API, 1)
+    self.assertEqual(jo.API, 2)
 
   def test_every_side_is_as_pinned(self):
     for name, expected in SIDES.items():

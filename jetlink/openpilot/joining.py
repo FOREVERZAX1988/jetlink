@@ -38,9 +38,10 @@ Two rules the swap keeps:
   only; building the JetlinkModelState unpickles a TinyJit, and doing that
   next to the small model running frames on the same device is not safe.
 - never swap while the plan is steering. The two models disagree by ~195 m of
-  planned path, and the swap costs a frame or two. Require fresh, fully
-  disengaged controls; standstill alone is not enough, longitudinal control
-  may still hold the brake.
+  planned path, and the swap costs a frame or two. modeld says before every
+  frame whether anything is in control (in_control), from messages it reads
+  anyway; standstill alone is not enough, longitudinal control may still hold
+  the brake.
 """
 from __future__ import annotations
 
@@ -81,8 +82,6 @@ REPLUG_POLL = 0.25
 # the 2026-09-07 evening drive had six in twelve minutes, every one the
 # USB-C port losing its host, and nothing the driver could see said so
 DROPS_TO_BLAME_CABLE = 2
-ENGAGEMENT_POLL_MS = 100
-ENGAGEMENT_MAX_AGE = 0.25
 # a large-model frame is ~30 ms and the worst seen on the current stack ~55.
 # One that took LATE_FRAME, or a second past SLOW_FRAME within LAG_WINDOW of
 # the last, is a fault and is handled as a loss: modeld would otherwise count
@@ -127,18 +126,16 @@ class JoiningModelState:
   """Duck-types openpilot's modeld ModelState, with a second one inside.
 
   `progress` is where the join says what it is waiting on (status.Progress),
-  `engagement` makes the poller the swap window reads (the adapter's), and
-  `log` is cloudlog on a comma.
+  and `log` is cloudlog on a comma.
   """
 
-  def __init__(self, small, connect, build, prepare=None, reset_small=None, *, progress, engagement, log):
+  def __init__(self, small, connect, build, prepare=None, reset_small=None, *, progress, log):
     self._small = small
     self._active = small
     self._connect = connect
     self._build = build
     self._reset_small = reset_small
     self._progress = progress
-    self._engagement = engagement
     self._log = log
 
     # whatever the swap would otherwise do on the frame loop, done now on
@@ -197,10 +194,9 @@ class JoiningModelState:
     self._host_left = False
     self._replugged = False
 
-    # assume engaged and moving until a message says otherwise, so a swap can
-    # never happen on no information
-    self._engaged = True
-    self._engagement_updated = 0.0
+    # in control until modeld says otherwise, so a swap can never happen on no
+    # information
+    self._in_control = True
     self._stop = threading.Event()
 
     # whether the large model has produced a frame; a first inference that
@@ -208,10 +204,8 @@ class JoiningModelState:
     # modelDataV2SP, not a param: a chestnut's load is over once, this never is
     self._loading = True
 
-    self._threads = [threading.Thread(target=self._join_loop, daemon=True),
-                     threading.Thread(target=self._watch_engagement, daemon=True)]
-    for t in self._threads:
-      t.start()
+    self._thread = threading.Thread(target=self._join_loop, daemon=True)
+    self._thread.start()
 
   # -- what modeld reads ------------------------------------------------------
   # A read not defined here follows the model that is driving (__getattr__):
@@ -303,6 +297,20 @@ class JoiningModelState:
     self._frame_drop_ratio = value
     self._small.frame_drop_ratio = value
 
+  @property
+  def in_control(self) -> bool:
+    return self._in_control
+
+  @in_control.setter
+  def in_control(self, value):
+    # openpilot or MADS in control, by modeld's own messages, written before
+    # every run() as frame_drop_ratio is: the swap waits for False. A thread
+    # polling selfdrived for it woke ~300 times a second on a drive and took
+    # 6 to 11 % of a core inside modeld (2026-10-05). It lands on the small
+    # model too, as every write does
+    self._in_control = value
+    self._small.in_control = value
+
   def __getattr__(self, name):
     # Only for names this class does not define. Without it, a comma or
     # sunnypilot sync that adds one read was an AttributeError on the frame
@@ -381,19 +389,13 @@ class JoiningModelState:
     self._slow_at = now
     return second
 
-  @property
-  def _window_open(self) -> bool:
-    # standstill does not make an active longitudinal controller safe to swap
-    fresh = 0 <= time.monotonic() - self._engagement_updated < ENGAGEMENT_MAX_AGE
-    return fresh and not self._engaged
-
   def _maybe_swap(self) -> None:
     """Build the large model state from a join that has landed and swap it in,
     on this thread, which is where everything tinygrad touches must happen.
     Its first frame resets the host's history. A build that fails is backed
     off like a demote, or one that fails the same way every time is a connect
     and a build per second for the drive."""
-    if self._joined is None or not self._window_open or self._small_frames < SMALL_WARMUP_FRAMES:
+    if self._joined is None or self._in_control or self._small_frames < SMALL_WARMUP_FRAMES:
       return
     with self._lock:
       joined, self._joined = self._joined, None
@@ -629,17 +631,6 @@ class JoiningModelState:
         joined[0].close()
         return
 
-  def _watch_engagement(self) -> None:
-    background_thread()   # off modeld's realtime core; see _join_loop
-    # made on this thread: the poller's sockets (a SubMaster) belong to the
-    # thread that made them
-    engaged = self._engagement()
-    while not self._stop.is_set():
-      # rechecked on every poll, including ones with no news: that is when
-      # alive turns false. The frame thread expires the answer too
-      self._engaged = engaged(ENGAGEMENT_POLL_MS)
-      self._engagement_updated = time.monotonic()
-
   def close(self) -> None:
     first = not self._stop.is_set()   # the leave is said once; cleanups close twice
     self._stop.set()
@@ -709,4 +700,4 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
     return links.open_link(parts, link, should_stop)
 
   return JoiningModelState(small, connect, build, prepare, reset_small=lambda: ready['reset_small'](),
-                           progress=parts.progress, engagement=op.engagement, log=parts.log)
+                           progress=parts.progress, log=parts.log)

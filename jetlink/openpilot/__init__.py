@@ -33,7 +33,10 @@ from jetlink.openpilot.interface import MODES, STATES, Keys, ModelFace, Openpilo
 from jetlink.openpilot.parts import Parts, for_this_process
 from jetlink.openpilot.status import Status
 
-API = 1
+# 2: modeld writes in_control onto the joining model before every frame, where
+# jetlink polled the adapter's engagement() (2026-10-05). An adapter of API 1
+# never writes it, and its large model would wait for a window forever
+API = 2
 
 __all__ = ['API', 'MODES', 'STATES', 'Jetlink', 'Keys', 'ModelFace', 'Openpilot', 'OwnerConfig', 'Status', 'bind',
            'conformance']
@@ -137,6 +140,9 @@ class Jetlink:
   def attach(self, small, cam_w: int, cam_h: int):
     """Join the link to modeld, once the camera is up and `small` is built:
     the joining model, which drives as `small` until the Jetson is there.
+    Before every run() modeld writes onto it `in_control` (is openpilot or
+    MADS in control? it swaps only while not) and `frame_drop_ratio` (its
+    share of dropped camera frames, which hands a lagging large model back).
 
     None unless prepare() said yes in this process: without it the GPU's
     thread would start on modeld's realtime core. If the joining model cannot

@@ -127,16 +127,12 @@ class WorkerSide(StatusSide, Protocol):
 
 
 class ModelSide(WorkerSide, Protocol):
-  """modeld: comma's model face, the engagement a swap waits out, and the
-  structured log line the link's telemetry goes to."""
+  """modeld: comma's model face, and the structured log line the link's
+  telemetry goes to. What modeld writes onto the model every frame is
+  Jetlink.attach's."""
 
   def model_face(self) -> ModelFace:
     """What a ModelState for comma's large model has to carry."""
-
-  def engagement(self) -> Callable[[int], bool]:
-    """A poller, made on the thread that calls it: (timeout_ms) -> engaged. Waits
-    up to timeout_ms for news and answers True when controls are engaged, or when
-    that is not known."""
 
   def event(self, name: str, **fields: Any) -> None:
     """A structured log line (cloudlog.event)."""

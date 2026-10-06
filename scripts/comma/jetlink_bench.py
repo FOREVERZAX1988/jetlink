@@ -27,6 +27,7 @@ from openpilot.common.basedir import BASEDIR
 from openpilot.common.hardware import HARDWARE
 from openpilot.common.params import Params
 from openpilot.common.prefix import OpenpilotPrefix
+from openpilot.sunnypilot.jetlink_adapter import IN_CONTROL
 
 
 def main():
@@ -35,7 +36,7 @@ def main():
   parser.add_argument('--output', type=Path, required=True)
   parser.add_argument('--small', action='store_true')
   parser.add_argument('--engaged-until', type=float, default=0.0,
-                      help='fake an engaged selfdriveState for this many seconds, so the join has to wait for a window')
+                      help='fake engaged controls for this many seconds, so the join has to wait for a window')
   parser.add_argument('--write-chunk', type=int, choices=[16384, 32768, 65536, 131072, 262144, 524288],
                       help='bench-only FunctionFS write quantum override, in bytes')
   args = parser.parse_args()
@@ -81,8 +82,7 @@ def main():
         params.put(key, value, block=True)
     params.put('CarParams', saved['CarParamsPersistent'], block=True)
     params.put('JetlinkLink', 0 if args.small else 1, block=True)   # Jetlink off, or USB
-    pm = messaging.PubMaster(['selfdriveState', 'selfdriveStateSP', 'carState', 'carControl', 'deviceState',
-                              'extrinsicsCalibration'])
+    pm = messaging.PubMaster([*IN_CONTROL, 'deviceState', 'extrinsicsCalibration'])
     sm = messaging.SubMaster(['modelV2', 'modelDataV2SP'])
     calibration = None
     if saved['CalibrationParams'] is not None:
@@ -113,20 +113,15 @@ def main():
           if tick % 100 == 0 and not live.get_bool('IsOffroad'):
             raise RuntimeError('real ignition changed: stopping bench')
           engaged = time.monotonic() - start < args.engaged_until
-          for service in ('selfdriveState', 'selfdriveStateSP', 'carState', 'carControl'):
+          for service in IN_CONTROL:
             message = messaging.new_message(service)
             message.valid = True
-            if service == 'carState':
-              message.carState.standstill = True
-            elif service == 'selfdriveState':
-              # The promotion gate reads these four; faking them engaged holds the join back.
-              message.selfdriveState.enabled = engaged
-            elif service == 'selfdriveStateSP':
-              message.selfdriveStateSP.mads.enabled = engaged
-              message.selfdriveStateSP.mads.active = engaged
-            elif service == 'carControl':
-              message.carControl.latActive = engaged
-              message.carControl.longActive = engaged
+            # what the adapter's in_control reads, which modeld writes onto the
+            # joining model; faking it engaged holds the join back
+            if service == 'carControl':
+              message.carControl.enabled = engaged
+            elif service == 'carControlSP':
+              message.carControlSP.mads.enabled = engaged
             pm.send(service, message)
           if tick % 10 == 0:
             device = messaging.new_message('deviceState')
