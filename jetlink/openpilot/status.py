@@ -61,7 +61,7 @@ class Progress:
     """Never raises: called from except handlers. A fraction's ticks are held to
     4 Hz within a stage; a report with no fraction (a join's state) and the end
     of a stage always go through, so the panel's last word is never dropped. A
-    join says 'waiting for jetlink' and 'checking the link keeps up' 50 ms apart;
+    join says 'waiting for jetlink' and 're-engage to switch' moments apart;
     holding the second left the first on the panel for the rest of the drive.
     `msg` is the panel's one short line; `drops`, once the link has dropped often
     enough to blame the cable, is the panel's to word."""

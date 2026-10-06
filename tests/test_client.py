@@ -85,18 +85,17 @@ class ClosingTheSocket(SocketPairTest):
 
 
 class FramesInFlight(SocketPairTest):
-  """Frames the comma sends without waiting (the small model driving) or stops
-  waiting for (a held frame), and how their answers are read later."""
+  """Frames the comma stops waiting for (a held frame), and how their answers
+  are read later."""
 
   def setUp(self):
     super().setUp()
     self.client.spec = _spec()
     self.client.deadline = 0.5
 
-  def send(self, frame_id: int, silence: float | None = None) -> int:
+  def send(self, frame_id: int) -> int:
     spec = self.client.spec
-    return self.client.infer_begin(bytes(spec.warped_nbytes), bytes(spec.packed_nbytes), frame_id=frame_id,
-                                   silence=silence)
+    return self.client.infer_begin(bytes(spec.warped_nbytes), bytes(spec.packed_nbytes), frame_id=frame_id)
 
   def answer(self, status=P.Status.OK) -> None:
     """The far end takes one request and answers it with its frame id in
@@ -156,8 +155,8 @@ class FramesInFlight(SocketPairTest):
     self.assertEqual(self.client.drain(), 0)
 
   def test_a_host_that_answers_nothing_for_the_deadline_fails_the_link_before_the_next_frame(self):
-    # whichever model is driving: frames keep going out while the small one
-    # does, so a quiet host shows here, not in a wait
+    # held frames keep going out without waiting, so a quiet host shows
+    # here, not in a wait
     self.client.deadline = 0.05
     self.send(1)
     time.sleep(0.06)
@@ -165,17 +164,6 @@ class FramesInFlight(SocketPairTest):
       self.send(2)
     self.assertIn('no answer to 1 frames', str(quiet.exception))
     self.assertTrue(self.client.dead)
-
-  def test_a_frame_may_give_a_quiet_host_longer_than_the_deadline(self):
-    # a shadow frame's: nothing waits on it, and a phone's first frames are warm-up
-    self.client.deadline = 0.05
-    self.send(1, silence=0.5)
-    time.sleep(0.06)
-    self.send(2, silence=0.5)
-    self.assertFalse(self.client.dead)
-    with self.assertRaises(LinkError) as quiet:
-      self.send(3)   # back to the deadline
-    self.assertIn('no answer to 2 frames in 0.1s', str(quiet.exception))
 
   def test_a_frame_the_server_failed_fails_the_link_when_drained(self):
     self.send(1)

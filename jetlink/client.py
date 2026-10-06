@@ -102,9 +102,8 @@ class JetlinkClient:
     # the newest model output read off the link, whichever call read it: what
     # a frame whose own reply is late publishes again (JetlinkModelState.end)
     self.last_output: np.ndarray | None = None
-    # frames sent and not yet answered, oldest first. More than one while
-    # frames go out without being waited for (drain), or after a reply a
-    # frame gave up on (infer_end with hold)
+    # frames sent and not yet answered, oldest first. More than one after a
+    # reply a frame gave up on (infer_end with hold)
     self._in_flight: deque[Sent] = deque()
     # seqs sent with no reply wanted (leave): an ERROR to one is not this link's
     self._no_reply_wanted: set[int] = set()
@@ -210,8 +209,8 @@ class JetlinkClient:
         self._dispatch(msg)
         continue
       if msg.msg_type == P.Msg.INFER_RESP and any(f.seq == msg.seq for f in self._in_flight):
-        # the answer to a frame nobody waited for, or one a frame gave up
-        # waiting for: read like any other, then on to what is wanted
+        # the answer to a frame that gave up waiting for it (a held frame):
+        # read like any other, then on to what is wanted
         self._take_reply(msg)
         continue
       # A reply a caller gave up on. Drop it, or every frame reads one behind.
@@ -378,25 +377,23 @@ class JetlinkClient:
   # -- inference ------------------------------------------------------------
 
   def infer_begin(self, warped: np.ndarray, packed: np.ndarray, frame_id: int = 0,
-                  reset: bool = False, want_state: bool = False, deadline: float | None = None,
-                  silence: float | None = None) -> int:
+                  reset: bool = False, want_state: bool = False, deadline: float | None = None) -> int:
     """Send a frame and return immediately with its sequence number.
 
     Split from infer_end so the caller can work while the Jetson is busy;
-    openpilot publishes chestnutState in that window. A frame nobody calls
-    infer_end for is read by the next drain or infer_end. A host that has
-    answered none of them for `silence` (the client's deadline by default)
-    is gone, not slow, and the link is done here, before another frame goes
-    out to it. `deadline` bounds this frame's send.
+    openpilot publishes chestnutState in that window. A frame whose reply
+    infer_end stopped waiting for is read by the next drain or infer_end. A
+    host that has answered none of them for the client's deadline is gone,
+    not slow, and the link is done here, before another frame goes out to
+    it. `deadline` bounds this frame's send.
     """
     if self.spec is None:
       raise LinkError("ensure_engine() first")
     if self.dead:
       raise LinkError("link previously failed")
-    silence = self.deadline if silence is None else silence
-    if self.waiting_for() > silence:
+    if self.waiting_for() > self.deadline:
       self.dead = True
-      raise LinkError(f"no answer to {len(self._in_flight)} frames in {silence:.1f}s; link abandoned")
+      raise LinkError(f"no answer to {len(self._in_flight)} frames in {self.deadline:.1f}s; link abandoned")
     warped = _as_bytes(warped, self.spec.warped_nbytes, 'warped')
     packed = _as_bytes(packed, self.spec.packed_nbytes, 'packed')
     seq = self._next_seq()
