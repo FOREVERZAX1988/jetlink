@@ -70,6 +70,11 @@ TELEMETRY_EVERY = 2
 TELEMETRY_PERIOD = 1.0
 # frames Trips keeps the timings of: a minute at 20 Hz
 TRIPS_KEPT = 1200
+# camera buffers cached (prepare) past which the log asks why. camerad hands
+# out a fixed pool of 18 a stream and maps new ones only when it restarts,
+# which modeld survives; past two generations of both streams something is
+# rotating addresses under the cache, which otherwise grows without a bound
+BLOB_CACHE_WARN = 2 * 2 * 18 + 1
 
 
 class Trips:
@@ -244,6 +249,9 @@ class JetlinkModelState:
       cache_key = (key, ptr)
       if cache_key not in self._blob_cache:
         self._blob_cache[cache_key] = self._tensor.from_blob(ptr, (self.frame_size,), dtype='uint8', device=self.warp_dev)
+        if len(self._blob_cache) == BLOB_CACHE_WARN:
+          self._log.warning("jetlink: %d camera buffers cached; is the camera stack rotating them?",
+                            len(self._blob_cache))
       self.full_frames[key] = self._blob_cache[cache_key]
 
     # Model decides when action is completed, so desire input is just a pulse triggered on rising edge.
@@ -262,7 +270,8 @@ class JetlinkModelState:
     t1 = time.perf_counter()
     # USB needs a cached host copy: reading the GPU mapping from writev was
     # slower. Reuse its destination instead of .data()'s bytearray per frame.
-    # Both paths stay valid until infer_begin finishes the synchronous send.
+    # Both are free again once infer_begin returns: the gadget's io_submit and
+    # the cable's sendmsg have copied the bytes by then.
     if self.send_from_gpu:
       data = warped._buffer().as_memoryview(allow_zero_copy=True)
     else:
@@ -280,19 +289,26 @@ class JetlinkModelState:
   def send(self, want_telemetry: bool = False) -> None:
     """The prepared frame to the host. It asks for the server's telemetry
     when the log is due for it, or when told to: modeld asks on the frames it
-    would have sent a chestnut's state on."""
+    would have sent a chestnut's state on.
+
+    With an output to hold, a frame the link cannot take without waiting for
+    the host to drain earlier ones is not sent, and end() holds it: the same
+    plan one frame old a late reply publishes, where waiting stalls the frame
+    loop on a host that is behind."""
     frame = self._frame
     self._frame_id += 1
     frame.telemetry = want_telemetry or time.monotonic() - self._last_logged >= TELEMETRY_PERIOD
     try:
       frame.seq = self.client.infer_begin(frame.data, self.packed, self._frame_id, reset=self._need_reset,
-                                          want_state=frame.telemetry)
+                                          want_state=frame.telemetry,
+                                          skip_if_busy=bool(HOLD_FRAME) and self.client.last_output is not None)
     except Exception:
       self._log.warning("jetlink: frame %d send failed: %s", self._frame_id, getattr(self.client.t, 'last_send', {}))
       raise
     frame.sent = time.perf_counter()
     frame.data = None
-    self._need_reset = False
+    if frame.seq is not None:
+      self._need_reset = False
 
   def end(self, after_enqueue: Callable[[], None] | None = None) -> dict[str, np.ndarray]:
     """The sent frame's output, as modeld blocks on a chestnut's, but not past
@@ -304,10 +320,13 @@ class JetlinkModelState:
     if after_enqueue is not None:
       after_enqueue()
     waiting_from = time.perf_counter()
-    hold = None
-    if HOLD_FRAME and self.client.last_output is not None:
-      hold = self._hold_left(frame)
-    model_output = self.client.infer_end(frame.seq, hold=hold)
+    if frame.seq is None:
+      model_output = None   # not sent (see send): held
+    else:
+      hold = None
+      if HOLD_FRAME and self.client.last_output is not None:
+        hold = self._hold_left(frame)
+      model_output = self.client.infer_end(frame.seq, hold=hold)
     t4 = time.perf_counter()
     held = model_output is None
     self.behind = self._note_hold(held)
@@ -318,8 +337,10 @@ class JetlinkModelState:
     # so after the first they go to the log at TELEMETRY_PERIOD
     log_hold = held and (self.trips.held <= 3 or t4 - self._last_hold_logged >= TELEMETRY_PERIOD)
     if self._frame_id <= 3 or t4 - frame.t0 > SLOW_FRAME or log_hold:
+      note = ''
       if held:
         self._last_hold_logged = t4
+        note = f', held ({self.trips.held} so far{", not sent" if frame.seq is None else ""})'
       # persisted on the comma so a drive can separate server execution from
       # receive stalls once the Jetson is offline; server total excludes USB
       gpu_us, queue_us, total_us = self.client.last_timings
@@ -328,7 +349,7 @@ class JetlinkModelState:
                         "server gpu %.1f queue %.1f total %.1f ms; ffs maxima prepare %.1f read_wait %.1f handoff %.1f ms",
                         self._frame_id, (frame.t1 - frame.t0) * 1e3, (frame.t2 - frame.t1) * 1e3,
                         (frame.sent - frame.t2) * 1e3, (t4 - waiting_from) * 1e3,
-                        f', held ({self.trips.held} so far)' if held else '',
+                        note,
                         gpu_us / 1e3, queue_us / 1e3, total_us / 1e3, receive.get('prepare', 0.0) * 1e3,
                         receive.get('read_wait', 0.0) * 1e3, receive.get('handoff', 0.0) * 1e3)
     return outputs

@@ -238,27 +238,22 @@ def test_a_failure_names_the_controller_state_it_found(tmp_path, monkeypatch):
   assert t._udc_note() == ''
 
 
-def test_the_watchdog_drops_the_link_so_a_stuck_write_can_return(mount, monkeypatch):
-  """FunctionFS writes cannot time out: the request sits on the endpoint until the
-  host drains it, and the join loop cannot retry what it is blocked inside.
-  Unbinding works here only because the endpoint is enabled (see _ensure_epfiles).
+def test_an_abort_drops_the_link_so_queued_writes_complete(mount, monkeypatch):
+  """FunctionFS writes cannot time out: a request sits on the endpoint until the
+  host drains it, and only the unbind completes it. After the abort the link is
+  done, and says it was this end's doing.
   """
   t = FfsTransport(str(mount))
   try:
     unbound = []
     monkeypatch.setattr(t, 'unbind', lambda: unbound.append(True))
     t._abort_write()
-    assert t._write_aborted and unbound, "the watchdog must drop the link, not just flag it"
-
-    # once aborted, the write reports our own doing, not the host-ready grace period
+    assert t._write_aborted and unbound, "the abort must drop the link, not just flag it"
     t._ensure_epfiles()
-    os.close(t.ep_in)
-    t.ep_in = -1                      # any failure will do; the flag decides the message
-    with pytest.raises(LinkError) as e:
-      t._write([memoryview(b'x')])
-    assert 'exceeded deadline' in str(e.value), str(e.value)
+    with pytest.raises(LinkError, match='link abandoned'):
+      t.send(P.Msg.PING, 1)
   finally:
-    t.ep_in = -1                      # already closed; keep close() off it
+    monkeypatch.undo()
     t.close()
 
 
@@ -289,30 +284,6 @@ def test_a_write_that_completes_leaves_the_link_alone(mount, monkeypatch):
     assert not unbound
     assert not t._write_aborted
   finally:
-    t.close()
-
-
-def test_send_deadline_aborts_a_blocked_kernel_write(mount, monkeypatch):
-  from types import SimpleNamespace
-  t = FfsTransport(str(mount))
-  released = threading.Event()
-  try:
-    t._ensure_epfiles()
-    monkeypatch.setattr(t, 'unbind', released.set)
-
-    def blocked(*args):
-      assert released.wait(1.0), 'write watchdog did not run'
-      raise OSError(108, 'endpoint shutdown')
-
-    # Replace this module's reference, not the process-wide os.writev.
-    monkeypatch.setattr(ffs, 'os', SimpleNamespace(writev=blocked))
-    started = time.monotonic()
-    with pytest.raises(LinkError, match='exceeded deadline'):
-      t.send(P.Msg.INFER_REQ, 1, (b'frame',), timeout=0.05)
-    assert time.monotonic() - started < 0.5
-    assert released.is_set()
-  finally:
-    monkeypatch.undo()
     t.close()
 
 
@@ -500,32 +471,36 @@ def test_reader_priority_is_best_effort_without_permission(monkeypatch):
   _bare_transport()._raise_reader_priority()   # must not raise on a box without RTPRIO
 
 
-def test_close_releases_the_endpoints_even_when_the_watchdog_hangs(mount, monkeypatch):
+def test_close_releases_the_endpoints_under_writes_the_host_never_took(mount, monkeypatch):
   """The leak that outlived the link.
 
-  close() used to raise before touching an fd if the write guard had not come
-  back within a second, which it has not when it is stuck inside its own
-  abort's unbind. ep0 then stayed open for the life of the process and every
-  descriptor write after it answered ESRCH: only a reboot brought the gadget
-  back.
+  An endpoint file whose request is still queued stays open in the kernel and
+  the next open of it answers EBUSY, and ep0 left open answers every
+  descriptor write after it with ESRCH: only a reboot brought the gadget back.
+  close() drops the gadget under writes the host never takes, and closes every
+  fd whatever happens to them.
   """
   monkeypatch.setattr(ffs, 'READER_JOIN_TIMEOUT', 0.05)
+  monkeypatch.setattr(ffs, 'CLOSE_FLUSH', 0.02)
   t = FfsTransport(str(mount))
   ep0 = t.ep0
-  stuck = threading.Event()
-  guard = threading.Thread(target=stuck.wait, daemon=True)
-  guard.start()
-  t._write_guard.thread = guard
+  host = os.open(mount / 'ep2', os.O_RDONLY | os.O_NONBLOCK)   # lets ep2 open
   try:
+    t._ensure_epfiles()
+    aio = t._aio
+    aio.fd = None          # the host takes nothing: the bytes stay queued
+    aio.holding = True
+    monkeypatch.setattr(t, 'unbind', lambda gadget=None: aio.shutdown())
+    t.send(P.Msg.PING, 1)
     t.close()
   finally:
-    stuck.set()
-
-  assert t.ep0 == -1
+    os.close(host)
+  assert aio.closed, 'the context is destroyed once the unbind completed its writes'
+  assert t.ep0 == -1 and t.ep_in == -1
   with pytest.raises(OSError):
     os.fstat(ep0)   # really closed, not merely forgotten
-
-  # And the gadget opens again, which is the half the raise used to cost.
+  monkeypatch.undo()
+  # And the gadget opens again.
   again = FfsTransport(str(mount))
   again.close()
 
@@ -670,7 +645,7 @@ def test_a_borrowed_gadget_with_no_controller_named_is_refused(mount):
 
 
 def test_a_stuck_borrowed_write_asks_the_owner_to_free_it(mount, tmp_path, monkeypatch):
-  """Unbinding is what dequeues a FunctionFS write nobody is reading, and on a
+  """Unbinding is what completes a FunctionFS write nobody is reading, and on a
   borrowed gadget only the owner can do it."""
   _udc(tmp_path / 'sys', monkeypatch)
   asked = []
@@ -685,9 +660,9 @@ def test_a_stuck_borrowed_write_asks_the_owner_to_free_it(mount, tmp_path, monke
 
 
 def test_an_owner_that_does_not_answer_does_not_wedge_the_frame_thread(mount, tmp_path, monkeypatch):
-  """The abort runs while a frame thread is inside a writev the kernel will
-  never return from on its own. Asking an owner that is dead and leaving it at
-  that costs the whole drive, the small model included."""
+  """The abort frees writes the kernel will never complete on its own. Asking
+  an owner that is dead and leaving it at that leaves them queued, and the
+  endpoint with them, for the rest of the drive."""
   _udc(tmp_path / 'sys', monkeypatch)
   owner = str(tmp_path / 'gadget')
   taken = []

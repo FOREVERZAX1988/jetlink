@@ -79,6 +79,14 @@ class Transport(ABC):
   def send(self, msg_type: int, seq: int, parts=(), flags: int = 0, timeout: float | None = None) -> None:
     """Send one message. `parts` is an iterable of buffers, sent as one message."""
 
+  def try_send(self, msg_type: int, seq: int, parts=(), flags: int = 0, timeout: float | None = None) -> bool:
+    """send(), unless the link would first make the caller wait for the peer
+    to take earlier messages: then False, and nothing was sent. Only a
+    transport that queues its writes can tell (FfsTransport); the rest send
+    and say True."""
+    self.send(msg_type, seq, parts, flags, timeout)
+    return True
+
   @abstractmethod
   def recv(self, timeout: float | None = None) -> Message:
     """Block for one message. Raises LinkTimeout if `timeout` elapses."""
@@ -196,9 +204,10 @@ class StreamTransport(Transport):
 
   # -- primitives a subclass must provide ----------------------------------
 
-  @abstractmethod
   def _write(self, bufs: list[memoryview]) -> int:
-    """Write from one or more buffers. Returns bytes written (may be partial)."""
+    """Write from one or more buffers. Returns bytes written (may be partial).
+    A transport that overrides _send_buffers need not provide it."""
+    raise NotImplementedError
 
   @abstractmethod
   def _read_into(self, dest: memoryview, timeout: float | None) -> int:
@@ -211,6 +220,16 @@ class StreamTransport(Transport):
   # -- framing -------------------------------------------------------------
 
   def send(self, msg_type: int, seq: int, parts=(), flags: int = 0, timeout: float | None = None) -> None:
+    bufs = self._frame(msg_type, seq, parts, flags)
+    self._send_deadline = None if timeout is None else time.monotonic() + timeout
+    try:
+      self._send_buffers(bufs)
+    finally:
+      self._send_deadline = None
+
+  def _frame(self, msg_type: int, seq: int, parts, flags: int) -> list[memoryview]:
+    """One message as the buffers that go on the wire, in order: the header,
+    `parts`, then the padding. Nothing is copied."""
     # cast('B'): slicing a float32 view in advance() would step by elements
     bufs = [memoryview(p).cast('B') for p in parts]
     length = sum(b.nbytes for b in bufs)
@@ -223,13 +242,8 @@ class StreamTransport(Transport):
       # A bulk transfer only ends on a short packet; see protocol.PACKET_MULTIPLE.
       flags |= P.Flag.PADDED
       bufs.append(memoryview(_PAD)[:1])
-    header = P.pack_header(msg_type, seq, length, flags)
-    bufs.insert(0, memoryview(header))
-    self._send_deadline = None if timeout is None else time.monotonic() + timeout
-    try:
-      self._send_buffers(bufs)
-    finally:
-      self._send_deadline = None
+    bufs.insert(0, memoryview(P.pack_header(msg_type, seq, length, flags)))
+    return bufs
 
   def _send_buffers(self, bufs: list[memoryview]) -> None:
     """Send one framed message. A transport may guard the whole transaction."""

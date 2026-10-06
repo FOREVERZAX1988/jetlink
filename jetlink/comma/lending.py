@@ -119,10 +119,10 @@ class Loan:
   def bounce(self) -> bool:
     """Ask the owner to take the gadget down and put it back up.
 
-    The only thing that dequeues a FunctionFS write nobody is reading is the
-    unbind, and the unbind belongs to whoever holds ep0. Called from the write
-    watchdog on a link that is already 15 s stuck, so the re-enumeration it
-    costs is not the expensive part.
+    The only thing that completes a FunctionFS write nobody is reading is the
+    unbind, and the unbind belongs to whoever holds ep0. Called on writes the
+    host has stopped taking (FfsTransport._abort_write), so the re-enumeration
+    it costs is not the expensive part.
     """
     with self._lock:
       if self._closed:

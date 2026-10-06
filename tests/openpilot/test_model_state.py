@@ -74,8 +74,15 @@ class FakeClient:
     self.keep: set[int] = set()
     # what a reply asked for telemetry carries, when the server has any
     self.telemetry = None
+    # frames (by frame_id) the link refuses when asked to skip if busy, and
+    # whether each frame asked
+    self.busy: set[int] = set()
+    self.skippable = []
 
-  def infer_begin(self, data, packed, frame_id, reset=False, want_state=False):
+  def infer_begin(self, data, packed, frame_id, reset=False, want_state=False, skip_if_busy=False):
+    self.skippable.append(skip_if_busy)
+    if skip_if_busy and frame_id in self.busy:
+      return None
     self.sent.append((np.frombuffer(bytes(data), np.uint8).copy(), np.array(packed, copy=True), frame_id, reset))
     self.asked.append(want_state)
     self._in_flight.append(frame_id)
@@ -316,6 +323,42 @@ class TestHold(ModelStateTest):
     with mock.patch.object(model_state, 'HOLD_FRAME', None):
       _, _, client, _ = self.run_frames(STATEFUL, n=3)
     self.assertEqual(client.holds, [None, None, None])
+    self.assertEqual(client.skippable, [False] * 3, 'and its send waits for the link too')
+
+  def test_a_frame_skips_a_busy_link_only_with_an_output_to_hold(self):
+    _, _, client, _ = self.run_frames(STATEFUL, n=3)
+    self.assertEqual(client.skippable, [False, True, True])
+
+  def test_a_frame_the_link_would_not_take_is_held_without_waiting(self):
+    client = FakeClient()
+    client.busy = {2}
+    spec = spec_for(STATEFUL)
+    warped = fakes.FakeTensor(np.zeros(np.prod(spec.warped_shape), np.uint8))
+    with mock.patch.object(model_state, 'call_warp', return_value=warped):
+      state = self.make(spec, client)
+      client.output[slice(*SLICES['plan'])] = 1.0
+      first, = self.frames(state, 1)
+      client.output = client.output.copy()
+      client.output[slice(*SLICES['plan'])] = 2.0
+      held, after = self.frames(state, 2)
+    self.assertTrue((held['plan'] == 1.0).all(), 'the frame before, again')
+    self.assertTrue((after['plan'] == 2.0).all())
+    self.assertEqual([f for _, _, f, _ in client.sent], [1, 3], 'frame 2 never went out')
+    self.assertEqual(len(client.holds), 2, 'and nothing waited for it')
+    self.assertEqual(state.trips.held, 1)
+    self.assertTrue(any('not sent' in line for line in self.log.lines('warning')))
+
+  def test_an_unsent_frame_leaves_the_reset_for_the_next_one(self):
+    client = FakeClient()
+    spec = spec_for(STATEFUL)
+    warped = fakes.FakeTensor(np.zeros(np.prod(spec.warped_shape), np.uint8))
+    with mock.patch.object(model_state, 'call_warp', return_value=warped):
+      state = self.make(spec, client)
+      self.frames(state, 1)
+      state._need_reset = True      # a swap asked the host to start over
+      client.busy = {2}
+      self.frames(state, 2)
+    self.assertEqual([(f, reset) for _, _, f, reset in client.sent], [(1, True), (3, True)])
 
   def holding(self, late, n: int, **patches):
     """`n` driven frames, the replies to `late` seqs (a predicate) too late

@@ -29,6 +29,7 @@ version = { attr = "jetlink.__version__" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["real_aio: uses Linux AIO itself, not tests/aio_fakes.FakeAio"]
 
 # The fork's rule set (sunnypilot's pyproject.toml), so code moves between the
 # two without reformatting, with two differences the fork does not allow:

@@ -377,7 +377,8 @@ class JetlinkClient:
   # -- inference ------------------------------------------------------------
 
   def infer_begin(self, warped: np.ndarray, packed: np.ndarray, frame_id: int = 0,
-                  reset: bool = False, want_state: bool = False, deadline: float | None = None) -> int:
+                  reset: bool = False, want_state: bool = False, deadline: float | None = None,
+                  skip_if_busy: bool = False) -> int | None:
     """Send a frame and return immediately with its sequence number.
 
     Split from infer_end so the caller can work while the Jetson is busy;
@@ -386,6 +387,10 @@ class JetlinkClient:
     host that has answered none of them for the client's deadline is gone,
     not slow, and the link is done here, before another frame goes out to
     it. `deadline` bounds this frame's send.
+
+    With `skip_if_busy`, a frame the link cannot take without waiting for the
+    host to drain earlier ones is not sent, and None comes back: the link is
+    as good as it was (Transport.try_send).
     """
     if self.spec is None:
       raise LinkError("ensure_engine() first")
@@ -399,13 +404,21 @@ class JetlinkClient:
     seq = self._next_seq()
     flags = ((P.Flag.RESET_QUEUES if reset else 0) | (P.Flag.WANT_STATE if want_state else 0)
              | (P.Flag.WANT_HIDDEN if self.want_hidden else 0))
+    parts = (P.pack_infer_req(frame_id, flags), warped, packed)
     try:
       self._in_flight.append(Sent(seq, frame_id, flags, time.monotonic()))
-      self.t.send(P.Msg.INFER_REQ, seq, (P.pack_infer_req(frame_id, flags), warped, packed),
-                  timeout=self.deadline if deadline is None else deadline)
+      if skip_if_busy:
+        sent = self.t.try_send(P.Msg.INFER_REQ, seq, parts)
+      else:
+        self.t.send(P.Msg.INFER_REQ, seq, parts, timeout=self.deadline if deadline is None else deadline)
+        sent = True
     except LinkError:
       self.dead = True
       raise
+    if not sent:
+      self._in_flight.pop()
+      self.seq = (seq - 1) & 0xFFFFFFFF   # never on the wire
+      return None
     return seq
 
   def infer_end(self, seq: int, deadline: float | None = None, hold: float | None = None) -> np.ndarray | None:
