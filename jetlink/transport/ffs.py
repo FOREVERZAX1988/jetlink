@@ -147,11 +147,12 @@ class FfsTransport(StreamTransport):
   that is not reading is a dead link either way.
   """
   read_chunk = READ_CHUNK
-  # dwc3 resends a TRB about once in 400 frames. A message that fits one writev
-  # is replayed whole and the receiver drops it by seq; split across two writes
-  # the replay lands mid-stream and the link is lost. The largest inference
-  # request is 400 KB padded, and only uploads, which sha256 covers, are bigger.
-  write_chunk = 512 * P.USB_MAX_PACKET
+  # FunctionFS kmallocs the sum of the iovecs for every write. A full frame
+  # needs order-7 pages and can stall in reclaim during recording rollover.
+  # 32 KB is order 3 on AGNOS (verified by kmalloc tracing), instead of order 7.
+  # Keep each request aligned, with signals masked across the
+  # whole message so Python cannot replay a partially sent, interrupted write.
+  write_chunk = 2 * P.GADGET_TX_ALIGN
   tx_align = P.GADGET_TX_ALIGN
 
   def __init__(self, mount: str = MOUNT, gadget: str | None = None,
@@ -228,6 +229,8 @@ class FfsTransport(StreamTransport):
     self._had_host = False
     self._open_lock = threading.Lock()
     self._write_aborted = False
+    self.last_send: dict = {}
+    self.send_totals: dict = {}
     self._reader: threading.Thread | None = None
     self._write_guard = WriteWatchdog(self._abort_write)
 
@@ -451,12 +454,12 @@ class FfsTransport(StreamTransport):
     return self._shrink('write_chunk')
 
   def _abort_write(self) -> None:
-    """Take the link down so a write nobody is reading returns. See WRITE_TIMEOUT.
+    """Take the link down so a stalled USB write returns. See WRITE_TIMEOUT.
 
     On the watchdog thread: the one stuck in writev cannot act.
     """
     self._write_aborted = True
-    log.warning("jetlink: no reader for %.3f s, dropping the gadget to free the write",
+    log.warning("jetlink: USB send exceeded %.3f s, dropping the gadget to free the write",
                 getattr(self, '_write_budget', WRITE_TIMEOUT))
     if self._bounce is None:
       return self.unbind()
@@ -471,46 +474,73 @@ class FfsTransport(StreamTransport):
     log.error("jetlink: the gadget's owner did not answer; dropping the link from here")
     self.unbind(self._owner_gadget)
 
-  def send(self, *args, **kwargs) -> None:
-    # Reset the quantum at each message: a latched shrink would split every
-    # later request across two writes and re-arm the dwc3 replay (see
-    # write_chunk). The pressure that forced it is usually gone by the next
-    # frame.
-    self.write_chunk = type(self).write_chunk
-    super().send(*args, **kwargs)
+  def _send_buffers(self, bufs: list[memoryview]) -> None:
+    self._ensure_epfiles()
+    if self._send_deadline is None:
+      self._send_deadline = time.monotonic() + WRITE_TIMEOUT
+    self._write_budget = self._write_timeout()
+    started = time.monotonic()
+    self.last_send = {'bytes': 0, 'writes': 0, 'enomem': 0, 'max_write_ms': 0.0,
+                      'elapsed_ms': 0.0, 'budget_ms': self._write_budget * 1e3,
+                      'chunk': self.write_chunk, 'aborted': False, 'errno': None}
+    # One mask and one watchdog per MESSAGE, not per 16 KB syscall. Besides
+    # avoiding extra wakeups, a single deadline includes time between writes.
+    was = signal.pthread_sigmask(signal.SIG_BLOCK, _IO_SIGNALS)
+    armed = False
+    try:
+      armed = self._write_guard.arm(self._write_budget)
+      if not armed:
+        raise LinkError('gadget write watchdog already expired or closed')
+      super()._send_buffers(bufs)
+      self._write_timeout()  # a late completion is not a successful send
+    finally:
+      try:
+        completed = self._write_guard.disarm() if armed else False
+        self.last_send.update(elapsed_ms=(time.monotonic() - started) * 1e3,
+                              chunk=self.write_chunk, aborted=self._write_aborted or not completed)
+        # Bounded session counters retain a slow send between 1 Hz log samples.
+        totals = self.send_totals
+        for key in ('bytes', 'writes', 'enomem'):
+          totals[key] = totals.get(key, 0) + self.last_send[key]
+        totals['messages'] = totals.get('messages', 0) + 1
+        totals['aborts'] = totals.get('aborts', 0) + int(self.last_send['aborted'])
+        totals['max_write_ms'] = max(totals.get('max_write_ms', 0.0), self.last_send['max_write_ms'])
+        totals['max_elapsed_ms'] = max(totals.get('max_elapsed_ms', 0.0), self.last_send['elapsed_ms'])
+        if armed and not completed:
+          raise LinkError('USB send exceeded deadline; link abandoned')
+      finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, was)
 
   def _write(self, bufs: list[memoryview]) -> int:
-    self._ensure_epfiles()
-    self._write_budget = self._write_timeout(WRITE_TIMEOUT)
-    # See _IO_SIGNALS: a signal here duplicates data on the wire.
-    was = signal.pthread_sigmask(signal.SIG_BLOCK, _IO_SIGNALS)
-    try:
-      if not self._write_guard.arm(self._write_budget):
-        raise LinkError('gadget write watchdog already expired or closed')
-      while True:
+    while True:
+      if self._write_aborted:
+        raise LinkError('USB send exceeded deadline; link abandoned')
+      self._write_timeout()
+      started = time.monotonic()
+      self.last_send['writes'] += 1
+      try:
         try:
           n = os.writev(self.ep_in, bufs)
-          self._had_host = True
-          return n
-        except OSError as e:
-          if self._write_aborted:
-            # Say whose doing it was: ENODEV alone reads like a cable falling
-            # out of a socket.
-            raise LinkError(f"gadget write had no reader for {self._write_budget:.3f}s") from e
-          # FunctionFS submits a write as one request, so a failed writev put
-          # nothing on the wire and is safe to retry.
-          if e.errno in _NOT_READY and self._wait_for_host_ready():
-            continue
-          if e.errno == errno.ENOMEM and self._shrink_write():
-            # A short write is fine: send() loops until the message is out.
+        finally:
+          elapsed_ms = (time.monotonic() - started) * 1e3
+          self.last_send['max_write_ms'] = max(self.last_send['max_write_ms'], elapsed_ms)
+        self.last_send['bytes'] += n
+        self._had_host = True
+        return n
+      except OSError as e:
+        self.last_send['errno'] = e.errno
+        if self._write_aborted:
+          raise LinkError('USB send exceeded deadline; link abandoned') from e
+        # ENOMEM occurs before queueing USB. Other errors may follow a
+        # partially transmitted request; only retry pre-host readiness.
+        if e.errno in _NOT_READY and not self._had_host and self._wait_for_host_ready():
+          continue
+        if e.errno == errno.ENOMEM:
+          self.last_send['enomem'] += 1
+          if self._shrink_write():
             bufs = take(bufs, self.write_chunk)
             continue
-          raise LinkError(f"gadget write failed: {e}{self._udc_note()}") from e
-    finally:
-      completed = self._write_guard.disarm()
-      signal.pthread_sigmask(signal.SIG_SETMASK, was)
-      if not completed:
-        raise LinkError('gadget write had no reader before deadline; link abandoned')
+        raise LinkError(f"gadget write failed: {e}{self._udc_note()}") from e
 
   # -- the reader thread ---------------------------------------------------
 

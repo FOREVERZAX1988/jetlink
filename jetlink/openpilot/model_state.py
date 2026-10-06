@@ -226,6 +226,9 @@ class JetlinkModelState:
       return
     self._last_logged = now
     self._event("jetlinkTelemetry", dead=bool(self.client.dead), **telemetry)
+    send = getattr(self.client.t, 'last_send', None)
+    if send:
+      self._event("jetlinkSend", nonce=self.client.nonce, frame=self._frame_id, totals=self.client.t.send_totals.copy(), **send)
 
   def prepare(self, bufs: dict, transforms: dict[str, np.ndarray], inputs: dict[str, np.ndarray]) -> None:
     """Take this frame up: read what the host has answered so far (a held
@@ -272,8 +275,12 @@ class JetlinkModelState:
     frame = self._frame
     self._frame_id += 1
     frame.telemetry = want_telemetry or time.monotonic() - self._last_logged >= TELEMETRY_PERIOD
-    frame.seq = self.client.infer_begin(frame.data, self.packed, self._frame_id, reset=self._need_reset,
-                                        want_state=frame.telemetry)
+    try:
+      frame.seq = self.client.infer_begin(frame.data, self.packed, self._frame_id, reset=self._need_reset,
+                                          want_state=frame.telemetry)
+    except Exception:
+      self._log.warning("jetlink: frame %d send failed: %s", self._frame_id, getattr(self.client.t, 'last_send', {}))
+      raise
     frame.sent = time.perf_counter()
     frame.data = None
     self._need_reset = False

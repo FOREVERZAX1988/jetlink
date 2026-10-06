@@ -249,7 +249,7 @@ def test_the_watchdog_drops_the_link_so_a_stuck_write_can_return(mount, monkeypa
     t.ep_in = -1                      # any failure will do; the flag decides the message
     with pytest.raises(LinkError) as e:
       t._write([memoryview(b'x')])
-    assert 'no reader' in str(e.value), str(e.value)
+    assert 'exceeded deadline' in str(e.value), str(e.value)
   finally:
     t.ep_in = -1                      # already closed; keep close() off it
     t.close()
@@ -300,7 +300,7 @@ def test_send_deadline_aborts_a_blocked_kernel_write(mount, monkeypatch):
     # Replace this module's reference, not the process-wide os.writev.
     monkeypatch.setattr(ffs, 'os', SimpleNamespace(writev=blocked))
     started = time.monotonic()
-    with pytest.raises(LinkError, match='no reader'):
+    with pytest.raises(LinkError, match='exceeded deadline'):
       t.send(P.Msg.INFER_REQ, 1, (b'frame',), timeout=0.05)
     assert time.monotonic() - started < 0.5
     assert released.is_set()
@@ -374,17 +374,6 @@ def test_reader_affinity_survives_a_platform_without_the_call(monkeypatch):
   from types import SimpleNamespace
   monkeypatch.setattr(priority, 'os', SimpleNamespace(cpu_count=lambda: 8))  # no sched_* (macOS)
   _bare_transport()._widen_affinity()  # must not raise
-
-
-def test_send_resets_the_write_quantum_each_message(monkeypatch):
-  """A prior ENOMEM shrink must not persist: a split write re-arms the dwc3
-  double-TRB replay, so each message starts at the full quantum again and only
-  the frames under memory pressure are ever split."""
-  t = _bare_transport()
-  t.write_chunk = 256 * P.USB_MAX_PACKET   # as if _shrink_write had halved it once
-  monkeypatch.setattr(ffs.StreamTransport, 'send', lambda self, *a, **k: None)
-  t.send(P.Msg.INFER_REQ, 1, ())
-  assert t.write_chunk == FfsTransport.write_chunk, "write quantum not reset for the next message"
 
 
 def test_gadget_receive_buffer_is_not_oversized(mount):

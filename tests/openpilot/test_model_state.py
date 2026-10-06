@@ -53,6 +53,7 @@ def spec_for(inputs: dict) -> ModelSpec:
 
 class FakeClient:
   def __init__(self, kind: str = 'usb'):
+    self.nonce = 'test-session'
     self.sent = []
     self.asked = []
     self.last_timings = (0, 0, 0)
@@ -403,6 +404,20 @@ class TestTelemetry(ModelStateTest):
     client.last_state = {'gpu_temp': 51.0}
     self.run_frames(STATEFUL, n=6, client=client)
     self.assertEqual(self.events, [('jetlinkTelemetry', {'dead': False, 'gpu_temp': 51.0})])
+
+  def test_send_diagnostics_include_session_maxima_without_extra_log_frequency(self):
+    client = FakeClient()
+    client.last_state = {'gpu_temp': 51.0}
+    client.t.last_send = {'elapsed_ms': 3.0, 'errno': None}
+    client.t.send_totals = {'messages': 100, 'max_elapsed_ms': 19.0}
+    self.run_frames(STATEFUL, n=6, client=client)
+    sends = [fields for name, fields in self.events if name == 'jetlinkSend']
+    self.assertEqual(len(sends), 1)
+    self.assertEqual(sends[0]['nonce'], 'test-session')
+    self.assertEqual(sends[0]['elapsed_ms'], 3.0)
+    self.assertEqual(sends[0]['totals']['max_elapsed_ms'], 19.0)
+    client.t.send_totals['messages'] += 1
+    self.assertEqual(sends[0]['totals']['messages'], 100)
 
   def test_nothing_back_yet_is_nothing_logged(self):
     self.run_frames(STATEFUL, n=4)

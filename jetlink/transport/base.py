@@ -227,14 +227,18 @@ class StreamTransport(Transport):
     bufs.insert(0, memoryview(header))
     self._send_deadline = None if timeout is None else time.monotonic() + timeout
     try:
-      while bufs:
-        self._write_timeout()
-        n = self._write(take(bufs, self.write_chunk) if self.write_chunk else bufs)
-        if n <= 0:
-          raise LinkError("peer went away during send")
-        bufs = advance(bufs, n)
+      self._send_buffers(bufs)
     finally:
       self._send_deadline = None
+
+  def _send_buffers(self, bufs: list[memoryview]) -> None:
+    """Send one framed message. A transport may guard the whole transaction."""
+    while bufs:
+      self._write_timeout()
+      n = self._write(take(bufs, self.write_chunk) if self.write_chunk else bufs)
+      if n <= 0:
+        raise LinkError("peer went away during send")
+      bufs = advance(bufs, n)
 
   def _clamp_read(self, dest: memoryview) -> int:
     """How many bytes this transport may ask for in one read."""
