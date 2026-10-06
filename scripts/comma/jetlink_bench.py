@@ -14,6 +14,7 @@ import argparse
 import csv
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -22,15 +23,15 @@ from pathlib import Path
 
 import numpy as np
 
-from openpilot.cereal import messaging
-from openpilot.common.basedir import BASEDIR
-from openpilot.common.hardware import HARDWARE
-from openpilot.common.params import Params
-from openpilot.common.prefix import OpenpilotPrefix
-from openpilot.sunnypilot.jetlink_adapter import IN_CONTROL
-
 
 def main():
+  from openpilot.cereal import messaging
+  from openpilot.common.basedir import BASEDIR
+  from openpilot.common.hardware import HARDWARE
+  from openpilot.common.params import Params
+  from openpilot.common.prefix import OpenpilotPrefix
+  from openpilot.sunnypilot.jetlink_adapter import IN_CONTROL
+
   parser = argparse.ArgumentParser(description=__doc__)
   parser.add_argument('--seconds', type=float, default=180)
   parser.add_argument('--output', type=Path, required=True)
@@ -39,8 +40,11 @@ def main():
                       help='fake engaged controls for this many seconds, so the join has to wait for a window')
   parser.add_argument('--write-chunk', type=int, choices=[16384, 32768, 65536, 131072, 262144, 524288],
                       help='bench-only FunctionFS write quantum override, in bytes')
+  parser.add_argument('--record', action='store_true', help='run loggerd, encoderd and driver monitoring; keep recordings under output')
+  parser.add_argument('--resources', action='store_true', help='sample CPU, PSS and VM state once per second')
   args = parser.parse_args()
-  if args.seconds <= 0:
+  args.output = args.output.resolve()
+  if not np.isfinite(args.seconds) or args.seconds <= 0:
     parser.error('--seconds must be positive')
   live = Params()
   if not live.get_bool('IsOffroad'):
@@ -54,17 +58,21 @@ def main():
     except (OSError, ProcessLookupError):
       continue
     if argv and (Path(os.fsdecode(argv[0])).name == 'camerad' or
-                 b'openpilot.selfdrive.modeld.modeld' in argv):
+                 any(b'openpilot.selfdrive.modeld.modeld' in arg or
+                     b'openpilot.selfdrive.modeld.dmonitoringmodeld' in arg for arg in argv) or
+                 Path(os.fsdecode(argv[0])).name in ('encoderd', 'loggerd')):
       raise SystemExit(f'physical resource already owned by {proc.parent.name}: {argv[:3]}')
   # the slot names a ref; without the catalog it names nothing the picker can
   # find, and the join asks for a model that has not been picked
   keys = ('CarParamsPersistent', 'CalibrationParams', 'ModelManager_ActiveBundleChestnut',
           'ModelManager_ModelsCache_Chestnut', 'JetlinkModelPointers',
-          'JetlinkSpec')
+          'JetlinkSpec', 'RecordFront', 'IsRhdDetected', 'ExperimentalMode')
   saved = {key: live.get(key) for key in keys}
   if saved['CarParamsPersistent'] is None:
     raise SystemExit('no saved CarParams; bench cannot choose a vehicle configuration')
   args.output.mkdir(parents=True, exist_ok=False)
+  if args.record and shutil.disk_usage(args.output).free < 2 << 30:
+    raise SystemExit('recording bench requires at least 2 GiB free')
   stop = False
 
   def stop_requested(*_):
@@ -74,6 +82,7 @@ def main():
   signal.signal(signal.SIGTERM, stop_requested)
   signal.signal(signal.SIGINT, stop_requested)
   children, files, rows = [], [], []
+  failure = None
   # Keep artifacts under the explicit output directory; no live Params writes.
   with OpenpilotPrefix() as prefix:
     params = Params()
@@ -87,21 +96,45 @@ def main():
     calibration = None
     if saved['CalibrationParams'] is not None:
       calibration = messaging.log_from_bytes(saved['CalibrationParams'])
+    child_env = dict(os.environ, LOG_ROOT=str(args.output / 'recordings'))
+    if args.record:
+      params.put('RecordFront', True, block=True)
     print(f'isolated prefix={prefix.prefix} output={args.output}', flush=True)
     HARDWARE.set_power_save(False)
     try:
-      model_command = [sys.executable, '-m', 'openpilot.selfdrive.modeld.modeld']
+      # -m puts the installed checkout ahead of PYTHONPATH. Always test the
+      # package this script belongs to, including a staged candidate in /data/tmp.
+      package = str(Path(__file__).resolve().parents[2])
+      setup = f'import sys; sys.path.insert(0, {package!r}); '
       if args.write_chunk is not None:
-        model_command = [sys.executable, '-c',
-                         ('from jetlink.transport.ffs import FfsTransport; '
-                          f'FfsTransport.write_chunk={args.write_chunk}; '
-                          'import runpy; runpy.run_module("openpilot.selfdrive.modeld.modeld", run_name="__main__")')]
-      for name, command in (
+        setup += f'from jetlink.transport.ffs import FfsTransport; FfsTransport.write_chunk={args.write_chunk}; '
+      model_command = [sys.executable, '-c', setup +
+                       'import runpy; runpy.run_module("openpilot.selfdrive.modeld.modeld", run_name="__main__")']
+      commands = [
         ('camerad', [str(Path(BASEDIR) / 'openpilot/system/camerad/camerad')]),
-        ('modeld', model_command)):
+        ('modeld', model_command)]
+      if args.record:
+        # AGNOS otherwise writes Python logs to the live /data/log even with
+        # an isolated prefix. Keep those files with the recording artifacts.
+        log_setup = ('from openpilot.common.hardware.hw import Paths; '
+                     f'Paths.swaglog_root=staticmethod(lambda: {str(args.output / "swaglog")!r}); '
+                     'import runpy; runpy.run_module("openpilot.system.logmessaged", run_name="__main__")')
+        commands.extend([
+          ('logmessaged', [sys.executable, '-c', log_setup]),
+          ('loggerd', [str(Path(BASEDIR) / 'openpilot/system/loggerd/loggerd')]),
+          ('encoderd', [str(Path(BASEDIR) / 'openpilot/system/loggerd/encoderd')]),
+          ('dmonitoringmodeld', [sys.executable, '-m', 'openpilot.selfdrive.modeld.dmonitoringmodeld']),
+        ])
+      for name, command in commands:
         log = (args.output / f'{name}.log').open('w')
         files.append(log)
-        children.append(subprocess.Popen(command, cwd=BASEDIR, stdout=log, stderr=subprocess.STDOUT))
+        children.append(subprocess.Popen(command, cwd=BASEDIR, env=child_env, stdout=log, stderr=subprocess.STDOUT))
+      if args.resources:
+        log = (args.output / 'resources.log').open('w')
+        files.append(log)
+        sampler = [sys.executable, str(Path(__file__).with_name('bench_resources.py')),
+                   '--output', str(args.output / 'resources.jsonl'), *[str(child.pid) for child in children]]
+        children.append(subprocess.Popen(sampler, stdout=log, stderr=subprocess.STDOUT))
       start = last = time.monotonic()
       tick = 0
       with (args.output / 'frames.csv').open('w') as stream:
@@ -109,7 +142,9 @@ def main():
         writer.writerow(['elapsed_s', 'frame_id', 'big', 'valid', 'exec_ms', 'drop_pct', 'age_ms', 'accel_state', 'available'])
         while not stop and time.monotonic() - start < args.seconds:
           if any(child.poll() is not None for child in children):
-            raise RuntimeError('camera/modeld exited; inspect captured logs')
+            raise RuntimeError('bench process exited; inspect captured logs')
+          if tick % 100 == 0 and args.record and shutil.disk_usage(args.output).free < 2 << 30:
+            raise RuntimeError('stopping recording bench: less than 2 GiB disk space free')
           if tick % 100 == 0 and not live.get_bool('IsOffroad'):
             raise RuntimeError('real ignition changed: stopping bench')
           engaged = time.monotonic() - start < args.engaged_until
@@ -154,6 +189,8 @@ def main():
             # slows the comma's share of every frame; a drive keeps it off
             HARDWARE.set_power_save(False)
           time.sleep(max(0, start + tick * 0.01 - time.monotonic()))
+    except Exception as error:
+      failure = error
     finally:
       stopping = time.monotonic()
       for child in reversed(children):
@@ -177,7 +214,9 @@ def main():
       # Power saving belongs to hardwared if real ignition changed.
       if live.get_bool('IsOffroad'):
         HARDWARE.set_power_save(True)
-  summary = {}
+  summary = {'interrupted': stop}
+  if failure is not None:
+    summary['error'] = f'{type(failure).__name__}: {failure}'
   for label, subset in [('all', rows), ('big', [r for r in rows if r[2]]), ('small', [r for r in rows if not r[2]])]:
     if subset:
       # the state column is text, so pick the numeric columns before numpy sees the rows
@@ -186,8 +225,19 @@ def main():
                         'over_50ms': int((values[:, 4] > 50).sum()), 'max_drop_pct': float(values[:, 5].max()),
                         'lagging_frames': int((values[:, 5] > 1).sum()), 'invalid_frames': int((values[:, 3] == 0).sum()),
                         'states': sorted({row[7] for row in subset})}
+  if args.record:
+    segments = sorted((args.output / 'recordings').glob('*--*'))
+    complete = [p.name for p in segments if all((p / name).exists() and (p / name).stat().st_size > 0
+                                               for name in ('rlog.zst', 'fcamera.hevc', 'ecamera.hevc', 'dcamera.hevc'))]
+    summary['recording'] = {'segments': len(segments), 'complete_segments': complete}
   (args.output / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')
   print(json.dumps(summary, indent=2), flush=True)
+  if failure is not None:
+    raise failure
+  if args.record and not summary['recording']['complete_segments']:
+    raise SystemExit('recording workload did not produce logs and all three camera files')
+  if args.record and args.seconds >= 150 and len(summary['recording']['complete_segments']) < 2:
+    raise SystemExit('recording workload did not exercise segment rotation')
   if not rows or (not args.small and not any(row[2] for row in rows)):
     raise SystemExit('bench did not exercise the requested model')
 
