@@ -81,21 +81,39 @@ def connect(log, loan, deadline: float | None = None, name: str | None = None, w
   return JetlinkClient.open_borrowed_ffs(loan.mount, loan.udc, bounce=loan.bounce, deadline=deadline, name=name)
 
 
+# what the panels say while a Wi-Fi link waits, by why (WifiWaiting)
+NOT_ON_WIFI = 'join hotspot'
+NO_ANSWER = 'open Jetlink app'
+
+
+class WifiWaiting(ConnectionError):
+  """The Wi-Fi dial found no device to talk to: the comma is on no Wi-Fi, or
+  nothing answers at its gateway. The join asks again in a few seconds, and
+  the panel says what is missing (joining._join_loop reads `waiting`)."""
+
+  def __init__(self, message: str, waiting: str):
+    super().__init__(message)
+    self.waiting = waiting
+    from jetlink.comma import wifi
+    self.retry_after = wifi.DIAL_DELAY
+
+
 def dial(log, deadline: float | None = None, name: str | None = None):
   """Open the link over Wi-Fi: the comma's gateway, the hotspot it joined
-  (jetlink.comma.wifi). LinkError when the comma is on no Wi-Fi or nothing
+  (jetlink.comma.wifi). WifiWaiting when the comma is on no Wi-Fi or nothing
   answers there, which the join retries."""
   from jetlink.client import FRAME_TIMEOUT, JetlinkClient
   from jetlink.comma import wifi
-  from jetlink.transport.base import LinkError
   host = wifi.gateway()
   if host is None:
-    raise LinkError("not on Wi-Fi")
+    raise WifiWaiting("not on Wi-Fi", NOT_ON_WIFI)
   try:
     client = JetlinkClient.open_tcp(host, timeout=wifi.DIAL_TIMEOUT, name=name,
                                     deadline=FRAME_TIMEOUT if deadline is None else deadline)
   except OSError as e:
-    raise LinkError(f"nothing answered at {host}: {e}") from e
+    raise WifiWaiting(f"nothing answered at {host}: {e}", NO_ANSWER) from e
+  # the hello says Wi-Fi and the band, so the far end can warn about 2.4 GHz
+  client.t.link = wifi.link_info()
   gadget.note_link('wifi', host)
   log.warning("jetlink: dialed %s over Wi-Fi", host)
   return client
@@ -227,6 +245,8 @@ def connect_patiently(link: Link):
   while True:
     try:
       client = link.open()
+    except WifiWaiting:
+      raise   # the join asks again soon and says why meanwhile; nothing here would change it
     except Exception as e:
       client, last = None, e
     if client is not None and link.wifi:
@@ -244,11 +264,7 @@ def connect_patiently(link: Link):
       # usually a provisioning run still finishing an exchange on the endpoints
       raise last if last is not None else TimeoutError("could not open the link")
     link.log.warning("jetlink: link not ready (%s), retrying", last)
-    if link.wifi:
-      from jetlink.comma import wifi
-      time.sleep(wifi.DIAL_DELAY)
-    else:
-      time.sleep(CONNECT_DELAY)
+    time.sleep(CONNECT_DELAY)
 
 
 # -- making the Jetson ready ------------------------------------------------------

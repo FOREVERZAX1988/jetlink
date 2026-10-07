@@ -145,7 +145,7 @@ data class StatusState(
     val linkNote: String
         get() {
             val medium = medium ?: return if (usb is UsbState.Attached) "Connecting" else "Waiting"
-            return if (medium.slow) "Slow, use USB 3" else "Connected"
+            return if (medium.slow) medium.fix ?: "Slow, use USB 3" else "Connected"
         }
 
     /** Under Waiting for Comma. */

@@ -488,7 +488,7 @@ const BUDGET = 50, TIGHT = 10, WINDOW = 120, STALE = 5, DRIVING = 10;
 const STAGES = [['queue', 'Input'], ['gpu', 'Model'], ['other', 'Other'], ['send', 'Send']];
 const STEP = { upload: 'Receiving the model', patch: 'Preparing the model', parse: 'Reading the model',
   build: 'Building the engine', save: 'Saving', load: 'Loading' };
-const MEDIUM = { usb3: 'USB 3', usb2: 'USB 2', usb1: 'USB 1', usb: 'USB', tcp: 'TCP' };
+const MEDIUM = { usb3: 'USB 3', usb2: 'USB 2', usb1: 'USB 1', usb: 'USB', tcp: 'TCP', wifi: 'Wi-Fi', wifi24: 'Wi-Fi 2.4 GHz' };
 const RUNTIME = { trt: 'TensorRT', ort: 'onnxruntime' };
 const ZONE = { cpu: 'CPU', gpu: 'GPU', tj: 'Tj', soc0: 'SoC 0', soc1: 'SoC 1', soc2: 'SoC 2' };
 const RAIL = { VDD_IN: 'Board', VDD_CPU_GPU_CV: 'CPU+GPU+CV', VDD_SOC: 'SoC' };

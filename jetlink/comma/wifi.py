@@ -12,8 +12,11 @@ built and the USB-C port is left alone, so ADB keeps working.
 """
 from __future__ import annotations
 
+import re
+import shutil
 import socket
 import struct
+import subprocess
 from pathlib import Path
 
 ROUTES = Path('/proc/net/route')
@@ -44,3 +47,25 @@ def gateway(interface: str = INTERFACE, routes: Path = ROUTES) -> str | None:
     if flags & _RTF_UP and flags & _RTF_GATEWAY:
       return socket.inet_ntoa(struct.pack('<I', int(f[2], 16)))
   return None
+
+
+def band(interface: str = INTERFACE) -> str | None:
+  """The band the comma is on, '2.4', '5' or '6' (GHz), from the frequency
+  iwconfig reports; None when it cannot say. Read once a dial: 2.4 GHz is
+  too slow for a big model's frames, and the apps say so."""
+  tool = shutil.which('iwconfig') or '/usr/sbin/iwconfig'
+  try:
+    out = subprocess.run([tool, interface], capture_output=True, text=True, timeout=1.0).stdout
+  except (OSError, subprocess.SubprocessError):
+    return None
+  m = re.search(r'Frequency[:=]\s*([\d.]+)\s*GHz', out)
+  if m is None:
+    return None
+  ghz = float(m.group(1))
+  return '2.4' if ghz < 3.0 else '5' if ghz < 5.925 else '6'
+
+
+def link_info(interface: str = INTERFACE) -> dict:
+  """What the comma's hello says of a Wi-Fi link (Transport.link_info)."""
+  b = band(interface)
+  return {'kind': 'wifi', **({'band': b} if b else {})}

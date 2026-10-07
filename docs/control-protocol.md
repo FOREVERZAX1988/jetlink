@@ -87,7 +87,8 @@ angle brackets.
 
 {"event":"link","t":0,"state":"connected","detail":"","peer":"usb","medium":"usb3","client":"modeld"}
 // state: "waiting" | "connected" | "disconnected". medium, when connected:
-// "usb3" | "usb2" | "usb1" | "usb" (speed unknown) | "tcp", from the comma's
+// "usb3" | "usb2" | "usb1" | "usb" (speed unknown) | "tcp" | "wifi" | "wifi24"
+// (the comma on the device's hotspot, 2.4 GHz too slow), from the comma's
 // hello (a phone's cable is TCP over USB). client: the hello's name, "modeld"
 // while driving or "provision" fetching the model; absent before a hello.
 // Transitions only.

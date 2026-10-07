@@ -40,6 +40,14 @@ private val steps = listOf(
     "Wait for Connected.",
 )
 
+private val wifiSteps = listOf(
+    "In Jetlink's settings, turn on Wi-Fi Link.",
+    "Turn on the phone's hotspot on 5 GHz.",
+    "On the comma, join the hotspot in Network settings.",
+    "On the comma, set Jetlink to Wi-Fi, offroad.",
+    "Wait for Connected.",
+)
+
 private val notes = listOf(
     "OnePlus, OPPO and realme: turn on OTG connection in Settings.",
     "Jetlink keeps running with the screen off while its notification shows.",
@@ -66,6 +74,15 @@ fun ConnectHelpScreen(back: () -> Unit) {
                 footer = { FormFooter("Or use a USB-C OTG adapter instead of the hub. The phone then does not charge.") },
             ) {
                 steps.forEachIndexed { index, step ->
+                    if (index > 0) RowDivider()
+                    Step(index + 1, step)
+                }
+            }
+            FormSection(
+                "Over Wi-Fi",
+                footer = { FormFooter("No cable: the comma dials the phone over the hotspot. 2.4 GHz is too slow for a big model.") },
+            ) {
+                wifiSteps.forEachIndexed { index, step ->
                     if (index > 0) RowDivider()
                     Step(index + 1, step)
                 }

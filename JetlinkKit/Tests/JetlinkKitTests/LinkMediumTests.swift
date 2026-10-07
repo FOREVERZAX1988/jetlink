@@ -23,15 +23,24 @@ struct LinkMediumTests {
     #expect(LinkMedium(tcpPeer: "10.0.0.5:40000") == .tcp)
     #expect(LinkMedium(tcpPeer: "192.168.60.4:50000") == .tcp)
     #expect(LinkMedium(link: ["kind": "tcp"]) == .tcp)
+    // the comma on the device's hotspot, by the band it joined on
+    #expect(LinkMedium(link: ["kind": "wifi", "band": "5"]) == .wifi)
+    #expect(LinkMedium(link: ["kind": "wifi", "band": "2.4"]) == .wifi24)
+    #expect(LinkMedium(link: ["kind": "wifi"]) == .wifi)
     #expect(LinkMedium(link: ["kind": "pigeon"]) == nil)
     #expect(LinkMedium(link: nil) == nil)
   }
 
-  @Test("Only USB 2 and 1 are slow enough to warn about")
+  @Test("Only USB 2 and 1 and 2.4 GHz Wi-Fi are slow enough to warn about")
   func slowLinks() {
-    #expect(LinkMedium.allCases.filter(\.isSlow) == [.usb2, .usb1])
+    #expect(LinkMedium.allCases.filter(\.isSlow) == [.usb2, .usb1, .wifi24])
     #expect(LinkMedium.usb2.advice?.hasPrefix("USB 2 costs") == true)
     #expect(LinkMedium.usb3.advice == nil)
+    #expect(LinkMedium.wifi24.advice?.contains("5 GHz") == true)
+    #expect(LinkMedium.wifi.advice == nil)
+    #expect(LinkMedium.usb2.fix == "Slow, use USB 3")
+    #expect(LinkMedium.wifi24.fix == "Slow, use 5 GHz")
+    #expect(LinkMedium.wifi.fix == nil)
   }
 
   @Test("A link event from a server that predates the field has no medium")
