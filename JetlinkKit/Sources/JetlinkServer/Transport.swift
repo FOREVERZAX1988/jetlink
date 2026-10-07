@@ -179,8 +179,9 @@ public final class TCPTransport: @unchecked Sendable {
     guard let base = bytes.baseAddress, let header = try? Wire.unpackHeader(base),
       Wire.headerSize + Int(header.length) + Wire.pad(header) == bytes.count
     else { return nil }
-    return Message(msgType: header.msgType, seq: header.seq, flags: header.flags,
-                   payload: UnsafeRawBufferPointer(start: base + Wire.headerSize, count: Int(header.length)), viaDatagram: true)
+    return Message(
+      msgType: header.msgType, seq: header.seq, flags: header.flags,
+      payload: UnsafeRawBufferPointer(start: base + Wire.headerSize, count: Int(header.length)), viaDatagram: true)
   }
 
   // MARK: receiving
