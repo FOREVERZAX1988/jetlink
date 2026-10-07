@@ -693,6 +693,9 @@ DESKTOP_OFF=0 DESKTOP_OFF_SAVED=0
 # 1 when the Jetson serves a comma over its own 5 GHz hotspot too (--set wifi=on)
 WIFI_LINK=0 WIFI_LINK_SAVED=0
 HOTSPOT=jetlink-hotspot
+# its name and password, for the end of the run and the web page (root only)
+HOTSPOT_FILE="$ETC_DIR/hotspot.env"
+HOTSPOT_SSID='' HOTSPOT_PASSWORD=''
 CACHE_DIR='' REF='' SOURCE='' SOURCE_DIR='' COMMIT=''
 # REF is what the install follows: latest (the newest release), a tag or a
 # branch. RESOLVED is the tag or branch that gave, or `local` for a checkout,
@@ -2088,6 +2091,13 @@ set_hotspot() {
     else
       note "The Wi-Fi hotspot starts at the next restart."
     fi
+    HOTSPOT_SSID="$(as_root nmcli -s -g 802-11-wireless.ssid connection show "$HOTSPOT" 2>/dev/null || true)"
+    HOTSPOT_PASSWORD="$(as_root nmcli -s -g 802-11-wireless-security.psk connection show "$HOTSPOT" 2>/dev/null || true)"
+    {
+      echo "# Written by the Jetlink installer: the hotspot a comma on Wi-Fi joins."
+      printf 'JETLINK_HOTSPOT_SSID=%q\n' "$HOTSPOT_SSID"
+      printf 'JETLINK_HOTSPOT_PASSWORD=%q\n' "$HOTSPOT_PASSWORD"
+    } | root_write "$HOTSPOT_FILE" 600
   elif [ "$WIFI_LINK_SAVED" = 1 ]; then
     remove_hotspot
   fi
@@ -2095,6 +2105,7 @@ set_hotspot() {
 
 remove_hotspot() {
   as_root nmcli connection delete "$HOTSPOT" >>"$LOG" 2>&1 || true
+  as_root rm -f "$HOTSPOT_FILE"
   good "Wi-Fi hotspot removed"
 }
 
@@ -2430,11 +2441,8 @@ finish() {
     note "Keep this computer plugged in and awake while driving: sleep drops the link."
   fi
   if [ "$WIFI_LINK" = 1 ]; then
-    local ssid psk
-    ssid="$(as_root nmcli -s -g 802-11-wireless.ssid connection show "$HOTSPOT" 2>/dev/null || true)"
-    psk="$(as_root nmcli -s -g 802-11-wireless-security.psk connection show "$HOTSPOT" 2>/dev/null || true)"
     say ""
-    say "  ${B}Over Wi-Fi:${N} join the comma to ${B}$ssid${N} ${D}(password $psk)${N}, then set Jetlink to ${B}Wi-Fi${N}."
+    say "  ${B}Over Wi-Fi:${N} join the comma to ${B}$HOTSPOT_SSID${N} ${D}(password $HOTSPOT_PASSWORD)${N}, then set Jetlink to ${B}Wi-Fi${N}."
   fi
   if [ "$STATUS_PORT" != 0 ]; then
     say ""

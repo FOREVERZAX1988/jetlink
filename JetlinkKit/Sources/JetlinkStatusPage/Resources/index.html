@@ -420,6 +420,7 @@ dialog[open] { position: fixed; inset: auto 0 0 0; }
           <div class="line"><b>Serve a comma over Wi-Fi</b>
             <label class="switch"><input type="checkbox" id="sw-wifi" aria-label="Serve a comma over Wi-Fi"><i></i></label></div>
           <div class="desc">The Jetson makes a 5 GHz hotspot. Join the comma to it and set Jetlink to Wi-Fi. The Jetson leaves any Wi-Fi network it is on; reach this page over the hotspot after. USB stays faster.</div>
+          <div class="desc" id="wifi-hotspot" hidden></div>
         </div>
       </section>
       <section class="card" id="set-autostart" hidden>
@@ -1051,7 +1052,13 @@ function drawSettings() {
     $('sw-poweroff').disabled = lock;
   }
   if (applies.has('desktop')) { $('sw-desktop').checked = draftValue('desktop') === 'on'; $('sw-desktop').disabled = lock; }
-  if (applies.has('wifi')) { $('sw-wifi').checked = draftValue('wifi') === 'on'; $('sw-wifi').disabled = lock; }
+  if (applies.has('wifi')) {
+    $('sw-wifi').checked = draftValue('wifi') === 'on';
+    $('sw-wifi').disabled = lock;
+    const spot = sys.hotspot;
+    $('wifi-hotspot').hidden = !spot;
+    if (spot) $('wifi-hotspot').innerHTML = `Hotspot <b>${esc(spot.ssid)}</b>, password <b>${esc(spot.password)}</b>`;
+  }
   if (applies.has('autostart')) { $('sw-autostart').checked = draftValue('autostart') === 'yes'; $('sw-autostart').disabled = lock; }
   const n = changes().length;
   $('applybar').hidden = !n || S.tab !== 'settings';

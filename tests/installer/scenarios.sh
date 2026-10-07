@@ -801,6 +801,10 @@ expect_in /etc/jetlink/install.conf "JETLINK_WIFI_LINK=1"
 expect_in /etc/jetlink/server.env 'JETLINK_LISTEN="--listen"'
 expect_out "Make a 5 GHz Wi-Fi hotspot for the comma"
 expect_out "join the comma to jetlink-fake"
+# for the web page, root only
+expect_in /etc/jetlink/hotspot.env "JETLINK_HOTSPOT_SSID=jetlink-fake"
+expect_in /etc/jetlink/hotspot.env "JETLINK_HOTSPOT_PASSWORD=0123456789abcdef"
+check "hotspot.env is not root only" test "$(stat -c %a /etc/jetlink/hotspot.env)" = 600
 # again: the hotspot there keeps its password
 : >"$FAKE_LOG"
 cli setup --set wifi=on </dev/null
@@ -810,6 +814,7 @@ expect_not_ran "nmcli connection add"
 cli setup --set wifi=off </dev/null
 expect_rc 0
 expect_ran "nmcli connection delete jetlink-hotspot"
+expect_no_file /etc/jetlink/hotspot.env
 expect_in /etc/jetlink/install.conf "JETLINK_WIFI_LINK=0"
 expect_in /etc/jetlink/server.env 'JETLINK_LISTEN=""'
 # a Jetson with no Wi-Fi says so and stays on USB

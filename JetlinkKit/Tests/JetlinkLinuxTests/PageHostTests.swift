@@ -30,7 +30,7 @@
       let commands: FakeCommands
       let host: PageHost
 
-      init(jetson: Bool = true, desktopOff: Bool = false, graphical: Bool = true, commands: FakeCommands = FakeCommands()) {
+      init(jetson: Bool = true, desktopOff: Bool = false, graphical: Bool = true, wifi: Bool = false, commands: FakeCommands = FakeCommands()) {
         tree.write(
           "/etc/jetlink/install.conf",
           """
@@ -42,6 +42,7 @@
           JETLINK_POWEROFF_WITH_COMMA=1
           JETLINK_DESKTOP_OFF=\(desktopOff ? 1 : 0)
           JETLINK_AUTOSTART=1
+          JETLINK_WIFI_LINK=\(wifi ? 1 : 0)
 
           """)
         tree.write(
@@ -97,6 +98,19 @@
       // no lock file: this server does not sleep
       #expect((info["awake"] as? [String: Any])?["available"] as? Bool == false)
       #expect(installed.commands.ran.all.isEmpty)
+    }
+
+    @Test("With the Wi-Fi link on, the page gets the hotspot to join the comma to; off, nothing")
+    func hotspot() {
+      let off = Installed()
+      #expect(off.host.info()["hotspot"] is NSNull)
+      let on = Installed(wifi: true)
+      #expect(on.host.info()["settings"] as? [String: String] == ["power": "always", "comma_poweroff": "yes", "wifi": "on", "desktop": "on"])
+      // the installer writes the file once the hotspot is up
+      #expect(on.host.info()["hotspot"] is NSNull)
+      on.tree.write("/etc/jetlink/hotspot.env", "JETLINK_HOTSPOT_SSID=jetlink-orin\nJETLINK_HOTSPOT_PASSWORD=0123456789abcdef\n")
+      #expect(on.host.info()["hotspot"] as? [String: String] == ["ssid": "jetlink-orin", "password": "0123456789abcdef"])
+      #expect(on.commands.ran.all.isEmpty)
     }
 
     @Test("No desktop answer for a Jetson that never had one; a PC has its start-up instead")

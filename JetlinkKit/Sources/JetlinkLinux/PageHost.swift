@@ -142,7 +142,18 @@
         "cache_dir": answers.env["JETLINK_CACHE_DIR"] ?? "",
         "awake": awake(answers),
         "task": task(),
+        "hotspot": hotspot(answers).map { $0 as Any } ?? NSNull(),
       ]
+    }
+
+    /// The hotspot a comma on Wi-Fi joins, while the Wi-Fi link is on: its
+    /// name and password, from the installer's root-only file. Only signed-in
+    /// pages get this endpoint.
+    func hotspot(_ answers: Answers) -> [String: String]? {
+      guard answers.conf["JETLINK_WIFI_LINK"] == "1", let file = ShellEnv.read(root.path("/etc/jetlink/hotspot.env")),
+        let ssid = file["JETLINK_HOTSPOT_SSID"], !ssid.isEmpty
+      else { return nil }
+      return ["ssid": ssid, "password": file["JETLINK_HOTSPOT_PASSWORD"] ?? ""]
     }
 
     // MARK: settings
