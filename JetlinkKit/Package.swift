@@ -88,9 +88,13 @@ let package = Package(
       linkerSettings: [.linkedLibrary("dl", .when(platforms: linux))]),
     // usbdevfs's ioctls, which are macros Swift cannot import.
     .target(name: "CUsbfs"),
+    // a lossless frame's planes back to pixels: zstd's decoder (vendor/) and the MED inverse
+    .target(name: "CLossless", exclude: ["vendor/LICENSE", "vendor/SOURCE.txt"]),
     .target(
       name: "JetlinkServer",
-      dependencies: ["JetlinkKit", "JetlinkONNX", "JetlinkRegistry", "JetlinkLog", .target(name: "CUsbfs", condition: .when(platforms: linux))]),
+      dependencies: [
+        "JetlinkKit", "JetlinkONNX", "JetlinkRegistry", "JetlinkLog", "CLossless", .target(name: "CUsbfs", condition: .when(platforms: linux)),
+      ]),
     .target(
       name: "JetlinkORT", dependencies: ["JetlinkKit", "JetlinkONNX", "JetlinkServer", "COrt"],
       linkerSettings: [.linkedFramework("Metal", .when(platforms: apple))]),
@@ -134,7 +138,7 @@ let package = Package(
     // The server's tests run it on onnxruntime's CPU provider, and on LiteRT
     // where $JETLINK_LITERT_DIR has its libraries.
     .testTarget(
-      name: "JetlinkServerTests", dependencies: ["JetlinkServer", "JetlinkORT", "JetlinkLiteRT", "JetlinkTestSupport"], exclude: ["Fixtures"]),
+      name: "JetlinkServerTests", dependencies: ["JetlinkServer", "CLossless", "JetlinkORT", "JetlinkLiteRT", "JetlinkTestSupport"], exclude: ["Fixtures"]),
     // On the fake shim (JL_TRT_FAKE), which jl_trt_fake.h drives.
     .testTarget(
       name: "JetlinkTRTTests", dependencies: ["JetlinkTRT", "CTrt", "JetlinkServer", "JetlinkONNX", "JetlinkTestSupport"],

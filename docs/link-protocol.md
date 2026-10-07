@@ -44,6 +44,15 @@ bench tools). There is one version: update the comma and Jetlink together.
   float32 without `hidden_state`: 8,324 bytes for the current models (73,860
   with it). The comma sets WANT_HIDDEN on a frame to get the whole vector, for
   logging every output; WANT_STATE appends the server's telemetry as JSON.
+- **Lossless frames.** For links slower than USB (Wi-Fi, in progress), a
+  frame can travel packed: each of its 12 planes is predicted pixel by pixel
+  from its neighbours (JPEG-LS's MED predictor), and the prediction errors are
+  packed alone with zstd. The comma sets LOSSLESS on the INFER_REQ, which then
+  carries the packed floats, a 4-byte size per plane, and the planes, about
+  half the bytes on real drive frames (2.1x). The server unpacks the planes in
+  parallel to exactly the frame the comma warped, so outputs are bit for bit
+  what the raw frame gives. The comma sends them only to a server whose hello
+  lists `med-zstd` in `frame_codecs`. Reference: `jetlink/lossless.py`.
 - **Hidden state on the server.** A queued model (BMRLNAP, Cinque Terre V2,
   Lebowski) feeds each frame's `hidden_state` into the next frame, where
   openpilot's modeld feeds its own. The server keeps it: zero when an engine

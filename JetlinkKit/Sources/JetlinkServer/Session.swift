@@ -44,6 +44,8 @@ final class Session: @unchecked Sendable {
   /// the telemetry when asked for.
   private let parts: UnsafeMutablePointer<UnsafeRawBufferPointer>
   private static let maxParts = 4
+  /// Where a lossless frame unpacks, made on the first one for its size.
+  private var lossless: LosslessFrame?
 
   init(transport: any MessageLink, host: EngineHost) {
     self.transport = transport
@@ -268,6 +270,8 @@ final class Session: @unchecked Sendable {
       // 0 unless the host really suspends: the comma then holds the gadget
       // for the whole park instead of letting go for a box that never sleeps.
       "sleep_after": host.hooks.sleepAfter,
+      // frames this server takes packed (Wire.Flag.lossless), for slow links
+      "frame_codecs": [LosslessFrame.codec],
     ]
     for (key, value) in host.backend.describe() {
       response[key] = value
@@ -453,18 +457,34 @@ final class Session: @unchecked Sendable {
     let started = DispatchTime.now().uptimeNanoseconds
     host.lastSeenAt = ProcessInfo.processInfo.systemUptime
     let layout = loaded.staging.layout
-    guard message.payload.count == layout.requestBytes else {
-      // The offsets below come from the spec, not the wire: a client on
-      // another model would have its scalars read out of the image.
+    let payload = message.payload
+    guard payload.count >= Wire.inferReqSize, let base = payload.baseAddress else {
       return InferReply(status: .badShape)
     }
-    let base = message.payload.baseAddress!
     let frameID = UInt32(littleEndian: base.loadUnaligned(as: UInt32.self))
     let flags = Wire.Flag(rawValue: UInt32(littleEndian: base.loadUnaligned(fromByteOffset: 4, as: UInt32.self)))
+    // The offsets below come from the spec, not the wire: a client on
+    // another model would have its scalars read out of the image.
+    let warped: UnsafeRawPointer
+    let packed: UnsafeRawPointer
+    if flags.contains(.lossless) {
+      // the packed floats at their usual size, then the frame's planes
+      let planesAt = Wire.inferReqSize + layout.packedBytes
+      guard payload.count >= planesAt, let frame = losslessFrame(shape: layout.warpedShape),
+        frame.unpack(UnsafeRawBufferPointer(rebasing: payload[planesAt...]))
+      else {
+        return InferReply(status: .badShape)
+      }
+      warped = UnsafeRawPointer(frame.pixels)
+      packed = base + Wire.inferReqSize
+    } else {
+      guard payload.count == layout.requestBytes else { return InferReply(status: .badShape) }
+      warped = base + Wire.inferReqSize
+      packed = warped + layout.warpedBytes
+    }
     if flags.contains(.resetQueues) {
       loaded.staging.reset()
     }
-    let warped = base + Wire.inferReqSize
 
     var status = Wire.Status.ok
     var queueUs: UInt32 = 0
@@ -472,7 +492,7 @@ final class Session: @unchecked Sendable {
     do {
       // The packed floats stay where they arrived: every cast and copy of
       // them reads unaligned, so they need no aligned copy first.
-      try loaded.staging.stage(warped: warped, packed: warped + layout.warpedBytes)
+      try loaded.staging.stage(warped: warped, packed: packed)
       queueUs = microseconds(since: started)
       try loaded.engine.run()
     } catch {
@@ -513,6 +533,14 @@ final class Session: @unchecked Sendable {
       frameID: frameID, status: status, gpuUs: loaded.engine.lastGpuUs, queueUs: queueUs, totalUs: microseconds(since: started),
       outputCount: replied ? count : 0, hidden: replied && !flags.contains(.wantHidden) ? layout.hidden : nil,
       wantsState: flags.contains(.wantState), ran: true, failure: failure)
+  }
+
+  private func losslessFrame(shape: [Int]) -> LosslessFrame? {
+    if let lossless, lossless.shape == shape {
+      return lossless
+    }
+    lossless = LosslessFrame(shape: shape)
+    return lossless
   }
 
   private func onShutdown(_ message: Message) throws {

@@ -26,7 +26,8 @@ import time
 import numpy as np
 
 from jetlink import lossless
-from jetlink.openpilot.lossless import Errors, Packer
+from jetlink.lossless import Packer
+from jetlink.openpilot.lossless import Errors
 from jetlink.openpilot.warp import Warp
 
 WARP = '/data/openpilot/openpilot/sunnypilot/jetlink_adapter/models/warp_{w}x{h}_512x256_tinygrad.pkl'
@@ -68,7 +69,7 @@ def main() -> None:
     errors = Errors(jit.captured.ret)
     view = errors.view
   print("errors in the warp's own graph" if fused else "errors as a second graph")
-  packer = Packer()
+  packer = Packer(12, 128 * 256)
   sync = warp.wait
   cams = frames(nv12.size, w)
   tfm = np.array([[1.3, 0, 100], [0, 1.3, 60], [0, 0, 1]], np.float32)
@@ -94,7 +95,7 @@ def main() -> None:
         errors.run()
       sync()
       if step == 2:
-        sizes.append(len(packer.pack(view)))
+        sizes.append(len(packer.pack(view)[1]))
       ts.append((time.perf_counter() - t0) * 1000)
     extra = f"  {np.mean(sizes) / 1024:.0f} KB (synthetic)" if sizes else ''
     print(f"{name:22s} {quantiles(ts)} ms{extra}")

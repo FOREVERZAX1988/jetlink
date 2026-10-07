@@ -22,14 +22,21 @@ packs those bytes: 2.1x on real drive frames (route 286, 2026-10-06).
 Zero padding gives the edges JPEG-LS's rules without cases: the first row
 predicts from the left, the first column from above, the first pixel from 0.
 
-The comma computes the errors on its GPU with the warp (openpilot.lossless);
-this module is the reference both ends and the tests check against, in numpy.
-Decoding is sequential (each pixel needs its decoded neighbours), so a
+The comma computes the errors on its GPU with the warp (openpilot.lossless)
+and packs each plane alone (Packer), so a server unpacks planes in parallel;
+on the wire that is INFER_REQ with Flag.LOSSLESS (jetlink.protocol). encode()
+and decode() are the reference both ends and the tests check against, in
+numpy. Decoding is sequential (each pixel needs its decoded neighbours), so a
 server's decoder is native code; decode() here is for tests.
 """
 from __future__ import annotations
 
+import ctypes
+import ctypes.util
+
 import numpy as np
+
+from jetlink.protocol import lossless_sizes
 
 # the warp's output: two cameras of six 128x256 planes (4 Y phases, U, V)
 SHAPE = (2, 6, 128, 256)
@@ -71,3 +78,66 @@ def decode(errors: np.ndarray) -> np.ndarray:
       pred = predict(out[..., i, j - 1], out[..., i - 1, j], out[..., i - 1, j - 1])
       out[..., i, j] = (pred + r[..., i - 1, j - 1]) % 256
   return out[..., 1:, 1:].astype(np.uint8)
+
+
+# zstd.h: ZSTD_c_compressionLevel, and ZSTD_c_literalCompressionMode
+# (ZSTD_c_experimentalParam5, which the shared library accepts) set to
+# ZSTD_ps_enable. Negative levels leave literals raw (1.2-1.5x on these errors)
+# unless told otherwise; matching is not worth its time on them, Huffman is
+# the gain: 2.12x at level -20, 2.63 ms a frame on a mici big core
+_ZSTD_C_LEVEL = 100
+_ZSTD_C_LITERAL_MODE = 1002
+_ZSTD_PS_ENABLE = 1
+LEVEL = -20
+
+
+def _libzstd():
+  """The system's libzstd: AGNOS and Linux by soname, a Mac's from Homebrew."""
+  for name in ('libzstd.so.1', ctypes.util.find_library('zstd'),
+               '/opt/homebrew/lib/libzstd.dylib', '/usr/local/lib/libzstd.dylib'):
+    if name:
+      try:
+        return ctypes.CDLL(name)
+      except OSError:
+        continue
+  raise OSError("no libzstd on this system")
+
+
+class Packer:
+  """Each plane of a frame's errors packed alone, into one reused buffer."""
+
+  def __init__(self, planes: int, plane_bytes: int):
+    lib = _libzstd()
+    lib.ZSTD_createCCtx.restype = ctypes.c_void_p
+    lib.ZSTD_CCtx_setParameter.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
+    lib.ZSTD_CCtx_setParameter.restype = ctypes.c_size_t
+    lib.ZSTD_compress2.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p, ctypes.c_size_t]
+    lib.ZSTD_compress2.restype = ctypes.c_size_t
+    lib.ZSTD_compressBound.argtypes = [ctypes.c_size_t]
+    lib.ZSTD_compressBound.restype = ctypes.c_size_t
+    lib.ZSTD_isError.argtypes = [ctypes.c_size_t]
+    lib.ZSTD_isError.restype = ctypes.c_uint
+    self._lib = lib
+    self._cctx = lib.ZSTD_createCCtx()
+    for key, value in ((_ZSTD_C_LEVEL, LEVEL), (_ZSTD_C_LITERAL_MODE, _ZSTD_PS_ENABLE)):
+      if lib.ZSTD_isError(lib.ZSTD_CCtx_setParameter(self._cctx, key, value)):
+        raise RuntimeError(f"libzstd refused parameter {key}={value}")
+    self.planes, self.plane_bytes = planes, plane_bytes
+    self._out = np.empty(planes * lib.ZSTD_compressBound(plane_bytes), np.uint8)
+    self._sizes = [0] * planes
+
+  def pack(self, errors) -> tuple[bytes, memoryview]:
+    """The size table and the packed planes of `errors` (planes x plane_bytes,
+    contiguous), as INFER_REQ with Flag.LOSSLESS carries them after the packed
+    floats. The planes are valid until the next pack()."""
+    src = np.frombuffer(errors, np.uint8)
+    if src.size != self.planes * self.plane_bytes:
+      raise ValueError(f"{src.size} bytes of errors, not {self.planes} planes of {self.plane_bytes}")
+    at, cap, base = 0, self._out.size, self._out.ctypes.data
+    for k in range(self.planes):
+      n = self._lib.ZSTD_compress2(self._cctx, base + at, cap - at, src.ctypes.data + k * self.plane_bytes, self.plane_bytes)
+      if self._lib.ZSTD_isError(n):
+        raise RuntimeError("zstd could not pack a plane")
+      self._sizes[k] = n
+      at += n
+    return lossless_sizes(self._sizes), memoryview(self._out)[:at]

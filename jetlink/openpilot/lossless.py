@@ -5,7 +5,7 @@ This file is part of jetlink and is licensed under the MIT License.
 See the LICENSE file in the root directory for more details.
 
 The comma's half of lossless frames (jetlink.lossless): MED errors on the GPU
-from the warp's output, and Huffman packing on the CPU.
+from the warp's output; jetlink.lossless.Packer packs them on the CPU.
 
 Measured on the mici (2026-10-06, scripts/comma/bench_lossless.py), warp
 p50 0.96 ms alone:
@@ -19,20 +19,9 @@ tinygrad is the fork's: imported inside the functions that need it.
 """
 from __future__ import annotations
 
-import ctypes
-
 import numpy as np
 
 from jetlink.lossless import SHAPE
-
-# zstd.h: ZSTD_c_compressionLevel, and ZSTD_c_literalCompressionMode
-# (ZSTD_c_experimentalParam5, accepted by the shared library) set to
-# ZSTD_ps_enable
-_ZSTD_C_LEVEL = 100
-_ZSTD_C_LITERAL_MODE = 1002
-_ZSTD_PS_ENABLE = 1
-# matching is not worth its time on these errors; Huffman alone is the gain
-LEVEL = -20
 
 
 def med(x):
@@ -69,30 +58,3 @@ class Errors:
 
   def run(self) -> None:
     self._jit(self._warped)
-
-
-class Packer:
-  """Huffman packing of the errors through the system's libzstd."""
-
-  def __init__(self, capacity: int = 2 * int(np.prod(SHAPE))):
-    lib = ctypes.CDLL('libzstd.so.1')
-    lib.ZSTD_createCCtx.restype = ctypes.c_void_p
-    lib.ZSTD_CCtx_setParameter.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
-    lib.ZSTD_CCtx_setParameter.restype = ctypes.c_size_t
-    lib.ZSTD_compress2.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p, ctypes.c_size_t]
-    lib.ZSTD_compress2.restype = ctypes.c_size_t
-    lib.ZSTD_isError.argtypes = [ctypes.c_size_t]
-    lib.ZSTD_isError.restype = ctypes.c_uint
-    self._lib = lib
-    self._cctx = lib.ZSTD_createCCtx()
-    for key, value in ((_ZSTD_C_LEVEL, LEVEL), (_ZSTD_C_LITERAL_MODE, _ZSTD_PS_ENABLE)):
-      if lib.ZSTD_isError(lib.ZSTD_CCtx_setParameter(self._cctx, key, value)):
-        raise RuntimeError(f"libzstd refused parameter {key}={value}")
-    self.out = np.empty(capacity, np.uint8)
-
-  def pack(self, src: np.ndarray) -> memoryview:
-    """The packed bytes of src, valid until the next pack()."""
-    n = self._lib.ZSTD_compress2(self._cctx, self.out.ctypes.data, self.out.size, src.ctypes.data, src.nbytes)
-    if self._lib.ZSTD_isError(n):
-      raise RuntimeError("zstd could not pack the frame")
-    return memoryview(self.out)[:n]

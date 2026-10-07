@@ -406,6 +406,61 @@ def test_wrong_sized_request_is_rejected(queued):
   assert status == P.Status.BAD_SHAPE
 
 
+# -- lossless frames (Flag.LOSSLESS): packed planes, unpacked bit for bit ----
+
+def _packer(spec: ModelSpec):
+  from jetlink.lossless import Packer
+  n, k, h, w = spec.warped_shape
+  try:
+    return Packer(n * k, h * w)
+  except OSError:
+    pytest.skip('no libzstd to pack frames with')
+
+
+def full_range_frames(n: int, seed: int = 3):
+  """(warped, packed) per frame, every pixel value: the errors wrap both ways."""
+  spec, rng = spec_of(QUEUED), np.random.default_rng(seed)
+  return [(rng.integers(0, 256, spec.warped_shape, dtype=np.uint8),
+           (rng.standard_normal(spec.packed_nelem) * 0.5).astype(np.float32)) for _ in range(n)]
+
+
+def test_the_hello_offers_lossless_frames(queued):
+  assert not queued.takes_lossless, 'only a hello says so'
+  assert P.LOSSLESS_CODEC in queued.hello()['frame_codecs']
+  assert queued.takes_lossless
+
+
+def test_lossless_frames_run_exactly_as_raw_ones(queued):
+  from jetlink.lossless import encode
+  packer = _packer(queued.spec)
+  frames = queued_frames(6) + full_range_frames(3)
+  raw = run(queued, frames)
+  packed_runs = []
+  for i, (warped, packed) in enumerate(frames):
+    table, planes = packer.pack(encode(warped))
+    packed_runs.append(queued.infer(None, packed, frame_id=i + 1, reset=i == 0, lossless=(table, bytes(planes))))
+  for got, want in zip(packed_runs, raw, strict=True):
+    np.testing.assert_array_equal(got, want)
+
+
+def test_a_lossless_frame_that_does_not_add_up_is_rejected(queued):
+  from jetlink.lossless import encode
+  packer = _packer(queued.spec)
+  warped, packed = queued_frames(1)[0]
+  table, planes = packer.pack(encode(warped))
+  planes = bytes(planes)
+  head = P.pack_infer_req(1, P.Flag.LOSSLESS)
+  corrupt = bytearray(planes)
+  corrupt[0] ^= 0xFF   # the first plane's zstd magic
+  for name, parts in (('one byte short', (head, packed, table, planes[:-1])),
+                      ('a plane that is not one', (head, packed, table, bytes(corrupt))),
+                      ('no table', (head, packed))):
+    seq = queued._next_seq()
+    queued.t.send(P.Msg.INFER_REQ, seq, parts)
+    _, status, _, _, _ = P.unpack_infer_resp(queued._expect(P.Msg.INFER_RESP, seq, 5.0).payload)
+    assert status == P.Status.BAD_SHAPE, name
+
+
 def _may_power_off() -> bool:
   """A booted systemd host outside CI: a server that got --poweroff wrong could take it down."""
   return Path('/run/systemd/system').exists() and not (os.environ.get('CI') or os.environ.get('JETLINK_TEST_SHUTDOWN'))
