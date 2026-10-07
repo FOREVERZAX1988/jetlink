@@ -1,3 +1,15 @@
+Jetlink v0.8.5
+==============
+**iPhone & iPad**
+* Faster, steadier cable link.
+
+**Driving**
+* One slow frame no longer hands the big model back.
+* Fixed switching to an old model while the pick builds.
+
+**General Updates & Fixes**
+* **Update the comma:** zoompilot's `develop` branch pins Jetlink v0.8.5.
+
 Jetlink v0.8.4
 ==============
 **Driving**
