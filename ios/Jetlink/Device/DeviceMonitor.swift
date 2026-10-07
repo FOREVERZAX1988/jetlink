@@ -63,11 +63,15 @@ final class DeviceMonitor {
     if thermal.note != nil && health.thermal.note == nil {
       warn("the \(ThisDevice.name) is \(thermal.title.lowercased()); the system slows the chip to cool it, and frames may miss 50 ms")
     }
+    let lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
+    if lowPower && !health.lowPowerMode {
+      warn("Low Power Mode is on; the system slows the chip to save power, and frames may miss 50 ms")
+    }
     health = DeviceHealth(
       thermal: thermal,
       batteryLevel: device.batteryLevel >= 0 ? Double(device.batteryLevel) : nil,
       power: power,
-      lowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled,
+      lowPowerMode: lowPower,
       availableMemory: health.availableMemory)
   }
 }
