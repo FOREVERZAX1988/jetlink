@@ -114,7 +114,7 @@ let package = Package(
         "JetlinkKit", "JetlinkLog", "JetlinkRegistry", "JetlinkServer", crypto, .product(name: "CryptoExtras", package: "swift-crypto"),
       ], resources: [.copy("Resources")]),
     .target(
-      name: "JetlinkAndroid", dependencies: ["JetlinkKit", "JetlinkServer", "JetlinkORT", "JetlinkLiteRT"],
+      name: "JetlinkAndroid", dependencies: ["JetlinkKit", "JetlinkRegistry", "JetlinkServer", "JetlinkORT", "JetlinkLiteRT"],
       linkerSettings: [.linkedLibrary("log", .when(platforms: [.android]))]),
     // Built for Linux and macOS; elsewhere its sources compile to an empty program.
     .executableTarget(

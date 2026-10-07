@@ -41,6 +41,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.zoompilot.jetlink.AppGraph
+import io.zoompilot.jetlink.R
+import io.zoompilot.jetlink.l10n
 import io.zoompilot.jetlink.ui.Format
 import io.zoompilot.jetlink.ui.JetlinkTheme
 import io.zoompilot.jetlink.ui.LogLevel
@@ -93,11 +95,11 @@ fun LogsContent(lines: List<String>, back: () -> Unit, share: () -> Unit, clear:
         if (follow && lines.isNotEmpty()) list.scrollToItem(lines.lastIndex)
     }
     PushedScreen(
-        "Logs",
+        l10n(R.string.help_logs),
         back,
         actions = {
-            IconButton(onClick = share, enabled = lines.isNotEmpty()) { Icon(Icons.Filled.Share, contentDescription = "Share") }
-            IconButton(onClick = clear, enabled = lines.isNotEmpty()) { Icon(Icons.Filled.Delete, contentDescription = "Clear") }
+            IconButton(onClick = share, enabled = lines.isNotEmpty()) { Icon(Icons.Filled.Share, contentDescription = l10n(R.string.content_desc_share)) }
+            IconButton(onClick = clear, enabled = lines.isNotEmpty()) { Icon(Icons.Filled.Delete, contentDescription = l10n(R.string.content_desc_clear)) }
         },
     ) { padding ->
         Box(Modifier.padding(padding).consumeWindowInsets(padding).fillMaxSize()) {
@@ -108,7 +110,7 @@ fun LogsContent(lines: List<String>, back: () -> Unit, share: () -> Unit, clear:
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     Icon(Icons.Filled.Description, contentDescription = null, tint = colors.secondaryText, modifier = Modifier.size(48.dp))
-                    Text("No Logs", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                    Text(l10n(R.string.no_logs), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                 }
             } else {
                 SelectionContainer {

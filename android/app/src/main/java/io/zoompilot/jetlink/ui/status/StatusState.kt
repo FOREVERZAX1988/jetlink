@@ -1,5 +1,6 @@
 package io.zoompilot.jetlink.ui.status
 
+import io.zoompilot.jetlink.R
 import io.zoompilot.jetlink.device.DeviceHealth
 import io.zoompilot.jetlink.server.Engine
 import io.zoompilot.jetlink.server.HistorySample
@@ -77,20 +78,20 @@ data class StatusState(
             }
         }
 
-    /** One word or two for where things stand, and what it means. */
-    enum class Summary(val title: String, val tone: Tone) {
-        Failed("Stopped", Tone.Bad),
-        Starting("Starting", Tone.Info),
-        Stopped("Stopped", Tone.Neutral),
-        Preparing("Preparing Model", Tone.Info),
-        Loading("Loading Model", Tone.Info),
-        ModelFailed("Model Failed", Tone.Bad),
-        AllowUsb("Allow USB", Tone.Warning),
-        Connected("Connected", Tone.Good),
-        ConnectedSlow("Connected", Tone.Warning),
-        NoModel("No Model", Tone.Warning),
-        Waiting("Waiting for Comma", Tone.Neutral),
-        Disconnected("Disconnected", Tone.Warning),
+    /** One word or two for where things stand, and what it means. `title` is English for the notification; UI shows `titleRes`. */
+    enum class Summary(val title: String, val titleRes: Int, val tone: Tone) {
+        Failed("Stopped", R.string.summary_failed, Tone.Bad),
+        Starting("Starting", R.string.summary_starting, Tone.Info),
+        Stopped("Stopped", R.string.summary_stopped, Tone.Neutral),
+        Preparing("Preparing Model", R.string.summary_preparing, Tone.Info),
+        Loading("Loading Model", R.string.summary_loading, Tone.Info),
+        ModelFailed("Model Failed", R.string.summary_model_failed, Tone.Bad),
+        AllowUsb("Allow USB", R.string.summary_allow_usb, Tone.Warning),
+        Connected("Connected", R.string.summary_connected, Tone.Good),
+        ConnectedSlow("Connected", R.string.summary_connected, Tone.Warning),
+        NoModel("No Model", R.string.summary_no_model, Tone.Warning),
+        Waiting("Waiting for Comma", R.string.summary_waiting, Tone.Neutral),
+        Disconnected("Disconnected", R.string.summary_disconnected, Tone.Warning),
     }
 
     val summary: Summary
@@ -141,35 +142,24 @@ data class StatusState(
             return if (isServingFrames && p99 != null) Format.headroomText(p99) else modelName.orEmpty()
         }
 
-    /** Under the Link tile: why there is none, or that a slow one costs frames. */
+    /** Under the Link tile: why there is none, or that a slow one costs frames. UI shows [StatusL10n.linkNote]; this stays English for the notification. */
     val linkNote: String
         get() {
             val medium = medium ?: return if (usb is UsbState.Attached) "Connecting" else "Waiting"
             return if (medium.slow) "Slow, use USB 3" else "Connected"
         }
 
-    /** Under Waiting for Comma. */
-    val waitingDescription: String
-        get() = if (usb is UsbState.Attached) "Connecting over USB." else "Plug in the comma."
+    /** Under Waiting for Comma, as a resource the UI translates. */
+    val waitingDescriptionRes: Int
+        get() = if (usb is UsbState.Attached) R.string.waiting_desc_usb else R.string.waiting_desc_plug
 }
 
-/** The Phone tiles' words, from DeviceHealth. */
+/** The Phone tiles' words, from DeviceHealth. The word-valued ones live in [StatusL10n]; these stay plain. */
 object DeviceText {
     fun thermal(health: DeviceHealth): Thermal = Thermal.of(health.thermal)
 
-    /** "Throttling" when the heat costs frames, else the battery's temperature. */
-    fun temperatureNote(health: DeviceHealth): String? =
-        thermal(health).note ?: health.batteryTemp?.let { "Battery ${Math.round(it)} °C" }
-
     /** "82", the unit set beside it; "--" when unknown. */
     fun batteryValue(health: DeviceHealth): String = health.batteryLevel?.toString() ?: "--"
-
-    fun powerText(health: DeviceHealth): String = when {
-        health.charging -> if ((health.batteryLevel ?: 0) >= 100) "Charged" else "Charging"
-        health.batteryLevel == null -> "Unknown"
-        health.powerSave -> "Battery Saver"
-        else -> "Not Charging"
-    }
 
     /** A phone running a model twenty times a second belongs on power. */
     fun batteryTone(health: DeviceHealth): Tone = when {
@@ -181,12 +171,6 @@ object DeviceText {
     /** "2.4", in GB, beside the unit; "--" when unknown. */
     fun memoryValue(health: DeviceHealth): String =
         if (health.availableMemory > 0) Format.gigabytes(health.availableMemory) else "--"
-
-    fun memoryNote(health: DeviceHealth): String? = when {
-        health.availableMemory <= 0 -> null
-        health.memoryTight -> "Low"
-        else -> "Free"
-    }
 
     fun memoryTone(health: DeviceHealth): Tone = if (health.memoryTight) Tone.Warning else Tone.Neutral
 }
