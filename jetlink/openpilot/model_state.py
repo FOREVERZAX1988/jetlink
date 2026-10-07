@@ -260,9 +260,13 @@ class JetlinkModelState:
     self._frame_id += 1
     frame.telemetry = want_telemetry or time.monotonic() - self._last_logged >= TELEMETRY_PERIOD
     try:
-      lossless = self._packer.pack(self.warp.errors) if self._packer is not None else None
-      frame.seq = self.client.infer_begin(self.warp.output, self.packed, self._frame_id, reset=self._need_reset,
-                                          want_state=frame.telemetry, skip_if_busy=self._can_hold, lossless=lossless)
+      if self._packer is None:
+        frame.seq = self.client.infer_begin(self.warp.output, self.packed, self._frame_id, reset=self._need_reset,
+                                            want_state=frame.telemetry, skip_if_busy=self._can_hold)
+      else:
+        frame.seq = self.client.infer_begin(None, self.packed, self._frame_id, reset=self._need_reset,
+                                            want_state=frame.telemetry, skip_if_busy=self._can_hold,
+                                            lossless=self._packer.pack(self.warp.errors))
     except Exception:
       self._log.warning("jetlink: frame %d send failed: %s", self._frame_id, getattr(self.client.t, 'last_send', {}))
       raise

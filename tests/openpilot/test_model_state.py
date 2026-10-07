@@ -81,7 +81,8 @@ class FakeClient:
     self.lossless.append(lossless)
     if skip_if_busy and frame_id in self.busy:
       return None
-    self.sent.append((np.frombuffer(bytes(data), np.uint8).copy(), np.array(packed, copy=True), frame_id, reset))
+    self.sent.append((None if data is None else np.frombuffer(bytes(data), np.uint8).copy(), np.array(packed, copy=True),
+                      frame_id, reset))
     self.asked.append(want_state)
     self._in_flight.append(frame_id)
     return frame_id
