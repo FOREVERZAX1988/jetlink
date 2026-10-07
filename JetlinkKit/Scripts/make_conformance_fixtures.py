@@ -89,26 +89,9 @@ WIRE_MESSAGES = [
   ('PROGRESS', 0, 0, '{"stage":"build","frac":0.5,"msg":"half"}'),
 ]
 
-FRAMING = ('packet_size', 'read_chunk', 'tx_align', 'rx_align', 'read_slack')
-
-
-def _framing(cls) -> dict:
-  return {a: getattr(cls, a) for a in FRAMING}
-
-
-def _usb_host() -> dict:
-  """The USB host's framing, as the comma's gadget expects it: whole-packet
-  reads with a packet of slack, the gadget's 16 KB bursts stripped, and the
-  PADDED byte on what it sends. The server is the only USB host now; this is
-  the framing it is held to."""
-  from jetlink import protocol as P
-  from jetlink.transport.base import StreamTransport
-  return {**_framing(StreamTransport), 'packet_size': P.USB_MAX_PACKET, 'rx_align': P.GADGET_TX_ALIGN,
-          'read_slack': P.USB_MAX_PACKET}
-
-
-def _memory(framing: dict, rx_size: int = 1 << 20):
-  """A transport over bytes in memory that frames as `framing` says."""
+def _memory(tx_align: int = 0, rx_size: int = 1 << 20):
+  """A transport over bytes in memory that pads what it sends to `tx_align`
+  (0: the PADDED byte) and reads what it is given whole, as the comma does."""
   from jetlink.transport.base import LinkError, StreamTransport
 
   class Memory(StreamTransport):
@@ -126,12 +109,10 @@ def _memory(framing: dict, rx_size: int = 1 << 20):
       return n
 
     def _read_into(self, dest, timeout) -> int:
-      # a USB host clamps to whole packets before it reads, TCP does not
-      n = self._clamp_read(dest) if self.packet_size else dest.nbytes
       left = self.incoming.nbytes - self.pos
       if left <= 0:
         raise LinkError('end of the fixture stream')
-      n = min(n, left)
+      n = min(dest.nbytes, left)
       dest[:n] = self.incoming[self.pos:self.pos + n]
       self.pos += n
       return n
@@ -139,9 +120,44 @@ def _memory(framing: dict, rx_size: int = 1 << 20):
     def close(self) -> None:
       pass
 
-  for name, value in framing.items():
-    setattr(Memory, name, value)
+  Memory.tx_align = tx_align
   return Memory
+
+
+def _usb_host(rx_size: int = 2 << 20):
+  """The USB host's framing, as the comma's gadget expects it: whole-packet
+  reads with a packet of slack, the gadget's 16 KB bursts stripped, and the
+  PADDED byte on what it sends. The Swift server is the only USB host; this is
+  the framing it is held to. A read for exactly what is left of a message,
+  rounded up to a packet, never stays outstanding past its end: reading
+  further desynced about once in 400 frames."""
+  from jetlink import protocol as P
+  from jetlink.transport.base import Message
+
+  packet, chunk = P.USB_MAX_PACKET, 1 << 20
+
+  class UsbHost(_memory(0, rx_size)):
+    def _fill(self, need: int, timeout) -> None:
+      self.rx.reserve(need + packet)
+      while self.rx.available < need:
+        missing = need - self.rx.available
+        dest = self.rx.writable()[:-(-missing // packet) * packet]
+        n = min(dest.nbytes, chunk) // packet * packet
+        assert n, f'no room for a whole packet of a {need} byte message'
+        self.rx.committed(self._read_into(dest[:n], None))
+
+    def recv(self, timeout=None) -> Message:
+      self._fill(P.HEADER_SIZE, None)
+      _, _, msg_type, seq, flags, length, _ = P.unpack_header(self.rx.view[self.rx.start:self.rx.start + P.HEADER_SIZE])
+      pad = -(P.HEADER_SIZE + length) % P.GADGET_TX_ALIGN
+      self._fill(P.HEADER_SIZE + length + pad, None)
+      self.rx.take(P.HEADER_SIZE)
+      payload = self.rx.take(length)
+      self.rx.take(pad)
+      self.rx.consumed()
+      return Message(msg_type, seq, flags, payload)
+
+  return UsbHost
 
 
 def _message_bytes(spec) -> tuple[list[bytes], bytes]:
@@ -162,7 +178,7 @@ def wire(root: Path) -> None:
   from jetlink.transport.tcp import TcpTransport
 
   # the host reads into a 2 MB buffer, as the server does
-  host, gadget, tcp = _memory(_usb_host(), 2 << 20), _memory(_framing(FfsTransport)), _memory(_framing(TcpTransport))
+  host, gadget, tcp = _usb_host(), _memory(FfsTransport.tx_align), _memory(TcpTransport.tx_align)
   out = root / SERVER
   out.mkdir(parents=True, exist_ok=True)
 

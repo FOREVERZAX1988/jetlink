@@ -169,7 +169,6 @@ class FfsTransport(StreamTransport):
   answers by holding (try_send) and anything else by waiting, then dropping
   the gadget, under its deadline.
   """
-  read_chunk = READ_CHUNK
   # FunctionFS kmallocs one contiguous buffer per request, and AIO holds a
   # frame's worth at once. A whole frame in one needs order-7 pages, which
   # recording rollover leaves none of (the route's stalls); 57 x 32 KB needs

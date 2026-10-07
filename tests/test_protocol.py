@@ -495,58 +495,6 @@ def test_a_frame_that_may_be_held_still_goes_out_under_the_clients_deadline():
   assert client.t.deadlines and all(d is not None and 0 < d <= 0.2 for d in client.t.deadlines)
 
 
-class _PacketTransport(StreamTransport):
-  """A stream that only ever delivers whole packets, like a bulk IN endpoint."""
-  packet_size = 1024
-  read_chunk = 4096
-
-  def __init__(self, payload: bytes, read_slack: int):
-    super().__init__(rx_size=8192)
-    self.read_slack = read_slack
-    self.pending = bytearray(payload)
-    self.zero_reads = 0
-
-  def _write(self, bufs):
-    return sum(b.nbytes for b in bufs)
-
-  def _read_into(self, dest, timeout):
-    n = self._clamp_read(dest)
-    if n == 0:
-      self.zero_reads += 1
-      if self.zero_reads > 50:
-        raise AssertionError("spinning: _fill made no progress")
-      return 0
-    n = min(n, len(self.pending))
-    dest[:n] = self.pending[:n]
-    del self.pending[:n]
-    return n
-
-  def close(self) -> None:
-    pass
-
-
-class TestOversizeMessageDoesNotStall:
-  """A message that outgrows the buffer and is not a whole number of packets must
-  not round down to zero packets: the reader then spins forever while the writer
-  blocks on the tail. Only the model upload is ever big enough to hit it."""
-
-  def _framed(self, body_len: int) -> bytes:
-    header = P.pack_header(P.Msg.UPLOAD_CHUNK, 1, body_len, 0)
-    return bytes(header) + bytes(body_len)
-
-  def test_a_packet_of_slack_lets_the_tail_arrive(self):
-    payload = self._framed(16384 + 24)
-    t = _PacketTransport(payload, read_slack=1024)
-    msg = t.recv(timeout=None)
-    assert len(msg.payload) == 16384 + 24
-
-  def test_without_slack_it_reports_instead_of_spinning(self):
-    payload = self._framed(16384 + 24)
-    t = _PacketTransport(payload, read_slack=0)
-    with pytest.raises(LinkError, match="read_slack too small"):
-      t.recv(timeout=None)
-
-
 def test_a_closed_client_is_dead():
   """Whoever still holds a closed client must open a new one: a big model
   retired after a link loss closes its client, and modeld's link reused it."""
