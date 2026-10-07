@@ -80,7 +80,7 @@ fun ConnectHelpScreen(back: () -> Unit) {
             }
             FormSection(
                 "Over Wi-Fi",
-                footer = { FormFooter("No cable: the comma dials the phone over the hotspot. 2.4 GHz is too slow for a big model.") },
+                footer = { FormFooter("No cable, but slower than USB. 2.4 GHz is too slow for a big model.") },
             ) {
                 wifiSteps.forEachIndexed { index, step ->
                     if (index > 0) RowDivider()

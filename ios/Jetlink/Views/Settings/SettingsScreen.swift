@@ -89,7 +89,7 @@ struct SettingsScreen: View {
     } footer: {
       if settings.wifiLink {
         Text(
-          "For a comma set to Wi-Fi: turn on Personal Hotspot with Allow Others to Join and Maximize Compatibility off, then join the comma to it."
+          "For a comma set to Wi-Fi. Turn on Personal Hotspot (Allow Others to Join on, Maximize Compatibility off) and join the comma to it."
         )
       }
     }

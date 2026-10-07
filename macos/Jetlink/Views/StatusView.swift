@@ -134,7 +134,7 @@ struct StatusView: View {
     } footer: {
       Text(
         settings.wifiLink
-          ? "Connect to the comma with a USB 3 cable, or join it to this Mac's Wi-Fi hotspot. Until it connects, the comma drives on its small model."
+          ? "Connect to the comma with a USB 3 cable, or join it to this Mac's hotspot. Until it connects, the comma drives on its small model."
           : "Connect to the comma with a USB 3 cable. Until it connects, the comma drives on its small model."
       )
       .font(.callout)

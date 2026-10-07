@@ -198,7 +198,7 @@ private fun Connection(values: SettingsValues, info: SettingsInfo, actions: Sett
     val link = info.snapshot.medium?.title
         ?: if (info.usb is UsbState.Attached) "Connecting" else "Not Connected"
     val footer: (@Composable () -> Unit)? = if (values.wifiLink) {
-        { FormFooter("For a comma set to Wi-Fi: turn on this phone's hotspot on 5 GHz, then join the comma to it.") }
+        { FormFooter("For a comma set to Wi-Fi. Turn on the hotspot on 5 GHz and join the comma to it.") }
     } else {
         null
     }

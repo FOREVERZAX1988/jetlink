@@ -145,7 +145,7 @@ public enum LinkMedium: String, Codable, Sendable, CaseIterable {
   public func advice(cable: Bool) -> String? {
     guard isSlow else { return nil }
     if isWifi {
-      return "2.4 GHz Wi-Fi is too slow for a big model. Put the hotspot on 5 GHz (on an iPhone, turn off Maximize Compatibility)."
+      return "2.4 GHz is too slow for a big model. Put the hotspot on 5 GHz (on iPhone, turn off Maximize Compatibility)."
     }
     let cost = cable ? "about 5 ms" : "about 10 ms"
     return "\(title) costs \(cost) a frame more than USB 3. Use a USB 3 cable and port."

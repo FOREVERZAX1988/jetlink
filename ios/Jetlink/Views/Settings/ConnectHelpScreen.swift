@@ -19,14 +19,14 @@ struct ConnectHelpScreen: View {
       }
       Section {
         step(1, "In Jetlink's settings, turn on Wi-Fi Link.")
-        step(2, "Turn on Personal Hotspot with Allow Others to Join, and Maximize Compatibility off for 5 GHz.")
+        step(2, "Turn on Personal Hotspot. Allow Others to Join on, Maximize Compatibility off.")
         step(3, "On the comma, join the hotspot in Network settings.")
         step(4, "On the comma, set Jetlink to Wi-Fi.")
         step(5, "Wait for Connected.")
       } header: {
         Text("Over Wi-Fi")
       } footer: {
-        Text("No cable: the comma dials your \(device) over the hotspot. 2.4 GHz is too slow for a big model.")
+        Text("No cable, but slower than USB. 2.4 GHz is too slow for a big model.")
       }
       Section {
         ForEach(USBSpeedGuide.rows, id: \.models) { row in

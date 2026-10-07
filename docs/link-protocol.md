@@ -44,15 +44,13 @@ bench tools). There is one version: update the comma and Jetlink together.
   float32 without `hidden_state`: 8,324 bytes for the current models (73,860
   with it). The comma sets WANT_HIDDEN on a frame to get the whole vector, for
   logging every output; WANT_STATE appends the server's telemetry as JSON.
-- **Lossless frames.** For links slower than USB (Wi-Fi, in progress), a
-  frame can travel packed: each of its 12 planes is predicted pixel by pixel
-  from its neighbours (JPEG-LS's MED predictor), and the prediction errors are
-  packed alone with zstd. The comma sets LOSSLESS on the INFER_REQ, which then
-  carries the packed floats, a 4-byte size per plane, and the planes, about
-  half the bytes on real drive frames (2.1x). The server unpacks the planes in
-  parallel to exactly the frame the comma warped, so outputs are bit for bit
-  what the raw frame gives. The comma sends them only to a server whose hello
-  lists `med-zstd` in `frame_codecs`. Reference: `jetlink/lossless.py`.
+- **Lossless frames.** Over Wi-Fi a frame travels packed, about half the
+  bytes (2.1x on real drives). Each of its 12 planes is predicted from its
+  neighbours (JPEG-LS's MED) and the errors packed alone with zstd. INFER_REQ
+  sets LOSSLESS and carries the packed floats, a 4-byte size per plane, then
+  the planes. The server unpacks them in parallel to the exact frame, so the
+  outputs match a raw frame bit for bit. Only to a server whose hello lists
+  `med-zstd` in `frame_codecs`. Reference: `jetlink/lossless.py`.
 - **Hidden state on the server.** A queued model (BMRLNAP, Cinque Terre V2,
   Lebowski) feeds each frame's `hidden_state` into the next frame, where
   openpilot's modeld feeds its own. The server keeps it: zero when an engine
@@ -89,7 +87,7 @@ settings):
 | --- | --- | --- |
 | **USB** | Jetson, Mac, Linux PC, Android | Plain: one vendor-specific interface, one bulk endpoint pair, opened through usbfs on Linux (IOKit on the Mac; usbfs on the descriptor Android's USB host API hands the app). No network interface. |
 | **iOS** | iPhone | Composite: interface 0 is the same vendor interface (never used on iOS), then a CDC-NCM network interface, since iOS gives apps no vendor USB access but drives USB network adapters itself. |
-| **Wi-Fi** | A device whose hotspot the comma joined | None: modeld dials the comma's Wi-Fi gateway (the hotspot) on 5599 and sends lossless frames to a server that takes them. ADB keeps the port. In progress. |
+| **Wi-Fi** | A phone, Mac or Jetson whose hotspot the comma joined | None. modeld dials the comma's Wi-Fi gateway on 5599 and sends lossless frames. ADB keeps the port. |
 
 - iOS network: the comma is `192.168.60.1` and runs DHCP; the phone gets a
   `192.168.60.x` address with no gateway or DNS, keeps its internet route over

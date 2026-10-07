@@ -146,7 +146,7 @@ struct ServerSettingsView: View {
         VStack(alignment: .leading, spacing: 4) {
           Toggle("Wi-Fi link", isOn: $settings.wifiLink)
           Text(
-            "For a comma set to Wi-Fi. It joins this Mac's hotspot and dials the Mac, so share the Mac's connection over Wi-Fi (System Settings > General > Sharing > Internet Sharing), on 5 GHz."
+            "For a comma set to Wi-Fi. Share this Mac's connection over Wi-Fi on 5 GHz (System Settings > General > Sharing) and join the comma to it."
           )
           .font(.callout)
           .foregroundStyle(.secondary)
