@@ -82,16 +82,6 @@ REPLUG_POLL = 0.25
 # the 2026-09-07 evening drive had six in twelve minutes, every one the
 # USB-C port losing its host, and nothing the driver could see said so
 DROPS_TO_BLAME_CABLE = 2
-# a large-model frame is ~30 ms and the worst seen on the current stack ~55.
-# One that took LATE_FRAME, or a second past SLOW_FRAME within LAG_WINDOW of
-# the last, is a fault and is handled as a loss: modeld would otherwise count
-# the dropped camera frames into modeldLagging with the slow model still
-# steering. With a late reply held rather than waited for (model_state), a
-# frame this long is the comma's own stall, a warp or a send, or a frame with
-# nothing to hold yet. A frame past link.INFERENCE_TIMEOUT never returns; it fails
-LATE_FRAME = 0.1
-SLOW_FRAME = 0.075
-LAG_WINDOW = 10.0
 # A host slower than the camera but never that slow (an iPhone that has warmed
 # up: 55 ms a frame drops one camera frame in ten) still has modeld skipping
 # frames, and selfdrived soft-disables on modeldLagging once modeld's filtered
@@ -101,8 +91,11 @@ LAG_WINDOW = 10.0
 # a second within about 6.5 s is not. modeld forgives the frame of a handover
 # too, so the drops that decided it never reach selfdrived
 DROP_LIMIT = 0.0075
-# the first frames after every swap are never counted as slow: the first after
-# a join carries the history reset, and a Mac's is ~100 ms of CoreML warm-up
+# the first frames after every swap never hand back: the first after a join
+# carries the history reset, and a Mac's is ~100 ms of CoreML warm-up. A slow
+# host is the large model's to say (model_state's held frames, `behind`) or
+# modeld's (DROP_LIMIT); a single slow frame is the comma's own stall, a warp
+# or a send, which handing back would not fix
 SETTLING_FRAMES = 3
 # the small model drives the first frames of every modeld start, even with the
 # large model ready: its first run in a process costs ~1.3 s, which the first
@@ -179,10 +172,8 @@ class JoiningModelState:
     # changes of the model that drives, and decisions to change it: modeld
     # compares it across run() (handovers)
     self._handovers = 0
-    # set on a frame the large model fell behind on; the next frame demotes.
-    # _slow_at is when the last slow frame was, for the second strike
+    # set on a frame the large model fell behind on; the next frame demotes
     self._lagging = False
-    self._slow_at: float | None = None
     # modeld's share of dropped camera frames, for the frame about to run
     self._frame_drop_ratio = 0.0
     # frames each model has run: the small one's since start, the large one's
@@ -362,7 +353,6 @@ class JoiningModelState:
                         (done - started) * 1e3, (failed - started) * 1e3,
                         (demoted - failed) * 1e3, (done - demoted) * 1e3)
       return result
-    took = time.monotonic() - started
     self._big_frames += 1
     if self._loading:
       # a connected engine can still fail its first inference; only announce
@@ -370,24 +360,12 @@ class JoiningModelState:
       self._loading = False
       self._progress.clear()
       self._log.warning("jetlink: large model joined mid-drive, modelV2.big is now true")
-    if self._big_frames > SETTLING_FRAMES:
-      why = getattr(big, 'behind', None) or (f'took {took * 1e3:.0f} ms' if self._fell_behind(took) else None)
-      if why:
-        # this frame's output is published as it came; its stall is forgiven now
-        self._lagging = True
-        self._handovers += 1
-        self._log.warning("jetlink: large model %s, the small model drives from the next", why)
+    if self._big_frames > SETTLING_FRAMES and big.behind:
+      # this frame's output is published as it came; its stall is forgiven now
+      self._lagging = True
+      self._handovers += 1
+      self._log.warning("jetlink: large model %s, the small model drives from the next", big.behind)
     return result
-
-  def _fell_behind(self, took: float) -> bool:
-    if took > LATE_FRAME:
-      return True
-    if took <= SLOW_FRAME:
-      return False
-    now = time.monotonic()
-    second = self._slow_at is not None and now - self._slow_at <= LAG_WINDOW
-    self._slow_at = now
-    return second
 
   def _maybe_swap(self) -> None:
     """Build the large model state from a join that has landed and swap it in,
@@ -418,7 +396,6 @@ class JoiningModelState:
     self._big = big
     self._joined_at = time.monotonic()
     self._big_frames = 0
-    self._slow_at = None
     self._handovers += 1
     self._active = big
 

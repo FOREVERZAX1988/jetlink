@@ -709,11 +709,13 @@ class LagTest(JoiningBase):
     self.settle()
 
   def swap(self):
-    # the first frames after a swap are never counted as slow: the first
-    # carries the history reset, and a Mac's is ~100 ms of warm-up
+    # the first frames after a swap never hand back: the first carries the
+    # history reset, and a Mac's is ~100 ms of warm-up
     for _ in range(joining.SETTLING_FRAMES):
+      self.big.behind = 'held frame 1 of the first 20'
       self.assertEqual(self.frame(took=0.3), {'from': 'big'})
       self.assertTrue(self.s.chestnut)
+    self.big.behind = None
 
   def settle(self):
     # modeld forgives the dropped frames of the ten frames after a handover
@@ -749,7 +751,7 @@ class LagTest(JoiningBase):
     return result
 
   def hand_back(self):
-    self.frame(took=joining.LATE_FRAME + 0.01)
+    self.behind()
     self.frame()
 
   def behind(self):
@@ -765,10 +767,10 @@ class LagTest(JoiningBase):
     self.assertEqual(self.frame(), {'from': 'big'})
     self.assertTrue(self.s.chestnut)
 
-  def test_a_late_frame_is_published_and_the_next_one_is_the_small_models(self):
+  def test_a_frame_behind_is_published_and_the_next_one_is_the_small_models(self):
     self.assert_big_drives()
     handovers = self.s.handovers
-    self.assertEqual(self.frame(took=joining.LATE_FRAME + 0.01), {'from': 'big'})
+    self.assertEqual(self.behind(), {'from': 'big'})
     # the late frame's output is the large model's, and so is everything modeld
     # reads off the model for it, modelV2.big included. The handover count
     # moves now, which is what makes modeld forgive the stall
@@ -793,31 +795,12 @@ class LagTest(JoiningBase):
       time.sleep(0.01)
     self.assertTrue(self.big.closed)
 
-  def test_one_slow_frame_is_jitter(self):
+  def test_a_slow_frame_alone_is_not_a_hand_back(self):
+    # the comma's own stall, a warp or a send: the small model would not fix it
     handovers = self.s.handovers
-    self.assertEqual(self.frame(took=joining.SLOW_FRAME + 0.005), {'from': 'big'})
+    self.assertEqual(self.frame(took=0.15), {'from': 'big'})
+    self.assertEqual(self.frame(took=0.15), {'from': 'big'})
     self.assertEqual(self.s.handovers, handovers)
-    for _ in range(5):
-      self.assert_big_drives()
-    self.reset.assert_not_called()
-
-  def test_a_second_slow_frame_within_the_window_hands_back(self):
-    self.frame(took=joining.SLOW_FRAME + 0.005)
-    self.assert_big_drives()
-    self.skew += joining.LAG_WINDOW / 2
-    handovers = self.s.handovers
-    self.assertEqual(self.frame(took=joining.SLOW_FRAME + 0.005), {'from': 'big'})
-    self.assertEqual(self.s.handovers, handovers + 1)
-    self.assertEqual(self.frame(), {'from': 'small'})
-    self.assertEqual(self.s._lags, 1)
-
-  def test_slow_frames_further_apart_are_not_a_pattern(self):
-    self.frame(took=joining.SLOW_FRAME + 0.005)
-    self.skew += joining.LAG_WINDOW + 1
-    self.frame(took=joining.SLOW_FRAME + 0.005)
-    self.assert_big_drives()
-    self.skew += joining.LAG_WINDOW + 1
-    self.frame(took=joining.SLOW_FRAME + 0.005)
     self.assert_big_drives()
     self.reset.assert_not_called()
 
@@ -854,19 +837,8 @@ class LagTest(JoiningBase):
     self._wait_reported(self.s, 'fell behind, reconnecting')
     self.assertFalse(any('cable' in c.args[2] for c in self.progress.report.call_args_list))
 
-  def test_the_next_large_model_starts_with_no_strike_and_settles_again(self):
-    self.frame(took=joining.SLOW_FRAME + 0.005)
-    self.hand_back()
-    self.assertFalse(self.s.chestnut)
-    # the join comes back and swaps with no strike against it: its first
-    # frames are slow and forgiven, and one slow frame after is jitter
-    self.rejoin()
-    self.assertIsNone(self.s._slow_at)
-    self.frame(took=joining.SLOW_FRAME + 0.005)
-    self.assert_big_drives()
-
-  # A host a little slower than the camera: no frame is slow enough for the
-  # rules above, but modeld skips camera frames, and selfdrived soft-disables
+  # A host a little slower than the camera: no frame is held, but modeld
+  # skips camera frames, and selfdrived soft-disables
   # past 1 % of them (modeldLagging)
 
   def assert_handed_back(self, handovers):
