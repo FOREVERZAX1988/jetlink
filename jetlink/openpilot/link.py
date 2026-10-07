@@ -81,6 +81,26 @@ def connect(log, loan, deadline: float | None = None, name: str | None = None, w
   return JetlinkClient.open_borrowed_ffs(loan.mount, loan.udc, bounce=loan.bounce, deadline=deadline, name=name)
 
 
+def dial(log, deadline: float | None = None, name: str | None = None):
+  """Open the link over Wi-Fi: the comma's gateway, the hotspot it joined
+  (jetlink.comma.wifi). LinkError when the comma is on no Wi-Fi or nothing
+  answers there, which the join retries."""
+  from jetlink.client import FRAME_TIMEOUT, JetlinkClient
+  from jetlink.comma import wifi
+  from jetlink.transport.base import LinkError
+  host = wifi.gateway()
+  if host is None:
+    raise LinkError("not on Wi-Fi")
+  try:
+    client = JetlinkClient.open_tcp(host, timeout=wifi.DIAL_TIMEOUT, name=name,
+                                    deadline=FRAME_TIMEOUT if deadline is None else deadline)
+  except OSError as e:
+    raise LinkError(f"nothing answered at {host}: {e}") from e
+  gadget.note_link('wifi', host)
+  log.warning("jetlink: dialed %s over Wi-Fi", host)
+  return client
+
+
 class Link:
   """modeld's end of the gadget: the lease, and the client that rides on it.
 
@@ -90,12 +110,14 @@ class Link:
   cycle. So an attempt that cannot use the link leaves it here rather than
   closing it, and only a deliberate close() lets go. On the cable the lease
   is the listener, and a client that died is replaced by the phone's next
-  dial on it.
+  dial on it. Over Wi-Fi there is no lease: the client is a dial to the
+  gateway (dial), and a dead one is replaced by the next.
   """
 
-  def __init__(self, log, name: str = 'modeld'):
+  def __init__(self, log, name: str = 'modeld', wifi: bool = False):
     self.log = log
     self.name = name
+    self.wifi = wifi
     self.client = None
     self.loan = None
     self._lock = threading.Lock()
@@ -107,6 +129,8 @@ class Link:
     reusing it failed the next attempt with EBADF, 5 s after every loss."""
     if self.client is not None and self.client.dead:
       self.close()
+    if self.client is None and self.wifi:
+      self.client = dial(self.log, name=self.name)
     if self.client is None:
       from jetlink.comma import lending
       self.client = connect(self.log, name=self.name, loan=self._borrow(deadline),
@@ -203,6 +227,8 @@ def connect_patiently(link: Link):
       client = link.open()
     except Exception as e:
       client, last = None, e
+    if client is not None and link.wifi:
+      return client   # the dial reached the device; there is no gadget
     if client is not None:
       # over a phone's cable wait_for_host returns at once and a TCP client's
       # rebind is a no-op, so its network interface is never bounced
@@ -216,7 +242,11 @@ def connect_patiently(link: Link):
       # usually a provisioning run still finishing an exchange on the endpoints
       raise last if last is not None else TimeoutError("could not open the link")
     link.log.warning("jetlink: link not ready (%s), retrying", last)
-    time.sleep(CONNECT_DELAY)
+    if link.wifi:
+      from jetlink.comma import wifi
+      time.sleep(wifi.DIAL_DELAY)
+    else:
+      time.sleep(CONNECT_DELAY)
 
 
 # -- making the Jetson ready ------------------------------------------------------

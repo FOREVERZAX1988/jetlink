@@ -95,9 +95,9 @@ def link_state() -> tuple[str | None, str | None]:
   cable the phone's address while a link is up. (None, None) before the
   owner has said."""
   record = read(LINK).split()
-  if record[:1] not in (['cable'], ['usb']):
+  if record[:1] not in (['cable'], ['usb'], ['wifi']):
     return None, None
-  return record[0], (record[1] if record[0] == 'cable' and len(record) > 1 else None)
+  return record[0], (record[1] if record[0] in ('cable', 'wifi') and len(record) > 1 else None)
 
 
 def link_kind(mode: str | None = None) -> str:
@@ -105,7 +105,7 @@ def link_kind(mode: str | None = None) -> str:
   the caller read it, stands in only until the owner has said: it may have
   moved and be waiting for the car to park. Without either, 'usb'."""
   kind, _ = link_state()
-  return kind or ('cable' if mode == 'ios' else 'usb')
+  return kind or {'ios': 'cable', 'wifi': 'wifi'}.get(mode, 'usb')
 
 
 def link_peer() -> str | None:
@@ -115,7 +115,8 @@ def link_peer() -> str | None:
 
 def note_link(kind: str, peer: str | None = None) -> None:
   """The owner's record of the gadget it built, 'usb' or 'cable', and on the
-  cable the phone that dialed in; see link_kind and link_peer."""
+  cable the phone that dialed in; or modeld's 'wifi' and the gateway it
+  dialed. See link_kind and link_peer."""
   _write(LINK, f"{kind} {peer}".strip() if peer else kind, "record the link")
 
 

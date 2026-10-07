@@ -151,6 +151,8 @@ def link_transport(mode: str | None = None, live: dict | None = None) -> str:
       peer = gadget.link_state()[1]
     if kind == 'cable':
       return f"iOS over USB ({peer})" if peer else "iOS over USB"
+    if kind == 'wifi':
+      return f"Wi-Fi ({peer})" if peer else "Wi-Fi"
   except Exception:
     pass
   return "USB"

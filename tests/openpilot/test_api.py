@@ -219,7 +219,7 @@ class TestTheJoinFactory(OpenpilotTest):
   def test_the_warp_is_sized_from_the_record(self):
     self.parts.spec.store(spec(model_hw=(64, 128)))
     self.join()
-    self.loaded.assert_called_once_with(1928, 1208, 256, 128)
+    self.loaded.assert_called_once_with(1928, 1208, 256, 128, lossless=False)
     self.warp.assert_called_once_with(self.loaded.return_value, fakes.frame_size(1928, 1208), self.parts.log)
     self.reset.assert_called_once_with(self.small)
     self.present.assert_called_once()
@@ -230,9 +230,25 @@ class TestTheJoinFactory(OpenpilotTest):
     link, background = self.present.call_args.args
     self.assertIs(background, background_thread)
 
+  def test_on_wifi_the_lossless_warp_is_loaded_when_the_build_made_one(self):
+    from jetlink.openpilot import link
+    self.parts.op.set_mode('wifi')
+    with mock.patch.object(self.parts.warps, 'is_cached', return_value=True) as cached, \
+         mock.patch.object(link, 'Link', wraps=link.Link) as made:
+      self.join()
+    cached.assert_called_once_with(1928, 1208, 512, 256, lossless=True)
+    self.loaded.assert_called_once_with(1928, 1208, 512, 256, lossless=True)
+    self.assertTrue(made.call_args.kwargs['wifi'])
+
+  def test_on_wifi_without_a_lossless_warp_the_plain_one_sends_raw(self):
+    self.parts.op.set_mode('wifi')
+    with mock.patch.object(self.parts.warps, 'is_cached', return_value=False):
+      self.join()
+    self.loaded.assert_called_once_with(1928, 1208, 512, 256, lossless=False)
+
   def test_without_a_record_it_is_this_devices_geometry(self):
     self.join()
-    self.loaded.assert_called_once_with(1928, 1208, 512, 256)
+    self.loaded.assert_called_once_with(1928, 1208, 512, 256, lossless=False)
 
   def test_a_warp_that_will_not_load_lets_the_link_go_and_raises(self):
     from jetlink.openpilot import link

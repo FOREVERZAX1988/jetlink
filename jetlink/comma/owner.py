@@ -621,9 +621,10 @@ class Owner:
   def step(self) -> None:
     # each read is a file; take them once and pass them down
     mode = self.mode = self.settings.mode()
-    if mode == 'off':
+    # over Wi-Fi modeld dials the hotspot itself: no gadget, the port left alone
+    if mode in ('off', 'wifi'):
       if self.transport is not None:
-        gadget.log.warning("jetlink: disabled, releasing the link")
+        gadget.log.warning("jetlink: %s, releasing the link", 'on Wi-Fi' if mode == 'wifi' else 'disabled')
         self.close_link()
       self.stop_worker()
       self.wake()

@@ -89,6 +89,7 @@ settings):
 | --- | --- | --- |
 | **USB** | Jetson, Mac, Linux PC, Android | Plain: one vendor-specific interface, one bulk endpoint pair, opened through usbfs on Linux (IOKit on the Mac; usbfs on the descriptor Android's USB host API hands the app). No network interface. |
 | **iOS** | iPhone | Composite: interface 0 is the same vendor interface (never used on iOS), then a CDC-NCM network interface, since iOS gives apps no vendor USB access but drives USB network adapters itself. |
+| **Wi-Fi** | A device whose hotspot the comma joined | None: modeld dials the comma's Wi-Fi gateway (the hotspot) on 5599 and sends lossless frames to a server that takes them. ADB keeps the port. In progress. |
 
 - iOS network: the comma is `192.168.60.1` and runs DHCP; the phone gets a
   `192.168.60.x` address with no gateway or DNS, keeps its internet route over

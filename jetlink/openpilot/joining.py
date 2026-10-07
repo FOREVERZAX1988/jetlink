@@ -638,7 +638,8 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
   op = parts.op
   face = op.model_face()
   ready: dict = {}
-  link = links.Link(parts.log)
+  wifi = parts.settings.mode() == 'wifi'
+  link = links.Link(parts.log, wifi=wifi)
 
   def prepare():
     from jetlink.openpilot.warp import Warp, prepare_reset
@@ -654,7 +655,10 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
       geometry = parts.warps.geometry()[2:]
     try:
       ready['reset_small'] = prepare_reset(small)
-      warp = Warp(parts.warps.load(cam_w, cam_h, *geometry), face.frame_size(cam_w, cam_h), parts.log)
+      # over Wi-Fi the lossless build, which makes the frame's MED errors too
+      # (jetlink.lossless), when the build made one; else frames go raw
+      lossless = wifi and parts.warps.is_cached(cam_w, cam_h, *geometry, lossless=True)
+      warp = Warp(parts.warps.load(cam_w, cam_h, *geometry, lossless=lossless), face.frame_size(cam_w, cam_h), parts.log)
     except Exception:
       link.close()
       raise

@@ -141,9 +141,9 @@ class JetlinkClient:
     return cls(FfsTransport.borrowed(mount, udc, bounce=bounce, owner_gadget=owner_gadget), **kw)
 
   @classmethod
-  def open_tcp(cls, host: str, port: int = 5599, **kw) -> JetlinkClient:
+  def open_tcp(cls, host: str, port: int = 5599, timeout: float = 5.0, **kw) -> JetlinkClient:
     from jetlink.transport.tcp import TcpTransport
-    return cls(TcpTransport.connect(host, port), **kw)
+    return cls(TcpTransport.connect(host, port, timeout=timeout), **kw)
 
   @classmethod
   def open_listen(cls, address: str, timeout: float | None = None, **kw) -> JetlinkClient:

@@ -242,8 +242,9 @@ class ProvisioningRun:
   def run(self) -> bool:
     """One provisioning round. True when there is nothing left to do, which
     main() makes the exit status the owner reads."""
-    # the setting alone, as the owner that started this run reads it
-    if self.parts.settings.mode() == 'off':
+    # the setting alone, as the owner that started this run reads it. Over
+    # Wi-Fi nothing is built offroad yet: the join uploads and builds onroad
+    if self.parts.settings.mode() in ('off', 'wifi'):
       return True
 
     reason = gadget.pending_shutdown()

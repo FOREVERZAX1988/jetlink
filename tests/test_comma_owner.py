@@ -568,6 +568,17 @@ class TestTheToggle(OwnerTest):
     o.close_link.assert_called_once()
     worker.terminate.assert_called_once()
 
+  def test_on_wifi_the_gadget_and_the_port_are_let_go(self):
+    # modeld dials the hotspot itself; ADB keeps the port
+    o = self.owner()
+    worker = o.worker = mock.Mock(**{'poll.return_value': None})
+    self.write('JetlinkLink', b'3')
+    o.step()
+    o.close_link.assert_called_once()
+    worker.terminate.assert_called_once()
+    o.port.off.assert_called_once()
+    o.port.update.assert_not_called()
+
   def test_the_first_gadget_is_not_held_up_by_the_sysctls(self):
     self.write('IsOffroad', b'0')
     o = self.owner(presented=False)
