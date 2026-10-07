@@ -90,9 +90,10 @@ class ServerController(private val context: Context, private val scope: Coroutin
         put("keep_alive", settings.keepNpuAwake)
         put("keep_cpu_warm", settings.keepCpuAwake)
         put("port", settings.port)
-        // Bench tools reach the server over Wi-Fi or `adb forward`; the comma
+        // Bench tools reach the server over Wi-Fi or `adb forward`, and a comma
+        // on the phone's hotspot dials it (Wi-Fi link); otherwise the comma
         // comes over USB.
-        put("listen", settings.developer)
+        put("listen", settings.developer || settings.wifiLink)
         put("usb", true)
         put("preload", true)
         put("chip", Chip.model)

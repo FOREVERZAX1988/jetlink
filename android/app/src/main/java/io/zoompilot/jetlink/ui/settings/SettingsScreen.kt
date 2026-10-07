@@ -165,7 +165,7 @@ fun SettingsContent(values: SettingsValues, info: SettingsInfo, actions: Setting
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
-        Connection(info)
+        Connection(values, info, actions)
         Performance(values, info, actions)
         FormSection("Display", footer = { FormFooter("Jetlink keeps serving with the screen off.") }) {
             SwitchRow("Keep Screen On", values.keepScreenOn, { on -> actions.update { it.copy(keepScreenOn = on) } })
@@ -194,11 +194,18 @@ fun SettingsContent(values: SettingsValues, info: SettingsInfo, actions: Setting
 }
 
 @Composable
-private fun Connection(info: SettingsInfo) {
+private fun Connection(values: SettingsValues, info: SettingsInfo, actions: SettingsActions) {
     val link = info.snapshot.medium?.title
         ?: if (info.usb is UsbState.Attached) "Connecting" else "Not Connected"
-    FormSection("Connection") {
+    val footer: (@Composable () -> Unit)? = if (values.wifiLink) {
+        { FormFooter("For a comma set to Wi-Fi: turn on this phone's hotspot on 5 GHz, then join the comma to it.") }
+    } else {
+        null
+    }
+    FormSection("Connection", footer = footer) {
         ValueRow("Link", link)
+        RowDivider()
+        SwitchRow("Wi-Fi Link", values.wifiLink, { on -> actions.update { it.copy(wifiLink = on) } })
     }
 }
 

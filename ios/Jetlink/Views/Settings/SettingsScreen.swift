@@ -72,6 +72,7 @@ struct SettingsScreen: View {
       .onChange(of: settings.keepGPUAwake) { app.server.restart() }
       .onChange(of: settings.keepCPUWarm) { app.server.restart() }
       .onChange(of: settings.developer) { app.server.restart() }
+      .onChange(of: settings.wifiLink) { app.server.restart() }
       .sensoryFeedback(.success, trigger: settings.developer)
     }
   }
@@ -79,8 +80,18 @@ struct SettingsScreen: View {
   // MARK: connection
 
   private var connection: some View {
-    Section("Connection") {
+    @Bindable var settings = app.settings
+    return Section {
       LabeledContent("Link", value: app.server.linkMedium?.phoneTitle ?? (app.network.cable == nil ? "Not Connected" : "Connecting"))
+      Toggle("Wi-Fi Link", isOn: $settings.wifiLink)
+    } header: {
+      Text("Connection")
+    } footer: {
+      if settings.wifiLink {
+        Text(
+          "For a comma set to Wi-Fi: turn on Personal Hotspot with Allow Others to Join and Maximize Compatibility off, then join the comma to it."
+        )
+      }
     }
   }
 

@@ -130,6 +130,12 @@ data class SettingsValues(
      * emulator, with no USB host, starts with it on.
      */
     val developer: Boolean = false,
+    /**
+     * The server listening on [port] for a comma that joined this phone's
+     * hotspot and dials it (the comma's Jetlink setting on Wi-Fi). Off unless
+     * chosen.
+     */
+    val wifiLink: Boolean = false,
 )
 
 class Settings(context: Context) {
@@ -146,6 +152,7 @@ class Settings(context: Context) {
             .putBoolean(KEEP_CPU_AWAKE, next.keepCpuAwake)
             .putBoolean(KEEP_SCREEN_ON, next.keepScreenOn)
             .putBoolean(DEVELOPER, next.developer)
+            .putBoolean(WIFI_LINK, next.wifiLink)
             .apply()
         state.value = next
     }
@@ -163,6 +170,7 @@ class Settings(context: Context) {
             keepCpuAwake = prefs.getBoolean(KEEP_CPU_AWAKE, defaults.keepCpuAwake),
             keepScreenOn = prefs.getBoolean(KEEP_SCREEN_ON, defaults.keepScreenOn),
             developer = prefs.getBoolean(DEVELOPER, Chip.isEmulator),
+            wifiLink = prefs.getBoolean(WIFI_LINK, defaults.wifiLink),
         )
     }
 
@@ -174,6 +182,7 @@ class Settings(context: Context) {
         private const val KEEP_CPU_AWAKE = "keepCpuAwake"
         private const val KEEP_SCREEN_ON = "keepScreenOn"
         private const val DEVELOPER = "developer"
+        private const val WIFI_LINK = "wifiLink"
 
         /** Settings from before Automatic are version 1. */
         private const val CURRENT = 2
