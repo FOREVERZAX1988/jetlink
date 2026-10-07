@@ -165,7 +165,6 @@ class Warp:
     import numpy as np
     from tinygrad.device import Device
     from tinygrad.tensor import Tensor
-    self.jit = jit
     self._frame_size = frame_size
     self._log = log
     self._tensor = Tensor
@@ -177,7 +176,7 @@ class Warp:
     self._tfm = np.zeros((3, 3), dtype=np.float32)
     self._big_tfm = np.zeros((3, 3), dtype=np.float32)
     tfm, big_tfm = (Tensor(a, device='NPY').realize() for a in (self._tfm, self._big_tfm))
-    self._tfm_bufs = (big_tfm.uop.base, tfm.uop.base)
+    self._tfm_buf, self._big_tfm_buf = tfm.uop.base, big_tfm.uop.base
     self._frames: dict[int, object] = {}   # camera buffer address -> its tensor
     blank = [np.zeros(frame_size, dtype=np.uint8) for _ in range(2)]
     blobs = [Tensor.from_blob(b.ctypes.data, (frame_size,), dtype='uint8', device=self._device) for b in blank]
@@ -194,7 +193,7 @@ class Warp:
     self._tfm[:, :] = tfm
     self._big_tfm[:, :] = big_tfm
     # the capture's input order, sorted names (WARP_INPUT_NAMES)
-    self._replay([self._buffer(big_frame), self._tfm_bufs[0], self._buffer(frame), self._tfm_bufs[1]], {})
+    self._replay([self._buffer(big_frame), self._big_tfm_buf, self._buffer(frame), self._tfm_buf], {})
 
   def _buffer(self, address: int):
     tensor = self._frames.get(address)

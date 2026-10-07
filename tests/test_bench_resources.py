@@ -1,11 +1,9 @@
 """The bench sampler reads real Linux formats without depending on openpilot."""
-import importlib.util
 from pathlib import Path
 
-MODULE = Path(__file__).resolve().parents[1] / 'scripts/comma/bench_resources.py'
-spec = importlib.util.spec_from_file_location('bench_resources', MODULE)
-resources = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(resources)
+from tests import load_script
+
+resources = load_script(Path(__file__).resolve().parents[1] / 'scripts/comma/bench_resources.py')
 
 
 def test_proc_stat_handles_names_with_spaces_and_parentheses(tmp_path):
@@ -32,7 +30,7 @@ def test_missing_process_is_not_an_empty_measurement(tmp_path):
   assert got['vmstat'] == {'allocstall': 6, 'compact_stall': 2, 'nr_dirty': 10}
 
 
-def test_pss_fallback_sums_mappings_and_missing_pss_is_unknown(tmp_path):
+def test_pss_sums_mappings_and_missing_pss_is_unknown(tmp_path):
   path = tmp_path / '123'
   path.mkdir()
   (path / 'stat').write_text('123 (modeld) S ' + '0 ' * 21)
@@ -40,3 +38,7 @@ def test_pss_fallback_sums_mappings_and_missing_pss_is_unknown(tmp_path):
   assert resources.sample([123], tmp_path, pss=True)['processes']['123']['pss_kb'] == 30
   (path / 'smaps').unlink()
   assert resources.sample([123], tmp_path, pss=True)['processes']['123']['pss_kb'] is None
+
+
+def test_the_recorded_sysctls_are_the_ones_the_link_tunes():
+  assert 'vm.extra_free_kbytes' in resources.tuned_sysctls()

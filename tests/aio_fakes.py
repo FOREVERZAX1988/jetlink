@@ -18,11 +18,12 @@ import os
 import time
 from collections import deque
 
-from jetlink.transport.aio import address
+from jetlink.transport.aio import address, layout
 
 
 class FakeAio:
   address = staticmethod(address)
+  layout = staticmethod(layout)
 
   def __init__(self, fd: int | None, depth: int):
     self.fd = fd
@@ -41,16 +42,16 @@ class FakeAio:
   def outstanding(self) -> int:
     return len(self.done) + len(self.held)
 
-  def submit(self, requests) -> int:
+  def submit(self, plan, bases, start: int, count: int) -> int:
     assert not self.closed, 'submit after close'
-    assert len(requests) <= self.depth
-    assert self.outstanding + len(requests) <= self.depth, 'more requests in flight than the context holds'
+    assert self.outstanding + count <= self.depth, 'more requests in flight than the context holds'
     self.submits += 1
     if self.fail:
       err = self.fail.popleft()
       raise OSError(err, os.strerror(err))
-    for spans in requests:
-      data = b''.join(ctypes.string_at(addr, n) for addr, n in spans)
+    for r in range(start, start + count):
+      pieces = range(plan.first[r], plan.first[r + 1])
+      data = b''.join(ctypes.string_at(bases[plan.span[i]] + int(plan.offset[i]), int(plan.length[i])) for i in pieces)
       self.requests.append(len(data))
       if self.fd is None:
         self.wire += data
@@ -60,7 +61,7 @@ class FakeAio:
           view = view[os.write(self.fd, view):]
       res = len(data) if self.result is None else self.result(len(data))
       (self.held if self.holding else self.done).append(res)
-    return len(requests)
+    return count
 
   def release(self) -> None:
     """The host takes everything it was holding back."""

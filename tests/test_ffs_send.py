@@ -13,6 +13,7 @@ import pytest
 
 from jetlink import protocol as P
 from jetlink.transport import ffs
+from jetlink.transport.aio import layout
 from jetlink.transport.base import LinkError
 from jetlink.transport.ffs import FfsTransport
 from tests.aio_fakes import FakeAio
@@ -63,7 +64,6 @@ def test_a_message_crosses_whole_in_aligned_requests(sender, size, quantum):
   if len(wire) <= ffs.QUEUED_LIMIT:
     assert aio.submits == 1, 'a message that fits goes in one io_submit'
   assert t.last_send['bytes'] == len(wire) and t.last_send['requests'] == len(aio.requests)
-  assert t._send_deadline is None
 
 
 def test_parts_are_gathered_without_a_copy_of_the_message(sender):
@@ -134,41 +134,20 @@ def test_a_write_the_host_did_not_complete_fails_the_next_send(sender, result, w
     t.try_send(P.Msg.PING, 3)
 
 
-def test_enomem_is_a_link_error_and_queues_nothing(sender):
-  # an 8 KB request comes from the slab (write_chunk); failing that is a comma out of memory
+def test_a_failed_submit_is_a_link_error_and_queues_nothing(sender):
+  # FunctionFS reports a failed write as its completion; io_submit itself
+  # fails only on a bad context or iocb
   t, aio = sender
-  aio.fail.append(errno.ENOMEM)
+  aio.fail.append(errno.EBADF)
   with pytest.raises(LinkError, match='gadget write failed'):
     t.send(P.Msg.PING, 1)
-  assert t.last_send['errno'] == errno.ENOMEM
-  assert not t._unbound, 'nothing of the message was queued, so the host has nothing to discard'
-
-
-def test_an_interrupted_submit_is_retried_and_repeats_nothing(sender):
-  t, aio = sender
-  aio.fail.append(errno.EINTR)
-  payload = _payload(50000)
-  t.send(P.Msg.INFER_REQ, 1, (payload,))
-  assert aio.submits == 2
-  assert bytes(aio.wire[P.HEADER_SIZE:P.HEADER_SIZE + len(payload)]) == payload
-
-
-def test_a_failure_past_the_first_byte_drops_the_gadget(sender):
-  # the host has half a message, which only a re-enumeration takes away
-  t, aio = sender
-  submit = aio.submit
-  calls = []
-
-  def second_fails(requests):
-    calls.append(len(requests))
-    if len(calls) == 2:
-      raise OSError(errno.EIO, 'I/O error')
-    return submit(requests)
-
-  aio.submit = second_fails
+  assert t.last_send['errno'] == errno.EBADF
   with pytest.raises(LinkError, match='gadget write failed'):
-    t.send(P.Msg.UPLOAD_CHUNK, 1, (_payload(4 << 20),), timeout=1.0)
-  assert t._unbound
+    t.send(P.Msg.PING, 2)
+
+
+
+
 
 
 def test_close_lets_queued_writes_finish_then_destroys_the_context(sender):
@@ -222,10 +201,11 @@ def test_send_totals_keep_the_maxima_between_log_samples(sender):
 
 def test_requests_cover_the_message_in_order_without_a_copy():
   spans = [(1000, 32), (5000, 5 * 16384), (900000, 2 * 16384 - 32)]
-  reqs = ffs._requests(spans, 8192)
-  assert [sum(length for _, length in req) for req in reqs] == [8192] * 14
+  plan = layout(tuple(n for _, n in spans), 8192)
+  assert plan.count == 14
+  assert [int(plan.length[plan.first[r]:plan.first[r + 1]].sum()) for r in range(plan.count)] == [8192] * 14
   # every byte once, in order: the gathered (address, length) runs rebuild the spans
-  runs = [run for req in reqs for run in req]
+  runs = [(spans[j][0] + int(off), int(n)) for j, off, n in zip(plan.span, plan.offset, plan.length, strict=True)]
   merged = []
   for addr, n in runs:
     if merged and merged[-1][0] + merged[-1][1] == addr:

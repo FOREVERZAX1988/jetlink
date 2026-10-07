@@ -212,7 +212,7 @@ def test_a_failure_names_the_controller_state_it_found(tmp_path, monkeypatch):
   every one a USB drop) said nothing about which; the UDC state does.
   """
   t = _bare_transport(bound_udc='udc0', _had_host=True, _closing=False, _queued=0,
-                      _reader_error=None, _read_size=P.USB_MAX_PACKET, _free=deque(),
+                      _reader_error=None, _free=deque(),
                       _cv=threading.Condition())
   monkeypatch.setattr(ffs, 'UDC_SYSFS', str(tmp_path))
   monkeypatch.setattr(t, '_widen_affinity', lambda: None)
@@ -258,9 +258,7 @@ def test_an_abort_drops_the_link_so_queued_writes_complete(mount, monkeypatch):
 
 
 def test_a_write_that_completes_leaves_the_link_alone(mount, monkeypatch):
-  # The guard must not fire on a healthy write; unbinding a working link would
-  # turn a slow frame into a dropped one.
-  monkeypatch.setattr(ffs, 'WRITE_TIMEOUT', 5.0)
+  # Unbinding a working link would turn a slow frame into a dropped one.
   t = FfsTransport(str(mount))
   try:
     t._ensure_epfiles()
@@ -382,7 +380,7 @@ def test_read_buffers_are_recycled_not_reallocated():
   """The hot receive path must not allocate per read: under memory pressure that
   allocation reclaims, 24 ms on the bench. A consumed buffer returns to the pool."""
   from collections import deque
-  t = _bare_transport(ep_out=0, _read_size=ffs.READ_CHUNK, _queued=4,
+  t = _bare_transport(ep_out=0, _queued=4,
                       _reader_error=None, _closing=False, _chunks=deque(), _free=deque(),
                       last_receive={'prepare': 0.0, 'read_wait': 0.0, 'handoff': 0.0})
   t._cv = threading.Condition()
@@ -397,7 +395,7 @@ def test_read_buffers_are_recycled_not_reallocated():
 
 def test_recycle_pool_is_bounded_and_ignores_foreign_buffers():
   from collections import deque
-  t = _bare_transport(ep_out=0, _read_size=ffs.READ_CHUNK, _queued=0,
+  t = _bare_transport(ep_out=0, _queued=0,
                       _reader_error=None, _closing=False, _chunks=deque(),
                       _free=deque(bytearray(ffs.READ_CHUNK) for _ in range(ffs.FREE_BUFS)),
                       last_receive={'prepare': 0.0, 'read_wait': 0.0, 'handoff': 0.0})

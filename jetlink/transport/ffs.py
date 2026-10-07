@@ -48,10 +48,12 @@ USB_ENDPOINT_XFER_BULK = 0x02
 EP_OUT = 0x01  # host -> device
 EP_IN = 0x82   # device -> host
 
-# FunctionFS kmallocs a contiguous buffer per read: order-5 and order-6 failures
-# in ffs_epfile_read_iter stalled replies 100-300 ms, and order-2 does not fail.
-# Do not go smaller to dodge the rare slow success: one page per read is ~19
-# syscalls for a 74 KB reply and cost ~6 ms a frame.
+# FunctionFS kmallocs a contiguous buffer per read and frees it on return. 16 KB
+# is an order-2 page allocation, which this kernel retries without bound under
+# memory pressure; vm.extra_free_kbytes (jetlink-root.sh) keeps that from
+# stalling: no reclaim in 3,396 reads of a recording bench (2026-10-07). 8 KB
+# would come from the slab like the writes, but a reply is 8,356 bytes, so it
+# took a second read: +0.3 ms a frame at p50.
 READ_CHUNK = 16 * P.USB_MAX_PACKET
 # How much the reader may queue before it stops. Only bounds memory if the
 # consumer stalls: inference never needs more than one response.
@@ -242,7 +244,6 @@ class FfsTransport(StreamTransport):
     self.ep0 = self.ep_out = self.ep_in = -1
     self._state_fd = -1   # held-open UDC 'state' fd; see _udc_state
     self._ready_deadline: float | None = None
-    self._read_size = READ_CHUNK
     self._cv = threading.Condition()
     self._chunks: deque[tuple[memoryview, float, float, float]] = deque()
     self._free: deque[bytearray] = deque()   # read buffers the consumer handed back; see _read_loop
@@ -501,9 +502,10 @@ class FfsTransport(StreamTransport):
     self._ensure_epfiles()
     return self._queue(bufs, None, wait=False)
 
-  def _send_buffers(self, bufs: list[memoryview]) -> None:
+  def send(self, msg_type: int, seq: int, parts=(), flags: int = 0, timeout: float | None = None) -> None:
+    bufs = self._frame(msg_type, seq, parts, flags)
     self._ensure_epfiles()
-    self._queue(bufs, self._send_deadline, wait=True)
+    self._queue(bufs, None if timeout is None else time.monotonic() + timeout, wait=True)
 
   def _queue(self, bufs: list[memoryview], deadline: float | None, wait: bool) -> bool:
     """Put one framed message on the IN endpoint as requests of write_chunk
@@ -535,34 +537,36 @@ class FfsTransport(StreamTransport):
             return False
         # the views in `bufs` keep these addresses valid until io_submit returns
         spans = [self._aio.address(b) for b in bufs if b.nbytes]
-        self._submit_message(_requests(spans, self.write_chunk), deadline, stats)
+        plan = self._aio.layout(tuple(n for _, n in spans), self.write_chunk)
+        self._submit_message(plan, [a for a, _ in spans], deadline, stats)
         return True
     finally:
       self._count(stats)
 
-  def _submit_message(self, requests: list[list], deadline: float, stats: dict) -> None:
-    """io_submit the requests as room allows. A failure past the first leaves
-    the host half a message, which only goes away with the link, so it drops
-    the gadget too."""
+  def _submit_message(self, plan, bases: list[int], deadline: float, stats: dict) -> None:
+    """io_submit the message's requests (an aio.Layout over the spans at
+    `bases`) as room allows: all at once for a frame, in windows for an upload
+    chunk larger than the context."""
     done = 0
-    while done < len(requests):
+    while done < plan.count:
       room = self._aio.depth - (self._submitted - self._reaped)
       if room <= 0:
         self._wait_for_room(deadline, stats)
         continue
-      done += self._submit(requests[done:done + room], deadline, stats, torn=done > 0)
+      done += self._submit(plan, bases, done, min(room, plan.count - done), stats)
 
-  def _submit(self, batch: list[list], deadline: float, stats: dict, torn: bool) -> int:
-    """io_submit `batch`; how many requests the kernel queued, 0 when it took
-    none and the message may still go."""
+  def _submit(self, plan, bases: list[int], start: int, count: int, stats: dict) -> int:
+    """io_submit `count` of the message's requests from `start`; how many the
+    kernel queued. FunctionFS reports a failed write as its completion
+    (_collect): io_submit itself fails only on a bad context or iocb."""
     t0 = time.monotonic()
     try:
-      n = self._aio.submit(batch)
+      n = self._aio.submit(plan, bases, start, count)
     except OSError as e:
       stats['errno'] = e.errno
-      if e.errno == errno.EINTR and time.monotonic() < deadline:
-        return 0   # nothing was queued, so nothing repeats
-      raise self._fail_send(f"gadget write failed: {e}{self._udc_note()}", torn) from e
+      why = f"gadget write failed: {e}{self._udc_note()}"
+      self._set_error(why)
+      raise LinkError(why) from e
     now = time.monotonic()
     stats['submit_ms'] += (now - t0) * 1e3
     stats['requests'] += n
@@ -581,23 +585,16 @@ class FfsTransport(StreamTransport):
     if self._tx_error is not None:
       raise LinkError(self._tx_error)
 
-  def _fail_send(self, why: str, torn: bool) -> LinkError:
-    if torn:
-      self._abort_write(why)
-    else:
-      self._set_error(why)
-    return LinkError(why)
-
   def _set_error(self, why: str) -> None:
     """The link's first write failure, which every send after it raises."""
     if self._tx_error is None:
       self._tx_error = why
 
-  def _collect(self, min_nr: int = 0, timeout: float | None = 0.0) -> None:
+  def _collect(self, min_nr: int = 0, timeout: float = 0.0) -> None:
     """Reap finished writes, waiting up to `timeout` for `min_nr` of them. The
     first that did not write all of its bytes is the link's failure."""
     queued = self._submitted - self._reaped
-    if self._aio is None or not queued:
+    if not queued:
       return
     results = self._aio.reap(min(min_nr, queued), timeout)
     self._reaped += len(results)
@@ -681,15 +678,14 @@ class FfsTransport(StreamTransport):
       pass
 
   def _read_loop(self) -> None:
-    # See _IO_SIGNALS: an interrupted read drops the packets it already took. This
-    # thread handles no signals, so mask them for its whole life.
+    # See _IO_SIGNALS.
     signal.pthread_sigmask(signal.SIG_BLOCK, _IO_SIGNALS)
     self._widen_affinity()
     self._raise_reader_priority()
     # Fill the pool up front: recycling alone leaves a gap while a reply's
     # chunks arrive and the consumer is a scheduling beat behind, and an
     # allocation there reclaims under memory pressure (24 ms, over budget).
-    self._free.extend(bytearray(self._read_size) for _ in range(FREE_BUFS))
+    self._free.extend(bytearray(READ_CHUNK) for _ in range(FREE_BUFS))
     while not self._closing:
       with self._cv:
         while self._queued >= MAX_QUEUED and not self._closing:
@@ -708,11 +704,10 @@ class FfsTransport(StreamTransport):
       # Reuse a buffer the consumer handed back: a fresh bytearray here was
       # measured stalling 20+ ms mid-frame under memory pressure, and the read
       # cannot start until it returns. Only this thread pops the free list.
-      buf = self._free.popleft() if self._free else bytearray(self._read_size)
+      buf = self._free.popleft() if self._free else bytearray(READ_CHUNK)
       read_started = time.monotonic()
       try:
-        # Multiples of the packet size only: the OUT endpoint rejects anything
-        # else, and _read_size is only ever halved from one.
+        # A multiple of the packet size: the OUT endpoint rejects anything else.
         got = os.readv(self.ep_out, [buf])
       except OSError as e:
         if self._closing:
@@ -761,10 +756,9 @@ class FfsTransport(StreamTransport):
         else:
           self._chunks.popleft()
           # Copied out, so return the buffer to the pool. chunk.obj survives a
-          # reslice; skip anything not from this pool at the current size, such
-          # as a shrunk buffer or a test's bytes.
+          # reslice; skip anything not from this pool, such as a test's bytes.
           buf = chunk.obj
-          if type(buf) is bytearray and len(buf) == self._read_size and len(self._free) < FREE_BUFS:
+          if type(buf) is bytearray and len(buf) == READ_CHUNK and len(self._free) < FREE_BUFS:
             self._free.append(buf)
         self._queued -= n
         self._cv.notify_all()
@@ -842,28 +836,6 @@ def _open_aio(fd: int, depth: int):
   not free."""
   from jetlink.transport.aio import Aio
   return Aio(fd, depth)
-
-
-def _requests(spans: list[tuple[int, int]], size: int) -> list[list[tuple[int, int]]]:
-  """The message as requests of `size` bytes, each [(address, length), ...]
-  gathered from `spans` without copying. The message is a whole number of
-  16 KB bursts and `size` divides 16 KB, so every request is `size` bytes,
-  which is what _collect checks each one's result against. Addresses, not
-  memoryviews: each view would cost an address() call per request."""
-  out: list[list[tuple[int, int]]] = []
-  req: list[tuple[int, int]] = []
-  filled = 0
-  for addr, n in spans:
-    while n:
-      take = min(n, size - filled)
-      req.append((addr, take))
-      addr, n, filled = addr + take, n - take, filled + take
-      if filled == size:
-        out.append(req)
-        req, filled = [], 0
-  if req:
-    out.append(req)
-  return out
 
 
 def _close_quietly(fd: int) -> None:

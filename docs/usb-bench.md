@@ -28,13 +28,13 @@ small/large-model statistics, not just the last few frames.
 
 `--resources` samples the child processes once a second into `resources.jsonl`:
 CPU ticks, faults, per-thread scheduling and context switches, VM counters,
-memory totals and free page orders. PSS is sampled every ten seconds, using
-`smaps` when the kernel lacks `smaps_rollup`. `sampler_ms` records collection
-cost. Convert CPU tick deltas using the recorded clock frequency and elapsed
+memory totals and free page orders. PSS is sampled every ten seconds from
+`smaps` (AGNOS's 4.9 kernel has no `smaps_rollup`). The first line records the
+sysctls the link tunes, so a run shows whether they were applied. `sampler_ms`
+records collection cost. Convert CPU tick deltas using the recorded clock frequency and elapsed
 monotonic time; 100% means one whole core. Compare matched steady-state windows.
 
-`--write-chunk 8192`, `16384` or `32768` overrides the candidate's AIO request
-size. An unchanged older checkout can override this internally, so check its
+`--write-chunk 8192` or `16384` overrides the candidate's AIO request size. An unchanged older checkout can override this internally, so check its
 code and actual send diagnostics before calling it a small-write baseline.
 `--small` measures the small model. Keep model, host, recording and power settings
 matched when comparing results.
@@ -62,7 +62,7 @@ Within 45 seconds, run the same checkout's diagnostic on the comma:
 
 ```sh
 PYTHONPATH=/data/openpilot /usr/local/venv/bin/python3 \
-  jetlink/scripts/comma/jetlink_usb_integrity.py --frames 100000 --write-chunk 32768
+  jetlink/scripts/comma/jetlink_usb_integrity.py --frames 100000
 ```
 
 The comma borrows the gadget from its owner and releases it on completion or
@@ -96,25 +96,24 @@ whole transport session.
 
 Smaller receive reserves save 256 KiB per transport and lower the queue ceiling
 from 8 MiB to 512 KiB. This is not a claim of a 7.5 MiB steady-state PSS saving.
-USB warp readback reuses its cached host destination while retaining tinygrad's
-copy and synchronization; the phone cable path keeps its GPU mapping.
+Frames go out from the warp's output, which lives in IO-coherent GPU memory the
+CPU reads through its cache, on the USB and the phone cable paths alike.
 
 Before promoting a fork pin, qualify the reporter's device and host, USB 2/3,
 uploads and model geometries; run recording/memory-pressure soaks and repeated
 reconnects; test host stalls and cable loss; compare complete-run latency, CPU
 and PSS. A clean short recording run or a digest-only test cannot replace those
-checks. Keep measured regressions visible: the first 32 KiB recording trial was
-1.44 ms slower at p50 than the 512 KiB baseline, outside the proposed +1 ms gate.
-
-On the same bench, the candidate with cached readback completed 3,432 large-model
-frames with zero drops or invalid frames, p50 24.84 ms, p99.9 28.57 ms and maximum
-34.84 ms. modeld used 21.26% of one core and median PSS was 238.17 MiB. The
-subsequent unchanged-code recording run reproduced a 200 ms watchdog disconnect
-and 30 order-7 FunctionFS allocation warnings; its initial fallback frame took
-315 ms. These observations support the allocation diagnosis, but do not close
-the remaining latency or cross-device qualification gates.
+checks.
 
 AIO with 8 KiB requests, 120 s against a synchronous 32 KiB control run back to
 back on the same bench: p50 23.95 against 24.85 ms, p99.9 26.61 against 30.25 ms,
 maximum 33.21 against 35.98 ms, no held frames, and modeld at 21.9% against 21.4%
-of one core. The byte-integrity run has not been repeated for AIO.
+of one core.
+
+With the coherent warp output and the replayed warp (2026-10-07), a settled
+180 s recording run: p50 21.07 ms, p99 21.51 ms, p99.9 23.11 ms, no held frames,
+modeld at 16.3% of one core. `vm.extra_free_kbytes` at 32 MiB took a 180 s
+recording run from 49 direct-reclaim stalls (the longest 148 ms) to none.
+FunctionFS's debug log turned off took the frame's `io_submit` from 1.20 to
+0.88 ms and frames from 21.14 to 20.86 ms at p50. The byte-integrity run passed
+100,000 frames with 187,842 signals and no mismatched byte.

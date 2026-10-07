@@ -16,10 +16,7 @@ code that drives.
 from __future__ import annotations
 
 import contextlib
-import sys
-import tempfile
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -52,15 +49,14 @@ def spec_for(inputs: dict) -> ModelSpec:
 
 
 class FakeClient:
-  def __init__(self, kind: str = 'usb'):
+  def __init__(self):
     self.nonce = 'test-session'
     self.sent = []
     self.asked = []
     self.last_timings = (0, 0, 0)
     self.last_state = None
     self.dead = False
-    # what the transport tells the server's hello: 'usb', or 'cable' for a phone
-    self.t = SimpleNamespace(link_info=lambda: {'kind': kind})
+    self.t = SimpleNamespace()
     self.output = np.zeros(18452, np.float32)
     self.output[slice(*SLICES['hidden_state'])] = 0.5
     self.last_output = None
@@ -135,11 +131,6 @@ class FakeWarp:
 
 class ModelStateTest(unittest.TestCase):
   def setUp(self):
-    # a phone's transport asks the UDC how fast the cable is
-    fakes.isolate(self, Path(tempfile.mkdtemp()))
-    p = mock.patch.dict(sys.modules, fakes.fake_tinygrad())
-    p.start()
-    self.addCleanup(p.stop)
     self.log = fakes.RecordingLog()
     self.events = []
 
@@ -273,11 +264,10 @@ class TestHold(ModelStateTest):
   """A reply not back HOLD_FRAME into the frame is not waited for: the
   previous output goes out again and the camera frame is not dropped."""
 
-  def test_a_late_reply_publishes_the_previous_output_once(self):
-    client = FakeClient()
-    client.late = {2}
-    spec = spec_for(STATEFUL)
-    state = self.make(spec, client)
+  def _second_frame_held(self, client) -> None:
+    """Three frames planning 1, 2, 2, where `client` holds the second: it
+    publishes the first's output again, and the third its own."""
+    state = self.make(spec_for(STATEFUL), client)
     client.output[slice(*SLICES['plan'])] = 1.0
     first, = self.frames(state, 1)
     client.output = client.output.copy()
@@ -287,6 +277,11 @@ class TestHold(ModelStateTest):
     self.assertTrue((held['plan'] == 1.0).all(), 'the frame before, again')
     self.assertTrue((after['plan'] == 2.0).all(), 'and the next frame its own')
     self.assertEqual(state.trips.held, 1)
+
+  def test_a_late_reply_publishes_the_previous_output_once(self):
+    client = FakeClient()
+    client.late = {2}
+    self._second_frame_held(client)
     self.assertTrue(any('held' in line for line in self.log.lines('warning')))
 
   def test_the_hold_is_the_rest_of_the_frame_budget(self):
@@ -309,18 +304,9 @@ class TestHold(ModelStateTest):
   def test_a_frame_the_link_would_not_take_is_held_without_waiting(self):
     client = FakeClient()
     client.busy = {2}
-    spec = spec_for(STATEFUL)
-    state = self.make(spec, client)
-    client.output[slice(*SLICES['plan'])] = 1.0
-    first, = self.frames(state, 1)
-    client.output = client.output.copy()
-    client.output[slice(*SLICES['plan'])] = 2.0
-    held, after = self.frames(state, 2)
-    self.assertTrue((held['plan'] == 1.0).all(), 'the frame before, again')
-    self.assertTrue((after['plan'] == 2.0).all())
+    self._second_frame_held(client)
     self.assertEqual([f for _, _, f, _ in client.sent], [1, 3], 'frame 2 never went out')
     self.assertEqual(len(client.holds), 2, 'and nothing waited for it')
-    self.assertEqual(state.trips.held, 1)
     self.assertTrue(any('not sent' in line for line in self.log.lines('warning')))
 
   def test_an_unsent_frame_leaves_the_reset_for_the_next_one(self):
@@ -405,7 +391,6 @@ class TestTheFace(ModelStateTest):
 
   def test_closing_it_closes_its_link(self):
     client = mock.Mock()
-    client.t.link_info.return_value = {'kind': 'usb'}
     self.make(spec_for(STATEFUL), client).close()
     client.close.assert_called_once_with()
 

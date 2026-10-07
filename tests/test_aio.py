@@ -13,7 +13,7 @@ import sys
 
 import pytest
 
-from jetlink.transport.aio import Aio, address
+from jetlink.transport.aio import IOVECS, Aio, address, layout
 
 
 def test_an_address_is_where_the_bytes_are_for_read_only_buffers_too():
@@ -50,15 +50,18 @@ def test_a_context_fills_its_structs_where_the_kernel_reads_them(monkeypatch):
 
   monkeypatch.setattr(Aio, '_call', call)
   a = Aio(7, 4)
-  payload = bytes(range(100))
-  addr, _ = address(payload)
-  assert a.submit([[(addr, 60)], [(addr + 60, 30), (addr + 90, 10)]]) == 2
+  head, body = bytes(range(20)), bytes(range(20, 100))
+  bases = [address(head)[0], address(body)[0]]
+  plan = layout((20, 80), 60)   # [head + body[:40]], [body[40:]]
+  assert a.submit(plan, bases, 0, 2) == 2
   first, second = a._iocbs[0], a._iocbs[1]
-  assert (first.nbytes, first.fildes, first.opcode) == (1, 7, 8)
-  assert second.nbytes == 2
-  iovecs = [(v.base, v.len) for v in a._iovecs[8:10]]
-  assert iovecs == [(addr + 60, 30), (addr + 90, 10)]
-  assert ctypes.string_at(a._iovecs[0].base, a._iovecs[0].len) == payload[:60]
+  assert (first.nbytes, first.fildes, first.opcode) == (2, 7, 8)
+  assert second.nbytes == 1
+  assert [(v.base, v.len) for v in a._iovecs[0:2]] == [(bases[0], 20), (bases[1], 40)]
+  assert (a._iovecs[IOVECS].base, a._iovecs[IOVECS].len) == (bases[1] + 40, 40)
+  # a window from the second request lands in the first iocb
+  assert a.submit(plan, bases, 1, 1) == 1
+  assert a._iocbs[0].nbytes == 1 and (a._iovecs[0].base, a._iovecs[0].len) == (bases[1] + 40, 40)
   done.extend([60, -108])
   assert a.reap(2, 0.0) == [60, -108]
 
@@ -71,7 +74,7 @@ def test_requests_reach_the_fd_in_order_and_are_reaped():
   try:
     payload = os.urandom(3000)
     addr, _ = address(payload)
-    assert aio.submit([[(addr, 1000)], [(addr + 1000, 1500), (addr + 2500, 500)]]) == 2
+    assert aio.submit(layout((3000,), 2000), [addr], 0, 2) == 2
     assert sorted(aio.reap(2, 1.0)) == [1000, 2000]
     assert os.read(r, 4000) == payload
     assert aio.reap(0, 0.0) == []
@@ -88,6 +91,19 @@ def test_a_bad_fd_fails_the_submit_and_queues_nothing():
   try:
     addr, _ = address(b'x' * 16)
     with pytest.raises(OSError):
-      aio.submit([[(addr, 16)]])
+      aio.submit(layout((16,), 16), [addr], 0, 1)
   finally:
     aio.close()
+
+
+def test_a_layout_cuts_spans_into_requests_of_the_size():
+  plan = layout((32, 8, 20000, 4536), 8192)
+  assert plan.count == 3
+  assert list(plan.pieces) == [3, 1, 2]
+  assert [int(plan.length[plan.first[r]:plan.first[r + 1]].sum()) for r in range(3)] == [8192, 8192, 8192]
+  assert layout((32, 8, 20000, 4536), 8192) is plan, 'a frame of the same shape reuses it'
+
+
+def test_a_request_gathers_at_most_iovecs_buffers():
+  with pytest.raises(ValueError):
+    layout((1,) * (IOVECS + 1), 8192)

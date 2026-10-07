@@ -21,9 +21,12 @@ only: the comma is aarch64, and CI's x86_64 runs the real thing too.
 from __future__ import annotations
 
 import ctypes
+import functools
 import os
 import platform
 import time
+
+import numpy as np
 
 # io_setup, io_destroy, io_submit, io_getevents
 _SYSCALLS = {'aarch64': (0, 1, 2, 4), 'x86_64': (206, 207, 209, 208)}
@@ -82,16 +85,60 @@ def address(buf) -> tuple[int, int]:
     _release_buffer(ctypes.byref(view))
 
 
+class Layout:
+  """A message whose spans are `lengths` bytes long, cut into requests of
+  `size` bytes: for each piece, the request it is in, its iovec within that
+  request's IOVECS, the span it gathers from and where in it, and its length.
+  Python loops over the pieces only here; a message of the same shape (every
+  frame of a link) reuses it through layout()."""
+
+  def __init__(self, lengths: tuple[int, ...], size: int):
+    request, slot, span, offset, length, pieces = [], [], [], [], [], []
+    r = filled = 0
+    for j, n in enumerate(lengths):
+      at = 0
+      while n:
+        take = min(n, size - filled)
+        if len(pieces) == r:
+          pieces.append(0)
+        if pieces[r] == IOVECS:
+          raise ValueError(f'a request gathers more than {IOVECS} buffers')
+        request.append(r)
+        slot.append(pieces[r])
+        span.append(j)
+        offset.append(at)
+        length.append(take)
+        pieces[r] += 1
+        at, n, filled = at + take, n - take, filled + take
+        if filled == size:
+          r, filled = r + 1, 0
+    self.count = len(pieces)
+    # where each request's pieces start, and the iovec words they fill
+    self.first = [0]
+    for c in pieces:
+      self.first.append(self.first[-1] + c)
+    self.words = 2 * (IOVECS * np.array(request, dtype=np.int64) + np.array(slot, dtype=np.int64))
+    self.span = np.array(span, dtype=np.int64)
+    self.offset = np.array(offset, dtype=np.uint64)
+    self.length = np.array(length, dtype=np.uint64)
+    self.pieces = np.array(pieces, dtype=np.uint64)
+
+
+@functools.lru_cache(maxsize=8)
+def layout(lengths: tuple[int, ...], size: int) -> Layout:
+  return Layout(lengths, size)
+
+
 class Aio:
   """A kernel AIO context of `depth` iocbs writing to `fd`, used from one
   thread at a time.
 
-  submit() takes requests as [(address, length), ...] each and returns how
-  many the kernel queued; the kernel has copied those bytes, so the caller
-  may reuse its buffers at once. reap() returns each finished request's
-  result, bytes written or a negative errno, in no promised order. The iocb
-  and iovec arrays are reused across submits: the kernel copies both before
-  io_submit returns.
+  submit() queues requests of a Layout, gathered from the spans' addresses
+  (`bases`), and returns how many the kernel queued; the kernel has copied
+  those bytes, so the caller may reuse its buffers at once. reap() returns
+  each finished request's result, bytes written or a negative errno, in no
+  promised order. The iocb and iovec arrays are reused across submits: the
+  kernel copies both before io_submit returns.
   """
 
   def __init__(self, fd: int, depth: int):
@@ -109,16 +156,15 @@ class Aio:
     for i, cb in enumerate(self._iocbs):
       # everything but the token, the iovec count and the iovecs is fixed
       cb.opcode, cb.fildes, cb.buf = IOCB_CMD_PWRITEV, fd, iovecs + i * IOVECS * size
-    # The per-frame fields as 64-bit words: a ctypes field set costs a proxy
-    # object, ~4 a request, 58 requests a frame on modeld's frame thread. iocb
-    # word 4 is the iovec count; an iovec is (address, length); an event is
-    # (data, iocb, result, result2).
-    self._iocb_words = memoryview(self._iocbs).cast('B').cast('Q')
-    self._iovec_words = memoryview(self._iovecs).cast('B').cast('Q')
+    # The per-frame fields as 64-bit words, written with numpy: iocb word 4 is
+    # the iovec count, an iovec is (address, length), and an event is (data,
+    # iocb, result, result2).
+    self._iocb_words = np.frombuffer(self._iocbs, dtype=np.uint64)
+    self._counts = np.arange(depth) * 8 + 4
+    self._iovec_words = np.frombuffer(self._iovecs, dtype=np.uint64)
     self._events = (_Event * depth)()
     self._event_words = memoryview(self._events).cast('B').cast('q')
     self._timeout = _Timespec()
-    self._poll = ctypes.byref(_Timespec())   # a zero timeout
 
   def _call(self, nr: int, *args) -> int:
     ret = self._syscall(ctypes.c_long(nr), *args)
@@ -128,46 +174,41 @@ class Aio:
     return ret
 
   address = staticmethod(address)
+  layout = staticmethod(layout)
 
-  def submit(self, requests: list[list[tuple[int, int]]]) -> int:
-    """Queue requests, in order. Raises OSError only when the kernel took
-    none of them; a short count means the next one failed, and nothing of it,
-    or of any after it, was queued."""
-    if len(requests) > self.depth:
-      raise ValueError(f'{len(requests)} requests for a context of {self.depth}')
-    cb, iov = self._iocb_words, self._iovec_words
-    for i, spans in enumerate(requests):
-      if len(spans) > IOVECS:
-        raise ValueError(f'a request gathers {len(spans)} buffers, more than {IOVECS}')
-      k = 2 * IOVECS * i
-      for addr, n in spans:
-        iov[k], iov[k + 1] = addr, n
-        k += 2
-      cb[8 * i + 4] = len(spans)   # nbytes counts iovecs for PWRITEV
-    return self._call(self._submit, self._ctx, ctypes.c_long(len(requests)), self._ptrs)
+  def submit(self, plan: Layout, bases: list[int], start: int, count: int) -> int:
+    """Queue `count` of the plan's requests from `start`, in order, gathered
+    from the spans at `bases`. Raises OSError only when the kernel took none
+    of them; a short count means the next one failed, and nothing of it, or of
+    any after it, was queued."""
+    if count > self.depth:
+      raise ValueError(f'{count} requests for a context of {self.depth}')
+    bases = np.array(bases, dtype=np.uint64)
+    lo, hi = plan.first[start], plan.first[start + count]
+    words = plan.words[lo:hi] - 2 * IOVECS * start
+    self._iovec_words[words] = bases[plan.span[lo:hi]] + plan.offset[lo:hi]
+    self._iovec_words[words + 1] = plan.length[lo:hi]
+    self._iocb_words[self._counts[:count]] = plan.pieces[start:start + count]   # nbytes counts iovecs for PWRITEV
+    return self._call(self._submit, self._ctx, ctypes.c_long(count), self._ptrs)
 
-  def reap(self, min_nr: int = 0, timeout: float | None = 0.0) -> list[int]:
-    """Finished requests' results, waiting up to `timeout` s (None: forever,
-    0: not at all) for at least `min_nr`; `min_nr` must not exceed what is
-    queued, or this waits out the whole timeout. The GIL is released while it
-    waits (ctypes).
+  def reap(self, min_nr: int, timeout: float) -> list[int]:
+    """Finished requests' results, waiting up to `timeout` s (0: not at all)
+    for at least `min_nr`; `min_nr` must not exceed what is queued, or this
+    waits out the whole timeout. The GIL is released while it waits (ctypes).
 
     A signal ends io_getevents with EINTR, and nothing retries a ctypes call
     (PEP 475 is os.* only), so this does: modeld's frame thread takes a
     SIGUSR2 from msgq ~160 times a second."""
-    end = time.monotonic() + timeout if timeout else None
+    end = time.monotonic() + timeout
     while True:
-      ts = self._poll if timeout == 0 else None
-      if end is not None:
-        left = max(0.0, end - time.monotonic())
-        self._timeout.sec = int(left)
-        self._timeout.nsec = int((left - int(left)) * 1e9)
-        ts = ctypes.byref(self._timeout)
+      left = max(0.0, end - time.monotonic())
+      self._timeout.sec = int(left)
+      self._timeout.nsec = int((left - int(left)) * 1e9)
       try:
-        n = self._call(self._getevents, self._ctx, ctypes.c_long(min(min_nr, self.depth)),
-                       ctypes.c_long(self.depth), self._events, ts)
+        n = self._call(self._getevents, self._ctx, ctypes.c_long(min_nr), ctypes.c_long(self.depth),
+                       self._events, ctypes.byref(self._timeout))
       except InterruptedError:
-        if end is not None and time.monotonic() >= end:
+        if time.monotonic() >= end:
           return []
         continue
       return self._event_words[2:4 * n:4].tolist()

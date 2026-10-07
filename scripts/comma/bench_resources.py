@@ -10,9 +10,20 @@ Sample bench processes and VM state without work on the model frame thread.
 import argparse
 import json
 import os
+import re
 import signal
 import time
 from pathlib import Path
+
+
+# the sysctls the link tunes, read off the root script so a run records
+# whether they were applied
+ROOT_SCRIPT = Path(__file__).with_name('jetlink-root.sh')
+
+
+def tuned_sysctls():
+  pairs = re.search(r'^VM_SYSCTLS=\((.*?)\)$', ROOT_SCRIPT.read_text(), re.M | re.S).group(1).split()
+  return [pair.split('=')[0] for pair in pairs]
 
 
 def read(path):
@@ -56,7 +67,7 @@ def sample(pids, proc=Path('/proc'), pss=False):
       continue
     stats['threads'] = {p.name: task(p) for p in (path / 'task').glob('[0-9]*')}
     if pss:
-      maps = read(path / 'smaps_rollup') or read(path / 'smaps')
+      maps = read(path / 'smaps')   # AGNOS's 4.9 has no smaps_rollup
       stats['pss_kb'] = sum(int(line.split()[1]) for line in maps.splitlines() if line.startswith('Pss:')) if maps else None
     result['processes'][str(pid)] = stats
   return result
@@ -78,8 +89,7 @@ def main():
   with args.output.open('w') as output:
     metadata = {'clock_ticks': os.sysconf('SC_CLK_TCK'), 'page_bytes': os.sysconf('SC_PAGE_SIZE'),
                 'commands': {str(pid): read(Path('/proc') / str(pid) / 'cmdline').replace('\0', ' ').strip() for pid in args.pids},
-                'sysctls': {k: read(Path('/proc/sys/vm') / k).strip()
-                            for k in ('min_free_kbytes', 'dirty_bytes', 'dirty_background_bytes')}}
+                'sysctls': {k: read(Path('/proc/sys') / k.replace('.', '/')).strip() for k in tuned_sysctls()}}
     output.write(json.dumps(metadata) + '\n')
     tick = 0
     while not stop:

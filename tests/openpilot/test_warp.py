@@ -220,7 +220,7 @@ class UopTensor(fakes.FakeTensor):
     return blob
 
 
-class FakeDevice:
+class FakeQcomDevice:
   """A tinygrad device as Warp uses it. An allocation's record holds the
   flags the kernel kept: the request masked by `keep`, plus some of its own."""
 
@@ -283,7 +283,7 @@ class TestWarp(unittest.TestCase):
   tensors once."""
 
   def setUp(self):
-    self.devices = {'QCOM': FakeDevice(), 'CPU': FakeDevice()}
+    self.devices = {'QCOM': FakeQcomDevice(), 'CPU': FakeQcomDevice()}
     modules = fakes.fake_tinygrad()
     modules['tinygrad.device'].Device = self.devices
     modules['tinygrad.tensor'].Tensor = UopTensor

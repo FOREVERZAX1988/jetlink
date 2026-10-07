@@ -105,12 +105,12 @@ class Trips:
 
 @dataclass
 class Frame:
-  """One frame on its way to the host: when the warp and the readback
-  finished, the bytes the wire takes, then its seq and send time once sent."""
+  """One frame on its way to the host: when its warp started, was launched
+  and finished, then its seq and send time once sent. The bytes are the
+  warp's output (Warp.output)."""
   t0: float
   t1: float
   t2: float
-  data: object
   seq: int | None = None
   sent: float = 0.0
   telemetry: bool = False
@@ -232,7 +232,7 @@ class JetlinkModelState:
     # free again once infer_begin returns: the gadget's io_submit and the
     # cable's sendmsg have copied it by then, before the next warp writes it
     self.warp.wait()
-    self._frame = Frame(t0, t1, time.perf_counter(), self.warp.output)
+    self._frame = Frame(t0, t1, time.perf_counter())
 
   def send(self, want_telemetry: bool = False) -> None:
     """The prepared frame to the host. It asks for the server's telemetry
@@ -247,13 +247,12 @@ class JetlinkModelState:
     self._frame_id += 1
     frame.telemetry = want_telemetry or time.monotonic() - self._last_logged >= TELEMETRY_PERIOD
     try:
-      frame.seq = self.client.infer_begin(frame.data, self.packed, self._frame_id, reset=self._need_reset,
+      frame.seq = self.client.infer_begin(self.warp.output, self.packed, self._frame_id, reset=self._need_reset,
                                           want_state=frame.telemetry, skip_if_busy=self._can_hold)
     except Exception:
       self._log.warning("jetlink: frame %d send failed: %s", self._frame_id, getattr(self.client.t, 'last_send', {}))
       raise
     frame.sent = time.perf_counter()
-    frame.data = None
     if frame.seq is not None:
       self._need_reset = False
 
@@ -312,7 +311,7 @@ class JetlinkModelState:
   @staticmethod
   def _hold_left(frame) -> float:
     """What is left of the hold for `frame`, from its warp's start."""
-    return (HOLD_FRAME or SLOW_FRAME) - (time.perf_counter() - frame.t0)
+    return HOLD_FRAME - (time.perf_counter() - frame.t0)
 
   def _note_hold(self, held: bool) -> str | None:
     """Why the large model should hand back after this frame, if it should:

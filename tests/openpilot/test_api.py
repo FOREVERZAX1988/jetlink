@@ -261,7 +261,6 @@ class TestTheJoinFactory(OpenpilotTest):
   def test_the_model_logs_its_telemetry_to_the_adapters_event(self):
     s = self.join()
     client = mock.Mock()
-    client.t.link_info.return_value = {'kind': 'usb'}
     big = s._build(client, spec())
     self.assertEqual(big._event, self.op.event)
     self.assertIs(big._log, self.op.log)
@@ -270,7 +269,6 @@ class TestTheJoinFactory(OpenpilotTest):
     s = self.join()
     self.assertIs(s._progress, self.parts.progress)
     client = mock.Mock()
-    client.t.link_info.return_value = {'kind': 'usb'}
     big = s._build(client, spec())
     self.assertIs(big.face, self.op.face)
     self.assertIs(big.warp, self.warp.return_value)

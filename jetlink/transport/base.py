@@ -189,9 +189,9 @@ class StreamTransport(Transport):
     self._desynced = False
     self._send_deadline: float | None = None
 
-  def _write_timeout(self, default: float | None = None) -> float | None:
+  def _write_timeout(self) -> float | None:
     if self._send_deadline is None:
-      return default
+      return None
     remaining = self._send_deadline - time.monotonic()
     if remaining <= 0:
       raise LinkError('send timed out; link abandoned')
@@ -201,8 +201,7 @@ class StreamTransport(Transport):
 
   def _write(self, bufs: list[memoryview]) -> int:
     """Write from one or more buffers. Returns bytes written (may be partial).
-    A transport that overrides _send_buffers (FfsTransport) need not provide
-    it."""
+    A transport that overrides send (FfsTransport) need not provide it."""
     raise NotImplementedError
 
   @abstractmethod
@@ -219,7 +218,12 @@ class StreamTransport(Transport):
     bufs = self._frame(msg_type, seq, parts, flags)
     self._send_deadline = None if timeout is None else time.monotonic() + timeout
     try:
-      self._send_buffers(bufs)
+      while bufs:
+        self._write_timeout()
+        n = self._write(bufs)
+        if n <= 0:
+          raise LinkError("peer went away during send")
+        bufs = advance(bufs, n)
     finally:
       self._send_deadline = None
 
@@ -240,15 +244,6 @@ class StreamTransport(Transport):
       bufs.append(memoryview(_PAD)[:1])
     bufs.insert(0, memoryview(P.pack_header(msg_type, seq, length, flags)))
     return bufs
-
-  def _send_buffers(self, bufs: list[memoryview]) -> None:
-    """Send one framed message. A transport may guard the whole transaction."""
-    while bufs:
-      self._write_timeout()
-      n = self._write(bufs)
-      if n <= 0:
-        raise LinkError("peer went away during send")
-      bufs = advance(bufs, n)
 
   def _clamp_read(self, dest: memoryview) -> int:
     """How many bytes this transport may ask for in one read."""
