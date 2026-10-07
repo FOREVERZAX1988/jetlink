@@ -296,6 +296,36 @@ def ensure(parts, client, sha256: str, nbytes: int, model_path: Path | None, *,
   return spec
 
 
+def stand_in(parts, hello: dict, pick: str) -> tuple[str, int] | None:
+  """The model to ask for in place of the pick, as (sha256, nbytes), or None
+  for the pick itself.
+
+  The server's hello says what it has: the model it has loaded and the ones it
+  has built. The pick wins whenever the server has it. Otherwise the model it
+  has loaded drives, so the iPhone the user set to Cinque Terre V3 serves that
+  rather than whatever the comma last built on some other server (ResAction on
+  the Jetson, 2026-10-07); then the comma's own record of the last model built,
+  if this server has it too. A server that lists nothing has only the record
+  to go on."""
+  built = parts.spec.ready_spec()
+  cached = hello.get('cached_models')
+  if not isinstance(cached, list):
+    return (built.sha256, built.nbytes) if built is not None and built.sha256 != pick else None
+  loaded = hello.get('loaded') or None
+  have = set(cached) | {loaded} - {None}
+  if pick in have:
+    return None
+  if loaded is not None:
+    # its size names it to the server, and only a catalog model resolved here,
+    # or the record, has one
+    nbytes = built.nbytes if built is not None and built.sha256 == loaded else parts.models.size_for(loaded)
+    if nbytes:
+      return loaded, int(nbytes)
+  if built is not None and built.sha256 in have:
+    return built.sha256, built.nbytes
+  return None
+
+
 def open_link(parts, link: Link, should_stop=None):
   """Get a client and a spec. Link IO only, so it is safe off modeld's thread;
   everything that touches tinygrad stays in the joining state's build.
@@ -324,18 +354,18 @@ def open_link(parts, link: Link, should_stop=None):
     link.note_server(hello)
     sha256, nbytes = identity(parts, selected)
     path = parts.models.shipped_model_path()
-    built = parts.spec.ready_spec()
-    if built is None:
+    standin = stand_in(parts, hello, sha256)
+    if standin is not None:
+      # the user's choice (2026-10-06): a model already built drives until the
+      # pick is fetched and built, which a provisioning run does parked, rather
+      # than the small model. Building here would unload it, and uploading
+      # would share the link with its frames
+      parts.log.warning("jetlink: %s is not ready yet, %s drives until it is", selected.get('name', sha256[:16]),
+                        parts.models.name_for(standin[0]))
+      sha256, nbytes, path = standin[0], standin[1], None
+    elif not parts.spec.engine_ready_for(sha256):
       parts.log.warning("jetlink: %s is not built yet, building it with the small model driving",
                         selected.get('name', sha256[:16]))
-    elif built.sha256 != sha256:
-      # the user's choice (2026-10-06): the last model the Jetson built
-      # drives until the pick is fetched and built, which a provisioning run
-      # does parked, rather than the small model. Building here would unload
-      # it, and uploading would share the link with its frames
-      parts.log.warning("jetlink: %s is not ready yet, %s drives until it is", selected.get('name', sha256[:16]),
-                        parts.models.name_for(built.sha256))
-      sha256, nbytes, path = built.sha256, built.nbytes, None
     # normally one round trip, since the provisioning run left the engine loaded. A
     # server that restarted reloads from the plan cache, 13 to 25 s; one
     # that has never seen this model builds it, 102 to 294 s

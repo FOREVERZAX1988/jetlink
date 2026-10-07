@@ -93,6 +93,13 @@ class TestModelIndex(ModelsTest):
     (entry,) = self.index_with([{'name': 'Gamma', 'ref': REF_C}])
     self.assertEqual((entry['name'], entry['oid'], entry['size']), ('Gamma', None, None))
 
+  def test_a_size_is_known_only_once_resolved(self):
+    with mock.patch.object(self.models, 'catalog', return_value=[{'name': 'Alpha', 'ref': REF_A},
+                                                                 {'name': 'Gamma', 'ref': REF_C}]), \
+         mock.patch.object(self.models, 'pointers', return_value=POINTERS):
+      self.assertEqual(self.models.size_for('1' * 64), 766_000_000)
+      self.assertIsNone(self.models.size_for('9' * 64))
+
   def test_a_second_read_within_the_ttl_costs_nothing(self):
     # the UI names the active model every frame
     with mock.patch.object(self.models, 'catalog', return_value=[]) as read, \

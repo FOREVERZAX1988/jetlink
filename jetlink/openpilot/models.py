@@ -238,6 +238,10 @@ class Models:
     characters when it lists none we have resolved."""
     return next((m['name'] for m in self.model_index() if m['oid'] == oid), oid[:16])
 
+  def size_for(self, oid: str) -> int | None:
+    """The byte count of the catalog model with this oid, once resolved here."""
+    return next((m['size'] for m in self.model_index() if m['oid'] == oid and m['size']), None)
+
   def has_file(self, model: dict) -> bool:
     """Is this model's ONNX on the comma, whole? Its size is the cheap check."""
     if not model.get('oid') or not model.get('size'):

@@ -326,6 +326,49 @@ class BuildingOnroad(OpenpilotTest):
     link.open_link(self.parts, self.link)
     self.assertEqual(self.ensure.call_args.args[2:4], (self.ENTRY['oid'], self.ENTRY['size']))
 
+  def hello(self, loaded=None, cached=()):
+    self.client.hello.return_value = {'device': 'iPhone', 'engine_state': 'none', 'loaded': loaded,
+                                      'cached_models': list(cached)}
+
+  def test_the_model_the_server_has_loaded_drives_over_the_record(self):
+    # 2026-10-07: the comma picked BMRLNAP v6, the iPhone was serving Cinque
+    # Terre V3, and the comma's record named ResAction from another server;
+    # the iPhone was made to switch to ResAction
+    self.patch(self.parts.spec, 'ready_spec', return_value=mock.Mock(sha256='r' * 64, nbytes=7))
+    size_for = self.patch(self.parts.models, 'size_for', return_value=99)
+    self.patch(self.parts.models, 'name_for', return_value='Cinque Terre V3')
+    self.hello(loaded='c' * 64, cached=['c' * 64, 'r' * 64])
+    link.open_link(self.parts, self.link)
+    self.assertEqual(self.ensure.call_args.args[2:5], ('c' * 64, 99, None))
+    size_for.assert_called_once_with('c' * 64)
+    assert self.op.log.has('CTM v2 is not ready yet, Cinque Terre V3 drives until it is')
+
+  def test_the_pick_wins_whenever_the_server_has_it(self):
+    self.patch(self.parts.spec, 'ready_spec', return_value=mock.Mock(sha256='r' * 64, nbytes=7))
+    for loaded, cached in ((self.ENTRY['oid'], ['r' * 64]), ('c' * 64, [self.ENTRY['oid']])):
+      with self.subTest(loaded=loaded):
+        self.hello(loaded=loaded, cached=cached)
+        link.open_link(self.parts, self.link)
+        self.assertEqual(self.ensure.call_args.args[2:4], (self.ENTRY['oid'], self.ENTRY['size']))
+
+  def test_the_record_stands_in_only_where_the_server_has_it(self):
+    self.patch(self.parts.spec, 'ready_spec', return_value=mock.Mock(sha256='r' * 64, nbytes=7))
+    self.hello(cached=['r' * 64])
+    link.open_link(self.parts, self.link)
+    self.assertEqual(self.ensure.call_args.args[2:5], ('r' * 64, 7, None))
+    # a server without it would answer need_upload and cost the record
+    self.hello(cached=['c' * 64])
+    link.open_link(self.parts, self.link)
+    self.assertEqual(self.ensure.call_args.args[2:4], (self.ENTRY['oid'], self.ENTRY['size']))
+
+  def test_a_loaded_model_of_unknown_size_is_passed_over(self):
+    # its size names it to the server; without one it would be need_upload
+    self.patch(self.parts.spec, 'ready_spec', return_value=None)
+    self.patch(self.parts.models, 'size_for', return_value=None)
+    self.hello(loaded='c' * 64, cached=['c' * 64])
+    link.open_link(self.parts, self.link)
+    self.assertEqual(self.ensure.call_args.args[2:4], (self.ENTRY['oid'], self.ENTRY['size']))
+
   def test_the_frame_deadline_is_set_before_the_link_is_handed_over(self):
     # ensure_engine waits minutes; the frame path must not inherit that
     client, _ = link.open_link(self.parts, self.link)

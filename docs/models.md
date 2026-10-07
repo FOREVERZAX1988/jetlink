@@ -6,8 +6,9 @@ While offroad and online, open **Settings > Models > Big Model** on the comma.
 Start with the default. The comma downloads it on any connection, and picks
 up where it left off if the download is interrupted. The Jetson then prepares
 it, about 3 minutes, the next time it is on while the car is parked. Until a
-newly picked model is ready, the last model the Jetson prepared drives; with
-none yet, the small model does. See [when it switches](using-jetlink.md#what-to-expect-when-driving).
+newly picked model is ready, the model the device already has loaded drives
+(on a phone or Mac, the one picked in the app), else the last one it prepared;
+with none, the small model does. See [when it switches](using-jetlink.md#what-to-expect-when-driving).
 
 If the Jetson only has power while the car is on, prepare a new model by
 starting the car, forcing offroad, and waiting for the Big Model panel to say
