@@ -553,31 +553,36 @@ sysctl_write() {
 # exit and stopped at ignition would hand every drive the stock values. A
 # reboot resets them.
 vm_apply() {
-  local pair key value rec="" failed=0
-  if [[ ! -e "$SYSCTL_PREV" ]]; then
-    for pair in "${VM_SYSCTLS[@]}"; do
-      key=${pair%%=*}
+  local pair key value had="" rec="" failed=0
+  # A key already in the record keeps its first value: a second apply must
+  # not record our own. One missing from it, a key a newer version added
+  # since the first apply of this boot, is recorded now, while it is stock.
+  [[ -e "$SYSCTL_PREV" ]] && had=$(cat "$SYSCTL_PREV" 2>/dev/null)
+  for pair in "${VM_SYSCTLS[@]}"; do
+    key=${pair%%=*}
+    if [[ $'\n'"$had" == *$'\n'"$key="* || $'\n'"$had" == *$'\n'"${key%_bytes}_ratio="* ]]; then
+      continue
+    fi
+    value=""
+    { read -r value < "$PROC_SYS/${key//.//}"; } 2>/dev/null || true
+    if [[ "$value" == 0 && "$key" == *_bytes ]]; then
+      # Stock AGNOS runs the dirty limits in ratio mode, so the *_bytes keys
+      # read 0, and the kernel silently drops a 0 written back to one.
+      # Writing the ratio key is what zeroes the bytes key, so that is the
+      # one to put back.
+      key=${key%_bytes}_ratio
       value=""
       { read -r value < "$PROC_SYS/${key//.//}"; } 2>/dev/null || true
-      if [[ "$value" == 0 && "$key" == *_bytes ]]; then
-        # Stock AGNOS runs the dirty limits in ratio mode, so the *_bytes keys
-        # read 0, and the kernel silently drops a 0 written back to one.
-        # Writing the ratio key is what zeroes the bytes key, so that is the
-        # one to put back.
-        key=${key%_bytes}_ratio
-        value=""
-        { read -r value < "$PROC_SYS/${key//.//}"; } 2>/dev/null || true
-      fi
-      if [[ -n "$value" ]]; then
-        rec+="$key=$value"$'\n'
-      else
-        echo "jetlink: could not read $key" >&2
-      fi
-    done
-    if [[ -n "$rec" ]]; then
-      { printf '%s' "$rec" > "$SYSCTL_PREV" && chmod 0644 "$SYSCTL_PREV"; } 2>/dev/null ||
-        echo "jetlink: could not record the previous sysctls in $SYSCTL_PREV" >&2
     fi
+    if [[ -n "$value" ]]; then
+      rec+="$key=$value"$'\n'
+    else
+      echo "jetlink: could not read $key" >&2
+    fi
+  done
+  if [[ -n "$rec" ]]; then
+    { printf '%s' "$rec" >> "$SYSCTL_PREV" && chmod 0644 "$SYSCTL_PREV"; } 2>/dev/null ||
+      echo "jetlink: could not record the previous sysctls in $SYSCTL_PREV" >&2
   fi
   for pair in "${VM_SYSCTLS[@]}"; do
     sysctl_write "${pair%%=*}" "${pair#*=}" || failed=1

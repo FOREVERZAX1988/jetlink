@@ -149,6 +149,19 @@ def test_vm_apply_records_the_stock_values_once_and_applies_ours(tmp_path):
   assert record(tmp_path).read_text() == stock
 
 
+def test_a_key_the_last_apply_did_not_record_is_recorded_while_stock(tmp_path):
+  # an update adds a key while the link is on: the record from this boot's
+  # first apply lacks it, and restore must still put it back
+  proc_sys(tmp_path, STOCK)
+  older = [k for k in RECORDED if k != 'vm.extra_free_kbytes']
+  record(tmp_path).write_text(''.join(f'{k}={STOCK[k]}\n' for k in older))
+  assert run_script(tmp_path, 'vm', 'apply').returncode == 0
+  assert record(tmp_path).read_text().splitlines() == [f'{k}={STOCK[k]}' for k in older] + ['vm.extra_free_kbytes=0']
+  assert read_sys(tmp_path, 'vm.extra_free_kbytes') == TUNED['vm.extra_free_kbytes']
+  assert run_script(tmp_path, 'vm', 'restore').returncode == 0
+  assert read_sys(tmp_path, 'vm.extra_free_kbytes') == '0'
+
+
 def test_vm_restore_goes_back_to_ratio_mode_and_drops_the_record(tmp_path):
   proc_sys(tmp_path, STOCK)
   assert run_script(tmp_path, 'vm', 'apply').returncode == 0
