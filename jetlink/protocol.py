@@ -15,6 +15,7 @@ vectored write out, one read into a preallocated buffer back.
 """
 from __future__ import annotations
 
+import functools
 import struct
 from enum import IntEnum
 
@@ -112,6 +113,54 @@ _infer_req = struct.Struct(INFER_REQ_FMT)
 INFER_RESP_FMT = '<IIIII'
 INFER_RESP_SIZE = struct.calcsize(INFER_RESP_FMT)
 _infer_resp = struct.Struct(INFER_RESP_FMT)
+
+
+# A frame over the phone's cable as UDP datagrams (TcpTransport.use_datagrams):
+# the INFER_REQ's stream bytes, header and pad included, cut into equal pieces
+# of at most DATAGRAM_PAYLOAD, each behind a DATAGRAM_HEADER. The comma's kernel
+# cuts a datagram into IP fragments after netfilter and routing, so the stack's
+# per-packet work runs once a datagram, about 7 times a frame, where TCP runs it
+# for each of ~272 segments: 7.35 to 4.3 ms a frame on the bench (2026-10-07).
+# The server offers it in HELLO_RESP (frame_port, frame_token) on the cable only.
+# A datagram with another token is from an earlier session and is dropped.
+DATAGRAM_MAGIC = 0x4D52464A  # b'JFRM'
+# magic, token, seq, offset, total: where this piece goes in a message of `total` bytes
+DATAGRAM_HEADER_FMT = '<IIIII'
+DATAGRAM_HEADER_SIZE = struct.calcsize(DATAGRAM_HEADER_FMT)
+# UDP carries 65507 bytes at most; equal pieces of up to this, 7 for a big model's frame
+DATAGRAM_PAYLOAD = 65000
+_datagram_header = struct.Struct(DATAGRAM_HEADER_FMT)
+
+
+def pack_datagram_header(token: int, seq: int, offset: int, total: int) -> bytes:
+  return _datagram_header.pack(DATAGRAM_MAGIC, token, seq, offset, total)
+
+
+def pack_datagram_header_into(buf, token: int, seq: int, offset: int, total: int) -> None:
+  _datagram_header.pack_into(buf, 0, DATAGRAM_MAGIC, token, seq, offset, total)
+
+
+def unpack_datagram_header(buf) -> tuple[int, int, int, int]:
+  """(token, seq, offset, total); ProtocolError for anything not ours."""
+  magic, token, seq, offset, total = _datagram_header.unpack_from(buf)
+  if magic != DATAGRAM_MAGIC:
+    raise ProtocolError(f"bad datagram magic 0x{magic:08x}")
+  return token, seq, offset, total
+
+
+def datagram_pieces(total: int) -> tuple[tuple[int, int], ...]:
+  """(offset, size) of each datagram for a message of `total` bytes: as few as
+  DATAGRAM_PAYLOAD allows, equal to within a byte. The same every frame of a
+  model, so kept."""
+  return _pieces(total, DATAGRAM_PAYLOAD)
+
+
+@functools.lru_cache(maxsize=8)
+def _pieces(total: int, payload: int) -> tuple[tuple[int, int], ...]:
+  n = max(1, -(-total // payload))
+  base, extra = divmod(total, n)
+  sizes = [base + (1 if i < extra else 0) for i in range(n)]
+  return tuple((sum(sizes[:i]), size) for i, size in enumerate(sizes))
 
 
 class ProtocolError(RuntimeError):

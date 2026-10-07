@@ -560,3 +560,22 @@ def test_need_upload_pushed_after_a_preload_uploads_when_the_caller_has_the_file
   client = JetlinkClient(server)
   assert client.ensure_engine(spec.sha256, spec.nbytes, onnx_path=model, build_timeout=30.0) == spec
   assert server.sent == [P.Msg.ENGINE_REQ, P.Msg.UPLOAD_CHUNK, P.Msg.UPLOAD_DONE]
+
+
+def test_a_datagram_header_round_trips_and_rejects_what_is_not_ours():
+  raw = P.pack_datagram_header(77, 2 ** 32 - 1, 65000, 398376)
+  assert len(raw) == P.DATAGRAM_HEADER_SIZE == 20
+  assert P.unpack_datagram_header(raw) == (77, 2 ** 32 - 1, 65000, 398376)
+  with pytest.raises(P.ProtocolError):
+    P.unpack_datagram_header(P.pack_header(P.Msg.PING, 1, 0)[:20])
+
+
+@pytest.mark.parametrize('total', [1, 32, 65000, 65001, 130001, 398376, 16 << 20])
+def test_messages_are_cut_into_as_few_equal_datagrams_as_fit(total):
+  pieces = P.datagram_pieces(total)
+  assert pieces[0][0] == 0 and sum(size for _, size in pieces) == total
+  assert all(a + n == b for (a, n), (b, _) in zip(pieces, pieces[1:], strict=False))
+  sizes = {size for _, size in pieces}
+  assert max(sizes) <= P.DATAGRAM_PAYLOAD and max(sizes) - min(sizes) <= 1
+  assert len(pieces) == -(-total // P.DATAGRAM_PAYLOAD)
+  assert P.DATAGRAM_HEADER_SIZE + max(sizes) <= 65507   # what UDP carries

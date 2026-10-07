@@ -293,13 +293,18 @@ class JetlinkModelState:
       # receive stalls once the Jetson is offline; server total excludes USB
       gpu_us, queue_us, total_us = self.client.last_timings
       receive = getattr(self.client.t, 'last_receive', {})
+      # over the cable: how frames go, how many never came back, and what the
+      # kernel dropped on the way in (softnet), since the link came up
+      drops = getattr(self.client.t, 'net_drops', lambda: None)()
+      cable = (f"; frames {'as datagrams' if self.client.t.datagrams else 'on the stream'}, "
+               f"{self.client.frames_lost} lost, net drops {drops}" if drops is not None else '')
       self._log.warning("jetlink: frame %d warp %.1f data %.1f send %.1f wait %.1f ms%s; "
-                        "server gpu %.1f queue %.1f total %.1f ms; ffs maxima prepare %.1f read_wait %.1f handoff %.1f ms",
+                        "server gpu %.1f queue %.1f total %.1f ms; ffs maxima prepare %.1f read_wait %.1f handoff %.1f ms%s",
                         self._frame_id, (frame.t1 - frame.t0) * 1e3, (frame.t2 - frame.t1) * 1e3,
                         (frame.sent - frame.t2) * 1e3, (t4 - waiting_from) * 1e3,
                         note,
                         gpu_us / 1e3, queue_us / 1e3, total_us / 1e3, receive.get('prepare', 0.0) * 1e3,
-                        receive.get('read_wait', 0.0) * 1e3, receive.get('handoff', 0.0) * 1e3)
+                        receive.get('read_wait', 0.0) * 1e3, receive.get('handoff', 0.0) * 1e3, cable)
     return outputs
 
   def run(self, bufs: dict, transforms: dict[str, np.ndarray],

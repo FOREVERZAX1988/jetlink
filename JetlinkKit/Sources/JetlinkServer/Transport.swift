@@ -28,6 +28,8 @@ public struct Message {
   public let seq: UInt32
   public let flags: UInt32
   public let payload: UnsafeRawBufferPointer
+  /// Did it come as datagrams (`FrameDatagrams`)? Only a frame does.
+  public var viaDatagram = false
 }
 
 /// Framing over a connected TCP socket, as `StreamTransport` and `TcpTransport`
@@ -61,6 +63,7 @@ public final class TCPTransport: @unchecked Sendable {
   deinit {
     close()
     tx.deallocate()
+    polls.deallocate()
   }
 
   /// A client's end: what the comma opens, and what a phone dialing the
@@ -116,10 +119,77 @@ public final class TCPTransport: @unchecked Sendable {
     _ = setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
   }
 
+  // MARK: frames as datagrams
+
+  /// Frames over the cable as datagrams, once offered; see `FrameDatagrams`.
+  private var datagrams: FrameDatagrams?
+  /// The stream's socket and the datagrams' for `poll`, set up with them.
+  private let polls = UnsafeMutablePointer<pollfd>.allocate(capacity: 2)
+
+  /// A port and a new token for the comma to send frames to as datagrams,
+  /// or nil off the cable: only a phone's USB link is offered them. The
+  /// session's loop thread calls this, as it calls `recv()`.
+  public func offerDatagrams() -> (port: UInt16, token: UInt32)? {
+    guard medium == .usb || TCPTransport.datagramsAnyPeer else { return nil }
+    if datagrams == nil {
+      guard let local = address(getsockname), let comma = address(getpeername),
+        let made = FrameDatagrams(local: local, comma: comma)
+      else { return nil }
+      datagrams = made
+      polls[0] = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+      polls[1] = pollfd(fd: made.fd, events: Int16(POLLIN), revents: 0)
+    }
+    return datagrams.map { ($0.port, $0.renew()) }
+  }
+
+  /// This connection's IPv4 address at one end: `getsockname` or `getpeername`.
+  private func address(_ name: (Int32, UnsafeMutablePointer<sockaddr>, UnsafeMutablePointer<socklen_t>) -> Int32) -> in_addr? {
+    var address = sockaddr_in()
+    var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+    let named = withUnsafeMutablePointer(to: &address) {
+      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { name(fd, $0, &length) }
+    }
+    return named == 0 && Int32(address.sin_family) == AF_INET ? address.sin_addr : nil
+  }
+
+  /// Any link counts as the cable for frame datagrams: for the live test
+  /// against the comma's client on loopback. Never on a phone.
+  static let datagramsAnyPeer = ProcessInfo.processInfo.environment["JETLINK_DATAGRAMS_ANY_PEER"] == "1"
+
+  /// The next message from either socket. TCP first when both have one, and
+  /// a TCP message is read whole once begun.
+  private func pollBoth(_ datagrams: FrameDatagrams) throws -> Message? {
+    while true {
+      polls[0].revents = 0
+      polls[1].revents = 0
+      if poll(polls, 2, -1) < 0 {
+        if errno == EINTR { continue }
+        throw LinkError.closed("poll failed: \(String(cString: strerror(errno)))")
+      }
+      if polls[0].revents != 0 { return nil }
+      if polls[1].revents != 0, let whole = datagrams.read(), let message = TCPTransport.message(whole) {
+        return message
+      }
+    }
+  }
+
+  /// A datagram frame's bytes as a message, or nil for bytes that do not
+  /// hold together: those are dropped, never a desynced link.
+  static func message(_ bytes: UnsafeRawBufferPointer) -> Message? {
+    guard let base = bytes.baseAddress, let header = try? Wire.unpackHeader(base),
+      Wire.headerSize + Int(header.length) + Wire.pad(header) == bytes.count
+    else { return nil }
+    return Message(msgType: header.msgType, seq: header.seq, flags: header.flags,
+                   payload: UnsafeRawBufferPointer(start: base + Wire.headerSize, count: Int(header.length)), viaDatagram: true)
+  }
+
   // MARK: receiving
 
   public func recv() throws -> Message {
-    try reader.recv(pad: { Wire.Flag(rawValue: $0.flags).contains(.padded) ? 1 : 0 }) { into, missing in
+    if let datagrams, let message = try pollBoth(datagrams) {
+      return message
+    }
+    return try reader.recv(pad: Wire.pad) { into, missing in
       while true {
         let n = Sys.read(fd, into, missing)
         if n > 0 { return n }
@@ -210,6 +280,7 @@ public final class TCPTransport: @unchecked Sendable {
       closed = true
       _ = Sys.shutdown(fd)
       _ = Sys.close(fd)
+      datagrams?.close()
     }
   }
 
@@ -380,17 +451,20 @@ enum JSONLine {
 package enum Sys {
   #if canImport(Darwin)
     package static let stream = SOCK_STREAM
+    static let datagram = SOCK_DGRAM
     static let keepIdle = TCP_KEEPALIVE
     static let iovMax = Int(IOV_MAX)
     /// For `send`: Darwin sockets have SO_NOSIGPIPE set instead.
     package static let sendFlags: Int32 = 0
   #elseif canImport(Glibc)
     package static let stream = Int32(SOCK_STREAM.rawValue)
+    static let datagram = Int32(SOCK_DGRAM.rawValue)
     static let keepIdle = TCP_KEEPIDLE
     static let iovMax = 1024
     package static let sendFlags = Int32(MSG_NOSIGNAL)
   #else
     package static let stream = SOCK_STREAM
+    static let datagram = SOCK_DGRAM
     static let keepIdle = TCP_KEEPIDLE
     static let iovMax = 1024
     package static let sendFlags = Int32(MSG_NOSIGNAL)

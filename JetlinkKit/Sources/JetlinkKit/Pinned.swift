@@ -24,6 +24,12 @@ public enum Pinned {
   public static let inferRespSize: Int = 20
   /// jetlink.transport.base.MAX_MESSAGE
   public static let maxMessage: Int = 16777216
+  /// jetlink.protocol.DATAGRAM_MAGIC
+  public static let datagramMagic: UInt32 = 0x4D52_464A
+  /// jetlink.protocol.DATAGRAM_HEADER_SIZE
+  public static let datagramHeaderSize: Int = 20
+  /// jetlink.protocol.DATAGRAM_PAYLOAD
+  public static let datagramPayload: Int = 65000
   /// jetlink.transport.tcp.DEFAULT_PORT
   public static let defaultPort: UInt16 = 5599
   /// jetlink.protocol.Msg

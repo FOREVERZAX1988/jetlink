@@ -30,6 +30,16 @@ bench tools). There is one version: update the comma and Jetlink together.
 - **INFER_REQ.** The comma's warped camera images (uint8) and 12 floats
   (`desire`, `traffic_convention`, `action_t`): 393,304 bytes with the header,
   409,600 over USB with the comma's padding.
+- **Frames over a phone's cable.** A phone's server offers a UDP port and a
+  token in its hello reply, over the cable only. Once the big model has an
+  output to fall back on, the comma sends each INFER_REQ there as about seven
+  equal UDP datagrams (`JFRM` header: token, sequence number, offset, total)
+  instead of on the TCP connection. The comma's kernel then does its
+  per-packet work about seven times a frame instead of once for each of
+  ~270 TCP segments: 7.35 to 4.3 ms a frame on the bench. Everything else, the
+  replies included, stays on TCP. A frame missing a piece is dropped when the
+  next one starts; the comma never gets its reply and treats it as a late
+  reply.
 - **INFER_RESP.** The status, the server's timings, and the model's outputs in
   float32 without `hidden_state`: 8,324 bytes for the current models (73,860
   with it). The comma sets WANT_HIDDEN on a frame to get the whole vector, for

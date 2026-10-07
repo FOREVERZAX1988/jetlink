@@ -72,6 +72,9 @@ class FakeTransport:
   def send_json(self, msg_type, seq, obj, flags=0):
     self.sent.append(obj)
 
+  def stop_datagrams(self):
+    pass
+
 
 @pytest.mark.parametrize('link,expected', [({'kind': 'cable', 'usb_speed': 'super-speed'}, {'kind': 'cable', 'usb_speed': 'super-speed'}),
                                            ({}, None), (OSError('no sysfs'), None)])

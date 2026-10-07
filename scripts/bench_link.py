@@ -40,6 +40,8 @@ from jetlink.spec import ModelSpec, spec_from_onnx
 
 # modeld's per-frame budget; a frame past it is dropped, and frameDropPerc > 1 soft-disables
 FRAME_BUDGET_MS = 50.0
+# how long a frame sent as datagrams is waited for before it counts as held
+DATAGRAM_HOLD = 1.0
 # how long --loan waits for the gadget owner to lend the link
 LOAN_TIMEOUT = 60.0
 
@@ -122,6 +124,8 @@ def main() -> int:
   p.add_argument('--sha256', help='model identity, for a model the server already has')
   p.add_argument('--nbytes', type=int, help='ONNX size in bytes, with --sha256')
   p.add_argument('--n', type=int, default=400)
+  p.add_argument('--no-datagrams', action='store_true',
+                 help='keep frames on the stream where a phone\'s server offers datagrams, for an A/B')
   p.add_argument('--rate', type=float, default=20.0, help='Hz; 0 = as fast as possible')
   args = p.parse_args()
   if args.loan and not args.ffs:
@@ -151,6 +155,7 @@ def _run(args, client) -> int:
   if args.wait_host:
     _wait_for_host(args.wait_host)
 
+  client.allow_datagrams = not args.no_datagrams
   hello = client.hello()
   print(f"server: {hello.get('backend', 'trt')} {hello.get('runtime_version', hello.get('trt_version'))} "
         f"on {hello['device']}, engine {hello['engine_state']}")
@@ -172,6 +177,7 @@ def _run(args, client) -> int:
   packed = np.zeros(spec.packed_nelem, np.float32)
 
   lat, gpu, queue, srv = [], [], [], []
+  held = 0
   send_ms, recv_ms = [], []
   period = 1.0 / args.rate if args.rate > 0 else 0.0
   next_t = time.perf_counter()
@@ -182,9 +188,14 @@ def _run(args, client) -> int:
         time.sleep(next_t - now)
       next_t += period
     t = time.perf_counter()
-    seq = client.infer_begin(warped, packed, frame_id=i, reset=(i == 0))
+    # as modeld sends them: over the cable, a frame after the first may go as
+    # datagrams, and one that never comes back is held, not a dead link
+    lose = i > 0 and client.t.datagrams
+    seq = client.infer_begin(warped, packed, frame_id=i, reset=(i == 0), skip_if_busy=lose)
     t_sent = time.perf_counter()
-    client.infer_end(seq)
+    if client.infer_end(seq, hold=DATAGRAM_HOLD if lose else None) is None:
+      held += 1
+      continue
     t_done = time.perf_counter()
     lat.append((t_done - t) * 1e3)
     send_ms.append((t_sent - t) * 1e3)
@@ -218,6 +229,8 @@ def _run(args, client) -> int:
   print(f"transport overhead: {a.mean() - s.mean():.2f} ms mean")
   over = int((a > FRAME_BUDGET_MS).sum())
   print(f"frames over the {FRAME_BUDGET_MS:.0f} ms budget: {over}/{len(a)} ({100*over/len(a):.1f}%)")
+  print(f"frames went {'as datagrams' if client.t.datagrams else 'on the stream'}; "
+        f"{held} held past {DATAGRAM_HOLD:g} s, {client.frames_lost} never answered")
   return 0
 
 

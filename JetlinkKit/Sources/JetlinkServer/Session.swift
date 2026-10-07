@@ -168,6 +168,14 @@ final class Session: @unchecked Sendable {
       try error(message.seq, "unknown_message", "type \(message.msgType)")
       return
     }
+    if message.viaDatagram {
+      // Only frames come as datagrams, and those never repeat (FrameDatagrams
+      // drops a seq at or below the last it finished). Their seqs are left out
+      // of lastSeq: a TCP message sent before a frame can arrive after it.
+      guard type == .inferReq else { return }
+      try onInfer(message)
+      return
+    }
     if type == .helloReq {
       // A hello means "a new client process", answered whatever the seq says.
       greet(message)
@@ -263,6 +271,12 @@ final class Session: @unchecked Sendable {
     ]
     for (key, value) in host.backend.describe() {
       response[key] = value
+    }
+    // Over a phone's cable, frames may come as datagrams: a new token each
+    // hello, so pieces of the last session's frames count for nothing
+    if let offer = transport.offerDatagrams() {
+      response["frame_port"] = Int(offer.port)
+      response["frame_token"] = Int(offer.token)
     }
     try sendJSON(.helloResp, seq: message.seq, response)
   }

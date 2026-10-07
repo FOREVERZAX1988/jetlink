@@ -107,6 +107,11 @@ class JetlinkClient:
     self._in_flight: deque[Sent] = deque()
     # seqs sent with no reply wanted (leave): an ERROR to one is not this link's
     self._no_reply_wanted: set[int] = set()
+    # frames the server never answered this session, for the log: a lost
+    # datagram is one, and to the caller a held frame like any late reply
+    self.frames_lost = 0
+    # take a server's offer of frame datagrams (_take_datagrams); the bench's A/B turns it off
+    self.allow_datagrams = True
 
   # -- construction ---------------------------------------------------------
 
@@ -237,8 +242,20 @@ class JetlinkClient:
     # its last output is nothing the new model may publish
     self._in_flight.clear()
     self.last_output = None
+    self.frames_lost = 0
     self.t.send_json(P.Msg.HELLO_REQ, seq, {'client': client})
-    return json.loads(bytes(self._expect(P.Msg.HELLO_RESP, seq, timeout).payload))
+    resp = json.loads(bytes(self._expect(P.Msg.HELLO_RESP, seq, timeout).payload))
+    self._take_datagrams(resp)
+    return resp
+
+  def _take_datagrams(self, hello: dict) -> None:
+    """Frames as datagrams when the server offers them (only a phone's server,
+    over the cable). A session that offers none puts frames back on the link."""
+    port, token = hello.get('frame_port'), hello.get('frame_token')
+    if port and token is not None and self.allow_datagrams and self.t.use_datagrams(int(port), int(token)):
+      log.info("frames go to the server as datagrams (port %d)", int(port))
+    else:
+      self.t.stop_datagrams()
 
   def state(self, timeout: float = 2.0) -> dict:
     seq = self._next_seq()
@@ -388,9 +405,13 @@ class JetlinkClient:
     not slow, and the link is done here, before another frame goes out to
     it. `deadline` bounds this frame's send.
 
-    With `skip_if_busy`, a frame the link cannot take without waiting for the
-    host to drain earlier ones is not sent, and None comes back: the link is
-    as good as it was (Transport.try_send).
+    `skip_if_busy` says the caller can do without this frame's reply: it
+    holds the last output, as JetlinkModelState.end does. A frame the link
+    cannot take without waiting for the host to drain earlier ones is then
+    not sent, and None comes back: the link is as good as it was
+    (Transport.try_send). Over a phone's cable it goes as datagrams instead,
+    where a lost one is a frame the server never answers, and the next reply
+    takes it out of flight (_take_reply).
     """
     if self.spec is None:
       raise LinkError("ensure_engine() first")
@@ -408,7 +429,9 @@ class JetlinkClient:
     sent = Sent(seq, frame_id, flags, time.monotonic())
     timeout = self.deadline if deadline is None else deadline
     try:
-      if skip_if_busy:
+      if skip_if_busy and self.t.datagrams:
+        self.t.send_datagrams(P.Msg.INFER_REQ, seq, parts)
+      elif skip_if_busy:
         if not self.t.try_send(P.Msg.INFER_REQ, seq, parts, timeout=timeout):
           return None   # the seq is skipped; replies are matched by seq, not counted
       else:
@@ -486,10 +509,12 @@ class JetlinkClient:
     its timings and telemetry kept, the frame and any older one taken out of
     flight. Raises, with the link dead, on anything but a good answer."""
     while self._in_flight and self._in_flight[0].seq != msg.seq:
-      # an older frame the server never answered: it answers in order, and a
-      # frame that fell out of its session (a hello between) is not coming
+      # an older frame the server never answered: it answers in order, so a
+      # frame that fell out of its session (a hello between), or whose
+      # datagrams did not all arrive, is not coming
       skipped = self._in_flight.popleft()
       log.warning('frame %d (seq %d) was never answered', skipped.frame_id, skipped.seq)
+      self.frames_lost += 1
     if not self._in_flight:
       self.dead = True
       raise LinkError(f'inference response seq {msg.seq} answers no frame sent')

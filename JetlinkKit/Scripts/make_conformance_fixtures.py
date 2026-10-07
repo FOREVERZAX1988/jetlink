@@ -207,8 +207,35 @@ def wire(root: Path) -> None:
   (out / 'wire.json').write_text(dump({
     'payload': 'byte i of a binary payload is (seq * 31 + i * 7) % 251',
     'headers': headers, 'infer_req': infer_req, 'infer_resp': infer_resp,
-    'messages': messages, 'streams': streams,
+    'messages': messages, 'streams': streams, 'datagrams': _datagrams(out),
   }))
+
+
+# A frame the comma sends as datagrams: three pieces, the last message padded
+DATAGRAM_FRAME = ('INFER_REQ', 21, 1, [8, 140000, 184])
+DATAGRAM_TOKEN = 0xC0FFEE11
+
+
+def _datagrams(out: Path) -> dict:
+  """Datagram headers, how messages are cut, and the datagrams
+  TcpTransport.send_datagrams sends for DATAGRAM_FRAME, in wire.datagrams.bin
+  one after another."""
+  from jetlink import protocol as P
+  from jetlink.transport.tcp import TcpTransport, datagrams
+
+  headers = [{'token': t, 'seq': q, 'offset': o, 'total': n, 'hex': P.pack_datagram_header(t, q, o, n).hex()}
+             for t, q, o, n in ((1, 1, 0, 32), (DATAGRAM_TOKEN, 2 ** 32 - 1, 65000, 398376), (2 ** 32 - 1, 7, 7, 16 << 20))]
+  pieces = [{'total': n, 'pieces': [list(p) for p in P.datagram_pieces(n)]} for n in (32, 65000, 65001, 130001, 398376)]
+
+  parts, _ = _message_bytes(DATAGRAM_FRAME)
+  stream = _memory(TcpTransport.tx_align)()
+  bufs = stream._frame(P.Msg[DATAGRAM_FRAME[0]], DATAGRAM_FRAME[1], parts, DATAGRAM_FRAME[2])
+  sent = [b''.join(bytes(b) for b in d) for d in datagrams(bufs, DATAGRAM_TOKEN, DATAGRAM_FRAME[1])]
+  (out / 'wire.datagrams.bin').write_bytes(b''.join(sent))
+  name, seq, flags, lengths = DATAGRAM_FRAME
+  return {'headers': headers, 'pieces': pieces,
+          'frame': {'name': name, 'type': P.Msg[name].value, 'seq': seq, 'flags': flags, 'parts': lengths,
+                    'token': DATAGRAM_TOKEN, 'file': 'wire.datagrams.bin', 'sizes': [len(d) for d in sent]}}
 
 
 # -- staging ------------------------------------------------------------------

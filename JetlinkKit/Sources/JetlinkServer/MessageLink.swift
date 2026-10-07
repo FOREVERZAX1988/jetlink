@@ -22,9 +22,14 @@ public protocol MessageLink: AnyObject, Sendable {
   /// Wakes a `recv()` blocked on another thread, which then throws.
   func shutdown()
   func close()
+  /// A port and a new token for frames as datagrams, or nil where the link
+  /// has none: only a phone's cable (`TCPTransport.offerDatagrams`).
+  func offerDatagrams() -> (port: UInt16, token: UInt32)?
 }
 
 extension MessageLink {
+  public func offerDatagrams() -> (port: UInt16, token: UInt32)? { nil }
+
   public func send(_ type: Wire.Msg, seq: UInt32, parts: [UnsafeRawBufferPointer] = [], flags: Wire.Flag = []) throws {
     try parts.withUnsafeBufferPointer { try sendParts(type, seq: seq, parts: $0, flags: flags) }
   }

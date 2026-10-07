@@ -28,6 +28,11 @@ public enum Wire {
   /// keeps the one-byte pad instead. `protocol.GADGET_TX_ALIGN`.
   public static let gadgetTxAlign = Pinned.gadgetTxAlign
 
+  /// The pad byte a received message's header says follows its payload.
+  static func pad(_ header: Header) -> Int {
+    Flag(rawValue: header.flags).contains(.padded) ? 1 : 0
+  }
+
   /// Does a sent message with a `length` byte payload need the pad byte and
   /// Flag.padded? The rule every sender but the gadget keeps.
   static func needsPad(_ length: Int) -> Bool {
@@ -144,6 +149,34 @@ public enum Wire {
       flags: UInt32(littleEndian: buffer.loadUnaligned(fromByteOffset: 12, as: UInt32.self)),
       length: UInt32(littleEndian: buffer.loadUnaligned(fromByteOffset: 16, as: UInt32.self)),
       reserved: UInt64(littleEndian: buffer.loadUnaligned(fromByteOffset: 20, as: UInt64.self)))
+  }
+
+  // MARK: frames as datagrams
+
+  /// A frame over the phone's cable as UDP datagrams (`FrameDatagrams`): the
+  /// INFER_REQ's stream bytes cut into equal pieces of at most
+  /// `datagramPayload`, each behind a datagram header. `protocol.DATAGRAM_MAGIC`.
+  public static let datagramMagic = Pinned.datagramMagic  // b'JFRM'
+  public static let datagramHeaderSize = Pinned.datagramHeaderSize
+  public static let datagramPayload = Pinned.datagramPayload
+
+  /// '<IIIII': magic, then where this piece goes in a message of `total` bytes,
+  /// for the session `token` the server's hello gave.
+  struct DatagramHeader: Equatable, Sendable {
+    var token: UInt32
+    var seq: UInt32
+    var offset: UInt32
+    var total: UInt32
+  }
+
+  /// The header, or nil for a datagram that is not ours.
+  static func unpackDatagramHeader(_ buffer: UnsafeRawPointer) -> DatagramHeader? {
+    guard UInt32(littleEndian: buffer.loadUnaligned(fromByteOffset: 0, as: UInt32.self)) == datagramMagic else { return nil }
+    return DatagramHeader(
+      token: UInt32(littleEndian: buffer.loadUnaligned(fromByteOffset: 4, as: UInt32.self)),
+      seq: UInt32(littleEndian: buffer.loadUnaligned(fromByteOffset: 8, as: UInt32.self)),
+      offset: UInt32(littleEndian: buffer.loadUnaligned(fromByteOffset: 12, as: UInt32.self)),
+      total: UInt32(littleEndian: buffer.loadUnaligned(fromByteOffset: 16, as: UInt32.self)))
   }
 
   public static func packInferResp(frameID: UInt32, status: Status, gpuUs: UInt32, queueUs: UInt32, totalUs: UInt32, into out: UnsafeMutableRawPointer) {

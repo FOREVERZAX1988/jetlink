@@ -87,6 +87,25 @@ class Transport(ABC):
     self.send(msg_type, seq, parts, timeout=timeout)
     return True
 
+  @property
+  def datagrams(self) -> bool:
+    """Do frames the caller can do without go as datagrams? Only a phone's
+    cable, once its server offered them (TcpTransport.use_datagrams)."""
+    return False
+
+  def use_datagrams(self, port: int, token: int) -> bool:
+    """Send those frames to the server's UDP `port` behind its `token`, where
+    the link can (TcpTransport); False and nothing changes elsewhere."""
+    return False
+
+  def stop_datagrams(self) -> None:
+    """Frames on the link itself again."""
+
+  def net_drops(self) -> int | None:
+    """Packets the kernel dropped on their way in since the link came up, on a
+    link that goes through the network stack (TcpTransport); None elsewhere."""
+    return None
+
   @abstractmethod
   def recv(self, timeout: float | None = None) -> Message:
     """Block for one message. Raises LinkTimeout if `timeout` elapses."""
@@ -286,6 +305,17 @@ class StreamTransport(Transport):
     self.rx.take(pad)
     self.rx.consumed()
     return Message(msg_type, seq, flags, payload)
+
+
+def take(bufs: list[memoryview], n: int) -> list[memoryview]:
+  """The first `n` bytes across a list of buffers, without copying."""
+  out: list[memoryview] = []
+  for mv in bufs:
+    if n <= 0:
+      break
+    out.append(mv if mv.nbytes <= n else mv[:n])
+    n -= out[-1].nbytes
+  return out
 
 
 def advance(bufs: list[memoryview], n: int) -> list[memoryview]:

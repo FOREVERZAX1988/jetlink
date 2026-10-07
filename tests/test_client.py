@@ -13,12 +13,14 @@ import socket
 import threading
 import time
 import unittest
+from unittest import mock
 
 import numpy as np
 
 from jetlink import protocol as P
 from jetlink.client import JetlinkClient
 from jetlink.transport.base import LinkError
+from jetlink.transport.tcp import TcpTransport
 from tests.test_protocol import _spec, make_pair, reply
 
 
@@ -191,3 +193,103 @@ class FramesInFlight(SocketPairTest):
 
 if __name__ == '__main__':
   unittest.main()
+
+
+class FramesAsDatagrams(FramesInFlight):
+  """Over the cable a phone's server offers a UDP port in its hello, and
+  frames the comma may lose go there as datagrams; everything else, and any
+  frame it cannot lose, stays on the stream. Loopback stands in for the
+  cable."""
+
+  def setUp(self):
+    super().setUp()
+    cable = mock.patch.object(TcpTransport, 'on_the_cable', return_value=True)
+    cable.start()
+    self.addCleanup(cable.stop)
+    self.udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    self.udp.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 << 20)
+    self.udp.bind(('127.0.0.1', 0))
+    self.udp.settimeout(2.0)
+    self.addCleanup(self.udp.close)
+
+  def greet(self, **offer) -> None:
+    """A hello the far end answers with `offer` in it."""
+    def serve():
+      msg = self.peer.recv(timeout=2.0)
+      self.peer.send_json(P.Msg.HELLO_RESP, msg.seq, {'device': 'test', **offer})
+    t = threading.Thread(target=serve, daemon=True)
+    t.start()
+    self.client.hello(timeout=2.0)
+    t.join(2.0)
+
+  def offer(self) -> dict:
+    return {'frame_port': self.udp.getsockname()[1], 'frame_token': 77}
+
+  def lose(self, frame_id: int) -> int:
+    spec = self.client.spec
+    return self.client.infer_begin(bytes(spec.warped_nbytes), bytes(spec.packed_nbytes), frame_id=frame_id,
+                                   skip_if_busy=True)
+
+  def take_frame(self) -> tuple[int, bytes]:
+    """One frame off the UDP socket, put back together: (seq, its stream bytes)."""
+    got, total, seq = {}, None, None
+    while total is None or sum(len(b) for b in got.values()) < total:
+      datagram = self.udp.recv(1 << 16)
+      token, seq, offset, total = P.unpack_datagram_header(datagram)
+      self.assertEqual(token, 77)
+      got[offset] = datagram[P.DATAGRAM_HEADER_SIZE:]
+    return seq, b''.join(got[o] for o in sorted(got))
+
+  def test_an_offer_sends_a_frame_that_may_be_lost_as_the_streams_bytes(self):
+    self.greet(**self.offer())
+    self.assertTrue(self.client.t.datagrams)
+    seq = self.lose(5)
+    got_seq, data = self.take_frame()
+    self.assertEqual(got_seq, seq)
+    spec = self.client.spec
+    stream = b''.join(bytes(b) for b in self.client.t._frame(
+      P.Msg.INFER_REQ, seq, (P.pack_infer_req(5, 0), bytes(spec.warped_nbytes), bytes(spec.packed_nbytes)), 0))
+    self.assertEqual(data, stream)
+    self.assertGreater(len(P.datagram_pieces(len(stream))), 1)
+    with self.assertRaises(LinkError):
+      self.peer.recv(timeout=0.1)   # nothing on the stream
+
+  def test_a_frame_that_cannot_be_lost_stays_on_the_stream(self):
+    self.greet(**self.offer())
+    self.send(1)
+    self.assertEqual(self.peer.recv(timeout=2.0).msg_type, P.Msg.INFER_REQ)
+
+  def test_no_offer_no_cable_or_turned_off_keeps_frames_on_the_stream(self):
+    self.greet()
+    self.assertFalse(self.client.t.datagrams)
+    self.client.allow_datagrams = False
+    self.greet(**self.offer())
+    self.assertFalse(self.client.t.datagrams)
+    self.client.allow_datagrams = True
+    with mock.patch.object(TcpTransport, 'on_the_cable', return_value=False):
+      self.greet(**self.offer())
+    self.assertFalse(self.client.t.datagrams, 'off the cable')
+    self.lose(1)
+    self.assertEqual(self.peer.recv(timeout=2.0).msg_type, P.Msg.INFER_REQ)
+
+  def test_a_lost_frame_is_taken_out_of_flight_by_the_next_reply(self):
+    self.greet(**self.offer())
+    first = self.lose(1)
+    self.take_frame()   # the phone never got it whole
+    self.assertIsNone(self.client.infer_end(first, hold=0.01))
+    second = self.lose(2)
+    seq, _ = self.take_frame()
+    self.peer.send(P.Msg.INFER_RESP, seq, (reply(np.full(self.client.spec.reply_nelem, 2.0), frame_id=2),))
+    self.assertEqual(self.client.infer_end(second)[0], 2.0)
+    self.assertEqual((self.client.frames_lost, self.client.waiting_for()), (1, 0.0))
+    self.assertTrue(self.client.t.datagrams, 'a lost frame is a held one, nothing more')
+
+  def test_a_send_the_kernel_refuses_fails_the_link(self):
+    # the phone's port is gone with its server, and the stream with it
+    port = self.udp.getsockname()[1]
+    self.udp.close()
+    self.greet(frame_port=port, frame_token=77)
+    with self.assertRaises(LinkError):
+      for frame_id in range(1, 4):
+        self.lose(frame_id)
+    self.assertTrue(self.client.dead)

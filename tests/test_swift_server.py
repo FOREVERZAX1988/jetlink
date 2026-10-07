@@ -26,6 +26,7 @@ import subprocess
 import sys
 import time
 from contextlib import contextmanager
+from unittest import mock
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -37,6 +38,7 @@ from jetlink.client import EngineMissing, JetlinkClient
 from jetlink.queues import PolicyQueues
 from jetlink.spec import DRIVING_OUTPUT, ModelSpec
 from jetlink.transport.base import LinkError, LinkTimeout
+from jetlink.transport.tcp import TcpTransport
 from tests import tiny_model
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -117,7 +119,7 @@ def _wait_listening(server: Server, timeout: float = 30.0) -> None:
 
 
 @contextmanager
-def running(tmp: Path, *extra: str):
+def running(tmp: Path, *extra: str, env: dict | None = None):
   cache = tmp / 'cache'
   cache.mkdir(parents=True)
   # Run without --poweroff, a shutdown must never power a machine off; a
@@ -126,7 +128,7 @@ def running(tmp: Path, *extra: str):
   fake.mkdir()
   (fake / 'systemctl').write_text(f'#!/bin/sh\necho "$@" >> "{tmp / "systemctl.called"}"\n')
   (fake / 'systemctl').chmod(0o755)
-  env = dict(os.environ, PATH=f'{fake}{os.pathsep}{os.environ.get("PATH", "")}', JETLINK_CACHE=str(cache))
+  env = dict(os.environ, PATH=f'{fake}{os.pathsep}{os.environ.get("PATH", "")}', JETLINK_CACHE=str(cache), **(env or {}))
   log = tmp / 'server.log'
   port = _free_port()
   with open(log, 'wb') as out:
@@ -522,3 +524,81 @@ def test_a_missing_engine_with_nothing_to_upload_is_engine_missing(bare):
       client.ensure_engine(spec.sha256, spec.nbytes, onnx_path=None, build_timeout=10.0)
   finally:
     client.close()
+
+
+# -- frames as datagrams: a phone's server over the cable ----------------------
+
+@pytest.fixture(scope='module')
+def cable(tmp_path_factory):
+  """A server that takes loopback for the cable, so it offers frame datagrams."""
+  with running(tmp_path_factory.mktemp('swift-cable'), env={'JETLINK_DATAGRAMS_ANY_PEER': '1'}) as s:
+    yield s
+
+
+@pytest.fixture
+def cable_queued(cable, monkeypatch):
+  monkeypatch.setattr(TcpTransport, 'on_the_cable', lambda self: True)
+  # small pieces, so the tiny model's frames are cut as a big model's are
+  monkeypatch.setattr(P, 'DATAGRAM_PAYLOAD', 700)
+  with ready(cable, QUEUED) as client:
+    client.hello()
+    client.ensure_engine(client.spec.sha256 if client.spec else spec_of(QUEUED).sha256, spec_of(QUEUED).nbytes,
+                         onnx_path=None, build_timeout=60.0)
+    yield client
+
+
+def lossy_run(client, frames, lose=()):
+  """Frames as modeld sends them once it holds an output: the first on the
+  stream, the rest as datagrams; those in `lose` with their middle piece
+  dropped on the way. The outputs of the frames that were answered."""
+  udp, token = client.t._udp
+  real = udp.sendmsg
+  outs = []
+  for i, (w, p) in enumerate(frames):
+    piece = [0]
+
+    def sendmsg(bufs, i=i, piece=piece):
+      piece[0] += 1
+      if i in lose and piece[0] == 2:
+        return sum(memoryview(b).nbytes for b in bufs)
+      return real(bufs)
+    client.t._udp = (mock.Mock(sendmsg=sendmsg), token)
+    seq = client.infer_begin(w, p, frame_id=i + 1, reset=i == 0, skip_if_busy=i > 0)
+    out = client.infer_end(seq, hold=0.5 if i > 0 else None)
+    if out is not None:
+      outs.append(out)
+  client.t._udp = (udp, token)
+  return outs
+
+
+def test_the_hello_offers_frame_datagrams_only_over_the_cable(server, cable, monkeypatch):
+  monkeypatch.setattr(TcpTransport, 'on_the_cable', lambda self: True)
+  for s, offered in ((server, False), (cable, True)):
+    client = s.connect()
+    try:
+      hello = client.hello()
+      assert ('frame_port' in hello, 'frame_token' in hello) == (offered, offered)
+      assert client.t.datagrams == offered
+    finally:
+      client.close()
+
+
+def test_frames_as_datagrams_give_what_the_stream_gives(cable_queued):
+  spec = cable_queued.spec
+  frames = queued_frames(8, seed=11)
+  assert len(P.datagram_pieces(spec.infer_req_nbytes + P.HEADER_SIZE)) > 1
+  outs = lossy_run(cable_queued, frames)
+  assert cable_queued.t.datagrams and cable_queued.frames_lost == 0
+  for got, want in zip(outs, queued_reference(frames), strict=True):
+    close_enough(outside(got, spec), outside(want, spec), atol=0.02)
+
+
+def test_a_frame_that_lost_a_piece_never_ran_and_the_history_goes_on_without_it(cable_queued):
+  spec = cable_queued.spec
+  frames = queued_frames(8, seed=12)
+  outs = lossy_run(cable_queued, frames, lose={3})
+  assert len(outs) == 7
+  assert cable_queued.frames_lost == 1 and not cable_queued.dead
+  kept = [f for i, f in enumerate(frames) if i != 3]
+  for got, want in zip(outs, queued_reference(kept), strict=True):
+    close_enough(outside(got, spec), outside(want, spec), atol=0.02)
