@@ -24,6 +24,8 @@ final class LosslessFrame: @unchecked Sendable {
   private let results: UnsafeMutablePointer<Int32>
   /// Where each plane starts in the payload, and where the last one ends.
   private let offsets: UnsafeMutablePointer<Int>
+  /// The payload being unpacked, for the planes' parallel loop.
+  private var source: UnsafeRawPointer?
 
   /// For a warped frame of shape (n, k, H, W): n * k planes of H x W. Nil
   /// for any other shape.
@@ -64,14 +66,18 @@ final class LosslessFrame: @unchecked Sendable {
       offsets[k + 1] = offsets[k] + size
     }
     guard offsets[planes] == src.count else { return false }
-    let planeBytes = planeHeight * planeWidth
-    let h = Int32(planeHeight), w = Int32(planeWidth)
-    let pixels = pixels.assumingMemoryBound(to: UInt8.self)
-    let offsets = offsets
-    DispatchQueue.concurrentPerform(iterations: planes) { k in
-      results[k] = jl_lossless_plane(
-        decoders[k], base + offsets[k], offsets[k + 1] - offsets[k], h, w, pixels + k * planeBytes)
-    }
+    source = base
+    defer { source = nil }
+    // only `self` crosses into the loop's closure: what each plane needs is its fields
+    DispatchQueue.concurrentPerform(iterations: planes) { k in self.unpackPlane(k) }
     return (0..<planes).allSatisfy { results[$0] == 0 }
+  }
+
+  private func unpackPlane(_ k: Int) {
+    guard let source else { return }
+    let planeBytes = planeHeight * planeWidth
+    results[k] = jl_lossless_plane(
+      decoders[k], source + offsets[k], offsets[k + 1] - offsets[k], Int32(planeHeight), Int32(planeWidth),
+      pixels.assumingMemoryBound(to: UInt8.self) + k * planeBytes)
   }
 }
