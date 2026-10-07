@@ -24,7 +24,8 @@ import java.io.File
 class UpdateManager(
     private val context: Context,
     private val github: GithubReleases = GithubReleases(),
-    private val currentVersion: AppVersion = AppVersion.parse(BuildConfig.VERSION_NAME) ?: AppVersion(0, 0, 0),
+    /** The release tag this build came from; a newer one than it is an update. */
+    private val currentTag: String = BuildConfig.BUILD_TAG,
 ) {
     private val _state = MutableStateFlow<UpdateState>(UpdateState.Unknown)
     val state: StateFlow<UpdateState> = _state.asStateFlow()
@@ -35,32 +36,34 @@ class UpdateManager(
 
     val cacheDir: File = File(context.cacheDir, "downloads").apply { mkdirs() }
 
-    /** Asks GitHub for the newest release and compares it with the installed version. */
+    /**
+     * Asks GitHub for the newest release with an Android APK and compares its
+     * tag with the installed one. The cn-branch prereleases ("cn-<sha>") are
+     * counted too, so a push to cn shows as an update without a v* tag.
+     */
     suspend fun check() {
         _state.value = UpdateState.Checking
-        val release = withContext(Dispatchers.IO) {
+        val releases = withContext(Dispatchers.IO) {
             try {
-                github.latest()
+                github.list(perPage = 10)
             } catch (e: Exception) {
-                null
+                emptyList()
             }
         }
+        // newest first: the first one with an APK is the update candidate
+        val release = releases.firstOrNull { github.apk(it) != null }
         if (release == null) {
             _state.value = UpdateState.Error("no release")
             return
         }
-        val parsed = AppVersion.parse(release.tag_name)
-        if (parsed == null) {
-            _state.value = UpdateState.Error("bad tag ${release.tag_name}")
+        val tag = release.tag_name
+        if (tag.isBlank() || tag == currentTag) {
+            _state.value = UpdateState.Current
             return
         }
-        val asset = github.apk(release)
-        if (parsed > currentVersion && asset != null) {
-            pending = release to asset
-            _state.value = UpdateState.Available(parsed)
-        } else {
-            _state.value = UpdateState.Current
-        }
+        val asset = github.apk(release)!!
+        pending = release to asset
+        _state.value = UpdateState.Available(tag)
     }
 
     /**

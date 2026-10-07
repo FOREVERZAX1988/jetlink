@@ -368,3 +368,52 @@ jobs:
         # macos/.swift-format is the repo style: 2 spaces, 160 columns, and no
         # UseSynthesizedInitializer, because the event structs keep their
         # memberwise initializers on purpose (01-contracts.md section 7).
+
+  cn-prerelease:
+    name: cn prerelease
+    # Every push to the cn branch publishes its Android and macOS builds as a
+    # prerelease, so a phone's updater can take the newest without waiting for
+    # a v* tag (the GitHub releases list, not the "latest" endpoint, which
+    # skips prereleases).
+    if: github.ref == 'refs/heads/cn'
+    needs: [android, app]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Download the Android app
+        uses: actions/download-artifact@v4
+        with:
+          name: Jetlink-android
+          path: dist
+
+      - name: Download the macOS app
+        uses: actions/download-artifact@v4
+        with:
+          name: Jetlink-unsigned
+          path: dist
+
+      - name: Publish the cn prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The tag is the commit, so every push gets its own prerelease and a
+          # new push never collides with an old one.
+          TAG="cn-${GITHUB_SHA::7}"
+          NOTES="Builds of the cn branch at ${GITHUB_SHA::7}, for testing. The Android APK is signed with the release key, so it installs over an earlier build; the app's updater finds it through the releases list."
+          APK="$(find dist -name '*.apk' -print -quit)"
+          APP="$(find dist -name 'Jetlink-unsigned.zip' -print -quit)"
+          [ -n "$APK" ] || { echo "error: no APK in dist" >&2; exit 1; }
+          [ -n "$APP" ] || { echo "error: no macOS zip in dist" >&2; exit 1; }
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # a rerun of the same commit: replace the files, keep the release
+            gh release upload "$TAG" --clobber "$APK" "$APP"
+          else
+            gh release create "$TAG" --prerelease --title "Jetlink cn ${GITHUB_SHA::7}" \
+              --notes "$NOTES" --target "$GITHUB_SHA" "$APK" "$APP"
+          fi
+

@@ -1,13 +1,15 @@
 package io.zoompilot.jetlink.update
 
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import java.net.HttpURLConnection
 import java.net.URL
 
 /**
  * Talks to the GitHub Releases API for [repo] ("owner/name"). The GitHub
- * release a [v* tag] publishes is the feed: [latest] fetches the newest
- * release, and [download] streams an asset to a file.
+ * release a [v* tag] publishes is the feed: [list] fetches the newest
+ * releases (prereleases included), and [download] streams an asset to a
+ * file.
  *
  * The API is public and the fork's releases are public, so no token is
  * sent; a rate-limited answer reads as a failed check.
@@ -17,9 +19,13 @@ class GithubReleases(
     private val json: Json = Json { ignoreUnknownKeys = true },
     private val connect: (URL) -> HttpURLConnection = { it.openConnection() as HttpURLConnection },
 ) {
-    /** The newest non-prerelease release, or null when there is none. */
-    fun latest(): GithubRelease? {
-        val url = URL("https://api.github.com/repos/$repo/releases/latest")
+    /**
+     * The newest [perPage] releases, newest first, drafts and prereleases
+     * included. Unlike the "latest" endpoint this sees the cn-branch
+     * prereleases, which is what the updater compares its build tag with.
+     */
+    fun list(perPage: Int = 5): List<GithubRelease> {
+        val url = URL("https://api.github.com/repos/$repo/releases?per_page=$perPage")
         val conn = connect(url)
         return try {
             conn.requestMethod = "GET"
@@ -27,10 +33,9 @@ class GithubReleases(
             conn.setRequestProperty("User-Agent", "jetlink-android")
             conn.connectTimeout = 15_000
             conn.readTimeout = 15_000
-            if (conn.responseCode != 200) return null
+            if (conn.responseCode != 200) return emptyList()
             conn.inputStream.bufferedReader().use { reader ->
-                val release = json.decodeFromString(GithubRelease.serializer(), reader.readText())
-                release.takeIf { !it.prerelease }
+                json.decodeFromString<List<GithubRelease>>(reader.readText())
             }
         } finally {
             conn.disconnect()

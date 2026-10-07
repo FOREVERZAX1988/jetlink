@@ -59,4 +59,24 @@ class GithubReleasesTest {
         )
         assertNull(GithubReleases().apk(release))
     }
+
+    @Test
+    fun parsesTheReleasesListWithPrereleases() {
+        val payload = """
+            [
+              {"tag_name": "cn-abc1234", "prerelease": true, "assets": [
+                {"name": "Jetlink-android.apk", "browser_download_url": "https://.../cn.apk"}
+              ]},
+              {"tag_name": "v0.8.3", "prerelease": false, "assets": [
+                {"name": "Jetlink-0.8.3-Android.apk", "browser_download_url": "https://.../v083.apk"}
+              ]}
+            ]
+        """.trimIndent()
+        val list = json.decodeFromString<List<GithubRelease>>(payload)
+        assertEquals(2, list.size)
+        assertEquals("cn-abc1234", list[0].tag_name)
+        assertNotNull(GithubReleases().apk(list[0]))
+        // the newest first: a cn prerelease the updater should see
+        assertEquals("Jetlink-android.apk", GithubReleases().apk(list[0])?.name)
+    }
 }

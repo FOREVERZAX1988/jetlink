@@ -490,7 +490,7 @@ private fun Updates(values: SettingsValues, info: SettingsInfo, actions: Setting
         RowDivider()
         when (state) {
             is UpdateState.Available -> ActionRow(
-                l10n(R.string.update_available, state.version.toString()),
+                l10n(R.string.update_available, state.tag),
                 { actions.installUpdate() },
                 color = MaterialTheme.colorScheme.primary,
             )

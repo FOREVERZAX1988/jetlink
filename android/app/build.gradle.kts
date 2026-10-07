@@ -36,6 +36,14 @@ android {
         targetSdk = 36
         versionCode = jetlinkVersionCode
         versionName = jetlinkVersion
+        // The release tag this build came from: "v0.8.3" on a tagged release,
+        // "cn" on a cn-branch build, "local" in a dev build. The updater
+        // compares it with the newest GitHub release to decide an update.
+        buildConfigField(
+            "String",
+            "BUILD_TAG",
+            "\"${providers.environmentVariable("GITHUB_REF_NAME").orNull?.takeIf(String::isNotEmpty) ?: "local"}\"",
+        )
         // The QNN runtime is arm64 only, and so is every Snapdragon with an NPU
         // worth driving on. The emulator on an Apple silicon Mac is arm64 too.
         ndk { abiFilters += "arm64-v8a" }

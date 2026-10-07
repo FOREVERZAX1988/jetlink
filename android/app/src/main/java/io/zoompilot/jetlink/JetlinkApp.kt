@@ -12,7 +12,6 @@ import io.zoompilot.jetlink.server.RunState
 import io.zoompilot.jetlink.server.ServerController
 import io.zoompilot.jetlink.server.ServerService
 import io.zoompilot.jetlink.settings.Settings
-import io.zoompilot.jetlink.update.AppVersion
 import io.zoompilot.jetlink.update.UpdateManager
 import io.zoompilot.jetlink.update.UpdateState
 import io.zoompilot.jetlink.usb.CommaUsb
@@ -59,7 +58,7 @@ class AppGraph(private val context: Context) {
             updates.check()
             val state = updates.state.value
             if (state is UpdateState.Available) {
-                notifyUpdate(state.version)
+                notifyUpdate(state.tag)
             }
         }
     }
@@ -73,8 +72,8 @@ class AppGraph(private val context: Context) {
         context.getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
-    /** An update alert: the title and the version, tapping it opens the app. */
-    private fun notifyUpdate(version: AppVersion) {
+    /** An update alert: the title and the release tag, tapping it opens the app. */
+    private fun notifyUpdate(tag: String) {
         if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return
         val pending = android.app.PendingIntent.getActivity(
             context, 0,
@@ -84,7 +83,7 @@ class AppGraph(private val context: Context) {
         val notification = NotificationCompat.Builder(context, updateChannelId)
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
             .setContentTitle(context.getString(R.string.update_notification_title))
-            .setContentText(context.getString(R.string.update_notification_text, version.toString()))
+            .setContentText(context.getString(R.string.update_notification_text, tag))
             .setContentIntent(pending)
             .setAutoCancel(true)
             .build()

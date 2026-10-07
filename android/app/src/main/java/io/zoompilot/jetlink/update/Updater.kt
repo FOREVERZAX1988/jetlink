@@ -45,10 +45,10 @@ sealed interface UpdateState {
     data object Unknown : UpdateState
     /** The check is running. */
     data object Checking : UpdateState
-    /** The installed version is the newest release. */
+    /** The installed build is the newest release. */
     data object Current : UpdateState
-    /** [version] is newer than the installed one and its APK can be downloaded. */
-    data class Available(val version: AppVersion) : UpdateState
+    /** [tag] is newer than the installed one and its APK can be downloaded. */
+    data class Available(val tag: String) : UpdateState
     /** The check failed; [message] what went wrong. */
     data class Error(val message: String) : UpdateState
 }
