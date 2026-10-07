@@ -54,6 +54,8 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.zoompilot.jetlink.AppGraph
+import io.zoompilot.jetlink.R
+import io.zoompilot.jetlink.l10n
 import io.zoompilot.jetlink.server.ImportState
 import io.zoompilot.jetlink.server.ModelRow
 import io.zoompilot.jetlink.server.Reply
@@ -142,11 +144,11 @@ fun ModelsScreen(graph: AppGraph) {
         containerColor = JetlinkTheme.colors.grouped,
         topBar = {
             TopAppBar(
-                title = { Text("Models", fontWeight = FontWeight.Bold) },
+                title = { Text(l10n(R.string.tab_models), fontWeight = FontWeight.Bold) },
                 actions = {
-                    IconButton(onClick = refresh) { Icon(Icons.Filled.Refresh, contentDescription = "Refresh") }
+                    IconButton(onClick = refresh) { Icon(Icons.Filled.Refresh, contentDescription = l10n(R.string.content_desc_refresh)) }
                     IconButton(onClick = { picker.launch(arrayOf("*/*")) }) {
-                        Icon(Icons.Filled.Add, contentDescription = "Add Model File")
+                        Icon(Icons.Filled.Add, contentDescription = l10n(R.string.content_desc_add_model))
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -168,27 +170,27 @@ fun ModelsScreen(graph: AppGraph) {
     when (val item = confirmation) {
         is Confirmation.Delete -> AlertDialog(
             onDismissRequest = { confirmation = null },
-            title = { Text("Delete ${item.row.title}?") },
-            text = { Text("You can download it again later.") },
+            title = { Text(l10n(R.string.model_delete_title, item.row.title)) },
+            text = { Text(l10n(R.string.model_delete_text)) },
             confirmButton = {
                 TextButton(onClick = {
                     confirmation = null
                     item.row.sha256?.let { sha -> run { graph.server.forget(sha, artifacts = true, model = true) } }
-                }) { Text("Delete", color = JetlinkTheme.colors.bad) }
+                }) { Text(l10n(R.string.action_delete), color = JetlinkTheme.colors.bad) }
             },
-            dismissButton = { TextButton(onClick = { confirmation = null }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { confirmation = null }) { Text(l10n(R.string.action_cancel)) } },
         )
         is Confirmation.Switch -> AlertDialog(
             onDismissRequest = { confirmation = null },
-            title = { Text("Use ${item.row.title}?") },
-            text = { Text("The comma uses its small model until this one is ready.") },
+            title = { Text(l10n(R.string.model_use_title, item.row.title)) },
+            text = { Text(l10n(R.string.model_use_text)) },
             confirmButton = {
                 TextButton(onClick = {
                     confirmation = null
                     run { useModel(graph, item.row) }
-                }) { Text("Use Model") }
+                }) { Text(l10n(R.string.action_use_model)) }
             },
-            dismissButton = { TextButton(onClick = { confirmation = null }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { confirmation = null }) { Text(l10n(R.string.action_cancel)) } },
         )
         null -> {}
     }
@@ -196,9 +198,9 @@ fun ModelsScreen(graph: AppGraph) {
     error?.let { message ->
         AlertDialog(
             onDismissRequest = { error = null },
-            title = { Text("Couldn't Complete") },
+            title = { Text(l10n(R.string.error_title)) },
             text = { Text(Format.sentence(message)) },
-            confirmButton = { TextButton(onClick = { error = null }) { Text("OK") } },
+            confirmButton = { TextButton(onClick = { error = null }) { Text(l10n(R.string.ok)) } },
         )
     }
 }
@@ -222,9 +224,9 @@ fun ModelsContent(snapshot: Snapshot, actions: ModelActions, modifier: Modifier 
     ) {
         item("available") {
             FormSection(
-                "Available",
+                l10n(R.string.section_available),
                 footer = if (catalogError != null) {
-                    { FooterNote("Couldn't refresh. Pull down to try again.", warning = true) }
+                    { FooterNote(l10n(R.string.catalog_refresh_failed), warning = true) }
                 } else {
                     null
                 },
@@ -237,7 +239,7 @@ fun ModelsContent(snapshot: Snapshot, actions: ModelActions, modifier: Modifier 
         }
         if (imports.isNotEmpty()) {
             item("adding") {
-                FormSection("Adding") {
+                FormSection(l10n(R.string.section_adding)) {
                     imports.forEachIndexed { index, import ->
                         if (index > 0) RowDivider()
                         ImportRow(import)
@@ -246,10 +248,10 @@ fun ModelsContent(snapshot: Snapshot, actions: ModelActions, modifier: Modifier 
             }
         }
         if (sections.added.isNotEmpty()) {
-            item("added") { FormSection("Added") { Rows(sections.added, actions) } }
+            item("added") { FormSection(l10n(R.string.section_added)) { Rows(sections.added, actions) } }
         }
         if (sections.uploaded.isNotEmpty()) {
-            item("uploaded") { FormSection("Uploaded") { Rows(sections.uploaded, actions) } }
+            item("uploaded") { FormSection(l10n(R.string.section_uploaded)) { Rows(sections.uploaded, actions) } }
         }
         ModelRules.diskLine(snapshot)?.let { line ->
             item("disk") {
@@ -284,12 +286,12 @@ private fun CatalogPlaceholder(failed: Boolean, retry: () -> Unit) {
         if (failed) {
             Icon(Icons.Filled.Warning, contentDescription = null, tint = colors.secondaryText, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
-            Text("Couldn't Load", color = colors.secondaryText, modifier = Modifier.weight(1f))
-            OutlinedButton(onClick = retry) { Text("Try Again") }
+            Text(l10n(R.string.catalog_load_failed), color = colors.secondaryText, modifier = Modifier.weight(1f))
+            OutlinedButton(onClick = retry) { Text(l10n(R.string.action_try_again)) }
         } else {
             CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
             Spacer(Modifier.width(10.dp))
-            Text("Loading…", color = colors.secondaryText)
+            Text(l10n(R.string.loading), color = colors.secondaryText)
         }
     }
 }
@@ -324,7 +326,7 @@ fun ModelRowView(row: ModelRow, actions: ModelActions) {
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false),
                 )
-                if (row.isDefault) Tag("Default", MaterialTheme.colorScheme.primary)
+                if (row.isDefault) Tag(l10n(R.string.tag_default), MaterialTheme.colorScheme.primary)
                 if (row.isRequestedByComma) Tag("Comma", colors.info)
             }
             Text(
@@ -342,7 +344,7 @@ fun ModelRowView(row: ModelRow, actions: ModelActions) {
         Box {
             when (action) {
                 RowAction.InUse -> IconButton(onClick = { menu = true }) {
-                    Icon(Icons.Filled.CheckCircle, contentDescription = "In Use", tint = colors.good, modifier = Modifier.size(28.dp))
+                    Icon(Icons.Filled.CheckCircle, contentDescription = l10n(R.string.content_desc_in_use), tint = colors.good, modifier = Modifier.size(28.dp))
                 }
                 RowAction.Stop -> IconButton(onClick = { actions.cancel(row) }) {
                     ProgressRing(row.status.frac, stoppable = true)
@@ -356,9 +358,9 @@ fun ModelRowView(row: ModelRow, actions: ModelActions) {
                 ) {
                     Text(
                         when (action) {
-                            RowAction.Get -> "Get"
-                            RowAction.Retry -> "Retry"
-                            else -> "Use"
+                            RowAction.Get -> l10n(R.string.action_get)
+                            RowAction.Retry -> l10n(R.string.action_try_again)
+                            else -> l10n(R.string.action_use)
                         },
                         fontWeight = FontWeight.Bold,
                     )
@@ -371,7 +373,7 @@ fun ModelRowView(row: ModelRow, actions: ModelActions) {
         }
         if (hasMenu && action != RowAction.InUse) {
             Box {
-                IconButton(onClick = { menu = true }) { Icon(Icons.Filled.MoreVert, contentDescription = "More") }
+                IconButton(onClick = { menu = true }) { Icon(Icons.Filled.MoreVert, contentDescription = l10n(R.string.content_desc_more)) }
                 RowMenu(menu, { menu = false }, row, canDelete, actions)
             }
         }
@@ -382,14 +384,14 @@ fun ModelRowView(row: ModelRow, actions: ModelActions) {
 private fun RowMenu(expanded: Boolean, dismiss: () -> Unit, row: ModelRow, canDelete: Boolean, actions: ModelActions) {
     DropdownMenu(expanded = expanded, onDismissRequest = dismiss) {
         if (row.status.kind == "downloading") {
-            DropdownMenuItem(text = { Text("Stop Download") }, onClick = { dismiss(); actions.cancel(row) })
+            DropdownMenuItem(text = { Text(l10n(R.string.menu_stop_download)) }, onClick = { dismiss(); actions.cancel(row) })
         }
         if (row.status.kind == "loaded") {
-            DropdownMenuItem(text = { Text("Stop Using") }, onClick = { dismiss(); actions.unload() })
+            DropdownMenuItem(text = { Text(l10n(R.string.menu_stop_using)) }, onClick = { dismiss(); actions.unload() })
         }
         if (canDelete) {
             DropdownMenuItem(
-                text = { Text("Delete", color = JetlinkTheme.colors.bad) },
+                text = { Text(l10n(R.string.action_delete), color = JetlinkTheme.colors.bad) },
                 onClick = { dismiss(); actions.delete(row) },
             )
         }

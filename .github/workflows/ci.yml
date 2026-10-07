@@ -11,6 +11,7 @@ on:
   push:
     branches: ["**"]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -24,7 +25,11 @@ jobs:
     name: What changed
     runs-on: ubuntu-24.04
     outputs:
-      apps: ${{ steps.filter.outputs.apps }}
+      # Upstream builds only what the push changed, measured against main.
+      # Here main and this branch can sit at the same commit, and that empty
+      # diff skips every build, the Android APK included, so this branch
+      # builds all of it. The filter below still reports what changed.
+      apps: "true"
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
@@ -199,7 +204,7 @@ jobs:
           path: |
             ~/.cache/jetlink-build
             JetlinkKit/.build
-          key: swift-linux-${{ matrix.arch }}-${{ hashFiles('scripts/build-linux.sh', 'JetlinkKit/Package.resolved') }}
+          key: swift-linux-v2-${{ matrix.arch }}-${{ hashFiles('scripts/build-linux.sh', 'JetlinkKit/Package.resolved') }}
 
       - name: Install curl
         run: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl
@@ -265,6 +270,8 @@ jobs:
     needs: [changes, swift-android]
     if: needs.changes.outputs.apps == 'true'
     runs-on: ubuntu-24.04
+    env:
+      HAVE_SIGNING: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
@@ -282,12 +289,25 @@ jobs:
           name: libjetlink-arm64-v8a
           path: swift-out
 
+      - name: Write the release key
+        if: env.HAVE_SIGNING == 'true'
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
+          echo "JETLINK_ANDROID_KEYSTORE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+
       - name: Unit tests and the release APK
         working-directory: android
+        env:
+          # read only when the step above named the keystore
+          JETLINK_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          JETLINK_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleRelease -Pjetlink.prebuiltSwift="$GITHUB_WORKSPACE/swift-out"
         # The Kotlin tests parse the snapshot fixture the Swift suites write,
         # and check the gadget's IDs, the port and the onnxruntime release
-        # against Pinned.swift.
+        # against Pinned.swift. With the release key the APK installs over an
+        # earlier one; without it, over the debug key (docs/publishing.md).
 
       - uses: actions/upload-artifact@v4
         with:
