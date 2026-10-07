@@ -141,6 +141,17 @@ struct ServerSettingsView: View {
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
         }
+      }
+      Section {
+        VStack(alignment: .leading, spacing: 4) {
+          Toggle("Wi-Fi link", isOn: $settings.wifiLink)
+          Text(
+            "For a comma set to Wi-Fi. It joins this Mac's hotspot and dials the Mac, so share the Mac's connection over Wi-Fi (System Settings > General > Sharing > Internet Sharing), on 5 GHz."
+          )
+          .font(.callout)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+        }
       } footer: {
         HStack {
           Text("Changes apply when the server restarts.")
