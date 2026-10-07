@@ -71,6 +71,8 @@ GADGET_SETUP_BACKOFF = 60.0
 GADGET_HELD_RETRY = 2.0
 # between attempts to bring the gadget's network interface up after a bind
 NET_BACKOFF = 5.0
+# jetlink-root.sh rps attempts a bind before the owner stops asking (ensure_steered)
+STEER_TRIES = 6
 # between attempts to listen for borrowers after one failed
 LENDER_BACKOFF = 30.0
 # between runs of the worker that found nothing to do. It costs a couple of
@@ -196,6 +198,7 @@ class Owner:
     self.next_net_attempt = 0.0
     self.steered = False                # usb0's receive work read back on core 6, since the drive started
     self.next_steer = 0.0
+    self.steer_tries = 0                # this bind's, up to STEER_TRIES
     self.lender_failed = False          # said once, until it listens again
     self.next_lender = 0.0
     self.worker: subprocess.Popen | None = None
@@ -357,22 +360,26 @@ class Owner:
       return
     self.next_net_attempt = now + NET_BACKOFF
     self.net_ready = gadget.net_up()
-    self.steered, self.next_steer = False, 0.0
+    self.steered, self.next_steer, self.steer_tries = False, 0.0, 0
 
   def ensure_steered(self, offroad: bool) -> None:
     """The cable's receive work onto core 6 (jetlink-root.sh rps), once a
     drive has started: net's own steer, at the bind, reads back 00 while
     hardwared has the big cores parked, and the kernel never adds them later.
-    Retried on NET_BACKOFF until the mask reads back right."""
-    if offroad or self.steered or not self.net_ready:
+    Retried on NET_BACKOFF, STEER_TRIES times a bind: a core 6 that stays
+    offline is no reason to run sudo every few seconds for a whole drive."""
+    if offroad or self.steered or not self.net_ready or self.steer_tries >= STEER_TRIES:
       return
     now = time.monotonic()
     if now < self.next_steer:
       return
     self.next_steer = now + NET_BACKOFF
+    self.steer_tries += 1
     self.steered = root.run('rps')
     if self.steered:
       gadget.log.warning("jetlink: the cable's receive work is on core 6")
+    elif self.steer_tries == STEER_TRIES:
+      gadget.log.warning("jetlink: the cable's receive work stays where the kernel puts it until the next bind")
 
   def settle(self) -> None:
     """Put the gadget back to bound with nothing open on it.

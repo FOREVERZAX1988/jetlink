@@ -937,6 +937,15 @@ class TestTheGadgetNetwork(IosTest):
     o.step()
     self.assertEqual(self.steers(), 2)
 
+  def test_a_steer_that_never_reads_back_is_given_up_until_the_next_bind(self):
+    self.root_run.side_effect = lambda *args, **kw: args != ('rps',)
+    o = self.owner()
+    self.write('IsOffroad', b'0')
+    for _ in range(owner.STEER_TRIES + 3):
+      o.next_steer = 0.0
+      o.step()
+    self.assertEqual(self.steers(), owner.STEER_TRIES)
+
   def test_a_new_bind_is_steered_again(self):
     o = self.owner()
     self.write('IsOffroad', b'0')
