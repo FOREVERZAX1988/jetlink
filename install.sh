@@ -690,6 +690,9 @@ POWER='' SLEEP_AFTER=0 POWEROFF_WITH_COMMA=0 ADD_SWAP=0 AUTOSTART=1 STATUS_PORT=
 # 1 when the Jetson starts without its desktop; the default target changes
 # only when the answer does, so a desktop turned back on by hand stays on
 DESKTOP_OFF=0 DESKTOP_OFF_SAVED=0
+# 1 when the Jetson serves a comma over its own 5 GHz hotspot too (--set wifi=on)
+WIFI_LINK=0 WIFI_LINK_SAVED=0
+HOTSPOT=jetlink-hotspot
 CACHE_DIR='' REF='' SOURCE='' SOURCE_DIR='' COMMIT=''
 # REF is what the install follows: latest (the newest release), a tag or a
 # branch. RESOLVED is the tag or branch that gave, or `local` for a checkout,
@@ -723,6 +726,7 @@ load_previous() {
   SLEEP_AFTER="${JETLINK_SLEEP_AFTER_HELD:-${JETLINK_SLEEP_AFTER:-0}}"
   POWEROFF_WITH_COMMA="${JETLINK_POWEROFF_WITH_COMMA:-0}"
   DESKTOP_OFF="${JETLINK_DESKTOP_OFF:-0}" DESKTOP_OFF_SAVED="${JETLINK_DESKTOP_OFF:-0}"
+  WIFI_LINK="${JETLINK_WIFI_LINK:-0}" WIFI_LINK_SAVED="${JETLINK_WIFI_LINK:-0}"
   AUTOSTART="${JETLINK_AUTOSTART:-1}"
   CACHE_DIR="${JETLINK_CACHE_DIR:-}"
   STATUS_PORT="${JETLINK_STATUS_PORT:-$STATUS_PORT}"
@@ -838,8 +842,8 @@ choose_web_password() {
 # --set: the install it changes, and the answers it gives, checked before
 # anything is shown. It keeps the server and the source that are here, so it
 # needs no network, and the web page can run it in the car.
-SET_KEYS="On a Jetson: power=always|switched, comma_poweroff=yes|no, desktop=on|off. On a PC: autostart=yes|no."
-SET_POWER='' SET_POWEROFF='' SET_DESKTOP='' SET_AUTOSTART=''
+SET_KEYS="On a Jetson: power=always|switched, comma_poweroff=yes|no, desktop=on|off, wifi=on|off. On a PC: autostart=yes|no."
+SET_POWER='' SET_POWEROFF='' SET_DESKTOP='' SET_AUTOSTART='' SET_WIFI=''
 check_set() {
   [ ${#OPT_SET[@]} -gt 0 ] || return 0
   [ "$DOCKER_ERA" = 0 ] || die "This install runs the server in Docker, and --set changes only a native one." \
@@ -853,7 +857,7 @@ check_set() {
     [[ $kv == ?*=* ]] || die "--set takes KEY=VALUE, not '$kv'." "$SET_KEYS"
     key="${kv%%=*}" value="${kv#*=}"
     case "$key" in
-      power|comma_poweroff|desktop)
+      power|comma_poweroff|desktop|wifi)
         [ "$JETSON" = 1 ] || die "--set $key is for a Jetson, and this computer is a PC." "$SET_KEYS" ;;
       autostart)
         [ "$JETSON" = 0 ] || die "--set autostart is for a PC: a Jetson always starts Jetlink." "$SET_KEYS" ;;
@@ -863,9 +867,11 @@ check_set() {
       power=always|power=switched) SET_POWER=$value ;;
       comma_poweroff=yes|comma_poweroff=no) SET_POWEROFF=$value ;;
       desktop=on|desktop=off) SET_DESKTOP=$value ;;
+      wifi=on|wifi=off) SET_WIFI=$value ;;
       autostart=yes|autostart=no) SET_AUTOSTART=$value ;;
       power=*) die "--set power takes always or switched, not '$value'." ;;
       desktop=*) die "--set desktop takes on or off, not '$value'." ;;
+      wifi=*) die "--set wifi takes on or off, not '$value'." ;;
       *) die "--set $key takes yes or no, not '$value'." ;;
     esac
   done
@@ -896,6 +902,10 @@ apply_set() {
       else
         note "This Jetson starts no desktop, so there is none to turn off."
       fi ;;
+  esac
+  case "$SET_WIFI" in
+    on) WIFI_LINK=1 ;;
+    off) WIFI_LINK=0 ;;
   esac
   case "$SET_AUTOSTART" in
     yes) AUTOSTART=1 ;;
@@ -1178,6 +1188,13 @@ show_plan() {
         say "  • Turn off the desktop ${D}(from the next restart)${N}"
       else
         say "  • Turn the desktop back on ${D}(from the next restart)${N}"
+      fi
+    fi
+    if [ "$WIFI_LINK" != "$WIFI_LINK_SAVED" ]; then
+      if [ "$WIFI_LINK" = 1 ]; then
+        say "  • Make a 5 GHz Wi-Fi hotspot for the comma ${D}(the Wi-Fi leaves any network it is on)${N}"
+      else
+        say "  • Remove the Wi-Fi hotspot"
       fi
     fi
     say "  • Start up faster, and keep the system log small"
@@ -1908,6 +1925,7 @@ configure_jetson() {
   shorten_uefi_wait
   quiet_kernel
   set_desktop
+  set_hotspot
   if [ "$JOURNALD_CAPPED" != 1 ]; then
     printf '# Jetlink: keep the system log from filling a small root partition\n[Journal]\nSystemMaxUse=200M\n' \
       | root_write "$JOURNALD_DROPIN"
@@ -2040,6 +2058,44 @@ set_desktop() {
     DESKTOP_OFF=$DESKTOP_OFF_SAVED
     note "Could not change whether the desktop starts; see $LOG"
   fi
+}
+
+# The comma joins this hotspot and dials the Jetson (its Jetlink setting on
+# Wi-Fi). NetworkManager keeps it, and brings it up at every start; one made
+# before keeps its password.
+set_hotspot() {
+  if [ "$WIFI_LINK" = 1 ]; then
+    if ! as_root nmcli -t -f NAME connection show 2>/dev/null | grep -qx "$HOTSPOT"; then
+      local dev psk
+      dev="$(as_root nmcli -t -f DEVICE,TYPE device 2>/dev/null | awk -F: '$2 == "wifi" { print $1; exit }')"
+      if [ -z "$dev" ]; then
+        WIFI_LINK=0
+        note "This Jetson has no Wi-Fi, so no hotspot for the comma."
+        return 0
+      fi
+      psk="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+      if ! as_root nmcli connection add type wifi ifname "$dev" con-name "$HOTSPOT" autoconnect yes \
+          connection.autoconnect-priority 100 ssid "jetlink-$(hostname 2>/dev/null || uname -n)" \
+          802-11-wireless.mode ap 802-11-wireless.band a ipv4.method shared \
+          wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$psk" >>"$LOG" 2>&1; then
+        WIFI_LINK=0
+        note "Could not make the Wi-Fi hotspot; see $LOG"
+        return 0
+      fi
+    fi
+    if as_root nmcli connection up "$HOTSPOT" >>"$LOG" 2>&1; then
+      good "Wi-Fi hotspot for the comma is on"
+    else
+      note "The Wi-Fi hotspot starts at the next restart."
+    fi
+  elif [ "$WIFI_LINK_SAVED" = 1 ]; then
+    remove_hotspot
+  fi
+}
+
+remove_hotspot() {
+  as_root nmcli connection delete "$HOTSPOT" >>"$LOG" 2>&1 || true
+  good "Wi-Fi hotspot removed"
 }
 
 restore_desktop() {
@@ -2184,6 +2240,8 @@ write_env() {
     printf 'JETLINK_STATUS_PORT=%q\n' "$STATUS_PORT"
     # flags the unit passes as they are, or nothing when empty
     printf 'JETLINK_POWEROFF="%s"\n' "$poweroff"
+    # --listen beside --usb for a comma on the hotspot, or nothing
+    if [ "$WIFI_LINK" = 1 ]; then printf 'JETLINK_LISTEN="--listen"\n'; else printf 'JETLINK_LISTEN=""\n'; fi
     printf 'JETLINK_TENSORRT="%s"\n' "${TRT_ARGS[*]}"
     printf 'JETLINK_JETSON=%q\n' "$JETSON"
     printf 'JETLINK_FLAVOR=%q\n' "$FLAVOR"
@@ -2203,6 +2261,7 @@ write_conf() {
     printf 'JETLINK_POWER=%q\n' "$POWER"
     printf 'JETLINK_POWEROFF_WITH_COMMA=%q\n' "$POWEROFF_WITH_COMMA"
     printf 'JETLINK_DESKTOP_OFF=%q\n' "$DESKTOP_OFF"
+    printf 'JETLINK_WIFI_LINK=%q\n' "$WIFI_LINK"
     printf 'JETLINK_AUTOSTART=%q\n' "$AUTOSTART"
     printf 'JETLINK_SWAP_FILE=%q\n' "$SWAP_FILE"
     printf 'JETLINK_MASKED_UNITS=%q\n' "$MASKED_UNITS"
@@ -2370,6 +2429,13 @@ finish() {
     say ""
     note "Keep this computer plugged in and awake while driving: sleep drops the link."
   fi
+  if [ "$WIFI_LINK" = 1 ]; then
+    local ssid psk
+    ssid="$(as_root nmcli -s -g 802-11-wireless.ssid connection show "$HOTSPOT" 2>/dev/null || true)"
+    psk="$(as_root nmcli -s -g 802-11-wireless-security.psk connection show "$HOTSPOT" 2>/dev/null || true)"
+    say ""
+    say "  ${B}Over Wi-Fi:${N} join the comma to ${B}$ssid${N} ${D}(password $psk)${N}, then set Jetlink to ${B}Wi-Fi${N}."
+  fi
   if [ "$STATUS_PORT" != 0 ]; then
     say ""
     say "  ${B}Web page:${N} http://$(hostname 2>/dev/null || uname -n).local:$STATUS_PORT"
@@ -2421,6 +2487,7 @@ uninstall() {
   restore_uefi_wait
   restore_kernel_messages
   restore_desktop
+  [ "$WIFI_LINK" = 1 ] && remove_hotspot
   if [ -n "$MASKED_UNITS" ]; then
     # shellcheck disable=SC2086
     as_root systemctl unmask $MASKED_UNITS >>"$LOG" 2>&1 || true

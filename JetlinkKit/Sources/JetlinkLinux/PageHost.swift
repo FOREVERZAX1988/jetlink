@@ -65,7 +65,8 @@
     static let longestAwake = 12 * 3600
     /// What install.sh's `--set` takes for each answer.
     static let choices: [String: Set<String>] = [
-      "power": ["always", "switched"], "comma_poweroff": ["yes", "no"], "desktop": ["on", "off"], "autostart": ["yes", "no"],
+      "power": ["always", "switched"], "comma_poweroff": ["yes", "no"], "desktop": ["on", "off"], "wifi": ["on", "off"],
+      "autostart": ["yes", "no"],
     ]
     static let colour = try! NSRegularExpression(pattern: "\u{1B}\\[[0-9;]*[A-Za-z]")
 
@@ -103,7 +104,10 @@
     func settings(_ answers: Answers) -> [String: String] {
       let conf = answers.conf
       guard answers.jetson else { return ["autostart": conf["JETLINK_AUTOSTART"] == "0" ? "no" : "yes"] }
-      var settings = ["power": conf["JETLINK_POWER"] ?? "", "comma_poweroff": conf["JETLINK_POWEROFF_WITH_COMMA"] == "1" ? "yes" : "no"]
+      var settings = [
+        "power": conf["JETLINK_POWER"] ?? "", "comma_poweroff": conf["JETLINK_POWEROFF_WITH_COMMA"] == "1" ? "yes" : "no",
+        "wifi": conf["JETLINK_WIFI_LINK"] == "1" ? "on" : "off",
+      ]
       // the desktop question only for one that starts it, or that Jetlink turned off
       let off = conf["JETLINK_DESKTOP_OFF"] == "1"
       if off || bootsToDesktop() { settings["desktop"] = off ? "off" : "on" }

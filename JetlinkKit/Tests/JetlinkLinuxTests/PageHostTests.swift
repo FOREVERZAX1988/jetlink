@@ -92,7 +92,7 @@
       #expect(info["installed"] as? Bool == true && info["jetson"] as? Bool == true)
       #expect(info["platform"] as? String == "NVIDIA Jetson Orin Nano" && info["version"] as? String == "v0.7.2")
       #expect(info["page_port"] as? Int == 5600 && info["sleep_after"] as? Int == 120 && info["deep_sleep"] as? Bool == true)
-      #expect(info["settings"] as? [String: String] == ["power": "always", "comma_poweroff": "yes", "desktop": "on"])
+      #expect(info["settings"] as? [String: String] == ["power": "always", "comma_poweroff": "yes", "wifi": "off", "desktop": "on"])
       #expect((info["task"] as? [String: Any])?["state"] as? String == "none")
       // no lock file: this server does not sleep
       #expect((info["awake"] as? [String: Any])?["available"] as? Bool == false)
@@ -103,9 +103,9 @@
     func applies() {
       // each kept while asked: its tree goes with it
       let bare = Installed(graphical: false)
-      #expect(bare.host.info()["settings"] as? [String: String] == ["power": "always", "comma_poweroff": "yes"])
+      #expect(bare.host.info()["settings"] as? [String: String] == ["power": "always", "comma_poweroff": "yes", "wifi": "off"])
       let turnedOff = Installed(desktopOff: true, graphical: false)
-      #expect(turnedOff.host.info()["settings"] as? [String: String] == ["power": "always", "comma_poweroff": "yes", "desktop": "off"])
+      #expect(turnedOff.host.info()["settings"] as? [String: String] == ["power": "always", "comma_poweroff": "yes", "wifi": "off", "desktop": "off"])
       let computer = Installed(jetson: false)
       #expect(computer.host.info()["settings"] as? [String: String] == ["autostart": "yes"])
       let empty = Tree()

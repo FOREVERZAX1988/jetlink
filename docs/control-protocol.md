@@ -38,7 +38,7 @@ answer 403.
 | `GET /logs` | the server's last 300 log lines, as text |
 | `POST /api/command` | one of the [commands](#commands) below: `status`, `catalog`, `download`, `cancel_download`, `prepare`, `forget`, `inventory`, `benchmark`, `cancel_benchmark`; the reply's `ok` false is a 409 |
 | `GET /api/system` | `settings`: the installer's answers that apply here, in its words; the version, keep-awake, the last run |
-| `POST /api/settings` | `{"power": "always"\|"switched", "comma_poweroff": "yes"\|"no", "desktop": "on"\|"off", "autostart": "yes"\|"no"}`, only those that apply: runs `jetlink setup --set ...` |
+| `POST /api/settings` | `{"power": "always"\|"switched", "comma_poweroff": "yes"\|"no", "desktop": "on"\|"off", "wifi": "on"\|"off", "autostart": "yes"\|"no"}`, only those that apply: runs `jetlink setup --set ...` |
 | `POST /api/action` | `{"action": "restart"\|"reboot"\|"poweroff"\|"update"\|"check_update"\|"keep_awake", "seconds"}` |
 | `GET /api/task` | the settings or update run: `kind`, `state` (`running`, `done`, `failed`, `lost`), `exit`, its last lines |
 

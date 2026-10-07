@@ -166,9 +166,12 @@ server. Give `--set` once for each answer; `install.sh --set` is the same.
 | `power` | `always` or `switched` | a Jetson |
 | `comma_poweroff` | `yes` or `no`; only with `always` | a Jetson |
 | `desktop` | `on` or `off`, from the next restart | a Jetson with a desktop |
+| `wifi` | `on` or `off`: a 5 GHz hotspot the comma joins, and the server listens on it | a Jetson with Wi-Fi |
 | `autostart` | `yes` or `no` | a PC |
 
 - An answer the install already has changes nothing.
+- `wifi=on` takes the Jetson's Wi-Fi off any network it is on. The hotspot's
+  name and password are shown at the end, and kept when it is turned on again.
 - An unknown key, a bad value, or a key for the other kind of computer stops it
   before anything changes.
 - It needs an install to change, and does not go with `--update`,

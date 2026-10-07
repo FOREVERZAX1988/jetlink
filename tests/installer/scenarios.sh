@@ -85,7 +85,8 @@ reset_box() {
   unset FAKE_ARCH FAKE_SMI FAKE_PUBLISHED FAKE_PM_REBOOT FAKE_SERVER_BROKEN FAKE_GPU_BROKEN \
     FAKE_TRT10 FAKE_NO_CURL FAKE_ROOT_FREE_GB FAKE_IMAGE_GB FAKE_DOWNLOAD_FAILS FAKE_BAD_SUM FAKE_NO_PLUGIN \
     FAKE_DOCKER_STUCK FAKE_BAD_WHEEL FAKE_SERVER_CRASHLOOP FAKE_PRELOAD FAKE_SERVER_OLD FAKE_DOWNLOAD_HANG \
-    FAKE_DOCKER_ROOT FAKE_OTHER_FS FAKE_KERNEL FAKE_GLIBC FAKE_PACMAN_STALE FAKE_UEFI_LOCKED JETLINK_TEST_PRELOAD_S
+    FAKE_DOCKER_ROOT FAKE_OTHER_FS FAKE_KERNEL FAKE_GLIBC FAKE_PACMAN_STALE FAKE_UEFI_LOCKED JETLINK_TEST_PRELOAD_S \
+    FAKE_NO_WIFI
   export JETLINK_REPO_URL=file:///tmp/repo FAKE_LATEST=v0.10.0 JETLINK_TEST_SYSTEMD_RUN=/tmp
 }
 
@@ -134,6 +135,7 @@ EOF
   # UEFI, efibootmgr, and JetPack's extlinux.conf as a flash leaves it
   mkdir -p /tmp/efivars
   ln -sf "$SRC/tests/installer/fake.sh" "$FAKE_BIN/efibootmgr"
+  ln -sf "$SRC/tests/installer/fake.sh" "$FAKE_BIN/nmcli"
   local append='root=PARTUUID=c6679549-196f-44be-9e3f-e4b5751013cb rw rootwait rootfstype=ext4 mminit_loglevel=4 console=ttyTCU0,115200 firmware_class.path=/etc/firmware fbcon=map:0'
   if [ "$1" = 36 ]; then
     append="$append nospectre_bhb video=efifb:off console=tty0"
@@ -789,13 +791,42 @@ expect_ran "systemctl set-default graphical.target"
 expect_out "Restart this computer once to bring the desktop back: sudo reboot"
 expect_in /etc/jetlink/install.conf "JETLINK_DESKTOP_OFF=0"
 
+scenario "--set wifi makes the hotspot and listens beside USB, and takes it away again"
+: >"$FAKE_LOG"
+cli setup --set wifi=on </dev/null
+expect_rc 0
+expect_ran "nmcli connection add type wifi ifname wlP1p1s0 con-name jetlink-hotspot"
+expect_ran "802-11-wireless.band a"
+expect_in /etc/jetlink/install.conf "JETLINK_WIFI_LINK=1"
+expect_in /etc/jetlink/server.env 'JETLINK_LISTEN="--listen"'
+expect_out "Make a 5 GHz Wi-Fi hotspot for the comma"
+expect_out "join the comma to jetlink-fake"
+# again: the hotspot there keeps its password
+: >"$FAKE_LOG"
+cli setup --set wifi=on </dev/null
+expect_rc 0
+expect_not_ran "nmcli connection add"
+: >"$FAKE_LOG"
+cli setup --set wifi=off </dev/null
+expect_rc 0
+expect_ran "nmcli connection delete jetlink-hotspot"
+expect_in /etc/jetlink/install.conf "JETLINK_WIFI_LINK=0"
+expect_in /etc/jetlink/server.env 'JETLINK_LISTEN=""'
+# a Jetson with no Wi-Fi says so and stays on USB
+export FAKE_NO_WIFI=1
+cli setup --set wifi=on </dev/null
+expect_rc 0
+expect_out "This Jetson has no Wi-Fi, so no hotspot for the comma."
+expect_in /etc/jetlink/install.conf "JETLINK_WIFI_LINK=0"
+unset FAKE_NO_WIFI
+
 scenario "--set with an unknown key, a bad value or the other computer's key fails and changes nothing"
 cp /etc/jetlink/install.conf /tmp/install.conf.before
 : >"$FAKE_LOG"
 cli setup --set colour=blue </dev/null
 expect_rc 1
 expect_out "--set does not know 'colour'."
-expect_out "On a Jetson: power=always|switched, comma_poweroff=yes|no, desktop=on|off. On a PC: autostart=yes|no."
+expect_out "On a Jetson: power=always|switched, comma_poweroff=yes|no, desktop=on|off, wifi=on|off. On a PC: autostart=yes|no."
 cli setup --set power=sometimes </dev/null
 expect_rc 1
 expect_out "--set power takes always or switched, not 'sometimes'."
