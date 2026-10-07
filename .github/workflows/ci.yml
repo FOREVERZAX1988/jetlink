@@ -289,6 +289,22 @@ jobs:
           name: libjetlink-arm64-v8a
           path: swift-out
 
+      - name: Name this build's release tag
+        run: |
+          # What the updater compares with the newest GitHub release. A tag
+          # build is its tag; a cn-branch build is the cn-<sha> prerelease the
+          # cn-prerelease job publishes from this same commit. Another branch
+          # takes its name, which no release carries, so it always checks.
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            tag="$GITHUB_REF_NAME"
+          elif [ "$GITHUB_REF_NAME" = cn ]; then
+            tag="cn-${GITHUB_SHA::7}"
+          else
+            tag="$GITHUB_REF_NAME"
+          fi
+          echo "JETLINK_BUILD_TAG=$tag" >> "$GITHUB_ENV"
+          echo "build tag: $tag"
+
       - name: Write the release key
         if: env.HAVE_SIGNING == 'true'
         env:
