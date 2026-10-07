@@ -48,7 +48,11 @@ class ProvisioningRun:
     self.loan = None
     self.stop = False
     self.fetch_failed = False
-    self.wifi = False   # the setting is Wi-Fi: dial the hotspot (run reads it)
+
+  @property
+  def wifi(self) -> bool:
+    """The setting is Wi-Fi: the run dials the hotspot."""
+    return self.parts.settings.mode() == 'wifi'
 
   # -- lifecycle ------------------------------------------------------------
 
@@ -65,8 +69,6 @@ class ProvisioningRun:
         client.close()
       except Exception:
         self.log.exception("jetlink: error closing the link")
-      if self.wifi:
-        gadget.clear_link()   # the dial's record (link.dial)
 
   def open_link(self) -> bool:
     """Borrow the link from the owner that started this run. Without a loan
@@ -237,10 +239,7 @@ class ProvisioningRun:
   # -- one run --------------------------------------------------------------
 
   def wait_for_jetson(self) -> bool:
-    """Has a host enumerated within WAKE_TIMEOUT? A sleeping Jetson wakes to
-    the bind. Over Wi-Fi the dial already reached the device."""
-    if self.wifi:
-      return True
+    """Has a host enumerated within WAKE_TIMEOUT? A sleeping Jetson wakes to the bind."""
     return gadget.wait_for_host(WAKE_TIMEOUT, bounce=self.bounce, should_stop=lambda: self.stop,
                                 mode=self.parts.settings.mode())
 
@@ -257,10 +256,8 @@ class ProvisioningRun:
     """One provisioning round. True when there is nothing left to do, which
     main() makes the exit status the owner reads."""
     # the setting alone, as the owner that started this run reads it
-    mode = self.parts.settings.mode()
-    if mode == 'off':
+    if self.parts.settings.mode() == 'off':
       return True
-    self.wifi = mode == 'wifi'
 
     reason = gadget.pending_shutdown()
     if reason is not None:

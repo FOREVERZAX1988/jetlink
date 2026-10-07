@@ -44,8 +44,6 @@ final class Session: @unchecked Sendable {
   /// the telemetry when asked for.
   private let parts: UnsafeMutablePointer<UnsafeRawBufferPointer>
   private static let maxParts = 4
-  /// Where a lossless frame unpacks, made on the first one for its size.
-  private var lossless: LosslessFrame?
 
   init(transport: any MessageLink, host: EngineHost) {
     self.transport = transport
@@ -470,7 +468,7 @@ final class Session: @unchecked Sendable {
     if flags.contains(.lossless) {
       // the packed floats at their usual size, then the frame's planes
       let planesAt = Wire.inferReqSize + layout.packedBytes
-      guard payload.count >= planesAt, let frame = losslessFrame(shape: layout.warpedShape),
+      guard payload.count >= planesAt, let frame = loaded.lossless,
         frame.unpack(UnsafeRawBufferPointer(rebasing: payload[planesAt...]))
       else {
         return InferReply(status: .badShape)
@@ -533,14 +531,6 @@ final class Session: @unchecked Sendable {
       frameID: frameID, status: status, gpuUs: loaded.engine.lastGpuUs, queueUs: queueUs, totalUs: microseconds(since: started),
       outputCount: replied ? count : 0, hidden: replied && !flags.contains(.wantHidden) ? layout.hidden : nil,
       wantsState: flags.contains(.wantState), ran: true, failure: failure)
-  }
-
-  private func losslessFrame(shape: [Int]) -> LosslessFrame? {
-    if let lossless, lossless.shape == shape {
-      return lossless
-    }
-    lossless = LosslessFrame(shape: shape)
-    return lossless
   }
 
   private func onShutdown(_ message: Message) throws {

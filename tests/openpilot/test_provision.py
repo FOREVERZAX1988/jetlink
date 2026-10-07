@@ -329,29 +329,23 @@ class TestOverWifi(OpenpilotTest):
   """Over Wi-Fi a run dials the hotspot itself: no loan, no gadget to wait for."""
 
   def test_it_dials_rather_than_borrows(self):
+    self.op.set_mode('wifi')
     d = provision.ProvisioningRun(self.parts)
-    d.wifi = True
     with mock.patch.object(lending, 'borrow') as borrow, mock.patch.object(link, 'dial') as dial:
       assert d.open_link() is True
     borrow.assert_not_called()
     assert dial.call_args.kwargs == {'deadline': 5.0, 'name': 'provision'}
     assert d.client is dial.return_value
-    assert d.wait_for_jetson() is True
+    with mock.patch.object(gadget, 'udc_state') as udc:
+      assert d.wait_for_jetson() is True   # the dial reached the device: no gadget to wait on
+    udc.assert_not_called()
 
   def test_no_device_on_the_hotspot_is_for_the_next_run(self):
+    self.op.set_mode('wifi')
     d = provision.ProvisioningRun(self.parts)
-    d.wifi = True
     with mock.patch.object(link, 'dial', side_effect=link.WifiWaiting('not on Wi-Fi', link.NOT_ON_WIFI)):
       assert d.open_link() is False
     assert self.op.log.has('not on Wi-Fi, leaving it for the next run')
-
-  def test_closing_clears_the_dials_record(self):
-    d = provision.ProvisioningRun(self.parts)
-    d.wifi = True
-    d.client = mock.Mock(dead=False)
-    with mock.patch.object(gadget, 'clear_link') as clear:
-      d.close_link()
-    clear.assert_called_once()
 
   def test_the_setting_on_wifi_is_a_round(self):
     self.op.set_mode('wifi')
@@ -361,11 +355,9 @@ class TestOverWifi(OpenpilotTest):
       self.patch(d, name, mock.Mock(return_value=value))
     self.patch(gadget, 'pending_shutdown', mock.Mock(return_value=None))
     self.patch(self.parts.warps, 'built', mock.Mock(return_value=True))
-    with mock.patch.object(gadget, 'wait_for_host') as wait:
-      assert d.run() is True
+    assert d.run() is True
     assert d.wifi
     d.provision.assert_called_once()
-    wait.assert_not_called()
 
 
 class TestTheRun(OpenpilotTest):

@@ -22,7 +22,7 @@ import threading
 import time
 from pathlib import Path
 
-from jetlink.comma import gadget
+from jetlink.comma import gadget, wifi
 
 # how long one attempt holds the gadget open waiting for a host. Not a deadline
 # on the large model: JoiningModelState retries for the drive, since the Jetson
@@ -90,12 +90,11 @@ class WifiWaiting(ConnectionError):
   """The Wi-Fi dial found no device to talk to: the comma is on no Wi-Fi, or
   nothing answers at its gateway. The join asks again in a few seconds, and
   the panel says what is missing (joining._join_loop reads `waiting`)."""
+  retry_after = wifi.DIAL_DELAY
 
   def __init__(self, message: str, waiting: str):
     super().__init__(message)
     self.waiting = waiting
-    from jetlink.comma import wifi
-    self.retry_after = wifi.DIAL_DELAY
 
 
 def dial(log, deadline: float | None = None, name: str | None = None):
@@ -103,17 +102,17 @@ def dial(log, deadline: float | None = None, name: str | None = None):
   (jetlink.comma.wifi). WifiWaiting when the comma is on no Wi-Fi or nothing
   answers there, which the join retries."""
   from jetlink.client import FRAME_TIMEOUT, JetlinkClient
-  from jetlink.comma import wifi
   host = wifi.gateway()
   if host is None:
     raise WifiWaiting("not on Wi-Fi", NOT_ON_WIFI)
   try:
-    client = JetlinkClient.open_tcp(host, timeout=wifi.DIAL_TIMEOUT, name=name,
+    # the hello says Wi-Fi and the band, so the far end can warn about 2.4 GHz;
+    # the panels' record of the dial goes when the link closes
+    client = JetlinkClient.open_tcp(host, timeout=wifi.DIAL_TIMEOUT, link=wifi.link_info(),
+                                    on_close=gadget.clear_link, name=name,
                                     deadline=FRAME_TIMEOUT if deadline is None else deadline)
   except OSError as e:
     raise WifiWaiting(f"nothing answered at {host}: {e}", NO_ANSWER) from e
-  # the hello says Wi-Fi and the band, so the far end can warn about 2.4 GHz
-  client.t.link = wifi.link_info()
   gadget.note_link('wifi', host)
   log.warning("jetlink: dialed %s over Wi-Fi", host)
   return client
@@ -186,8 +185,6 @@ class Link:
         client.close()
       except Exception:
         self.log.exception("jetlink: error closing the link")
-      if self.wifi:
-        gadget.clear_link()   # the dial's record (dial): the panels stop saying connected
 
   def _borrow(self, deadline: float | None):
     """The lease on the gadget jetlinkd owns. Raises without one: only the
@@ -249,8 +246,6 @@ def connect_patiently(link: Link):
       raise   # the join asks again soon and says why meanwhile; nothing here would change it
     except Exception as e:
       client, last = None, e
-    if client is not None and link.wifi:
-      return client   # the dial reached the device; there is no gadget
     if client is not None:
       # over a phone's cable wait_for_host returns at once and a TCP client's
       # rebind is a no-op, so its network interface is never bounced

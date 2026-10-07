@@ -8,13 +8,11 @@ import JetlinkKit
 /// decoder. The Python is `jetlink.protocol.LOSSLESS_*`.
 ///
 /// Unchecked Sendable for `unpack`'s parallel loop: each iteration has its
-/// own decoder, result slot and plane of `pixels`, and one session unpacks
-/// one frame at a time.
+/// own decoder, result slot and plane of `pixels`, and the host's lock lets
+/// one frame unpack at a time.
 final class LosslessFrame: @unchecked Sendable {
   static let codec = Pinned.losslessCodec
 
-  /// The warped frame's shape, (2, 6, H, W): 12 planes of H x W.
-  let shape: [Int]
   let planes: Int
   let planeHeight: Int
   let planeWidth: Int
@@ -24,11 +22,13 @@ final class LosslessFrame: @unchecked Sendable {
   let pixels: UnsafeMutableRawPointer
   private let decoders: [OpaquePointer]
   private let results: UnsafeMutablePointer<Int32>
+  /// Where each plane starts in the payload, and where the last one ends.
+  private let offsets: UnsafeMutablePointer<Int>
 
-  /// For a warped frame of this shape, or nil when it is not (n, k, H, W).
+  /// For a warped frame of shape (n, k, H, W): n * k planes of H x W. Nil
+  /// for any other shape.
   init?(shape: [Int]) {
     guard shape.count == 4, shape.allSatisfy({ $0 > 0 }) else { return nil }
-    self.shape = shape
     planes = shape[0] * shape[1]
     planeHeight = shape[2]
     planeWidth = shape[3]
@@ -43,12 +43,14 @@ final class LosslessFrame: @unchecked Sendable {
     self.decoders = decoders
     pixels = .allocate(byteCount: planes * planeHeight * planeWidth, alignment: 64)
     results = .allocate(capacity: planes)
+    offsets = .allocate(capacity: planes + 1)
   }
 
   deinit {
     decoders.forEach { jl_lossless_free($0) }
     pixels.deallocate()
     results.deallocate()
+    offsets.deallocate()
   }
 
   /// The size table and the planes at `src` into `pixels`. False when they
@@ -56,7 +58,6 @@ final class LosslessFrame: @unchecked Sendable {
   /// after it, or a plane that does not unpack to exactly one plane.
   func unpack(_ src: UnsafeRawBufferPointer) -> Bool {
     guard src.count >= tableBytes, let base = src.baseAddress else { return false }
-    var offsets = [Int](repeating: 0, count: planes + 1)
     offsets[0] = tableBytes
     for k in 0..<planes {
       let size = Int(UInt32(littleEndian: base.loadUnaligned(fromByteOffset: k * 4, as: UInt32.self)))
@@ -66,6 +67,7 @@ final class LosslessFrame: @unchecked Sendable {
     let planeBytes = planeHeight * planeWidth
     let h = Int32(planeHeight), w = Int32(planeWidth)
     let pixels = pixels.assumingMemoryBound(to: UInt8.self)
+    let offsets = offsets
     DispatchQueue.concurrentPerform(iterations: planes) { k in
       results[k] = jl_lossless_plane(
         decoders[k], base + offsets[k], offsets[k + 1] - offsets[k], h, w, pixels + k * planeBytes)

@@ -43,14 +43,14 @@ struct ServerStoreTests {
   }
 
   @Test func usbServesTheGadgetAndOpensNoPort() {
-    let configuration = ServerStore.configuration(transport: .usb, tcpPort: 5599, cacheDirectory: cache)
+    let configuration = ServerStore.configuration(transport: .usb, tcpPort: 5599, cacheDirectory: cache, wifiLink: false)
     #expect(configuration.usb)
     #expect(!configuration.listen)
     #expect(configuration.cacheRoot == cache)
   }
 
   @Test func tcpListensOnThePortAndLeavesUSBAlone() {
-    let configuration = ServerStore.configuration(transport: .tcp, tcpPort: 5601, cacheDirectory: cache)
+    let configuration = ServerStore.configuration(transport: .tcp, tcpPort: 5601, cacheDirectory: cache, wifiLink: false)
     #expect(!configuration.usb)
     #expect(configuration.listen)
     #expect(configuration.port == 5601)

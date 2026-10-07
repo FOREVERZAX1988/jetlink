@@ -231,7 +231,7 @@ final class ServerStore: ServerControlling {
 
   /// What the server is asked to be, from the settings.
   /// USB unless TCP was chosen for bench tools; the Wi-Fi link listens beside USB.
-  nonisolated static func configuration(transport: TransportChoice, tcpPort: Int, cacheDirectory: URL, wifiLink: Bool = false) -> Server.Configuration {
+  nonisolated static func configuration(transport: TransportChoice, tcpPort: Int, cacheDirectory: URL, wifiLink: Bool) -> Server.Configuration {
     let port = UInt16(clamping: tcpPort > 0 ? tcpPort : AppSettings.defaultTCPPort)
     return Server.Configuration(port: port, cacheRoot: cacheDirectory, preload: true, listen: transport == .tcp || wifiLink, usb: transport == .usb)
   }

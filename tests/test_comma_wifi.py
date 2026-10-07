@@ -71,19 +71,18 @@ class TestBand(unittest.TestCase):
     with mock.patch.object(wifi, 'band', return_value=None):
       self.assertEqual(wifi.link_info(), {'kind': 'wifi'})
 
-  def test_a_tcp_link_says_what_its_opener_set(self):
-    import socket
+  def test_a_tcp_link_says_what_its_opener_set_and_undoes_it_on_close(self):
     from jetlink.transport.tcp import TcpTransport
-    srv = socket.create_server(('127.0.0.1', 0))
-    self.addCleanup(srv.close)
-    a = socket.create_connection(srv.getsockname())
-    b, _ = srv.accept()
-    self.addCleanup(a.close)
-    self.addCleanup(b.close)
-    t = TcpTransport(a)
-    self.assertEqual(t.link_info(), {'kind': 'tcp'})
-    t.link = {'kind': 'wifi', 'band': '5'}
+    from tests.test_protocol import make_pair
+    client, server = make_pair()
+    self.addCleanup(server.close)
+    self.assertEqual(client.link_info(), {'kind': 'tcp'})
+    closed = mock.Mock()
+    t = TcpTransport(client.sock, link={'kind': 'wifi', 'band': '5'}, on_close=closed)
     self.assertEqual(t.link_info(), {'kind': 'wifi', 'band': '5'})
+    t.close()
+    t.close()
+    closed.assert_called_once()
 
 
 class TestDial(fakes.OpenpilotTest):
@@ -96,19 +95,10 @@ class TestDial(fakes.OpenpilotTest):
     self.assertIs(got, client)
     self.assertEqual(open_tcp.call_args.args, ('172.20.10.1',))
     self.assertEqual(open_tcp.call_args.kwargs['timeout'], wifi.DIAL_TIMEOUT)
+    self.assertEqual(open_tcp.call_args.kwargs['link']['kind'], 'wifi')
+    # the panels' record of the dial goes with the link
+    self.assertIs(open_tcp.call_args.kwargs['on_close'], gadget.clear_link)
     note.assert_called_once_with('wifi', '172.20.10.1')
-    self.assertEqual(client.t.link['kind'], 'wifi')
-
-  def test_closing_a_wifi_link_clears_the_record_the_panels_read(self):
-    client = mock.Mock(dead=False)
-    with mock.patch.object(wifi, 'gateway', return_value='172.20.10.1'), \
-         mock.patch('jetlink.client.JetlinkClient.open_tcp', return_value=client):
-      wifi_link = link.Link(self.parts.log, wifi=True)
-      wifi_link.open()
-      self.assertEqual(gadget.link_state(), ('wifi', '172.20.10.1'))
-      wifi_link.close()
-    client.close.assert_called_once()
-    self.assertEqual(gadget.link_state(), (None, None))
 
   def test_the_panels_say_wifi_and_the_gateway(self):
     from jetlink.openpilot import status
@@ -140,15 +130,15 @@ class TestDial(fakes.OpenpilotTest):
     slept.assert_not_called()
 
   def test_no_lease_is_asked_for_and_no_gadget_waited_on(self):
+    # the dial's own record says Wi-Fi, so the wait for a host returns at once
     client = mock.Mock(dead=False)
     with mock.patch.object(wifi, 'gateway', return_value='172.20.10.1'), \
          mock.patch('jetlink.client.JetlinkClient.open_tcp', return_value=client), \
-         mock.patch.object(gadget, 'note_link'), \
          mock.patch('jetlink.comma.lending.borrow') as borrow, \
-         mock.patch.object(gadget, 'wait_for_host') as wait:
+         mock.patch.object(gadget, 'udc_state') as udc:
       self.assertIs(link.connect_patiently(link.Link(self.parts.log, wifi=True)), client)
     borrow.assert_not_called()
-    wait.assert_not_called()
+    udc.assert_not_called()
 
 
 if __name__ == '__main__':

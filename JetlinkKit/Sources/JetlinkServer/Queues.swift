@@ -132,8 +132,6 @@ struct FrameLayout {
   /// INFER_REQ's payload: the request head, the warped frame, the packed floats.
   let requestBytes: Int
   let warpedBytes: Int
-  /// (2, 6, H, W), which a lossless frame's planes are.
-  let warpedShape: [Int]
   let packedBytes: Int
   /// The driving output, float32 on the wire whatever the engine gives, and
   /// where the engine writes it, which stays put from load to close.
@@ -146,7 +144,6 @@ struct FrameLayout {
   init(spec: ModelSpec, engine: any Engine) {
     requestBytes = spec.inferReqBytes
     warpedBytes = spec.warpedBytes
-    warpedShape = spec.warpedShape
     packedBytes = spec.packedBytes
     outputCount = spec.outputCount
     outputType = engine.outputs[ModelConstants.drivingOutput]?.type

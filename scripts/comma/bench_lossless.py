@@ -5,16 +5,15 @@ Copyright (c) 2026-, Zeph Leggett.
 This file is part of jetlink and is licensed under the MIT License.
 See the LICENSE file in the root directory for more details.
 
-Time lossless frames on the comma: the built warp alone, with the MED errors
-on the GPU, and with Huffman packing, and check every step bit for bit
-against jetlink.lossless.
+Time lossless frames on the comma: the lossless warp (warp, and the MED errors
+in its graph), then the per-plane packing, and check the errors bit for bit
+against jetlink.lossless.encode.
 
-    PYTHONPATH=/data/openpilot \\
+    PYTHONPATH=/data/openpilot \
       taskset -c 7 /usr/local/venv/bin/python3 jetlink_repo/scripts/comma/bench_lossless.py
 
 The camera frames are synthetic (a gradient and noise), so the timings stand
-and the packed size does not; scratchpad lossless/medbench.c measured real
-frames.
+and the packed size does not.
 """
 from __future__ import annotations
 
@@ -27,8 +26,7 @@ import numpy as np
 
 from jetlink import lossless
 from jetlink.lossless import Packer
-from jetlink.openpilot.lossless import Errors
-from jetlink.openpilot.warp import Warp
+from jetlink.openpilot.warp import Warp, lossless_path
 
 WARP = '/data/openpilot/openpilot/sunnypilot/jetlink_adapter/models/warp_{w}x{h}_512x256_tinygrad.pkl'
 
@@ -50,52 +48,38 @@ def main() -> None:
   p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
   p.add_argument('--camera', default='1344x760', help='WxH (mici 1344x760, tici 1928x1208)')
   p.add_argument('--n', type=int, default=300)
-  p.add_argument('--warp', help='a built warp; with_errors (--lossless) makes the errors in its own graph')
+  p.add_argument('--warp', help='a lossless warp build (python -m jetlink.openpilot.warp --lossless); the build\'s by default')
   args = p.parse_args()
 
   from openpilot.selfdrive.modeld.compile_modeld import NV12Frame
   from openpilot.system.camerad.cameras.nv12_info import get_nv12_info
   w, h = (int(v) for v in args.camera.split('x'))
   nv12 = NV12Frame(w, h, *get_nv12_info(w, h))
-  log = logging.getLogger('bench_lossless')
 
-  with open(args.warp or WARP.format(w=w, h=h), 'rb') as f:
-    jit = pickle.load(f)
-  warp = Warp(jit, nv12.size, log)
-  fused = warp.errors is not None
-  if fused:
-    view = np.frombuffer(warp.errors, np.uint8)
-  else:
-    errors = Errors(jit.captured.ret)
-    view = errors.view
-  print("errors in the warp's own graph" if fused else "errors as a second graph")
-  packer = Packer(12, 128 * 256)
-  sync = warp.wait
+  with open(args.warp or lossless_path(WARP.format(w=w, h=h)), 'rb') as f:
+    warp = Warp(pickle.load(f), nv12.size, logging.getLogger('bench_lossless'))
+  if warp.errors is None:
+    raise SystemExit("not a lossless warp: build one with --lossless")
+  errors = np.frombuffer(warp.errors, np.uint8)
+  packer = Packer(lossless.SHAPE)
   cams = frames(nv12.size, w)
   tfm = np.array([[1.3, 0, 100], [0, 1.3, 60], [0, 0, 1]], np.float32)
 
   for i in range(4):
     warp.start(cams[i].ctypes.data, cams[(i + 1) % 4].ctypes.data, tfm, tfm)
-    if not fused:
-      errors.run()
-    sync()
+    warp.wait()
     warped = np.frombuffer(warp.output, np.uint8).reshape(lossless.SHAPE)
-    assert (view.reshape(lossless.SHAPE) == lossless.encode(warped)).all(), "GPU errors differ from the reference"
-    packer.pack(view)
+    assert (errors.reshape(lossless.SHAPE) == lossless.encode(warped)).all(), "GPU errors differ from the reference"
   print("GPU errors match jetlink.lossless.encode")
 
-  steps = (('warp + errors', 1), ('warp + errors + pack', 2)) if fused else \
-          (('warp', 0), ('warp + errors', 1), ('warp + errors + pack', 2))
-  for name, step in steps * 2:
+  for name, pack in (('warp + errors', False), ('warp + errors + pack', True)) * 2:
     ts, sizes = [], []
     for i in range(args.n):
       t0 = time.perf_counter()
       warp.start(cams[i % 4].ctypes.data, cams[(i + 1) % 4].ctypes.data, tfm, tfm)
-      if step and not fused:
-        errors.run()
-      sync()
-      if step == 2:
-        sizes.append(len(packer.pack(view)[1]))
+      warp.wait()
+      if pack:
+        sizes.append(len(packer.pack(warp.errors)[1]))
       ts.append((time.perf_counter() - t0) * 1000)
     extra = f"  {np.mean(sizes) / 1024:.0f} KB (synthetic)" if sizes else ''
     print(f"{name:22s} {quantiles(ts)} ms{extra}")

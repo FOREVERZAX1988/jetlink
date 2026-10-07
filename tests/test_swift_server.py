@@ -410,9 +410,8 @@ def test_wrong_sized_request_is_rejected(queued):
 
 def _packer(spec: ModelSpec):
   from jetlink.lossless import Packer
-  n, k, h, w = spec.warped_shape
   try:
-    return Packer(n * k, h * w)
+    return Packer(spec.warped_shape)
   except OSError:
     pytest.skip('no libzstd to pack frames with')
 

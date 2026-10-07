@@ -166,8 +166,7 @@ class JetlinkModelState:
     self._packer = None
     if getattr(warp, 'errors', None) is not None and getattr(client, 'takes_lossless', False):
       from jetlink.lossless import Packer
-      n, k, h, w = spec.warped_shape
-      self._packer = Packer(n * k, h * w)
+      self._packer = Packer(spec.warped_shape)
 
     self.input_shapes = spec.input_shapes
     self.output_slices = spec.output_slices

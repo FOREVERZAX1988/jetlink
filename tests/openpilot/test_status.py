@@ -521,12 +521,13 @@ class TestTheSnapshot(OpenpilotTest):
     with mock.patch.object(self.parts.warps, 'built', return_value=True), \
          mock.patch.object(settings, 'mode', wraps=settings.mode) as mode, \
          mock.patch.object(gadget, 'link_kind', wraps=gadget.link_kind) as kind, \
+         mock.patch.object(gadget, 'link_state', wraps=gadget.link_state) as link, \
          mock.patch.object(gadget, 'gadget_error', return_value=None) as error, \
          mock.patch.object(self.parts.spec, '_raw', wraps=self.parts.spec._raw) as spec:
       self.jl.status()
-    self.assertEqual((mode.call_count, error.call_count, spec.call_count), (1, 1, 1))
-    # the transport's fallback is the setting already read, not a second read
-    kind.assert_called_once_with('usb')
+    self.assertEqual((mode.call_count, error.call_count, spec.call_count, link.call_count), (1, 1, 1, 1))
+    # the transport's fallback is the setting and the link record already read
+    kind.assert_called_once_with('usb', (None, None))
 
   def test_a_failure_with_the_link_on_says_so(self):
     self.op.set_mode('usb')

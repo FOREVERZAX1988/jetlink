@@ -673,7 +673,7 @@ class TestWifi(OwnerTest):
     o = self.owner()
     with mock.patch.object(gadget, 'pending_shutdown', return_value='parked'):
       o.step()
-    o.spawn_worker.assert_called_once_with('the device has to be shut down: parked')
+    o.spawn_worker.assert_called_once_with('the jetson has to be shut down: parked')
 
 
 class TestVmTuning(OwnerTest):

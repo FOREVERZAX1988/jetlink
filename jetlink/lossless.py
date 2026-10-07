@@ -36,8 +36,6 @@ import ctypes.util
 
 import numpy as np
 
-from jetlink.protocol import lossless_sizes
-
 # the warp's output: two cameras of six 128x256 planes (4 Y phases, U, V)
 SHAPE = (2, 6, 128, 256)
 
@@ -106,7 +104,9 @@ def _libzstd():
 class Packer:
   """Each plane of a frame's errors packed alone, into one reused buffer."""
 
-  def __init__(self, planes: int, plane_bytes: int):
+  def __init__(self, warped_shape):
+    n, k, h, w = warped_shape
+    self.planes, self.plane_bytes = n * k, h * w
     lib = _libzstd()
     lib.ZSTD_createCCtx.restype = ctypes.c_void_p
     lib.ZSTD_CCtx_setParameter.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
@@ -117,27 +117,35 @@ class Packer:
     lib.ZSTD_compressBound.restype = ctypes.c_size_t
     lib.ZSTD_isError.argtypes = [ctypes.c_size_t]
     lib.ZSTD_isError.restype = ctypes.c_uint
-    self._lib = lib
+    self._compress = lib.ZSTD_compress2
     self._cctx = lib.ZSTD_createCCtx()
     for key, value in ((_ZSTD_C_LEVEL, LEVEL), (_ZSTD_C_LITERAL_MODE, _ZSTD_PS_ENABLE)):
       if lib.ZSTD_isError(lib.ZSTD_CCtx_setParameter(self._cctx, key, value)):
         raise RuntimeError(f"libzstd refused parameter {key}={value}")
-    self.planes, self.plane_bytes = planes, plane_bytes
-    self._out = np.empty(planes * lib.ZSTD_compressBound(plane_bytes), np.uint8)
-    self._sizes = [0] * planes
+    self._out = np.empty(self.planes * lib.ZSTD_compressBound(self.plane_bytes), np.uint8)
+    self._out_at = self._out.ctypes.data
+    # the size table INFER_REQ carries before the planes: a u32 per plane
+    self._sizes = np.zeros(self.planes, '<u4')
+    self._table = memoryview(self._sizes).cast('B')
+    # the errors' address, kept while they are the same buffer: the warp's
+    # are one for its life, so the frame loop reads it once
+    self._src = None
+    self._src_at = 0
 
-  def pack(self, errors) -> tuple[bytes, memoryview]:
+  def pack(self, errors) -> tuple[memoryview, memoryview]:
     """The size table and the packed planes of `errors` (planes x plane_bytes,
     contiguous), as INFER_REQ with Flag.LOSSLESS carries them after the packed
-    floats. The planes are valid until the next pack()."""
-    src = np.frombuffer(errors, np.uint8)
-    if src.size != self.planes * self.plane_bytes:
-      raise ValueError(f"{src.size} bytes of errors, not {self.planes} planes of {self.plane_bytes}")
-    at, cap, base = 0, self._out.size, self._out.ctypes.data
+    floats. Both are valid until the next pack()."""
+    if errors is not self._src:
+      src = np.frombuffer(errors, np.uint8)
+      if src.size != self.planes * self.plane_bytes:
+        raise ValueError(f"{src.size} bytes of errors, not {self.planes} planes of {self.plane_bytes}")
+      self._src, self._src_at = errors, src.ctypes.data
+    at, cap = 0, self._out.size
     for k in range(self.planes):
-      n = self._lib.ZSTD_compress2(self._cctx, base + at, cap - at, src.ctypes.data + k * self.plane_bytes, self.plane_bytes)
-      if self._lib.ZSTD_isError(n):
+      n = self._compress(self._cctx, self._out_at + at, cap - at, self._src_at + k * self.plane_bytes, self.plane_bytes)
+      if n > cap - at:   # a zstd error code is a size_t near its maximum
         raise RuntimeError("zstd could not pack a plane")
       self._sizes[k] = n
       at += n
-    return lossless_sizes(self._sizes), memoryview(self._out)[:at]
+    return self._table, memoryview(self._out)[:at]

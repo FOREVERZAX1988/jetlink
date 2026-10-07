@@ -706,21 +706,10 @@ class Owner:
     # flight takes minutes, so a shutdown request cannot queue behind one
     reason = gadget.pending_shutdown()
     if reason is not None and not self.lender.lent:
-      if self.worker_running():
-        if self.shutting_down:
-          # the run asking the jetson. Stopping it here restarted it every
-          # step, half a second, less than it takes to start: on the bench
-          # nothing ever asked, and hardwared gave up after its 25 s
-          return
-        self.stop_worker()
-      if time.monotonic() < self.next_shutdown_run:
-        return
-      self.wake()
-      if self.open_link():
-        self.next_shutdown_run = time.monotonic() + SHUTDOWN_RETRY
-        self.spawn_worker(f'the jetson has to be shut down: {reason}')
-        self.shutting_down = True
-      return
+      def present() -> bool:
+        self.wake()
+        return self.open_link()
+      return self.shutdown_run(reason, present)
 
     if not offroad:
       # the drive has started and the endpoints belong to modeld. A run of ours
@@ -766,6 +755,23 @@ class Owner:
     else:
       self.settle()
 
+  def shutdown_run(self, reason: str, ready=None) -> None:
+    """Start the run that asks the far end to power off, once `ready` (the
+    link presented) says it can, and again after SHUTDOWN_RETRY while the
+    request stands. Any other run stops for it first."""
+    if self.worker_running():
+      if self.shutting_down:
+        # the run asking. Stopping it here restarted it every step, half a
+        # second, less than it takes to start: on the bench nothing ever
+        # asked, and hardwared gave up after its 25 s
+        return
+      self.stop_worker()
+    if time.monotonic() < self.next_shutdown_run or (ready is not None and not ready()):
+      return
+    self.next_shutdown_run = time.monotonic() + SHUTDOWN_RETRY
+    self.spawn_worker(f'the jetson has to be shut down: {reason}')
+    self.shutting_down = True
+
   def wifi_step(self) -> None:
     """A step over Wi-Fi, after step() let the gadget and the port go.
 
@@ -780,10 +786,8 @@ class Owner:
     if reason is not None:
       if gateway is None:
         gadget.finish_shutdown()
-      elif not self.worker_running() and time.monotonic() >= self.next_shutdown_run:
-        self.next_shutdown_run = time.monotonic() + SHUTDOWN_RETRY
-        self.spawn_worker(f'the device has to be shut down: {reason}')
-        self.shutting_down = True
+      else:
+        self.shutdown_run(reason)
       return
     if not self.settings.offroad():
       self.stop_worker()

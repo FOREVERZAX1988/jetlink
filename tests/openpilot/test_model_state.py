@@ -250,8 +250,7 @@ class TestLossless(ModelStateTest):
 
   def test_the_errors_go_packed_to_a_server_that_takes_them(self):
     spec, client, warp, packer, made = self.lossless_state(takes=True)
-    n, k, h, w = spec.warped_shape
-    made.assert_called_once_with(n * k, h * w)
+    made.assert_called_once_with(spec.warped_shape)
     self.assertEqual(client.lossless, [(b'table', b'planes')] * 2)
     self.assertTrue(all(c.args == (warp.errors,) for c in packer.pack.call_args_list))
 
