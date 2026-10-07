@@ -568,17 +568,6 @@ class TestTheToggle(OwnerTest):
     o.close_link.assert_called_once()
     worker.terminate.assert_called_once()
 
-  def test_on_wifi_the_gadget_and_the_port_are_let_go(self):
-    # modeld dials the hotspot itself; ADB keeps the port
-    o = self.owner()
-    worker = o.worker = mock.Mock(**{'poll.return_value': None})
-    self.write('JetlinkLink', b'3')
-    o.step()
-    o.close_link.assert_called_once()
-    worker.terminate.assert_called_once()
-    o.port.off.assert_called_once()
-    o.port.update.assert_not_called()
-
   def test_the_first_gadget_is_not_held_up_by_the_sysctls(self):
     self.write('IsOffroad', b'0')
     o = self.owner(presented=False)
@@ -623,6 +612,68 @@ class TestTheToggle(OwnerTest):
     o.stop = True
     o.run()
     o.port.off.assert_called_once()
+
+
+class TestWifi(OwnerTest):
+  """Over Wi-Fi modeld dials the hotspot: no gadget, the port left alone, and
+  offroad a provisioning run that dials it too."""
+
+  def setUp(self):
+    super().setUp()
+    self.write('JetlinkLink', b'3')
+    self.gateway = mock.Mock(return_value='172.20.10.1')
+    p = mock.patch.object(owner.wifi, 'gateway', self.gateway)
+    self.addCleanup(p.stop)
+    p.start()
+
+  def test_the_gadget_and_the_port_are_let_go(self):
+    o = self.owner()
+    o.step()
+    o.close_link.assert_called_once()
+    o.port.off.assert_called_once()
+    o.port.update.assert_not_called()
+
+  def test_joining_a_hotspot_starts_a_run(self):
+    o = self.owner()
+    o.step()
+    o.spawn_worker.assert_called_once_with('joined a hotspot')
+
+  def test_the_same_hotspot_starts_no_second_run(self):
+    o = self.owner()
+    o.step()
+    o.step()
+    o.spawn_worker.assert_called_once()
+
+  def test_no_hotspot_no_run(self):
+    self.gateway.return_value = None
+    o = self.owner()
+    o.step()
+    o.spawn_worker.assert_not_called()
+
+  def test_a_running_run_is_kept_offroad_and_stopped_onroad(self):
+    o = self.owner()
+    worker = o.worker = mock.Mock(**{'poll.return_value': None})
+    o.step()
+    worker.terminate.assert_not_called()
+    o.spawn_worker.assert_not_called()
+    self.write('IsOffroad', b'0')
+    o.step()
+    worker.terminate.assert_called_once()
+
+  def test_a_shutdown_with_no_hotspot_is_done_at_once(self):
+    self.gateway.return_value = None
+    o = self.owner()
+    with mock.patch.object(gadget, 'pending_shutdown', return_value='parked'), \
+         mock.patch.object(gadget, 'finish_shutdown') as finish:
+      o.step()
+    finish.assert_called_once()
+    o.spawn_worker.assert_not_called()
+
+  def test_a_shutdown_goes_to_the_device_over_a_run(self):
+    o = self.owner()
+    with mock.patch.object(gadget, 'pending_shutdown', return_value='parked'):
+      o.step()
+    o.spawn_worker.assert_called_once_with('the device has to be shut down: parked')
 
 
 class TestVmTuning(OwnerTest):
