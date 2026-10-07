@@ -233,14 +233,20 @@ class Models:
       return lfs_download(href, pointer, dest, progress=progress, should_stop=should_stop)
     raise NetworkError(f"no LFS server has {pointer.oid[:16]}")
 
+  def _row_for(self, oid: str) -> dict | None:
+    """The catalog model with this oid, among those we have resolved."""
+    return next((m for m in self.model_index() if m['oid'] == oid), None)
+
   def name_for(self, oid: str) -> str:
     """The catalog's name for the model with this oid, or the oid's first 16
     characters when it lists none we have resolved."""
-    return next((m['name'] for m in self.model_index() if m['oid'] == oid), oid[:16])
+    row = self._row_for(oid)
+    return row['name'] if row is not None else oid[:16]
 
   def size_for(self, oid: str) -> int | None:
     """The byte count of the catalog model with this oid, once resolved here."""
-    return next((m['size'] for m in self.model_index() if m['oid'] == oid and m['size']), None)
+    row = self._row_for(oid)
+    return row['size'] if row is not None else None
 
   def has_file(self, model: dict) -> bool:
     """Is this model's ONNX on the comma, whole? Its size is the cheap check."""

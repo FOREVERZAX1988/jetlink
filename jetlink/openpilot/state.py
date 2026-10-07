@@ -4,7 +4,7 @@ Copyright (c) 2026-, Zeph Leggett.
 This file is part of jetlink and is licensed under the MIT License.
 See the LICENSE file in the root directory for more details.
 
-The picked model's spec, and whether its engine is built, in one record.
+The spec of the last model a server built (the pick, or a stand-in for it), and whether its engine is built, in one record.
 
 Reading the shapes and output slices means parsing a 766 MB ONNX. The server
 does that when it builds the engine and answers with the spec; provisioning

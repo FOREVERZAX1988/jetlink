@@ -299,7 +299,7 @@ class BuildingOnroad(OpenpilotTest):
     self.patch(link, 'connect_patiently', return_value=self.client)
     for target, name, value in ((self.parts.models, 'selected_model', dict(self.ENTRY)),
                                 (self.parts.models, 'shipped_model_path', None),
-                                (self.parts.spec, 'engine_ready_for', False)):
+                                (self.parts.spec, 'ready_spec', None)):
       self.patch(target, name, return_value=value)
     self.ensure = self.patch(link, 'ensure', return_value=self.spec)
 
@@ -326,15 +326,18 @@ class BuildingOnroad(OpenpilotTest):
     link.open_link(self.parts, self.link)
     self.assertEqual(self.ensure.call_args.args[2:4], (self.ENTRY['oid'], self.ENTRY['size']))
 
-  def hello(self, loaded=None, cached=()):
+  RECORD = mock.Mock(sha256='r' * 64, nbytes=7)
+
+  def hello(self, loaded=None, cached=(), record=RECORD):
+    """A server that lists what it has, and the comma's record of the last model built."""
     self.client.hello.return_value = {'device': 'iPhone', 'engine_state': 'none', 'loaded': loaded,
                                       'cached_models': list(cached)}
+    self.parts.spec.ready_spec.return_value = record
 
   def test_the_model_the_server_has_loaded_drives_over_the_record(self):
     # 2026-10-07: the comma picked BMRLNAP v6, the iPhone was serving Cinque
     # Terre V3, and the comma's record named ResAction from another server;
     # the iPhone was made to switch to ResAction
-    self.patch(self.parts.spec, 'ready_spec', return_value=mock.Mock(sha256='r' * 64, nbytes=7))
     size_for = self.patch(self.parts.models, 'size_for', return_value=99)
     self.patch(self.parts.models, 'name_for', return_value='Cinque Terre V3')
     self.hello(loaded='c' * 64, cached=['c' * 64, 'r' * 64])
@@ -344,7 +347,6 @@ class BuildingOnroad(OpenpilotTest):
     assert self.op.log.has('CTM v2 is not ready yet, Cinque Terre V3 drives until it is')
 
   def test_the_pick_wins_whenever_the_server_has_it(self):
-    self.patch(self.parts.spec, 'ready_spec', return_value=mock.Mock(sha256='r' * 64, nbytes=7))
     for loaded, cached in ((self.ENTRY['oid'], ['r' * 64]), ('c' * 64, [self.ENTRY['oid']])):
       with self.subTest(loaded=loaded):
         self.hello(loaded=loaded, cached=cached)
@@ -352,7 +354,6 @@ class BuildingOnroad(OpenpilotTest):
         self.assertEqual(self.ensure.call_args.args[2:4], (self.ENTRY['oid'], self.ENTRY['size']))
 
   def test_the_record_stands_in_only_where_the_server_has_it(self):
-    self.patch(self.parts.spec, 'ready_spec', return_value=mock.Mock(sha256='r' * 64, nbytes=7))
     self.hello(cached=['r' * 64])
     link.open_link(self.parts, self.link)
     self.assertEqual(self.ensure.call_args.args[2:5], ('r' * 64, 7, None))
@@ -363,9 +364,8 @@ class BuildingOnroad(OpenpilotTest):
 
   def test_a_loaded_model_of_unknown_size_is_passed_over(self):
     # its size names it to the server; without one it would be need_upload
-    self.patch(self.parts.spec, 'ready_spec', return_value=None)
     self.patch(self.parts.models, 'size_for', return_value=None)
-    self.hello(loaded='c' * 64, cached=['c' * 64])
+    self.hello(loaded='c' * 64, cached=['c' * 64], record=None)
     link.open_link(self.parts, self.link)
     self.assertEqual(self.ensure.call_args.args[2:4], (self.ENTRY['oid'], self.ENTRY['size']))
 
