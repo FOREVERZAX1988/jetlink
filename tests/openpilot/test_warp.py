@@ -205,114 +205,24 @@ class TestCallConvention(unittest.TestCase):
           self.fail(f"{name} calls the warp JIT directly: {stripped}")
 
 
-class TestWarm(unittest.TestCase):
-  def test_two_calls_on_zero_frames_of_the_cameras_size(self):
-    calls = []
+class UopTensor(fakes.FakeTensor):
+  """A FakeTensor that stands for its own buffer, which is what a warp's
+  capture is handed (uop.base)."""
 
-    def jit(**kwargs):
-      calls.append(kwargs)
-      return fakes.FakeTensor(np.zeros(1))
+  def __init__(self, data=None, device=None, dtype=None):
+    super().__init__(data, device, dtype)
+    self.uop = SimpleNamespace(base=self)
 
-    with mock.patch.dict(sys.modules, fakes.fake_tinygrad()):
-      warp.warm(jit, 1234)
-    self.assertEqual(len(calls), 2)
-    self.assertEqual(sorted(calls[0]), warp.WARP_INPUT_NAMES)
-    self.assertEqual(calls[0]['frame'].shape, (1234,))
-
-
-class TestReplay(unittest.TestCase):
-  """TinyJit's checks once per input set, then the capture replayed with the
-  buffers prepared then."""
-
-  def setUp(self):
-    self.jit_calls, self.replays, self.prepared = [], [], []
-    self.var_vals = {}
-
-    def prepare(args, kwargs):
-      self.prepared.append(sorted(kwargs))
-      return [kwargs[k] for k in sorted(kwargs)], dict(self.var_vals), sorted(kwargs), []
-
-    modules = fakes.fake_tinygrad()
-    modules['tinygrad.engine.jit']._prepare_jit_inputs = prepare
-    p = mock.patch.dict(sys.modules, modules)
-    p.start()
-    self.addCleanup(p.stop)
-    self.out = object()
-    test = self
-
-    class Jit:
-      def __init__(self):
-        self.captured = lambda bufs, var_vals: test.replays.append((bufs, var_vals)) or test.out
-
-      def __call__(self, **kwargs):
-        test.jit_calls.append(kwargs)
-        return test.out
-
-    self.jit = Jit()
-    self.tfm, self.big_tfm, self.frames = object(), object(), [object() for _ in range(3)]
-
-  def frame(self, replay, i=0):
-    return warp.call_warp(replay, self.tfm, self.big_tfm, self.frames[i], self.frames[i + 1])
-
-  def test_tinygrad_checks_a_set_once_then_the_capture_replays(self):
-    replay = warp.Replay(self.jit)
-    for _ in range(3):
-      self.assertIs(self.frame(replay), self.out)
-    self.assertEqual(len(self.jit_calls), 1)
-    self.assertEqual(sorted(self.jit_calls[0]), warp.WARP_INPUT_NAMES)
-    self.assertEqual(self.replays, [([self.frames[1], self.big_tfm, self.frames[0], self.tfm], {})] * 2)
-
-  def test_another_camera_buffer_is_checked_again(self):
-    replay = warp.Replay(self.jit)
-    self.frame(replay, 0)
-    self.frame(replay, 1)
-    self.frame(replay, 1)
-    self.assertEqual(len(self.jit_calls), 2)
-    self.assertEqual(len(self.replays), 1)
-
-  def test_an_id_reused_by_another_tensor_is_not_replayed(self):
-    replay = warp.Replay(self.jit)
-    self.frame(replay)
-    key = next(iter(replay._known))
-    replay._known[key] = ((object(),) * 4, ['stale'])
-    self.frame(replay)
-    self.assertEqual((len(self.jit_calls), self.replays), (2, []))
-
-  def test_symbolic_inputs_always_go_through_tinygrad(self):
-    self.var_vals = {'n': 1}
-    replay = warp.Replay(self.jit)
-    for _ in range(3):
-      self.frame(replay)
-    self.assertEqual((len(self.jit_calls), self.replays), (3, []))
-
-  def test_so_does_a_jit_that_never_captured(self):
-    self.jit.captured = None
-    replay = warp.Replay(self.jit)
-    for _ in range(3):
-      self.frame(replay)
-    self.assertEqual(len(self.jit_calls), 3)
-
-  def test_and_a_tinygrad_without_the_same_internals(self):
-    del sys.modules['tinygrad.engine.jit']._prepare_jit_inputs
-    replay = warp.Replay(self.jit)
-    for _ in range(3):
-      self.frame(replay)
-    self.assertEqual((len(self.jit_calls), self.replays), (3, []))
-
-  def test_past_the_bound_tinygrad_checks_every_call(self):
-    replay = warp.Replay(self.jit)
-    with mock.patch.object(warp, 'KNOWN_INPUT_SETS', 1):
-      self.frame(replay, 0)
-      self.frame(replay, 1)
-      self.frame(replay, 1)
-    self.assertEqual(len(replay._known), 1)
-    self.assertEqual(len(self.jit_calls), 3)
+  @staticmethod
+  def from_blob(ptr, shape, dtype=None, device=None):
+    blob = UopTensor(device=device)
+    blob.ptr, blob.shape = ptr, shape
+    return blob
 
 
-class FakeQcom:
-  """The QCOM device as coherent_output uses it. An allocation's record holds
-  the flags the kernel kept, which is the request masked by `keep`, plus
-  some of its own."""
+class FakeDevice:
+  """A tinygrad device as Warp uses it. An allocation's record holds the
+  flags the kernel kept: the request masked by `keep`, plus some of its own."""
 
   def __init__(self):
     self.keep = ~0
@@ -331,8 +241,8 @@ class FakeQcom:
 class FakeOutput:
   """The warp JIT's output Buffer, write-combined as tinygrad allocates it."""
 
-  def __init__(self, device='QCOM'):
-    self.device, self.nbytes, self._base = device, 64, None
+  def __init__(self, device):
+    self.device, self.nbytes = device, 64
     self._buf = SimpleNamespace(meta=(SimpleNamespace(flags=0x100c0000), True))
     self.bytes = bytearray(64)
 
@@ -344,66 +254,109 @@ class FakeOutput:
     self._buf = opaque
     return self
 
-  def as_memoryview(self, allow_zero_copy=False, no_sync=False):
-    assert allow_zero_copy and no_sync, 'a copy, or a synchronize the caller makes itself'
+  def as_memoryview(self, force_zero_copy=False, no_sync=False):
+    assert force_zero_copy and no_sync, 'a copy, or a synchronize the caller makes itself'
     return memoryview(self.bytes)
 
 
-def jit_returning(out):
-  ret = SimpleNamespace(uop=SimpleNamespace(base=SimpleNamespace(buffer=out)))
-  return SimpleNamespace(captured=SimpleNamespace(ret=ret))
+class FakeCapture:
+  """A captured warp: what TinyJit calls went in (each with the output's
+  allocation as the call found it), and what replays."""
+
+  def __init__(self, out):
+    self.out = out
+    self.ret = SimpleNamespace(uop=SimpleNamespace(base=SimpleNamespace(buffer=out)))
+    self.calls, self.replays = [], []
+
+  def jit(self, **kwargs):
+    self.calls.append((kwargs, self.out._buf))
+    return self.ret
+
+  def __call__(self, bufs, var_vals):
+    self.replays.append((bufs, var_vals))
+    return self.ret
 
 
-class TestCoherentOutput(unittest.TestCase):
-  """The warp's output moved to memory the CPU reads through its cache, and
-  only where the kernel made it coherent: write-back memory that is not read
-  stale frames, 396 of 400 on the comma."""
+class TestWarp(unittest.TestCase):
+  """The warp as the frame loop runs it: its output in memory the CPU reads
+  through its cache, checked once and replayed after, camera buffers as
+  tensors once."""
 
   def setUp(self):
-    self.qcom = FakeQcom()
+    self.devices = {'QCOM': FakeDevice(), 'CPU': FakeDevice()}
     modules = fakes.fake_tinygrad()
-    modules['tinygrad.device'].Device = {'QCOM': self.qcom}
+    modules['tinygrad.device'].Device = self.devices
+    modules['tinygrad.tensor'].Tensor = UopTensor
     p = mock.patch.dict(sys.modules, modules)
     p.start()
     self.addCleanup(p.stop)
     self.log = fakes.RecordingLog()
 
-  def test_the_output_moves_to_coherent_write_back_memory(self):
-    out = FakeOutput()
-    jit = jit_returning(out)
-    self.assertTrue(warp.coherent_output(jit, self.log))
-    self.assertIs(out._buf, self.qcom.allocs[0])
-    self.assertEqual(out._buf.meta[0].flags & warp.COHERENT_WRITEBACK, warp.COHERENT_WRITEBACK)
-    ret, view, sync = warp.coherent_view(jit)
-    self.assertIs(ret, jit.captured.ret)
-    self.assertEqual(view.nbytes, 64)
-    self.assertIs(sync, self.qcom.synchronize)
+  def make(self, device='QCOM'):
+    capture = FakeCapture(FakeOutput(device))
+    jit = mock.Mock(side_effect=capture.jit)
+    jit.captured = capture
+    return warp.Warp(jit, 1234, self.log), capture
 
-  def test_twice_is_once(self):
-    jit = jit_returning(FakeOutput())
-    warp.coherent_output(jit, self.log)
-    self.assertTrue(warp.coherent_output(jit, self.log))
-    self.assertEqual(len(self.qcom.allocs), 1)
+  def test_the_output_is_coherent_before_the_first_call(self):
+    # the first call binds the graph to its buffers' addresses
+    w, capture = self.make()
+    qcom = self.devices['QCOM']
+    self.assertEqual(len(qcom.allocs), 1)
+    self.assertTrue(all(found is qcom.allocs[0] for _, found in capture.calls))
+    self.assertEqual(qcom.allocs[0].meta[0].flags & warp.COHERENT_WRITEBACK, warp.COHERENT_WRITEBACK)
+    self.assertEqual(w.output.nbytes, 64)
+    self.assertIs(w.wait, qcom.synchronize)
 
-  def test_memory_the_kernel_would_not_make_coherent_is_given_back(self):
+  def test_memory_the_kernel_would_not_make_coherent_is_refused(self):
+    # write-back memory that is not coherent read stale frames, 396 of 400
     for withheld in (1 << 31, 1 << 26):   # coherency; write-back
-      self.qcom.keep = ~withheld
-      out = FakeOutput()
-      before = out._buf
-      jit = jit_returning(out)
-      self.assertFalse(warp.coherent_output(jit, self.log))
-      self.assertIs(out._buf, before)
-      self.assertIs(self.qcom.freed[-1], self.qcom.allocs[-1])
-      self.assertIsNone(warp.coherent_view(jit))
+      self.devices['QCOM'].keep = ~withheld
+      with self.assertRaisesRegex(RuntimeError, 'IO-coherent'):
+        self.make()
+      self.assertIs(self.devices['QCOM'].freed[-1], self.devices['QCOM'].allocs[-1])
 
-  def test_another_device_keeps_its_output(self):
-    self.assertFalse(warp.coherent_output(jit_returning(FakeOutput('CPU')), self.log))
-    self.assertEqual(self.qcom.allocs, [])
+  def test_a_cpu_warp_keeps_its_output(self):
+    # the fork's frame-path test runs the real warp on tinygrad's CPU device
+    self.make('CPU')
+    self.assertEqual(self.devices['CPU'].allocs, [])
 
-  def test_a_jit_of_another_make_is_logged_and_left(self):
-    self.assertFalse(warp.coherent_output(SimpleNamespace(captured=None), self.log))
-    self.assertEqual([level for level, _ in self.log.records], ['exception'])
-    self.assertIsNone(warp.coherent_view(object()))
+  def test_it_is_warmed_through_tinygrad_on_zero_frames_of_the_cameras_size(self):
+    _, capture = self.make()
+    self.assertEqual(len(capture.calls), 2)
+    kwargs, _ = capture.calls[0]
+    self.assertEqual(sorted(kwargs), warp.WARP_INPUT_NAMES)
+    self.assertEqual(kwargs['frame'].shape, (1234,))
+    self.assertEqual(capture.replays, [])
+    self.devices['QCOM'].synchronize.assert_called_once_with()
+
+  def test_a_frame_replays_the_capture_with_its_buffers(self):
+    w, capture = self.make()
+    tfm, big_tfm = np.eye(3) * 2, np.eye(3) * 3
+    w.start(0x1000, 0x2000, tfm, big_tfm)
+    (bufs, var_vals), = capture.replays
+    self.assertEqual(var_vals, {})
+    big_frame, big_tfm_buf, frame, tfm_buf = bufs   # sorted names, as the capture took them
+    self.assertEqual((frame.ptr, big_frame.ptr), (0x1000, 0x2000))
+    self.assertEqual((frame.shape, frame.device), ((1234,), 'QCOM'))
+    np.testing.assert_array_equal(tfm_buf.array, tfm)
+    np.testing.assert_array_equal(big_tfm_buf.array, big_tfm)
+    self.assertEqual(len(capture.calls), 2, 'no call through TinyJit after the warm-up')
+
+  def test_a_camera_buffer_becomes_a_tensor_once(self):
+    w, capture = self.make()
+    for _ in range(3):
+      w.start(0x1000, 0x2000, np.eye(3), np.eye(3))
+    first, *rest = [bufs for bufs, _ in capture.replays]
+    for bufs in rest:
+      self.assertTrue(all(a is b for a, b in zip(first, bufs, strict=True)))
+
+  def test_buffers_past_two_generations_are_logged_once(self):
+    w, _ = self.make()
+    with mock.patch.object(warp, 'FRAMES_WARN', 3):
+      for i in range(6):
+        w.start(0x1000 * (i + 1), 0x100000, np.eye(3), np.eye(3))
+    self.assertEqual(len([line for line in self.log.lines('warning') if 'camera buffers' in line]), 1)
 
 
 class TestPrepareReset(unittest.TestCase):

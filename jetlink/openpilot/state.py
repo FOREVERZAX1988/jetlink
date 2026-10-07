@@ -44,8 +44,12 @@ class SpecRecord:
 
   def engine_ready_for(self, sha256: str | None) -> bool:
     """Has the server built the engine for this model? Params only."""
+    return bool(sha256) and self.built_sha() == sha256
+
+  def built_sha(self) -> str | None:
+    """ready_spec()'s sha256, without making the spec of it."""
     d = self._raw()
-    return bool(sha256) and d is not None and d.get('sha256') == sha256 and d.get('ready') is True
+    return d.get('sha256') if d is not None and d.get('ready') is True else None
 
   def ready_spec(self):
     """The last model whose engine the server built, whichever model is picked

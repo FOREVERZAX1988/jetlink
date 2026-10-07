@@ -260,9 +260,9 @@ def read(parts, mode: str) -> Status:
   reason = unavailable(parts, record) if enabled else None
   # the last model the server built; the pick's, or the stand-in that drives
   # until the pick is built (link.open_link)
-  built = parts.spec.ready_spec() if enabled and reason is None else None
+  built = parts.spec.built_sha() if enabled and reason is None else None
   selected = parts.models.selected_model() if built is not None else None
-  ready = built is not None and selected is not None and built.sha256 == selected['oid']
+  ready = built is not None and selected is not None and built == selected['oid']
   return Status(
     enabled=enabled,
     mode=mode,
@@ -274,7 +274,7 @@ def read(parts, mode: str) -> Status:
     progress=parts.progress.read(),
     model=parts.models.selected_model_name(),
     default_model=parts.models.default_model_name(),
-    standin=parts.models.name_for(built.sha256) if built is not None and not ready else None,
+    standin=parts.models.name_for(built) if built is not None and not ready else None,
   )
 
 

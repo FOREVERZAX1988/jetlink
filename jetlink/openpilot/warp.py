@@ -4,8 +4,8 @@ Copyright (c) 2026-, Zeph Leggett.
 This file is part of jetlink and is licensed under the MIT License.
 See the LICENSE file in the root directory for more details.
 
-The comma-side warp JIT: how it is built, where it lives, what loads it, and
-the small model's reset for a fallback.
+The comma-side warp JIT: how it is built, where it lives, what loads it, how
+the frame loop runs it (Warp), and the small model's reset for a fallback.
 
 The warp stays on the comma (see model_state), and upstream's fused run_model
 JIT (openpilot #38684) has no warp to borrow, so comma's make_warp graph is
@@ -34,11 +34,14 @@ WARP_INPUT_NAMES = ['big_frame', 'big_tfm', 'frame', 'tfm']
 # KGSL allocation flags (msm_kgsl.h) for memory the GPU's accesses snoop the
 # CPU's caches on, mapped write-back: KGSL_MEMFLAGS_IOCOHERENT, which
 # tinygrad's kgsl bindings lack, and KGSL_CACHEMODE_WRITEBACK (3 << 26). See
-# coherent_output
+# Warp
 COHERENT_WRITEBACK = (1 << 31) | (3 << 26)
-# input sets Replay keeps: modeld's two camera pools of 18 buffers advance
-# together, so a drive sees a few dozen; past this, TinyJit checks every call
-KNOWN_INPUT_SETS = 256
+# camera buffers a Warp holds tensors for past which the log asks why.
+# camerad hands out a fixed pool of 18 a stream and maps new ones only when
+# it restarts, which modeld survives; past two generations of both streams
+# something is rotating addresses under the cache, which otherwise grows
+# without a bound
+FRAMES_WARN = 2 * 2 * 18 + 1
 
 
 def call_warp(warp, tfm, big_tfm, frame, big_frame):
@@ -49,47 +52,6 @@ def call_warp(warp, tfm, big_tfm, frame, big_frame):
   call raised JitError on the first frame of a drive.
   """
   return warp(tfm=tfm, big_tfm=big_tfm, frame=frame, big_frame=big_frame)
-
-
-class Replay:
-  """A warp JIT for modeld's frame loop, minus TinyJit's checks on inputs it
-  has passed before. Called as the JIT is, through call_warp.
-
-  TinyJit prepares every call's inputs and checks them against the capture
-  before it replays it, a graph rewrite per input: 0.97 ms of a 1.93 ms warp
-  call on the comma, on modeld's frame thread. The frame loop passes the same
-  tensors frame after frame: the two NPY transforms, written in place, and
-  the camera buffers, a fixed pool per stream. So the first call with a set
-  goes through TinyJit, checks and all, and later ones replay the capture
-  with the buffers prepared for it then, which is all TinyJit does with them.
-  A JIT that has not captured, or a tinygrad without the same internals,
-  goes through TinyJit every call.
-  """
-
-  def __init__(self, jit):
-    self.jit = jit
-    self._captured = getattr(jit, 'captured', None)
-    try:
-      from tinygrad.engine.jit import _prepare_jit_inputs
-      self._prepare = _prepare_jit_inputs
-    except ImportError:
-      self._prepare = None
-    # id()s of an input set -> (the set, its prepared buffers); the set is
-    # kept so an id cannot be reused under it
-    self._known: dict[tuple[int, ...], tuple[tuple, list]] = {}
-
-  def __call__(self, *, tfm, big_tfm, frame, big_frame):
-    inputs = (tfm, big_tfm, frame, big_frame)
-    key = tuple(map(id, inputs))
-    known = self._known.get(key)
-    if known is not None and all(a is b for a, b in zip(known[0], inputs, strict=True)):
-      return self._captured(known[1], {})
-    out = call_warp(self.jit, tfm, big_tfm, frame, big_frame)
-    if self._captured is not None and self._prepare is not None and len(self._known) < KNOWN_INPUT_SETS:
-      bufs, var_vals, _, _ = self._prepare((), {'tfm': tfm, 'big_tfm': big_tfm, 'frame': frame, 'big_frame': big_frame})
-      if not var_vals:
-        self._known[key] = (inputs, bufs)
-    return out
 
 
 def init_device(log) -> None:
@@ -172,83 +134,90 @@ class Warps:
     return warp
 
 
-def warm(warp, frame_size: int) -> None:
-  """Run a loaded warp JIT until it is cheap to call. `frame_size` is the
-  camera's NV12 buffer size (ModelFace.frame_size).
+class Warp:
+  """The built warp as modeld's frame loop runs it: start() with two camera
+  buffers and their transforms, wait(), and `output` holds the warped frame,
+  where the link sends it from.
 
-  Measured: loading 0.3 s, the first call 1.9 s, the second 5 ms. Paid on
-  modeld's frame loop that was ~26 dropped frames and 16 s of modeldLagging
-  after every join.
+  Three things the JIT alone does not do, each measured on the comma
+  (2026-10-06):
+  - Its output lives in GPU memory the CPU reads through its cache. tinygrad
+    maps a QCOM buffer write-combined, which the CPU reads uncached: copying
+    the 393 KB out took 2.9 ms, the kernel's copy straight from that mapping
+    7.3 ms. The Adreno 630 is IO-coherent, so KGSL memory flagged IOCOHERENT
+    and write-back is right to read once the GPU is done: 0.22 ms for the
+    kernel's copy, the GPU's own time unchanged. It moves before the first
+    call, which binds the graph to its buffers' addresses.
+  - A frame replays the capture with its inputs' buffers. TinyJit prepares
+    and checks every call's inputs, a graph rewrite per input: 0.97 ms of a
+    1.93 ms call. Every frame's inputs are alike (camera buffers as from_blob
+    tensors, two NPY transforms written in place), and the buffers are all
+    TinyJit's preparing hands the capture, so they are checked once, by the
+    warm-up's calls through TinyJit.
+  - A camera buffer becomes a tensor once, by address.
+
+  The warm-up is the first call's 1.9 s and the second's compile, paid here
+  rather than on modeld's frame loop, where it was ~26 dropped frames and
+  16 s of modeldLagging after every join.
   """
-  import numpy as np
+
+  def __init__(self, jit, frame_size: int, log):
+    import numpy as np
+    from tinygrad.device import Device
+    from tinygrad.tensor import Tensor
+    self.jit = jit
+    self._frame_size = frame_size
+    self._log = log
+    self._tensor = Tensor
+    out = jit.captured.ret.uop.base.buffer
+    self._device = out.device
+    if self._device.startswith('QCOM'):
+      _make_coherent(out)
+    # written in place by start(): the NPY tensors are views of them
+    self._tfm = np.zeros((3, 3), dtype=np.float32)
+    self._big_tfm = np.zeros((3, 3), dtype=np.float32)
+    tfm, big_tfm = (Tensor(a, device='NPY').realize() for a in (self._tfm, self._big_tfm))
+    self._tfm_bufs = (big_tfm.uop.base, tfm.uop.base)
+    self._frames: dict[int, object] = {}   # camera buffer address -> its tensor
+    blank = [np.zeros(frame_size, dtype=np.uint8) for _ in range(2)]
+    blobs = [Tensor.from_blob(b.ctypes.data, (frame_size,), dtype='uint8', device=self._device) for b in blank]
+    for _ in range(2):
+      call_warp(jit, tfm, big_tfm, blobs[0], blobs[1])
+    self.wait = Device[self._device].synchronize
+    self.wait()
+    self.output = out.as_memoryview(force_zero_copy=True, no_sync=True)
+    self._replay = jit.captured
+
+  def start(self, frame: int, big_frame: int, tfm, big_tfm) -> None:
+    """Warp the camera buffers at these addresses under their transforms.
+    `output` is the frame once wait() returns, until the next start()."""
+    self._tfm[:, :] = tfm
+    self._big_tfm[:, :] = big_tfm
+    # the capture's input order, sorted names (WARP_INPUT_NAMES)
+    self._replay([self._buffer(big_frame), self._tfm_bufs[0], self._buffer(frame), self._tfm_bufs[1]], {})
+
+  def _buffer(self, address: int):
+    tensor = self._frames.get(address)
+    if tensor is None:
+      tensor = self._frames[address] = self._tensor.from_blob(address, (self._frame_size,), dtype='uint8',
+                                                              device=self._device)
+      if len(self._frames) == FRAMES_WARN:
+        self._log.warning("jetlink: %d camera buffers cached; is the camera stack rotating them?", len(self._frames))
+    return tensor.uop.base
+
+
+def _make_coherent(out) -> None:
+  """Move a QCOM buffer to KGSL memory flagged IOCOHERENT and write-back.
+  Raises if the kernel keeps either flag back (the allocation's record holds
+  its answer): write-back memory that is not coherent reads stale frames."""
   from tinygrad.device import Device
-  from tinygrad.tensor import Tensor
-
-  frames = [np.zeros(frame_size, dtype=np.uint8) for _ in range(2)]
-  blobs = [Tensor.from_blob(f.ctypes.data, (frame_size,), dtype='uint8', device=Device.DEFAULT) for f in frames]
-  eye = [np.eye(3, dtype=np.float32) for _ in range(2)]
-  tfm, big_tfm = (Tensor(e, device='NPY').realize() for e in eye)
-  for _ in range(2):
-    call_warp(warp, tfm, big_tfm, blobs[0], blobs[1]).realize()
-  Device.default.synchronize()
-
-
-def coherent_output(warp, log) -> bool:
-  """Put the warp's output in GPU memory the CPU reads through its cache.
-
-  tinygrad maps a QCOM buffer write-combined, so the CPU reads it uncached:
-  copying the 393 KB warp output out took 2.9 ms, and sending it straight
-  from that mapping 7.3 ms (the kernel's copy). The Adreno 630 is
-  IO-coherent, so a write-back buffer flagged KGSL_MEMFLAGS_IOCOHERENT is
-  right to read the moment the GPU is done: 0.1 ms to copy, 0.22 ms to send,
-  the GPU's own time unchanged (2026-10-06, comma four, real warp, every
-  frame checked against a GPU-side copy).
-
-  Call it before the warp's first call, which binds its buffers' addresses
-  into the graph. False leaves the warp as it was: a device or kernel that
-  keeps either flag back would hand out write-back memory that is not
-  coherent, and the CPU would read stale frames from it.
-  """
-  try:
-    from tinygrad.device import Device
-    out = warp.captured.ret.uop.base.buffer
-    if not out.device.startswith('QCOM') or out._base is not None:
-      return False
-    if _coherent(out._buf):
-      return True
-    dev = Device[out.device]
-    mem = dev._gpu_alloc(out.nbytes, flags=COHERENT_WRITEBACK)
-    if not _coherent(mem):
-      dev._gpu_free(mem)
-      log.warning("jetlink: the GPU driver kept back IO-coherent memory; the warp's output is read uncached")
-      return False
-    out.deallocate()
-    out.allocate(opaque=mem)
-    return True
-  except Exception:
-    log.exception("jetlink: could not move the warp's output to IO-coherent memory")
-    return False
-
-
-def coherent_view(warp):
-  """(the tensor every warp call returns, the CPU's view of its bytes, the
-  GPU's synchronize) once coherent_output moved it; None otherwise. The
-  view is right to read, or send, once synchronize returns."""
-  try:
-    from tinygrad.device import Device
-    ret = warp.captured.ret
-    out = ret.uop.base.buffer
-    if not _coherent(out._buf):
-      return None
-    return ret, out.as_memoryview(allow_zero_copy=True, no_sync=True), Device[out.device].synchronize
-  except Exception:
-    return None
-
-
-def _coherent(mem) -> bool:
-  """Does this QCOM allocation have both flags? The kernel's answer, which
-  is what the allocation's record holds, not the request."""
-  return getattr(mem.meta[0], 'flags', 0) & COHERENT_WRITEBACK == COHERENT_WRITEBACK
+  dev = Device[out.device]
+  mem = dev._gpu_alloc(out.nbytes, flags=COHERENT_WRITEBACK)
+  if mem.meta[0].flags & COHERENT_WRITEBACK != COHERENT_WRITEBACK:
+    dev._gpu_free(mem)
+    raise RuntimeError(f"the GPU driver kept back IO-coherent memory (flags {mem.meta[0].flags:#x})")
+  out.deallocate()
+  out.allocate(opaque=mem)
 
 
 def prepare_reset(model):

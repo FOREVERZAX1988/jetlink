@@ -151,7 +151,8 @@ def main():
   parser.add_argument('--host', action='store_true')
   parser.add_argument('--frames', type=int, default=100000)
   parser.add_argument('--payload-bytes', type=int, default=393216)
-  parser.add_argument('--write-chunk', type=int, choices=[16384, 32768, 524288])
+  parser.add_argument('--write-chunk', type=int, choices=[8192, 16384],
+                      help='FunctionFS AIO request size; it must divide the 16 KB padding')
   args = parser.parse_args()
   if not 1 <= args.frames < 2**32 or not 8 <= args.payload_bytes <= 4 << 20:
     parser.error('frames must fit a positive uint32; payload must be between 8 bytes and 4 MiB')

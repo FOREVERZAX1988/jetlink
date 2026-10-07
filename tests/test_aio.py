@@ -35,7 +35,6 @@ def test_a_context_fills_its_structs_where_the_kernel_reads_them(monkeypatch):
   from types import SimpleNamespace
 
   from jetlink.transport import aio as module
-  monkeypatch.setattr(module.sys, 'platform', 'linux')
   monkeypatch.setattr(module.platform, 'machine', lambda: 'aarch64')
   monkeypatch.setattr(module.ctypes, 'CDLL', lambda *a, **k: SimpleNamespace(syscall=SimpleNamespace(restype=None)))
   done = []
@@ -44,8 +43,8 @@ def test_a_context_fills_its_structs_where_the_kernel_reads_them(monkeypatch):
     if nr == self._submit:
       return args[1].value
     if nr == self._getevents:
-      for i, (token, res) in enumerate(done):
-        self._events[i].data, self._events[i].res = token, res
+      for i, res in enumerate(done):
+        self._events[i].res = res
       return len(done)
     return 0
 
@@ -53,15 +52,15 @@ def test_a_context_fills_its_structs_where_the_kernel_reads_them(monkeypatch):
   a = Aio(7, 4)
   payload = bytes(range(100))
   addr, _ = address(payload)
-  assert a.submit(41, [[(addr, 60)], [(addr + 60, 30), (addr + 90, 10)]]) == 2
+  assert a.submit([[(addr, 60)], [(addr + 60, 30), (addr + 90, 10)]]) == 2
   first, second = a._iocbs[0], a._iocbs[1]
-  assert (first.data, first.nbytes, first.fildes, first.opcode) == (41, 1, 7, 8)
-  assert (second.data, second.nbytes) == (42, 2)
+  assert (first.nbytes, first.fildes, first.opcode) == (1, 7, 8)
+  assert second.nbytes == 2
   iovecs = [(v.base, v.len) for v in a._iovecs[8:10]]
   assert iovecs == [(addr + 60, 30), (addr + 90, 10)]
   assert ctypes.string_at(a._iovecs[0].base, a._iovecs[0].len) == payload[:60]
-  done.extend([(41, 60), (42, -108)])
-  assert a.reap(2, 0.0) == [(41, 60), (42, -108)]
+  done.extend([60, -108])
+  assert a.reap(2, 0.0) == [60, -108]
 
 
 @pytest.mark.real_aio
@@ -72,8 +71,8 @@ def test_requests_reach_the_fd_in_order_and_are_reaped():
   try:
     payload = os.urandom(3000)
     addr, _ = address(payload)
-    assert aio.submit(1, [[(addr, 1000)], [(addr + 1000, 1500), (addr + 2500, 500)]]) == 2
-    assert sorted(aio.reap(2, 1.0)) == [(1, 1000), (2, 2000)]
+    assert aio.submit([[(addr, 1000)], [(addr + 1000, 1500), (addr + 2500, 500)]]) == 2
+    assert sorted(aio.reap(2, 1.0)) == [1000, 2000]
     assert os.read(r, 4000) == payload
     assert aio.reap(0, 0.0) == []
   finally:
@@ -89,6 +88,6 @@ def test_a_bad_fd_fails_the_submit_and_queues_nothing():
   try:
     addr, _ = address(b'x' * 16)
     with pytest.raises(OSError):
-      aio.submit(1, [[(addr, 16)]])
+      aio.submit([[(addr, 16)]])
   finally:
     aio.close()

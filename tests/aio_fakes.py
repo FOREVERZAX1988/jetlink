@@ -22,7 +22,6 @@ from jetlink.transport.aio import address
 
 
 class FakeAio:
-  made: list[FakeAio] = []
   address = staticmethod(address)
 
   def __init__(self, fd: int | None, depth: int):
@@ -30,20 +29,19 @@ class FakeAio:
     self.depth = depth
     self.wire = bytearray()
     self.requests: list[int] = []      # bytes in each request, as submitted
-    self.done: deque[tuple[int, int]] = deque()
-    self.held: deque[tuple[int, int]] = deque()
+    self.done: deque[int] = deque()      # results, as reap returns them
+    self.held: deque[int] = deque()
     self.holding = False
     self.fail: deque[int] = deque()    # errnos the next submits raise, one each
-    self.result = None                 # a function of (token, nbytes) -> res, to fake a failed transfer
+    self.result = None                 # a function of nbytes -> res, to fake a failed transfer
     self.submits = 0
     self.closed = False
-    FakeAio.made.append(self)
 
   @property
   def outstanding(self) -> int:
     return len(self.done) + len(self.held)
 
-  def submit(self, first_token: int, requests) -> int:
+  def submit(self, requests) -> int:
     assert not self.closed, 'submit after close'
     assert len(requests) <= self.depth
     assert self.outstanding + len(requests) <= self.depth, 'more requests in flight than the context holds'
@@ -51,7 +49,7 @@ class FakeAio:
     if self.fail:
       err = self.fail.popleft()
       raise OSError(err, os.strerror(err))
-    for token, spans in enumerate(requests, first_token):
+    for spans in requests:
       data = b''.join(ctypes.string_at(addr, n) for addr, n in spans)
       self.requests.append(len(data))
       if self.fd is None:
@@ -60,8 +58,8 @@ class FakeAio:
         view = memoryview(data)
         while view:
           view = view[os.write(self.fd, view):]
-      res = len(data) if self.result is None else self.result(token, len(data))
-      (self.held if self.holding else self.done).append((token, res))
+      res = len(data) if self.result is None else self.result(len(data))
+      (self.held if self.holding else self.done).append(res)
     return len(requests)
 
   def release(self) -> None:
@@ -72,7 +70,7 @@ class FakeAio:
 
   def shutdown(self) -> None:
     """The endpoint went away: every request still queued fails."""
-    self.done.extend((token, -108) for token, _ in self.held)   # ESHUTDOWN
+    self.done.extend(-108 for _ in self.held)   # ESHUTDOWN
     self.held.clear()
 
   def reap(self, min_nr: int = 0, timeout: float | None = 0.0):

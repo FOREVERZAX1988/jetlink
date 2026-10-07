@@ -27,7 +27,7 @@ def sender():
   t._ensure_epfiles = lambda: None
   t._udc_note = lambda: ''
   t.ep_in = 123
-  t._aio = aio = FakeAio(None, ffs.AIO_DEPTH)
+  t._aio = aio = FakeAio(None, ffs.QUEUED_LIMIT // FfsTransport.write_chunk)
   unbound = []
 
   def unbind(gadget=None):
@@ -44,10 +44,11 @@ def _payload(size: int) -> bytes:
 
 
 @pytest.mark.parametrize('size', [0, 1, 16352, 16384, 32768, 393216, FRAME, 4 << 20])
-@pytest.mark.parametrize('quantum', [8192, 16384, 32768])
+@pytest.mark.parametrize('quantum', [8192, 16384])
 def test_a_message_crosses_whole_in_aligned_requests(sender, size, quantum):
-  t, aio = sender
+  t, _ = sender
   t.write_chunk = quantum
+  t._aio = aio = FakeAio(None, ffs.QUEUED_LIMIT // quantum)
   payload = _payload(size)
   t.send(P.Msg.INFER_REQ, 7, (payload,), timeout=1.0)
   wire = bytes(aio.wire)
@@ -56,10 +57,9 @@ def test_a_message_crosses_whole_in_aligned_requests(sender, size, quantum):
   assert wire[P.HEADER_SIZE:P.HEADER_SIZE + size] == payload
   assert not any(wire[P.HEADER_SIZE + size:]), 'padding is zeros'
   assert len(wire) % P.GADGET_TX_ALIGN == 0
-  # never a short packet: every request but the last `quantum` bytes, and the
-  # last a whole number of packets too
-  assert all(n == quantum for n in aio.requests[:-1])
-  assert 0 < aio.requests[-1] <= quantum and aio.requests[-1] % P.USB_MAX_PACKET == 0
+  # never a short packet: every request `quantum` bytes, which _collect
+  # checks each result against
+  assert set(aio.requests) == {quantum}
   if len(wire) <= ffs.QUEUED_LIMIT:
     assert aio.submits == 1, 'a message that fits goes in one io_submit'
   assert t.last_send['bytes'] == len(wire) and t.last_send['requests'] == len(aio.requests)
@@ -122,11 +122,13 @@ def test_a_blocking_send_waits_for_room_then_drops_the_gadget(sender):
     t.send(P.Msg.PING, 4)
 
 
-def test_a_write_the_host_did_not_complete_fails_the_next_send(sender):
+@pytest.mark.parametrize('result, why', [(lambda n: -errno.EPIPE, 'Broken pipe'),
+                                         (lambda n: n - 1024, '7168 of 8192 bytes')])
+def test_a_write_the_host_did_not_complete_fails_the_next_send(sender, result, why):
   t, aio = sender
-  aio.result = lambda token, n: -errno.EPIPE
+  aio.result = result
   t.send(P.Msg.PING, 1)
-  with pytest.raises(LinkError, match='gadget write failed'):
+  with pytest.raises(LinkError, match=f'gadget write failed: {why}'):
     t.send(P.Msg.PING, 2)
   with pytest.raises(LinkError, match='gadget write failed'):
     t.try_send(P.Msg.PING, 3)
@@ -157,11 +159,11 @@ def test_a_failure_past_the_first_byte_drops_the_gadget(sender):
   submit = aio.submit
   calls = []
 
-  def second_fails(first, requests):
+  def second_fails(requests):
     calls.append(len(requests))
     if len(calls) == 2:
       raise OSError(errno.EIO, 'I/O error')
-    return submit(first, requests)
+    return submit(requests)
 
   aio.submit = second_fails
   with pytest.raises(LinkError, match='gadget write failed'):
@@ -220,11 +222,10 @@ def test_send_totals_keep_the_maxima_between_log_samples(sender):
 
 def test_requests_cover_the_message_in_order_without_a_copy():
   spans = [(1000, 32), (5000, 5 * 16384), (900000, 2 * 16384 - 32)]
-  reqs = ffs._requests(spans, 32768)
-  assert [n for n, _ in reqs] == [32768] * 3 + [16384]
-  assert all(n == sum(length for _, length in req) for n, req in reqs)
+  reqs = ffs._requests(spans, 8192)
+  assert [sum(length for _, length in req) for req in reqs] == [8192] * 14
   # every byte once, in order: the gathered (address, length) runs rebuild the spans
-  runs = [run for _, req in reqs for run in req]
+  runs = [run for req in reqs for run in req]
   merged = []
   for addr, n in runs:
     if merged and merged[-1][0] + merged[-1][1] == addr:

@@ -8,7 +8,6 @@ Framing and transport tests. No Jetson, no CUDA - these run anywhere.
 """
 from __future__ import annotations
 
-import errno
 import json
 import struct
 import threading
@@ -467,24 +466,17 @@ def test_telemetry_that_is_not_a_json_object_is_refused(tail):
   assert client.dead
 
 
-class _CappedTransport(StreamTransport):
-  """Records the size of every write the framing layer submits."""
-  write_chunk = 64
+class _TimedTransport(StreamTransport):
+  """Records the deadline each write ran under, as TcpTransport's sendmsg
+  loop has it."""
 
-  def __init__(self, fail_over: int | None = None):
+  def __init__(self):
     super().__init__()
-    self.writes: list[int] = []
-    self.fail_over = fail_over
-    self.out = bytearray()
+    self.deadlines: list[float | None] = []
 
   def _write(self, bufs):
-    n = sum(b.nbytes for b in bufs)
-    if self.fail_over is not None and n > self.fail_over:
-      raise OSError(errno.ENOMEM, 'Cannot allocate memory')
-    self.writes.append(n)
-    for b in bufs:
-      self.out += bytes(b)
-    return n
+    self.deadlines.append(self._write_timeout())
+    return sum(b.nbytes for b in bufs)
 
   def _read_into(self, dest, timeout):
     return 0
@@ -493,28 +485,14 @@ class _CappedTransport(StreamTransport):
     pass
 
 
-class TestWriteChunking:
-  """FunctionFS turns one writev into one USB request and has to allocate a
-  contiguous buffer for it, so an uncapped write fails with ENOMEM on a
-  fragmented device. The inference path never hit it; a 4 MB upload chunk did."""
-
-  def test_a_big_message_is_split(self):
-    t = _CappedTransport()
-    t.send(1, 1, (bytes(500),))
-    assert max(t.writes) <= 64
-    assert sum(t.writes) == 500 + P.HEADER_SIZE
-
-  def test_the_bytes_still_arrive_in_order(self):
-    t = _CappedTransport()
-    payload = bytes(range(256)) * 3
-    t.send(1, 1, (payload,))
-    assert bytes(t.out[P.HEADER_SIZE:]) == payload
-
-  def test_an_uncapped_transport_writes_once(self):
-    t = _CappedTransport()
-    t.write_chunk = 0
-    t.send(1, 1, (bytes(500),))
-    assert len(t.writes) == 1
+def test_a_frame_that_may_be_held_still_goes_out_under_the_clients_deadline():
+  # a transport that cannot tell whether its host is behind sends the frame,
+  # and a phone that stopped reading must not hold the frame loop past it
+  client = JetlinkClient(_TimedTransport(), want_hidden=False)
+  client.spec, client.deadline = _spec(), 0.2
+  spec = client.spec
+  assert client.infer_begin(bytes(spec.warped_nbytes), bytes(spec.packed_nbytes), skip_if_busy=True) is not None
+  assert client.t.deadlines and all(d is not None and 0 < d <= 0.2 for d in client.t.deadlines)
 
 
 class _PacketTransport(StreamTransport):

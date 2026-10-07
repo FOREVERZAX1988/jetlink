@@ -159,6 +159,10 @@ class Models:
     """One file per model, so switching back does not re-download."""
     return f"{model['oid'][:16]}.onnx"
 
+  def model_path(self, model: dict) -> Path:
+    """Where a model's ONNX lives, whether or not it is there yet."""
+    return self.model_dir() / self.model_file_name(model)
+
   def shipped_model_path(self) -> Path | None:
     """The chosen large model, if it has been fetched. Keyed on the oid, not
     the in-tree pointer, which moves with upstream syncs; the size is the cheap
@@ -166,7 +170,7 @@ class Models:
     model = self.selected_model()
     if model is None or not self.has_file(model):
       return None
-    return self.model_dir() / self.model_file_name(model)
+    return self.model_path(model)
 
   def lfs_endpoints(self) -> list[str]:
     """Where a model's bytes are asked for, nearest first: the LFS server this
@@ -189,9 +193,9 @@ class Models:
     is chosen. The registry streams it to a .part file and hashes it on the way,
     so only the whole model ever takes the name.
 
-    A transfer that fails is tried again after DOWNLOAD_RETRY_DELAYS, carrying
-    on from the .part it left, until DOWNLOAD_ATTEMPTS have failed; the .part
-    outlives the run for the next one. Each attempt asks the LFS server again:
+    A transfer that fails is tried again after each of DOWNLOAD_RETRY_DELAYS,
+    carrying on from the .part it left; once they are spent the .part outlives
+    the run for the next one. Each attempt asks the LFS server again:
     the address it hands out expires. `retrying(error, delay)` hears of each
     wait; a run that is stopped stops waiting."""
     from jetlink.registry.catalog import NetworkError
@@ -199,7 +203,7 @@ class Models:
     model = self.selected_model()
     if model is None or not model['oid']:
       return None
-    dest = self.model_dir() / self.model_file_name(model)
+    dest = self.model_path(model)
     if self.has_file(model):
       return dest
     pointer = Pointer(model['oid'], int(model['size']))
@@ -238,9 +242,8 @@ class Models:
     """Is this model's ONNX on the comma, whole? Its size is the cheap check."""
     if not model.get('oid') or not model.get('size'):
       return False
-    path = self.model_dir() / self.model_file_name(model)
     try:
-      return path.stat().st_size == model['size']
+      return self.model_path(model).stat().st_size == model['size']
     except OSError:
       return False
 

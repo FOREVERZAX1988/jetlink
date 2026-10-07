@@ -294,7 +294,7 @@ def lfs_download(href: str, pointer: Pointer, dest: Path, progress: ProgressFn |
     request = urllib.request.Request(href, headers={'Range': f'bytes={written}-'}) if written else href
     try:
       with opener(request, timeout=CONNECT_TIMEOUT) as response:
-        if written and getattr(response, 'status', 200) != 206:
+        if written and response.status != 206:
           # the server ignored the Range and sends the whole object
           log.warning("%s: no partial content, downloading from the start", pointer.oid[:16])
           digest, written = hashlib.sha256(), 0

@@ -15,8 +15,6 @@ def fake_aio(request, monkeypatch):
   comma has the endpoint it was made for. tests/test_aio.py, marked real_aio,
   runs the real one on Linux."""
   if request.node.get_closest_marker('real_aio'):
-    return None
+    return
   from jetlink.transport import ffs
-  FakeAio.made.clear()
   monkeypatch.setattr(ffs, '_open_aio', FakeAio)
-  return FakeAio

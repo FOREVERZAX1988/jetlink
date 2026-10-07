@@ -116,6 +116,23 @@ class FakeClient:
     return len(self._in_flight)
 
 
+class FakeWarp:
+  """warp.Warp as the model state uses it. `output` holds the warped frame
+  only once wait() has returned: the GPU writes it in between."""
+
+  def __init__(self, warped):
+    self.warped = warped
+    self.output = memoryview(bytearray(warped.nbytes))
+    self.started = []
+
+  def start(self, frame, big_frame, tfm, big_tfm):
+    self.started.append((frame, big_frame, np.array(tfm), np.array(big_tfm)))
+    self.output[:] = b'\xee' * self.output.nbytes
+
+  def wait(self):
+    self.output[:] = self.warped.tobytes()
+
+
 class ModelStateTest(unittest.TestCase):
   def setUp(self):
     # a phone's transport asks the UDC how fast the cable is
@@ -126,26 +143,20 @@ class ModelStateTest(unittest.TestCase):
     self.log = fakes.RecordingLog()
     self.events = []
 
-  def make(self, spec, client, face=fakes.FACE):
-    return model_state.JetlinkModelState(1928, 1208, client, spec, object(), face=face, log=self.log,
+  def make(self, spec, client, face=fakes.FACE, warped=None):
+    warped = np.zeros(np.prod(spec.warped_shape), np.uint8) if warped is None else warped
+    return model_state.JetlinkModelState(client, spec, FakeWarp(warped), face=face, log=self.log,
                                          event=lambda name, **fields: self.events.append((name, fields)))
 
-  def run_frames(self, inputs: dict, n: int = 3, client=None, warp_output=None, after_enqueue=None):
+  def run_frames(self, inputs: dict, n: int = 3, client=None, after_enqueue=None):
     """`n` frames driven. Returns the spec, the state, the client and the
     warped frame every frame carried."""
     spec = spec_for(inputs)
     client = client or FakeClient()
     warped = np.arange(np.prod(spec.warped_shape), dtype=np.uint64).astype(np.uint8)
-    warp_output = warp_output or fakes.FakeTensor(warped)
-    with mock.patch.object(model_state, 'call_warp', return_value=warp_output):
-      state = self.make(spec, client)
-      self.frames(state, n, after_enqueue)
+    state = self.make(spec, client, warped=warped)
+    self.frames(state, n, after_enqueue)
     return spec, state, client, warped
-
-  @staticmethod
-  def warping(warped):
-    """The warp mocked, for frames run after run_frames() returned."""
-    return mock.patch.object(model_state, 'call_warp', return_value=fakes.FakeTensor(warped))
 
   @staticmethod
   def frames(state, n: int, after_enqueue=None) -> list:
@@ -175,20 +186,17 @@ class TestWire(ModelStateTest):
     # the desire pulse is the rising edge, as openpilot's own ModelState sends it
     self.assertEqual([p[3] for _, p, _, _ in client.sent], [0.0, 1.0, 0.0])
 
-  def test_over_the_cable_the_frame_goes_out_of_the_gpu_mapping(self):
-    # the socket copies the mapping while the first segments are on the wire;
-    # no host copy first
-    client = FakeClient('cable')
-    spec = spec_for(STATEFUL)
-    frame = np.arange(np.prod(spec.warped_shape), dtype=np.uint64).astype(np.uint8)
-    mapping = SimpleNamespace(as_memoryview=mock.Mock(return_value=memoryview(frame)))
-    warp_output = SimpleNamespace(data=mock.Mock(side_effect=AssertionError('copied on the host')),
-                                  _buffer=lambda: mapping)
-    _, state, client, _ = self.run_frames(STATEFUL, client=client, warp_output=warp_output)
-    self.assertTrue(state.send_from_gpu)
-    mapping.as_memoryview.assert_called_with(allow_zero_copy=True)
-    for data, *_ in client.sent:
-      np.testing.assert_array_equal(data, frame)
+  def test_the_warp_gets_the_camera_buffers_where_they_are_and_their_transforms(self):
+    # and the frame goes out of its output once it is done (FakeWarp)
+    state = self.make(spec_for(STATEFUL), FakeClient())
+    bufs = {k: SimpleNamespace(data=np.zeros(8, np.uint8)) for k in ('img', 'big_img')}
+    tfm = {'img': np.eye(3) * 2, 'big_img': np.eye(3) * 3}
+    state.run(bufs, tfm, {'desire': np.zeros(8, np.float32), 'traffic_convention': np.zeros(2, np.float32),
+                          'action_t': np.zeros(2, np.float32)})
+    (frame, big_frame, got_tfm, got_big), = state.warp.started
+    self.assertEqual((frame, big_frame), (bufs['img'].data.ctypes.data, bufs['big_img'].data.ctypes.data))
+    np.testing.assert_array_equal(got_tfm, tfm['img'])
+    np.testing.assert_array_equal(got_big, tfm['big_img'])
 
   def test_every_frame_is_measured_for_the_leave(self):
     # the whole frame as modeld waits on it, against the server's own total;
@@ -211,56 +219,6 @@ class TestWire(ModelStateTest):
     self.assertEqual((summary['p50_ms'], summary['max_ms'], summary['server_ms']), (30.0, 200.0, 25.0))
     self.assertEqual(summary['p99_ms'], 30.0, 'p99 is the 99th of a hundred, as the server takes it')
     self.assertEqual(model_state.Trips().summary(), {'frames': 0, 'over': 0, 'held': 0, 'span_s': 0.0})
-
-  def test_a_coherent_warp_output_goes_out_without_a_copy(self):
-    # warp.coherent_output: sent from where the GPU wrote it once it is done,
-    # over USB as well, with no host copy and no realize to find the buffer
-    spec = spec_for(STATEFUL)
-    frame = np.arange(np.prod(spec.warped_shape), dtype=np.uint64).astype(np.uint8)
-    ret = SimpleNamespace(_buffer=mock.Mock(side_effect=AssertionError('realized to find the buffer')))
-    sync = mock.Mock(name='synchronize')
-    with mock.patch.object(model_state, 'coherent_view', return_value=(ret, memoryview(frame), sync)):
-      _, state, client, _ = self.run_frames(STATEFUL, warp_output=ret)
-    self.assertEqual(sync.call_count, 3)
-    self.assertIsNone(state._readback_data)
-    self.assertEqual(len(client.sent), 3)
-    for data, *_ in client.sent:
-      np.testing.assert_array_equal(data, frame)
-
-  def test_a_warp_returning_another_tensor_is_read_back_as_before(self):
-    sync = mock.Mock(name='synchronize')
-    with mock.patch.object(model_state, 'coherent_view', return_value=(object(), memoryview(bytearray(8)), sync)):
-      _, state, client, warped = self.run_frames(STATEFUL)
-    sync.assert_not_called()
-    for data, *_ in client.sent:
-      np.testing.assert_array_equal(data, warped)
-
-  def test_usb_keeps_the_host_copy(self):
-    _, state, _, _ = self.run_frames(STATEFUL)
-    self.assertFalse(state.send_from_gpu)
-
-  def test_usb_reuses_readback_storage_without_reusing_old_frame_bytes(self):
-    _, state, client, first = self.run_frames(STATEFUL, n=1)
-    destination = state._readback_data
-    second = np.bitwise_xor(first, 0xff)
-    with self.warping(second):
-      self.frames(state, 1)
-    self.assertIs(state._readback_data, destination)
-    np.testing.assert_array_equal(client.sent[0][0], first)
-    np.testing.assert_array_equal(client.sent[1][0], second)
-    # GPU output changing later must not change this cached host copy.
-    second[:] = 0
-    np.testing.assert_array_equal(np.frombuffer(destination, np.uint8), np.bitwise_xor(first, 0xff))
-
-  def test_the_cable_is_a_phone_s_socket_as_the_transport_says(self):
-    from jetlink.transport.tcp import CABLE_ADDRESS, TcpTransport
-    sock = mock.Mock()
-    sock.getsockname.return_value = (CABLE_ADDRESS, 5599)
-    sock.getpeername.return_value = ('192.168.60.3', 50000)
-    client = FakeClient()
-    client.t = TcpTransport(sock)
-    state = self.make(spec_for(STATEFUL), client)
-    self.assertTrue(state.send_from_gpu)
 
   def test_a_queued_model_gets_the_frame_and_twelve_floats_too(self):
     spec, state, client, warped = self.run_frames(QUEUED)
@@ -288,13 +246,11 @@ class TestProving(ModelStateTest):
     client = FakeClient()
     client.late = late
     spec = spec_for(STATEFUL)
-    warped = fakes.FakeTensor(np.zeros(np.prod(spec.warped_shape), np.uint8))
     behind = []
-    with mock.patch.object(model_state, 'call_warp', return_value=warped):
-      state = self.make(spec, client)
-      for _ in range(n):
-        self.frames(state, 1)
-        behind.append(state.behind)
+    state = self.make(spec, client)
+    for _ in range(n):
+      self.frames(state, 1)
+      behind.append(state.behind)
     return behind
 
   def test_a_held_frame_while_proving_is_behind(self):
@@ -321,14 +277,12 @@ class TestHold(ModelStateTest):
     client = FakeClient()
     client.late = {2}
     spec = spec_for(STATEFUL)
-    warped = fakes.FakeTensor(np.zeros(np.prod(spec.warped_shape), np.uint8))
-    with mock.patch.object(model_state, 'call_warp', return_value=warped):
-      state = self.make(spec, client)
-      client.output[slice(*SLICES['plan'])] = 1.0
-      first, = self.frames(state, 1)
-      client.output = client.output.copy()
-      client.output[slice(*SLICES['plan'])] = 2.0
-      held, after = self.frames(state, 2)
+    state = self.make(spec, client)
+    client.output[slice(*SLICES['plan'])] = 1.0
+    first, = self.frames(state, 1)
+    client.output = client.output.copy()
+    client.output[slice(*SLICES['plan'])] = 2.0
+    held, after = self.frames(state, 2)
     self.assertTrue((first['plan'] == 1.0).all())
     self.assertTrue((held['plan'] == 1.0).all(), 'the frame before, again')
     self.assertTrue((after['plan'] == 2.0).all(), 'and the next frame its own')
@@ -356,14 +310,12 @@ class TestHold(ModelStateTest):
     client = FakeClient()
     client.busy = {2}
     spec = spec_for(STATEFUL)
-    warped = fakes.FakeTensor(np.zeros(np.prod(spec.warped_shape), np.uint8))
-    with mock.patch.object(model_state, 'call_warp', return_value=warped):
-      state = self.make(spec, client)
-      client.output[slice(*SLICES['plan'])] = 1.0
-      first, = self.frames(state, 1)
-      client.output = client.output.copy()
-      client.output[slice(*SLICES['plan'])] = 2.0
-      held, after = self.frames(state, 2)
+    state = self.make(spec, client)
+    client.output[slice(*SLICES['plan'])] = 1.0
+    first, = self.frames(state, 1)
+    client.output = client.output.copy()
+    client.output[slice(*SLICES['plan'])] = 2.0
+    held, after = self.frames(state, 2)
     self.assertTrue((held['plan'] == 1.0).all(), 'the frame before, again')
     self.assertTrue((after['plan'] == 2.0).all())
     self.assertEqual([f for _, _, f, _ in client.sent], [1, 3], 'frame 2 never went out')
@@ -374,13 +326,11 @@ class TestHold(ModelStateTest):
   def test_an_unsent_frame_leaves_the_reset_for_the_next_one(self):
     client = FakeClient()
     spec = spec_for(STATEFUL)
-    warped = fakes.FakeTensor(np.zeros(np.prod(spec.warped_shape), np.uint8))
-    with mock.patch.object(model_state, 'call_warp', return_value=warped):
-      state = self.make(spec, client)
-      self.frames(state, 1)
-      state._need_reset = True      # a swap asked the host to start over
-      client.busy = {2}
-      self.frames(state, 2)
+    state = self.make(spec, client)
+    self.frames(state, 1)
+    state._need_reset = True      # a swap asked the host to start over
+    client.busy = {2}
+    self.frames(state, 2)
     self.assertEqual([(f, reset) for _, _, f, reset in client.sent], [(1, True), (3, True)])
 
   def holding(self, late, n: int, **patches):
@@ -391,9 +341,8 @@ class TestHold(ModelStateTest):
     client = FakeClient()
     client.late = {seq for seq in range(1, n + 1) if late(seq)}
     spec = spec_for(STATEFUL)
-    warped = fakes.FakeTensor(np.zeros(np.prod(spec.warped_shape), np.uint8))
     behind = []
-    with mock.patch.object(model_state, 'call_warp', return_value=warped), contextlib.ExitStack() as patched:
+    with contextlib.ExitStack() as patched:
       patched.enter_context(mock.patch.multiple(model_state, **patches))
       state = self.make(spec, client)
       for _ in range(n):
@@ -439,7 +388,6 @@ class TestTheFace(ModelStateTest):
     self.assertEqual(state.lat_delay, 0.0, "the joining model's to set, from the small model")
     self.assertIsInstance(state.parser, fakes.FakeParser)
     self.assertEqual(state.prev_desire.shape, (face.desire_len,))
-    self.assertEqual(state.frame_size, face.frame_size(1928, 1208))
     self.assertIs(state.chestnut, True)
 
   def test_outputs_go_through_the_parser_sliced(self):
@@ -447,12 +395,10 @@ class TestTheFace(ModelStateTest):
     client = FakeClient()
     client.output[slice(*SLICES['plan'])] = 2.0
     state = self.make(spec, client)
-    warped = fakes.FakeTensor(np.zeros(np.prod(spec.warped_shape), np.uint8))
     bufs = {k: SimpleNamespace(data=np.zeros(8, np.uint8)) for k in ('img', 'big_img')}
-    with mock.patch.object(model_state, 'call_warp', return_value=warped):
-      out = state.run(bufs, {'img': np.eye(3), 'big_img': np.eye(3)},
-                      {'desire': np.zeros(8, np.float32), 'traffic_convention': np.zeros(2, np.float32),
-                       'action_t': np.zeros(2, np.float32)})
+    out = state.run(bufs, {'img': np.eye(3), 'big_img': np.eye(3)},
+                    {'desire': np.zeros(8, np.float32), 'traffic_convention': np.zeros(2, np.float32),
+                     'action_t': np.zeros(2, np.float32)})
     self.assertEqual(set(out), set(SLICES))
     self.assertEqual(out['plan'].shape, (1, 990))
     self.assertTrue((out['plan'] == 2.0).all())

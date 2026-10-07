@@ -207,7 +207,7 @@ class TestTheJoinFactory(OpenpilotTest):
     from jetlink.openpilot import link, warp
     self.present = self.patch(link, 'present_early')
     self.reset = self.patch(warp, 'prepare_reset')
-    self.warm = self.patch(warp, 'warm')
+    self.warp = self.patch(warp, 'Warp')
     self.loaded = self.patch(self.parts.warps, 'load')
     # the join thread is the joining state's; not here
     self.patch(joining.JoiningModelState, '_join_loop', lambda s: None)
@@ -221,7 +221,7 @@ class TestTheJoinFactory(OpenpilotTest):
     self.parts.spec.store(spec(model_hw=(64, 128)))
     self.join()
     self.loaded.assert_called_once_with(1928, 1208, 256, 128)
-    self.warm.assert_called_once_with(self.loaded.return_value, fakes.frame_size(1928, 1208))
+    self.warp.assert_called_once_with(self.loaded.return_value, fakes.frame_size(1928, 1208), self.parts.log)
     self.reset.assert_called_once_with(self.small)
     self.present.assert_called_once()
 
@@ -273,7 +273,7 @@ class TestTheJoinFactory(OpenpilotTest):
     client.t.link_info.return_value = {'kind': 'usb'}
     big = s._build(client, spec())
     self.assertIs(big.face, self.op.face)
-    self.assertIs(big.warp.jit, self.loaded.return_value)
+    self.assertIs(big.warp, self.warp.return_value)
 
   def test_a_server_model_of_another_geometry_is_refused(self):
     s = self.join()

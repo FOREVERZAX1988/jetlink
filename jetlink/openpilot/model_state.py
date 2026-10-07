@@ -22,8 +22,7 @@ leaves the Jetson, so there is no prev_feat to send back. The spec says which.
 
 What openpilot's modeld reads off a ModelState comes from the fork's adapter
 (ModelFace): comma's constants, parser, smoothing and action function.
-tinygrad is imported when a model is built, never at module level: only
-modeld and the build have it.
+tinygrad is warp.Warp's to import: only modeld and the build have it.
 """
 from __future__ import annotations
 
@@ -34,8 +33,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
-
-from jetlink.openpilot.warp import Replay, call_warp, coherent_view
 
 SEND_RAW_PRED = os.getenv('SEND_RAW_PRED')
 SLOW_FRAME = 0.05  # the full 20 Hz budget, not just the largest outliers
@@ -70,11 +67,6 @@ TELEMETRY_EVERY = 2
 TELEMETRY_PERIOD = 1.0
 # frames Trips keeps the timings of: a minute at 20 Hz
 TRIPS_KEPT = 1200
-# camera buffers cached (prepare) past which the log asks why. camerad hands
-# out a fixed pool of 18 a stream and maps new ones only when it restarts,
-# which modeld survives; past two generations of both streams something is
-# rotating addresses under the cache, which otherwise grows without a bound
-BLOB_CACHE_WARN = 2 * 2 * 18 + 1
 
 
 class Trips:
@@ -139,10 +131,7 @@ class JetlinkModelState:
 
   prev_desire: np.ndarray  # for tracking the rising edge of the pulse
 
-  def __init__(self, cam_w: int, cam_h: int, client, spec, warp, *, face, log, event):
-    from tinygrad.device import Device
-    from tinygrad.tensor import Tensor
-    self._tensor = Tensor
+  def __init__(self, client, spec, warp, *, face, log, event):
     self._log = log
     # (name, **fields): a structured log line, cloudlog.event on a comma
     self._event = event
@@ -158,29 +147,14 @@ class JetlinkModelState:
 
     self.client = client
     self.spec = spec
-    # Over a phone's cable, hand the socket the warp's GPU mapping itself: the
-    # kernel copies it while the first segments are already on the wire, where
-    # copying it here first held the send back 2.5 ms. On the Mac stand-in the
-    # comma's side of a frame was 0.6 ms faster at p50 and 2 ms at p99. USB
-    # keeps the host copy it was measured with. The client's transport says
-    # which, as the owner lent it
-    self.send_from_gpu = client.t.link_info().get('kind') == 'cable'
-    # Both of those read the warp's output through tinygrad's write-combined
-    # mapping, uncached. Once warp.coherent_output has moved it to memory the
-    # CPU reads through its cache, every frame goes out from where the GPU
-    # wrote it, over either transport: no copy, and no per-frame realize to
-    # find the buffer (the JIT returns the same tensor every call)
-    self._warp_ret, self._warp_view, self._warp_sync = coherent_view(warp) or (None, None, None)
-    log.warning("jetlink: frames go out of the warp's %s", 'IO-coherent output, no copy'
-                if self._warp_view is not None else 'write-combined output')
     # not chestnut hardware, but the same role: modelV2.big, the UI and the
     # model manager key off this flag
     self.chestnut = True
 
-    # a warm warp, loaded ahead: the first call costs ~2 s and this can run on
-    # modeld's frame thread (warp.warm). Replayed without TinyJit's per-call
-    # checks once an input set has passed them (warp.Replay)
-    self.warp = Replay(warp)
+    # a warp.Warp, loaded and warmed ahead: its first call costs ~2 s and this
+    # runs on modeld's frame thread. Frames go out of its output as they are,
+    # over either transport
+    self.warp = warp
 
     self.input_shapes = spec.input_shapes
     self.output_slices = spec.output_slices
@@ -188,28 +162,16 @@ class JetlinkModelState:
     # from the same field
     self.frame_skip = spec.frame_skip
 
-    # the warp's own two inputs stay separate NPY tensors; everything past the
-    # warp is the server's. Writing the numpy array is what feeds the JIT
-    self.npy = {'tfm': np.zeros((3, 3), dtype=np.float32),
-                'big_tfm': np.zeros((3, 3), dtype=np.float32)}
-    self.warp_inputs = {k: Tensor(v, device='NPY').realize() for k, v in self.npy.items()}
-
-    # compile_modeld.make_input_queues' packed_npy_inputs, minus the GPU queues
-    # the server owns; for a stateful graph, minus prev_feat too
+    # compile_modeld.make_input_queues' packed_npy_inputs, minus the warp's
+    # inputs and the GPU queues the server owns; for a stateful graph, minus
+    # prev_feat too
     self.packed = np.zeros(spec.packed_nelem, dtype=np.float32)
-    self.npy.update({k: self.packed[at].reshape(shape) for k, (at, shape) in spec.packed_layout.items()})
+    self.npy = {k: self.packed[at].reshape(shape) for k, (at, shape) in spec.packed_layout.items()}
 
-    # read once: it must be the device the cached JIT was compiled against
-    self.warp_dev = Device.DEFAULT
     self.prev_desire = np.zeros(face.desire_len, dtype=np.float32)
     self.parser = face.parser()
-    self.frame_size = face.frame_size(cam_w, cam_h)
     # the camera buffers modeld hands over, whatever the graph calls its inputs
     self.vision_input_names = ['img', 'big_img']
-    self.full_frames: dict = {}
-    self._blob_cache: dict = {}
-    self._readback_buffer = None
-    self._readback_data: memoryview | None = None
     self._need_reset = True
     self._frame_id = 0
     self._last_logged = 0.0
@@ -251,20 +213,8 @@ class JetlinkModelState:
     what the host has answered so far (a held frame's late reply) and pack
     the rest of the inputs. send() puts it on the link and end() waits for
     its answer."""
-    for key in bufs.keys():
-      ptr = np.frombuffer(bufs[key].data, dtype=np.uint8).ctypes.data
-      cache_key = (key, ptr)
-      if cache_key not in self._blob_cache:
-        self._blob_cache[cache_key] = self._tensor.from_blob(ptr, (self.frame_size,), dtype='uint8', device=self.warp_dev)
-        if len(self._blob_cache) == BLOB_CACHE_WARN:
-          self._log.warning("jetlink: %d camera buffers cached; is the camera stack rotating them?",
-                            len(self._blob_cache))
-      self.full_frames[key] = self._blob_cache[cache_key]
-    self.npy['tfm'][:, :] = transforms['img'][:, :]
-    self.npy['big_tfm'][:, :] = transforms['big_img'][:, :]
-
     t0 = time.perf_counter()
-    warped = call_warp(self.warp, **self.warp_inputs, frame=self.full_frames['img'], big_frame=self.full_frames['big_img'])
+    self.warp.start(_address(bufs['img']), _address(bufs['big_img']), transforms['img'], transforms['big_img'])
     t1 = time.perf_counter()
     # the GPU is warping; nothing below is an input to it
     self.client.drain()
@@ -279,28 +229,10 @@ class JetlinkModelState:
     self.npy['traffic_convention'][:] = inputs['traffic_convention']
     self.npy['action_t'][:] = inputs['action_t']
 
-    # The frame's bytes are free again once infer_begin returns: the gadget's
-    # io_submit and the cable's sendmsg have copied them by then, before the
-    # next warp writes them.
-    if self._warp_view is not None and warped is self._warp_ret:
-      self._warp_sync()   # the GPU is done writing it
-      data = self._warp_view
-    elif self.send_from_gpu:
-      data = warped._buffer().as_memoryview(allow_zero_copy=True)
-    else:
-      # USB from write-combined memory: a host copy first, as the kernel's own
-      # copy out of that mapping was slower still. Reuse its destination
-      # instead of .data()'s bytearray per frame.
-      source = warped._buffer()
-      if self._readback_buffer is None:
-        from tinygrad.device import Buffer
-        self._readback_data = memoryview(bytearray(source.nbytes))
-        self._readback_buffer = Buffer('PYTHON', source.size, source.dtype, opaque=self._readback_data)
-      # copy_from performs the same GPU synchronization and copy as .data().
-      # It also checks byte lengths if a malformed warp changes its output.
-      self._readback_buffer.copy_from(source)
-      data = self._readback_data
-    self._frame = Frame(t0, t1, time.perf_counter(), data)
+    # free again once infer_begin returns: the gadget's io_submit and the
+    # cable's sendmsg have copied it by then, before the next warp writes it
+    self.warp.wait()
+    self._frame = Frame(t0, t1, time.perf_counter(), self.warp.output)
 
   def send(self, want_telemetry: bool = False) -> None:
     """The prepared frame to the host. It asks for the server's telemetry
@@ -422,3 +354,7 @@ class JetlinkModelState:
     """Let go of the link; the joining state calls this on a model it retires."""
     self.client.close()
 
+
+def _address(buf) -> int:
+  """Where a camera buffer modeld hands over (a VisionBuf) keeps its bytes."""
+  return np.frombuffer(buf.data, dtype=np.uint8).ctypes.data

@@ -674,7 +674,7 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
   link = links.Link(parts.log)
 
   def prepare():
-    from jetlink.openpilot.warp import coherent_output, prepare_reset, warm
+    from jetlink.openpilot.warp import Warp, prepare_reset
     # the gadget first, so the Jetson enumerates while the warp loads. Left to
     # the join thread the bind landed ~3 s later, behind the small model's
     # first frame, and one ignition had a 655 ms frame during the bind
@@ -687,9 +687,7 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
       geometry = parts.warps.geometry()[2:]
     try:
       ready['reset_small'] = prepare_reset(small)
-      warp = parts.warps.load(cam_w, cam_h, *geometry)
-      coherent_output(warp, parts.log)   # before its first call
-      warm(warp, face.frame_size(cam_w, cam_h))
+      warp = Warp(parts.warps.load(cam_w, cam_h, *geometry), face.frame_size(cam_w, cam_h), parts.log)
     except Exception:
       link.close()
       raise
@@ -700,7 +698,7 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
     warp = ready.get('warp') if ready.get('geometry') == (img_w * 2, img_h * 2) else None
     if warp is None:
       raise RuntimeError('no prepared warp for the server model geometry')
-    return JetlinkModelState(cam_w, cam_h, client, spec, warp, face=face, log=parts.log, event=op.event)
+    return JetlinkModelState(client, spec, warp, face=face, log=parts.log, event=op.event)
 
   def connect(should_stop=None):
     return links.open_link(parts, link, should_stop)

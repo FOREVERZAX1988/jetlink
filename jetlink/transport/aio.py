@@ -16,14 +16,13 @@ every queued request on its TRB ring, so the bus streams them back to back,
 and the caller's buffers are free again the moment io_submit returns.
 
 Only what FfsTransport needs: one context, PWRITEV iocbs, and reaping. Linux
-on a little-endian CPU only; the comma is aarch64.
+only: the comma is aarch64, and CI's x86_64 runs the real thing too.
 """
 from __future__ import annotations
 
 import ctypes
 import os
 import platform
-import sys
 import time
 
 # io_setup, io_destroy, io_submit, io_getevents
@@ -87,17 +86,15 @@ class Aio:
   """A kernel AIO context of `depth` iocbs writing to `fd`, used from one
   thread at a time.
 
-  submit() takes requests as [(address, length), ...] each, tokens counting
-  up from the one it is given, and returns how many the kernel queued; the
-  kernel has copied those bytes, so the caller may reuse its buffers at once.
-  reap() returns (token, result) per finished request, result being bytes
-  written or a negative errno. The iocb and iovec arrays are reused across
-  submits: the kernel copies both before io_submit returns.
+  submit() takes requests as [(address, length), ...] each and returns how
+  many the kernel queued; the kernel has copied those bytes, so the caller
+  may reuse its buffers at once. reap() returns each finished request's
+  result, bytes written or a negative errno, in no promised order. The iocb
+  and iovec arrays are reused across submits: the kernel copies both before
+  io_submit returns.
   """
 
   def __init__(self, fd: int, depth: int):
-    if sys.platform != 'linux' or sys.byteorder != 'little' or platform.machine() not in _SYSCALLS:
-      raise OSError(f'no Linux AIO on {sys.platform} {platform.machine()}')
     self._setup, self._destroy, self._submit, self._getevents = _SYSCALLS[platform.machine()]
     self._libc = ctypes.CDLL(None, use_errno=True)
     self._syscall = self._libc.syscall
@@ -114,13 +111,14 @@ class Aio:
       cb.opcode, cb.fildes, cb.buf = IOCB_CMD_PWRITEV, fd, iovecs + i * IOVECS * size
     # The per-frame fields as 64-bit words: a ctypes field set costs a proxy
     # object, ~4 a request, 58 requests a frame on modeld's frame thread. iocb
-    # word 0 is the token and 4 the iovec count; an iovec is (address, length);
-    # an event is (token, iocb, result, result2).
+    # word 4 is the iovec count; an iovec is (address, length); an event is
+    # (data, iocb, result, result2).
     self._iocb_words = memoryview(self._iocbs).cast('B').cast('Q')
     self._iovec_words = memoryview(self._iovecs).cast('B').cast('Q')
     self._events = (_Event * depth)()
     self._event_words = memoryview(self._events).cast('B').cast('q')
     self._timeout = _Timespec()
+    self._poll = ctypes.byref(_Timespec())   # a zero timeout
 
   def _call(self, nr: int, *args) -> int:
     ret = self._syscall(ctypes.c_long(nr), *args)
@@ -131,12 +129,10 @@ class Aio:
 
   address = staticmethod(address)
 
-  def submit(self, first_token: int, requests: list[list[tuple[int, int]]]) -> int:
-    """Queue requests, in order, as tokens first_token, first_token + 1, ...
-    Raises OSError only when the kernel took none of them; a short count means
-    the next one failed, and nothing of it, or of any after it, was queued."""
-    if not requests:
-      return 0
+  def submit(self, requests: list[list[tuple[int, int]]]) -> int:
+    """Queue requests, in order. Raises OSError only when the kernel took
+    none of them; a short count means the next one failed, and nothing of it,
+    or of any after it, was queued."""
     if len(requests) > self.depth:
       raise ValueError(f'{len(requests)} requests for a context of {self.depth}')
     cb, iov = self._iocb_words, self._iovec_words
@@ -147,20 +143,21 @@ class Aio:
       for addr, n in spans:
         iov[k], iov[k + 1] = addr, n
         k += 2
-      cb[8 * i], cb[8 * i + 4] = first_token + i, len(spans)   # nbytes counts iovecs for PWRITEV
+      cb[8 * i + 4] = len(spans)   # nbytes counts iovecs for PWRITEV
     return self._call(self._submit, self._ctx, ctypes.c_long(len(requests)), self._ptrs)
 
-  def reap(self, min_nr: int = 0, timeout: float | None = 0.0) -> list[tuple[int, int]]:
-    """Finished requests, waiting up to `timeout` s (None: forever) for at
-    least `min_nr`; `min_nr` must not exceed what is queued, or this waits
-    out the whole timeout. The GIL is released while it waits (ctypes).
+  def reap(self, min_nr: int = 0, timeout: float | None = 0.0) -> list[int]:
+    """Finished requests' results, waiting up to `timeout` s (None: forever,
+    0: not at all) for at least `min_nr`; `min_nr` must not exceed what is
+    queued, or this waits out the whole timeout. The GIL is released while it
+    waits (ctypes).
 
     A signal ends io_getevents with EINTR, and nothing retries a ctypes call
     (PEP 475 is os.* only), so this does: modeld's frame thread takes a
     SIGUSR2 from msgq ~160 times a second."""
-    end = None if timeout is None else time.monotonic() + max(0.0, timeout)
+    end = time.monotonic() + timeout if timeout else None
     while True:
-      ts = None
+      ts = self._poll if timeout == 0 else None
       if end is not None:
         left = max(0.0, end - time.monotonic())
         self._timeout.sec = int(left)
@@ -173,8 +170,7 @@ class Aio:
         if end is not None and time.monotonic() >= end:
           return []
         continue
-      ev = self._event_words
-      return [(ev[4 * i], ev[4 * i + 2]) for i in range(n)]
+      return self._event_words[2:4 * n:4].tolist()
 
   def close(self) -> None:
     """Destroy the context. The kernel cancels what is still queued and waits,

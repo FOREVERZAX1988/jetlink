@@ -406,12 +406,13 @@ class JetlinkClient:
              | (P.Flag.WANT_HIDDEN if self.want_hidden else 0))
     parts = (P.pack_infer_req(frame_id, flags), warped, packed)
     sent = Sent(seq, frame_id, flags, time.monotonic())
+    timeout = self.deadline if deadline is None else deadline
     try:
       if skip_if_busy:
-        if not self.t.try_send(P.Msg.INFER_REQ, seq, parts):
+        if not self.t.try_send(P.Msg.INFER_REQ, seq, parts, timeout=timeout):
           return None   # the seq is skipped; replies are matched by seq, not counted
       else:
-        self.t.send(P.Msg.INFER_REQ, seq, parts, timeout=self.deadline if deadline is None else deadline)
+        self.t.send(P.Msg.INFER_REQ, seq, parts, timeout=timeout)
     except LinkError:
       self.dead = True
       raise

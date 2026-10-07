@@ -79,12 +79,12 @@ class Transport(ABC):
   def send(self, msg_type: int, seq: int, parts=(), flags: int = 0, timeout: float | None = None) -> None:
     """Send one message. `parts` is an iterable of buffers, sent as one message."""
 
-  def try_send(self, msg_type: int, seq: int, parts=()) -> bool:
+  def try_send(self, msg_type: int, seq: int, parts=(), timeout: float | None = None) -> bool:
     """send(), unless the link would first make the caller wait for the peer
     to take earlier messages: then False, and nothing was sent. Only a
-    transport that queues its writes can tell (FfsTransport); the rest send
-    and say True."""
-    self.send(msg_type, seq, parts)
+    transport that queues its writes can tell (FfsTransport); the rest send,
+    within `timeout` as send() does, and say True."""
+    self.send(msg_type, seq, parts, timeout=timeout)
     return True
 
   @abstractmethod
@@ -184,11 +184,6 @@ class StreamTransport(Transport):
   # likewise; 0 uses the one-byte PADDED rule. See protocol.GADGET_TX_ALIGN.
   tx_align = 0
   rx_align = 0
-  # Largest single write, for a transport whose kernel allocates one buffer
-  # per write (FfsTransport sizes its AIO requests with it). 0 means no cap
-  # (TCP).
-  write_chunk = 0
-
   def __init__(self, rx_size: int = 1 << 20):
     self.rx = RxBuffer(rx_size)
     self._desynced = False
@@ -206,7 +201,8 @@ class StreamTransport(Transport):
 
   def _write(self, bufs: list[memoryview]) -> int:
     """Write from one or more buffers. Returns bytes written (may be partial).
-    A transport that overrides _send_buffers need not provide it."""
+    A transport that overrides _send_buffers (FfsTransport) need not provide
+    it."""
     raise NotImplementedError
 
   @abstractmethod
@@ -249,7 +245,7 @@ class StreamTransport(Transport):
     """Send one framed message. A transport may guard the whole transaction."""
     while bufs:
       self._write_timeout()
-      n = self._write(take(bufs, self.write_chunk) if self.write_chunk else bufs)
+      n = self._write(bufs)
       if n <= 0:
         raise LinkError("peer went away during send")
       bufs = advance(bufs, n)
@@ -325,17 +321,6 @@ class StreamTransport(Transport):
     self.rx.take(pad)
     self.rx.consumed()
     return Message(msg_type, seq, flags, payload)
-
-
-def take(bufs: list[memoryview], n: int) -> list[memoryview]:
-  """The first `n` bytes across a list of buffers, without copying."""
-  out: list[memoryview] = []
-  for mv in bufs:
-    if n <= 0:
-      break
-    out.append(mv if mv.nbytes <= n else mv[:n])
-    n -= out[-1].nbytes
-  return out
 
 
 def advance(bufs: list[memoryview], n: int) -> list[memoryview]:

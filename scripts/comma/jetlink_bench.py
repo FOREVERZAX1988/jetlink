@@ -38,8 +38,8 @@ def main():
   parser.add_argument('--small', action='store_true')
   parser.add_argument('--engaged-until', type=float, default=0.0,
                       help='fake engaged controls for this many seconds, so the join has to wait for a window')
-  parser.add_argument('--write-chunk', type=int, choices=[8192, 16384, 32768, 65536, 131072, 262144, 524288],
-                      help='bench-only FunctionFS write quantum override, in bytes')
+  parser.add_argument('--write-chunk', type=int, choices=[8192, 16384],
+                      help='bench-only FunctionFS AIO request size; it must divide the 16 KB padding')
   parser.add_argument('--record', action='store_true', help='run loggerd, encoderd and driver monitoring; keep recordings under output')
   parser.add_argument('--resources', action='store_true', help='sample CPU, PSS and VM state once per second')
   args = parser.parse_args()

@@ -240,11 +240,14 @@ def identity(parts, entry: dict) -> tuple[str, int]:
 _hashed: dict[tuple[str, int, int], str] = {}
 
 
+def _hash_key(path: Path, st) -> tuple[str, int, int]:
+  return str(path), st.st_size, st.st_mtime_ns
+
+
 def remember_hash(path: Path, sha256: str) -> None:
   """A file whose hash is already proven, as a download's is on the way in:
   its upload need not read the gigabyte again (verified_upload)."""
-  st = path.stat()
-  _hashed[(str(path), st.st_size, st.st_mtime_ns)] = sha256
+  _hashed[_hash_key(path, path.stat())] = sha256
 
 
 def verified_upload(log, model_path: Path | None, sha256: str, nbytes: int) -> Path | None:
@@ -258,7 +261,7 @@ def verified_upload(log, model_path: Path | None, sha256: str, nbytes: int) -> P
       log.error("jetlink: %s is %d bytes, the registry says %d; not uploading it",
                 model_path.name, st.st_size, nbytes)
       return None
-    key = (str(model_path), st.st_size, st.st_mtime_ns)
+    key = _hash_key(model_path, st)
     have = _hashed.get(key)
     if have is None:
       from jetlink.spec import sha256_file
@@ -321,19 +324,18 @@ def open_link(parts, link: Link, should_stop=None):
     link.note_server(hello)
     sha256, nbytes = identity(parts, selected)
     path = parts.models.shipped_model_path()
-    if not parts.spec.engine_ready_for(sha256):
-      standin = parts.spec.ready_spec()
-      if standin is not None and standin.sha256 != sha256:
-        # the user's choice (2026-10-06): the last model the Jetson built
-        # drives until the pick is fetched and built, which a provisioning run
-        # does parked, rather than the small model. Building here would unload
-        # it, and uploading would share the link with its frames
-        parts.log.warning("jetlink: %s is not ready yet, %s drives until it is", selected.get('name', sha256[:16]),
-                          parts.models.name_for(standin.sha256))
-        sha256, nbytes, path = standin.sha256, standin.nbytes, None
-      else:
-        parts.log.warning("jetlink: %s is not built yet, building it with the small model driving",
-                          selected.get('name', sha256[:16]))
+    built = parts.spec.ready_spec()
+    if built is None:
+      parts.log.warning("jetlink: %s is not built yet, building it with the small model driving",
+                        selected.get('name', sha256[:16]))
+    elif built.sha256 != sha256:
+      # the user's choice (2026-10-06): the last model the Jetson built
+      # drives until the pick is fetched and built, which a provisioning run
+      # does parked, rather than the small model. Building here would unload
+      # it, and uploading would share the link with its frames
+      parts.log.warning("jetlink: %s is not ready yet, %s drives until it is", selected.get('name', sha256[:16]),
+                        parts.models.name_for(built.sha256))
+      sha256, nbytes, path = built.sha256, built.nbytes, None
     # normally one round trip, since the provisioning run left the engine loaded. A
     # server that restarted reloads from the plan cache, 13 to 25 s; one
     # that has never seen this model builds it, 102 to 294 s

@@ -89,7 +89,7 @@ WIRE_MESSAGES = [
   ('PROGRESS', 0, 0, '{"stage":"build","frac":0.5,"msg":"half"}'),
 ]
 
-FRAMING = ('packet_size', 'read_chunk', 'tx_align', 'rx_align', 'write_chunk', 'read_slack')
+FRAMING = ('packet_size', 'read_chunk', 'tx_align', 'rx_align', 'read_slack')
 
 
 def _framing(cls) -> dict:
