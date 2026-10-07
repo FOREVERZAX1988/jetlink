@@ -9,6 +9,7 @@
 #   sudo scripts/comma/jetlink-root.sh gadget            # the gadget for a Jetson or a Mac
 #   sudo scripts/comma/jetlink-root.sh gadget --ios      # the gadget for an iPhone
 #   sudo scripts/comma/jetlink-root.sh net               # after a bind, iOS only: address, DHCP
+#   sudo scripts/comma/jetlink-root.sh rps               # the cable's receive work onto core 6, read back
 #   sudo scripts/comma/jetlink-root.sh check             # what is there now
 #   sudo scripts/comma/jetlink-root.sh teardown
 #   sudo scripts/comma/jetlink-root.sh port hold|off     # the USB-C port held as the device, or let go
@@ -44,7 +45,7 @@
 # $NET_STATUS_FILE; it never fails the gadget.
 set -euo pipefail
 
-GADGET=/sys/kernel/config/usb_gadget/jetlink
+GADGET=${JETLINK_GADGET:-/sys/kernel/config/usb_gadget/jetlink}
 FFS_MOUNT=/dev/ffs-jetlink
 FFS_NAME=jetlink
 CONFIGFS=/sys/kernel/config
@@ -68,6 +69,17 @@ DHCP_RANGE=192.168.60.2,192.168.60.254,10m
 DNSMASQ_PID=/dev/shm/jetlink-dnsmasq.pid
 DNSMASQ_IF=/dev/shm/jetlink-dnsmasq.if
 DNSMASQ_LEASES=/dev/shm/jetlink-usb0.leases
+SYS_NET=${JETLINK_SYS_NET:-/sys/class/net}
+# The cable's receive work (RPS): core 6, the one big core openpilot runs no
+# real-time thread on. It clocks out the rest of each frame and takes the
+# phone's reply, and under load 4.9 hands it to ksoftirqd, which waits behind
+# any SCHED_FIFO thread on its core. With f0 (cores 4-7) each connection hashed
+# to one of them: 4 is card/controlsd/selfdrived, 5 the ui, 87 and 77 % busy on
+# a drive. A ui-like FIFO 53 load on the receive core took the bench's link from
+# 7.6 to 12.4 ms (p90 36 to 47 ms round trip); on core 6, 7.7 (2026-10-07).
+# The kernel keeps only the cores online at the write, so with the big cores
+# parked it reads 00: the owner steers again once a drive starts.
+RPS_CPUS=40
 
 # port: the charger's DISABLE_POWER_ROLE_SWITCH voter on the PMI8998, the one
 # role lever that holds across plugs, and the policy engine's own USB PD
@@ -132,7 +144,7 @@ PROC_SYS=${JETLINK_PROC_SYS:-/proc/sys}
 SYSCTL_PREV=${JETLINK_SYSCTL_PREV:-/dev/shm/jetlink-sysctl-prev}
 
 usage() {
-  echo "usage: $0 gadget [--ios] | net | check | teardown | port hold|off|device|reset|source|sink | udc apply|restore|start|stop | vm apply|restore | draw off|on" >&2
+  echo "usage: $0 gadget [--ios] | net | rps | check | teardown | port hold|off|device|reset|source|sink | udc apply|restore|start|stop | vm apply|restore | draw off|on" >&2
   exit 2
 }
 
@@ -171,8 +183,21 @@ dnsmasq_alive() {
 net_ifname() {
   local name
   name=$(cat "$GADGET/functions/$NET_FN/ifname" 2>/dev/null || true)
-  [[ -n "$name" && -d "/sys/class/net/$name" ]] || return 1
+  [[ -n "$name" && -d "$SYS_NET/$name" ]] || return 1
   echo "$name"
+}
+
+# The cable's receive work onto RPS_CPUS; 0 only when the mask reads it back.
+steer() {
+  local dev=$1 mask got
+  mask="$SYS_NET/$dev/queues/rx-0/rps_cpus"
+  [[ -w "$mask" ]] || { echo "jetlink: $dev has no receive steering to set" >&2; return 1; }
+  echo "$RPS_CPUS" > "$mask" 2>/dev/null || true
+  got=$(cat "$mask" 2>/dev/null || true)
+  if [[ -z "$got" ]] || (( 16#$got != 16#$RPS_CPUS )); then
+    echo "jetlink: $dev's receive steering reads ${got:-nothing}, not $RPS_CPUS (core 6 offline?)" >&2
+    return 1
+  fi
 }
 
 # The comma's end of the cable network. Idempotent, and never fatal. The owner
@@ -196,11 +221,8 @@ net_up() {
     net_status "error: $why"; echo "jetlink: $why" >&2
     return 0
   fi
-  # Steer receive processing onto the big cores: the comma's little cores add
-  # milliseconds to a 460 KB frame.
-  if [[ -w "/sys/class/net/$dev/queues/rx-0/rps_cpus" ]]; then
-    echo f0 > "/sys/class/net/$dev/queues/rx-0/rps_cpus" 2>/dev/null || true
-  fi
+  # parked big cores read back 00 here; the owner steers again onroad
+  steer "$dev" 2>/dev/null || true
   # DHCP for the phone, and only that: no router (option 3) and no DNS (option 6),
   # so the phone keeps its default route over Wi-Fi. No DNS service (--port=0).
   # dnsmasq binds the interface by name, so a netdev that came back under a new
@@ -390,6 +412,13 @@ cmd_net() {
   [[ $EUID -eq 0 ]] || fail "jetlink-root.sh net must run as root"
   [[ -d "$GADGET" ]] || { net_status "error: no gadget"; fail "no gadget at $GADGET; run gadget first"; }
   net_up
+}
+
+# Not fail(): that is the gadget's record.
+cmd_rps() {
+  local dev
+  dev=$(net_ifname) || { echo "jetlink: no cable network interface to steer" >&2; exit 1; }
+  steer "$dev" || exit 1
 }
 
 cmd_teardown() {
@@ -644,6 +673,7 @@ if [[ $# -gt 0 ]]; then shift; fi
 case "$cmd" in
   gadget) cmd_gadget "$@" ;;
   net) cmd_net ;;
+  rps) cmd_rps ;;
   check) cmd_check ;;
   teardown) cmd_teardown ;;
   port) cmd_port "$@" ;;

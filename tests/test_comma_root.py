@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 
 from jetlink.comma import root
-from tests.comma_fakes import (STOCK, TUNED, dual_role, ffs_log_off, pe_params, proc_sys, read_all, read_sys, record,
+from tests.comma_fakes import (STOCK, TUNED, cable_netdev, dual_role, ffs_log_off, pe_params, proc_sys, read_all, read_sys, record,
                                 run_script, udc_glue, usb_icl, usbpd, voter)
 
 REPO = Path(__file__).resolve().parents[1]
@@ -289,6 +289,28 @@ def test_udc_apply_keeps_the_device_and_restore_puts_it_back(tmp_path):
     for d in (udc_glue(tmp_path), pe_params(tmp_path)):
       assert (d / 'usb_compliance_mode').read_text().strip() == value
     assert ffs_log_off(tmp_path).read_text().strip() == log_off
+
+
+def test_rps_puts_the_cables_receive_work_on_core_6(tmp_path):
+  mask = cable_netdev(tmp_path)
+  assert run_script(tmp_path, 'rps').returncode == 0
+  assert mask.read_text().strip() == '40'
+
+
+def test_rps_fails_when_the_mask_does_not_read_back(tmp_path):
+  # the kernel keeps only the cores online at the write: parked, core 6 reads 00
+  mask = cable_netdev(tmp_path)
+  mask.unlink()
+  mask.symlink_to('/dev/null')
+  result = run_script(tmp_path, 'rps')
+  assert result.returncode == 1
+  assert 'reads nothing, not 40' in result.stderr
+
+
+def test_rps_without_the_cable_network_says_so(tmp_path):
+  result = run_script(tmp_path, 'rps')
+  assert result.returncode == 1
+  assert 'no cable network interface' in result.stderr
 
 
 @pytest.mark.parametrize('args', [(), ('setup',), ('--ios',), ('gadget', '--net'), ('port',), ('port', 'on'), ('udc',),

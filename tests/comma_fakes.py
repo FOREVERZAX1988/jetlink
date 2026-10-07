@@ -88,6 +88,19 @@ def ffs_log_off(tmp: Path) -> Path:
   return tmp / 'f_fs_log_disable'
 
 
+def cable_netdev(tmp: Path, name: str = 'usb1') -> Path:
+  """The NCM function's netdev, named in the gadget as f_ncm names it at bind;
+  returns its receive queue's rps_cpus, a plain file the script writes."""
+  function = tmp / 'gadget' / 'functions' / 'ncm.usb0'
+  function.mkdir(parents=True)
+  (function / 'ifname').write_text(f'{name}\n')
+  queue = tmp / 'net' / name / 'queues' / 'rx-0'
+  queue.mkdir(parents=True)
+  mask = queue / 'rps_cpus'
+  mask.write_text('00\n')
+  return mask
+
+
 def run_script(tmp: Path, *args: str, timeout: float | None = None) -> subprocess.CompletedProcess:
   """jetlink-root.sh *args, as the user running the tests, on the fakes under `tmp`."""
   env = {
@@ -101,5 +114,7 @@ def run_script(tmp: Path, *args: str, timeout: float | None = None) -> subproces
     'JETLINK_UDC_GLUE': str(udc_glue(tmp)),
     'JETLINK_PE_PARAMS': str(pe_params(tmp)),
     'JETLINK_FFS_LOG_OFF': str(ffs_log_off(tmp)),
+    'JETLINK_GADGET': str(tmp / 'gadget'),
+    'JETLINK_SYS_NET': str(tmp / 'net'),
   }
   return subprocess.run(['bash', str(root.SCRIPT), *args], env=env, capture_output=True, text=True, timeout=timeout)

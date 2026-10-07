@@ -911,6 +911,41 @@ class TestTheGadgetNetwork(IosTest):
     self.assertEqual(gadget.net_up.call_count, 2)
     self.assertTrue(o.cable.listening)
 
+  def steers(self) -> int:
+    return sum(1 for c in self.root_run.call_args_list if c.args == ('rps',))
+
+  def test_the_receive_work_is_steered_once_the_drive_starts(self):
+    # net's own steer at the bind reads 00 while the big cores are parked
+    o = self.owner()
+    o.step()
+    self.assertEqual(self.steers(), 0)
+    self.write('IsOffroad', b'0')
+    for _ in range(3):
+      o.step()
+    self.assertEqual(self.steers(), 1)
+
+  def test_a_steer_that_does_not_read_back_is_retried_after_a_backoff(self):
+    self.root_run.side_effect = lambda *args, **kw: args != ('rps',)
+    o = self.owner()
+    self.write('IsOffroad', b'0')
+    for _ in range(3):
+      o.step()
+    self.assertEqual(self.steers(), 1)
+    self.root_run.side_effect = None
+    o.next_steer = 0.0
+    o.step()
+    o.step()
+    self.assertEqual(self.steers(), 2)
+
+  def test_a_new_bind_is_steered_again(self):
+    o = self.owner()
+    self.write('IsOffroad', b'0')
+    o.step()
+    o.transport.rebind.return_value = True
+    self.assertTrue(o.bounce_gadget())
+    o.step()
+    self.assertEqual(self.steers(), 2)
+
   def test_nothing_presented_brings_nothing_up(self):
     o = self.owner(presented=False)
     o.step()

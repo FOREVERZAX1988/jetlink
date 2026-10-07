@@ -194,6 +194,8 @@ class Owner:
     self._peer: str | None = None       # the phone published as dialed in
     self.net_ready = False              # usb0 configured for this bind
     self.next_net_attempt = 0.0
+    self.steered = False                # usb0's receive work read back on core 6, since the drive started
+    self.next_steer = 0.0
     self.lender_failed = False          # said once, until it listens again
     self.next_lender = 0.0
     self.worker: subprocess.Popen | None = None
@@ -355,6 +357,22 @@ class Owner:
       return
     self.next_net_attempt = now + NET_BACKOFF
     self.net_ready = gadget.net_up()
+    self.steered, self.next_steer = False, 0.0
+
+  def ensure_steered(self, offroad: bool) -> None:
+    """The cable's receive work onto core 6 (jetlink-root.sh rps), once a
+    drive has started: net's own steer, at the bind, reads back 00 while
+    hardwared has the big cores parked, and the kernel never adds them later.
+    Retried on NET_BACKOFF until the mask reads back right."""
+    if offroad or self.steered or not self.net_ready:
+      return
+    now = time.monotonic()
+    if now < self.next_steer:
+      return
+    self.next_steer = now + NET_BACKOFF
+    self.steered = root.run('rps')
+    if self.steered:
+      gadget.log.warning("jetlink: the cable's receive work is on core 6")
 
   def settle(self) -> None:
     """Put the gadget back to bound with nothing open on it.
@@ -670,6 +688,7 @@ class Owner:
       return
     self.attached = gadget.host_attached()
     self.watch_the_port()
+    self.ensure_steered(offroad)
 
     # before the worker gate: hardwared waits 25 s for this and a build in
     # flight takes minutes, so a shutdown request cannot queue behind one
