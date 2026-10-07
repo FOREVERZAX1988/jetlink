@@ -105,7 +105,12 @@ USB_ICL_VOTER=${JETLINK_USB_ICL_VOTER:-/sys/kernel/debug/pmic-votable/USB_ICL}
 # Not vm.min_free_kbytes: a 128 MB floor takes about three times that out of
 # MemAvailable, 360 MB on a 3.6 GB comma, and openpilot's LOW MEMORY alert
 # reads MemTotal-MemAvailable against 90 %. Drives at 80 % showed 90 and
-# alerted. The caps alone are not yet re-measured against the stall.
+# alerted. vm.extra_free_kbytes (Android's) instead has kswapd keep that much
+# more free ahead of the allocators, leaving the direct-reclaim floor where it
+# is: 32 MB took a 3-minute recording bench from 49 direct-reclaim stalls (the
+# longest 148 ms) to none, for 2.7 points on that gauge, as the kernel takes
+# it out of MemAvailable about 2.5 times; 64 MB added nothing but cost 4.5
+# (2026-10-07). A drive sits near 71 %.
 # And the socket buffer caps, for the iPhone's TCP link: transport/tcp.py asks
 # for 4 MB, which turns autotuning off, and the kernel clamps it to these, 224
 # KB on AGNOS and so 448 KB of buffer. A 393 KB frame in 1448-byte segments does
@@ -113,7 +118,7 @@ USB_ICL_VOTER=${JETLINK_USB_ICL_VOTER:-/sys/kernel/debug/pmic-votable/USB_ICL}
 # round trip. With 4 MB the frame goes in one write and the send took ~4 ms
 # (a tester's comma, 2026-10-04). Only a socket that asks gets more; one set up
 # before the apply keeps the old cap until the phone reconnects.
-VM_SYSCTLS=(vm.dirty_bytes=16777216 vm.dirty_background_bytes=8388608
+VM_SYSCTLS=(vm.dirty_bytes=16777216 vm.dirty_background_bytes=8388608 vm.extra_free_kbytes=32768
             net.core.wmem_max=4194304 net.core.rmem_max=4194304)
 PROC_SYS=${JETLINK_PROC_SYS:-/proc/sys}
 # the stock values to write back, one key=value a line, recorded by the first

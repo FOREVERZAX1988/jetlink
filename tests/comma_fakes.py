@@ -23,6 +23,7 @@ STOCK = {
   'vm.dirty_background_bytes': '0',
   'vm.dirty_ratio': '20',
   'vm.dirty_background_ratio': '10',
+  'vm.extra_free_kbytes': '0',
   'net.core.wmem_max': '229376',
   'net.core.rmem_max': '229376',
 }
