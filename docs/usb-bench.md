@@ -19,6 +19,12 @@ Set `OPENPILOT=/data/openpilot` when staging the Jetlink checkout elsewhere.
 The output directory must not exist. The bench stops before free disk space
 falls below 2 GiB; recordings remain in the output directory for inspection.
 
+The bench runs the modeld manager would start for the active driving model:
+modeld_v2 for a sunnypilot (tinygrad) bundle, stock modeld for openpilot's own;
+`--modeld stock` or `--modeld tinygrad` chooses. It publishes deviceState and
+the calibration at the car's rates (2 and 4 Hz): modeld recomputes both warp
+matrices on every calibration, 0.55 ms of its frame.
+
 `--record` runs camerad, modeld, driver monitoring, encoderd, loggerd and
 logmessaged. Python logs and video files stay under the output directory.
 A run of at least 150 seconds must produce two complete recording segments,

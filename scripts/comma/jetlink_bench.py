@@ -23,6 +23,10 @@ from pathlib import Path
 
 import numpy as np
 
+# the modeld manager starts: stock for openpilot's own model, modeld_v2 for a
+# sunnypilot (tinygrad) bundle; the frame loops differ before model.run
+MODELD = {'stock': 'openpilot.selfdrive.modeld.modeld', 'tinygrad': 'openpilot.sunnypilot.modeld_v2.modeld'}
+
 
 def main():
   from openpilot.cereal import messaging
@@ -40,6 +44,8 @@ def main():
                       help='fake engaged controls for this many seconds, so the join has to wait for a window')
   parser.add_argument('--write-chunk', type=int, choices=[8192, 16384],
                       help='bench-only FunctionFS AIO request size; it must divide the 16 KB padding')
+  parser.add_argument('--modeld', choices=sorted(MODELD), help="which modeld runs; by default the one manager runs "
+                      "for the active driving model (tinygrad for a sunnypilot bundle, stock for openpilot's own)")
   parser.add_argument('--record', action='store_true', help='run loggerd, encoderd and driver monitoring; keep recordings under output')
   parser.add_argument('--resources', action='store_true', help='sample CPU, PSS and VM state once per second')
   args = parser.parse_args()
@@ -49,6 +55,11 @@ def main():
   live = Params()
   if not live.get_bool('IsOffroad'):
     raise SystemExit('bench requires the real device to remain offroad')
+  if args.modeld is None:
+    from openpilot.cereal import custom
+    from openpilot.sunnypilot.models.helpers import get_active_model_runner
+    tinygrad = get_active_model_runner(live, force_check=True) == custom.ModelManagerSP.Runner.tinygrad
+    args.modeld = 'tinygrad' if tinygrad else 'stock'
   # Cameras are a physical resource, even with isolated messaging. jetlinkd is
   # not: it owns the gadget and lends the endpoints, which is what a drive does
   # too, so leaving it up is the arrangement under test rather than a conflict.
@@ -58,13 +69,13 @@ def main():
     except (OSError, ProcessLookupError):
       continue
     if argv and (Path(os.fsdecode(argv[0])).name == 'camerad' or
-                 any(b'openpilot.selfdrive.modeld.modeld' in arg or
+                 any(b'openpilot.selfdrive.modeld.modeld' in arg or b'modeld_v2' in arg or
                      b'openpilot.selfdrive.modeld.dmonitoringmodeld' in arg for arg in argv) or
                  Path(os.fsdecode(argv[0])).name in ('encoderd', 'loggerd')):
       raise SystemExit(f'physical resource already owned by {proc.parent.name}: {argv[:3]}')
   # the slot names a ref; without the catalog it names nothing the picker can
   # find, and the join asks for a model that has not been picked
-  keys = ('CarParamsPersistent', 'CalibrationParams', 'ModelManager_ActiveBundleChestnut',
+  keys = ('CarParamsPersistent', 'CalibrationParams', 'ModelManager_ActiveBundle', 'ModelManager_ActiveBundleChestnut',
           'ModelManager_ModelsCache_Chestnut', 'JetlinkModelPointers',
           'JetlinkSpec', 'RecordFront', 'IsRhdDetected', 'ExperimentalMode')
   saved = {key: live.get(key) for key in keys}
@@ -99,7 +110,7 @@ def main():
     child_env = dict(os.environ, LOG_ROOT=str(args.output / 'recordings'))
     if args.record:
       params.put('RecordFront', True, block=True)
-    print(f'isolated prefix={prefix.prefix} output={args.output}', flush=True)
+    print(f'isolated prefix={prefix.prefix} output={args.output} modeld={args.modeld}', flush=True)
     HARDWARE.set_power_save(False)
     try:
       # -m puts the installed checkout ahead of PYTHONPATH. Always test the
@@ -109,7 +120,7 @@ def main():
       if args.write_chunk is not None:
         setup += f'from jetlink.transport.ffs import FfsTransport; FfsTransport.write_chunk={args.write_chunk}; '
       model_command = [sys.executable, '-c', setup +
-                       'import runpy; runpy.run_module("openpilot.selfdrive.modeld.modeld", run_name="__main__")']
+                       f'import runpy; runpy.run_module({MODELD[args.modeld]!r}, run_name="__main__")']
       commands = [
         ('camerad', [str(Path(BASEDIR) / 'openpilot/system/camerad/camerad')]),
         ('modeld', model_command)]
@@ -158,15 +169,17 @@ def main():
             elif service == 'carControlSP':
               message.carControlSP.mads.enabled = engaged
             pm.send(service, message)
-          if tick % 10 == 0:
+          # at the car's rates (services.py): modeld recomputes both warp
+          # matrices on every calibration, 0.55 ms of its frame
+          if tick % 50 == 0:
             device = messaging.new_message('deviceState')
             device.valid = True
             device.deviceState.deviceType = HARDWARE.get_device_type()
             pm.send('deviceState', device)
-            if calibration is not None:
-              message = calibration.as_builder()
-              message.logMonoTime = time.monotonic_ns()
-              pm.send('extrinsicsCalibration', message)
+          if tick % 25 == 0 and calibration is not None:
+            message = calibration.as_builder()
+            message.logMonoTime = time.monotonic_ns()
+            pm.send('extrinsicsCalibration', message)
           sm.update(0)
           if sm.updated['modelV2']:
             model = sm['modelV2']
