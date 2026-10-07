@@ -1,3 +1,21 @@
+Jetlink v0.8.4
+==============
+**Driving**
+* A slow big model hands back within a second.
+* modeld uses less CPU.
+* Fixed occasional link drops while driving.
+
+**iPhone & iPad**
+* The comma no longer charges the phone. It caused instability.
+* Status says **Driving on Small Model** after a lost link.
+
+**Models**
+* **ResAction Preview** added.
+* The last built model drives while a new pick downloads.
+
+**General Updates & Fixes**
+* **Update the comma:** zoompilot's `develop` branch pins Jetlink v0.8.4.
+
 Jetlink v0.8.3
 ==============
 **iPhone & iPad**
