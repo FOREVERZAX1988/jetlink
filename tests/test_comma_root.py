@@ -307,6 +307,28 @@ def test_rps_fails_when_the_mask_does_not_read_back(tmp_path):
   assert 'reads nothing, not 40' in result.stderr
 
 
+def test_teardown_takes_our_conntrack_rules_out_and_leaves_the_rest(tmp_path):
+  # the netdev's name moves between binds, so ours are found by their comment
+  calls = tmp_path / 'iptables.calls'
+  fake = tmp_path / 'iptables'
+  fake.write_text(f"""#!/bin/sh
+case "$*" in
+  *" -S"*) printf '%s\\n' '-P OUTPUT ACCEPT' \\
+    '-A PREROUTING -i usb1 -m comment --comment jetlink -j CT --notrack' \\
+    '-A OUTPUT -o usb1 -m comment --comment jetlink -j CT --notrack' \\
+    '-A OUTPUT -o wlan0 -m comment --comment someone -j CT --notrack' ;;
+  *) echo "$*" >> {calls} ;;
+esac
+""")
+  fake.chmod(0o755)
+  result = run_script(tmp_path, 'teardown', iptables=fake)
+  assert result.returncode == 0, result.stderr
+  assert calls.read_text().splitlines() == [
+    '-w -t raw -D PREROUTING -i usb1 -m comment --comment jetlink -j CT --notrack',
+    '-w -t raw -D OUTPUT -o usb1 -m comment --comment jetlink -j CT --notrack',
+  ]
+
+
 def test_rps_without_the_cable_network_says_so(tmp_path):
   result = run_script(tmp_path, 'rps')
   assert result.returncode == 1

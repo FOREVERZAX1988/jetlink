@@ -101,7 +101,7 @@ def cable_netdev(tmp: Path, name: str = 'usb1') -> Path:
   return mask
 
 
-def run_script(tmp: Path, *args: str, timeout: float | None = None) -> subprocess.CompletedProcess:
+def run_script(tmp: Path, *args: str, timeout: float | None = None, iptables: Path | None = None) -> subprocess.CompletedProcess:
   """jetlink-root.sh *args, as the user running the tests, on the fakes under `tmp`."""
   env = {
     **os.environ,
@@ -116,5 +116,7 @@ def run_script(tmp: Path, *args: str, timeout: float | None = None) -> subproces
     'JETLINK_FFS_LOG_OFF': str(ffs_log_off(tmp)),
     'JETLINK_GADGET': str(tmp / 'gadget'),
     'JETLINK_SYS_NET': str(tmp / 'net'),
+    # nothing on this machine's tables: a fake, or a name nothing answers to
+    'JETLINK_IPTABLES': str(iptables or tmp / 'no-iptables'),
   }
   return subprocess.run(['bash', str(root.SCRIPT), *args], env=env, capture_output=True, text=True, timeout=timeout)

@@ -80,6 +80,14 @@ SYS_NET=${JETLINK_SYS_NET:-/sys/class/net}
 # The kernel keeps only the cores online at the write, so with the big cores
 # parked it reads 00: the owner steers again once a drive starts.
 RPS_CPUS=40
+# No connection tracking on the cable. AGNOS builds conntrack and the legacy
+# tables in, so every packet to and from the phone was tracked and walked four
+# empty tables: NOTRACK in raw for the cable's netdev took 0.37 ms off a TCP
+# frame's send on the bench (2026-10-07), and covers the TCP that frame
+# datagrams fall back to. The rules carry a comment and are replaced as a set:
+# the netdev's name moves between binds, and usb0 is the modem's when it has one.
+IPTABLES=${JETLINK_IPTABLES:-iptables-legacy}
+TRACK_TAG=jetlink
 
 # port: the charger's DISABLE_POWER_ROLE_SWITCH voter on the PMI8998, the one
 # role lever that holds across plugs, and the policy engine's own USB PD
@@ -192,12 +200,34 @@ steer() {
   local dev=$1 mask got
   mask="$SYS_NET/$dev/queues/rx-0/rps_cpus"
   [[ -w "$mask" ]] || { echo "jetlink: $dev has no receive steering to set" >&2; return 1; }
-  echo "$RPS_CPUS" > "$mask" 2>/dev/null || true
+  put "$RPS_CPUS" "$mask" "could not steer $dev's receive work" || return 1
   got=$(cat "$mask" 2>/dev/null || true)
   if [[ -z "$got" ]] || (( 16#$got != 16#$RPS_CPUS )); then
     echo "jetlink: $dev's receive steering reads ${got:-nothing}, not $RPS_CPUS (core 6 offline?)" >&2
     return 1
   fi
+}
+
+# Every raw-table rule of ours gone, each found by its comment. Never fatal;
+# fails only without the tool, which untrack reads as nothing to do.
+retrack() {
+  local rule
+  command -v "$IPTABLES" >/dev/null 2>&1 || return 1
+  while read -r rule; do
+    [[ -n "$rule" ]] || continue
+    # word splitting is the point: one rule's arguments
+    # shellcheck disable=SC2086
+    "$IPTABLES" -w -t raw $rule 2>/dev/null || true
+  done < <("$IPTABLES" -w -t raw -S 2>/dev/null | sed -n "/--comment $TRACK_TAG /s/^-A /-D /p")
+  return 0
+}
+
+# The cable's traffic, both ways, out of conntrack: ours replaced by these two.
+untrack() {
+  local dev=$1
+  retrack || return 0
+  "$IPTABLES" -w -t raw -I PREROUTING -i "$dev" -m comment --comment "$TRACK_TAG" -j CT --notrack 2>/dev/null || true
+  "$IPTABLES" -w -t raw -I OUTPUT -o "$dev" -m comment --comment "$TRACK_TAG" -j CT --notrack 2>/dev/null || true
 }
 
 # The comma's end of the cable network. Idempotent, and never fatal. The owner
@@ -223,6 +253,7 @@ net_up() {
   fi
   # parked big cores read back 00 here; the owner steers again onroad
   steer "$dev" 2>/dev/null || true
+  untrack "$dev"
   # DHCP for the phone, and only that: no router (option 3) and no DNS (option 6),
   # so the phone keeps its default route over Wi-Fi. No DNS service (--port=0).
   # dnsmasq binds the interface by name, so a netdev that came back under a new
@@ -255,6 +286,7 @@ net_down() {
     kill "$pid" 2>/dev/null || true
   fi
   rm -f "$DNSMASQ_PID" 2>/dev/null || true
+  retrack || true
 }
 
 # The network function and its DHCP server, gone: for teardown, and for a USB
