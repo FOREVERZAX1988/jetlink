@@ -18,7 +18,7 @@ import pickle
 import sys
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest import mock
 
 import numpy as np
@@ -259,14 +259,44 @@ class FakeOutput:
     return memoryview(self.bytes)
 
 
+class FakeDest:
+  """A QCOM buffer of the capture's own, the CPU's view of it."""
+
+  def __init__(self, data):
+    self.data = data
+
+  def as_memoryview(self, force_zero_copy=False):
+    assert force_zero_copy
+    return memoryview(self.data)
+
+
 class FakeCapture:
   """A captured warp: what TinyJit calls went in (each with the output's
-  allocation as the call found it), and what replays."""
+  allocation as the call found it), and what replays. Its steps are tinygrad's
+  for QCOM: copy tfm, copy big_tfm (each from its input slot into a buffer of
+  the capture's own, `dests`), then the graph, which replays here too."""
 
   def __init__(self, out):
     self.out = out
     self.ret = SimpleNamespace(uop=SimpleNamespace(base=SimpleNamespace(buffer=out)))
     self.calls, self.replays = [], []
+    self.dests = {name: bytearray(36) for name in ('tfm', 'big_tfm')}
+
+    def copy(name):
+      return SimpleNamespace(src=(SimpleNamespace(op='COPY'),), slot=warp.WARP_INPUT_NAMES.index(name),
+                             dest=SimpleNamespace(buffer=FakeDest(self.dests[name])))
+    self.graph = SimpleNamespace(op='CUSTOM_FUNCTION', arg='graph')
+    self._linear = SimpleNamespace(src=(copy('tfm'), copy('big_tfm'), SimpleNamespace(src=(self.graph,))))
+
+  def resolve_params(self, step, inputs):
+    return step.dest, inputs[step.slot]
+
+  def get_graph_runtime(self, ast, inputs):
+    assert ast is self.graph
+    return self
+
+  def tfm(self, name):
+    return np.frombuffer(self.dests[name], dtype=np.float32).reshape(3, 3)
 
   def jit(self, **kwargs):
     self.calls.append((kwargs, self.out._buf))
@@ -284,9 +314,13 @@ class TestWarp(unittest.TestCase):
 
   def setUp(self):
     self.devices = {'QCOM': FakeQcomDevice(), 'CPU': FakeQcomDevice()}
-    modules = fakes.fake_tinygrad()
+    self.modules = modules = fakes.fake_tinygrad()
     modules['tinygrad.device'].Device = self.devices
     modules['tinygrad.tensor'].Tensor = UopTensor
+    modules['tinygrad.uop'] = ModuleType('tinygrad.uop')
+    modules['tinygrad.uop.ops'] = ModuleType('tinygrad.uop.ops')
+    modules['tinygrad.uop.ops'].Ops = SimpleNamespace(COPY='COPY', CUSTOM_FUNCTION='CUSTOM_FUNCTION')
+    modules['tinygrad.engine.realize'] = ModuleType('tinygrad.engine.realize')
     p = mock.patch.dict(sys.modules, modules)
     p.start()
     self.addCleanup(p.stop)
@@ -294,6 +328,8 @@ class TestWarp(unittest.TestCase):
 
   def make(self, device='QCOM'):
     capture = FakeCapture(FakeOutput(device))
+    realize = self.modules['tinygrad.engine.realize']
+    realize.resolve_params, realize.get_graph_runtime = capture.resolve_params, capture.get_graph_runtime
     jit = mock.Mock(side_effect=capture.jit)
     jit.captured = capture
     return warp.Warp(jit, 1234, self.log), capture
@@ -330,18 +366,37 @@ class TestWarp(unittest.TestCase):
     self.assertEqual(capture.replays, [])
     self.devices['QCOM'].synchronize.assert_called_once_with()
 
-  def test_a_frame_replays_the_capture_with_its_buffers(self):
+  def test_a_frame_runs_the_graph_alone_with_its_buffers(self):
+    # the transforms go straight into the buffers the capture copies them to
     w, capture = self.make()
     tfm, big_tfm = np.eye(3) * 2, np.eye(3) * 3
     w.start(0x1000, 0x2000, tfm, big_tfm)
     (bufs, var_vals), = capture.replays
     self.assertEqual(var_vals, {})
-    big_frame, big_tfm_buf, frame, tfm_buf = bufs   # sorted names, as the capture took them
+    big_frame, _, frame, _ = bufs   # sorted names, as the capture took them
     self.assertEqual((frame.ptr, big_frame.ptr), (0x1000, 0x2000))
     self.assertEqual((frame.shape, frame.device), ((1234,), 'QCOM'))
-    np.testing.assert_array_equal(tfm_buf.array, tfm)
-    np.testing.assert_array_equal(big_tfm_buf.array, big_tfm)
+    np.testing.assert_array_equal(capture.tfm('tfm'), tfm)
+    np.testing.assert_array_equal(capture.tfm('big_tfm'), big_tfm)
     self.assertEqual(len(capture.calls), 2, 'no call through TinyJit after the warm-up')
+
+  def test_a_capture_of_other_steps_is_refused(self):
+    capture = FakeCapture(FakeOutput('QCOM'))
+    capture._linear.src = capture._linear.src[2:]
+    realize = self.modules['tinygrad.engine.realize']
+    realize.resolve_params, realize.get_graph_runtime = capture.resolve_params, capture.get_graph_runtime
+    jit = mock.Mock(side_effect=capture.jit)
+    jit.captured = capture
+    with self.assertRaisesRegex(RuntimeError, 'two transform copies and a graph'):
+      warp.Warp(jit, 1234, self.log)
+
+  def test_a_cpu_warp_replays_the_whole_capture(self):
+    # the fork's frame-path test runs the real warp on tinygrad's CPU device
+    w, capture = self.make('CPU')
+    w.start(0x1000, 0x2000, np.eye(3) * 2, np.eye(3) * 3)
+    (bufs, _), = capture.replays
+    np.testing.assert_array_equal(bufs[3].array, np.eye(3) * 2)
+    np.testing.assert_array_equal(bufs[1].array, np.eye(3) * 3)
 
   def test_a_camera_buffer_becomes_a_tensor_once(self):
     w, capture = self.make()

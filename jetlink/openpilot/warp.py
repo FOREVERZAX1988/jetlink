@@ -151,9 +151,16 @@ class Warp:
   - A frame replays the capture with its inputs' buffers. TinyJit prepares
     and checks every call's inputs, a graph rewrite per input: 0.97 ms of a
     1.93 ms call. Every frame's inputs are alike (camera buffers as from_blob
-    tensors, two NPY transforms written in place), and the buffers are all
-    TinyJit's preparing hands the capture, so they are checked once, by the
-    warm-up's calls through TinyJit.
+    tensors, two transforms), and the buffers are all TinyJit's preparing
+    hands the capture, so they are checked once, by the warm-up's calls
+    through TinyJit.
+  - On the GPU only the capture's graph of warp kernels runs. Replayed whole,
+    the capture is three steps through tinygrad's dispatch, two of them
+    copying a transform from an NPY tensor into its QCOM buffer through a
+    synced memory view: 0.61 ms of a 1.13 ms launch on the frame loop, the
+    graph's submit the rest (2026-10-07). start() writes the transforms into
+    those buffers itself, as the copies did; the GPU is idle there, since
+    every start() is waited for before the next.
   - A camera buffer becomes a tensor once, by address.
 
   The warm-up is the first call's 1.9 s and the second's compile, paid here
@@ -186,6 +193,9 @@ class Warp:
     self.wait()
     self.output = out.as_memoryview(force_zero_copy=True, no_sync=True)
     self._replay = jit.captured
+    if self._device.startswith('QCOM'):
+      inputs = (blobs[1].uop.base, self._big_tfm_buf, blobs[0].uop.base, self._tfm_buf)
+      self._replay, self._tfm, self._big_tfm = _graph_alone(jit.captured, inputs)
 
   def start(self, frame: int, big_frame: int, tfm, big_tfm) -> None:
     """Warp the camera buffers at these addresses under their transforms.
@@ -193,7 +203,7 @@ class Warp:
     self._tfm[:, :] = tfm
     self._big_tfm[:, :] = big_tfm
     # the capture's input order, sorted names (WARP_INPUT_NAMES)
-    self._replay([self._buffer(big_frame), self._big_tfm_buf, self._buffer(frame), self._tfm_buf], {})
+    self._replay((self._buffer(big_frame), self._big_tfm_buf, self._buffer(frame), self._tfm_buf), {})
 
   def _buffer(self, address: int):
     tensor = self._frames.get(address)
@@ -203,6 +213,26 @@ class Warp:
       if len(self._frames) == FRAMES_WARN:
         self._log.warning("jetlink: %d camera buffers cached; is the camera stack rotating them?", len(self._frames))
     return tensor.uop.base
+
+
+def _graph_alone(captured, inputs):
+  """The capture's graph of warp kernels, and the QCOM buffers its two copy
+  steps write the transforms into, as (3, 3) float32 views: tfm's, then
+  big_tfm's. Raises unless the capture is those three steps."""
+  import numpy as np
+  from tinygrad.engine.realize import get_graph_runtime, resolve_params
+  from tinygrad.uop.ops import Ops
+  steps = captured._linear.src
+  copies = [s for s in steps if s.src[0].op is Ops.COPY]
+  graphs = [s.src[0] for s in steps if s.src[0].op is Ops.CUSTOM_FUNCTION and s.src[0].arg == 'graph']
+  if len(steps) != 3 or len(copies) != 2 or len(graphs) != 1:
+    raise RuntimeError(f"the warp's capture is not two transform copies and a graph: {[s.src[0].op for s in steps]}")
+  views = {}
+  for step in copies:
+    dest, src = resolve_params(step, inputs)
+    name = WARP_INPUT_NAMES[next(i for i, u in enumerate(inputs) if u is src)]
+    views[name] = np.frombuffer(dest.buffer.as_memoryview(force_zero_copy=True), dtype=np.float32).reshape(3, 3)
+  return get_graph_runtime(graphs[0], inputs), views['tfm'], views['big_tfm']
 
 
 def _make_coherent(out) -> None:
