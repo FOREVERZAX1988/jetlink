@@ -18,8 +18,7 @@ this package is jetlink's own and changes without notice.
 
 API changes only for a breaking change to the contract. A new Status field, a
 new Jetlink method, or a new interface member that jetlink reads with getattr
-and a fallback, is additive and keeps it. So is removing a method no adapter
-of the current API calls.
+and a fallback, is additive and keeps it.
 
 Imported by the resident gadget owner, so nothing heavy at module level: the
 parts a heavy process uses are imported when it first uses them.

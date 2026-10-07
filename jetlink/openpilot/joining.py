@@ -91,12 +91,6 @@ DROPS_TO_BLAME_CABLE = 2
 # a second within about 6.5 s is not. modeld forgives the frame of a handover
 # too, so the drops that decided it never reach selfdrived
 DROP_LIMIT = 0.0075
-# the first frames after every swap never hand back: the first after a join
-# carries the history reset, and a Mac's is ~100 ms of CoreML warm-up. A slow
-# host is the large model's to say (model_state's held frames, `behind`) or
-# modeld's (DROP_LIMIT); a single slow frame is the comma's own stall, a warp
-# or a send, which handing back would not fix
-SETTLING_FRAMES = 3
 # the small model drives the first frames of every modeld start, even with the
 # large model ready: its first run in a process costs ~1.3 s, which the first
 # fallback frame paid (25 dropped frames, commIssue) when the large model had
@@ -176,10 +170,8 @@ class JoiningModelState:
     self._lagging = False
     # modeld's share of dropped camera frames, for the frame about to run
     self._frame_drop_ratio = 0.0
-    # frames each model has run: the small one's since start, the large one's
-    # since it swapped in
+    # frames the small model has run since start
     self._small_frames = 0
-    self._big_frames = 0
     # whether the host had let go of the gadget when the last link was lost,
     # and whether this failure streak has already skipped a backoff for a replug
     self._host_left = False
@@ -353,14 +345,13 @@ class JoiningModelState:
                         (done - started) * 1e3, (failed - started) * 1e3,
                         (demoted - failed) * 1e3, (done - demoted) * 1e3)
       return result
-    self._big_frames += 1
     if self._loading:
       # a connected engine can still fail its first inference; only announce
       # readiness after a frame the caller can publish
       self._loading = False
       self._progress.clear()
       self._log.warning("jetlink: large model joined mid-drive, modelV2.big is now true")
-    if self._big_frames > SETTLING_FRAMES and big.behind:
+    if big.behind:
       # this frame's output is published as it came; its stall is forgiven now
       self._lagging = True
       self._handovers += 1
@@ -395,7 +386,6 @@ class JoiningModelState:
       return
     self._big = big
     self._joined_at = time.monotonic()
-    self._big_frames = 0
     self._handovers += 1
     self._active = big
 

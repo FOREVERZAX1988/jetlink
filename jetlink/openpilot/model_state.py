@@ -60,6 +60,11 @@ HOLD_WINDOW = 10.0
 # wheel, where an iPhone's every return was a soft disable within a second
 # (2026-10-04)
 PROVING_FRAMES = 20
+# the first of them never hand back, held or not: the first after a join
+# carries the history reset, and a Mac's is ~100 ms of CoreML warm-up. A
+# single slow frame later is the comma's own stall, a warp or a send, which
+# handing back would not fix; only held frames say the host is behind
+SETTLING_FRAMES = 3
 # frames between asks for the server's telemetry, which rides on the response:
 # every second one, as modeld sent a chestnut's state (20 Hz over 10 Hz)
 TELEMETRY_EVERY = 2
@@ -315,9 +320,9 @@ class JetlinkModelState:
 
   def _note_hold(self, held: bool) -> str | None:
     """Why the large model should hand back after this frame, if it should:
-    any held frame among its first PROVING_FRAMES, HOLDS_IN_A_ROW held frames
-    running, or more than HOLDS_ALLOWED in HOLD_WINDOW. None while it is
-    keeping up."""
+    any held frame among its first PROVING_FRAMES past SETTLING_FRAMES,
+    HOLDS_IN_A_ROW held frames running, or more than HOLDS_ALLOWED in
+    HOLD_WINDOW. None while it is keeping up."""
     if not held:
       self._holds_in_a_row = 0
       return None
@@ -327,6 +332,8 @@ class JetlinkModelState:
     while now - self._holds[0] > HOLD_WINDOW:
       self._holds.popleft()
     self._holds_in_a_row += 1
+    if self._frame_id <= SETTLING_FRAMES:
+      return None
     if self._frame_id <= PROVING_FRAMES:
       return f'held frame {self._frame_id} of the first {PROVING_FRAMES}'
     if self._holds_in_a_row >= HOLDS_IN_A_ROW:

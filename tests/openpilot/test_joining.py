@@ -16,7 +16,6 @@ import threading
 import time
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest import mock
 
 from jetlink.openpilot import joining
@@ -676,30 +675,16 @@ class WaitingTest(JoiningBase):
 
 
 class LagTest(JoiningBase):
-  """A large model that answers, but late, is handed back as if it were lost.
-
-  The frames' lengths are faked on the joining state's own clock, so nothing
-  here waits them out and a busy machine cannot turn jitter into a fault.
-  """
+  """A large model that answers, but late, is handed back as if it were lost:
+  when it says it held too many frames (behind), or when modeld drops too
+  many camera frames behind it."""
 
   def setUp(self):
     super().setUp()
-    self.skew = 0.0
-    real = time.monotonic
-    patcher = mock.patch.object(joining, 'time', SimpleNamespace(monotonic=lambda: real() + self.skew))
-    patcher.start()
-    self.addCleanup(patcher.stop)
     self.reset = mock.Mock()
-    self.took = 0.0
     # modeld's filter of dropped camera frames, and its frames since a handover
     self.drops = 0.0
     self.run_count = 0
-    run = self.big.run
-
-    def slow_run(*args):
-      self.skew += self.took
-      return run(*args)
-    self.big.run = slow_run
     self.small.new_constant, self.big.new_constant = 'small', 'big'
     self.s = self._make(self.small, self._connect, self._build, reset_small=self.reset)
     self.addCleanup(self._close, self.s)
@@ -709,13 +694,8 @@ class LagTest(JoiningBase):
     self.settle()
 
   def swap(self):
-    # the first frames after a swap never hand back: the first carries the
-    # history reset, and a Mac's is ~100 ms of warm-up
-    for _ in range(joining.SETTLING_FRAMES):
-      self.big.behind = 'held frame 1 of the first 20'
-      self.assertEqual(self.frame(took=0.3), {'from': 'big'})
-      self.assertTrue(self.s.chestnut)
-    self.big.behind = None
+    self.assertEqual(self.frame(), {'from': 'big'})
+    self.assertTrue(self.s.chestnut)
 
   def settle(self):
     # modeld forgives the dropped frames of the ten frames after a handover
@@ -730,14 +710,12 @@ class LagTest(JoiningBase):
     self.swap()
     self.settle()
 
-  def frame(self, took=None, skipped=0):
+  def frame(self, skipped=0):
     """One modeld frame, after `skipped` camera frames modeld dropped. Before
     run() modeld writes its share of dropped frames onto the model, from the
     filter both modelds run (10 s at 20 Hz), held at zero for the ten frames
     after a handover. Kept here: jetlink cannot import it, and the fork's seam
     test runs the real one against DROP_LIMIT."""
-    if took is not None:
-      self.took = took
     self.drops += 0.05 / (10. + 0.05) * (min(skipped, 10) - self.drops)
     if self.run_count < 10:
       self.drops = 0.
@@ -747,7 +725,6 @@ class LagTest(JoiningBase):
     result = self._run(self.s)
     if self.s.handovers != handovers:
       self.run_count = 0
-    self.took = 0.03
     return result
 
   def hand_back(self):
@@ -759,7 +736,7 @@ class LagTest(JoiningBase):
     (model_state.JetlinkModelState.behind), published as it came."""
     self.big.behind = 'held 5 frames in a row'
     try:
-      return self.frame(took=0.046)
+      return self.frame()
     finally:
       self.big.behind = None
 
@@ -794,15 +771,6 @@ class LagTest(JoiningBase):
         break
       time.sleep(0.01)
     self.assertTrue(self.big.closed)
-
-  def test_a_slow_frame_alone_is_not_a_hand_back(self):
-    # the comma's own stall, a warp or a send: the small model would not fix it
-    handovers = self.s.handovers
-    self.assertEqual(self.frame(took=0.15), {'from': 'big'})
-    self.assertEqual(self.frame(took=0.15), {'from': 'big'})
-    self.assertEqual(self.s.handovers, handovers)
-    self.assert_big_drives()
-    self.reset.assert_not_called()
 
   def test_a_model_that_says_it_held_too_many_is_handed_back_on_the_next_frame(self):
     handovers = self.s.handovers
@@ -887,13 +855,13 @@ class LagTest(JoiningBase):
         self.rejoin()
 
   def test_a_host_slower_than_the_camera_hands_back(self):
-    # 55 ms a frame, never slow enough for the timing rules: modeld falls 5 ms
+    # 55 ms a frame, never held: modeld falls 5 ms
     # further behind the camera each frame and skips one when it is a whole
     # frame behind, so every tenth: an iPhone that has warmed up
     behind, handed_back_at = 0, None
     for i in range(1, 41):
       skipped, behind = divmod(behind + 5, 50)
-      if self.frame(took=0.055, skipped=skipped) == {'from': 'small'}:
+      if self.frame(skipped=skipped) == {'from': 'small'}:
         handed_back_at = i
         break
     # the second dropped frame, about a second in

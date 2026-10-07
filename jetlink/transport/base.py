@@ -169,7 +169,7 @@ class RxBuffer:
 class StreamTransport(Transport):
   """Framing over any ordered byte stream.
 
-  TCP, USB bulk and FunctionFS are all streams, so they all need exactly this.
+  TCP and FunctionFS are both streams, so they both need exactly this.
   Subclasses supply only the two primitives that differ.
   """
 

@@ -255,6 +255,12 @@ class TestProving(ModelStateTest):
     self.assertIsNotNone(self.late_at({n}, n=n)[-1])
     self.assertEqual(self.late_at({n + 1}, n=n + 1), [None] * (n + 1))
 
+  def test_a_held_frame_while_settling_is_forgiven(self):
+    # the first after a join carries the history reset, a Mac's is CoreML warm-up
+    n = model_state.SETTLING_FRAMES
+    self.assertEqual(self.late_at(set(range(2, n + 1)), n=n), [None] * n)
+    self.assertIsNotNone(self.late_at({n + 1}, n=n + 1)[-1])
+
   def test_a_host_that_keeps_up_proves_without_a_word(self):
     self.assertEqual(self.late_at(set(), n=model_state.PROVING_FRAMES + 5),
                      [None] * (model_state.PROVING_FRAMES + 5))
@@ -324,6 +330,7 @@ class TestHold(ModelStateTest):
     to wait for. The state, and what `behind` said after each frame. Past
     the proof unless `patches` say otherwise (TestProving)."""
     patches.setdefault('PROVING_FRAMES', 0)
+    patches.setdefault('SETTLING_FRAMES', 0)
     client = FakeClient()
     client.late = {seq for seq in range(1, n + 1) if late(seq)}
     spec = spec_for(STATEFUL)
