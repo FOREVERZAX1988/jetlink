@@ -58,11 +58,6 @@ class TcpTransport(StreamTransport):
     return srv
 
   @classmethod
-  def accept(cls, srv: socket.socket) -> tuple[TcpTransport, tuple]:
-    conn, addr = srv.accept()
-    return cls(conn), addr
-
-  @classmethod
   def listen_once(cls, host: str = '0.0.0.0', port: int = DEFAULT_PORT,
                   timeout: float | None = None) -> tuple[TcpTransport, tuple]:
     """Take exactly one incoming connection and stop listening: a phone that

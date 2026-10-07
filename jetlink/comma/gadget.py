@@ -447,17 +447,5 @@ def pending_shutdown() -> str | None:
     return None
 
 
-def await_shutdown(timeout: float, poll: float = 0.25) -> bool:
-  """Wait for the owner's run to take a shutdown request. False if nobody did
-  within `timeout`, and then the request is withdrawn."""
-  deadline = time.monotonic() + timeout
-  while time.monotonic() < deadline:
-    if not SHUTDOWN_REQUEST.exists():
-      return True
-    time.sleep(poll)
-  finish_shutdown()
-  return False
-
-
 def finish_shutdown() -> None:
   _write(SHUTDOWN_REQUEST, None, "remove the shutdown request")

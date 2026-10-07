@@ -396,14 +396,3 @@ class TestDormant(unittest.TestCase):
     self.assertEqual(gadget.pending_shutdown(), 'car battery')
     gadget.finish_shutdown()
     self.assertIsNone(gadget.pending_shutdown())
-
-  def test_a_request_nobody_takes_is_withdrawn(self):
-    # hardwared waits on it, and then goes on without it
-    gadget.request_shutdown('car battery')
-    self.assertFalse(gadget.await_shutdown(0.05, poll=0.01))
-    self.assertIsNone(gadget.pending_shutdown())
-
-  def test_a_request_taken_ends_the_wait(self):
-    gadget.request_shutdown('car battery')
-    gadget.finish_shutdown()
-    self.assertTrue(gadget.await_shutdown(0.05, poll=0.01))

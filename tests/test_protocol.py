@@ -48,7 +48,7 @@ def make_pair() -> tuple[TcpTransport, TcpTransport]:
   srv = TcpTransport.listen('127.0.0.1', 0)
   port = srv.getsockname()[1]
   client = TcpTransport.connect('127.0.0.1', port)
-  server, _ = TcpTransport.accept(srv)
+  server = TcpTransport(srv.accept()[0])
   srv.close()
   return client, server
 

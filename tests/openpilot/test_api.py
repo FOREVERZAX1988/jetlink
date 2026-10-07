@@ -14,7 +14,6 @@ model and nothing else.
 """
 import inspect
 import sys
-import threading
 import time
 import unittest
 from types import SimpleNamespace
@@ -29,7 +28,8 @@ from tests.openpilot import fakes
 from tests.openpilot.fakes import OpenpilotTest
 
 # what the fork calls on a Jetlink, as it calls it. Additive only: a changed
-# or removed one is an API bump (see jetlink/openpilot/__init__.py)
+# one, or a removed one an adapter still calls, is an API bump (see
+# jetlink/openpilot/__init__.py)
 JETLINK = {
   'enabled': '()',
   'status': '()',
@@ -37,7 +37,6 @@ JETLINK = {
   'model_state': '(ref)',
   'prepare': '()',
   'attach': '(small, cam_w, cam_h)',
-  'shutdown': "(reason='', timeout=25.0)",
   'request_shutdown': "(reason='')",
   'shutdown_pending': '()',
   'should_extend_catalog': '()',
@@ -279,79 +278,37 @@ class TestTheJoinFactory(OpenpilotTest):
       s._build(mock.Mock(), spec(model_hw=(64, 128)))
 
 
-class TestShutdown(OpenpilotTest):
-  """hardwared's call at power-off: bounded, and it never raises."""
-
-  def setUp(self):
-    super().setUp()
-    self.op.set_mode('usb')
-
-  def test_disabled_costs_one_read_and_nothing_else(self):
-    self.op.set_mode('off')
-    with mock.patch.object(self.jl, '_request_shutdown') as request:
-      self.jl.shutdown('car battery')
-    request.assert_not_called()
-
-  def test_beside_a_chestnut_nothing_is_asked(self):
-    self.op.chestnut = True
-    with mock.patch.object(self.jl, '_request_shutdown') as request:
-      self.jl.shutdown('car battery')
-    request.assert_not_called()
-
-  def test_the_request_is_forwarded_with_the_bound(self):
-    with mock.patch.object(self.jl, '_request_shutdown') as request:
-      self.jl.shutdown('car battery', timeout=3.0)
-    request.assert_called_once_with('car battery', 3.0)
-
-  def test_a_request_that_hangs_cannot_hold_hardwared(self):
-    release = threading.Event()
-    self.addCleanup(release.set)
-    with mock.patch.object(self.jl, '_request_shutdown', side_effect=lambda *a: release.wait(30)):
-      t0 = time.monotonic()
-      self.jl.shutdown('car battery', timeout=0.2)
-      self.assertLess(time.monotonic() - t0, 2.0)
-    self.assertEqual(self.op.log.lines('warning'),
-                     ['jetlink: shutdown request still pending after 0 s, going on without it'])
-
-  def test_a_request_that_raises_is_logged_not_propagated(self):
-    with mock.patch.object(self.jl, '_request_shutdown', side_effect=RuntimeError('no')):
-      self.jl.shutdown('car battery', timeout=1.0)
-    self.assertEqual(self.op.log.lines('exception'), ['jetlink: shutdown request failed'])
-
-
 class ShuttingTheJetsonDown(OpenpilotTest):
   """hardwared hands the request to the owner only when a Jetson is there to take it."""
 
-  def shutdown(self, mode='usb', present=True, requested=True, taken=True):
+  def shutdown(self, mode='usb', present=True, requested=True):
     self.op.set_mode(mode)
     with mock.patch.object(status.Presence, 'present', return_value=present), \
-         mock.patch.object(gadget, 'request_shutdown', return_value=requested) as request, \
-         mock.patch.object(gadget, 'await_shutdown', return_value=taken) as wait:
-      self.jl._request_shutdown('car battery', 3.0)
-    return request, wait
+         mock.patch.object(gadget, 'request_shutdown', return_value=requested) as request:
+      asked = self.jl.request_shutdown('car battery')
+    return request, asked
 
   def test_the_link_off_asks_nothing(self):
-    request, wait = self.shutdown(mode='off')
+    request, asked = self.shutdown(mode='off')
     request.assert_not_called()
-    wait.assert_not_called()
+    self.assertFalse(asked)
 
   def test_no_jetson_there_asks_nothing(self):
-    request, wait = self.shutdown(present=False)
+    request, asked = self.shutdown(present=False)
     request.assert_not_called()
-    wait.assert_not_called()
+    self.assertFalse(asked)
 
-  def test_a_jetson_there_is_asked_and_waited_for(self):
-    request, wait = self.shutdown()
+  def test_a_jetson_there_is_asked(self):
+    request, asked = self.shutdown()
     request.assert_called_once_with('car battery')
-    wait.assert_called_once_with(3.0)
-    self.assertTrue(self.op.log.has('shutdown request handed to the jetson'))
+    self.assertTrue(asked)
 
-  def test_a_request_that_could_not_be_written_is_not_waited_on(self):
-    request, wait = self.shutdown(requested=False)
+  def test_a_request_that_could_not_be_written_is_not_pending(self):
+    request, asked = self.shutdown(requested=False)
     request.assert_called_once_with('car battery')
-    wait.assert_not_called()
+    self.assertFalse(asked)
 
-  def test_a_jetson_that_just_left_is_not_waited_for(self):
+  def test_a_jetson_that_just_left_is_not_asked(self):
     # hardwared's own readers keep this process's presence fresh; a host seen
     # moments before the power-off would have the run wait 20 s for nobody
     self.op.set_mode('usb')
@@ -361,12 +318,8 @@ class ShuttingTheJetsonDown(OpenpilotTest):
          mock.patch.object(gadget, 'dormant', return_value=False), \
          mock.patch.object(gadget, 'request_shutdown') as request:
       self.assertTrue(self.parts.presence.present(), 'the hold this test is about')
-      self.jl._request_shutdown('car battery', 3.0)
+      self.assertFalse(self.jl.request_shutdown('car battery'))
     request.assert_not_called()
-
-  def test_nobody_taking_it_is_logged(self):
-    self.shutdown(taken=False)
-    self.assertTrue(self.op.log.has('nobody took the shutdown request within 3 s'))
 
 
 class PoweringOffWithoutWaiting(OpenpilotTest):

@@ -501,7 +501,7 @@ class TestShuttingTheJetsonDown(OpenpilotTest):
     from jetlink.transport.tcp import TcpTransport
     srv = TcpTransport.listen('127.0.0.1', 0)
     ours = TcpTransport.connect('127.0.0.1', srv.getsockname()[1])
-    theirs, _ = TcpTransport.accept(srv)
+    theirs = TcpTransport(srv.accept()[0])
     srv.close()
     server = ReplayDroppingServer(theirs, last_seq=40)
     self.addCleanup(ours.close)

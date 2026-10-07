@@ -343,7 +343,6 @@ class JetlinkModelState:
     # the non-finite check runs on the server (Status.NOT_FINITE -> LinkError),
     # so modeld's big->small failover fires as it does for a chestnut
     outputs_dict = self.parser.parse_outputs(self.slice_outputs(model_output, self.output_slices))
-    self.spec.feed_back(self.packed, model_output)
     if SEND_RAW_PRED:
       outputs_dict['raw_pred'] = model_output.copy()
     self._parsed = (model_output, outputs_dict)

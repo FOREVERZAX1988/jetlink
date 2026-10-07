@@ -18,14 +18,14 @@ this package is jetlink's own and changes without notice.
 
 API changes only for a breaking change to the contract. A new Status field, a
 new Jetlink method, or a new interface member that jetlink reads with getattr
-and a fallback, is additive and keeps it.
+and a fallback, is additive and keeps it. So is removing a method no adapter
+of the current API calls.
 
 Imported by the resident gadget owner, so nothing heavy at module level: the
 parts a heavy process uses are imported when it first uses them.
 """
 from __future__ import annotations
 
-import threading
 import time
 
 from jetlink.comma import gadget
@@ -41,8 +41,8 @@ API = 2
 __all__ = ['API', 'MODES', 'STATES', 'Jetlink', 'Keys', 'ModelFace', 'Openpilot', 'OwnerConfig', 'Status', 'bind',
            'conformance']
 
-# how long a caller waits for the owner's run to shut the Jetson down. Wake
-# from suspend is ~8 s to a server
+# how long a power-off request waits for the owner's run to shut the Jetson
+# down before it is withdrawn. Wake from suspend is ~8 s to a server
 SHUTDOWN_TIMEOUT = 25.0
 
 
@@ -207,39 +207,12 @@ class Jetlink:
       self._shutdown_asked = None
     return pending
 
-  def shutdown(self, reason: str = '', timeout: float = SHUTDOWN_TIMEOUT) -> None:
-    """request_shutdown(), then wait up to `timeout` for the owner to take it,
-    on a thread abandoned at the deadline: for a caller with nothing to do
-    meanwhile. hardwared keeps publishing, and uses the two above."""
-    if not self.enabled():
-      return
-
-    def request():
-      try:
-        self._request_shutdown(reason, timeout)
-      except Exception:
-        self._log.exception("jetlink: shutdown request failed")
-
-    t = threading.Thread(target=request, name='accelerator-shutdown', daemon=True)
-    t.start()
-    t.join(timeout)
-    if t.is_alive():
-      self._log.warning("jetlink: shutdown request still pending after %.0f s, going on without it", timeout)
-
-  def _request_shutdown(self, reason: str, timeout: float) -> None:
-    if not self._ask_for_power_off(reason):
-      return
-    if gadget.await_shutdown(timeout):
-      self._log.warning("jetlink: shutdown request handed to the jetson")
-    else:
-      self._log.warning("jetlink: nobody took the shutdown request within %.0f s", timeout)
-
   def _ask_for_power_off(self, reason: str) -> bool:
     """Hand the request to the owner: nothing else can touch the link, and
     the request is a file (gadget.SHUTDOWN_REQUEST) the owner's step looks
     for before anything else. Skipped when no Jetson is known to be there
     (dormant counts as there). A run busy in a long provision is stopped for
-    it; the caller's timeout covers a Jetson that never answers."""
+    it; shutdown_pending()'s deadline covers a Jetson that never answers."""
     from jetlink.openpilot.status import Presence
     if not self.enabled():
       return False
