@@ -61,6 +61,23 @@ class TestDial(fakes.OpenpilotTest):
     self.assertEqual(open_tcp.call_args.kwargs['timeout'], wifi.DIAL_TIMEOUT)
     note.assert_called_once_with('wifi', '172.20.10.1')
 
+  def test_closing_a_wifi_link_clears_the_record_the_panels_read(self):
+    client = mock.Mock(dead=False)
+    with mock.patch.object(wifi, 'gateway', return_value='172.20.10.1'), \
+         mock.patch('jetlink.client.JetlinkClient.open_tcp', return_value=client):
+      wifi_link = link.Link(self.parts.log, wifi=True)
+      wifi_link.open()
+      self.assertEqual(gadget.link_state(), ('wifi', '172.20.10.1'))
+      wifi_link.close()
+    client.close.assert_called_once()
+    self.assertEqual(gadget.link_state(), (None, None))
+
+  def test_the_panels_say_wifi_and_the_gateway(self):
+    from jetlink.openpilot import status
+    self.assertEqual(status.link_transport('wifi'), 'Wi-Fi')
+    gadget.note_link('wifi', '172.20.10.1')
+    self.assertEqual(status.link_transport('wifi'), 'Wi-Fi (172.20.10.1)')
+
   def test_off_wifi_there_is_nothing_to_dial(self):
     with mock.patch.object(wifi, 'gateway', return_value=None), \
          mock.patch('jetlink.client.JetlinkClient.open_tcp') as open_tcp:

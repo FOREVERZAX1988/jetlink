@@ -151,6 +151,14 @@ class LoadTest(OpenpilotTest):
     self.init_device.assert_not_called()
     self.assertTrue(self.op.log.has('no usable gadget (no configfs), staying on the small model'))
 
+  def test_over_wifi_no_gadget_is_needed(self):
+    self.op.set_mode('wifi')
+    with mock.patch.object(self.jl, 'enabled', return_value=True), \
+         mock.patch.object(gadget, 'link_configured', return_value=False) as link_configured, \
+         mock.patch.object(self.parts.warps, 'built', return_value=True):
+      self.assertTrue(self.jl.prepare())
+    link_configured.assert_not_called()
+
   def test_the_link_off_says_no_before_any_setup(self):
     with mock.patch.object(self.jl, 'enabled', return_value=False), \
          mock.patch.object(gadget, 'link_configured') as link_configured:

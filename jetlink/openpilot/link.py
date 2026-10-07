@@ -168,6 +168,8 @@ class Link:
         client.close()
       except Exception:
         self.log.exception("jetlink: error closing the link")
+      if self.wifi:
+        gadget.clear_link()   # the dial's record (dial): the panels stop saying connected
 
   def _borrow(self, deadline: float | None):
     """The lease on the gadget jetlinkd owns. Raises without one: only the

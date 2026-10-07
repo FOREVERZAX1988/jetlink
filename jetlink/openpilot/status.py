@@ -140,7 +140,7 @@ def link_transport(mode: str | None = None, live: dict | None = None) -> str:
   or an iPhone dialed in over the network one. `live` is the owner's record;
   without it, `mode` stands in until the owner has said. Never raises."""
   try:
-    if live is not None and live.get('link') in ('usb', 'cable'):
+    if mode != 'wifi' and live is not None and live.get('link') in ('usb', 'cable'):
       kind, peer = live['link'], live.get('peer')
     else:
       kind, peer = gadget.link_state()
@@ -269,7 +269,9 @@ def read(parts, mode: str) -> Status:
     enabled=enabled,
     mode=mode,
     transport=link_transport(mode, live),
-    present=bool(live.get('present')) if live is not None else parts.presence.present(),
+    # over Wi-Fi the owner holds nothing: modeld's dial is the link (link.dial)
+    present=(gadget.link_state()[0] == 'wifi' if mode == 'wifi'
+             else bool(live.get('present')) if live is not None else parts.presence.present()),
     port=usb_port(),
     ready=ready,
     reason=reason,
