@@ -14,7 +14,7 @@
 #   sudo scripts/comma/jetlink-root.sh port hold|off     # the USB-C port held as the device, or let go
 #   sudo scripts/comma/jetlink-root.sh port device|reset # ask the far end to host over USB PD, or reset PD
 #   sudo scripts/comma/jetlink-root.sh port source       # ask the far end for the source role: the comma charges it
-#   sudo scripts/comma/jetlink-root.sh udc apply|restore # the USB device controller kept a device, or stock
+#   sudo scripts/comma/jetlink-root.sh udc apply|restore # the USB device controller kept a device and its debug log off, or stock
 #   sudo scripts/comma/jetlink-root.sh udc start|stop    # its device side turned on, or off
 #   sudo scripts/comma/jetlink-root.sh vm apply|restore  # the link's VM tuning, or the stock values
 #   sudo scripts/comma/jetlink-root.sh draw off|on       # no current drawn from the port (iOS), or the charger's own
@@ -85,6 +85,12 @@ DUAL_ROLE=${JETLINK_DUAL_ROLE:-/sys/class/dual_role_usb/otg_default}
 # its data lines only after USB PD, and at boot no gadget is bound for 10 s.
 UDC_GLUE=${JETLINK_UDC_GLUE:-/sys/devices/platform/soc/a600000.ssusb}
 PE_PARAMS=${JETLINK_PE_PARAMS:-/sys/module/policy_engine/parameters}
+# And Qualcomm's FunctionFS logs four lines to an IPC debug ring for every USB
+# request, inside io_submit on modeld's frame thread: about 200 a frame, into
+# a buffer only debugfs reads. Turned off on a recording bench, the frame's
+# io_submit went from 1.20 to 0.88 ms and frames from 21.14 to 20.86 ms at
+# p50 (2026-10-07). 1 turns it off; stock is 0.
+FFS_LOG_OFF=${JETLINK_FFS_LOG_OFF:-/sys/kernel/debug/ipc_logging/f_fs/log_disable}
 USB_PSY=${JETLINK_USB_PSY:-/sys/class/power_supply/usb}
 
 # draw: the charger's USB_ICL voter, the input current limit on the port. As
@@ -504,20 +510,22 @@ cmd_port() {
 # it off again once that host is gone.
 cmd_udc() {
   case "${1:-}" in
-    apply) udc_compliance Y || exit 1 ;;
-    restore) udc_compliance N || exit 1 ;;
+    apply) udc_set Y 1 || exit 1 ;;
+    restore) udc_set N 0 || exit 1 ;;
     start) put peripheral "$UDC_GLUE/mode" "could not start the USB device controller ($UDC_GLUE/mode)" || exit 1 ;;
     stop) put none "$UDC_GLUE/mode" "could not stop the USB device controller ($UDC_GLUE/mode)" || exit 1 ;;
     *) usage ;;
   esac
 }
 
-# Both knobs, each on its own, so one the kernel lacks does not keep the other.
-udc_compliance() {
+# The compliance modes to $1 and FunctionFS's debug log switch to $2, each on
+# its own, so one the kernel lacks does not keep the others.
+udc_set() {
   local failed=0 knob
   for knob in "$PE_PARAMS/usb_compliance_mode" "$UDC_GLUE/usb_compliance_mode"; do
     put "$1" "$knob" "could not set $knob" || failed=1
   done
+  put "$2" "$FFS_LOG_OFF" "could not set $FFS_LOG_OFF" || failed=1
   return $failed
 }
 
@@ -543,6 +551,13 @@ release_voter() {
     { echo "jetlink: could not release $1" >&2; return 1; }
 }
 
+# A key's value, or nothing when it cannot be read.
+sysctl_read() {
+  local value=""
+  { read -r value < "$PROC_SYS/${1//.//}"; } 2>/dev/null || true
+  echo "$value"
+}
+
 # One key per write, so a value the kernel rejects does not take the rest with it.
 sysctl_write() {
   put "$2" "$PROC_SYS/${1//.//}" "could not set $1=$2"
@@ -563,16 +578,14 @@ vm_apply() {
     if [[ $'\n'"$had" == *$'\n'"$key="* || $'\n'"$had" == *$'\n'"${key%_bytes}_ratio="* ]]; then
       continue
     fi
-    value=""
-    { read -r value < "$PROC_SYS/${key//.//}"; } 2>/dev/null || true
+    value=$(sysctl_read "$key")
     if [[ "$value" == 0 && "$key" == *_bytes ]]; then
       # Stock AGNOS runs the dirty limits in ratio mode, so the *_bytes keys
       # read 0, and the kernel silently drops a 0 written back to one.
       # Writing the ratio key is what zeroes the bytes key, so that is the
       # one to put back.
       key=${key%_bytes}_ratio
-      value=""
-      { read -r value < "$PROC_SYS/${key//.//}"; } 2>/dev/null || true
+      value=$(sysctl_read "$key")
     fi
     if [[ -n "$value" ]]; then
       rec+="$key=$value"$'\n'

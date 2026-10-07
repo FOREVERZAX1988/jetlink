@@ -21,8 +21,8 @@ from pathlib import Path
 import pytest
 
 from jetlink.comma import root
-from tests.comma_fakes import (STOCK, TUNED, dual_role, pe_params, proc_sys, read_all, read_sys, record, run_script,
-                                udc_glue, usb_icl, usbpd, voter)
+from tests.comma_fakes import (STOCK, TUNED, dual_role, ffs_log_off, pe_params, proc_sys, read_all, read_sys, record,
+                                run_script, udc_glue, usb_icl, usbpd, voter)
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -284,10 +284,11 @@ def test_a_refusal_says_why(tmp_path):
 def test_udc_apply_keeps_the_device_and_restore_puts_it_back(tmp_path):
   for d in (udc_glue(tmp_path), pe_params(tmp_path)):
     d.mkdir()
-  for command, value in (('apply', 'Y'), ('restore', 'N')):
+  for command, value, log_off in (('apply', 'Y', '1'), ('restore', 'N', '0')):
     assert run_script(tmp_path, 'udc', command).returncode == 0
     for d in (udc_glue(tmp_path), pe_params(tmp_path)):
       assert (d / 'usb_compliance_mode').read_text().strip() == value
+    assert ffs_log_off(tmp_path).read_text().strip() == log_off
 
 
 @pytest.mark.parametrize('args', [(), ('setup',), ('--ios',), ('gadget', '--net'), ('port',), ('port', 'on'), ('udc',),

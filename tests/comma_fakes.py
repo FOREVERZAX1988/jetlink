@@ -83,6 +83,11 @@ def pe_params(tmp: Path) -> Path:
   return tmp / 'policy_engine'
 
 
+def ffs_log_off(tmp: Path) -> Path:
+  """FunctionFS's IPC debug log switch, 1 for off; a plain file the script writes."""
+  return tmp / 'f_fs_log_disable'
+
+
 def run_script(tmp: Path, *args: str, timeout: float | None = None) -> subprocess.CompletedProcess:
   """jetlink-root.sh *args, as the user running the tests, on the fakes under `tmp`."""
   env = {
@@ -95,5 +100,6 @@ def run_script(tmp: Path, *args: str, timeout: float | None = None) -> subproces
     'JETLINK_DUAL_ROLE': str(dual_role(tmp)),
     'JETLINK_UDC_GLUE': str(udc_glue(tmp)),
     'JETLINK_PE_PARAMS': str(pe_params(tmp)),
+    'JETLINK_FFS_LOG_OFF': str(ffs_log_off(tmp)),
   }
   return subprocess.run(['bash', str(root.SCRIPT), *args], env=env, capture_output=True, text=True, timeout=timeout)
