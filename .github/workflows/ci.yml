@@ -11,6 +11,7 @@ on:
   push:
     branches: ["**"]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -24,7 +25,11 @@ jobs:
     name: What changed
     runs-on: ubuntu-24.04
     outputs:
-      apps: ${{ steps.filter.outputs.apps }}
+      # Upstream builds only what the push changed, measured against main.
+      # Here main and this branch can sit at the same commit, and that empty
+      # diff skips every build, the Android APK included, so this branch
+      # builds all of it. The filter below still reports what changed.
+      apps: "true"
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
@@ -199,7 +204,7 @@ jobs:
           path: |
             ~/.cache/jetlink-build
             JetlinkKit/.build
-          key: swift-linux-${{ matrix.arch }}-${{ hashFiles('scripts/build-linux.sh', 'JetlinkKit/Package.resolved') }}
+          key: swift-linux-v2-${{ matrix.arch }}-${{ hashFiles('scripts/build-linux.sh', 'JetlinkKit/Package.resolved') }}
 
       - name: Install curl
         run: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl
@@ -265,6 +270,8 @@ jobs:
     needs: [changes, swift-android]
     if: needs.changes.outputs.apps == 'true'
     runs-on: ubuntu-24.04
+    env:
+      HAVE_SIGNING: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
@@ -282,12 +289,41 @@ jobs:
           name: libjetlink-arm64-v8a
           path: swift-out
 
+      - name: Name this build's release tag
+        run: |
+          # What the updater compares with the newest GitHub release. A tag
+          # build is its tag; a cn-branch build is the cn-<sha> prerelease the
+          # cn-prerelease job publishes from this same commit. Another branch
+          # takes its name, which no release carries, so it always checks.
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            tag="$GITHUB_REF_NAME"
+          elif [ "$GITHUB_REF_NAME" = cn ]; then
+            tag="cn-${GITHUB_SHA::7}"
+          else
+            tag="$GITHUB_REF_NAME"
+          fi
+          echo "JETLINK_BUILD_TAG=$tag" >> "$GITHUB_ENV"
+          echo "build tag: $tag"
+
+      - name: Write the release key
+        if: env.HAVE_SIGNING == 'true'
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
+          echo "JETLINK_ANDROID_KEYSTORE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+
       - name: Unit tests and the release APK
         working-directory: android
+        env:
+          # read only when the step above named the keystore
+          JETLINK_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          JETLINK_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleRelease -Pjetlink.prebuiltSwift="$GITHUB_WORKSPACE/swift-out"
         # The Kotlin tests parse the snapshot fixture the Swift suites write,
         # and check the gadget's IDs, the port and the onnxruntime release
-        # against Pinned.swift.
+        # against Pinned.swift. With the release key the APK installs over an
+        # earlier one; without it, over the debug key (docs/publishing.md).
 
       - uses: actions/upload-artifact@v4
         with:
@@ -348,3 +384,52 @@ jobs:
         # macos/.swift-format is the repo style: 2 spaces, 160 columns, and no
         # UseSynthesizedInitializer, because the event structs keep their
         # memberwise initializers on purpose (01-contracts.md section 7).
+
+  cn-prerelease:
+    name: cn prerelease
+    # Every push to the cn branch publishes its Android and macOS builds as a
+    # prerelease, so a phone's updater can take the newest without waiting for
+    # a v* tag (the GitHub releases list, not the "latest" endpoint, which
+    # skips prereleases).
+    if: github.ref == 'refs/heads/cn'
+    needs: [android, app]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Download the Android app
+        uses: actions/download-artifact@v4
+        with:
+          name: Jetlink-android
+          path: dist
+
+      - name: Download the macOS app
+        uses: actions/download-artifact@v4
+        with:
+          name: Jetlink-unsigned
+          path: dist
+
+      - name: Publish the cn prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The tag is the commit, so every push gets its own prerelease and a
+          # new push never collides with an old one.
+          TAG="cn-${GITHUB_SHA::7}"
+          NOTES="Builds of the cn branch at ${GITHUB_SHA::7}, for testing. The Android APK is signed with the release key, so it installs over an earlier build; the app's updater finds it through the releases list."
+          APK="$(find dist -name '*.apk' -print -quit)"
+          APP="$(find dist -name 'Jetlink-unsigned.zip' -print -quit)"
+          [ -n "$APK" ] || { echo "error: no APK in dist" >&2; exit 1; }
+          [ -n "$APP" ] || { echo "error: no macOS zip in dist" >&2; exit 1; }
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # a rerun of the same commit: replace the files, keep the release
+            gh release upload "$TAG" --clobber "$APK" "$APP"
+          else
+            gh release create "$TAG" --prerelease --title "Jetlink cn ${GITHUB_SHA::7}" \
+              --notes "$NOTES" --target "$GITHUB_SHA" "$APK" "$APP"
+          fi
+
