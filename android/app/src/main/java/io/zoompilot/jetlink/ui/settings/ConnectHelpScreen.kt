@@ -21,6 +21,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import io.zoompilot.jetlink.R
+import io.zoompilot.jetlink.l10n
 import io.zoompilot.jetlink.ui.JetlinkTheme
 import io.zoompilot.jetlink.ui.components.ActionRow
 import io.zoompilot.jetlink.ui.components.CardSpacing
@@ -32,32 +34,32 @@ import io.zoompilot.jetlink.ui.components.RowDivider
 private const val GUIDE = "https://github.com/zoompilot/jetlink/blob/main/docs/android-app.md#connect-the-comma"
 
 private val steps = listOf(
-    "On the comma, set Jetlink to USB, offroad.",
-    "Plug a USB 3 hub with power pass-through into the phone.",
-    "Connect the hub to the comma with a USB-A to USB-C cable.",
-    "Plug a charger into the hub.",
-    "When Android asks, tap OK and tick Always open.",
-    "Wait for Connected.",
+    R.string.connect_step_1,
+    R.string.connect_step_2,
+    R.string.connect_step_3,
+    R.string.connect_step_4,
+    R.string.connect_step_5,
+    R.string.connect_step_6,
 )
 
 private val wifiSteps = listOf(
-    "In Jetlink's settings, turn on Wi-Fi Link.",
-    "Turn on the phone's hotspot on 5 GHz.",
-    "On the comma, join the hotspot in Network settings.",
-    "On the comma, set Jetlink to Wi-Fi, offroad.",
-    "Wait for Connected.",
+    R.string.wifi_step_1,
+    R.string.wifi_step_2,
+    R.string.wifi_step_3,
+    R.string.wifi_step_4,
+    R.string.wifi_step_5,
 )
 
 private val notes = listOf(
-    "OnePlus, OPPO and realme: turn on OTG connection in Settings.",
-    "Jetlink keeps running with the screen off while its notification shows.",
+    R.string.connect_note_1,
+    R.string.connect_note_2,
 )
 
 /** How the comma and the phone meet, in a few steps for a reader standing at the car. */
 @Composable
 fun ConnectHelpScreen(back: () -> Unit) {
     val uriHandler = LocalUriHandler.current
-    PushedScreen("Connecting the Comma", back) { padding ->
+    PushedScreen(l10n(R.string.help_connect), back) { padding ->
         Column(
             Modifier
                 .padding(padding)
@@ -71,33 +73,33 @@ fun ConnectHelpScreen(back: () -> Unit) {
         ) {
             FormSection(
                 null,
-                footer = { FormFooter("Or use a USB-C OTG adapter instead of the hub. The phone then does not charge.") },
+                footer = { FormFooter(l10n(R.string.connect_footer_otg)) },
             ) {
                 steps.forEachIndexed { index, step ->
                     if (index > 0) RowDivider()
-                    Step(index + 1, step)
+                    Step(index + 1, l10n(step))
                 }
             }
             FormSection(
-                "Over Wi-Fi",
-                footer = { FormFooter("No cable, but slower than USB. 2.4 GHz is too slow for a big model.") },
+                l10n(R.string.section_over_wifi),
+                footer = { FormFooter(l10n(R.string.connect_footer_wifi)) },
             ) {
                 wifiSteps.forEachIndexed { index, step ->
                     if (index > 0) RowDivider()
-                    Step(index + 1, step)
+                    Step(index + 1, l10n(step))
                 }
             }
             FormSection(
-                "Good to Know",
-                footer = { FormFooter("Every hop must be USB 3: the phone, the hub and the cable. USB 2 leaves less time for each frame.") },
+                l10n(R.string.section_good_to_know),
+                footer = { FormFooter(l10n(R.string.connect_footer_usb3)) },
             ) {
                 notes.forEachIndexed { index, note ->
                     if (index > 0) RowDivider()
-                    Text(note, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp))
+                    Text(l10n(note), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp))
                 }
             }
             FormSection(null) {
-                ActionRow("Learn More", { runCatching { uriHandler.openUri(GUIDE) } }, color = MaterialTheme.colorScheme.primary, chevron = false)
+                ActionRow(l10n(R.string.action_learn_more), { runCatching { uriHandler.openUri(GUIDE) } }, color = MaterialTheme.colorScheme.primary, chevron = false)
             }
         }
     }

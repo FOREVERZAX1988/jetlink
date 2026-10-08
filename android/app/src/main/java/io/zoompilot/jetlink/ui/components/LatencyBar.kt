@@ -29,6 +29,8 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.zoompilot.jetlink.server.Stages
+import io.zoompilot.jetlink.R
+import io.zoompilot.jetlink.l10n
 import io.zoompilot.jetlink.server.Stats
 import io.zoompilot.jetlink.ui.BUDGET_MS
 import io.zoompilot.jetlink.ui.Format
@@ -45,8 +47,9 @@ fun LatencyBreakdown(stats: Stats, modifier: Modifier = Modifier, compact: Boole
     val colors = JetlinkTheme.colors
     val stages = stats.stagesMs ?: Stages()
     val mean = stats.servedMs?.mean ?: 0.0
-    val description = "Average ${Format.ms(mean)}: " +
-        FrameStage.entries.joinToString(", ") { "${it.title} ${Format.ms(it.value(stages))}" }
+    // Resolved outside joinToString: its lambda is not a composable scope.
+    val stageParts = FrameStage.entries.map { "${l10n(it.titleRes)} ${Format.ms(it.value(stages))}" }
+    val description = l10n(R.string.latency_average_description, Format.ms(mean), stageParts.joinToString(", "))
     Column(
         modifier.clearAndSetSemantics { contentDescription = description },
         verticalArrangement = Arrangement.spacedBy(if (compact) 12.dp else 16.dp),

@@ -1,5 +1,8 @@
 package io.zoompilot.jetlink.ui
 
+import androidx.compose.runtime.Composable
+import io.zoompilot.jetlink.R
+import io.zoompilot.jetlink.l10n
 import io.zoompilot.jetlink.server.BenchReport
 import io.zoompilot.jetlink.server.HistorySample
 import io.zoompilot.jetlink.server.Stages
@@ -28,11 +31,11 @@ const val HISTORY_SECONDS = 120
 /** What a state means, as a colour: the same five everywhere. */
 enum class Tone { Neutral, Info, Good, Warning, Bad }
 
-/** The room left in the frame budget at P99. */
-enum class Room(val title: String, val tone: Tone) {
-    Plenty("Good", Tone.Good),
-    Tight("Tight", Tone.Warning),
-    Over("Over Budget", Tone.Bad);
+/** The room left in the frame budget at P99. `title` is English for the tests; UI shows `titleRes`, as [io.zoompilot.jetlink.ui.status.StatusState.Summary] does. */
+enum class Room(val title: String, val titleRes: Int, val tone: Tone) {
+    Plenty("Good", R.string.room_plenty, Tone.Good),
+    Tight("Tight", R.string.room_tight, Tone.Warning),
+    Over("Over Budget", R.string.room_over, Tone.Bad);
 
     companion object {
         fun of(headroomMs: Double): Room = when {
@@ -45,14 +48,14 @@ enum class Room(val title: String, val tone: Tone) {
     }
 }
 
-/** Fast enough, tight, or too slow: the benchmark's answer, as on the iPhone and the Mac. */
-enum class Verdict(val title: String, val detail: String, val tone: Tone) {
-    Good("Fast Enough", "Room for the cable in the 50 ms budget.", Tone.Good),
-    Tight("Tight", "Little room left for the cable.", Tone.Warning),
-    Slow("Too Slow", "Misses 20 frames a second.", Tone.Bad),
+/** Fast enough, tight, or too slow: the benchmark's answer, as on the iPhone and the Mac. Titles and details keep their English for the tests; the UI resolves the `*Res` pair. */
+enum class Verdict(val title: String, val detail: String, val titleRes: Int, val detailRes: Int, val tone: Tone) {
+    Good("Fast Enough", "Room for the cable in the 50 ms budget.", R.string.verdict_good_title, R.string.verdict_good_detail, Tone.Good),
+    Tight("Tight", "Little room left for the cable.", R.string.verdict_tight_title, R.string.verdict_tight_detail, Tone.Warning),
+    Slow("Too Slow", "Misses 20 frames a second.", R.string.verdict_slow_title, R.string.verdict_slow_detail, Tone.Bad),
 
     /** Stopped before a frame was measured. */
-    None("No Frames", "Stopped before a frame was measured.", Tone.Neutral);
+    None("No Frames", "Stopped before a frame was measured.", R.string.verdict_none_title, R.string.verdict_none_detail, Tone.Neutral);
 
     companion object {
         fun of(p99: Double, over50: Int = 0): Verdict = when {
@@ -70,12 +73,12 @@ enum class Verdict(val title: String, val detail: String, val tone: Tone) {
     }
 }
 
-/** How warm the phone is, from the word the server and DeviceMonitor use. */
-enum class Thermal(val title: String, val tone: Tone) {
-    Nominal("Normal", Tone.Neutral),
-    Fair("Warm", Tone.Neutral),
-    Serious("Hot", Tone.Warning),
-    Critical("Critical", Tone.Bad);
+/** How warm the phone is, from the word the server and DeviceMonitor use. `title` is English for the tests; UI shows `titleRes`. */
+enum class Thermal(val title: String, val titleRes: Int, val tone: Tone) {
+    Nominal("Normal", R.string.thermal_normal, Tone.Neutral),
+    Fair("Warm", R.string.thermal_warm, Tone.Neutral),
+    Serious("Hot", R.string.thermal_hot, Tone.Warning),
+    Critical("Critical", R.string.thermal_critical, Tone.Bad);
 
     /** Said only when the heat costs frames. */
     val note: String? get() = if (this == Serious || this == Critical) "Throttling" else null
@@ -91,12 +94,12 @@ enum class Thermal(val title: String, val tone: Tone) {
     }
 }
 
-/** The four places a frame's time goes, in the order they happen. */
-enum class FrameStage(val title: String) {
-    Input("Input"),
-    Model("Model"),
-    Other("Other"),
-    Send("Send");
+/** The four places a frame's time goes, in the order they happen. `title` is English for the tests; UI shows `titleRes`. */
+enum class FrameStage(val title: String, val titleRes: Int) {
+    Input("Input", R.string.stage_input),
+    Model("Model", R.string.stage_model),
+    Other("Other", R.string.stage_other),
+    Send("Send", R.string.stage_send);
 
     fun value(stages: Stages): Double = when (this) {
         Input -> stages.queue
@@ -138,17 +141,16 @@ object Format {
         if (frac > 0) percent(frac) else msg?.let { elapsed.find(it)?.value }
 
     /** "Loading · 42%", "Loading · 12 s", or just "Loading". */
+    @Composable
     fun progressText(stage: String?, frac: Double, msg: String?): String =
         listOfNotNull(stageName(stage), progressAmount(frac, msg)).joinToString(" · ")
 
-    /** "18.4 ms headroom", or "3.2 ms over" once P99 is past the budget. */
-    fun headroomText(p99: Double): String {
-        val room = BUDGET_MS - p99
-        return if (room >= 0) "${ms(room)} headroom" else "${ms(-room)} over"
-    }
+    /** [progressText] with the stage's English name, for a caller that cannot compose (the notification, tests). */
+    fun progressTextPlain(stage: String?, frac: Double, msg: String?): String =
+        listOfNotNull(stageNamePlain(stage), progressAmount(frac, msg)).joinToString(" · ")
 
-    /** The server's stage names in plain English. */
-    fun stageName(stage: String?): String = when (stage) {
+    /** The server's stage name in plain English; the UI shows [stageName]. */
+    fun stageNamePlain(stage: String?): String = when (stage) {
         "upload" -> "Receiving"
         "patch" -> "Preparing"
         "parse" -> "Reading"
@@ -161,6 +163,30 @@ object Format {
         "failed" -> "Failed"
         else -> "Working"
     }
+
+    /** "18.4 ms headroom", or "3.2 ms over" once P99 is past the budget. */
+    fun headroomText(p99: Double): String {
+        val room = BUDGET_MS - p99
+        return if (room >= 0) "${ms(room)} headroom" else "${ms(-room)} over"
+    }
+
+    /** The server's stage names, in the app's language. */
+    @Composable
+    fun stageName(stage: String?): String = l10n(
+        when (stage) {
+            "upload" -> R.string.stage_upload
+            "patch" -> R.string.stage_patch
+            "parse" -> R.string.stage_parse
+            "convert" -> R.string.stage_convert
+            "compile" -> R.string.stage_compile
+            "build" -> R.string.stage_build
+            "save" -> R.string.stage_save
+            "load" -> R.string.stage_load
+            "warm" -> R.string.stage_warm
+            "failed" -> R.string.stage_failed
+            else -> R.string.stage_working
+        },
+    )
 
     /**
      * "766 MB", "1.8 GB": decimal units, one decimal at most, and none on a
@@ -217,7 +243,9 @@ object Format {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return trimmed
         val capital = trimmed.replaceFirstChar { it.uppercaseChar() }
-        return if (capital.last() in ".!?") capital else "$capital."
+        if (capital.last() in ".!?。！？") return capital
+        // A Chinese line takes the full-width stop; uppercaseChar is a no-op there.
+        return if (capital.first().code > 0x2E80) "$capital。" else "$capital."
     }
 
     /** Errors red, warnings orange: the Python server pads the level, so a warning is " WARNING" and an error " ERROR ". */
