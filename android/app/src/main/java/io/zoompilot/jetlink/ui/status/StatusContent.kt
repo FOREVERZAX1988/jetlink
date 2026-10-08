@@ -39,7 +39,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
+import io.zoompilot.jetlink.R
 import io.zoompilot.jetlink.device.DeviceHealth
+import io.zoompilot.jetlink.l10n
 import io.zoompilot.jetlink.server.Stats
 import io.zoompilot.jetlink.ui.Format
 import io.zoompilot.jetlink.ui.JetlinkTheme
@@ -116,7 +118,7 @@ private fun Banners(state: StatusState) {
 
 @Composable
 private fun AllowUsbBanner() {
-    WarningBanner("Allow USB: tap OK when Android asks, and tick Always open.")
+    WarningBanner(l10n(R.string.banner_allow_usb))
 }
 
 @Composable
@@ -129,10 +131,10 @@ private fun Cards(state: StatusState, layout: CardLayout, actions: StatusActions
             if (serving != null) {
                 LatencyCard(serving)
                 if (state.history.size > 1) HistoryCard(state)
-                SectionHeader("Link", detail = state.medium?.title)
+                SectionHeader(l10n(R.string.section_link), detail = state.medium?.title)
                 LinkTiles(serving)
             }
-            SectionHeader("Phone")
+            SectionHeader(l10n(R.string.section_phone))
             DeviceTiles(state)
         }
         CardLayout.Sideways -> Row(horizontalArrangement = spacing) {
@@ -156,10 +158,10 @@ private fun Cards(state: StatusState, layout: CardLayout, actions: StatusActions
             Column(Modifier.weight(1f), verticalArrangement = spacing) {
                 if (serving != null) {
                     if (state.history.size > 1) HistoryCard(state)
-                    SectionHeader("Link", detail = state.medium?.title)
+                    SectionHeader(l10n(R.string.section_link), detail = state.medium?.title)
                     LinkTiles(serving)
                 }
-                SectionHeader("Phone")
+                SectionHeader(l10n(R.string.section_phone))
                 DeviceTiles(state)
             }
         }
@@ -168,14 +170,14 @@ private fun Cards(state: StatusState, layout: CardLayout, actions: StatusActions
 
 @Composable
 private fun LatencyCard(recent: Stats, compact: Boolean = false) {
-    SummaryCard("Latency", Icons.Filled.Timer, JetlinkTheme.colors.info, trailing = "Last 10 s") {
+    SummaryCard(l10n(R.string.section_latency), Icons.Filled.Timer, JetlinkTheme.colors.info, trailing = l10n(R.string.last_10s)) {
         LatencyBreakdown(recent, compact = compact)
     }
 }
 
 @Composable
 private fun HistoryCard(state: StatusState) {
-    SummaryCard("History", Icons.AutoMirrored.Filled.ShowChart, JetlinkTheme.colors.purple, trailing = "2 min") {
+    SummaryCard(l10n(R.string.section_history), Icons.AutoMirrored.Filled.ShowChart, JetlinkTheme.colors.purple, trailing = l10n(R.string.last_2min)) {
         HistoryChart(state.history)
     }
 }
@@ -185,14 +187,14 @@ private fun LinkTiles(recent: Stats) {
     val colors = JetlinkTheme.colors
     MetricRow {
         MetricTile(
-            "Frame Rate", Icons.Filled.Speed, colors.teal, Format.decimal(recent.fps), tile(),
+            l10n(R.string.tile_frame_rate), Icons.Filled.Speed, colors.teal, Format.decimal(recent.fps), tile(),
             unit = "fps",
-            note = if (recent.fps < 18) "Below 20" else null,
+            note = if (recent.fps < 18) l10n(R.string.note_below_20) else null,
             noteColor = colors.warning,
         )
         MetricTile(
-            "Slow Frames", Icons.Filled.SlowMotionVideo, colors.pink, Format.integer(recent.slow), tile(),
-            note = if (recent.slow > 0) "Over 60 ms" else null,
+            l10n(R.string.tile_slow_frames), Icons.Filled.SlowMotionVideo, colors.pink, Format.integer(recent.slow), tile(),
+            note = if (recent.slow > 0) l10n(R.string.note_over_60ms) else null,
             noteColor = colors.bad,
         )
     }
@@ -206,28 +208,28 @@ private fun DeviceTiles(state: StatusState) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         MetricRow {
             MetricTile(
-                "Temperature", thermal.icon, colors.orange, thermal.title, tile(),
-                note = DeviceText.temperatureNote(health),
+                l10n(R.string.tile_temperature), thermal.icon, colors.orange, StatusL10n.thermalTitle(thermal), tile(),
+                note = StatusL10n.temperatureNote(health),
                 noteColor = colors.tone(thermal.tone),
             )
             MetricTile(
-                "Battery", batteryIcon(health), colors.good, DeviceText.batteryValue(health), tile(),
+                l10n(R.string.tile_battery), batteryIcon(health), colors.good, DeviceText.batteryValue(health), tile(),
                 unit = if (health.batteryLevel == null) null else "%",
-                note = DeviceText.powerText(health),
+                note = StatusL10n.powerText(health),
                 noteColor = colors.tone(DeviceText.batteryTone(health)),
             )
         }
         MetricRow {
             MetricTile(
-                "Memory", Icons.Filled.Memory, colors.indigo, DeviceText.memoryValue(health), tile(),
+                l10n(R.string.tile_memory), Icons.Filled.Memory, colors.indigo, DeviceText.memoryValue(health), tile(),
                 unit = if (health.availableMemory > 0) "GB" else null,
-                note = DeviceText.memoryNote(health),
+                note = StatusL10n.memoryNote(health),
                 noteColor = colors.tone(DeviceText.memoryTone(health)),
             )
             MetricTile(
-                "Link", if (state.medium == null) Icons.Filled.LinkOff else Icons.Filled.Cable, colors.teal,
-                state.medium?.title ?: "None", tile(),
-                note = state.linkNote,
+                l10n(R.string.tile_link), if (state.medium == null) Icons.Filled.LinkOff else Icons.Filled.Cable, colors.teal,
+                state.medium?.title ?: l10n(R.string.link_none), tile(),
+                note = StatusL10n.linkNote(state),
                 noteColor = if (state.medium?.slow == true) colors.warning else null,
             )
         }
