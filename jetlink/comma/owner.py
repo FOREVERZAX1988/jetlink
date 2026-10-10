@@ -637,6 +637,11 @@ class Owner:
           root.run('draw', 'on', timeout=root.PORT_TIMEOUT)
         self.tuned = None
       self.port.off()
+      # the gadget is let go here, so a host the last USB step had attached is
+      # gone with it. Left set, wanted() reads that stale attachment as one that
+      # just turned up and Wi-Fi mode starts a provisioning run every step
+      self.attached = False
+      self.configured = False
       if mode == 'wifi':
         self.wifi_step()
       return

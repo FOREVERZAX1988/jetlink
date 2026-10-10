@@ -686,6 +686,19 @@ class TestWifi(OwnerTest):
     o.step()
     o.spawn_worker.assert_called_once()
 
+  def test_a_host_left_over_from_the_usb_link_does_not_start_a_run(self):
+    # the setting moved off USB while a host had us configured. That attachment
+    # is stale - the gadget is let go - so the Wi-Fi step must not read it as a
+    # jetson that just turned up and start a provisioning run every step.
+    o = self.owner()
+    o.attached = True
+    o.had_host = False
+    o.step()                                # the join, which starts a run by itself
+    o.spawn_worker.assert_called_once_with('joined a hotspot')
+    o.spawn_worker.reset_mock()
+    o.step()                                # steady state: nothing left to notice
+    o.spawn_worker.assert_not_called()
+
   def test_no_hotspot_no_run(self):
     self.gateway.return_value = None
     o = self.owner()
