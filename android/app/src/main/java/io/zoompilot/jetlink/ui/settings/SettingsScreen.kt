@@ -234,7 +234,7 @@ fun SettingsContent(values: SettingsValues, info: SettingsInfo, actions: Setting
 @Composable
 private fun Connection(values: SettingsValues, info: SettingsInfo, actions: SettingsActions) {
     val link = info.snapshot.medium?.title
-        ?: if (info.usb is UsbState.Attached) l10n(R.string.link_connecting) else l10n(R.string.link_not_connected)
+        ?: if (info.usb is UsbState.Attached || values.wifiLink) l10n(R.string.link_connecting) else l10n(R.string.link_not_connected)
     val footer: (@Composable () -> Unit)? = if (values.wifiLink) {
         { FormFooter(l10n(R.string.settings_connection_footer_wifi)) }
     } else {

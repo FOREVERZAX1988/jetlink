@@ -23,6 +23,13 @@ data class StatusState(
     val snapshot: Snapshot = Snapshot(),
     val health: DeviceHealth = DeviceHealth(),
     val usb: UsbState = UsbState.None,
+
+    /**
+     * The Wi-Fi link setting: the phone listens on its port for a comma that
+     * joined its hotspot and dials it. A link is then on its way with no
+     * cable, so the Status tab waits the way it does for one that is.
+     */
+    val wifiLink: Boolean = false,
 ) {
     val engine: Engine get() = snapshot.engine
     val connected: Boolean get() = snapshot.connected
@@ -145,13 +152,17 @@ data class StatusState(
     /** Under the Link tile: why there is none, or that a slow one costs frames. UI shows [StatusL10n.linkNote]; this stays English for the notification. */
     val linkNote: String
         get() {
-            val medium = medium ?: return if (usb is UsbState.Attached) "Connecting" else "Waiting"
+            val medium = medium ?: return if (usb is UsbState.Attached || wifiLink) "Connecting" else "Waiting"
             return if (medium.slow) medium.fix ?: "Slow, use USB 3" else "Connected"
         }
 
     /** Under Waiting for Comma, as a resource the UI translates. */
     val waitingDescriptionRes: Int
-        get() = if (usb is UsbState.Attached) R.string.waiting_desc_usb else R.string.waiting_desc_plug
+        get() = when {
+            usb is UsbState.Attached -> R.string.waiting_desc_usb
+            wifiLink -> R.string.waiting_desc_wifi
+            else -> R.string.waiting_desc_plug
+        }
 }
 
 /** The Phone tiles' words, from DeviceHealth. The word-valued ones live in [StatusL10n]; these stay plain. */

@@ -34,7 +34,7 @@ object StatusL10n {
     fun linkNote(state: StatusState): String {
         val medium = state.medium
         return when {
-            medium == null -> l10n(if (state.usb is io.zoompilot.jetlink.usb.UsbState.Attached) R.string.note_connecting else R.string.note_waiting)
+            medium == null -> l10n(if (state.usb is io.zoompilot.jetlink.usb.UsbState.Attached || state.wifiLink) R.string.note_connecting else R.string.note_waiting)
             medium.slow -> l10n(R.string.note_slow_link)
             else -> l10n(R.string.summary_connected)
         }
