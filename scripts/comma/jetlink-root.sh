@@ -586,7 +586,13 @@ udc_set() {
   for knob in "$PE_PARAMS/usb_compliance_mode" "$UDC_GLUE/usb_compliance_mode"; do
     put "$1" "$knob" "could not set $knob" || failed=1
   done
-  put "$2" "$FFS_LOG_OFF" "could not set $FFS_LOG_OFF" || failed=1
+  # The ring is a kernel build option: this AGNOS kernel has ipc_logging
+  # without f_fs, so there is no file to switch. Absent is the ring already
+  # off, which is what $2 asks for, and not a failed apply: counting it
+  # turned every udc apply and restore on this device into an error line.
+  if [[ -e $FFS_LOG_OFF ]]; then
+    put "$2" "$FFS_LOG_OFF" "could not set $FFS_LOG_OFF" || failed=1
+  fi
   return $failed
 }
 

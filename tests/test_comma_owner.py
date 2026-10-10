@@ -207,6 +207,48 @@ class TestParked(OwnerTest):
     o.step()
     self.assertTrue(o.dormant)
 
+  def host_on_the_port(self) -> None:
+    """What the USB-C port controller reads with a cable, a live host behind
+    it, in it: 1 or 2, and never what kind of host."""
+    gadget.CC_ORIENTATION.write_text('1')
+
+  def test_a_host_on_the_port_is_presented_to_even_a_stranger(self):
+    # a far end that has never said hello is one this owner has never met: a
+    # phone, or a Jetson on its first setup. The hello it would have to say
+    # travels over the gadget, so something on the port is the only thing that
+    # can move this on, and holding the bind back for a hello deadlocks it
+    o = self.owner(presented=False)
+    self.host_on_the_port()
+    o.step()
+    o.open_link.assert_called_once()
+
+  def test_a_host_on_the_port_earns_the_build_when_there_is_no_gadget(self):
+    gadget.link_configured.return_value = False
+    o = self.owner(presented=False)
+    self.host_on_the_port()
+    o.step()
+    self.assertTrue(any(c.args[0] == 'gadget' for c in self.root_run.call_args_list),
+                    "the owner never asked jetlink-root.sh for a gadget")
+
+  def test_a_host_on_the_port_wakes_a_dormant_owner(self):
+    # it was let go for a far end that sleeps; whatever it is that just
+    # plugged in, the marker has to go or nothing shows the link as present
+    o = self.owner(presented=False)
+    o.dormant = True
+    gadget.set_dormant(True)
+    self.host_on_the_port()
+    o.step()
+    self.assertFalse(o.dormant)
+    self.assertFalse(gadget.dormant())
+    o.open_link.assert_called_once()
+
+  def test_an_empty_port_leaves_the_sleeping_far_end_alone(self):
+    # nothing on the cable, and the far end sleeps: the bind is what would
+    # hold a Jetson awake all night
+    o = self.owner(presented=False)
+    o.step()
+    o.open_link.assert_not_called()
+
   def test_a_run_that_wakes_the_jetson_gets_the_hold_before_letting_go(self):
     # bench 2026-09-10: a run finished 2.5 s after the wake, the owner released
     # the gadget 1 ms later, and the jetson was still enumerating. The hold used

@@ -745,9 +745,16 @@ class Owner:
     # dials over: for iOS the gadget stays up whatever the record says
     sleeps = self.far_end_sleeps() and not self.built_ios
     if self.transport is None:
-      # nothing to do and nothing presented: only worth a bind if the far end
-      # stays awake for it
-      if not sleeps and self.ensure_gadget(ios):
+      # nothing to do and nothing presented: worth a bind if the far end stays
+      # awake for it, and always while a host is on the port. A far end that
+      # has never said hello - a phone, a Jetson on its first setup - is one
+      # this owner has never met, and with no gadget bound there is nothing for
+      # it to enumerate: holding the bind back until a hello arrives deadlocks
+      # the link, because the hello travels over the gadget the hello would
+      # earn. Sleeping is for a far end we know sleeps, which is one that said
+      # so; the marker and the hold are unchanged for that one.
+      if (not sleeps or gadget.port_has_host()) and self.ensure_gadget(ios):
+        self.wake()
         self.open_link()
       return
     if sleeps and time.monotonic() - self.idle_since >= DORMANT_HOLD:
