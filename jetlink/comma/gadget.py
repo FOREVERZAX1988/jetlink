@@ -95,17 +95,17 @@ def link_state() -> tuple[str | None, str | None]:
   cable the phone's address while a link is up. (None, None) before the
   owner has said."""
   record = read(LINK).split()
-  if record[:1] not in (['cable'], ['usb']):
+  if record[:1] not in (['cable'], ['usb'], ['wifi']):
     return None, None
-  return record[0], (record[1] if record[0] == 'cable' and len(record) > 1 else None)
+  return record[0], (record[1] if record[0] in ('cable', 'wifi') and len(record) > 1 else None)
 
 
-def link_kind(mode: str | None = None) -> str:
+def link_kind(mode: str | None = None, record: tuple | None = None) -> str:
   """link_state's kind, or a stand-in: `mode`, the Jetlink setting as
   the caller read it, stands in only until the owner has said: it may have
   moved and be waiting for the car to park. Without either, 'usb'."""
-  kind, _ = link_state()
-  return kind or ('cable' if mode == 'ios' else 'usb')
+  kind, _ = link_state() if record is None else record
+  return kind or {'ios': 'cable', 'wifi': 'wifi'}.get(mode, 'usb')
 
 
 def link_peer() -> str | None:
@@ -115,7 +115,8 @@ def link_peer() -> str | None:
 
 def note_link(kind: str, peer: str | None = None) -> None:
   """The owner's record of the gadget it built, 'usb' or 'cable', and on the
-  cable the phone that dialed in; see link_kind and link_peer."""
+  cable the phone that dialed in; or modeld's 'wifi' and the gateway it
+  dialed. See link_kind and link_peer."""
   _write(LINK, f"{kind} {peer}".strip() if peer else kind, "record the link")
 
 
@@ -324,12 +325,11 @@ def wait_for_host(timeout: float, bounce=None, should_stop=None, report=None, mo
   pin still showing a host, and only another connect moves it: that is what
   `bounce` is for, and it is spent once.
 
-  On the cable there is nothing to wait for: the connect that made the client
-  already reached the phone. The UDC is configured too, but by the phone, and
-  it is the dial that proved it is there. `mode` is the link setting, for
-  before the owner has recorded which gadget it built (link_kind).
+  On the cable or Wi-Fi there is nothing to wait for: the connect that made
+  the client already reached the phone or the device. `mode` is the link
+  setting, for before the owner or the dial has recorded the link (link_kind).
   """
-  if link_kind(mode) == 'cable':
+  if link_kind(mode) in ('cable', 'wifi'):
     return True
   deadline = time.monotonic() + timeout
   stalled_since = None

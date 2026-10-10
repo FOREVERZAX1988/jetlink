@@ -51,7 +51,7 @@ import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from jetlink.comma import gadget, lending, port, root
+from jetlink.comma import gadget, lending, port, root, wifi
 
 POLL = 0.5
 # how long the gadget is held after the last thing that wanted it. The server
@@ -183,6 +183,7 @@ class Owner:
     # coming up
     self.idle_since = time.monotonic()
     self.next_attempt = 0.0
+    self.gateway: str | None = None     # the Wi-Fi gateway seen last step, in Wi-Fi mode
     self.next_gadget_attempt = 0.0
     self.failed_ios: bool | None = None  # the mode whose last build failed, until one works
     self.next_worker = 0.0
@@ -621,11 +622,13 @@ class Owner:
   def step(self) -> None:
     # each read is a file; take them once and pass them down
     mode = self.mode = self.settings.mode()
-    if mode == 'off':
+    # over Wi-Fi modeld dials the hotspot itself: no gadget, the port left alone
+    if mode in ('off', 'wifi'):
       if self.transport is not None:
-        gadget.log.warning("jetlink: disabled, releasing the link")
+        gadget.log.warning("jetlink: %s, releasing the link", 'on Wi-Fi' if mode == 'wifi' else 'disabled')
         self.close_link()
-      self.stop_worker()
+      if mode == 'off':
+        self.stop_worker()
       self.wake()
       if self.tuned:
         root.run('vm', 'restore')
@@ -634,6 +637,8 @@ class Owner:
           root.run('draw', 'on', timeout=root.PORT_TIMEOUT)
         self.tuned = None
       self.port.off()
+      if mode == 'wifi':
+        self.wifi_step()
       return
     self.link_step(mode == 'ios')
     if self.tuned != mode:
@@ -701,21 +706,10 @@ class Owner:
     # flight takes minutes, so a shutdown request cannot queue behind one
     reason = gadget.pending_shutdown()
     if reason is not None and not self.lender.lent:
-      if self.worker_running():
-        if self.shutting_down:
-          # the run asking the jetson. Stopping it here restarted it every
-          # step, half a second, less than it takes to start: on the bench
-          # nothing ever asked, and hardwared gave up after its 25 s
-          return
-        self.stop_worker()
-      if time.monotonic() < self.next_shutdown_run:
-        return
-      self.wake()
-      if self.open_link():
-        self.next_shutdown_run = time.monotonic() + SHUTDOWN_RETRY
-        self.spawn_worker(f'the jetson has to be shut down: {reason}')
-        self.shutting_down = True
-      return
+      def present() -> bool:
+        self.wake()
+        return self.open_link()
+      return self.shutdown_run(reason, present)
 
     if not offroad:
       # the drive has started and the endpoints belong to modeld. A run of ours
@@ -760,6 +754,49 @@ class Owner:
       self.go_dormant()
     else:
       self.settle()
+
+  def shutdown_run(self, reason: str, ready=None) -> None:
+    """Start the run that asks the far end to power off, once `ready` (the
+    link presented) says it can, and again after SHUTDOWN_RETRY while the
+    request stands. Any other run stops for it first."""
+    if self.worker_running():
+      if self.shutting_down:
+        # the run asking. Stopping it here restarted it every step, half a
+        # second, less than it takes to start: on the bench nothing ever
+        # asked, and hardwared gave up after its 25 s
+        return
+      self.stop_worker()
+    if time.monotonic() < self.next_shutdown_run or (ready is not None and not ready()):
+      return
+    self.next_shutdown_run = time.monotonic() + SHUTDOWN_RETRY
+    self.spawn_worker(f'the jetson has to be shut down: {reason}')
+    self.shutting_down = True
+
+  def wifi_step(self) -> None:
+    """A step over Wi-Fi, after step() let the gadget and the port go.
+
+    Offroad, a provisioning run dials the hotspot itself when there may be
+    work: what wanted() notices, or the comma joining a hotspot. Onroad the
+    run stops and modeld dials. A shutdown request goes to the device over a
+    run too; with no hotspot there is nothing to shut down."""
+    gateway = wifi.gateway()
+    joined = gateway is not None and gateway != self.gateway
+    self.gateway = gateway
+    reason = gadget.pending_shutdown()
+    if reason is not None:
+      if gateway is None:
+        gadget.finish_shutdown()
+      else:
+        self.shutdown_run(reason)
+      return
+    if not self.settings.offroad():
+      self.stop_worker()
+      return
+    if gateway is None or self.worker_running():
+      return
+    why = self.wanted() or ('joined a hotspot' if joined else None)
+    if why is not None:
+      self.spawn_worker(why)
 
   def watch_the_port(self) -> None:
     """The edges of the USB link, and for iOS the phone's dial.

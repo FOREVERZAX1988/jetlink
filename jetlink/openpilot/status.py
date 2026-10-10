@@ -135,22 +135,26 @@ class Presence:
     return now - self._last_configured < gadget.PRESENCE_HOLD
 
 
-def link_transport(mode: str | None = None, live: dict | None = None) -> str:
+def link_transport(mode: str | None = None, live: dict | None = None, record: tuple | None = None) -> str:
   """What carries the link, for the panels: a host on the vendor interface,
-  or an iPhone dialed in over the network one. `live` is the owner's record;
-  without it, `mode` stands in until the owner has said. Never raises."""
+  an iPhone dialed in over the network one, or the hotspot modeld dialed.
+  `live` is the owner's record; without it, `mode` stands in until the owner
+  has said. `record` is gadget.link_state(), when the caller read it. Never
+  raises."""
   try:
-    if live is not None and live.get('link') in ('usb', 'cable'):
+    record = gadget.link_state() if record is None else record
+    if mode != 'wifi' and live is not None and live.get('link') in ('usb', 'cable'):
       kind, peer = live['link'], live.get('peer')
     else:
-      kind, peer = gadget.link_state()
-      kind = kind or gadget.link_kind(mode)
+      kind, peer = gadget.link_kind(mode, record), record[1]
     if kind == 'cable' and not peer:
       # the owner records the phone while it holds the dial; a borrower that
       # took the dial itself noted it in the link record
-      peer = gadget.link_state()[1]
+      peer = record[1]
     if kind == 'cable':
       return f"iOS over USB ({peer})" if peer else "iOS over USB"
+    if kind == 'wifi':
+      return f"Wi-Fi ({peer})" if peer else "Wi-Fi"
   except Exception:
     pass
   return "USB"
@@ -256,6 +260,7 @@ class Status(NamedTuple):
 def read(parts, mode: str) -> Status:
   """Everything at once, over the link setting the caller read: each file once."""
   record, live = owner_record()
+  link = gadget.link_state()
   enabled = parts.enabled(mode)
   reason = unavailable(parts, record) if enabled else None
   # the last model the server built; the pick's, or the stand-in that drives
@@ -266,8 +271,10 @@ def read(parts, mode: str) -> Status:
   return Status(
     enabled=enabled,
     mode=mode,
-    transport=link_transport(mode, live),
-    present=bool(live.get('present')) if live is not None else parts.presence.present(),
+    transport=link_transport(mode, live, link),
+    # over Wi-Fi the owner holds nothing: modeld's dial is the link (link.dial)
+    present=(link[0] == 'wifi' if mode == 'wifi'
+             else bool(live.get('present')) if live is not None else parts.presence.present()),
     port=usb_port(),
     ready=ready,
     reason=reason,

@@ -132,6 +132,7 @@ struct FrameLayout {
   /// INFER_REQ's payload: the request head, the warped frame, the packed floats.
   let requestBytes: Int
   let warpedBytes: Int
+  let packedBytes: Int
   /// The driving output, float32 on the wire whatever the engine gives, and
   /// where the engine writes it, which stays put from load to close.
   let outputCount: Int
@@ -143,6 +144,7 @@ struct FrameLayout {
   init(spec: ModelSpec, engine: any Engine) {
     requestBytes = spec.inferReqBytes
     warpedBytes = spec.warpedBytes
+    packedBytes = spec.packedBytes
     outputCount = spec.outputCount
     outputType = engine.outputs[ModelConstants.drivingOutput]?.type
     output = engine.output(ModelConstants.drivingOutput)

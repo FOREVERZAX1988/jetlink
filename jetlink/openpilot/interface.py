@@ -32,7 +32,7 @@ from typing import Any, Protocol
 
 # the Jetlink setting: off; a Jetson, a Linux PC or a Mac on USB; an
 # iPhone on the cable. The INT param holds the index
-MODES = ('off', 'usb', 'ios')
+MODES = ('off', 'usb', 'ios', 'wifi')
 # what a joining model reports as big_model_state, by the names of the fork's
 # modelDataV2SP.acceleratorState enum
 STATES = ('none', 'joining', 'retrying', 'ready', 'running', 'unavailable')

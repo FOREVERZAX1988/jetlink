@@ -30,7 +30,7 @@
       let commands: FakeCommands
       let host: PageHost
 
-      init(jetson: Bool = true, desktopOff: Bool = false, graphical: Bool = true, commands: FakeCommands = FakeCommands()) {
+      init(jetson: Bool = true, desktopOff: Bool = false, graphical: Bool = true, wifi: Bool = false, commands: FakeCommands = FakeCommands()) {
         tree.write(
           "/etc/jetlink/install.conf",
           """
@@ -42,6 +42,7 @@
           JETLINK_POWEROFF_WITH_COMMA=1
           JETLINK_DESKTOP_OFF=\(desktopOff ? 1 : 0)
           JETLINK_AUTOSTART=1
+          JETLINK_WIFI_LINK=\(wifi ? 1 : 0)
 
           """)
         tree.write(
@@ -92,20 +93,33 @@
       #expect(info["installed"] as? Bool == true && info["jetson"] as? Bool == true)
       #expect(info["platform"] as? String == "NVIDIA Jetson Orin Nano" && info["version"] as? String == "v0.7.2")
       #expect(info["page_port"] as? Int == 5600 && info["sleep_after"] as? Int == 120 && info["deep_sleep"] as? Bool == true)
-      #expect(info["settings"] as? [String: String] == ["power": "always", "comma_poweroff": "yes", "desktop": "on"])
+      #expect(info["settings"] as? [String: String] == ["power": "always", "comma_poweroff": "yes", "wifi": "off", "desktop": "on"])
       #expect((info["task"] as? [String: Any])?["state"] as? String == "none")
       // no lock file: this server does not sleep
       #expect((info["awake"] as? [String: Any])?["available"] as? Bool == false)
       #expect(installed.commands.ran.all.isEmpty)
     }
 
+    @Test("With the Wi-Fi link on, the page gets the hotspot to join the comma to; off, nothing")
+    func hotspot() {
+      let off = Installed()
+      #expect(off.host.info()["hotspot"] is NSNull)
+      let on = Installed(wifi: true)
+      #expect(on.host.info()["settings"] as? [String: String] == ["power": "always", "comma_poweroff": "yes", "wifi": "on", "desktop": "on"])
+      // the installer writes the file once the hotspot is up
+      #expect(on.host.info()["hotspot"] is NSNull)
+      on.tree.write("/etc/jetlink/hotspot.env", "JETLINK_HOTSPOT_SSID=jetlink-orin\nJETLINK_HOTSPOT_PASSWORD=0123456789abcdef\n")
+      #expect(on.host.info()["hotspot"] as? [String: String] == ["ssid": "jetlink-orin", "password": "0123456789abcdef"])
+      #expect(on.commands.ran.all.isEmpty)
+    }
+
     @Test("No desktop answer for a Jetson that never had one; a PC has its start-up instead")
     func applies() {
       // each kept while asked: its tree goes with it
       let bare = Installed(graphical: false)
-      #expect(bare.host.info()["settings"] as? [String: String] == ["power": "always", "comma_poweroff": "yes"])
+      #expect(bare.host.info()["settings"] as? [String: String] == ["power": "always", "comma_poweroff": "yes", "wifi": "off"])
       let turnedOff = Installed(desktopOff: true, graphical: false)
-      #expect(turnedOff.host.info()["settings"] as? [String: String] == ["power": "always", "comma_poweroff": "yes", "desktop": "off"])
+      #expect(turnedOff.host.info()["settings"] as? [String: String] == ["power": "always", "comma_poweroff": "yes", "wifi": "off", "desktop": "off"])
       let computer = Installed(jetson: false)
       #expect(computer.host.info()["settings"] as? [String: String] == ["autostart": "yes"])
       let empty = Tree()

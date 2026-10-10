@@ -49,6 +49,11 @@ class ProvisioningRun:
     self.stop = False
     self.fetch_failed = False
 
+  @property
+  def wifi(self) -> bool:
+    """The setting is Wi-Fi: the run dials the hotspot."""
+    return self.parts.settings.mode() == 'wifi'
+
   # -- lifecycle ------------------------------------------------------------
 
   def request_stop(self, *_) -> None:
@@ -67,9 +72,17 @@ class ProvisioningRun:
 
   def open_link(self) -> bool:
     """Borrow the link from the owner that started this run. Without a loan
-    there is nothing to open: only the owner ever holds ep0."""
+    there is nothing to open: only the owner ever holds ep0. Over Wi-Fi,
+    dial the hotspot instead."""
     if self.client is not None:
       return True
+    if self.wifi:
+      try:
+        self.client = link.dial(self.log, deadline=5.0, name='provision')
+        return True
+      except link.WifiWaiting as e:
+        self.log.warning("jetlink: %s, leaving it for the next run", e)
+        return False
     try:
       self.loan = lending.borrow('provision')
       if self.loan is None:

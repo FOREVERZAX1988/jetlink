@@ -19,7 +19,30 @@ struct HTTP: Sendable {
   /// The body at `url`, at most `limit` bytes. Past the limit the request is
   /// cancelled rather than read: a pointer is 134 bytes, and a host that
   /// resolved the LFS filter for us would otherwise send the whole model.
+  ///
+  /// The mirrors the app configured are tried first, in their order, then the
+  /// original host: a network failure moves to the next candidate, while a
+  /// 404 is an answer about the resource and ends the attempt at once, so
+  /// `notFound` reaches the caller with the original URL's meaning intact.
   func get(_ url: String, timeout: TimeInterval, limit: Int? = nil) async throws(RegistryError) -> Data {
+    let candidates = Mirrors.candidates(for: url)
+    guard candidates.count > 1 else {
+      return try await getOnce(url, timeout: timeout, limit: limit)
+    }
+    var last: RegistryError = .network("no mirror answered for \(url)")
+    for candidate in candidates {
+      do {
+        return try await getOnce(candidate, timeout: timeout, limit: limit)
+      } catch let error as RegistryError {
+        if error.kind == .notFound { throw error }
+        last = error
+      }
+    }
+    throw last
+  }
+
+  /// One host's answer, without the mirrors.
+  private func getOnce(_ url: String, timeout: TimeInterval, limit: Int? = nil) async throws(RegistryError) -> Data {
     guard let target = URL(string: url), target.scheme != nil else {
       throw .network("could not fetch \(url): unknown url type")
     }

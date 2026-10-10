@@ -125,8 +125,9 @@ class Jetlink:
       return False
     # the link is not worth waiting for: attach() joins in the background.
     # enabled() is the setting alone, so this is where a device that cannot
-    # present a gadget at all says so; nothing here would ever reach a Jetson
-    if not gadget.link_configured():
+    # present a gadget at all says so; nothing here would ever reach a Jetson.
+    # Over Wi-Fi there is no gadget: modeld dials the hotspot
+    if self._mode() != 'wifi' and not gadget.link_configured():
       self._log.warning("jetlink: no usable gadget (%s), staying on the small model",
                         gadget.gadget_error() or 'not set up')
       return False

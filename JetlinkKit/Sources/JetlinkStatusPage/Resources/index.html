@@ -414,6 +414,15 @@ dialog[open] { position: fixed; inset: auto 0 0 0; }
           <div class="desc">Jetlink does not need it. Off leaves more memory for the models and starts faster, from the next restart.</div>
         </div>
       </section>
+      <section class="card" id="set-wifi" hidden>
+        <h2>Wi-Fi</h2>
+        <div class="setting">
+          <div class="line"><b>Serve a comma over Wi-Fi</b>
+            <label class="switch"><input type="checkbox" id="sw-wifi" aria-label="Serve a comma over Wi-Fi"><i></i></label></div>
+          <div class="desc">The Jetson makes a 5 GHz hotspot. Join the comma to it and set Jetlink to Wi-Fi. The Jetson leaves any Wi-Fi network it is on; reach this page over the hotspot after. USB stays faster.</div>
+          <div class="desc" id="wifi-hotspot" hidden></div>
+        </div>
+      </section>
       <section class="card" id="set-autostart" hidden>
         <h2>Start-up</h2>
         <div class="setting">
@@ -488,7 +497,7 @@ const BUDGET = 50, TIGHT = 10, WINDOW = 120, STALE = 5, DRIVING = 10;
 const STAGES = [['queue', 'Input'], ['gpu', 'Model'], ['other', 'Other'], ['send', 'Send']];
 const STEP = { upload: 'Receiving the model', patch: 'Preparing the model', parse: 'Reading the model',
   build: 'Building the engine', save: 'Saving', load: 'Loading' };
-const MEDIUM = { usb3: 'USB 3', usb2: 'USB 2', usb1: 'USB 1', usb: 'USB', tcp: 'TCP' };
+const MEDIUM = { usb3: 'USB 3', usb2: 'USB 2', usb1: 'USB 1', usb: 'USB', tcp: 'TCP', wifi: 'Wi-Fi', wifi24: 'Wi-Fi 2.4 GHz' };
 const RUNTIME = { trt: 'TensorRT', ort: 'onnxruntime' };
 const ZONE = { cpu: 'CPU', gpu: 'GPU', tj: 'Tj', soc0: 'SoC 0', soc1: 'SoC 1', soc2: 'SoC 2' };
 const RAIL = { VDD_IN: 'Board', VDD_CPU_GPU_CV: 'CPU+GPU+CV', VDD_SOC: 'SoC' };
@@ -1024,6 +1033,7 @@ function drawSettings() {
   const applies = new Set(ready ? Object.keys(sys.settings) : []);
   $('set-power').hidden = !applies.has('power');
   $('set-desktop').hidden = !applies.has('desktop');
+  $('set-wifi').hidden = !applies.has('wifi');
   $('set-autostart').hidden = !applies.has('autostart');
   $('set-signin').hidden = !controls();
   const port = (sys && sys.page_port) || location.port || 80;
@@ -1042,6 +1052,13 @@ function drawSettings() {
     $('sw-poweroff').disabled = lock;
   }
   if (applies.has('desktop')) { $('sw-desktop').checked = draftValue('desktop') === 'on'; $('sw-desktop').disabled = lock; }
+  if (applies.has('wifi')) {
+    $('sw-wifi').checked = draftValue('wifi') === 'on';
+    $('sw-wifi').disabled = lock;
+    const spot = sys.hotspot;
+    $('wifi-hotspot').hidden = !spot;
+    if (spot) $('wifi-hotspot').innerHTML = `Hotspot <b>${esc(spot.ssid)}</b>, password <b>${esc(spot.password)}</b>`;
+  }
   if (applies.has('autostart')) { $('sw-autostart').checked = draftValue('autostart') === 'yes'; $('sw-autostart').disabled = lock; }
   const n = changes().length;
   $('applybar').hidden = !n || S.tab !== 'settings';
@@ -1067,6 +1084,7 @@ function applySettings() {
     power: draftValue('power') === 'always' ? 'Always on' : 'Switched power',
     comma_poweroff: draftValue('comma_poweroff') === 'yes' ? 'The comma can turn it off' : 'The comma does not turn it off',
     desktop: draftValue('desktop') === 'on' ? 'Start the desktop' : 'No desktop',
+    wifi: draftValue('wifi') === 'on' ? 'Serve a comma over Wi-Fi' : 'No Wi-Fi hotspot',
     autostart: draftValue('autostart') === 'yes' ? 'Start with the computer' : 'Start it yourself',
   })[k]);
   sheet({
@@ -1396,6 +1414,7 @@ document.addEventListener('click', e => {
 });
 $('sw-poweroff').addEventListener('change', e => setDraft('comma_poweroff', e.target.checked ? 'yes' : 'no'));
 $('sw-desktop').addEventListener('change', e => setDraft('desktop', e.target.checked ? 'on' : 'off'));
+$('sw-wifi').addEventListener('change', e => setDraft('wifi', e.target.checked ? 'on' : 'off'));
 $('sw-autostart').addEventListener('change', e => setDraft('autostart', e.target.checked ? 'yes' : 'no'));
 $('hw-more').addEventListener('toggle', () => mark('hw'));
 

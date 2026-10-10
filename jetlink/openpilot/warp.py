@@ -77,6 +77,13 @@ def init_device(log) -> None:
     log.exception("jetlink: could not start tinygrad's compile pool before modeld goes realtime")
 
 
+def lossless_path(path: Path) -> Path:
+  """Where the lossless build (with_errors) of the warp at `path` goes: beside
+  it, so the fork's build and load() agree from one name."""
+  path = Path(path)
+  return path.with_name(path.name.replace('_tinygrad.pkl', '_lossless_tinygrad.pkl'))
+
+
 class Warps:
   """The warps the build made for this device, as the fork's adapter says where."""
 
@@ -92,16 +99,17 @@ class Warps:
     disagree, load() raises and the drive is small-model."""
     return tuple(self.op.camera())
 
-  def path(self, cam_w: int, cam_h: int, model_w: int, model_h: int) -> Path:
-    return Path(self.op.warp_path(cam_w, cam_h, model_w, model_h))
+  def path(self, cam_w: int, cam_h: int, model_w: int, model_h: int, lossless: bool = False) -> Path:
+    path = Path(self.op.warp_path(cam_w, cam_h, model_w, model_h))
+    return lossless_path(path) if lossless else path
 
-  def is_cached(self, cam_w: int, cam_h: int, model_w: int, model_h: int) -> bool:
-    """Is there a warp for this geometry?
+  def is_cached(self, cam_w: int, cam_h: int, model_w: int, model_h: int, lossless: bool = False) -> bool:
+    """Is there a warp for this geometry (its lossless build, with lossless)?
 
     Presence only. Staleness is the build's job: the target depends on tinygrad
     and the capture sources. A pickle from an incompatible tinygrad raises in load().
     """
-    return self.path(cam_w, cam_h, model_w, model_h).is_file()
+    return self.path(cam_w, cam_h, model_w, model_h, lossless).is_file()
 
   def built(self) -> bool:
     """Is there a warp for this device's camera? Without one the link cannot
@@ -110,16 +118,16 @@ class Warps:
       self._built = self.is_cached(*self.geometry())
     return self._built
 
-  def load(self, cam_w: int, cam_h: int, model_w: int, model_h: int):
-    """The built warp JIT. Raises if it is not there or is stale.
+  def load(self, cam_w: int, cam_h: int, model_w: int, model_h: int, lossless: bool = False):
+    """The built warp JIT, or its lossless build. Raises if it is not there or is stale.
 
     modeld's big-model load is wrapped in the fallback to the small model, and a
     warp that cannot be trusted must not reach the car.
     """
-    if not self.is_cached(cam_w, cam_h, model_w, model_h):
-      raise RuntimeError(f"no warp built for {cam_w}x{cam_h} -> {model_w}x{model_h}; "
+    if not self.is_cached(cam_w, cam_h, model_w, model_h, lossless):
+      raise RuntimeError(f"no {'lossless ' if lossless else ''}warp built for {cam_w}x{cam_h} -> {model_w}x{model_h}; "
                          "the fork's build makes it (python -m jetlink.openpilot.warp)")
-    with open(self.path(cam_w, cam_h, model_w, model_h), 'rb') as f:
+    with open(self.path(cam_w, cam_h, model_w, model_h, lossless), 'rb') as f:
       warp = pickle.load(f)
 
     # a JIT pickled before TinyJit captured loads fine and computes nothing; one
@@ -137,7 +145,9 @@ class Warps:
 class Warp:
   """The built warp as modeld's frame loop runs it: start() with two camera
   buffers and their transforms, wait(), and `output` holds the warped frame,
-  where the link sends it from.
+  where the link sends it from. A lossless build (with_errors) also fills
+  `errors` with the frame's MED errors (jetlink.lossless), in the same graph;
+  `errors` is None otherwise.
 
   Three things the JIT alone does not do, each measured on the comma
   (2026-10-06):
@@ -175,10 +185,14 @@ class Warp:
     self._frame_size = frame_size
     self._log = log
     self._tensor = Tensor
-    out = jit.captured.ret.uop.base.buffer
+    # the warped frame, and with a lossless build (with_errors) its MED errors
+    ret = jit.captured.ret
+    outs = [t.uop.base.buffer for t in (ret if isinstance(ret, (tuple, list)) else (ret,))]
+    out = outs[0]
     self._device = out.device
     if self._device.startswith('QCOM'):
-      _make_coherent(out)
+      for buf in outs:
+        _make_coherent(buf)
     # written in place by start(): the NPY tensors are views of them
     self._tfm = np.zeros((3, 3), dtype=np.float32)
     self._big_tfm = np.zeros((3, 3), dtype=np.float32)
@@ -192,6 +206,7 @@ class Warp:
     self.wait = Device[self._device].synchronize
     self.wait()
     self.output = out.as_memoryview(force_zero_copy=True, no_sync=True)
+    self.errors = outs[1].as_memoryview(force_zero_copy=True, no_sync=True) if len(outs) > 1 else None
     self._replay = jit.captured
     if self._device.startswith('QCOM'):
       inputs = (blobs[1].uop.base, self._big_tfm_buf, blobs[0].uop.base, self._tfm_buf)
@@ -285,6 +300,17 @@ def prepare_reset(model):
 
 # -- the build ------------------------------------------------------------------
 
+def with_errors(graph):
+  """The warp graph, returning the warped frame and its MED errors
+  (jetlink.lossless), so one GPU graph makes both: as a second graph the
+  errors cost 0.5 ms on the mici, mostly its dispatch."""
+  def warp(tfm, big_tfm, frame, big_frame):
+    from jetlink.openpilot.lossless import med
+    warped = graph(tfm=tfm, big_tfm=big_tfm, frame=frame, big_frame=big_frame)
+    return warped, med(warped)
+  return warp
+
+
 def compile_warp(graph, frame_size: int, out: Path) -> Path:
   """JIT the warp graph and pickle it to `out`. Holds the GPU while it runs.
 
@@ -309,7 +335,8 @@ def compile_warp(graph, frame_size: int, out: Path) -> Path:
   for _ in range(3):
     tfm_npy[:] = rng.standard_normal((3, 3)).astype(np.float32)
     big_tfm_npy[:] = rng.standard_normal((3, 3)).astype(np.float32)
-    call_warp(warp_jit, tfm, big_tfm, frame, big_frame).realize()
+    warped = call_warp(warp_jit, tfm, big_tfm, frame, big_frame)
+    Tensor.realize(*(warped if isinstance(warped, tuple) else (warped,)))
   Device.default.synchronize()
 
   out = Path(out)
@@ -342,6 +369,7 @@ def main(argv: list[str] | None = None) -> None:
   p.add_argument('--camera', type=size, required=True, help='camera resolution, WxH')
   p.add_argument('--model', type=size, required=True, help='model input, WxH')
   p.add_argument('--output', type=Path, required=True)
+  p.add_argument('--lossless', action='store_true', help='also output the MED errors (jetlink.lossless)')
   args = p.parse_args(argv)
 
   (cam_w, cam_h), (model_w, model_h) = args.camera, args.model
@@ -350,7 +378,7 @@ def main(argv: list[str] | None = None) -> None:
   # before anything of tinygrad's is imported here: comma's graph module
   # patches tinygrad's firmware fetch as it loads
   graph, frame_size = op.make_warp(cam_w, cam_h, model_w, model_h)
-  out = compile_warp(graph, frame_size, args.output)
+  out = compile_warp(with_errors(graph) if args.lossless else graph, frame_size, args.output)
   print(f"  Saved to {out}")
 
 

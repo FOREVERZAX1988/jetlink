@@ -10,6 +10,7 @@ import android.hardware.usb.UsbEndpoint
 import android.hardware.usb.UsbInterface
 import android.hardware.usb.UsbManager
 import android.util.Log
+import io.zoompilot.jetlink.R
 import io.zoompilot.jetlink.server.Native
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -71,13 +72,14 @@ class CommaUsb(private val context: Context) {
 
     private fun attach(device: UsbDevice) {
         disconnect()
-        val iface = linkInterface(device) ?: return fail("the comma's gadget has no vendor interface")
-        val bulkIn = endpoint(iface, UsbConstants.USB_DIR_IN) ?: return fail("the gadget's interface has no bulk IN endpoint")
-        val bulkOut = endpoint(iface, UsbConstants.USB_DIR_OUT) ?: return fail("the gadget's interface has no bulk OUT endpoint")
-        val connection = manager.openDevice(device) ?: return fail("Android would not open the comma")
+        if (!Native.loaded) return fail(context.getString(R.string.usb_err_no_lib))
+        val iface = linkInterface(device) ?: return fail(context.getString(R.string.usb_err_no_vendor_iface))
+        val bulkIn = endpoint(iface, UsbConstants.USB_DIR_IN) ?: return fail(context.getString(R.string.usb_err_no_bulk_in))
+        val bulkOut = endpoint(iface, UsbConstants.USB_DIR_OUT) ?: return fail(context.getString(R.string.usb_err_no_bulk_out))
+        val connection = manager.openDevice(device) ?: return fail(context.getString(R.string.usb_err_open_failed))
         if (!connection.claimInterface(iface, true)) {
             connection.close()
-            return fail("another app holds the comma's interface")
+            return fail(context.getString(R.string.usb_err_interface_busy))
         }
         val error = Native.usbAttach(connection.fileDescriptor, bulkIn.address, bulkOut.address)
         if (error != null) {
@@ -95,7 +97,7 @@ class CommaUsb(private val context: Context) {
     fun disconnect() {
         val current = open ?: return
         open = null
-        Native.usbDetach()
+        if (Native.loaded) Native.usbDetach()
         current.connection.releaseInterface(current.iface)
         current.connection.close()
         state.value = UsbState.None

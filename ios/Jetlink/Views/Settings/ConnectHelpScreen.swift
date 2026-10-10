@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// How the comma and the iPhone or iPad meet: one USB-C cable, in a
-/// few steps for a reader standing at the car. docs/iphone-app.md has the why.
+/// How the comma and the iPhone or iPad meet: one USB-C cable, or the
+/// phone's hotspot, in a few steps for a reader standing at the car.
+/// docs/iphone-app.md has the why.
 struct ConnectHelpScreen: View {
   static let guide = URL(string: "https://github.com/zoompilot/jetlink/blob/main/docs/iphone-app.md#connect-the-comma")!
 
@@ -15,6 +16,17 @@ struct ConnectHelpScreen: View {
         step(4, "Wait for Connected.")
       } footer: {
         Text("A powered USB-C hub keeps your \(device) charging.")
+      }
+      Section {
+        step(1, "In Jetlink's settings, turn on Wi-Fi Link.")
+        step(2, "Turn on Personal Hotspot. Allow Others to Join on, Maximize Compatibility off.")
+        step(3, "On the comma, join the hotspot in Network settings.")
+        step(4, "On the comma, set Jetlink to Wi-Fi.")
+        step(5, "Wait for Connected.")
+      } header: {
+        Text("Over Wi-Fi")
+      } footer: {
+        Text("No cable, but slower than USB. 2.4 GHz is too slow for a big model.")
       }
       Section {
         ForEach(USBSpeedGuide.rows, id: \.models) { row in

@@ -107,6 +107,22 @@ class TestValidity(WarpTest):
     self.assertEqual(self.warps.geometry(), fakes.MICI)
 
 
+class TestLossless(WarpTest):
+  def test_the_lossless_warp_lives_beside_the_plain_one(self):
+    plain = self.warps.path(*GEOM)
+    lossless = self.warps.path(*GEOM, lossless=True)
+    self.assertEqual(lossless.parent, plain.parent)
+    self.assertEqual(lossless, warp.lossless_path(plain))
+    self.assertTrue(lossless.name.endswith('_lossless_tinygrad.pkl'))
+
+  def test_neither_answers_for_the_other(self):
+    self.write()
+    self.assertTrue(self.warps.is_cached(*GEOM))
+    self.assertFalse(self.warps.is_cached(*GEOM, lossless=True))
+    with self.assertRaisesRegex(RuntimeError, 'no lossless warp built'):
+      self.warps.load(*GEOM, lossless=True)
+
+
 class TestLoad(WarpTest):
   def test_a_miss_raises_rather_than_returning_none(self):
     """modeld's big-model load is wrapped in the fallback to the small model.
@@ -326,13 +342,33 @@ class TestWarp(unittest.TestCase):
     self.addCleanup(p.stop)
     self.log = fakes.RecordingLog()
 
-  def make(self, device='QCOM'):
+  def make(self, device='QCOM', errors=False):
     capture = FakeCapture(FakeOutput(device))
+    if errors:
+      # a lossless build (with_errors): the warped frame and its MED errors
+      capture.errors = FakeOutput(device)
+      capture.ret = (capture.ret, SimpleNamespace(uop=SimpleNamespace(base=SimpleNamespace(buffer=capture.errors))))
     realize = self.modules['tinygrad.engine.realize']
     realize.resolve_params, realize.get_graph_runtime = capture.resolve_params, capture.get_graph_runtime
     jit = mock.Mock(side_effect=capture.jit)
     jit.captured = capture
     return warp.Warp(jit, 1234, self.log), capture
+
+  def test_a_plain_warp_has_no_errors(self):
+    w, _ = self.make()
+    self.assertIsNone(w.errors)
+
+  def test_a_lossless_warp_has_both_outputs_coherent_before_the_first_call(self):
+    w, capture = self.make(errors=True)
+    qcom = self.devices['QCOM']
+    self.assertEqual(len(qcom.allocs), 2)
+    self.assertIs(capture.out._buf, qcom.allocs[0])
+    self.assertIs(capture.errors._buf, qcom.allocs[1])
+    self.assertTrue(all(found is qcom.allocs[0] for _, found in capture.calls))
+    for mem in qcom.allocs:
+      self.assertEqual(mem.meta[0].flags & warp.COHERENT_WRITEBACK, warp.COHERENT_WRITEBACK)
+    self.assertEqual(w.output.nbytes, 64)
+    self.assertEqual(w.errors.nbytes, 64)
 
   def test_the_output_is_coherent_before_the_first_call(self):
     # the first call binds the graph to its buffers' addresses
@@ -464,6 +500,20 @@ class TestTheBuild(OpenpilotTest):
     graph, frame_size = compile_warp.call_args.args[:2]
     self.assertEqual(frame_size, fakes.frame_size(1344, 760))
     self.assertEqual(compile_warp.call_args.args[2], out)
+
+  def test_lossless_builds_the_graph_with_its_errors(self):
+    out = self.tmp / 'warp_lossless.pkl'
+    adapter_graph = RecordingGraph()
+    with mock.patch.object(warp, 'compile_warp', return_value=out) as compile_warp, \
+         mock.patch('jetlink.openpilot.interface.load_adapter', return_value=self.op), \
+         mock.patch.object(self.op, 'make_warp', return_value=(adapter_graph, 64)):
+      warp.main(['--adapter', 'x', '--camera', '1344x760', '--model', '512x256', '--output', str(out), '--lossless'])
+    graph = compile_warp.call_args.args[0]
+    self.assertIsNot(graph, adapter_graph)
+    with mock.patch('jetlink.openpilot.lossless.med', side_effect=lambda w: ('errors of', w)):
+      warped, errors = graph(tfm='T', big_tfm='BT', frame='F', big_frame='BF')
+    self.assertEqual(adapter_graph.calls, [warp.WARP_INPUT_NAMES])
+    self.assertEqual(errors, ('errors of', warped))
 
   def test_comma_s_graph_is_made_before_anything_of_tinygrad_is_imported(self):
     # comma's graph module patches tinygrad's firmware fetch as it loads

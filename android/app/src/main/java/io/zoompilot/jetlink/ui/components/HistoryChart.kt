@@ -18,6 +18,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import io.zoompilot.jetlink.server.HistorySample
+import io.zoompilot.jetlink.R
+import io.zoompilot.jetlink.l10n
 import io.zoompilot.jetlink.ui.BUDGET_MS
 import io.zoompilot.jetlink.ui.Format
 import io.zoompilot.jetlink.ui.HISTORY_SECONDS
@@ -44,7 +46,7 @@ fun HistoryChart(history: List<HistorySample>, modifier: Modifier = Modifier) {
     val worst = buckets.maxOfOrNull { it.p99 } ?: 0.0
     val top = maxOf(BUDGET_MS * 1.2, worst * 1.1)
     val over = buckets.count { it.p99 > BUDGET_MS }
-    val description = "Last two minutes: worst P99 ${Format.ms(worst)}, $over of ${buckets.size} five-second spans over budget."
+    val description = l10n(R.string.chart_history_description, Format.ms(worst), over, buckets.size)
     Canvas(modifier.fillMaxWidth().height(150.dp).semantics { contentDescription = description }) {
         val axisBand = 40.dp.toPx()
         val labelBand = 18.dp.toPx()

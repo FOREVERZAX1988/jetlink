@@ -35,6 +35,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.zoompilot.jetlink.R
+import io.zoompilot.jetlink.l10n
 import io.zoompilot.jetlink.ui.BUDGET_MS
 import io.zoompilot.jetlink.ui.Format
 import io.zoompilot.jetlink.ui.JetlinkTheme
@@ -61,9 +63,9 @@ fun HeadroomRing(p99: Double?, modifier: Modifier = Modifier, lineWidth: Dp = 22
         label = "headroom",
     )
     val description = if (p99 == null || room == null) {
-        "No frames yet"
+        l10n(R.string.ring_no_frames)
     } else {
-        "${Format.headroomText(p99)} of ${BUDGET_MS.toInt()} milliseconds. ${room.title}."
+        l10n(R.string.ring_description, Format.headroomText(p99), BUDGET_MS.toInt(), l10n(room.titleRes))
     }
     Box(
         modifier.aspectRatio(1f).clearAndSetSemantics { contentDescription = description },
@@ -124,12 +126,12 @@ fun HeadroomRing(p99: Double?, modifier: Modifier = Modifier, lineWidth: Dp = 22
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(roomIcon(room), contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(4.dp))
-                    Text(room.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = tint)
+                    Text(l10n(room.titleRes), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = tint)
                 }
             } else {
                 Text("--", fontSize = big, fontWeight = FontWeight.Bold, color = colors.tertiaryText)
                 Text(
-                    "No Frames",
+                    l10n(R.string.verdict_none_title),
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = colors.secondaryText,
