@@ -1,6 +1,25 @@
 {
   "bundles": [
     {
+      "short_name": "MDV2",
+      "display_name": "Mountain Dew V2 Preview (October 08, 2026)",
+      "is_20hz": true,
+      "is_big": true,
+      "ref": "4bfb53406352e2c8716ab06e23b57b4e3c00b45c",
+      "environment": "development",
+      "runner": "tinygrad",
+      "index": 15,
+      "minimum_selector_version": "19",
+      "generation": "12",
+      "build_time": "2026-10-08T00:05:48Z",
+      "overrides": {
+        "folder": "Preview Models",
+        "lat": ".1",
+        "long": ".3"
+      },
+      "models": []
+    },
+    {
       "short_name": "RESACT",
       "display_name": "ResAction Preview (October 05, 2026)",
       "is_20hz": true,
