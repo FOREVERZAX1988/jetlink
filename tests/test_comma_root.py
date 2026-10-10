@@ -284,11 +284,30 @@ def test_a_refusal_says_why(tmp_path):
 def test_udc_apply_keeps_the_device_and_restore_puts_it_back(tmp_path):
   for d in (udc_glue(tmp_path), pe_params(tmp_path)):
     d.mkdir()
+  # a kernel whose FunctionFS carries the ring: the switch is there to write
+  ffs_log_off(tmp_path).write_text('0\n')
   for command, value, log_off in (('apply', 'Y', '1'), ('restore', 'N', '0')):
     assert run_script(tmp_path, 'udc', command).returncode == 0
     for d in (udc_glue(tmp_path), pe_params(tmp_path)):
       assert (d / 'usb_compliance_mode').read_text().strip() == value
     assert ffs_log_off(tmp_path).read_text().strip() == log_off
+
+
+def test_udc_apply_without_the_ring_switches_the_modes_and_says_nothing(tmp_path):
+  # this AGNOS kernel has ipc_logging without f_fs, so there is no file to
+  # switch. Absent is the ring already off, which is what the argument asks
+  # for: counting it as a failed apply failed every udc apply and restore on
+  # the device, and the owner read the USB device side as never kept on.
+  for d in (udc_glue(tmp_path), pe_params(tmp_path)):
+    d.mkdir()
+  for command, value in (('apply', 'Y'), ('restore', 'N')):
+    result = run_script(tmp_path, 'udc', command)
+    assert result.returncode == 0
+    assert 'f_fs_log_disable' not in result.stderr
+    for d in (udc_glue(tmp_path), pe_params(tmp_path)):
+      assert (d / 'usb_compliance_mode').read_text().strip() == value
+  # nothing was made for it: an absent ring is not ours to invent
+  assert not ffs_log_off(tmp_path).exists()
 
 
 def test_rps_puts_the_cables_receive_work_on_core_6(tmp_path):
