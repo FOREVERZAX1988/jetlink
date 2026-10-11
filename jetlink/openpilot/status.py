@@ -176,12 +176,18 @@ def usb_port() -> str | None:
 NO_WARP = "no warp built for this camera"
 
 
-def unavailable(parts, record: dict | None) -> str | None:
+def unavailable(parts, record: dict | None, mode: str | None = None) -> str | None:
   """Why an enabled link cannot run the large model, or None: files only.
   `record` is the owner's status record: its error when it is live, STOPPED
-  when its heartbeat is not, and the gadget's own files without one."""
+  when its heartbeat is not, and the gadget's own files without one. `mode` is
+  the link setting read with it: over Wi-Fi no gadget is built at all, so the
+  gadget's files cannot say why that link does not run."""
   if record is None:
-    error = gadget.gadget_error()
+    # no record since boot, or a stop an owner asked for left: the gadget's
+    # files are all there is. Over Wi-Fi a teardown's leftovers in them are
+    # not a failed build, and would alert the driver about a gadget this mode
+    # never builds
+    error = None if mode == 'wifi' else gadget.gadget_error()
   elif not gadget.owner_alive(record):
     return STOPPED
   else:
@@ -194,7 +200,7 @@ def unavailable(parts, record: dict | None) -> str | None:
 def reason(parts, mode: str) -> str | None:
   """Why the link cannot run, for someone who asked for it only: with it off,
   a device that cannot present the gadget simply does not offer the feature."""
-  return unavailable(parts, owner_record()[0]) if parts.enabled(mode) else None
+  return unavailable(parts, owner_record()[0], mode) if parts.enabled(mode) else None
 
 
 # -- the snapshot ----------------------------------------------------------------
@@ -262,7 +268,7 @@ def read(parts, mode: str) -> Status:
   record, live = owner_record()
   link = gadget.link_state()
   enabled = parts.enabled(mode)
-  reason = unavailable(parts, record) if enabled else None
+  reason = unavailable(parts, record, mode) if enabled else None
   # the last model the server built; the pick's, or the stand-in that drives
   # until the pick is built (link.open_link)
   built = parts.spec.built_sha() if enabled and reason is None else None

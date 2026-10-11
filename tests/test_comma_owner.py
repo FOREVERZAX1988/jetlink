@@ -769,6 +769,26 @@ class TestWifi(OwnerTest):
     self.presence.close.assert_called_once()
     self.presence.handshake.assert_called_once()
 
+  def test_the_gadgets_leftovers_are_not_this_links_failure(self):
+    # a teardown of the last USB session leaves 'error: gadget torn down' in
+    # the gadget's files. Over Wi-Fi there is no gadget to fail, so the record
+    # hardwared turns into the offroad alert must not carry it: this is what
+    # nagged a driver who had only asked for the Wi-Fi link.
+    o = self.owner()
+    o.step()
+    gadget.GADGET_STATUS.write_text('error: gadget torn down\n')
+    o.publish_status()
+    self.assertEqual(gadget.owner_status()['error'], None)
+
+  def test_a_crash_loop_is_still_said_over_wifi(self):
+    # the gadget is not the only thing the record's error carries: an owner
+    # backing off a crash loop is the driver's business whatever the mode
+    o = self.owner()
+    o.step()
+    o.backing_off = 'the service keeps stopping'
+    o.publish_status()
+    self.assertEqual(gadget.owner_status()['error'], 'the service keeps stopping')
+
 
 class TestVmTuning(OwnerTest):
   """When the owner applies and restores the VM tuning, against the real

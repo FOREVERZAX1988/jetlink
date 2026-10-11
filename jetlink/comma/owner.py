@@ -553,8 +553,12 @@ class Owner:
       'link': None if self.built_ios is None else ('cable' if self.built_ios else 'usb'),
       'peer': self._peer,
       # root's jetlink-gadget and the lender's error, as gadget_error() puts
-      # them together, or why a crash loop's backoff is holding this start
-      'error': self.backing_off or gadget.gadget_error(),
+      # them together, or why a crash loop's backoff is holding this start.
+      # Over Wi-Fi this owner builds no gadget and leaves the port alone, so a
+      # teardown's leftovers in those files say nothing about this link: read
+      # as why it cannot run they nag the driver about a feature they did not
+      # ask for and nothing is wrong with
+      'error': self.backing_off or (None if self.mode == 'wifi' else gadget.gadget_error()),
       'net': gadget.net_status(),
       'dormant': self.dormant,
       'udc': state,

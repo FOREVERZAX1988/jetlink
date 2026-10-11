@@ -92,6 +92,17 @@ class SelectionTest(OpenpilotTest):
     self.assertFalse(s.ready)
     self.assertEqual(s.reason, 'no gadget')
 
+  def test_the_wifi_link_is_never_nagged_about_the_gadget(self):
+    # over Wi-Fi no gadget is built and the port is left alone: 'gadget torn
+    # down' left in the gadget's files by the last USB session is not this
+    # link's failure, and the offroad alert stayed up over nothing
+    self.configure(mode='wifi', model='m', spec_sha='a' * 64, ready=True, gadget_error='gadget torn down')
+    self.assertIsNone(self.jl.reason())
+    self.assertIsNone(self.jl.status().reason)
+    # the same file under USB is the link's failure, and says so
+    self.configure(mode='usb', model='m', spec_sha='a' * 64, ready=True, gadget_error='gadget torn down')
+    self.assertEqual(self.jl.reason(), 'gadget torn down')
+
   def test_no_warp_for_this_camera_says_why(self):
     # the build made none, and nothing compiles one at runtime: every drive
     # would be the small model while the panel said ready
