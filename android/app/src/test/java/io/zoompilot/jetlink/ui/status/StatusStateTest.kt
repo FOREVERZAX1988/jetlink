@@ -1,6 +1,7 @@
 package io.zoompilot.jetlink.ui.status
 
 import io.zoompilot.jetlink.device.DeviceHealth
+import io.zoompilot.jetlink.presence.Presence
 import io.zoompilot.jetlink.server.CatalogInfo
 import io.zoompilot.jetlink.server.Engine
 import io.zoompilot.jetlink.server.Link
@@ -71,9 +72,15 @@ class StatusStateTest {
         assertEquals(R.string.waiting_desc_plug, state.waitingDescriptionRes)
         // the Wi-Fi link setting and a comma on the hotspot that answered: a
         // link on its way with no cable, which is the USB reading above
-        val wifi = state.copy(wifiLink = true, wifiPresent = true)
+        val wifi = state.copy(wifiLink = true, presence = Presence.Here)
         assertEquals("Connecting", wifi.linkNote)
         assertEquals(R.string.waiting_desc_wifi, wifi.waitingDescriptionRes)
+        // a comma that answered but dials another gateway: it joined a
+        // different hotspot, and saying so beats "connecting"
+        val elsewhere = state.copy(wifiLink = true, presence = Presence.Elsewhere)
+        assertEquals("Waiting", elsewhere.linkNote)
+        assertEquals(R.string.waiting_desc_wifi_elsewhere, elsewhere.waitingDescriptionRes)
+        assertFalse(elsewhere.connecting)
         // the setting alone is not a link: the phone is listening and no comma
         // has answered, so there is one to wait for, not one on its way
         val listening = state.copy(wifiLink = true)

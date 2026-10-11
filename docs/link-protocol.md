@@ -108,17 +108,22 @@ to go on but its own **Wi-Fi Link** setting, and a comma joined to some other
 network reads as on its way there and never arrives. So the comma says it is
 here. While its setting is Wi-Fi and it is on a Wi-Fi, the owner
 (`jetlink.comma.wifi.Presence`) sends one datagram a second to the gateway,
-UDP port **5600**, `jetlink` alone:
-`{"jetlink": "presence", "v": 1, "id": "9b3f0c1d"}`, and the app answers it to
-the port the announcement came from:
+UDP port **5600**, naming the gateway it dials, `gw`:
+`{"jetlink": "presence", "v": 1, "id": "9b3f0c1d", "gw": "172.20.10.1"}`, and
+the app answers it to the port the announcement came from:
 `{"jetlink": "presence", "v": 1, "ack": true, "id": "9b3f0c1d"}`.
 
 `id` is fresh for every announcement and an answer to any other one is ignored,
-so a late answer, or one from another comma, cannot hold the reading up. The
-app's Status tab reads the link as connecting over Wi-Fi while a comma answers,
-never on the setting alone: that is the state a cable already in the phone
-shows before the ignition, and a comma that is not on this hotspot is not on
-its way. The comma takes the answer as the app listening, and says so in its
+so a late answer, or one from another comma, cannot hold the reading up. `gw`
+is the address the comma dials - the device it took for the hotspot. The app
+compares it with its own addresses and answers only when it is one of them, and
+reads the link as connecting only then: a comma that answered but reports
+another gateway joined a different hotspot, and the app says so rather than
+call it connecting. An announcement that names no gateway (an older comma) is
+read as before, as one on this hotspot. The app's Status tab reads the link as
+connecting over Wi-Fi while a comma answers on its own hotspot, never on the
+setting alone: that is the state a cable already in the phone shows before the
+ignition, and a comma that is not on this hotspot is not on its way. The comma takes the answer as the app listening, and says so in its
 log once. The gateway is the only address ever sent to, nothing is carried but
 these bytes, and a comma on no Wi-Fi sends nothing: a comma and a phone joined
 to the same router are not a link, since the comma dials its own gateway and

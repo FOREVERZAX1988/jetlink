@@ -182,6 +182,11 @@ class TestPresence(unittest.TestCase):
     self.assertTrue(message['id'])
     self.assertEqual(self.caller[0], '127.0.0.1')
 
+  def test_the_announcement_names_the_gateway_it_dials(self):
+    # the app reads the link as on its way only when this is one of its own
+    self.presence.handshake('127.0.0.1')
+    self.assertEqual(self.announced()['gw'], '127.0.0.1')
+
   def test_the_apps_answer_is_the_handshake(self):
     self.presence.handshake('127.0.0.1')
     self.answer(self.announced())

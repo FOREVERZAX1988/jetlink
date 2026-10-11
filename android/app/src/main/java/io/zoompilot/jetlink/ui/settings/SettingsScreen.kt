@@ -60,6 +60,7 @@ import io.zoompilot.jetlink.AppGraph
 import io.zoompilot.jetlink.AppLocale
 import io.zoompilot.jetlink.settings.AppTheme
 import io.zoompilot.jetlink.R
+import io.zoompilot.jetlink.presence.Presence
 import io.zoompilot.jetlink.l10n
 import io.zoompilot.jetlink.BuildConfig
 import io.zoompilot.jetlink.server.RunState
@@ -90,8 +91,8 @@ data class SettingsInfo(
     val snapshot: Snapshot,
     val runState: RunState,
     val usb: UsbState,
-    /** A comma on this phone's hotspot, answered by the presence handshake. */
-    val wifiPresent: Boolean = false,
+    /** What the presence handshake says of a comma on a hotspot (presence.Presence). */
+    val presence: Presence = Presence.None,
     val wifi: String?,
     /** onnxruntime's version, from the server's info. */
     val runtime: String?,
@@ -136,7 +137,7 @@ fun SettingsScreen(graph: AppGraph, openConnect: () -> Unit, openLogs: () -> Uni
     val runState by graph.server.runState.collectAsStateWithLifecycle()
     val usb by graph.usb.usb.collectAsStateWithLifecycle()
     val update by graph.updates.state.collectAsStateWithLifecycle()
-    val present by graph.presence.here.collectAsStateWithLifecycle()
+    val present by graph.presence.state.collectAsStateWithLifecycle()
     val wifi = rememberWifiAddress()
     val runtime by produceState<String?>(null, runState) {
         value = withContext(Dispatchers.IO) { graph.server.runtimeVersion() }
@@ -147,7 +148,7 @@ fun SettingsScreen(graph: AppGraph, openConnect: () -> Unit, openLogs: () -> Uni
         snapshot = snapshot,
         runState = runState,
         usb = usb,
-        wifiPresent = present,
+        presence = present,
         wifi = wifi,
         runtime = snapshot.server?.runtimeVersion ?: runtime,
         chip = Chip.name,
@@ -238,7 +239,7 @@ fun SettingsContent(values: SettingsValues, info: SettingsInfo, actions: Setting
 @Composable
 private fun Connection(values: SettingsValues, info: SettingsInfo, actions: SettingsActions) {
     val link = info.snapshot.medium?.title
-        ?: if (info.usb is UsbState.Attached || info.wifiPresent) l10n(R.string.link_connecting) else l10n(R.string.link_not_connected)
+        ?: if (info.usb is UsbState.Attached || info.presence == Presence.Here) l10n(R.string.link_connecting) else l10n(R.string.link_not_connected)
     val footer: (@Composable () -> Unit)? = if (values.wifiLink) {
         { FormFooter(l10n(R.string.settings_connection_footer_wifi)) }
     } else {

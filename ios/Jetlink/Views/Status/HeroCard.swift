@@ -118,7 +118,7 @@ struct HeroCard: View {
         Label("Waiting for Comma", systemImage: "cable.connector")
           .symbolEffect(.pulse, options: .repeating)
       } description: {
-        Text(state.cableAddress == nil ? "Plug in the comma." : "Connecting over USB.")
+        Text(state.waitingDescription)
       }
     }
   }

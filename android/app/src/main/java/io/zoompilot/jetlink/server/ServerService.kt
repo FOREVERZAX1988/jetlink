@@ -88,10 +88,10 @@ class ServerService : LifecycleService() {
         }
         lifecycleScope.launch {
             // the line under the Status title
-            combine(graph.server.runState, graph.server.snapshot, graph.usb.usb, graph.settings.values, graph.presence.here) { run, snapshot, usb, values, present ->
+            combine(graph.server.runState, graph.server.snapshot, graph.usb.usb, graph.settings.values, graph.presence.state) { run, snapshot, usb, values, present ->
                 StatusText.subtitle(
                     this@ServerService,
-                    StatusState(run, snapshot, usb = usb, wifiLink = values.wifiLink, wifiPresent = present),
+                    StatusState(run, snapshot, usb = usb, wifiLink = values.wifiLink, presence = present),
                 ) to snapshot.connected
             }.distinctUntilChanged().collectLatest { (text, connected) ->
                 getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(text))

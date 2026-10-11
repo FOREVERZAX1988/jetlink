@@ -18,6 +18,11 @@ struct StatusState: Equatable {
   var history: [StatsSample] = []
   /// The phone's address on the comma's cable network, while the cable is in.
   var cableAddress: String?
+  /// The Wi-Fi Link setting: this phone listens for a comma on its hotspot.
+  var wifiLink = false
+  /// What the presence handshake says of a comma (presence.PresenceMonitor):
+  /// one on this phone's hotspot, one on another hotspot, or none.
+  var presence: Presence = .none
   /// What the connected comma's link is carried over: USB 3, USB 2 or TCP.
   var linkMedium: LinkMedium?
   var health = DeviceHealth()
@@ -119,6 +124,19 @@ struct StatusState: Equatable {
   /// The line under the title: the summary and the model.
   var subtitle: String {
     [headline, modelName].compactMap { $0 }.joined(separator: " · ")
+  }
+
+  /// Under "Waiting for Comma": why, and over which link. The Wi-Fi Link setting
+  /// alone is not a link, and a comma that answered on another hotspot is not
+  /// this phone's, so the honest reading waits rather than call it connecting.
+  var waitingDescription: String {
+    if cableAddress != nil { return "Connecting over USB." }
+    switch presence {
+    case .here: return "Connecting over Wi-Fi."
+    case .elsewhere: return "The comma is on another Wi-Fi. Join it to this hotspot."
+    case .none: break
+    }
+    return wifiLink ? "Waiting for the comma to join this hotspot." : "Plug in the comma."
   }
 }
 

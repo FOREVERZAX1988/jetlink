@@ -12,6 +12,8 @@ final class AppModel {
   let device: DeviceMonitor
   let network: NetworkInterfaces
   let localNetwork: LocalNetworkAccess
+  /// The Wi-Fi presence handshake's listening half; the Wi-Fi Link setting runs it.
+  let presence: PresenceMonitor
   /// Whether the scene is in front. A suspended app serves nothing, so the
   /// Status tab says so as soon as the scene is not active.
   var sceneActive = true
@@ -27,6 +29,7 @@ final class AppModel {
     self.device = DeviceMonitor()
     self.network = network
     self.localNetwork = LocalNetworkAccess()
+    self.presence = PresenceMonitor()
     device.warn = { [weak server] in server?.note(.warning, $0) }
   }
 
@@ -38,6 +41,7 @@ final class AppModel {
     server.start()
     localNetwork.check()
     models.refreshCatalog()
+    syncPresence()
   }
 
   /// Everything the Status tab draws, from the stores.
@@ -58,7 +62,15 @@ final class AppModel {
     state.hasPreparedModel = !(models.inventory?.artifacts.filter(\.current).isEmpty ?? true)
     state.catalogUnavailable = models.catalog?.error != nil && (models.catalog?.models.isEmpty ?? true)
     state.localNetworkDenied = localNetwork.state == .denied
+    state.wifiLink = settings.wifiLink
+    state.presence = presence.state
     return state
+  }
+
+  /// The Wi-Fi Link setting runs the presence listener: on, this phone answers
+  /// the comma that joined its hotspot; off, it answers nothing.
+  func syncPresence() {
+    if settings.wifiLink { presence.start() } else { presence.stop() }
   }
 
   /// The list failed to load and nothing is cached: try again when the

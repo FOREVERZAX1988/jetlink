@@ -49,6 +49,9 @@ final class ServerStore: ServerControlling {
 
   let settings: AppSettings
   let logs: LogBuffer
+  /// The Wi-Fi presence handshake's listening half; the Wi-Fi link setting runs
+  /// it alongside the server, which restarts when that setting changes.
+  let presence: PresenceMonitor
   /// Every event a `ModelStore` cares about: inventory, catalog, download, import.
   let modelEvents: AsyncStream<ControlEvent>
 
@@ -69,6 +72,7 @@ final class ServerStore: ServerControlling {
     self.logs = logs
     self.logFile = logFile
     self.isLive = isLive
+    self.presence = PresenceMonitor()
     self.sleepAssertion = SleepAssertion()
     let (stream, continuation) = AsyncStream<ControlEvent>.makeStream(bufferingPolicy: .unbounded)
     self.modelEvents = stream
@@ -91,6 +95,7 @@ final class ServerStore: ServerControlling {
     }
     runState = .starting
     lastFailure = nil
+    if settings.wifiLink { presence.start() }
     // One ordered stream of log lines, drained by one task into the Logs
     // view and server.log; a task per line could reorder them.
     let stream = LogStream()
@@ -169,6 +174,7 @@ final class ServerStore: ServerControlling {
   }
 
   private func tearDown() {
+    presence.stop()
     embedded = nil
     consumeTask?.cancel()
     consumeTask = nil

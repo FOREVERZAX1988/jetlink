@@ -50,8 +50,8 @@ fun rememberStatusState(graph: AppGraph): StatusState {
     val health by graph.device.health.collectAsStateWithLifecycle()
     val usb by graph.usb.usb.collectAsStateWithLifecycle()
     val settings by graph.settings.values.collectAsStateWithLifecycle()
-    val present by graph.presence.here.collectAsStateWithLifecycle()
-    return StatusState(runState, snapshot, health, usb, settings.wifiLink, present)
+    val presence by graph.presence.state.collectAsStateWithLifecycle()
+    return StatusState(runState, snapshot, health, usb, settings.wifiLink, presence)
 }
 
 /**

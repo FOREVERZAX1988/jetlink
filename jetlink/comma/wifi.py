@@ -90,6 +90,11 @@ def link_info(interface: str = INTERFACE) -> dict:
 # hotspot through, and an announcement that left the hotspot for another
 # network is not this comma's link. Nothing here carries a frame, and a comma
 # on no Wi-Fi sends nothing at all.
+#
+# The announcement names that gateway too (its `gw`), and the app reads the
+# link as on its way only when the address is one of its own: a comma that
+# joined another hotspot in the same subnet dials that one's device, not this
+# phone, and is not the comma this phone is listening for.
 PRESENCE_PORT = 5600
 PRESENCE_PERIOD = 1.0
 # how long an answer counts for. The app answers every announcement, so this
@@ -167,10 +172,12 @@ class Presence:
     return True
 
   def _announce(self, gateway: str) -> None:
-    """One datagram at the gateway. A send that cannot go takes the socket with
-    it, and the next step opens another: the interface may come back."""
+    """One datagram at the gateway, naming it: the app compares `gw` with its
+    own addresses, and answers - reads the link as on its way - only when this
+    comma dialed it. A send that cannot go takes the socket with it, and the
+    next step opens another: the interface may come back."""
     try:
-      self.sock.sendto(_message(id=self.id), (gateway, self.port))
+      self.sock.sendto(_message(id=self.id, gw=gateway), (gateway, self.port))
     except OSError:
       self.close()
 

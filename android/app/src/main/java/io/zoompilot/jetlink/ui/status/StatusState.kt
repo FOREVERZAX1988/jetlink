@@ -2,6 +2,7 @@ package io.zoompilot.jetlink.ui.status
 
 import io.zoompilot.jetlink.R
 import io.zoompilot.jetlink.device.DeviceHealth
+import io.zoompilot.jetlink.presence.Presence
 import io.zoompilot.jetlink.server.Engine
 import io.zoompilot.jetlink.server.HistorySample
 import io.zoompilot.jetlink.server.Medium
@@ -32,20 +33,23 @@ data class StatusState(
     val wifiLink: Boolean = false,
 
     /**
-     * The presence handshake (presence.PresenceMonitor): a comma on this
-     * phone's hotspot announced itself and was answered within the last few
-     * seconds. A Wi-Fi link reads as on its way on this and never on
+     * The presence handshake (presence.PresenceMonitor): what the last
+     * announcements say of a comma. [Presence.Here] is one on this phone's
+     * hotspot - answered within the last few seconds and dialing an address
+     * this phone holds. [Presence.Elsewhere] is one that answered but dials
+     * another gateway: it joined a different hotspot, and is not this phone's
+     * link. A Wi-Fi link reads as on its way on [Presence.Here] and never on
      * [wifiLink], so the Status tab waits the way it does for a cable in a
      * phone with no ignition behind it, and only while there is a comma to
      * wait for.
      */
-    val wifiPresent: Boolean = false,
+    val presence: Presence = Presence.None,
 ) {
     val engine: Engine get() = snapshot.engine
     val connected: Boolean get() = snapshot.connected
 
     /** A cable with a comma behind it, or a comma on this phone's hotspot: something to connect to. */
-    val connecting: Boolean get() = usb is UsbState.Attached || wifiPresent
+    val connecting: Boolean get() = usb is UsbState.Attached || presence == Presence.Here
 
     /** The engine's model by name. */
     val modelName: String? get() = snapshot.modelName(engine.sha256)
@@ -173,7 +177,10 @@ data class StatusState(
     val waitingDescriptionRes: Int
         get() = when {
             usb is UsbState.Attached -> R.string.waiting_desc_usb
-            wifiPresent -> R.string.waiting_desc_wifi
+            presence == Presence.Here -> R.string.waiting_desc_wifi
+            // a comma answered but dials another gateway: it joined a different
+            // hotspot, which is worth saying rather than leave it at "connecting"
+            presence == Presence.Elsewhere -> R.string.waiting_desc_wifi_elsewhere
             // the setting is on and no comma has answered on this hotspot: one
             // on another network is not the one this phone is listening for
             wifiLink -> R.string.waiting_desc_wifi_waiting

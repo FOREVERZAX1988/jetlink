@@ -25,6 +25,28 @@ class PresenceMonitorTest {
     }
 
     @Test
+    fun anAnnouncementNamesTheGatewayItsCommaDials() {
+        assertEquals(
+            "192.168.43.1",
+            PresenceMonitor.announceGateway("""{"jetlink":"presence","v":1,"id":"9b3f0c1d","gw":"192.168.43.1"}"""),
+        )
+        // an older comma says nothing of one: the app reads it as before
+        assertNull(PresenceMonitor.announceGateway("""{"jetlink":"presence","v":1,"id":"9b3f0c1d"}"""))
+        assertNull("another kind", PresenceMonitor.announceGateway("""{"jetlink":"snapshot","v":1,"gw":"192.168.43.1"}"""))
+    }
+
+    @Test
+    fun theGatewayIsThisPhoneOnlyWhenItIsOneOfItsOwn() {
+        val ours = setOf("192.168.43.1")
+        assertEquals(Presence.Here, PresenceMonitor.presence("192.168.43.1", ours))
+        // the comma joined another hotspot in the same subnet and dials that
+        // one's device, not this phone: not the link this phone is listening for
+        assertEquals(Presence.Elsewhere, PresenceMonitor.presence("192.168.10.1", ours))
+        // a comma that names no gateway is read as before, as on this hotspot
+        assertEquals(Presence.Here, PresenceMonitor.presence(null, ours))
+    }
+
+    @Test
     fun nothingElseIsAnAnnouncement() {
         assertNull("another kind", PresenceMonitor.announceId("""{"jetlink":"snapshot","v":1,"id":"9b3f0c1d"}"""))
         assertNull("another version", PresenceMonitor.announceId("""{"jetlink":"presence","v":2,"id":"9b3f0c1d"}"""))

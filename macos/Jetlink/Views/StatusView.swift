@@ -118,6 +118,11 @@ struct StatusView: View {
               .font(.callout)
               .foregroundStyle(.orange)
           }
+          if let note = wifiNote {
+            Text(note)
+              .font(.callout)
+              .foregroundStyle(.secondary)
+          }
         }
       }
       if server.link.state == .connected, let stats = server.state.stats {
@@ -161,10 +166,22 @@ struct StatusView: View {
     }
   }
 
+  /// What the Wi-Fi link setting makes of the comma: answered on this Mac's
+  /// hotspot, answered on another one, or nothing heard yet. The setting alone
+  /// is not a link.
+  private var wifiNote: String? {
+    guard settings.wifiLink, server.link.state == .waiting else { return nil }
+    switch server.presence.state {
+    case .here: return "Connecting over Wi-Fi."
+    case .elsewhere: return "The comma is on another Wi-Fi. Join it to this Mac's hotspot."
+    case .none: return "Waiting for the comma to join this Mac's hotspot."
+    }
+  }
+
   private var linkText: String {
     switch server.link.state {
     case .waiting:
-      return "Waiting for comma"
+      return server.presence.state == .here ? "Connecting" : "Waiting for comma"
     case .connected:
       return "Connected over \((server.link.connectedMedium ?? .usb).title)"
     case .disconnected:

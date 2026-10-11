@@ -72,17 +72,30 @@ struct SettingsScreen: View {
       .onChange(of: settings.keepGPUAwake) { app.server.restart() }
       .onChange(of: settings.keepCPUWarm) { app.server.restart() }
       .onChange(of: settings.developer) { app.server.restart() }
-      .onChange(of: settings.wifiLink) { app.server.restart() }
+      .onChange(of: settings.wifiLink) {
+        app.server.restart()
+        app.syncPresence()
+      }
       .sensoryFeedback(.success, trigger: settings.developer)
     }
   }
 
   // MARK: connection
 
+  /// The Link row: a live link's medium, a cable or a comma on this phone's
+  /// hotspot on its way, and nothing otherwise. A comma that answered on
+  /// another hotspot is not this phone's, so it is not "Connecting".
+  private var linkValue: String {
+    if let medium = app.server.linkMedium { return medium.phoneTitle }
+    if app.network.cable != nil { return "Connecting" }
+    if app.presence.state == .here { return "Connecting" }
+    return "Not Connected"
+  }
+
   private var connection: some View {
     @Bindable var settings = app.settings
     return Section {
-      LabeledContent("Link", value: app.server.linkMedium?.phoneTitle ?? (app.network.cable == nil ? "Not Connected" : "Connecting"))
+      LabeledContent("Link", value: linkValue)
       Toggle("Wi-Fi Link", isOn: $settings.wifiLink)
     } header: {
       Text("Connection")
