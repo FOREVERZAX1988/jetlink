@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import io.zoompilot.jetlink.device.DeviceMonitor
+import io.zoompilot.jetlink.presence.PresenceMonitor
 import io.zoompilot.jetlink.server.RunState
 import io.zoompilot.jetlink.server.ServerController
 import io.zoompilot.jetlink.server.ServerService
@@ -38,6 +39,8 @@ class AppGraph(private val context: Context) {
     val server = ServerController(context, scope)
     val usb = CommaUsb(context)
     val device = DeviceMonitor(context, scope)
+    /** The Wi-Fi presence handshake's listening half; ServerService runs it. */
+    val presence = PresenceMonitor(scope)
     val updates = UpdateManager(context)
 
     /** The notification channel update alerts come on. */

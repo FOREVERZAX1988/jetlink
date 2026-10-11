@@ -26,13 +26,26 @@ data class StatusState(
 
     /**
      * The Wi-Fi link setting: the phone listens on its port for a comma that
-     * joined its hotspot and dials it. A link is then on its way with no
-     * cable, so the Status tab waits the way it does for one that is.
+     * joined its hotspot and dials it. Listening is not a link on its way,
+     * though: the comma may be on another network, or off.
      */
     val wifiLink: Boolean = false,
+
+    /**
+     * The presence handshake (presence.PresenceMonitor): a comma on this
+     * phone's hotspot announced itself and was answered within the last few
+     * seconds. A Wi-Fi link reads as on its way on this and never on
+     * [wifiLink], so the Status tab waits the way it does for a cable in a
+     * phone with no ignition behind it, and only while there is a comma to
+     * wait for.
+     */
+    val wifiPresent: Boolean = false,
 ) {
     val engine: Engine get() = snapshot.engine
     val connected: Boolean get() = snapshot.connected
+
+    /** A cable with a comma behind it, or a comma on this phone's hotspot: something to connect to. */
+    val connecting: Boolean get() = usb is UsbState.Attached || wifiPresent
 
     /** The engine's model by name. */
     val modelName: String? get() = snapshot.modelName(engine.sha256)
@@ -152,7 +165,7 @@ data class StatusState(
     /** Under the Link tile: why there is none, or that a slow one costs frames. UI shows [StatusL10n.linkNote]; this stays English for the notification. */
     val linkNote: String
         get() {
-            val medium = medium ?: return if (usb is UsbState.Attached || wifiLink) "Connecting" else "Waiting"
+            val medium = medium ?: return if (connecting) "Connecting" else "Waiting"
             return if (medium.slow) medium.fix ?: "Slow, use USB 3" else "Connected"
         }
 
@@ -160,7 +173,10 @@ data class StatusState(
     val waitingDescriptionRes: Int
         get() = when {
             usb is UsbState.Attached -> R.string.waiting_desc_usb
-            wifiLink -> R.string.waiting_desc_wifi
+            wifiPresent -> R.string.waiting_desc_wifi
+            // the setting is on and no comma has answered on this hotspot: one
+            // on another network is not the one this phone is listening for
+            wifiLink -> R.string.waiting_desc_wifi_waiting
             else -> R.string.waiting_desc_plug
         }
 }

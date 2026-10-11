@@ -79,10 +79,20 @@ class ServerService : LifecycleService() {
                 withContext(Dispatchers.IO) { graph.usb.connect() }
             }
         }
+        // the Wi-Fi presence handshake: the comma on this phone's hotspot
+        // announces itself and this answers it (presence.PresenceMonitor)
+        lifecycleScope.launch {
+            graph.settings.values.map { it.wifiLink }.distinctUntilChanged().collectLatest { on ->
+                if (on) graph.presence.start() else graph.presence.stop()
+            }
+        }
         lifecycleScope.launch {
             // the line under the Status title
-            combine(graph.server.runState, graph.server.snapshot, graph.usb.usb) { run, snapshot, usb ->
-                StatusText.subtitle(this@ServerService, StatusState(run, snapshot, usb = usb)) to snapshot.connected
+            combine(graph.server.runState, graph.server.snapshot, graph.usb.usb, graph.settings.values, graph.presence.here) { run, snapshot, usb, values, present ->
+                StatusText.subtitle(
+                    this@ServerService,
+                    StatusState(run, snapshot, usb = usb, wifiLink = values.wifiLink, wifiPresent = present),
+                ) to snapshot.connected
             }.distinctUntilChanged().collectLatest { (text, connected) ->
                 getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(text))
                 holdWakeLock(connected)
@@ -104,6 +114,7 @@ class ServerService : LifecycleService() {
 
     override fun onDestroy() {
         unregisterReceiver(usbEvents)
+        graph.presence.stop()
         holdWakeLock(false)
         graph.scope.launch(Dispatchers.IO) {
             graph.usb.disconnect()

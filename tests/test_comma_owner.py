@@ -657,13 +657,20 @@ class TestTheToggle(OwnerTest):
 
 
 class TestWifi(OwnerTest):
-  """Over Wi-Fi modeld dials the hotspot: no gadget, the port left alone, and
-  offroad a provisioning run that dials it too."""
+  """Over Wi-Fi modeld dials the hotspot: no gadget, the port left alone,
+  offroad a provisioning run that dials it too, and every step the presence
+  handshake, which is how the app on that hotspot knows a comma is here."""
 
   def setUp(self):
     super().setUp()
     self.write('JetlinkLink', b'3')
     self.gateway = mock.Mock(return_value='172.20.10.1')
+    # the real one opens a UDP socket to the gateway, which is no test's
+    # business; what it does with one is test_comma_wifi.py's
+    self.presence = mock.Mock(handshake=mock.Mock(return_value=False))
+    p = mock.patch.object(owner.wifi, 'Presence', mock.Mock(return_value=self.presence))
+    self.addCleanup(p.stop)
+    p.start()
     p = mock.patch.object(owner.wifi, 'gateway', self.gateway)
     self.addCleanup(p.stop)
     p.start()
@@ -729,6 +736,38 @@ class TestWifi(OwnerTest):
     with mock.patch.object(gadget, 'pending_shutdown', return_value='parked'):
       o.step()
     o.spawn_worker.assert_called_once_with('the jetson has to be shut down: parked')
+
+  def test_the_app_on_the_hotspot_is_asked_every_step(self):
+    # the announcement is the comma's, and the answer is what the app reads the
+    # Wi-Fi link as connecting on: a comma on no hotspot of that phone's says
+    # nothing, and the app says so
+    o = self.owner()
+    o.step()
+    o.step()
+    self.assertEqual(self.presence.handshake.call_args_list, [mock.call('172.20.10.1'), mock.call('172.20.10.1')])
+
+  def test_an_answered_handshake_is_said_once(self):
+    self.presence.handshake.return_value = True
+    o = self.owner()
+    with mock.patch.object(gadget, 'log') as log:
+      o.step()
+      o.step()
+      log.info.assert_called_once()
+    self.assertTrue(o.presence_up)
+    # and nothing to say when it keeps answering
+    self.presence.handshake.return_value = False
+    with mock.patch.object(gadget, 'log') as log:
+      o.step()
+      o.step()
+      log.info.assert_called_once()
+
+  def test_a_comma_that_turned_the_setting_off_stops_announcing(self):
+    o = self.owner()
+    o.step()
+    self.write('JetlinkLink', b'1')   # USB
+    o.step()
+    self.presence.close.assert_called_once()
+    self.presence.handshake.assert_called_once()
 
 
 class TestVmTuning(OwnerTest):

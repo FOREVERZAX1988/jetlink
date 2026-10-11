@@ -100,6 +100,30 @@ settings):
   root step goes through `scripts/comma/jetlink-root.sh`. See the
   [installation reference](installation-reference.md#custom-usb-integrations).
 
+### The presence handshake over Wi-Fi
+
+Wi-Fi is the one link the far end cannot see before it opens: the comma dials
+the hotspot's gateway, so until it does, the device running the app has nothing
+to go on but its own **Wi-Fi Link** setting, and a comma joined to some other
+network reads as on its way there and never arrives. So the comma says it is
+here. While its setting is Wi-Fi and it is on a Wi-Fi, the owner
+(`jetlink.comma.wifi.Presence`) sends one datagram a second to the gateway,
+UDP port **5600**, `jetlink` alone:
+`{"jetlink": "presence", "v": 1, "id": "9b3f0c1d"}`, and the app answers it to
+the port the announcement came from:
+`{"jetlink": "presence", "v": 1, "ack": true, "id": "9b3f0c1d"}`.
+
+`id` is fresh for every announcement and an answer to any other one is ignored,
+so a late answer, or one from another comma, cannot hold the reading up. The
+app's Status tab reads the link as connecting over Wi-Fi while a comma answers,
+never on the setting alone: that is the state a cable already in the phone
+shows before the ignition, and a comma that is not on this hotspot is not on
+its way. The comma takes the answer as the app listening, and says so in its
+log once. The gateway is the only address ever sent to, nothing is carried but
+these bytes, and a comma on no Wi-Fi sends nothing: a comma and a phone joined
+to the same router are not a link, since the comma dials its own gateway and
+the phone is not it.
+
 ### Bus speed
 
 Latency needs USB 3 (SuperSpeed). A frame is about 400 KB to the server and

@@ -90,6 +90,8 @@ data class SettingsInfo(
     val snapshot: Snapshot,
     val runState: RunState,
     val usb: UsbState,
+    /** A comma on this phone's hotspot, answered by the presence handshake. */
+    val wifiPresent: Boolean = false,
     val wifi: String?,
     /** onnxruntime's version, from the server's info. */
     val runtime: String?,
@@ -134,6 +136,7 @@ fun SettingsScreen(graph: AppGraph, openConnect: () -> Unit, openLogs: () -> Uni
     val runState by graph.server.runState.collectAsStateWithLifecycle()
     val usb by graph.usb.usb.collectAsStateWithLifecycle()
     val update by graph.updates.state.collectAsStateWithLifecycle()
+    val present by graph.presence.here.collectAsStateWithLifecycle()
     val wifi = rememberWifiAddress()
     val runtime by produceState<String?>(null, runState) {
         value = withContext(Dispatchers.IO) { graph.server.runtimeVersion() }
@@ -144,6 +147,7 @@ fun SettingsScreen(graph: AppGraph, openConnect: () -> Unit, openLogs: () -> Uni
         snapshot = snapshot,
         runState = runState,
         usb = usb,
+        wifiPresent = present,
         wifi = wifi,
         runtime = snapshot.server?.runtimeVersion ?: runtime,
         chip = Chip.name,
@@ -234,7 +238,7 @@ fun SettingsContent(values: SettingsValues, info: SettingsInfo, actions: Setting
 @Composable
 private fun Connection(values: SettingsValues, info: SettingsInfo, actions: SettingsActions) {
     val link = info.snapshot.medium?.title
-        ?: if (info.usb is UsbState.Attached || values.wifiLink) l10n(R.string.link_connecting) else l10n(R.string.link_not_connected)
+        ?: if (info.usb is UsbState.Attached || info.wifiPresent) l10n(R.string.link_connecting) else l10n(R.string.link_not_connected)
     val footer: (@Composable () -> Unit)? = if (values.wifiLink) {
         { FormFooter(l10n(R.string.settings_connection_footer_wifi)) }
     } else {

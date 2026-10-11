@@ -7,6 +7,8 @@ See the LICENSE file in the root directory for more details.
 The link over Wi-Fi: the comma dials its Wi-Fi gateway and nothing else, and
 modeld's link opens over that dial with no gadget to wait for.
 """
+import json
+import socket
 import tempfile
 import unittest
 from pathlib import Path
@@ -143,3 +145,94 @@ class TestDial(fakes.OpenpilotTest):
 
 if __name__ == '__main__':
   unittest.main()
+
+
+class TestPresence(unittest.TestCase):
+  """The handshake a comma on Wi-Fi sends to the device it joined, so that
+  device's app reads the link as connecting only while there is a comma on the
+  hotspot to connect to. The phone's half is presence.PresenceMonitor in the
+  Android app; here a loopback socket is the phone."""
+
+  def setUp(self):
+    self.phone = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    self.phone.bind(('127.0.0.1', 0))
+    self.phone.settimeout(2.0)
+    self.addCleanup(self.phone.close)
+    # the clock the owner's step would move: nothing here waits on a real one
+    self.now = [1000.0]
+    self.presence = wifi.Presence(port=self.phone.getsockname()[1], clock=lambda: self.now[0])
+    self.addCleanup(self.presence.close)
+
+  def announced(self) -> dict:
+    """The announcement, as the phone read it, keeping where it came from: the
+    answer goes back to the port the announcement came from, never to a port of
+    its own."""
+    data, self.caller = self.phone.recvfrom(wifi.PRESENCE_DATAGRAM)
+    return json.loads(data)
+
+  def answer(self, message: dict, **fields) -> None:
+    """The app's answer: the announcement back with ack set."""
+    self.phone.sendto(json.dumps({'jetlink': 'presence', 'v': 1, 'ack': True, **message, **fields}).encode(), self.caller)
+
+  def test_the_announcement_names_the_protocol_and_carries_an_id(self):
+    self.assertFalse(self.presence.handshake('127.0.0.1'))
+    message = self.announced()
+    self.assertEqual(message['jetlink'], 'presence')
+    self.assertEqual(message['v'], wifi.PRESENCE_VERSION)
+    self.assertTrue(message['id'])
+    self.assertEqual(self.caller[0], '127.0.0.1')
+
+  def test_the_apps_answer_is_the_handshake(self):
+    self.presence.handshake('127.0.0.1')
+    self.answer(self.announced())
+    # on the same step the answer arrived on, as the owner's next step is
+    self.assertTrue(self.presence.handshake('127.0.0.1'))
+
+  def test_only_the_same_id_answered_counts(self):
+    self.presence.handshake('127.0.0.1')
+    self.answer(self.announced(), id='deadbeef')
+    self.assertFalse(self.presence.handshake('127.0.0.1'))
+
+  def test_an_answer_stops_counting_after_the_hold(self):
+    self.presence.handshake('127.0.0.1')
+    self.answer(self.announced())
+    self.assertTrue(self.presence.handshake('127.0.0.1'))
+    self.now[0] += wifi.PRESENCE_HOLD - 0.1
+    self.assertTrue(self.presence.handshake('127.0.0.1'), 'an answer inside the hold still counts')
+    self.now[0] += wifi.PRESENCE_HOLD
+    self.assertFalse(self.presence.handshake('127.0.0.1'))
+
+  def test_one_announcement_a_period(self):
+    self.presence.handshake('127.0.0.1')
+    first = self.announced()
+    self.now[0] += wifi.PRESENCE_PERIOD / 2
+    self.presence.handshake('127.0.0.1')
+    self.now[0] += wifi.PRESENCE_PERIOD / 2
+    self.presence.handshake('127.0.0.1')
+    self.assertNotEqual(first['id'], self.announced()['id'], 'a fresh id each announcement')
+    self.phone.settimeout(0.1)
+    with self.assertRaises(socket.timeout):
+      self.phone.recvfrom(wifi.PRESENCE_DATAGRAM)
+
+  def test_junk_is_no_answer(self):
+    self.presence.handshake('127.0.0.1')
+    self.announced()
+    self.phone.sendto(b'not a datagram at all', self.caller)
+    self.phone.sendto(b'{"jetlink": "presence", "v": 1, "ack": false, "id": "x"}', self.caller)
+    self.assertFalse(self.presence.handshake('127.0.0.1'))
+
+  def test_a_comma_on_no_wifi_announces_nothing(self):
+    self.assertFalse(self.presence.handshake(None))
+    self.assertIsNone(self.presence.sock)
+    self.phone.settimeout(0.1)
+    with self.assertRaises(socket.timeout):
+      self.phone.recvfrom(wifi.PRESENCE_DATAGRAM)
+
+  def test_only_an_ack_of_the_same_id_is_an_answer(self):
+    good = b'{"jetlink":"presence","v":1,"ack":true,"id":"ab"}'
+    self.assertTrue(wifi._answered(good, 'ab'))
+    self.assertFalse(wifi._answered(good, 'cd'))
+    self.assertFalse(wifi._answered(b'{"jetlink":"presence","v":1,"ack":false,"id":"ab"}', 'ab'))
+    self.assertFalse(wifi._answered(b'{"jetlink":"presence","v":2,"ack":true,"id":"ab"}', 'ab'))
+    self.assertFalse(wifi._answered(b'{"jetlink":"presence","v":1,"ack":true,"id":"ab"}', ''))
+    self.assertFalse(wifi._answered(b'nonsense', 'ab'))

@@ -184,6 +184,10 @@ class Owner:
     self.idle_since = time.monotonic()
     self.next_attempt = 0.0
     self.gateway: str | None = None     # the Wi-Fi gateway seen last step, in Wi-Fi mode
+    # the presence handshake over Wi-Fi, and whether the app on the device
+    # this comma joined is answering it; None until it has been asked
+    self.presence = wifi.Presence()
+    self.presence_up: bool | None = None
     self.next_gadget_attempt = 0.0
     self.failed_ios: bool | None = None  # the mode whose last build failed, until one works
     self.next_worker = 0.0
@@ -644,7 +648,11 @@ class Owner:
       self.configured = False
       if mode == 'wifi':
         self.wifi_step()
+      else:
+        self.presence.close()
       return
+    # USB and iOS: only a Wi-Fi setting announces itself (wifi_step)
+    self.presence.close()
     self.link_step(mode == 'ios')
     if self.tuned != mode:
       # jetlink-root.sh vm: the recording VM tuning the gadget's reads need;
@@ -794,6 +802,9 @@ class Owner:
     gateway = wifi.gateway()
     joined = gateway is not None and gateway != self.gateway
     self.gateway = gateway
+    # before anything else this step does: the app on the device we joined is
+    # what reads the link as connecting, and it hears that from here
+    self.note_presence(self.presence.handshake(gateway))
     reason = gadget.pending_shutdown()
     if reason is not None:
       if gateway is None:
@@ -809,6 +820,20 @@ class Owner:
     why = self.wanted() or ('joined a hotspot' if joined else None)
     if why is not None:
       self.spawn_worker(why)
+
+  def note_presence(self, up: bool) -> None:
+    """Say the presence handshake's edges once. The app on the device this
+    comma joined answers the announcement while it has its Wi-Fi link on, and
+    that is what it reads the link as connecting on (jetlink.comma.wifi): a
+    comma that is not on that hotspot is not on its way, whatever the setting
+    says."""
+    if up == self.presence_up:
+      return
+    was, self.presence_up = self.presence_up, up
+    if up:
+      gadget.log.info("jetlink: the Jetlink app answered on %s; it reads the Wi-Fi link as connecting", self.gateway)
+    elif was and self.gateway is not None:
+      gadget.log.info("jetlink: the Jetlink app stopped answering on %s", self.gateway)
 
   def watch_the_port(self) -> None:
     """The edges of the USB link, and for iOS the phone's dial.

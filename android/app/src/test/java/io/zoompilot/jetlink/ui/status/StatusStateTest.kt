@@ -69,10 +69,17 @@ class StatusStateTest {
         assertEquals("BMRLNAP Model v4", state.accessoryDetail)
         assertEquals("Waiting", state.linkNote)
         assertEquals(R.string.waiting_desc_plug, state.waitingDescriptionRes)
-        // the Wi-Fi link setting: a link on its way with no cable
-        val wifi = state.copy(wifiLink = true)
+        // the Wi-Fi link setting and a comma on the hotspot that answered: a
+        // link on its way with no cable, which is the USB reading above
+        val wifi = state.copy(wifiLink = true, wifiPresent = true)
         assertEquals("Connecting", wifi.linkNote)
         assertEquals(R.string.waiting_desc_wifi, wifi.waitingDescriptionRes)
+        // the setting alone is not a link: the phone is listening and no comma
+        // has answered, so there is one to wait for, not one on its way
+        val listening = state.copy(wifiLink = true)
+        assertEquals("Waiting", listening.linkNote)
+        assertEquals(R.string.waiting_desc_wifi_waiting, listening.waitingDescriptionRes)
+        assertFalse(listening.connecting)
         val plugged = state.copy(usb = UsbState.Attached)
         assertEquals("Connecting", plugged.linkNote)
         assertEquals(R.string.waiting_desc_usb, plugged.waitingDescriptionRes)

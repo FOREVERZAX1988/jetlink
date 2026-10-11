@@ -61,7 +61,12 @@ No cable. Slower than USB; for testing.
 2. Turn on the phone's hotspot on **5 GHz**. 2.4 GHz is too slow.
 3. On the comma, join the hotspot in **Settings > Network**.
 4. Set **Settings > Models > Jetlink** to **Wi-Fi**.
-5. Wait for **Connected over Wi-Fi**.
+5. Wait for **Connected over Wi-Fi**. Before the ignition the Status tab reads
+   **Connecting over Wi-Fi** once the comma is on the hotspot: the comma
+   announces itself there (see [the presence
+   handshake](link-protocol.md#the-presence-handshake-over-wi-fi)), and until
+   it does, **Waiting for Comma** is the honest reading - a comma joined to
+   another network, the phone's home Wi-Fi included, is not on its way.
 
 <a id="benchmark"></a>
 
