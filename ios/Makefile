@@ -7,13 +7,15 @@
 #   make open      open the project in Xcode; pick a team, then run on a phone
 #   make testflight archive, upload to App Store Connect and wait while Apple
 #                  processes it (scripts/testflight.sh lists what it needs)
+#   make ipa       archive and export an installable .ipa to ios/build/export,
+#                  without uploading (testflight with UPLOAD=0)
 SHELL := /usr/bin/env bash
 .SHELLFLAGS := -euo pipefail -c
 
 IOS_DIR := $(patsubst %/,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
 BUILD := $(IOS_DIR)/build
 
-.PHONY: project build typecheck open testflight clean
+.PHONY: project build typecheck open testflight ipa clean
 
 project:
 	JETLINK_VERSION=0.0.0 JETLINK_BUILD=1 xcodegen generate --spec $(IOS_DIR)/project.yml --project $(IOS_DIR)
@@ -31,6 +33,9 @@ open: project
 
 testflight:
 	$(IOS_DIR)/scripts/testflight.sh
+
+ipa:
+	UPLOAD=0 $(IOS_DIR)/scripts/testflight.sh
 
 clean:
 	rm -rf $(BUILD)

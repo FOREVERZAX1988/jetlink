@@ -104,6 +104,18 @@ jobs:
         # On a rerun after the upload went through, it publishes that build
         # rather than making another.
 
+      - name: Keep the exported .ipa
+        # An export-only run (upload unticked) leaves the .ipa on the runner,
+        # which is discarded when the job ends. Publishing it is what lets
+        # someone without a Mac download an installable build from the run.
+        if: always() && env.HAVE_KEY == 'true' && inputs.upload != true
+        uses: actions/upload-artifact@v4
+        with:
+          name: Jetlink-ipa
+          path: ios/build/export/*.ipa
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Revoke the development certificate
         if: always() && env.HAVE_KEY == 'true'
         env:
