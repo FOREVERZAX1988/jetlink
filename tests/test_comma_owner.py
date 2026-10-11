@@ -761,6 +761,21 @@ class TestWifi(OwnerTest):
       o.step()
       log.info.assert_called_once()
 
+  def test_the_edge_that_falls_names_the_gateway_the_app_answered_on(self):
+    # the comma moved to another network: the app on the hotspot it left did
+    # not stop answering, the comma is no longer there to be answered. The log
+    # names that gateway, not the one this step is on, or whoever reads it goes
+    # looking for an app that was never on the new network
+    self.presence.handshake.return_value = True
+    o = self.owner()
+    o.step()
+    self.assertEqual(o.presence_gateway, '172.20.10.1')
+    self.gateway.return_value = '192.168.10.251'
+    self.presence.handshake.return_value = False
+    with mock.patch.object(gadget, 'log') as log:
+      o.step()
+      log.info.assert_called_once_with("jetlink: the Jetlink app stopped answering on %s", '172.20.10.1')
+
   def test_a_comma_that_turned_the_setting_off_stops_announcing(self):
     o = self.owner()
     o.step()

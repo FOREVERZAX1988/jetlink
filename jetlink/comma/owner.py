@@ -188,6 +188,7 @@ class Owner:
     # this comma joined is answering it; None until it has been asked
     self.presence = wifi.Presence()
     self.presence_up: bool | None = None
+    self.presence_gateway: str | None = None  # the gateway the app last answered on
     self.next_gadget_attempt = 0.0
     self.failed_ios: bool | None = None  # the mode whose last build failed, until one works
     self.next_worker = 0.0
@@ -830,14 +831,18 @@ class Owner:
     comma joined answers the announcement while it has its Wi-Fi link on, and
     that is what it reads the link as connecting on (jetlink.comma.wifi): a
     comma that is not on that hotspot is not on its way, whatever the setting
-    says."""
+    says. The edge that falls names the gateway the app answered on, not the
+    one this step is on: a comma that moved to another network left that app
+    behind, which is not an app that stopped answering."""
     if up == self.presence_up:
       return
     was, self.presence_up = self.presence_up, up
     if up:
+      self.presence_gateway = self.gateway
       gadget.log.info("jetlink: the Jetlink app answered on %s; it reads the Wi-Fi link as connecting", self.gateway)
-    elif was and self.gateway is not None:
-      gadget.log.info("jetlink: the Jetlink app stopped answering on %s", self.gateway)
+    elif was and self.presence_gateway is not None:
+      gadget.log.info("jetlink: the Jetlink app stopped answering on %s", self.presence_gateway)
+      self.presence_gateway = None
 
   def watch_the_port(self) -> None:
     """The edges of the USB link, and for iOS the phone's dial.
