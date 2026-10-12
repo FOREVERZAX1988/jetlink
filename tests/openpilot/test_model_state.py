@@ -16,6 +16,7 @@ code that drives.
 from __future__ import annotations
 
 import contextlib
+import time
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -401,6 +402,80 @@ class TestHold(ModelStateTest):
     # a window of nothing: every hold is the only one in it
     _, behind = self.holding(lambda seq: seq % 2 == 0, n=4 * model_state.HOLDS_ALLOWED, HOLD_WINDOW=0.0)
     self.assertEqual(behind, [None] * len(behind))
+
+
+class TestWifiHold(ModelStateTest):
+  """A link off the cable pays a network round trip per reply, so the hold
+  waits the wider WIFI_HOLD_FRAME and a few late frames while proving are the
+  radio, not a host that cannot keep up. On the cable nothing changes."""
+
+  @staticmethod
+  def over_wifi(client: FakeClient) -> FakeClient:
+    """A client whose transport answers that it is not on the cable."""
+    client.t.on_the_cable = lambda: False
+    return client
+
+  def budget(self, client):
+    """The state, and what `_hold_left` allows a frame started now."""
+    state = self.make(spec_for(STATEFUL), client)
+    return state, state._hold_left(SimpleNamespace(t0=time.perf_counter()))
+
+  def test_the_wifi_budget_reaches_past_the_cable_one(self):
+    state, left = self.budget(self.over_wifi(FakeClient()))
+    self.assertTrue(state._wifi)
+    self.assertGreater(left, model_state.HOLD_FRAME, 'a Wi-Fi reply gets the wider budget')
+    self.assertLessEqual(left, model_state.WIFI_HOLD_FRAME)
+
+  def test_the_cable_keeps_the_tighter_budget(self):
+    client = FakeClient()
+    client.t.on_the_cable = lambda: True
+    state, left = self.budget(client)
+    self.assertFalse(state._wifi)
+    self.assertLessEqual(left, model_state.HOLD_FRAME)
+
+  def test_a_link_with_no_medium_to_ask_keeps_the_tighter_budget(self):
+    # an older server, or a fake: no on_the_cable, so not Wi-Fi
+    state, left = self.budget(FakeClient())
+    self.assertFalse(state._wifi)
+    self.assertLessEqual(left, model_state.HOLD_FRAME)
+
+  def test_a_wifi_frame_holds_within_the_wider_budget(self):
+    client = self.over_wifi(FakeClient())
+    _, state, client, _ = self.run_frames(STATEFUL, n=3, client=client)
+    self.assertTrue(state._wifi)
+    self.assertIsNone(client.holds[0], 'nothing to publish again yet: the first frame waits')
+    for hold in client.holds[1:]:
+      self.assertGreater(hold, 0.0)
+      self.assertLessEqual(hold, model_state.WIFI_HOLD_FRAME)
+
+  def late_at(self, late: set[int], n: int, wifi: bool):
+    """`n` driven frames, the replies to `late` seqs too late to wait for."""
+    client = self.over_wifi(FakeClient()) if wifi else FakeClient()
+    client.late = late
+    behind = []
+    state = self.make(spec_for(STATEFUL), client)
+    for _ in range(n):
+      self.frames(state, 1)
+      behind.append(state.behind)
+    return behind
+
+  def test_a_few_late_frames_while_proving_are_the_radio(self):
+    k = model_state.WIFI_PROVING_HOLDS
+    first = model_state.SETTLING_FRAMES + 1      # past settling, inside proving
+    behind = self.late_at(set(range(first, first + k)), n=first + k - 1, wifi=True)
+    self.assertEqual(behind, [None] * len(behind), f'{k} late frames on Wi-Fi are forgiven')
+
+  def test_one_past_the_wifi_allowance_still_says_behind(self):
+    k = model_state.WIFI_PROVING_HOLDS
+    first = model_state.SETTLING_FRAMES + 1
+    n = first + k
+    behind = self.late_at(set(range(first, first + k + 1)), n=n, wifi=True)
+    self.assertEqual(behind[-1], f'held frame {n} of the first {model_state.PROVING_FRAMES}')
+
+  def test_on_the_cable_one_late_frame_while_proving_is_still_behind(self):
+    behind = self.late_at({7}, n=8, wifi=False)
+    self.assertEqual(behind[6], f'held frame 7 of the first {model_state.PROVING_FRAMES}')
+    self.assertIsNone(behind[7], 'said once, for the frame that held')
 
 
 class TestTheFace(ModelStateTest):

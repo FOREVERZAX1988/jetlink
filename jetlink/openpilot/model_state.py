@@ -43,6 +43,10 @@ SLOW_FRAME = 0.05  # the full 20 Hz budget, not just the largest outliers
 # delay both dwarf, where a dropped frame is the same stale plan plus a count
 # toward selfdrived's modeldLagging. None waits the client's deadline, as before
 HOLD_FRAME = 0.046
+# TCP over Wi-Fi has an extra network round trip on top of the host's
+# inference. Keep the wait inside one 20 Hz frame (50 ms), while USB
+# keeps the original 46 ms so a slow cable host is still visible.
+WIFI_HOLD_FRAME = 0.050
 # Held frames the large model may make before it is behind rather than
 # tailing: this many in a row, or more than HOLDS_ALLOWED within HOLD_WINDOW.
 # A host at 40 ms a frame with a tail past 46 (an iPhone) holds a few frames
@@ -60,6 +64,10 @@ HOLD_WINDOW = 10.0
 # wheel, where an iPhone's every return was a soft disable within a second
 # (2026-10-04)
 PROVING_FRAMES = 20
+# Wi-Fi adds scheduling and radio jitter to every reply. A few late
+# frames during warm-up are not a host that cannot keep up, unlike the
+# low-latency USB link this proving rule was written for.
+WIFI_PROVING_HOLDS = 3
 # the first of them never hand back, held or not: the first after a join
 # carries the history reset, and a Mac's is ~100 ms of CoreML warm-up. A
 # single slow frame later is the comma's own stall, a warp or a send, which
@@ -152,6 +160,9 @@ class JetlinkModelState:
 
     self.client = client
     self.spec = spec
+    transport = getattr(self.client, 't', None)
+    on_cable = getattr(transport, 'on_the_cable', None)
+    self._wifi = callable(on_cable) and not on_cable()
     # not chestnut hardware, but the same role: modelV2.big, the UI and the
     # model manager key off this flag
     self.chestnut = True
@@ -275,7 +286,7 @@ class JetlinkModelState:
 
   def end(self, after_enqueue: Callable[[], None] | None = None) -> dict[str, np.ndarray]:
     """The sent frame's output, as modeld blocks on a chestnut's, but not past
-    HOLD_FRAME once there is an output to publish again: a frame that long
+    the hold once there is an output to publish again: a frame that long
     is a dropped camera frame. Only a stall past the client's deadline raises,
     into the joining state's demotion to the small model."""
     frame, self._frame = self._frame, None
@@ -327,13 +338,14 @@ class JetlinkModelState:
 
   @property
   def _can_hold(self) -> bool:
-    """Is there an output to publish again instead of waiting (HOLD_FRAME)?"""
-    return bool(HOLD_FRAME) and self.client.last_output is not None
+    """Is there an output to publish again instead of waiting?"""
+    limit = WIFI_HOLD_FRAME if self._wifi else HOLD_FRAME
+    return bool(limit) and self.client.last_output is not None
 
-  @staticmethod
-  def _hold_left(frame) -> float:
+  def _hold_left(self, frame) -> float:
     """What is left of the hold for `frame`, from its warp's start."""
-    return HOLD_FRAME - (time.perf_counter() - frame.t0)
+    limit = WIFI_HOLD_FRAME if self._wifi else HOLD_FRAME
+    return limit - (time.perf_counter() - frame.t0)
 
   def _note_hold(self, held: bool) -> str | None:
     """Why the large model should hand back after this frame, if it should:
@@ -352,6 +364,8 @@ class JetlinkModelState:
     if self._frame_id <= SETTLING_FRAMES:
       return None
     if self._frame_id <= PROVING_FRAMES:
+      if self._wifi and len(self._holds) <= WIFI_PROVING_HOLDS:
+        return None
       return f'held frame {self._frame_id} of the first {PROVING_FRAMES}'
     if self._holds_in_a_row >= HOLDS_IN_A_ROW:
       return f'held {self._holds_in_a_row} frames in a row'
