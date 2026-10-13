@@ -94,6 +94,13 @@ class Settings:
     key = self.keys.charge_phone
     return bool(key) and self.params.get_bool(key) is True
 
+  def preview(self) -> bool:
+    """Is the fork drawing the onroad UI while parked? Off when the param is
+    unset, which is every fork that does not have the feature, and when the
+    fork declares no key for it."""
+    key = self.keys.preview
+    return bool(key) and self.params.get_bool(key) is True
+
   def marks(self) -> dict[str, int]:
     """When each watched param last changed, by key; 0 for one that is unset."""
     out = {}

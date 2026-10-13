@@ -923,6 +923,61 @@ class WarmupTest(JoiningBase):
     self.assertGreater(calls, 0)
 
 
+class PreviewEndsTest(JoiningBase):
+  """A preview that is driven away. The fork clears IsOnroadPreview when the
+  real onroad UI takes over, but a large model state built in the preview keeps
+  what it was built with: the moment anything can be in control, the wheel's
+  rules have to be the ones that count."""
+
+  def test_the_preview_rule_ends_when_anything_can_be_in_control(self):
+    s = self._state()
+    self._wait_joined(s)
+    self.big.preview = True
+    s.in_control = False
+    self._run(s)
+    self.assertTrue(self.big.preview)
+    s.in_control = True
+    self._run(s)
+    self.assertFalse(self.big.preview)
+    self.assertTrue(self.log.has("in control, a preview's silence rule no longer applies"))
+
+
+class PeerAnswerTest(unittest.TestCase):
+  """②: over Wi-Fi there is no replug edge. The app answering the owner's
+  presence handshake is the host saying it is there, and the delay the backoff
+  would sit out is for a Jetson that is booting or an engine being built."""
+
+  def state(self, peer):
+    log = RecordingLog()
+    # the join thread is started in __init__ and would call connect(): this
+    # test is about the backoff it waits out
+    with mock.patch.object(JoiningModelState, '_join_loop', lambda self: None):
+      s = JoiningModelState(None, None, None, progress=mock.Mock(), log=log, peer=peer)
+    s._rejoin_at = time.monotonic() + 30.0
+    return s, log
+
+  def test_the_app_answering_ends_the_backoff(self):
+    s, log = self.state(lambda: True)
+    with mock.patch.object(joining, 'REPLUG_POLL', 0.01), \
+         mock.patch.object(joining.gadget, 'host_attached', lambda: True):
+      t0 = time.monotonic()
+      self.assertFalse(s._wait_out_back_off())
+    self.assertLess(time.monotonic() - t0, 1.0, 'the backoff was sat out')
+    self.assertTrue(log.has('the app on the other end is answering, retrying now'))
+
+  def test_a_link_that_never_answers_waits_the_delay(self):
+    s, log = self.state(lambda: False)
+    with mock.patch.object(joining, 'REPLUG_POLL', 0.01), \
+         mock.patch.object(joining.gadget, 'host_attached', lambda: True):
+      timer = threading.Timer(0.2, s._stop.set)
+      timer.start()
+      self.addCleanup(timer.cancel)
+      t0 = time.monotonic()
+      self.assertTrue(s._wait_out_back_off())
+    self.assertGreaterEqual(time.monotonic() - t0, 0.2)
+    self.assertFalse(log.has('answering, retrying now'))
+
+
 class ReplugTest(JoiningBase):
   """The backoff after a loss is for a host that is still there. One that let
   go of the gadget and configured it again is a replug: try at once."""

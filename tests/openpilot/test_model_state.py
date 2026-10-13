@@ -66,6 +66,9 @@ class FakeClient:
     # end() asked for
     self.late = set()
     self.holds = []
+    # and the budget a frame that had nothing to hold asked for (end()'s
+    # first-frame deadline), None when it held instead
+    self.deadlines = []
     self.drains = 0
     # frames (by frame_id) a drain leaves unanswered: a reply not back yet
     self.keep: set[int] = set()
@@ -88,8 +91,9 @@ class FakeClient:
     self._in_flight.append(frame_id)
     return frame_id
 
-  def infer_end(self, seq, hold=None):
+  def infer_end(self, seq, hold=None, deadline=None):
     self.holds.append(hold)
+    self.deadlines.append(deadline)
     if hold is not None and (seq in self.late or seq in self.keep):
       return None
     self._in_flight.remove(seq)
@@ -138,10 +142,11 @@ class ModelStateTest(unittest.TestCase):
     self.log = fakes.RecordingLog()
     self.events = []
 
-  def make(self, spec, client, face=fakes.FACE, warped=None):
+  def make(self, spec, client, face=fakes.FACE, warped=None, preview=False):
     warped = np.zeros(np.prod(spec.warped_shape), np.uint8) if warped is None else warped
     return model_state.JetlinkModelState(client, spec, FakeWarp(warped), face=face, log=self.log,
-                                         event=lambda name, **fields: self.events.append((name, fields)))
+                                         event=lambda name, **fields: self.events.append((name, fields)),
+                                         preview=preview)
 
   def run_frames(self, inputs: dict, n: int = 3, client=None, after_enqueue=None):
     """`n` frames driven. Returns the spec, the state, the client and the
@@ -558,6 +563,69 @@ class TestTelemetry(ModelStateTest):
     self.run_frames(STATEFUL, n=3, client=client, after_enqueue=callback)
     self.assertEqual(client.asked, [True, True, True])
     self.assertEqual(callback.call_count, 3)
+
+
+class TestTheHostsFirstAnswer(ModelStateTest):
+  """The frames before the host has answered once have no output to publish
+  again, so end() has nothing to hold: they wait their own budget
+  (model_state.FIRST_FRAME_TIMEOUT). The client's deadline is one 20 Hz frame,
+  and a first frame is the slowest frame there is (the history reset and the
+  host's own cold start)."""
+
+  def test_the_first_frame_waits_its_own_budget(self):
+    spec, state, client, _ = self.run_frames(STATEFUL, n=3)
+    self.assertIsNone(client.holds[0])
+    self.assertEqual(client.deadlines[0], model_state.FIRST_FRAME_TIMEOUT)
+    # the answer is in: every frame after it holds instead, as before
+    self.assertEqual(client.deadlines[1:], [None, None])
+    for hold in client.holds[1:]:
+      self.assertIsNotNone(hold)
+
+  def test_wifi_waits_the_wider_one(self):
+    client = FakeClient()
+    client.t.on_the_cable = lambda: False
+    state = self.make(spec_for(STATEFUL), client)
+    self.frames(state, 1)
+    self.assertEqual(client.deadlines, [model_state.WIFI_FIRST_FRAME_TIMEOUT])
+
+  def test_an_output_already_in_hand_is_not_a_first_frame(self):
+    # drain() before the first frame has the host's output: there is something
+    # to publish again, so the frame holds and never waits the budget
+    client = FakeClient()
+    client.last_output = client.output
+    state = self.make(spec_for(STATEFUL), client)
+    self.frames(state, 1)
+    self.assertEqual(client.deadlines, [None])
+    self.assertIsNotNone(client.holds[0])
+
+
+class TestAPreview(ModelStateTest):
+  """A preview never takes control, so a host that is slow but answering keeps
+  the link: its frames publish the previous output and the picture refreshes at
+  the host's rate. Only silence past PREVIEW_SILENCE hands it back."""
+
+  def make_late(self, preview: bool):
+    """A host slower than the hold on every frame after its first."""
+    client = FakeClient()
+    client.late = set(range(2, 20))
+    return self.make(spec_for(STATEFUL), client, preview=preview), client
+
+  def test_held_frames_in_a_row_are_kept(self):
+    state, client = self.make_late(preview=True)
+    self.frames(state, 8)
+    self.assertEqual(state.trips.held, 7)
+    self.assertIsNone(state.behind)
+
+  def test_the_same_host_hands_a_driving_link_back(self):
+    state, client = self.make_late(preview=False)
+    self.frames(state, 8)
+    self.assertTrue((state.behind or '').startswith('held frame'), state.behind)
+
+  def test_silence_hands_the_preview_back(self):
+    state, client = self.make_late(preview=True)
+    with mock.patch.object(model_state, 'PREVIEW_SILENCE', 0.0):
+      self.frames(state, 8)
+    self.assertIn('no answer for', state.behind or '')
 
 
 if __name__ == '__main__':

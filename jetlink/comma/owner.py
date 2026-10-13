@@ -565,6 +565,11 @@ class Owner:
       'udc': state,
       'speed': gadget.usb_speed() if configured else None,
       'present': present,
+      # the handshake as an edge, for a reader that wants "is the app on that
+      # hotspot still answering" rather than "is a host on the port": over
+      # Wi-Fi the latter is always False and there is no replug to catch a link
+      # that died, only this (read by joining._wait_out_back_off)
+      'presence': self.presence_up,
       'server': self.server,
       'worker': self.worker is not None and self.worker.poll() is None,
       'unfinished': self.unfinished,

@@ -468,8 +468,13 @@ class JetlinkClient:
     if sent is None:
       raise LinkError(f'frame seq {seq} was not sent, or has been read already')
     failing = hold is None
+    # what this frame's wait is bounded by: the client's deadline unless the
+    # caller brought its own (model_state's first-frame budget), so the
+    # failure below names whichever it was
+    budget = self.deadline
     if failing:
-      hold = (self.deadline if deadline is None else deadline) - (time.monotonic() - sent.sent_at)
+      budget = self.deadline if deadline is None else deadline
+      hold = budget - (time.monotonic() - sent.sent_at)
     try:
       if failing and hold <= 0:
         raise LinkTimeout('frame deadline elapsed during send')
@@ -478,7 +483,7 @@ class JetlinkClient:
       if not failing:
         return None
       self.dead = True
-      raise LinkError(f"no answer for frame in {self.deadline:.1f}s; link abandoned") from e
+      raise LinkError(f"no answer for frame in {budget:.1f}s; link abandoned") from e
     except LinkError:
       self.dead = True
       raise

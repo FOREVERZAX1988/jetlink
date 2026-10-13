@@ -47,6 +47,31 @@ HOLD_FRAME = 0.046
 # inference. Keep the wait inside one 20 Hz frame (50 ms), while USB
 # keeps the original 46 ms so a slow cable host is still visible.
 WIFI_HOLD_FRAME = 0.050
+# What the frames before the host's first answer may wait, which the hold above
+# cannot cover: there is no output to publish again, so there is nothing to fall
+# back on and the wait would be the client's deadline (link.INFERENCE_TIMEOUT,
+# 0.2 s), a number written for one 20 Hz frame. The first frame of a join is the
+# slowest one there is: it carries the history reset and the host's own cold
+# start (a Mac's CoreML ~100 ms, a phone's LiteRT more), and no reply yet is a
+# link that never joined, not a host that is behind. So those frames wait this
+# instead (client.FRAME_TIMEOUT's own reason: past it the far end is gone, not
+# slow), and Wi-Fi the wider one: an extra round trip, a radio that can lose the
+# request itself, and no USB edge to catch a reply that is late.
+# Bounded on purpose: end() blocks the frame thread for as long as this lasts,
+# so modelV2 stops, and a host that never answers would pin modeld where the
+# small model should have taken over. A join that fails this way is retried,
+# and the retry finds the host warm.
+FIRST_FRAME_TIMEOUT = 3.0
+WIFI_FIRST_FRAME_TIMEOUT = 6.0
+# How long a preview may go with no answer at all before the link is taken for
+# lost. A preview never takes control, so holding is no hazard in it: a slow
+# host's frames publish the previous output, the plan goes on being drawn, and
+# the picture refreshes at the host's rate. That is the point of a preview, and
+# the hold counts below (written for the wheel) would take it away from the
+# first frame past SETTLING_FRAMES. Only silence past this hands the picture
+# back to the small model, so a plan that has stopped moving is replaced by the
+# comma's own.
+PREVIEW_SILENCE = 5.0
 # Held frames the large model may make before it is behind rather than
 # tailing: this many in a row, or more than HOLDS_ALLOWED within HOLD_WINDOW.
 # A host at 40 ms a frame with a tail past 46 (an iPhone) holds a few frames
@@ -144,7 +169,7 @@ class JetlinkModelState:
 
   prev_desire: np.ndarray  # for tracking the rising edge of the pulse
 
-  def __init__(self, client, spec, warp, *, face, log, event):
+  def __init__(self, client, spec, warp, *, face, log, event, preview: bool = False):
     self._log = log
     # (name, **fields): a structured log line, cloudlog.event on a comma
     self._event = event
@@ -163,6 +188,14 @@ class JetlinkModelState:
     transport = getattr(self.client, 't', None)
     on_cable = getattr(transport, 'on_the_cable', None)
     self._wifi = callable(on_cable) and not on_cable()
+    # the fork's onroad preview (its IsOnroadPreview, which it declares through
+    # interface.Keys.preview): the comma draws the onroad UI while parked, and
+    # nothing in it can take control, so a host that is only slow is kept rather
+    # than handed back (PREVIEW_SILENCE). Public, and cleared by the joining
+    # state the moment anything can be in control: the fork clears its param
+    # when the real onroad UI takes over, but a state built in the preview keeps
+    # what it was built with (joining.PreviewEndsTest)
+    self.preview = preview
     # not chestnut hardware, but the same role: modelV2.big, the UI and the
     # model manager key off this flag
     self.chestnut = True
@@ -211,6 +244,9 @@ class JetlinkModelState:
     self._holds: deque[float] = deque()
     self._holds_in_a_row = 0
     self.behind: str | None = None
+    # when the host last answered, for the preview's silence rule. The state is
+    # built on the swap frame, so it starts counting from there
+    self._last_answer = time.monotonic()
 
   def slice_outputs(self, model_outputs: np.ndarray, output_slices: dict[str, slice]) -> dict[str, np.ndarray]:
     return {k: model_outputs[np.newaxis, v] for k, v in output_slices.items()}
@@ -296,8 +332,12 @@ class JetlinkModelState:
     waiting_from = time.perf_counter()
     if frame.seq is None:
       model_output = None   # not sent (see send): held
+    elif self._can_hold:
+      model_output = self.client.infer_end(frame.seq, hold=self._hold_left(frame))
     else:
-      model_output = self.client.infer_end(frame.seq, hold=self._hold_left(frame) if self._can_hold else None)
+      # nothing has come back yet this session, so there is no output to publish
+      # again: this frame waits its own budget, not one 20 Hz frame
+      model_output = self.client.infer_end(frame.seq, deadline=self._first_frame_budget)
     t4 = time.perf_counter()
     held = model_output is None
     self.behind = self._note_hold(held)
@@ -342,6 +382,11 @@ class JetlinkModelState:
     limit = WIFI_HOLD_FRAME if self._wifi else HOLD_FRAME
     return bool(limit) and self.client.last_output is not None
 
+  @property
+  def _first_frame_budget(self) -> float:
+    """What the frames before the host's first answer of this session may wait."""
+    return WIFI_FIRST_FRAME_TIMEOUT if self._wifi else FIRST_FRAME_TIMEOUT
+
   def _hold_left(self, frame) -> float:
     """What is left of the hold for `frame`, from its warp's start."""
     limit = WIFI_HOLD_FRAME if self._wifi else HOLD_FRAME
@@ -351,9 +396,13 @@ class JetlinkModelState:
     """Why the large model should hand back after this frame, if it should:
     any held frame among its first PROVING_FRAMES past SETTLING_FRAMES,
     HOLDS_IN_A_ROW held frames running, or more than HOLDS_ALLOWED in
-    HOLD_WINDOW. None while it is keeping up."""
+    HOLD_WINDOW. None while it is keeping up.
+
+    A preview is held to PREVIEW_SILENCE instead, and to nothing else: it never
+    takes control, so a host that is slow but answering is the feature."""
     if not held:
       self._holds_in_a_row = 0
+      self._last_answer = time.monotonic()
       return None
     self.trips.held += 1
     now = time.monotonic()
@@ -361,6 +410,9 @@ class JetlinkModelState:
     while now - self._holds[0] > HOLD_WINDOW:
       self._holds.popleft()
     self._holds_in_a_row += 1
+    if self.preview:
+      silence = now - self._last_answer
+      return f'no answer for {silence:.0f} s' if silence > PREVIEW_SILENCE else None
     if self._frame_id <= SETTLING_FRAMES:
       return None
     if self._frame_id <= PROVING_FRAMES:

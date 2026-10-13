@@ -450,6 +450,27 @@ class FrameDeadline(unittest.TestCase):
     self.assertGreaterEqual(took, link.INFERENCE_TIMEOUT * 0.9)
     self.assertLess(took, link.INFERENCE_TIMEOUT + 0.1)
 
+  def test_a_frame_with_its_own_budget_names_that_one(self):
+    # model_state's first frame brings its own budget (FIRST_FRAME_TIMEOUT), so
+    # what the link fails with has to name what it actually waited, not the
+    # client's 0.2 s
+    import numpy as np
+
+    from jetlink.client import JetlinkClient
+    from jetlink.transport.base import LinkError
+    from tests.test_protocol import _spec, make_pair
+    a, b = make_pair()
+    client = JetlinkClient(a, deadline=link.INFERENCE_TIMEOUT)
+    client.spec = spec = _spec()
+    try:
+      seq = client.infer_begin(np.zeros(spec.warped_shape, np.uint8), np.zeros(spec.packed_nelem, np.float32), 1)
+      with self.assertRaises(LinkError) as caught:
+        client.infer_end(seq, deadline=0.35)
+    finally:
+      client.close()
+      b.close()
+    self.assertIn('in 0.3s', str(caught.exception))
+
 
 if __name__ == '__main__':
   unittest.main()

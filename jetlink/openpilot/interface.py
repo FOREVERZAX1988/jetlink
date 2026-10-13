@@ -54,6 +54,11 @@ class Keys:
   # BOOL: an iPhone on a direct cable is asked to charge from the comma
   # (comma.port). Off when unset, and without the key
   charge_phone: str | None = None
+  # BOOL: the fork is drawing the onroad UI while parked (its IsOnroadPreview).
+  # Nothing in a preview takes control, so the large model is held to a
+  # different rule there (model_state.PREVIEW_SILENCE). Off when unset, and
+  # without the key
+  preview: str | None = None
 
 
 @dataclass(frozen=True)

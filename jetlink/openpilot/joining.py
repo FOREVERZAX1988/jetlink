@@ -116,7 +116,7 @@ class JoiningModelState:
   and `log` is cloudlog on a comma.
   """
 
-  def __init__(self, small, connect, build, prepare=None, reset_small=None, *, progress, log):
+  def __init__(self, small, connect, build, prepare=None, reset_small=None, *, progress, log, peer=None):
     self._small = small
     self._active = small
     self._connect = connect
@@ -124,6 +124,11 @@ class JoiningModelState:
     self._reset_small = reset_small
     self._progress = progress
     self._log = log
+    # whether the app on the other end is answering right now, so a Wi-Fi
+    # backoff can be cut short the way a USB replug cuts one: over Wi-Fi there
+    # is no gadget edge to catch, only the owner's presence handshake. A link
+    # that cannot answer is taken for the cable, where the replug is the signal
+    self._peer = peer or (lambda: False)
 
     # whatever the swap would otherwise do on the frame loop, done now on
     # modeld's main thread before the frame loop exists; at the swap it cost
@@ -176,6 +181,8 @@ class JoiningModelState:
     # and whether this failure streak has already skipped a backoff for a replug
     self._host_left = False
     self._replugged = False
+    # and whether this streak has already skipped one for an app answering again
+    self._peer_retried = False
 
     # in control until modeld says otherwise, so a swap can never happen on no
     # information
@@ -321,6 +328,13 @@ class JoiningModelState:
     if self._active is self._small:
       self._small_frames += 1
       return self._small.run(bufs, transforms, inputs, after_enqueue)
+    if self._in_control and getattr(self._active, 'preview', False):
+      # the preview is over: the fork clears IsOnroadPreview when the real
+      # onroad UI takes over, but a large model state built during the preview
+      # keeps what it was built with. From the frame anything can be in
+      # control, the rules written for the wheel are the ones that count
+      self._active.preview = False
+      self._log.warning("jetlink: in control, a preview's silence rule no longer applies")
     return self._run_big(bufs, transforms, inputs, after_enqueue)
 
   def _run_big(self, bufs, transforms, inputs, after_enqueue):
@@ -451,6 +465,7 @@ class JoiningModelState:
     self._failures = 1 if stable else self._failures + 1
     if stable:
       self._replugged = False   # a new streak may skip a backoff for a replug again
+      self._peer_retried = False   # ...or for an app that is answering again
     self._joined_at = 0.0
     if self._failures <= QUICK_RETRIES:
       delay = REJOIN_DELAY_QUICK
@@ -548,10 +563,11 @@ class JoiningModelState:
       self._keep_alive()
 
   def _wait_out_back_off(self) -> bool:
-    """Until the next attempt is due, or a host configures the gadget again
-    after it went away. Once per failure streak: a host that flaps, a marginal
-    cable, would otherwise cycle the swap and its alerts with no backoff at
-    all. True once closed."""
+    """Until the next attempt is due, or the host says it is there: it
+    configured the gadget again after it went away, or, over Wi-Fi, the app on
+    the other end answered the owner's presence handshake. Once per failure
+    streak: a host that flaps, a marginal cable, would otherwise cycle the swap
+    and its alerts with no backoff at all. True once closed."""
     host_left, self._host_left = self._host_left or not gadget.host_attached(), False
     while (left := self._rejoin_at - time.monotonic()) > 0:
       if self._stop.wait(min(left, REPLUG_POLL)):
@@ -562,6 +578,14 @@ class JoiningModelState:
         self._log.warning("jetlink: the host configured the gadget again, retrying now")
         return False
       host_left = host_left or not attached
+      if not self._peer_retried and self._peer():
+        # over Wi-Fi the app answering is the host saying it is there. The
+        # delay being sat out is for a Jetson that is booting, or an engine
+        # that is building, not for an app that is answering already: a phone
+        # whose first frame was over budget is warm on the retry
+        self._peer_retried = True
+        self._log.warning("jetlink: the app on the other end is answering, retrying now")
+        return False
     return self._stop.is_set()
 
   def _keep_alive(self) -> None:
@@ -669,10 +693,20 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
     warp = ready.get('warp') if ready.get('geometry') == (img_w * 2, img_h * 2) else None
     if warp is None:
       raise RuntimeError('no prepared warp for the server model geometry')
-    return JetlinkModelState(client, spec, warp, face=face, log=parts.log, event=op.event)
+    return JetlinkModelState(client, spec, warp, face=face, log=parts.log, event=op.event,
+                             preview=parts.settings.preview())
 
   def connect(should_stop=None):
     return links.open_link(parts, link, should_stop)
 
+  def peer_present() -> bool:
+    """Whether the app on the other end is answering the owner's presence
+    handshake right now (comma.owner.note_presence, which its record carries
+    as 'presence'). Over Wi-Fi that is the only liveness there is: 'present'
+    is the gadget's and a Wi-Fi link has no gadget."""
+    from jetlink.openpilot import status
+    live = status.owner_record()[1]
+    return bool(live is not None and live.get('presence'))
+
   return JoiningModelState(small, connect, build, prepare, reset_small=lambda: ready['reset_small'](),
-                           progress=parts.progress, log=parts.log)
+                           progress=parts.progress, log=parts.log, peer=peer_present)
