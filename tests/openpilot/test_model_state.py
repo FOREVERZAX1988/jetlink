@@ -25,6 +25,7 @@ import numpy as np
 
 from jetlink.openpilot import model_state
 from jetlink.spec import ModelSpec
+from jetlink.transport.base import LinkError
 from tests.openpilot import fakes
 
 # Cinque Terre V3's output layout, read off its ONNX
@@ -57,6 +58,12 @@ class FakeClient:
     self.last_timings = (0, 0, 0)
     self.last_state = None
     self.dead = False
+    # a preview's link: there a frame the server failed is that frame's failure
+    # and not the link's, and the frames whose answer carries no output at all
+    # (a NOT_FINITE from the server)
+    self.tolerate_failed = False
+    self.last_failed = False
+    self.failed: set[int] = set()
     self.t = SimpleNamespace()
     self.output = np.zeros(18452, np.float32)
     self.output[slice(*SLICES['hidden_state'])] = 0.5
@@ -94,6 +101,15 @@ class FakeClient:
   def infer_end(self, seq, hold=None, deadline=None):
     self.holds.append(hold)
     self.deadlines.append(deadline)
+    if seq in self.failed:
+      # the server answered, and its answer carried no output (NOT_FINITE)
+      self._in_flight.remove(seq)
+      self.last_failed = True
+      if not self.tolerate_failed:
+        self.dead = True
+        raise LinkError(f'inference failed: NOT_FINITE (frame {seq})')
+      return None
+    self.last_failed = False
     if hold is not None and (seq in self.late or seq in self.keep):
       return None
     self._in_flight.remove(seq)
@@ -626,6 +642,51 @@ class TestAPreview(ModelStateTest):
     with mock.patch.object(model_state, 'PREVIEW_SILENCE', 0.0):
       self.frames(state, 8)
     self.assertIn('no answer for', state.behind or '')
+
+
+class TestAPreviewFrameTheHostCannotAnswer(ModelStateTest):
+  """A host that answers with a frame it could not compute is still there. A
+  preview keeps its link and serves that frame from the small model, where the
+  wheel hands the link back."""
+
+  def make_preview(self, preview: bool):
+    client = FakeClient()
+    return super().make(spec_for(STATEFUL), client, preview=preview), client
+
+  def test_a_preview_keeps_the_link_where_the_wheel_hands_it_back(self):
+    state, client = self.make_preview(preview=True)
+    self.assertTrue(client.tolerate_failed)
+    client.failed.add(1)
+    # nothing has come back this session, so there is no output to publish
+    # again: the joining state serves this frame (joining._run_big)
+    with self.assertRaises(model_state.FrameFailed):
+      self.frames(state, 1)
+    self.assertFalse(client.dead)
+
+    driving, wheel = self.make_preview(preview=False)
+    self.assertFalse(wheel.tolerate_failed)
+    wheel.failed.add(1)
+    with self.assertRaises(LinkError):
+      self.frames(driving, 1)
+    self.assertTrue(wheel.dead)
+
+  def test_an_earlier_output_is_published_again_and_the_clock_restarts(self):
+    state, client = self.make_preview(preview=True)
+    first = self.frames(state, 1)[0]
+    client.failed.add(2)
+    with mock.patch.object(model_state, 'PREVIEW_SILENCE', 0.0):
+      # an answer that carried no output is still an answer: a host that goes
+      # on failing its frames is not a host that went quiet
+      again = self.frames(state, 1)[0]
+    self.assertIs(again, first)
+    self.assertIsNone(state.behind)
+    self.assertFalse(client.dead)
+
+  def test_a_driven_away_preview_is_held_to_the_wheels_rules_again(self):
+    state, client = self.make_preview(preview=True)
+    self.frames(state, 1)
+    state.preview = False
+    self.assertFalse(client.tolerate_failed)
 
 
 if __name__ == '__main__':

@@ -50,6 +50,7 @@ import time
 
 from jetlink import protocol as P
 from jetlink.comma import gadget
+from jetlink.openpilot.model_state import FrameFailed
 from jetlink.transport.priority import background_thread
 
 # after a join fails or the large model dies mid-drive. Long enough not to
@@ -342,6 +343,15 @@ class JoiningModelState:
     started = time.monotonic()
     try:
       result = big.run(bufs, transforms, inputs, after_enqueue)
+    except FrameFailed as e:
+      # the host answered this frame and the answer carried no output: the
+      # frame failed, the link did not. A preview never takes control, so the
+      # frame is the small model's and the join is kept -- the app goes on being
+      # the model, one frame shown from the comma's, and only a host that stops
+      # answering at all (PREVIEW_SILENCE) hands the picture back. after_enqueue
+      # is dropped, end() may already have called it
+      self._log.warning("jetlink: %s; the small model takes this frame", e)
+      return self._small.run(bufs, transforms, inputs, None)
     except Exception:
       failed = time.monotonic()
       self._log.exception("jetlink: large model failed mid-drive, back to the small model")

@@ -18,7 +18,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from jetlink.openpilot import joining
+from jetlink.openpilot import joining, model_state
 from jetlink.openpilot.joining import REJOIN_DELAY_QUICK, STABLE_SECONDS, JoiningModelState
 from tests.openpilot.fakes import RecordingLog, isolate
 
@@ -940,6 +940,19 @@ class PreviewEndsTest(JoiningBase):
     self._run(s)
     self.assertFalse(self.big.preview)
     self.assertTrue(self.log.has("in control, a preview's silence rule no longer applies"))
+
+  def test_a_frame_the_host_answered_without_an_output_keeps_the_join(self):
+    # the host is there and its answer carried nothing the link can publish:
+    # the frame is the small model's, and the large model is not handed back
+    s = self._state()
+    self._wait_joined(s)
+    s.in_control = False
+    self.big.preview = True
+    self.big.raises = model_state.FrameFailed('inference failed on frame 4 before any output')
+    self.assertEqual(self._run(s), {'from': 'small'})
+    self.assertTrue(s.chestnut)
+    self.assertFalse(self.big.closed)
+    self.assertTrue(self.log.has('the small model takes this frame'))
 
 
 class PeerAnswerTest(unittest.TestCase):

@@ -114,6 +114,17 @@ class JetlinkClient:
     self.frames_lost = 0
     # take a server's offer of frame datagrams (_take_datagrams); the bench's A/B turns it off
     self.allow_datagrams = True
+    # Whether a frame the server answered with a failure (Status.NOT_FINITE on
+    # an output it could not compute, or a shape it could not fill) is this
+    # link's failure or only that frame's. False for the wheel, where a host
+    # that cannot answer is handed back to the small model. A preview never
+    # takes control, so it sets this: a host that is there but cannot answer
+    # keeps its link, and the joining state serves the frame from the small
+    # model (model_state.FrameFailed)
+    self.tolerate_failed = False
+    # whether the last reply's own status was OK: an answer that carried no
+    # output is still an answer, which a preview's silence rule counts
+    self.last_failed = False
 
   # -- construction ---------------------------------------------------------
 
@@ -493,7 +504,9 @@ class JetlinkClient:
     """Read every reply that has already arrived, without waiting for one that
     has not. How many frames were answered. What they carried is kept as
     last_output, last_timings and last_state, as infer_end keeps it; a frame
-    the server failed is this link's failure, as it would have been there."""
+    the server failed is this link's failure, as it would have been there --
+    unless tolerate_failed, when a failed frame counts as answered and leaves
+    no output."""
     answered = 0
     while self._in_flight:   # with nothing out there is nothing to read for
       try:
@@ -521,10 +534,12 @@ class JetlinkClient:
     waits on it."""
     return time.monotonic() - self._in_flight[0].sent_at if self._in_flight else 0.0
 
-  def _take_reply(self, msg: Message) -> np.ndarray:
+  def _take_reply(self, msg: Message) -> np.ndarray | None:
     """One INFER_RESP off the stream: checked against the frame it answers,
     its timings and telemetry kept, the frame and any older one taken out of
-    flight. Raises, with the link dead, on anything but a good answer."""
+    flight. Raises, with the link dead, on anything but a good answer -- unless
+    tolerate_failed is set, when a frame the host answered with a failure is
+    that frame's failure and not the link's, and None comes back."""
     while self._in_flight and self._in_flight[0].seq != msg.seq:
       # an older frame the server never answered: it answers in order, so a
       # frame that fell out of its session (a hello between), or whose
@@ -542,8 +557,19 @@ class JetlinkClient:
     fid, status, gpu_us, queue_us, total_us = P.unpack_infer_resp(msg.payload)
     self.last_timings = (gpu_us, queue_us, total_us)
     if status != P.Status.OK:
-      self.dead = True
-      raise LinkError(f"inference failed: {_name(P.Status, status)} (frame {fid})")
+      detail = f"inference failed: {_name(P.Status, status)} (frame {fid})"
+      if not self.tolerate_failed:
+        self.dead = True
+        raise LinkError(detail)
+      # The host answered, so the link is there; it is this frame's output that
+      # is not. A caller that can do without it -- a preview, whose frames
+      # nobody drives on -- gets None, as a held frame does, and the joining
+      # state serves the frame from the small model rather than handing the link
+      # back. The frame is still out of flight: it was answered
+      log.warning(detail)
+      self.last_failed = True
+      return None
+    self.last_failed = False
     if fid != frame_id:
       self.dead = True
       raise LinkError(f'inference response frame {fid}, expected {frame_id}')

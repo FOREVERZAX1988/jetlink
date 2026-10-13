@@ -107,6 +107,19 @@ TELEMETRY_PERIOD = 1.0
 TRIPS_KEPT = 1200
 
 
+class FrameFailed(Exception):
+  """A frame the host answered, and the answer carried no output the session
+  can publish: an inference that failed (Status.NOT_FINITE on an output the host
+  could not compute, or a shape it could not fill) on a frame with none earlier
+  in the session to publish again. The link is not the failure.
+
+  Only a preview gets here: it sets client.tolerate_failed, so such an answer
+  does not end the link, and it never takes control, so serving this frame from
+  the small model is safe (joining.JoiningModelState._run_big). The wheel's
+  rules are untouched -- there such an answer is still the link's (client).
+  """
+
+
 class Trips:
   """What the comma measures of its frames over the link: the whole run, warp
   to parsed output, which is the frame as modeld waits on it, against the
@@ -188,13 +201,9 @@ class JetlinkModelState:
     transport = getattr(self.client, 't', None)
     on_cable = getattr(transport, 'on_the_cable', None)
     self._wifi = callable(on_cable) and not on_cable()
-    # the fork's onroad preview (its IsOnroadPreview, which it declares through
-    # interface.Keys.preview): the comma draws the onroad UI while parked, and
-    # nothing in it can take control, so a host that is only slow is kept rather
-    # than handed back (PREVIEW_SILENCE). Public, and cleared by the joining
-    # state the moment anything can be in control: the fork clears its param
-    # when the real onroad UI takes over, but a state built in the preview keeps
-    # what it was built with (joining.PreviewEndsTest)
+    # the fork's onroad preview (its IsOnroadPreview, declared through
+    # interface.Keys.preview); see the property. Set here, and it tells the link
+    # as well: a preview keeps a host whose frame carried no output
     self.preview = preview
     # not chestnut hardware, but the same role: modelV2.big, the UI and the
     # model manager key off this flag
@@ -323,8 +332,10 @@ class JetlinkModelState:
   def end(self, after_enqueue: Callable[[], None] | None = None) -> dict[str, np.ndarray]:
     """The sent frame's output, as modeld blocks on a chestnut's, but not past
     the hold once there is an output to publish again: a frame that long
-    is a dropped camera frame. Only a stall past the client's deadline raises,
-    into the joining state's demotion to the small model."""
+    is a dropped camera frame. A stall past the client's deadline raises, into
+    the joining state's demotion to the small model. In a preview a frame the
+    host answered without an output raises FrameFailed instead, which the
+    joining state takes without handing the link back."""
     frame, self._frame = self._frame, None
     # publish health while the Jetson works
     if after_enqueue is not None:
@@ -341,6 +352,12 @@ class JetlinkModelState:
     t4 = time.perf_counter()
     held = model_output is None
     self.behind = self._note_hold(held)
+    if held and self.client.last_failed and self.client.last_output is None:
+      # the host answered and the answer carried no output, on a frame with
+      # none earlier in this session to publish again: there is nothing to hold.
+      # A preview keeps the link and the joining state serves this frame from
+      # the small model, rather than handing the picture back to it
+      raise FrameFailed(f"inference failed on frame {self._frame_id} before any output")
     outputs = self._outputs(self.client.last_output if held else model_output)
     self.trips.record(t4 - frame.t0, self.client.last_timings[2])
     # a frame past the budget is a dropped camera frame; send against reply
@@ -383,6 +400,24 @@ class JetlinkModelState:
     return bool(limit) and self.client.last_output is not None
 
   @property
+  def preview(self) -> bool:
+    """Is the comma drawing the onroad UI while parked (the fork's
+    IsOnroadPreview)? Nothing in a preview can take control, so the large model
+    is held to PREVIEW_SILENCE and a frame the host cannot answer is that
+    frame's failure, not the link's. The joining state clears it the moment
+    anything can be in control: the fork clears its param when the real onroad
+    UI takes over, but a state built in the preview keeps what it was built
+    with (joining.PreviewEndsTest)."""
+    return self._preview
+
+  @preview.setter
+  def preview(self, value: bool) -> None:
+    self._preview = bool(value)
+    # the link reads it too, so a host that is there but cannot answer a frame
+    # keeps its link where the wheel would hand one back (client.tolerate_failed)
+    self.client.tolerate_failed = self._preview
+
+  @property
   def _first_frame_budget(self) -> float:
     """What the frames before the host's first answer of this session may wait."""
     return WIFI_FIRST_FRAME_TIMEOUT if self._wifi else FIRST_FRAME_TIMEOUT
@@ -411,6 +446,12 @@ class JetlinkModelState:
       self._holds.popleft()
     self._holds_in_a_row += 1
     if self.preview:
+      if self.client.last_failed:
+        # the host answered; only what it said was unusable. The link is there,
+        # and a preview is held to the link, so the clock restarts and it goes
+        # on being the model the app is running
+        self._last_answer = now
+        return None
       silence = now - self._last_answer
       return f'no answer for {silence:.0f} s' if silence > PREVIEW_SILENCE else None
     if self._frame_id <= SETTLING_FRAMES:
