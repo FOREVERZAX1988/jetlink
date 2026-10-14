@@ -267,6 +267,7 @@ public final class OrtBackend: EngineBackend {
     let source = staged.appending(path: file)
     let context = staged.appending(path: "\(session)_ctx.onnx")
     report("compile", 0, "compiling \(session) for the NPU")
+    let started = Date()
     try Ticker.during(interval: 2, Ticker.paced("compile", "compiling \(session) for the NPU", took: took, report: report)) {
       let config = [
         "ep.context_enable": "1",
@@ -276,10 +277,19 @@ public final class OrtBackend: EngineBackend {
       ]
       _ = try OrtSession(model: source, provider: "QNN", options: providerOptions(.htp), config: config)
     }
+    let seconds = Date().timeIntervalSince(started)
     guard FileManager.default.fileExists(atPath: context.path) else {
-      log.warning("onnxruntime wrote no EP context for \(session); each load will compile it again")
+      log.warning("onnxruntime wrote no EP context for \(session) in \(String(format: "%.1f", seconds)) s; each load will compile it again")
+      if seconds < 30 {
+        // A compile that came back this fast compiled nothing: the QNN
+        // provider took no node of the graph, so onnxruntime left the model to
+        // the CPU, which is minutes a frame rather than a frame.
+        log.warning("the QNN provider took no node of \(session) (it returned in \(String(format: "%.1f", seconds)) s): the model is on the phone's CPU")
+      }
+      HostDiagnostics.report("the NPU build of \(session) wrote no EP context in \(String(format: "%.1f", seconds)) s")
       return file
     }
+    log.info("the NPU context for \(session) is \(formatBytes(Files.size(of: context)))")
     try? FileManager.default.removeItem(at: source)
     return context.lastPathComponent
   }
@@ -336,6 +346,10 @@ public final class OrtBackend: EngineBackend {
       guard case .coreML = unit, let cache = entry["cache"] as? String else { return nil }
       let contents = (try? FileManager.default.contentsOfDirectory(atPath: artifact.appending(path: cache, directoryHint: .isDirectory).path)) ?? []
       return contents.isEmpty ? "the CoreML cache for \(entry["model"] as? String ?? cache) is empty" : nil
+    }
+    let npuFile = manifest.first { OrtUnit(entry: $0) == .htp }.flatMap { $0["model"] as? String }
+    if let npuFile, !npuFile.contains("_ctx") {
+      log.warning("the artifact's NPU session holds the model, not a compiled context: this load compiles it for the phone again")
     }
     let what = profile.usesCoreML ? "the CoreML model" : "the model"
     let (engine, seconds) = try Artifact.load(artifact, meta: meta, what: what, report: report) {
