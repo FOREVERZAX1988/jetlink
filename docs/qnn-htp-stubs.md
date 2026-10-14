@@ -65,9 +65,10 @@ no model, and no setting, makes an Maven-only build serve a V85 phone.
 
 ## Where a V85 pair comes from
 
-Not from Maven, and not from this repository: Qualcomm's AI Stack License
-allows these libraries inside an app only, so no public repository ships the
-V85 pair -- a search finds the build files that name it, not the file.
+Not from Maven, and not from upstream: Qualcomm's AI Stack License allows
+these libraries inside an app only, so no public repository ships the V85
+pair -- a search finds the build files that name it, not the file. This fork
+carries the pair inside its APK instead (last section).
 
 The full QAIRT SDK ("Qualcomm AI Engine Direct SDK", from Qualcomm's developer
 site or Package Manager) lays the pair out as
@@ -122,9 +123,31 @@ ls "$QNN_SDK_ROOT"/lib/aarch64-android/libQnnHtpV*Stub.so
 ls "$QNN_SDK_ROOT"/lib/hexagon-v8*/unsigned/libQnnHtpV*Skel.so
 ```
 
-## Until a build carries it
+## The V85 pair this fork carries
 
-The GPU profile serves the model, and the failing build names it. When a
-`qnn-runtime` past 2.51.0, or an SDK build, brings the V85 pair, taking it is
-the AAR's own layout: the Stub and its Skel in `jni/arm64-v8a/` of the APK,
-about 21 MB for the pair.
+`android/app/src/main/jniLibs/arm64-v8a/` holds the pair, 14 MB together, out
+of QAIRT **2.51.40.260930**:
+
+| file | from the SDK | bytes | SHA-256 |
+| --- | --- | --- | --- |
+| `libQnnHtpV85Stub.so` | `lib/aarch64-android/` | 875,568 | `8c3636f34ff763d872623172e192b64983e0578d124e5b73f064c28e372f3874` |
+| `libQnnHtpV85Skel.so` | `lib/hexagon-v85/unsigned/` | 14,058,420 | `b06247fa38ffad5b8c55a83ff7d4b5500a69282944c0942253fb57b38eaf6b40` |
+
+Both land in `lib/arm64-v8a/` of the APK as the AAR's own pair does, and
+`useLegacyPackaging` extracts them to `nativeLibraryDir`, where `libQnnHtp.so`
+opens the Stub by name and the CDSP reads the Skel beside it
+(`ADSP_LIBRARY_PATH`, set from that directory). The `npu:` report should now
+read `the HTP architectures this build carries: ... V79 V81 V85`.
+
+Qualcomm's license allows the pair inside an app only, so it is not upstream's
+to carry and not Maven's to publish: this fork's APK carries it, and a build
+without those two files still serves every Hexagon up to V81.
+`android/app/build.gradle.kts` fails on half a pair, which QNN would swallow.
+
+**One build per Stub, Skel and HTP library.** The pair is 2.51.40, while the
+`libQnnHtp.so` and `libQnnHtpPrepare.so` an APK gets from
+`onnxruntime-android-qnn` 1.29.0's `qnn-runtime` 2.42.0 are of that build. QNN
+wants one build for all three; if the device still refuses the model with the
+V85 Stub in place, the next step is that same QAIRT build's `libQnnHtp.so`,
+`libQnnHtpPrepare.so` and `libQnnSystem.so` (not the pair alone), and the
+`npu:` lines name the version that answered.

@@ -242,6 +242,23 @@ val liteRtLibraries = tasks.register<LiteRtLibraries>("liteRtLibraries") {
     outputDir.set(layout.buildDirectory.dir("litert/jniLibs"))
 }
 
+/**
+ * The V85 pair this build carries for an SM8975, a Snapdragon 8 Elite Gen 6:
+ * `libQnnHtpV85Stub.so` and `libQnnHtpV85Skel.so` in `src/main/jniLibs`, the
+ * two files QAIRT lays out under `lib/aarch64-android/` and
+ * `lib/hexagon-v85/unsigned/` [docs/qnn-htp-stubs.md]. Maven's qnn-runtime
+ * stops at V81, so this fork carries the pair; a checkout without it still
+ * builds and serves every Hexagon up to V81. Half of it is an error: QNN
+ * refuses a model in silence, which is the failure the pair ends.
+ */
+run {
+    val v85 = fileTree("src/main/jniLibs/arm64-v8a") { include("libQnnHtpV85*.so") }
+    check(v85.files.size == 2) {
+        "src/main/jniLibs/arm64-v8a holds ${v85.files.map { it.name }}: the V85 pair is the " +
+            "Stub and its Skel together, or nothing at all"
+    }
+}
+
 androidComponents {
     onVariants { variant ->
         variant.sources.jniLibs?.addGeneratedSourceDirectory(swiftBuild, SwiftBuild::outputDir)
