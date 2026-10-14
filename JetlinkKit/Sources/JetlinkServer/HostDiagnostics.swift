@@ -61,15 +61,29 @@ package enum HostDiagnostics {
       return true
     }
 
-    /// This process's QNN and onnxruntime libraries, from its own maps.
-    private static let mapsCommand = "grep -iE 'qnn|onnxruntime|cdsprpc|adsprpc|libjetlink' /proc/self/maps | grep -oE '/[^ ]+\\.so' | sort -u"
-    private static let deviceCommand = "ls -l /dev/adsprpc-smd /dev/cdsprpc-smd /dev/fastrpc-adsp /dev/fastrpc-cdsp"
-    private static let qnnWords = ["qnn", "onnxruntime", "cdsprpc", "adsprpc"]
+    /// This process's QNN and onnxruntime libraries, from its own maps. Its
+    /// pid is written out: this runs through a shell, and a shell's own
+    /// `/proc/self/maps` is the shell's (or the grep's, in the pipe), so a
+    /// probe that said `self` answered about itself and found nothing, always.
+    private static let mapsCommand =
+      "grep -iE 'qnn|onnxruntime|cdsprpc|adsprpc|libjetlink' /proc/\(ProcessInfo.processInfo.processIdentifier)/maps"
+      + " | grep -oE '/[^ ]+\\.so' | sort -u"
+    /// Where the app's own native libraries are when the maps naming failed,
+    /// which is where the QNN libraries it brought are opened from.
+    private static let appDirCommand = "ls -d /data/app/*/*jetlink*/lib/arm64 2>/dev/null"
+    /// The APK itself, for a build that keeps its libraries inside it, which
+    /// AGP's default `extractNativeLibs` off is: the directory above does not
+    /// exist then, and every library of the app is mapped as the APK, so the
+    /// maps have no `.so` of the app's to name, only `base.apk`.
+    private static let apkCommand =
+      "grep -oE '/data/app/[^ ]*base\\\\.apk' /proc/\\(ProcessInfo.processInfo.processIdentifier)/maps 2>/dev/null | head -1"
+    private static let deviceCommand = "ls -l /dev/adsprpc-smd /dev/cdsprpc-smd /dev/fastrpc-adsp /dev/fastrpc-cdsp /dev/fastrpc-cdsp-secure"
+    private static let qnnWords = ["qnn", "onnxruntime", "cdsprpc", "adsprpc", "htp", "skel", "snpe", "hexagon"]
     private static let dspWords = ["skel", "qnn", "dsp", "rfsa", "fastrpc"]
-    private static let logWords = ["qnn", "htp", "onnxruntime", "dsp", "adsp", "fastrpc", "fallback", "unsupported"]
+    private static let logWords = ["qnn", "htp", "onnxruntime", "dsp", "adsp", "fastrpc", "fallback", "unsupported", "skel", "stub", "arch", "fail"]
     private static let propertyWords = [
       "soc", "board", "hardware", "platform", "qnn", "hexagon", "dsp", "adsp", "cpu.abi",
-      "product.model", "product.device", "build.version"
+      "product.model", "product.device", "build.version", "chipset", "soc_id", "vendor.qti"
     ]
 
     /// The facts, the ones that could name a reason first.
@@ -77,20 +91,65 @@ package enum HostDiagnostics {
       var lines: [String] = []
       let mapped = shell(mapsCommand)
       lines.append(contentsOf: section("the QNN and onnxruntime libraries this process has open", mapped))
-      let directory = mapped.first { $0.hasSuffix("/libjetlink.so") }.map { ($0 as NSString).deletingLastPathComponent }
-      if let directory {
-        lines.append(contentsOf: section("what the app brought in \(directory)", matching(listing(directory), qnnWords)))
+      let carried = appLibraries(mapped)
+      if carried.isEmpty {
+        lines.append("nothing named the app's own libraries: this process's maps, its APK and an app library directory all came up empty")
       } else {
-        lines.append("no libjetlink.so in this process's maps, so no library directory to name")
+        // Everything, not only the QNN-named: a Stub the phone cannot use and
+        // its absence are the same line here, and the Skel sits beside it.
+        lines.append(contentsOf: section("every library the app itself carries", carried))
       }
-      let system = listing("/vendor/lib64") + listing("/vendor/lib") + listing("/system/lib64")
+      let arches = htpArches(carried)
+      lines.append("the HTP architectures this build carries: \(arches.isEmpty ? "none named" : arches.joined(separator: " "))")
+      let system =
+        listing("/vendor/lib64") + listing("/vendor/lib") + listing("/system/lib64")
+        + listing("/odm/lib64") + listing("/vendor/lib64/qnn") + listing("/system/lib64/qnn")
       lines.append(contentsOf: section("the phone's own QNN and onnxruntime libraries", matching(system, qnnWords)))
-      let dsp = listing("/vendor/lib/rfsa/adsp") + listing("/vendor/lib64/rfsa/adsp") + listing("/vendor/dsp") + listing("/system/lib/rfsa/adsp")
+      let dsp =
+        listing("/vendor/lib/rfsa/adsp") + listing("/vendor/lib64/rfsa/adsp") + listing("/vendor/lib64/rfsa/cdsp")
+        + listing("/vendor/lib/rfsa/cdsp") + listing("/vendor/dsp") + listing("/vendor/dsp/cdsp")
+        + listing("/system/lib/rfsa/adsp") + listing("/odm/lib/rfsa/adsp")
       lines.append(contentsOf: section("the phone's DSP libraries, the Skel a Hexagon loads", matching(dsp, dspWords)))
       lines.append(contentsOf: section("the DSP devices this process talks on", shell(deviceCommand)))
       lines.append(contentsOf: section("the chip", matching(shell("getprop"), propertyWords)))
       lines.append(contentsOf: section("this process's own log, its pid's lines", processLog()))
       return lines
+    }
+
+    /// What the app's own QNN comes in. The libraries beside `libjetlink.so`
+    /// where the loader extracted them; else what the APK carries, which
+    /// `unzip` reads out of it; else an app library directory, for a build
+    /// extracted somewhere else. Empty when nothing could name them.
+    private static func appLibraries(_ mapped: [String]) -> [String] {
+      if let directory = mapped.first(where: { $0.hasSuffix("/libjetlink.so") })
+        .map({ ($0 as NSString).deletingLastPathComponent })
+      {
+        return listing(directory)
+      }
+      if let apk = shell(apkCommand).first, apk.hasSuffix(".apk") {
+        let carried = shell("unzip -l '\(apk)' 2>/dev/null | grep -oE 'lib/arm64-v8a/[^ ]+' | sort -u")
+        if !carried.isEmpty { return carried }
+      }
+      if let directory = shell(appDirCommand).first { return listing(directory) }
+      return []
+    }
+
+    /// The HTP architectures the app's own QNN carries, which is every arch an
+    /// NPU build can be compiled for here: a Stub and its Skel are named for
+    /// one. A Hexagon newer than the last of these is one this build cannot
+    /// run on at all, which is the whole answer when an NPU build takes no
+    /// node of its graph. "V68 V69 V73 V75 V79 V81" from the
+    /// `libQnnHtpV68Stub.so` upwards that the app carries.
+    private static func htpArches(_ libraries: [String]) -> [String] {
+      var arches: Set<Int> = []
+      for library in libraries {
+        guard let start = library.range(of: "libQnnHtpV")?.upperBound else { continue }
+        let digits = library[start...].prefix { $0.isNumber }
+        let rest = library[start...].dropFirst(digits.count)
+        guard !digits.isEmpty, rest.hasPrefix("Stub.so"), let arch = Int(digits) else { continue }
+        arches.insert(arch)
+      }
+      return arches.sorted().map { "V\($0)" }
     }
 
     /// A title and the lines under it, or the one line that says it is empty.

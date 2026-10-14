@@ -57,4 +57,10 @@ over 20 seconds, each write the phone's QNN libraries, the ones the app
 brought, the DSP libraries and devices, the chip's properties, and this
 process's own log, under `npu:`. Send those lines with the rest.
 
+A phone whose QNN runtime has no HTP architecture for its Hexagon -- a
+Snapdragon newer than the last `libQnnHtpV*Stub.so` the app carries, which the
+report prints as **the HTP architectures this build carries** -- cannot run an
+NPU profile at all: that build fails with the reason, and the GPU profile
+serves the model.
+
 </details>
