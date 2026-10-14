@@ -279,14 +279,23 @@ public final class OrtBackend: EngineBackend {
     let seconds = Date().timeIntervalSince(started)
     guard FileManager.default.fileExists(atPath: context.path) else {
       log.warning("onnxruntime wrote no EP context for \(session) in \(String(format: "%.1f", seconds)) s; each load will compile it again")
+      // A compile that came back this fast compiled nothing: the QNN provider
+      // took no node of the graph, so onnxruntime left the model to the CPU,
+      // which is minutes a frame rather than a frame. The artifact would then
+      // be a promise of an NPU it does not keep: the load runs the whole model
+      // on the CPU under a warm-up that never ends. The build fails here
+      // instead, as the LiteRT path fails when a phone's GPU cannot take the
+      // model, so the app says which phone could not rather than spinning.
       if seconds < 30 {
-        // A compile that came back this fast compiled nothing: the QNN
-        // provider took no node of the graph, so onnxruntime left the model to
-        // the CPU, which is minutes a frame rather than a frame.
         log.warning("the QNN provider took no node of \(session) (it returned in \(String(format: "%.1f", seconds)) s): the model is on the phone's CPU")
       }
       HostDiagnostics.report("the NPU build of \(session) wrote no EP context in \(String(format: "%.1f", seconds)) s")
-      return file
+      throw HostError.failed(
+        "the phone's NPU took no node of \(session): QNN wrote no compiled context for it, so onnxruntime would run the "
+          + "whole model on the phone's CPU, minutes a frame. This build's QNN has no HTP architecture for this phone's "
+          + "Hexagon: the npu: lines name the stubs it carries and the phone's own libraries. Run this model on the GPU "
+          + "until a QNN runtime carries this Hexagon's stub."
+      )
     }
     log.info("the NPU context for \(session) is \(formatBytes(Files.size(of: context)))")
     try? FileManager.default.removeItem(at: source)
