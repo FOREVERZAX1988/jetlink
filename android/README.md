@@ -158,6 +158,21 @@ Jetlink logs "is not in the EdgeTPU allowed list" and "error code 16", and runs
 on the GPU. Google adds an app; the release key's certificate is the one to
 give them (docs/publishing.md#android-release-key).
 
+An NPU build on a Snapdragon whose Hexagon is past the last architecture its
+QNN runtime carries cannot run at all: QNN creates no device
+(`QNN_DEVICE_ERROR_INVALID_CONFIG`), its provider takes no node of the graph,
+and onnxruntime leaves the whole model on the CPU under a warm-up that never
+ends. The build fails there now, naming the GPU profile as the one that serves
+the model, and the `npu:` lines name both sides: the HTP architectures the
+APK's QNN carries, and the phone's own QNN and DSP libraries.
+`com.qualcomm.qti:qnn-runtime` 2.51.0, the newest on Maven (2026-10-06),
+carries `libQnnHtpV*Stub.so` and its Skel for V68 to V81, where the Snapdragon
+8 Elite Gen 5's V81 is the last. The first Snapdragon tried (an SM8975,
+2026-10-14) is past all of them, and Qualcomm's own binaries name V85 next, so
+its NPU profile waits on a QNN runtime that carries this Hexagon's Stub -- the
+full QAIRT SDK from the Qualcomm Package Manager is where that comes from, not
+Maven, and not this repository.
+
 The NPU path follows LiteRT 2.2.0's source. LiteRT's Google Tensor plugin
 (`libLiteRtCompilerPlugin_google_tensor.so`, which the APK carries) hands the
 converted model to `EdgeTpuCompilerCompileFlatbuffer` in the Pixel's
