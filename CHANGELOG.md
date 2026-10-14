@@ -1,3 +1,15 @@
+Jetlink v0.8.6
+==============
+**Jetson**
+* Sleeps until the comma wakes it, no longer waking every 30 minutes.
+
+**Models**
+* **Mountain Dew V2 Preview** added.
+
+**General Updates & Fixes**
+* Works with the latest openpilot.
+* **Update the comma:** zoompilot's `develop` branch pins Jetlink v0.8.6.
+
 Jetlink v0.8.5
 ==============
 **iPhone & iPad**
