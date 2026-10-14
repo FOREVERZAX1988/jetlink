@@ -168,10 +168,12 @@ APK's QNN carries, and the phone's own QNN and DSP libraries.
 `com.qualcomm.qti:qnn-runtime` 2.51.0, the newest on Maven (2026-10-06),
 carries `libQnnHtpV*Stub.so` and its Skel for V68 to V81, where the Snapdragon
 8 Elite Gen 5's V81 is the last. The first Snapdragon tried (an SM8975,
-2026-10-14) is past all of them, and Qualcomm's own binaries name V85 next, so
-its NPU profile waits on a QNN runtime that carries this Hexagon's Stub -- the
-full QAIRT SDK from the Qualcomm Package Manager is where that comes from, not
-Maven, and not this repository.
+2026-10-14) is a Snapdragon 8 Elite Gen 6, `htp_version: 85` in Qualcomm AI
+Hub's chipset table, past the last architecture the AAR carries; its NPU
+profile waits on a QNN runtime that carries this Hexagon's Stub, which is the
+full QAIRT SDK from Qualcomm's developer site or Package Manager, not Maven,
+and not this repository. [QNN HTP stubs](../docs/qnn-htp-stubs.md) records the
+mapping, the AAR's contents, and the keywords to search with.
 
 The NPU path follows LiteRT 2.2.0's source. LiteRT's Google Tensor plugin
 (`libLiteRtCompilerPlugin_google_tensor.so`, which the APK carries) hands the

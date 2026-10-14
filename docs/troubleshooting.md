@@ -61,6 +61,8 @@ A phone whose QNN runtime has no HTP architecture for its Hexagon -- a
 Snapdragon newer than the last `libQnnHtpV*Stub.so` the app carries, which the
 report prints as **the HTP architectures this build carries** -- cannot run an
 NPU profile at all: that build fails with the reason, and the GPU profile
-serves the model.
+serves the model. [QNN HTP stubs](qnn-htp-stubs.md) maps a phone to the
+architecture, lists what Maven carries, and says where the missing pair comes
+from and what to search for.
 
 </details>

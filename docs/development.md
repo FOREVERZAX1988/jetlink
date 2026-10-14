@@ -13,5 +13,6 @@ For normal installation, use the [setup guides](README.md#set-up).
 | Investigate performance | [Backends](backends.md), [Mac measurements](mac-performance.md), [Jetson measurements](jetson-performance.md) |
 | Diagnose USB disconnects and comma resource use | [USB and recording benchmarks](usb-bench.md) |
 | Build an app | [Mac](../macos/README.md), [iPhone](../ios/README.md), [Android](../android/README.md) |
+| Match a build to a Snapdragon's Hexagon | [QNN HTP stubs](qnn-htp-stubs.md) |
 | Keep the server compatible with the comma | [Conformance](conformance.md) |
 | Publish releases | [Publishing](publishing.md) |
