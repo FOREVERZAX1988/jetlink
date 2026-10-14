@@ -358,8 +358,16 @@ public final class EngineHost: @unchecked Sendable {
       }
       // A frame or two on zeros: minutes on a phone's CPU, so it ticks.
       let warming = engine!
+      let warmStarted = Date()
       let loaded = try Ticker.during(interval: 1, Ticker.paced("warm", "warming up", took: 0, report: progressFn)) {
         try warm(warming, spec: ready)
+      }
+      let warmSeconds = Date().timeIntervalSince(warmStarted)
+      if warmSeconds >= 20 {
+        // A warm engine is a frame or two: this long means the device compiled
+        // the model here rather than loading what it compiled before.
+        log.warning("warming up took \(Int(warmSeconds.rounded())) s, which a warm engine is not")
+        HostDiagnostics.report("warming up took \(Int(warmSeconds.rounded())) s")
       }
       engine = nil
       lock.lock()

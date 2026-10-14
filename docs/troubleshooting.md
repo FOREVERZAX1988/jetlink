@@ -51,4 +51,10 @@ sudo dmesg | grep -iE 'usbpd|type-?c|swap|weak charger|reverse boost' | tail -n 
 Include the cable model and whether the comma restarted. Repeat with the
 cable reversed.
 
+When an Android phone's NPU profile never leaves **preparing**, the app's log
+answers why by itself: a build that writes no compiled context, and a warm-up
+over 20 seconds, each write the phone's QNN libraries, the ones the app
+brought, the DSP libraries and devices, the chip's properties, and this
+process's own log, under `npu:`. Send those lines with the rest.
+
 </details>
