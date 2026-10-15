@@ -178,6 +178,10 @@
         // Where the QNN provider finds the NPU's skel libraries: the app's own,
         // then the system's DSP directories.
         setenv("ADSP_LIBRARY_PATH", "\(dir);/system/lib/rfsa/adsp;/system/vendor/lib/rfsa/adsp;/dsp", 1)
+        // And for the `npu:` report, which cannot find the directory itself:
+        // an app may not list /data/app, so its probes need this one handed to
+        // them (HostDiagnostics.nativeDirectory).
+        HostDiagnostics.nativeDirectory = dir
       }
       guard let cache = config["cache"] as? String, !cache.isEmpty else {
         throw HostFailure("no cache directory")

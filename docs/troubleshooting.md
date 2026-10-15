@@ -57,6 +57,18 @@ over 20 seconds, each write the phone's QNN libraries, the ones the app
 brought, the DSP libraries and devices, the chip's properties, and this
 process's own log, under `npu:`. Send those lines with the rest.
 
+The libraries the app brought come first, with the directory they were read
+from: the Android app hands the server `ApplicationInfo.nativeLibraryDir`,
+because a probe of its own cannot find the directory -- `/data/app` may be
+walked but not read by an app, so a glob over it matches nothing, and Android
+carries no `unzip` to read the APK's entries instead. The four libraries QNN
+has to agree on with itself (the backend, the system one, and this phone's
+Stub and Skel) are hashed there, so a phone holding another QNN build says so
+rather than looking like a build that carries nothing. **the neural runtime's
+own lines** is what QNN, the DSP and onnxruntime said themselves, whatever
+process said it: a provider that takes no node leaves its reason there and
+nowhere else.
+
 A phone whose QNN runtime has no HTP architecture for its Hexagon -- a
 Snapdragon newer than the last `libQnnHtpV*Stub.so` the app carries, which the
 report prints as **the HTP architectures this build carries** -- cannot run an

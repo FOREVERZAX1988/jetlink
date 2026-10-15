@@ -292,9 +292,10 @@ public final class OrtBackend: EngineBackend {
       HostDiagnostics.report("the NPU build of \(session) wrote no EP context in \(String(format: "%.1f", seconds)) s")
       throw HostError.failed(
         "the phone's NPU took no node of \(session): QNN wrote no compiled context for it, so onnxruntime would run the "
-          + "whole model on the phone's CPU, minutes a frame. This build's QNN has no HTP architecture for this phone's "
-          + "Hexagon: the npu: lines name the stubs it carries and the phone's own libraries. Run this model on the GPU "
-          + "until a QNN runtime carries this Hexagon's stub."
+          + "whole model on the phone's CPU, minutes a frame. Which reason it is -- a Stub for another Hexagon, a Skel "
+          + "the DSP will not take, a QNN backend that is not its Stub's build -- the npu: lines above are the evidence: "
+          + "what the app carries, hashed, what this process has open, where the Skel is looked for, and what QNN itself "
+          + "said. Run this model on the GPU until they name the pair this phone needs."
       )
     }
     log.info("the NPU context for \(session) is \(formatBytes(Files.size(of: context)))")
