@@ -39,16 +39,16 @@ package enum HostDiagnostics {
   /// Writes `reason`, then what this machine says about its NPU runtime.
   ///
   /// For the engine's thread, where a second costs nothing, and never for a
-  /// frame's. It shells out, so it takes about that second. Two reports inside
-  /// a minute are one: a build that wrote no context is followed at once by
-  /// the load that pays for it, which would repeat everything.
+  /// frame's. It shells out, so it takes about that second. Every report is
+  /// written, however soon it follows another: a build that wrote no context is
+  /// followed at once by the load that pays for it, so one failed start writes
+  /// two reports -- and the second is the one a log is pasted from, a person
+  /// having retried the profile. A report held back is a reason no one can
+  /// read. What is held back instead is the reading of the directories, which
+  /// do not change inside a minute (`listing`).
   package static func report(_ reason: String, limit: Int = lineLimit) {
     #if os(Android)
       let log = ServerLog(category: "npu")
-      guard claim() else {
-        log.info("the phone's NPU runtime was read a moment ago, not again for: \(reason)")
-        return
-      }
       log.warning("the phone's NPU runtime, as its libraries and its log tell it: \(reason)")
       let lines = gather()
       for line in lines.prefix(limit) {
@@ -66,7 +66,8 @@ package enum HostDiagnostics {
   #if os(Android)
     private static let lock = NSLock()
     private static let spacing: TimeInterval = 60
-    nonisolated(unsafe) private static var lastProbe = Date.distantPast
+    /// One `ls -l` per directory per `spacing`, with the time it was read.
+    nonisolated(unsafe) private static var listings: [String: (at: Date, lines: [String])] = [:]
 
     /// The app's own directory of libraries, as the Android app names it
     /// (`ApplicationInfo.nativeLibraryDir`), handed over at start. A probe
@@ -75,16 +76,6 @@ package enum HostDiagnostics {
     /// no `unzip` to read the APK's entries instead. Both failures read as
     /// "this build carries no Stub", which is why the directory is passed in.
     nonisolated(unsafe) package static var nativeDirectory: String?
-
-    /// True for the first report in `spacing`, which holds the rest off.
-    private static func claim() -> Bool {
-      lock.lock()
-      defer { lock.unlock() }
-      let now = Date()
-      guard now.timeIntervalSince(lastProbe) >= spacing else { return false }
-      lastProbe = now
-      return true
-    }
 
     /// These probes run through `popen`, one shell each, and every one of them
     /// names this process's pid: a shell's own `/proc/self/maps` is the shell's
@@ -274,11 +265,26 @@ package enum HostDiagnostics {
       // from one QAIRT release, and a Stub from another speaks another dialect.
       let stub = qnnFiles.first { $0.contains("\(arch)Stub") } ?? "libQnnHtp\(arch)Stub.so"
       lines.append("the app's Stub for \(arch): \(stub), the Skel it came with beside it")
-      let own = shell(
-        "ls -l /vendor/lib64 /system/lib64 /odm/lib64 /vendor/lib /vendor/lib/rfsa/adsp /system/vendor/lib/rfsa/adsp 2>/dev/null"
-          + " | grep -iE 'libQnnHtp\(arch)(Stub|Skel|CalculatorStub)\\.so' | awk '{print $5, $9}'")
-      lines.append(contentsOf: own.isEmpty ? ["the phone has no \(arch) pair of its own in any of those directories"] : own)
+      let own = ownDirectories().flatMap { listing($0) }.filter { $0.contains("libQnnHtp\(arch)") }
+      if own.isEmpty {
+        lines.append("the phone has no \(arch) pair of its own in any of: \(ownDirectories().joined(separator: " "))")
+      } else {
+        lines.append(contentsOf: own)
+      }
       return lines
+    }
+
+    /// Where a phone's own QNN libraries have been seen. The DSP directories
+    /// are the ones a search that stops at `/vendor/lib64` misses: a Skel is
+    /// read by the Hexagon, so a vendor keeps it in an `rfsa` directory beside
+    /// the Hexagon's own, and the phone this was written for keeps its whole
+    /// V85 set under `/odm` -- backend and Stub in `/odm/lib64`, the Skel in
+    /// `/odm/lib/rfsa/adsp`.
+    private static func ownDirectories() -> [String] {
+      [
+        "/vendor/lib64", "/system/lib64", "/odm/lib64", "/vendor/lib",
+        "/odm/lib/rfsa/adsp", "/vendor/lib/rfsa/adsp", "/vendor/lib/rfsa/cdsp", "/system/vendor/lib/rfsa/adsp",
+      ]
     }
 
     /// The HTP architectures the app's own QNN carries, which is every arch an
@@ -321,8 +327,24 @@ package enum HostDiagnostics {
     }
 
     /// One `ls -l` of a directory, as lines, or its own line saying why not.
+    /// Every file line carries the directory it was read from: a phone holds
+    /// three QNN builds in three directories, and a bare file name does not say
+    /// which of them a file belongs to -- which is what a report is asked. The
+    /// listing is kept for `spacing`, because the files in a directory do not
+    /// change between the two reports one failed start writes; the listing is
+    /// never the reason a report goes unwritten.
     private static func listing(_ path: String) -> [String] {
-      shell("ls -l '\(path)'").filter { !$0.hasPrefix("total ") }
+      lock.lock()
+      let kept = listings[path]
+      lock.unlock()
+      if let kept, Date().timeIntervalSince(kept.at) < spacing { return kept.lines }
+      let lines = shell("ls -l '\(path)'")
+        .filter { !$0.hasPrefix("total ") }
+        .map { $0.hasPrefix("ls:") ? $0 : "\(path)  \($0)" }
+      lock.lock()
+      listings[path] = (Date(), lines)
+      lock.unlock()
+      return lines
     }
 
     /// This process's lines in logcat, kept to what a neural runtime says: an
