@@ -99,22 +99,23 @@ def _saved_peer(port: int) -> str | None:
 
 
 def discover(port: int = 5599, interface: str = INTERFACE,
-             timeout: float = DISCOVER_TIMEOUT) -> str | None:
+             timeout: float = DISCOVER_TIMEOUT, skip: frozenset[str] | set[str] = frozenset()) -> str | None:
   """Find a jetlink server on the local Wi-Fi without a fixed address.
 
   Tries a remembered peer first, then the gateway (the phone-hotspot case),
   then sweeps the subnet concurrently (the shared-AP case, phone is an
-  ordinary client). Returns the first host whose TCP connect succeeds,
+  ordinary client). Hosts in `skip` (already tried and failed by the caller)
+  are not probed again. Returns the first host whose TCP connect succeeds,
   remembered for next time. Pure connect probes; no HELLO, so a probe neither
   starts a session nor loads the phone's model. None when nothing answers."""
   saved = _saved_peer(port)
-  if saved:
+  if saved and saved not in skip:
     return saved
 
   gw = gateway(interface)
   # gateway first (hotspot), then the other hosts on the link (shared AP)
   candidates: list[str] = []
-  if gw:
+  if gw and gw not in skip:
     candidates.append(gw)
   addr = local_addr(interface)
   if addr is not None:
@@ -122,7 +123,7 @@ def discover(port: int = 5599, interface: str = INTERFACE,
     net = ipaddress.ip_network(f"{ip}/{prefix}", strict=False)
     for h in net.hosts():
       hs = str(h)
-      if hs != ip and hs != gw:
+      if hs != ip and hs != gw and hs not in skip:
         candidates.append(hs)
       if len(candidates) > DISCOVER_MAX_HOSTS:
         break
@@ -134,6 +135,8 @@ def discover(port: int = 5599, interface: str = INTERFACE,
       seen.add(host)
       ordered.append(host)
 
+  if not ordered:
+    return None
   # probe concurrently: a host that drops the SYN waits the full timeout, and a
   # sequential /24 sweep would take seconds. The gateway is tried first, alone.
   head, rest = ordered[:1], ordered[1:]
