@@ -47,9 +47,9 @@
              declaration is how an app's linker namespace is allowed to look
              outside its own directory at all, and QNN's backend, its Stub, its
              Prepare and its System library are the four names that have to
-             arrive from one build. The declaration is half of it -- the phone's
-             own public library table is the other half, and the `npu:` report
-             prints both (`HostDiagnostics.qnnNames`). -->
+             arrive from one build. The declaration is half of it, and the
+             phone's own public library table is the other half: the `npu:`
+             report prints both (HostDiagnostics.qnnNames). -->
         <uses-native-library android:name="libQnnHtp.so" android:required="false" />
         <uses-native-library android:name="libQnnHtpV85Stub.so" android:required="false" />
         <uses-native-library android:name="libQnnHtpPrepare.so" android:required="false" />
