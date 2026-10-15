@@ -184,7 +184,6 @@ public final class OrtBackend: EngineBackend {
     switch unit {
     case .htp:
       var options = [
-        "backend_type": "htp",
         // burst holds the clocks up between frames, the counterpart of the
         // Mac's GPU keep-alive; sustained trades speed for less heat.
         "htp_performance_mode": keepAlive ? "burst" : "sustained_high_performance",
@@ -197,8 +196,15 @@ public final class OrtBackend: EngineBackend {
       // this phone's Stub and the Skel its DSP was signed for are then one
       // vendor build. Without the option onnxruntime loads `libQnnHtp.so` by
       // name, which is the copy beside the app.
+      //
+      // onnxruntime takes the QNN backend one of two ways and refuses both at
+      // once -- "Only one of 'backend_type' and 'backend_path' should be set",
+      // thrown from the provider's own constructor, before it reads the model
+      // -- so a path replaces the type here instead of joining it.
       if let path = qnnBackend, !path.isEmpty {
         options["backend_path"] = path
+      } else {
+        options["backend_type"] = "htp"
       }
       return options
     case .qnnGPU: return ["backend_type": "gpu"]

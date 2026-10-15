@@ -197,9 +197,22 @@ package enum HostDiagnostics {
         // parent of the shell's own parent is this pid: a reading that goes
         // through neither Foundation nor the C library.
         "this process, as the shell reads it: \(shell("awk '{print $4}' /proc/$PPID/stat").first ?? "unread")",
+        // The domain SELinux puts this process in: the subject of every
+        // `avc: denied` line in the log, and the whole reason one phone
+        // refuses its DSP to the app and another hands it over.
+        "this app's SELinux domain, as the kernel reads it: \(selinuxDomain())",
       ]
       lines.append(contentsOf: shell(processCommand))
       return lines
+    }
+
+    /// The SELinux domain this process runs in, from the kernel's own file for
+    /// it: `u:r:untrusted_app_34:s0:c199,c257,c512,c768` on the app an OEM's
+    /// firmware refuses its DSP to, `u:r:platform_app:s0` on one it does not.
+    /// "unread" where the phone has no SELinux to put a process in one.
+    private static func selinuxDomain() -> String {
+      (try? String(contentsOfFile: "/proc/self/attr/current", encoding: .utf8))
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) } ?? "unread"
     }
 
     /// The directory the app's own libraries are in: the one the process mapped

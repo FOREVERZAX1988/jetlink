@@ -215,6 +215,18 @@ every phone, which is what every Hexagon up to V81 has been served by. The
 report says which of the two was in force, so one APK can try both and the
 lines that name the reason are the same either way.
 
+onnxruntime's provider takes the backend **by path or by type**, never both:
+`Only one of 'backend_type' and 'backend_path' should be set`, thrown from the
+provider's own constructor before it reads the model. A path therefore replaces
+`backend_type: htp` instead of joining it; a build that set both failed before
+QNN was asked anything at all (2026-10-15 20:08, `cn-14bbcb4`).
+
+The report also names the domain the kernel runs the app in
+(`/proc/self/attr/current`), which is the subject of every `avc: denied` line in
+the runtime's log: an app in `untrusted_app_34` is one a vendor's firmware can
+refuse its DSP to, where `platform_app` or a `shell` process may not be. Two
+phones with the same refusal in their logs are told apart by that one line.
+
 ## Where a phone keeps its own QNN, and where the report now looks
 
 Recorded 2026-10-15, from the phone's own `npu:` report: an SM8975 running
