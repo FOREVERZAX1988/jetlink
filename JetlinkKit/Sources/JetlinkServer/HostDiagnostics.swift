@@ -218,10 +218,14 @@ package enum HostDiagnostics {
 
     /// The same files, hashed: a phone whose copies are not the APK's is
     /// running another QNN build, which no setting and no preparation fixes.
+    /// Sixteen hex characters and the name, not the whole of either: two builds
+    /// of one library are the same size (the AAR's 14,058,420-byte Skel and the
+    /// SDK's differ in 503 bytes, and in nothing else), so the hash is the only
+    /// line that tells them apart, and the directory is the same for all four.
     private static func hashes(_ mapped: [String]) -> [String] {
       guard let directory = appDirectory(mapped) else { return [] }
       let files = qnnFiles.map { "'\(directory)/\($0)'" }.joined(separator: " ")
-      return shell("sha256sum \(files) | sed 's#.*/##'")
+      return shell("sha256sum \(files) | awk '{n=split($2,a,\"/\"); print substr($1,1,16), a[n]}'")
     }
 
     /// `ADSP_LIBRARY_PATH`'s directories, in the order the DSP searches them:
