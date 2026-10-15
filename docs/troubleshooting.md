@@ -52,7 +52,12 @@ Include the cable model and whether the comma restarted. Repeat with the
 cable reversed.
 
 When an Android phone's NPU profile never leaves **preparing**, the app's log
-answers why by itself: a build that writes no compiled context, and a warm-up
+answers why by itself: every attempt writes a report under `npu:`, from the
+first. A failed profile is tried twice, once by the preparation and once by the
+load after it, and both reports are written in full -- paste the one nearest
+the failure, or both. (Builds before `cn-<newest>` held the second back with
+`read a moment ago, not again for:`, which left a log with no reason in it at
+all.) A report writes a build that wrote no compiled context, and a warm-up
 over 20 seconds, each write under `npu:` -- and the reason first, now: the
 runtime's own lines (onnxruntime's logger, which carries QNN's), the phone's log
 around them, the pid this process is, the pair this run is set to use and the
@@ -60,7 +65,9 @@ phone's own pair for the same Hexagon, the QNN libraries the app brought and the
 ones the phone has, the Skel the DSP will find first, the DSP libraries and
 devices, and the chip's properties. Send those lines with the rest. A phone
 whose DSP will not take the pair this build carries can be set to run the
-phone's own QNN libraries instead (**Settings > Developer > Phone's Own QNN**),
+phone's own QNN libraries instead, under **Settings > Developer > Phone's Own
+QNN** -- the Developer section is hidden until **About > Version** is tapped
+seven times, and it appears above **Check for updates** once it is on.
 and the report says which pair was in force either way
 ([QNN HTP stubs](qnn-htp-stubs.md)).
 

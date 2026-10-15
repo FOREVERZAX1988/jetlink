@@ -214,3 +214,39 @@ through `backend_path`. Off, nothing changes: the app's pair runs first, on
 every phone, which is what every Hexagon up to V81 has been served by. The
 report says which of the two was in force, so one APK can try both and the
 lines that name the reason are the same either way.
+
+## Where a phone keeps its own QNN, and where the report now looks
+
+Recorded 2026-10-15, from the phone's own `npu:` report: an SM8975 running
+ColorOS 17 keeps a **complete V85 set of its own**, under `/odm`, not `/vendor`:
+
+| file | bytes | directory |
+| --- | --- | --- |
+| `libQnnHtp.so` | 3,778,744 | `/odm/lib64` |
+| `libQnnHtpPrepare.so` | 88,128,192 | `/odm/lib64` |
+| `libQnnHtpV85Stub.so` | 779,448 | `/odm/lib64` |
+| `libQnnSystem.so` | 4,052,904 | `/odm/lib64` |
+| `libQnnHtpV85Skel.so` | 12,582,764 | `/odm/lib/rfsa/adsp` |
+
+Two things follow, and both were gaps rather than conclusions:
+
+- **The backend search already reached it** (`/vendor/lib64`, else
+  `/system/lib64`, else `/odm/lib64`) -- so *Phone's Own QNN* did load the
+  phone's own backend on this phone.
+- **The Skel search did not.** `ADSP_LIBRARY_PATH` named
+  `/system/lib/rfsa/adsp`, `/system/vendor/lib/rfsa/adsp` and `/dsp`, and on
+  this phone the first two do not exist and the third is empty: the DSP fell
+  through to the app's own Skel, which is the pair the setting exists to stop
+  using. It now names `/vendor/lib/rfsa/adsp`, `/vendor/lib/rfsa/cdsp` and
+  `/odm/lib/rfsa/adsp` as well.
+
+`HostDiagnostics` reads the same directories (`ownDirectories()`), and now
+prints the directory beside every file it lists: a phone holding three QNN
+builds in three directories cannot be read from file names alone.
+
+One line decides which pair is really in force: **the QNN and onnxruntime
+libraries this process has open**, read from `/proc/<pid>/maps`, which names
+the full path of every QNN library the process mapped -- the Stub included.
+QNN's `libQnnHtp.so` opens its Stub by name, so a phone's own backend beside
+the app's Stub is a pair from two builds; that section, not the setting, says
+whether that happened.
