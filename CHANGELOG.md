@@ -1,3 +1,13 @@
+Jetlink v0.8.7
+==============
+**Models**
+* **Mountain Dew Model** now runs the retrained model comma shipped, not the earlier one.
+* **Mountain Dew V2 Preview** removed. If you picked it, Jetlink switches to Cinque Terre V3; pick **Mountain Dew Model** for comma's final version.
+* **Mountain Dew Model v3** is listed, and loads once comma publishes its files.
+
+**General Updates & Fixes**
+* **Update the comma and the app:** zoompilot's `develop` branch pins Jetlink v0.8.7.
+
 Jetlink v0.8.6
 ==============
 **Jetson**
