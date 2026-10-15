@@ -36,11 +36,11 @@ android {
         targetSdk = 36
         versionCode = jetlinkVersionCode
         versionName = jetlinkVersion
-        // The release tag this build came from, for the updater to compare
-        // with the newest GitHub release. The workflow names it
-        // (JETLINK_BUILD_TAG): "v0.8.4" on a tagged release, "cn-<sha>" on a
-        // cn-branch build, whose push creates the cn-<sha> prerelease the
-        // updater watches. GITHUB_REF_NAME is the tap, and "local" a dev build.
+        // The release tag this build came from, for the updater to order with
+        // the newest GitHub release. The workflow names it (JETLINK_BUILD_TAG):
+        // "v0.8.7" on a tagged release, "0.8.7-1015-1" on a cn-branch build
+        // (version-MMDD-that-day's build number), whose push publishes the
+        // matching prerelease. GITHUB_REF_NAME is the tap, and "local" a dev build.
         val buildTag = providers.environmentVariable("JETLINK_BUILD_TAG").orNull?.takeIf(String::isNotEmpty)
             ?: providers.environmentVariable("GITHUB_REF_NAME").orNull?.takeIf(String::isNotEmpty)
             ?: "local"
