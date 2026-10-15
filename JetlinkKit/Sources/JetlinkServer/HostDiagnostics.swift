@@ -36,6 +36,17 @@ package enum HostDiagnostics {
   /// QNN builds are three builds that take no node of any model.
   nonisolated(unsafe) package static var qnnBackend: String?
 
+  /// *Phone's Own QNN*, this run. The report prints it: which pair is in force
+  /// is what a silent refusal is read against, and it is the one thing a log
+  /// pasted from a phone cannot say by itself.
+  nonisolated(unsafe) package static var phoneOwnQnn = false
+
+  /// The phone's own libraries this run opened by their paths, before the
+  /// backend was handed to onnxruntime. A name opened after them resolves to
+  /// them, which is what keeps the phone's own backend from running beside the
+  /// app's Stub of the same name (`Host.phoneLibraries`).
+  nonisolated(unsafe) package static var phoneLibraries: [String] = []
+
   /// Writes `reason`, then what this machine says about its NPU runtime.
   ///
   /// For the engine's thread, where a second costs nothing, and never for a
@@ -126,11 +137,19 @@ package enum HostDiagnostics {
       // under onnxruntime's logger, and the phone's log holds what QNN, the DSP
       // and the process itself said around it. The directories come after,
       // each within its own budget, so nothing above them can be cut off.
-      lines.append(contentsOf: section("the runtime's own lines, as onnxruntime and QNN wrote them", runtimeLines?() ?? []))
+      // Every line of it, not the first of a cap: QNN writes its refusal
+      // *after* the graph transformers -- the device is created at the
+      // partitioning that follows them -- so a cap of 24 lines showed four
+      // transformers and cut the one line this report exists for. The ring is
+      // what onnxruntime wrote since the session was made; it is short, and it
+      // is the section that answers the question.
+      lines.append(
+        contentsOf: section(
+          "the runtime's own lines, as onnxruntime and QNN wrote them", runtimeLines?() ?? [], cap: 200))
       lines.append(contentsOf: section("this process's own log, its pid's lines", processLog(), cap: 80))
       lines.append(contentsOf: section("the runtime's lines in the phone's log, whatever pid wrote them", runtimeLog(), cap: 40))
       lines.append(contentsOf: section("this process", processFacts()))
-      let mapped = shell(mapsCommand)
+      let mapped = mappedLibraries()
       lines.append(contentsOf: section("the QNN and onnxruntime libraries this process has open", mapped))
       let carried = appLibraries(mapped)
       if carried.isEmpty {
@@ -207,6 +226,32 @@ package enum HostDiagnostics {
       return listing(directory)
     }
 
+    /// Every QNN, DSP and onnxruntime library this process has open, read
+    /// here, in this process, before any shell is asked: the probe below names
+    /// a pid, and a pid and `/proc/self` are not the same question -- on the
+    /// phone this was written for the pid's maps answered "No such file or
+    /// directory" and the section came back empty, which reads as "the app
+    /// carried no QNN at all". `/proc/self` is the process the report is
+    /// written in, whatever a pid says.
+    private static func mappedLibraries() -> [String] {
+      let here = selfMaps()
+      return here.isEmpty ? shell(mapsCommand) : here
+    }
+
+    private static func selfMaps() -> [String] {
+      guard let maps = FileManager.default.contents(atPath: "/proc/self/maps"),
+        let text = String(data: maps, encoding: .utf8)
+      else { return [] }
+      var paths: Set<String> = []
+      for line in text.split(separator: "\n") {
+        guard let field = line.split(separator: " ").first(where: { $0.hasPrefix("/") }) else { continue }
+        let lower = field.lowercased()
+        guard qnnWords.contains(where: { lower.contains($0) }) else { continue }
+        paths.insert(String(field))
+      }
+      return paths.sorted()
+    }
+
     /// The same files, hashed: a phone whose copies are not the APK's is
     /// running another QNN build, which no setting and no preparation fixes.
     /// Sixteen hex characters and the name, not the whole of either: two builds
@@ -230,7 +275,7 @@ package enum HostDiagnostics {
     /// The Skel and Stub files one directory holds, by size and name: the two
     /// halves of the match, one loaded by the app and one by the DSP.
     private static func named(_ directory: String) -> [String] {
-      shell("ls -l '\(directory)' 2>/dev/null | grep -iE 'skel|stub' | awk '{print $5, $9}'")
+      shell("ls -l '\(directory)' 2>/dev/null | grep -iE 'skel|stub' | awk '{print $5, $NF}'")
     }
 
     /// One numbered line per directory: a path that does not exist is one the
@@ -251,9 +296,17 @@ package enum HostDiagnostics {
     private static func pairInForce(_ search: [(directory: String, files: [String])], arch: String?) -> [String] {
       var lines: [String] = []
       lines.append("the QNN backend this run loads: \(qnnBackend ?? "the app's own libQnnHtp.so, beside the app")")
+      lines.append("the Phone's Own QNN setting this run: \(phoneOwnQnn ? "on" : "off")")
+      if !phoneLibraries.isEmpty {
+        lines.append("opened by path before the session, so every name finds these: \(phoneLibraries.joined(separator: " "))")
+      }
       let held = search.first { $0.files.contains { $0.lowercased().contains("skel.so") } }
       if let held, let file = held.files.first(where: { $0.lowercased().contains("skel.so") }) {
         lines.append("the DSP looks for its Skel in \(held.directory) first, and finds: \(file)")
+        if let native = nativeDirectory, held.directory == native {
+          lines.append(
+            "and that is the app's own copy, which no vendor signed: a DSP that will not take it takes no node of any model")
+        }
       } else {
         lines.append("no directory in ADSP_LIBRARY_PATH holds a Skel: the DSP has none to load")
       }
