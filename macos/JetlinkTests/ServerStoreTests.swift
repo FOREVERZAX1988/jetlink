@@ -43,17 +43,34 @@ struct ServerStoreTests {
   }
 
   @Test func usbServesTheGadgetAndOpensNoPort() {
-    let configuration = ServerStore.configuration(transport: .usb, tcpPort: 5599, cacheDirectory: cache)
+    let configuration = ServerStore.configuration(transport: .usb, tcpPort: 5599, cacheDirectory: cache, wifiLink: false)
     #expect(configuration.usb)
     #expect(!configuration.listen)
     #expect(configuration.cacheRoot == cache)
   }
 
   @Test func tcpListensOnThePortAndLeavesUSBAlone() {
-    let configuration = ServerStore.configuration(transport: .tcp, tcpPort: 5601, cacheDirectory: cache)
+    let configuration = ServerStore.configuration(transport: .tcp, tcpPort: 5601, cacheDirectory: cache, wifiLink: false)
     #expect(!configuration.usb)
     #expect(configuration.listen)
     #expect(configuration.port == 5601)
+  }
+
+  @Test func theWifiLinkListensBesideUSB() {
+    let configuration = ServerStore.configuration(transport: .usb, tcpPort: 5599, cacheDirectory: cache, wifiLink: true)
+    #expect(configuration.usb)
+    #expect(configuration.listen)
+    #expect(configuration.port == 5599)
+  }
+
+  @MainActor @Test func theWifiLinkIsOffUntilChosenAndRemembered() throws {
+    let suite = "io.zoompilot.jetlink.tests.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let settings = AppSettings(defaults: defaults)
+    #expect(!settings.wifiLink)
+    settings.wifiLink = true
+    #expect(AppSettings(defaults: defaults).wifiLink)
   }
 
   @MainActor @Test func tcpIsOnlyTheDeveloperSwitch() throws {

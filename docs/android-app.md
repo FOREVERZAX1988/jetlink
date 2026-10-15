@@ -51,6 +51,18 @@ It pulses while the model downloads and prepares.
 On OnePlus, OPPO, and realme phones, enable **OTG connection** in Settings.
 It may turn itself off when unused.
 
+<a id="over-wi-fi"></a>
+
+### Over Wi-Fi
+
+No cable. Slower than USB; for testing.
+
+1. In Jetlink's **Settings**, turn on **Wi-Fi Link**.
+2. Turn on the phone's hotspot on **5 GHz**. 2.4 GHz is too slow.
+3. On the comma, join the hotspot in **Settings > Network**.
+4. Set **Settings > Models > Jetlink** to **Wi-Fi**.
+5. Wait for **Connected over Wi-Fi**.
+
 <a id="benchmark"></a>
 
 ## 3. Check performance

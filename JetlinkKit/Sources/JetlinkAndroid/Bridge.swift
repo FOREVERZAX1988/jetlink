@@ -3,6 +3,7 @@
   import Foundation
   import JetlinkKit
   import JetlinkLiteRT
+  import JetlinkRegistry
   import JetlinkLog
   import JetlinkORT
   import JetlinkServer
@@ -166,6 +167,13 @@
 
     func start(_ config: [String: Any]) throws {
       stop()
+      // The mirror bases the model catalog and the LFS requests try before
+      // the original hosts: the user's list from Settings.kt, their order.
+      if let mirrors = config["mirrors"] as? [String] {
+        Mirrors.configure(mirrors)
+      } else {
+        Mirrors.configure([])
+      }
       if let dir = config["native_library_dir"] as? String, !dir.isEmpty {
         // Where the QNN provider finds the NPU's skel libraries: the app's own,
         // then the system's DSP directories.

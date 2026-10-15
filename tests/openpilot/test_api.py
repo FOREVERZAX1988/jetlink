@@ -218,8 +218,8 @@ class TestTheJoinFactory(OpenpilotTest):
   def test_the_warp_is_sized_from_the_record(self):
     self.parts.spec.store(spec(model_hw=(64, 128)))
     self.join()
-    self.loaded.assert_called_once_with(1928, 1208, 256, 128)
-    self.warp.assert_called_once_with(self.loaded.return_value, fakes.frame_size(1928, 1208))
+    self.loaded.assert_called_once_with(1928, 1208, 256, 128, lossless=False)
+    self.warp.assert_called_once_with(self.loaded.return_value, fakes.frame_size(1928, 1208), self.parts.log)
     self.reset.assert_called_once_with(self.small)
     self.present.assert_called_once()
 
@@ -231,7 +231,7 @@ class TestTheJoinFactory(OpenpilotTest):
 
   def test_without_a_record_it_is_this_devices_geometry(self):
     self.join()
-    self.loaded.assert_called_once_with(1928, 1208, 512, 256)
+    self.loaded.assert_called_once_with(1928, 1208, 512, 256, lossless=False)
 
   def test_a_warp_that_will_not_load_lets_the_link_go_and_raises(self):
     from jetlink.openpilot import link

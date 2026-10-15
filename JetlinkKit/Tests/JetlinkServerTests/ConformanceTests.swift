@@ -101,7 +101,9 @@ struct PinnedConstantTests {
       #expect(message.map { String(describing: $0) } == camel(name), "message \(name) = \(value)")
     }
     #expect((0...UInt16(255)).compactMap(Wire.Msg.init(rawValue:)).count == Pinned.messageTypes.count)
-    let flags: [String: Wire.Flag] = ["RESET_QUEUES": .resetQueues, "WANT_STATE": .wantState, "WANT_HIDDEN": .wantHidden, "PADDED": .padded]
+    let flags: [String: Wire.Flag] = [
+      "RESET_QUEUES": .resetQueues, "WANT_STATE": .wantState, "WANT_HIDDEN": .wantHidden, "LOSSLESS": .lossless, "PADDED": .padded,
+    ]
     #expect(Set(flags.keys) == Set(Pinned.flags.map(\.name)))
     for (name, value) in Pinned.flags {
       #expect(flags[name]?.rawValue == value, "flag \(name)")

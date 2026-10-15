@@ -74,12 +74,15 @@ class FakeClient:
     # whether each frame asked
     self.busy: set[int] = set()
     self.skippable = []
+    self.lossless = []
 
-  def infer_begin(self, data, packed, frame_id, reset=False, want_state=False, skip_if_busy=False):
+  def infer_begin(self, data, packed, frame_id, reset=False, want_state=False, skip_if_busy=False, lossless=None):
     self.skippable.append(skip_if_busy)
+    self.lossless.append(lossless)
     if skip_if_busy and frame_id in self.busy:
       return None
-    self.sent.append((np.frombuffer(bytes(data), np.uint8).copy(), np.array(packed, copy=True), frame_id, reset))
+    self.sent.append((None if data is None else np.frombuffer(bytes(data), np.uint8).copy(), np.array(packed, copy=True),
+                      frame_id, reset))
     self.asked.append(want_state)
     self._in_flight.append(frame_id)
     return frame_id
@@ -227,6 +230,39 @@ class TestWire(ModelStateTest):
     self.run_frames(STATEFUL, n=4)
     timed = [line for line in self.log.lines('warning') if ' warp ' in line]
     self.assertEqual([line.split()[2] for line in timed], ['1', '2', '3'])
+
+
+class TestLossless(ModelStateTest):
+  """A lossless warp's errors go packed, to a server that takes them."""
+
+  def lossless_state(self, takes: bool, errors: bool = True):
+    spec = spec_for(STATEFUL)
+    client = FakeClient()
+    client.takes_lossless = takes
+    warp = FakeWarp(np.zeros(np.prod(spec.warped_shape), np.uint8))
+    warp.errors = memoryview(bytearray(warp.output.nbytes)) if errors else None
+    packer = mock.Mock(**{'pack.return_value': (b'table', b'planes')})
+    with mock.patch('jetlink.lossless.Packer', return_value=packer) as made:
+      state = model_state.JetlinkModelState(client, spec, warp, face=fakes.FACE, log=self.log,
+                                            event=lambda name, **fields: None)
+    self.frames(state, 2)
+    return spec, client, warp, packer, made
+
+  def test_the_errors_go_packed_to_a_server_that_takes_them(self):
+    spec, client, warp, packer, made = self.lossless_state(takes=True)
+    made.assert_called_once_with(spec.warped_shape)
+    self.assertEqual(client.lossless, [(b'table', b'planes')] * 2)
+    self.assertTrue(all(c.args == (warp.errors,) for c in packer.pack.call_args_list))
+
+  def test_a_server_that_does_not_take_them_gets_the_frame_raw(self):
+    _, client, _, packer, made = self.lossless_state(takes=False)
+    made.assert_not_called()
+    self.assertEqual(client.lossless, [None, None])
+
+  def test_a_plain_warp_sends_raw(self):
+    _, client, _, _, made = self.lossless_state(takes=True, errors=False)
+    made.assert_not_called()
+    self.assertEqual(client.lossless, [None, None])
 
 
 class TestProving(ModelStateTest):

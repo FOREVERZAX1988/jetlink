@@ -39,6 +39,20 @@ In Jetlink, check for **Connected over USB 3**, a rate near **20 frames per
 second**, and **zero slow frames**. If it says USB 2, check the cable and port.
 Read [daily use](using-jetlink.md) before driving.
 
+<a id="over-wi-fi"></a>
+
+### Over Wi-Fi
+
+No cable. Slower than USB; for testing. The comma dials the Mac, so the Mac
+must be the hotspot it joins.
+
+1. In **Settings > Server**, turn on **Wi-Fi link** and restart the server.
+2. Share the Mac's connection over Wi-Fi on 5 GHz: **System Settings > General >
+   Sharing > Internet Sharing**.
+3. On the comma, join the Mac's network in **Settings > Network**.
+4. Set **Settings > Models > Jetlink** to **Wi-Fi**.
+5. Wait for **Connected over Wi-Fi**.
+
 <a id="everyday-use"></a>
 <a id="prepare-a-model-before-you-drive"></a>
 <a id="use-a-model-before-you-drive"></a>

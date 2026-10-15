@@ -8,6 +8,9 @@ final class Loaded {
   let spec: ModelSpec
   let engine: any Engine
   let staging: any FrameStaging
+  /// Where a lossless frame unpacks, made on the first one. Under the host's
+  /// lock, as every frame is.
+  lazy var lossless = LosslessFrame(shape: spec.warpedShape)
 
   init(sha256: String, spec: ModelSpec, engine: any Engine, staging: any FrameStaging) {
     self.sha256 = sha256

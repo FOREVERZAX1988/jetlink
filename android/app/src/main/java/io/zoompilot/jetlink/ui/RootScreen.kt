@@ -42,6 +42,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.zoompilot.jetlink.AppGraph
+import io.zoompilot.jetlink.R
+import io.zoompilot.jetlink.l10n
 import io.zoompilot.jetlink.ui.benchmark.BenchmarkScreen
 import io.zoompilot.jetlink.ui.benchmark.BenchmarkText
 import io.zoompilot.jetlink.ui.logs.LogsScreen
@@ -56,11 +58,11 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
-enum class Tab(val title: String, val icon: ImageVector) {
-    Status("Status", Icons.Filled.Speed),
-    Models("Models", Icons.Filled.Inventory2),
-    Benchmark("Benchmark", Icons.Filled.Timer),
-    Settings("Settings", Icons.Filled.Settings),
+enum class Tab(val titleRes: Int, val icon: ImageVector) {
+    Status(R.string.tab_status, Icons.Filled.Speed),
+    Models(R.string.tab_models, Icons.Filled.Inventory2),
+    Benchmark(R.string.tab_benchmark, Icons.Filled.Timer),
+    Settings(R.string.tab_settings, Icons.Filled.Settings),
 }
 
 /** A screen pushed over the tabs. */
@@ -123,7 +125,7 @@ fun RootScreen(graph: AppGraph, initialTab: String?, launchBenchmark: Int?) {
                                     tab = item
                                 },
                                 icon = { Icon(item.icon, contentDescription = null) },
-                                label = { Text(item.title) },
+                                label = { Text(l10n(item.titleRes)) },
                             )
                         }
                     }
@@ -157,7 +159,7 @@ private fun StatusAccessory(state: StatusState, onClick: () -> Unit) {
             Row(Modifier.padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(summaryIcon(summary), contentDescription = null, tint = colors.tone(summary.tone), modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(10.dp))
-                Text(summary.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                Text(l10n(summary.titleRes), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, maxLines = 1)
                 Spacer(Modifier.width(8.dp).weight(1f))
                 Text(
                     state.accessoryDetail,
@@ -192,10 +194,10 @@ private fun ShutdownAlert(requests: Int) {
     if (requests > seen) {
         AlertDialog(
             onDismissRequest = { seen = requests },
-            title = { Text("Comma Asked to Shut Down") },
+            title = { Text(l10n(R.string.shutdown_title)) },
             // the reason the comma gave is in Logs
-            text = { Text("Jetlink can't turn off your phone, but you can close the app.") },
-            confirmButton = { TextButton(onClick = { seen = requests }) { Text("OK") } },
+            text = { Text(l10n(R.string.shutdown_text)) },
+            confirmButton = { TextButton(onClick = { seen = requests }) { Text(l10n(R.string.ok)) } },
         )
     }
 }

@@ -86,6 +86,8 @@ class JetlinkClient:
     self.deadline = deadline
     # Flag.WANT_HIDDEN on every frame; see RAW_PRED_ENV
     self.want_hidden = bool(os.environ.get(RAW_PRED_ENV)) if want_hidden is None else want_hidden
+    # the last hello's server takes lossless frames (P.LOSSLESS_CODEC)
+    self.takes_lossless = False
     # Who the server logs this connection as. The nonce is per client object,
     # so two processes taking turns on one gadget, or one process reopening
     # the link, are separable in a journal whose clock is wrong anyway.
@@ -139,9 +141,11 @@ class JetlinkClient:
     return cls(FfsTransport.borrowed(mount, udc, bounce=bounce, owner_gadget=owner_gadget), **kw)
 
   @classmethod
-  def open_tcp(cls, host: str, port: int = 5599, **kw) -> JetlinkClient:
+  def open_tcp(cls, host: str, port: int = 5599, timeout: float = 5.0, link: dict | None = None,
+               on_close=None, **kw) -> JetlinkClient:
+    """`link` and `on_close` are the transport's (TcpTransport)."""
     from jetlink.transport.tcp import TcpTransport
-    return cls(TcpTransport.connect(host, port), **kw)
+    return cls(TcpTransport.connect(host, port, timeout=timeout, link=link, on_close=on_close), **kw)
 
   @classmethod
   def open_listen(cls, address: str, timeout: float | None = None, **kw) -> JetlinkClient:
@@ -245,6 +249,7 @@ class JetlinkClient:
     self.frames_lost = 0
     self.t.send_json(P.Msg.HELLO_REQ, seq, {'client': client})
     resp = json.loads(bytes(self._expect(P.Msg.HELLO_RESP, seq, timeout).payload))
+    self.takes_lossless = P.LOSSLESS_CODEC in (resp.get('frame_codecs') or ())
     self._take_datagrams(resp)
     return resp
 
@@ -393,9 +398,9 @@ class JetlinkClient:
 
   # -- inference ------------------------------------------------------------
 
-  def infer_begin(self, warped: np.ndarray, packed: np.ndarray, frame_id: int = 0,
+  def infer_begin(self, warped: np.ndarray | None, packed: np.ndarray, frame_id: int = 0,
                   reset: bool = False, want_state: bool = False, deadline: float | None = None,
-                  skip_if_busy: bool = False) -> int | None:
+                  skip_if_busy: bool = False, lossless: tuple | None = None) -> int | None:
     """Send a frame and return immediately with its sequence number.
 
     Split from infer_end so the caller can work while the Jetson is busy;
@@ -412,6 +417,10 @@ class JetlinkClient:
     (Transport.try_send). Over a phone's cable it goes as datagrams instead,
     where a lost one is a frame the server never answers, and the next reply
     takes it out of flight (_take_reply).
+
+    `lossless` is the frame packed instead (jetlink.lossless.Packer.pack's
+    size table and planes), for a server whose hello lists the codec
+    (takes_lossless); `warped` is not sent then.
     """
     if self.spec is None:
       raise LinkError("ensure_engine() first")
@@ -420,12 +429,15 @@ class JetlinkClient:
     if self.waiting_for() > self.deadline:
       self.dead = True
       raise LinkError(f"no answer to {len(self._in_flight)} frames in {self.deadline:.1f}s; link abandoned")
-    warped = _as_bytes(warped, self.spec.warped_nbytes, 'warped')
     packed = _as_bytes(packed, self.spec.packed_nbytes, 'packed')
     seq = self._next_seq()
     flags = ((P.Flag.RESET_QUEUES if reset else 0) | (P.Flag.WANT_STATE if want_state else 0)
-             | (P.Flag.WANT_HIDDEN if self.want_hidden else 0))
-    parts = (P.pack_infer_req(frame_id, flags), warped, packed)
+             | (P.Flag.WANT_HIDDEN if self.want_hidden else 0) | (P.Flag.LOSSLESS if lossless else 0))
+    if lossless:
+      # the packed floats first, at their fixed size, then the planes
+      parts = (P.pack_infer_req(frame_id, flags), packed, *lossless)
+    else:
+      parts = (P.pack_infer_req(frame_id, flags), _as_bytes(warped, self.spec.warped_nbytes, 'warped'), packed)
     sent = Sent(seq, frame_id, flags, time.monotonic())
     timeout = self.deadline if deadline is None else deadline
     try:
@@ -555,18 +567,20 @@ class JetlinkClient:
     self.last_output = _whole_output(self.spec, np.frombuffer(msg.payload, np.float32, n, P.INFER_RESP_SIZE), whole)
     return self.last_output
 
-  def infer(self, warped: np.ndarray, packed: np.ndarray, frame_id: int = 0,
+  def infer(self, warped: np.ndarray | None, packed: np.ndarray, frame_id: int = 0,
             reset: bool = False, deadline: float | None = None,
-            want_state: bool = False) -> np.ndarray:
+            want_state: bool = False, lossless: tuple | None = None) -> np.ndarray:
     """One frame. Returns the model output as float32, shaped (n,), laid out
     as the spec's output_slices say; hidden_state reads as zeros unless
     `want_hidden`, since it stays on the server.
 
     `warped` is (2, 6, H, W) uint8 off openpilot's warp, `packed` the float32
     packed_npy_inputs. Either may be any buffer, so a tinygrad Tensor.data()
-    memoryview reaches the wire with no numpy round trip.
+    memoryview reaches the wire with no numpy round trip. `lossless` sends
+    the frame packed instead (infer_begin).
     """
-    return self.infer_end(self.infer_begin(warped, packed, frame_id, reset, want_state, deadline), deadline)
+    return self.infer_end(self.infer_begin(warped, packed, frame_id, reset, want_state, deadline,
+                                           lossless=lossless), deadline)
 
   @property
   def lendable(self) -> bool:

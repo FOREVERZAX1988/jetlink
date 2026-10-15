@@ -33,9 +33,16 @@ CABLE_ADDRESS = '192.168.60.1'
 
 
 class TcpTransport(StreamTransport):
-  def __init__(self, sock: socket.socket):
+  # what the hello says of this link when the opener knows better than the
+  # addresses, and what to undo when it closes: a Wi-Fi dial (link.dial)
+  link: dict | None = None
+  on_close = None
+
+  def __init__(self, sock: socket.socket, link: dict | None = None, on_close=None):
     super().__init__()
     self.sock = sock
+    self.link = link
+    self.on_close = on_close
     self._timeout: float | None = -1.0  # force the first settimeout
     _tune(sock)
     # (socket connected to the server's frame port, its token); see use_datagrams
@@ -52,6 +59,8 @@ class TcpTransport(StreamTransport):
       return False
 
   def link_info(self) -> dict:
+    if self.link is not None:
+      return self.link
     return usb_link_info('cable', udc_speed()) if self.on_the_cable() else {'kind': 'tcp'}
 
   def net_drops(self) -> int:
@@ -103,8 +112,8 @@ class TcpTransport(StreamTransport):
       raise LinkError(f"frame datagrams failed: {e}") from e
 
   @classmethod
-  def connect(cls, host: str, port: int = DEFAULT_PORT, timeout: float = 5.0) -> TcpTransport:
-    return cls(socket.create_connection((host, port), timeout=timeout))
+  def connect(cls, host: str, port: int = DEFAULT_PORT, timeout: float = 5.0, **kw) -> TcpTransport:
+    return cls(socket.create_connection((host, port), timeout=timeout), **kw)
 
   @classmethod
   def listen(cls, host: str = '0.0.0.0', port: int = DEFAULT_PORT, backlog: int = 1) -> socket.socket:
@@ -170,6 +179,9 @@ class TcpTransport(StreamTransport):
         let_go()
       except OSError:
         pass
+    on_close, self.on_close = self.on_close, None
+    if on_close is not None:
+      on_close()
 
 
 def _softnet_dropped(path: str = '/proc/net/softnet_stat') -> int:

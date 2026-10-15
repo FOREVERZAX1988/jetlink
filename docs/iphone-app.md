@@ -39,6 +39,19 @@
 Stay offroad and online until the comma's home-button icon turns **green**.
 It pulses while the model downloads and prepares.
 
+<a id="over-wi-fi"></a>
+
+### Over Wi-Fi
+
+No cable. Slower than USB; for testing.
+
+1. In Jetlink's **Settings**, turn on **Wi-Fi Link**.
+2. Turn on **Personal Hotspot** with **Allow Others to Join** on and
+   **Maximize Compatibility** off. 2.4 GHz is too slow.
+3. On the comma, join the hotspot in **Settings > Network**.
+4. Set **Settings > Models > Jetlink** to **Wi-Fi**.
+5. Keep Jetlink on screen and wait for **Connected over Wi-Fi**.
+
 <a id="status"></a>
 
 Check for a rate near **20 frames per second** and **zero slow frames**.

@@ -53,7 +53,7 @@ struct StatusContent: View {
       // phone read as Connected and nothing more
       if let medium = state.linkMedium, let advice = medium.advice(cable: true) {
         banner(
-          "\(medium.title) Link", "\(advice) \(USBSpeedGuide.summary(for: state.deviceName))",
+          "\(medium.title) Link", medium.isWifi ? advice : "\(advice) \(USBSpeedGuide.summary(for: state.deviceName))",
           symbol: "tortoise.fill")
       }
       cards
@@ -182,7 +182,8 @@ struct StatusContent: View {
           value: health.memoryValue, unit: health.availableMemory == nil ? nil : "GB",
           note: health.memoryNote, noteTone: health.memoryTone)
         MetricTile(
-          title: "Link", systemImage: state.linkMedium == nil ? "cable.connector.slash" : "cable.connector", tint: .teal,
+          title: "Link", systemImage: state.linkMedium == nil ? "cable.connector.slash" : state.linkMedium?.isWifi == true ? "wifi" : "cable.connector",
+          tint: .teal,
           value: state.linkMedium?.phoneTitle ?? "None",
           note: linkNote, noteTone: state.linkMedium?.isSlow == true ? .orange : nil)
       }
@@ -192,7 +193,7 @@ struct StatusContent: View {
   /// Under the Link tile: why there is none, or that a slow one costs frames.
   private var linkNote: String {
     guard let medium = state.linkMedium else { return state.cableAddress == nil ? "Waiting" : "Connecting" }
-    return medium.isSlow ? "Slow, use USB 3" : "Connected"
+    return medium.fix ?? "Connected"
   }
 }
 

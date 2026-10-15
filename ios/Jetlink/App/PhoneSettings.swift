@@ -46,6 +46,13 @@ final class PhoneSettings {
     didSet { defaults.set(keepScreenOn, forKey: Keys.keepScreenOn) }
   }
 
+  /// The server listening on `port` for a comma that joined this phone's
+  /// hotspot and dials it (the comma's Jetlink setting on Wi-Fi). Off unless
+  /// chosen.
+  var wifiLink: Bool {
+    didSet { defaults.set(wifiLink, forKey: Keys.wifiLink) }
+  }
+
   init(defaults: UserDefaults = .standard) {
     self.defaults = defaults
     let port = defaults.integer(forKey: Keys.port)
@@ -55,6 +62,7 @@ final class PhoneSettings {
     self.keepGPUAwake = defaults.object(forKey: Keys.keepGPUAwake) as? Bool ?? true
     self.keepCPUWarm = defaults.object(forKey: Keys.keepCPUWarm) as? Bool ?? true
     self.keepScreenOn = defaults.object(forKey: Keys.keepScreenOn) as? Bool ?? true
+    self.wifiLink = defaults.bool(forKey: Keys.wifiLink)
   }
 
   /// Where models and prepared engines live. Application Support, not Caches:
@@ -67,6 +75,7 @@ final class PhoneSettings {
   private enum Keys {
     static let port = "port"
     static let developer = "developer"
+    static let wifiLink = "wifiLink"
     static let device = "device"
     static let keepGPUAwake = "keepGPUAwake"
     static let keepCPUWarm = "keepCPUWarm"

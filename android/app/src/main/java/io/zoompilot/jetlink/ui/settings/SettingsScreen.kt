@@ -20,10 +20,18 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -49,6 +57,10 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.zoompilot.jetlink.AppGraph
+import io.zoompilot.jetlink.AppLocale
+import io.zoompilot.jetlink.settings.AppTheme
+import io.zoompilot.jetlink.R
+import io.zoompilot.jetlink.l10n
 import io.zoompilot.jetlink.BuildConfig
 import io.zoompilot.jetlink.server.RunState
 import io.zoompilot.jetlink.server.ServerService
@@ -67,8 +79,10 @@ import io.zoompilot.jetlink.ui.components.RowDivider
 import io.zoompilot.jetlink.ui.components.SwitchRow
 import io.zoompilot.jetlink.ui.components.ValueRow
 import io.zoompilot.jetlink.ui.components.rememberWifiAddress
+import io.zoompilot.jetlink.update.UpdateState
 import io.zoompilot.jetlink.usb.UsbState
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /** What the Settings rows show beyond the settings themselves. */
@@ -85,10 +99,12 @@ data class SettingsInfo(
     val processors: List<Processor>,
     /** A Snapdragon, whose NPU and GPU QNN can drive. */
     val snapdragon: Boolean = true,
-    /** What Automatic runs on here. */
-    val automatic: Processor = Processor.Gpu,
-    /** What runs the loaded model, when its engine says ("GPU(fp16)"). */
+    /** What Automatic resolves to on this phone. */
+    val automatic: Processor = Processor.Auto,
+    /** The accelerator the running engine uses, or null before one is ready. */
     val accelerator: String? = null,
+    /** The latest update check's answer. */
+    val update: UpdateState = UpdateState.Unknown,
 )
 
 /** What the Settings rows do. */
@@ -99,6 +115,10 @@ class SettingsActions(
     val stopServer: () -> Unit = {},
     val startServer: () -> Unit = {},
     val restartServer: () -> Unit = {},
+    /** Checks the GitHub release for a newer app. */
+    val checkUpdates: () -> Unit = {},
+    /** Installs the downloaded update's APK. */
+    val installUpdate: () -> Unit = {},
 )
 
 /**
@@ -113,10 +133,13 @@ fun SettingsScreen(graph: AppGraph, openConnect: () -> Unit, openLogs: () -> Uni
     val snapshot by graph.server.snapshot.collectAsStateWithLifecycle()
     val runState by graph.server.runState.collectAsStateWithLifecycle()
     val usb by graph.usb.usb.collectAsStateWithLifecycle()
+    val update by graph.updates.state.collectAsStateWithLifecycle()
     val wifi = rememberWifiAddress()
     val runtime by produceState<String?>(null, runState) {
         value = withContext(Dispatchers.IO) { graph.server.runtimeVersion() }
     }
+    // A download the Update row started, shown as progress.
+    var download by remember { mutableStateOf<Float?>(null) }
     val info = SettingsInfo(
         snapshot = snapshot,
         runState = runState,
@@ -129,6 +152,7 @@ fun SettingsScreen(graph: AppGraph, openConnect: () -> Unit, openLogs: () -> Uni
         snapdragon = Chip.isQualcomm || Chip.isEmulator,
         automatic = Chip.automatic,
         accelerator = snapshot.engine.takeIf { it.state == "ready" }?.accelerator,
+        update = update,
     )
     val actions = SettingsActions(
         update = graph.settings::update,
@@ -137,12 +161,25 @@ fun SettingsScreen(graph: AppGraph, openConnect: () -> Unit, openLogs: () -> Uni
         stopServer = { ServerService.start(context, ServerService.ACTION_STOP) },
         startServer = { ServerService.start(context) },
         restartServer = { graph.restartServer(context) },
+        checkUpdates = {
+            download = null
+            graph.scope.launch { graph.updates.check() }
+        },
+        installUpdate = {
+            graph.scope.launch {
+                val file = graph.updates.download { done, total ->
+                    download = if (total > 0) done.toFloat() / total.toFloat() else null
+                }
+                download = null
+                file?.let { graph.updates.install(it) }
+            }
+        },
     )
     Scaffold(
         containerColor = JetlinkTheme.colors.grouped,
         topBar = {
             TopAppBar(
-                title = { Text("Settings", fontWeight = FontWeight.Bold) },
+                title = { Text(l10n(R.string.tab_settings), fontWeight = FontWeight.Bold) },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = JetlinkTheme.colors.grouped,
                     scrolledContainerColor = JetlinkTheme.colors.grouped,
@@ -150,12 +187,12 @@ fun SettingsScreen(graph: AppGraph, openConnect: () -> Unit, openLogs: () -> Uni
             )
         },
     ) { padding ->
-        SettingsContent(values, info, actions, Modifier.padding(padding).consumeWindowInsets(padding))
+        SettingsContent(values, info, actions, download, Modifier.padding(padding).consumeWindowInsets(padding))
     }
 }
 
 @Composable
-fun SettingsContent(values: SettingsValues, info: SettingsInfo, actions: SettingsActions, modifier: Modifier = Modifier) {
+fun SettingsContent(values: SettingsValues, info: SettingsInfo, actions: SettingsActions, download: Float? = null, modifier: Modifier = Modifier) {
     Column(
         modifier
             .fillMaxSize()
@@ -165,114 +202,95 @@ fun SettingsContent(values: SettingsValues, info: SettingsInfo, actions: Setting
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
-        Connection(info)
+        Connection(values, info, actions)
         Performance(values, info, actions)
-        FormSection("Display", footer = { FormFooter("Jetlink keeps serving with the screen off.") }) {
-            SwitchRow("Keep Screen On", values.keepScreenOn, { on -> actions.update { it.copy(keepScreenOn = on) } })
-        }
+        DisplayAndLanguage(values, actions)
+        MirrorSources(values, actions)
         info.snapshot.disk?.let { disk ->
-            FormSection("Storage") {
-                ValueRow("Downloaded", Format.bytes(disk.modelsBytes))
+            FormSection(l10n(R.string.settings_storage)) {
+                ValueRow(l10n(R.string.storage_downloaded), Format.bytes(disk.modelsBytes))
                 RowDivider()
-                ValueRow("Prepared", Format.bytes(disk.enginesBytes))
+                ValueRow(l10n(R.string.storage_prepared), Format.bytes(disk.enginesBytes))
                 disk.freeBytes?.let {
                     RowDivider()
-                    ValueRow("Available", Format.bytes(it))
+                    ValueRow(l10n(R.string.storage_available), Format.bytes(it))
                 }
             }
         }
-        FormSection("Help") {
-            ActionRow("Connecting the Comma", actions.openConnect)
+        FormSection(l10n(R.string.settings_help)) {
+            ActionRow(l10n(R.string.help_connect), actions.openConnect)
             RowDivider()
-            ActionRow("Logs", actions.openLogs)
+            ActionRow(l10n(R.string.help_logs), actions.openLogs)
         }
         if (values.developer) {
             Developer(values, info, actions)
         }
+        Updates(values, info, actions, download)
         About(values, info, actions)
     }
 }
 
+/** The Wi-Fi link setting, off unless the driver turned it on. */
 @Composable
-private fun Connection(info: SettingsInfo) {
+private fun Connection(values: SettingsValues, info: SettingsInfo, actions: SettingsActions) {
     val link = info.snapshot.medium?.title
-        ?: if (info.usb is UsbState.Attached) "Connecting" else "Not Connected"
-    FormSection("Connection") {
-        ValueRow("Link", link)
+        ?: if (info.usb is UsbState.Attached) l10n(R.string.link_connecting) else l10n(R.string.link_not_connected)
+    val footer: (@Composable () -> Unit)? = if (values.wifiLink) {
+        { FormFooter(l10n(R.string.settings_connection_footer_wifi)) }
+    } else {
+        null
+    }
+    FormSection(l10n(R.string.settings_connection), footer = footer) {
+        ValueRow(l10n(R.string.settings_link), link)
+        RowDivider()
+        SwitchRow(l10n(R.string.settings_wifi_link), values.wifiLink, { on -> actions.update { it.copy(wifiLink = on) } })
     }
 }
 
-/**
- * The port bench tools reach the server on, and where on Wi-Fi. Shown, and
- * the port open, only with the developer setting on.
- */
+/** The word for a theme choice, in the app's language. */
 @Composable
-private fun Developer(values: SettingsValues, info: SettingsInfo, actions: SettingsActions) {
-    val colors = JetlinkTheme.colors
-    val focus = LocalFocusManager.current
-    var portText by remember(values.port) { mutableStateOf(values.port.toString()) }
-    val typed = portText.toIntOrNull()?.takeIf { it in 1..65535 }
-    val apply = {
-        if (typed != null && typed != values.port) {
-            actions.update { it.copy(port = typed) }
-        } else {
-            portText = values.port.toString()
-        }
-        focus.clearFocus()
-    }
-    val footer = "For bench tools on a Mac over Wi-Fi or adb. The comma does not use this port. Tap Version 7 times to hide this."
-    FormSection("Developer", footer = { FormFooter(footer) }) {
-        Row(
-            Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("Port", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-            BasicTextField(
-                value = portText,
-                onValueChange = { text -> portText = text.filter(Char::isDigit).take(5) },
-                singleLine = true,
-                textStyle = MaterialTheme.typography.bodyLarge.copy(color = colors.secondaryText, textAlign = TextAlign.End),
-                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = { apply() }),
-                modifier = Modifier.width(96.dp),
-            )
-        }
-        if (typed != null && typed != values.port) {
-            RowDivider()
-            ActionRow("Use Port $typed", { apply() }, color = MaterialTheme.colorScheme.primary, chevron = false)
-        }
-        info.wifi?.let { address ->
-            RowDivider()
+private fun themeName(theme: AppTheme): String = l10n(
+    when (theme) {
+        AppTheme.System -> R.string.theme_system
+        AppTheme.Light -> R.string.theme_light
+        AppTheme.Dark -> R.string.theme_dark
+    },
+)
+
+/** Display, the theme and the app language. A choice applies at once, everywhere. */
+@Composable
+private fun DisplayAndLanguage(values: SettingsValues, actions: SettingsActions) {
+    var choosingTheme by remember { mutableStateOf(false) }
+    var choosing by remember { mutableStateOf(false) }
+    FormSection(l10n(R.string.settings_display), footer = { FormFooter(l10n(R.string.settings_display_footer)) }) {
+        SwitchRow(l10n(R.string.settings_keep_screen_on), values.keepScreenOn, { on -> actions.update { it.copy(keepScreenOn = on) } })
+        RowDivider()
+        Box {
             Row(
-                Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 16.dp, vertical = 12.dp),
+                Modifier
+                    .fillMaxWidth()
+                    .clickable(role = Role.DropdownList) { choosingTheme = true }
+                    .heightIn(min = 48.dp)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("Wi-Fi", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-                SelectionContainer {
-                    Text("$address:${info.snapshot.port ?: values.port}", style = MaterialTheme.typography.bodyLarge, color = colors.secondaryText)
+                Text(l10n(R.string.settings_theme), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                Spacer(Modifier.width(12.dp))
+                Text(themeName(values.theme), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.primary)
+            }
+            DropdownMenu(expanded = choosingTheme, onDismissRequest = { choosingTheme = false }) {
+                AppTheme.entries.forEach { theme ->
+                    DropdownMenuItem(
+                        text = { Text(themeName(theme), fontWeight = if (theme == values.theme) FontWeight.SemiBold else null) },
+                        onClick = {
+                            choosingTheme = false
+                            if (theme != values.theme) actions.update { it.copy(theme = theme) }
+                        },
+                    )
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun Performance(values: SettingsValues, info: SettingsInfo, actions: SettingsActions) {
-    val colors = JetlinkTheme.colors
-    var choosing by remember { mutableStateOf(false) }
-    val choices = info.processors
-    val footer = when {
-        values.processor.fellBack(info.accelerator, info.automatic) ->
-            "The NPU did not take this model, so it runs on the GPU. Logs (in Help) say why. " +
-                "Changing the processor prepares models again."
-        info.automatic == Processor.TensorNpu ->
-            "Automatic runs the model on the Tensor NPU, which prepares it the first time. " +
-                "A model the NPU cannot take runs on the GPU. Changing the processor prepares models again."
-        info.snapdragon -> "Automatic runs the model on the GPU for now. Changing the processor prepares models again."
-        else -> "This phone has no NPU Jetlink can use, so the model runs on its GPU. Run Benchmark to see whether it keeps up."
-    }
-    FormSection("Performance", footer = { FormFooter(footer) }) {
+        RowDivider()
         Box {
             Row(
                 Modifier
@@ -282,13 +300,108 @@ private fun Performance(values: SettingsValues, info: SettingsInfo, actions: Set
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("Processor", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                Text(l10n(R.string.settings_language), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
                 Spacer(Modifier.width(12.dp))
-                Text(
-                    values.processor.summary(info.accelerator, info.automatic),
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.primary,
-                )
+                Text(values.language.displayName, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.primary)
+            }
+            DropdownMenu(expanded = choosing, onDismissRequest = { choosing = false }) {
+                AppLocale.entries.forEach { locale ->
+                    DropdownMenuItem(
+                        text = { Text(locale.displayName, fontWeight = if (locale == values.language) FontWeight.SemiBold else null) },
+                        onClick = {
+                            choosing = false
+                            if (locale != values.language) actions.update { it.copy(language = locale) }
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** The mirror bases the server tries before the original hosts, added and removed by hand. */
+@Composable
+private fun MirrorSources(values: SettingsValues, actions: SettingsActions) {
+    var adding by remember { mutableStateOf(false) }
+    var draft by remember { mutableStateOf("") }
+    FormSection(l10n(R.string.settings_mirrors), footer = { FormFooter(l10n(R.string.settings_mirrors_footer)) }) {
+        values.mirrors.forEach { mirror ->
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(mirror, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                IconButton(onClick = { actions.update { it.copy(mirrors = values.mirrors - mirror) } }) {
+                    Icon(Icons.Filled.Close, contentDescription = l10n(R.string.mirror_delete))
+                }
+            }
+            RowDivider()
+        }
+        ActionRow(l10n(R.string.mirror_add), { draft = ""; adding = true }, chevron = false)
+    }
+    if (adding) {
+        val trimmed = draft.trim()
+        val valid = (trimmed.startsWith("https://") || trimmed.startsWith("http://")) && trimmed.length > 8
+        AlertDialog(
+            onDismissRequest = { adding = false },
+            title = { Text(l10n(R.string.mirror_add)) },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = draft,
+                        onValueChange = { draft = it },
+                        singleLine = true,
+                        placeholder = { Text(l10n(R.string.mirror_hint)) },
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    )
+                    if (trimmed.isNotBlank() && !valid) {
+                        Text(l10n(R.string.mirror_invalid), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        adding = false
+                        val mirror = trimmed.trimEnd('/')
+                        if (mirror !in values.mirrors) {
+                            actions.update { it.copy(mirrors = values.mirrors + mirror) }
+                        }
+                    },
+                    enabled = valid,
+                ) { Text(l10n(R.string.action_confirm)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { adding = false }) { Text(l10n(R.string.action_cancel_dialog)) }
+            },
+        )
+    }
+}
+
+@Composable
+private fun Performance(values: SettingsValues, info: SettingsInfo, actions: SettingsActions) {
+    val colors = JetlinkTheme.colors
+    var choosing by remember { mutableStateOf(false) }
+    val choices = info.processors
+    val footer = when {
+        values.processor.fellBack(info.accelerator, info.automatic) -> l10n(R.string.settings_performance_footer_fellback)
+        info.automatic == Processor.TensorNpu -> l10n(R.string.settings_performance_footer_tensor)
+        info.snapdragon -> l10n(R.string.settings_performance_footer)
+        else -> l10n(R.string.settings_performance_footer_nonsnapdragon)
+    }
+    FormSection(l10n(R.string.settings_performance), footer = { FormFooter(footer) }) {
+        Box {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable(role = Role.DropdownList) { choosing = true }
+                    .heightIn(min = 48.dp)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(l10n(R.string.settings_processor), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                Spacer(Modifier.width(12.dp))
+                Text(values.processor.summary(info.accelerator, info.automatic), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.primary)
             }
             DropdownMenu(expanded = choosing, onDismissRequest = { choosing = false }, modifier = Modifier.background(colors.card)) {
                 choices.forEach { processor ->
@@ -305,15 +418,101 @@ private fun Performance(values: SettingsValues, info: SettingsInfo, actions: Set
         if (values.processor.usesQnn) {
             RowDivider()
             SwitchRow(
-                "Keep NPU Awake", values.keepNpuAwake, { on -> actions.update { it.copy(keepNpuAwake = on) } },
-                supporting = "Holds the NPU at full speed between frames.",
+                l10n(R.string.settings_keep_npu), values.keepNpuAwake, { on -> actions.update { it.copy(keepNpuAwake = on) } },
+                supporting = l10n(R.string.settings_keep_npu_support),
             )
         }
         RowDivider()
         SwitchRow(
-            "Keep CPU Awake", values.keepCpuAwake, { on -> actions.update { it.copy(keepCpuAwake = on) } },
-            supporting = "Holds the CPU's clocks up between frames.",
+            l10n(R.string.settings_keep_cpu), values.keepCpuAwake, { on -> actions.update { it.copy(keepCpuAwake = on) } },
+            supporting = l10n(R.string.settings_keep_cpu_support),
         )
+    }
+}
+
+/** The port bench tools reach the server on, and where on Wi-Fi. Shown, and the port open, only with the developer setting on. */
+@Composable
+private fun Developer(values: SettingsValues, info: SettingsInfo, actions: SettingsActions) {
+    val colors = JetlinkTheme.colors
+    val focus = LocalFocusManager.current
+    var portText by remember(values.port) { mutableStateOf(values.port.toString()) }
+    val typed = portText.toIntOrNull()?.takeIf { it in 1..65535 }
+    val apply = {
+        if (typed != null && typed != values.port) {
+            actions.update { it.copy(port = typed) }
+        } else {
+            portText = values.port.toString()
+        }
+        focus.clearFocus()
+    }
+    FormSection(l10n(R.string.settings_developer), footer = { FormFooter(l10n(R.string.settings_developer_footer)) }) {
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(l10n(R.string.settings_port), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+            BasicTextField(
+                value = portText,
+                onValueChange = { text -> portText = text.filter(Char::isDigit).take(5) },
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodyLarge.copy(color = colors.secondaryText, textAlign = TextAlign.End),
+                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { apply() }),
+                modifier = Modifier.width(96.dp),
+            )
+        }
+        if (typed != null && typed != values.port) {
+            RowDivider()
+            ActionRow(l10n(R.string.settings_use_port, typed), { apply() }, color = MaterialTheme.colorScheme.primary, chevron = false)
+        }
+        info.wifi?.let { address ->
+            RowDivider()
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(l10n(R.string.settings_wifi), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                SelectionContainer {
+                    Text("$address:${info.snapshot.port ?: values.port}", style = MaterialTheme.typography.bodyLarge, color = colors.secondaryText)
+                }
+            }
+        }
+    }
+}
+
+private const val DEVELOPER_TAPS = 7
+
+/** Updates: an automatic-check switch, and a row that checks, downloads and installs. */
+@Composable
+private fun Updates(values: SettingsValues, info: SettingsInfo, actions: SettingsActions, download: Float?) {
+    val colors = JetlinkTheme.colors
+    val state = info.update
+    FormSection(l10n(R.string.settings_updates)) {
+        SwitchRow(
+            l10n(R.string.settings_auto_update),
+            values.autoUpdate,
+            { on -> actions.update { it.copy(autoUpdate = on) } },
+            supporting = l10n(R.string.settings_auto_update_support),
+        )
+        RowDivider()
+        when (state) {
+            is UpdateState.Available -> ActionRow(
+                l10n(R.string.update_available, state.tag),
+                { actions.installUpdate() },
+                color = MaterialTheme.colorScheme.primary,
+            )
+            is UpdateState.Checking -> ValueRow(l10n(R.string.update_checking), "")
+            is UpdateState.Error -> ValueRow(l10n(R.string.update_error), state.message, valueColor = colors.bad)
+            UpdateState.Current -> ValueRow(l10n(R.string.update_current), "")
+            UpdateState.Unknown -> Unit
+        }
+        download?.let { frac ->
+            RowDivider()
+            LinearProgressIndicator(progress = { frac.coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
+        }
+        RowDivider()
+        ActionRow(l10n(R.string.settings_check_updates), actions.checkUpdates)
     }
 }
 
@@ -329,38 +528,37 @@ private fun About(values: SettingsValues, info: SettingsInfo, actions: SettingsA
             taps = 0
             val on = !values.developer
             actions.update { it.copy(developer = on) }
-            Toast.makeText(context, if (on) "Developer settings on" else "Developer settings off", Toast.LENGTH_SHORT).show()
+            val msg = if (on) context.getString(R.string.developer_toast_on) else context.getString(R.string.developer_toast_off)
+            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
         }
     }
     val server = when (info.runState) {
-        RunState.Stopped -> "Stopped"
-        RunState.Starting -> "Starting"
-        RunState.Serving -> "Running"
-        is RunState.Failed -> "Failed"
+        RunState.Stopped -> l10n(R.string.server_stopped)
+        RunState.Starting -> l10n(R.string.server_starting)
+        RunState.Serving -> l10n(R.string.server_running)
+        is RunState.Failed -> l10n(R.string.server_failed)
     }
-    FormSection("About") {
-        ValueRow("Version", info.version, Modifier.clickable(onClick = tapVersion))
+    FormSection(l10n(R.string.settings_about)) {
+        ValueRow(l10n(R.string.about_version), info.version, Modifier.clickable(onClick = tapVersion))
         RowDivider()
-        ValueRow("Runtime", info.runtime?.let { "onnxruntime $it" } ?: "onnxruntime")
+        ValueRow(l10n(R.string.about_runtime), info.runtime?.let { "onnxruntime $it" } ?: "onnxruntime")
         RowDivider()
-        ValueRow("Chip", info.chip)
+        ValueRow(l10n(R.string.about_chip), info.chip)
         RowDivider()
-        ValueRow("Server", server, valueColor = if (info.runState is RunState.Failed) colors.bad else null)
+        ValueRow(l10n(R.string.about_server), server, valueColor = if (info.runState is RunState.Failed) colors.bad else null)
         RowDivider()
         if (info.runState == RunState.Stopped) {
-            ActionRow("Start Server", actions.startServer, color = MaterialTheme.colorScheme.primary, chevron = false)
+            ActionRow(l10n(R.string.action_start_server), actions.startServer, color = MaterialTheme.colorScheme.primary, chevron = false)
         } else {
             // a failed server's service still runs: it starts again, it is not started
-            ActionRow("Restart Server", actions.restartServer, color = MaterialTheme.colorScheme.primary, chevron = false)
+            ActionRow(l10n(R.string.action_restart_server), actions.restartServer, color = MaterialTheme.colorScheme.primary, chevron = false)
             RowDivider()
-            ActionRow("Stop Server", actions.stopServer, color = colors.bad, chevron = false)
+            ActionRow(l10n(R.string.action_stop_server), actions.stopServer, color = colors.bad, chevron = false)
         }
     }
 }
 
-private const val DEVELOPER_TAPS = 7
-
-@Preview(showBackground = true, heightDp = 1500)
+@Preview(showBackground = true, heightDp = 1300)
 @Composable
 private fun SettingsPreview() {
     JetlinkTheme {
@@ -375,7 +573,7 @@ private fun SettingsPreview() {
                     runtime = "1.29.0",
                     chip = "Snapdragon 8 Gen 3",
                     version = "0.5.0",
-                    processors = listOf(Processor.Auto, Processor.Npu, Processor.Gpu, Processor.NpuGpu),
+                    processors = listOf(Processor.NpuGpu, Processor.Npu, Processor.Gpu),
                 ),
                 SettingsActions(),
             )

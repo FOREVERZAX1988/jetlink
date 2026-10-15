@@ -101,6 +101,9 @@ class Flag(IntEnum):
   WANT_HIDDEN = 1 << 2    # on INFER_REQ: keep hidden_state in the response, for
                           # a caller logging the whole output vector. 64 KB more
                           # on the big models; nothing else needs it.
+  LOSSLESS = 1 << 3       # on INFER_REQ: the frame is packed (LOSSLESS_CODEC),
+                          # as jetlink.lossless.Packer packs it. Only to a server
+                          # whose hello lists the codec in 'frame_codecs'
   PADDED = 1 << 7         # one pad byte follows the payload; see PACKET_MULTIPLE
 
 
@@ -163,6 +166,15 @@ def _pieces(total: int, payload: int) -> tuple[tuple[int, int], ...]:
   return tuple((sum(sizes[:i]), size) for i, size in enumerate(sizes))
 
 
+# A lossless frame (jetlink.lossless), for links slower than USB: each plane of
+# the warped frame (warped_shape (2, 6, H, W): 12 planes of H x W) packed alone,
+# its MED errors through zstd with Huffman on the literals, so a server can
+# unpack planes in parallel. INFER_REQ with Flag.LOSSLESS carries the request
+# head, the packed floats (their size from the handshake, as ever), a u32 size
+# per plane, then the planes. A server that takes it says so in its hello
+LOSSLESS_CODEC = 'med-zstd'
+
+
 class ProtocolError(RuntimeError):
   pass
 
@@ -202,3 +214,4 @@ class Status(IntEnum):
   BAD_SHAPE = 2
   INFER_FAILED = 3
   NOT_FINITE = 4      # model produced NaN/Inf; caller must fall back
+

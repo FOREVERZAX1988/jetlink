@@ -87,6 +87,10 @@ when prompted. Port **5600** is the default; **0** disables it.
 Read [daily use](using-jetlink.md) before driving.
 [Open the web page](using-jetlink.md#web-page) to check it from your phone.
 
+**Over Wi-Fi** (no cable, slower; for testing): run
+`jetlink setup --set wifi=on`, join the comma to the hotspot it names, and set
+**Jetlink** to **Wi-Fi**. The Jetson's Wi-Fi then leaves any network it is on.
+
 <a id="troubleshooting"></a>
 
 ## Need help?
