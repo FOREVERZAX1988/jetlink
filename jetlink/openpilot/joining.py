@@ -637,6 +637,7 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
   from jetlink.openpilot import link as links
   # here rather than in build(): the import then costs modeld's main thread
   # before the frame loop, not the frame the swap lands on
+  from jetlink.openpilot import model_state
   from jetlink.openpilot.model_state import JetlinkModelState
   op = parts.op
   face = op.model_face()
@@ -672,7 +673,13 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
     warp = ready.get('warp') if ready.get('geometry') == (img_w * 2, img_h * 2) else None
     if warp is None:
       raise RuntimeError('no prepared warp for the server model geometry')
-    return JetlinkModelState(client, spec, warp, face=face, log=parts.log, event=op.event)
+    # wider hold/settling/proof tolerance only for the Wi-Fi link (phone NPU)
+    hold_kw = dict(hold_frame=model_state.WIFI_HOLD_FRAME,
+                   settling_frames=model_state.WIFI_SETTLING_FRAMES,
+                   holds_in_a_row=model_state.WIFI_HOLDS_IN_A_ROW,
+                   holds_allowed=model_state.WIFI_HOLDS_ALLOWED,
+                   proving_holds_fatal=False) if wifi else {}
+    return JetlinkModelState(client, spec, warp, face=face, log=parts.log, event=op.event, **hold_kw)
 
   def connect(should_stop=None):
     return links.open_link(parts, link, should_stop)

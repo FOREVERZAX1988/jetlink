@@ -65,6 +65,24 @@ PROVING_FRAMES = 20
 # single slow frame later is the comma's own stall, a warp or a send, which
 # handing back would not fix; only held frames say the host is behind
 SETTLING_FRAMES = 3
+# Wi-Fi hosts (a phone's NPU) have a fixed ~33 ms server inference plus the
+# network round trip, so a frame's wait is ~42 ms - past the USB-tuned 46 ms
+# budget once the comma's own warp/send (~5 ms) is paid. Holding to the full
+# frame keeps the large model in its proof window instead of handing back on
+# frame 4 every join. A held frame still publishes the previous output (one
+# stale plan), never a dropped camera frame. Only used for the Wi-Fi link.
+WIFI_HOLD_FRAME = 0.05
+# The phone's first returns also carry NPU/transport warm-up past the three
+# frames a Mac's CoreML needs; give a Wi-Fi join more settling frames.
+WIFI_SETTLING_FRAMES = 8
+# A phone NPU answers near the full frame budget and holds most frames by a
+# millisecond or two; each held frame is a plan one frame old, not a dropped
+# camera frame. Over Wi-Fi the proof therefore does not fail on marginal
+# holds, and the steady-state run tolerance is widened: only a sustained
+# stall (~0.5 s of nothing new) hands back. The 0.2 s client deadline still
+# fails a dead host before any of this.
+WIFI_HOLDS_IN_A_ROW = 10
+WIFI_HOLDS_ALLOWED = 60
 # frames between asks for the server's telemetry, which rides on the response:
 # every second one, as modeld sent a chestnut's state (20 Hz over 10 Hz)
 TELEMETRY_EVERY = 2
@@ -136,8 +154,23 @@ class JetlinkModelState:
 
   prev_desire: np.ndarray  # for tracking the rising edge of the pulse
 
-  def __init__(self, client, spec, warp, *, face, log, event):
+  def __init__(self, client, spec, warp, *, face, log, event,
+               hold_frame: float = HOLD_FRAME, settling_frames: int = SETTLING_FRAMES,
+               holds_in_a_row: int = HOLDS_IN_A_ROW, holds_allowed: int = HOLDS_ALLOWED,
+               proving_holds_fatal: bool = True):
     self._log = log
+    # per-link hold budget / settling grace. USB/Jetson keep the module
+    # defaults; a Wi-Fi host (phone NPU) is given a wider window, see joining.
+    self._hold_frame = float(hold_frame)
+    self._settling_frames = int(settling_frames)
+    self._holds_in_a_row_limit = int(holds_in_a_row)
+    self._holds_allowed = int(holds_allowed)
+    # USB: any held frame in the proof window proves the host too slow. Over
+    # Wi-Fi a phone NPU sits right at the frame budget and holds most frames by
+    # a millisecond or two (still a fresh-enough, one-frame-old plan), so the
+    # proof uses the steady-state rules (a run of holds / too many holds); only
+    # a genuinely stalling host hands back.
+    self._proving_holds_fatal = bool(proving_holds_fatal)
     # (name, **fields): a structured log line, cloudlog.event on a comma
     self._event = event
     self.face = face
@@ -328,12 +361,11 @@ class JetlinkModelState:
   @property
   def _can_hold(self) -> bool:
     """Is there an output to publish again instead of waiting (HOLD_FRAME)?"""
-    return bool(HOLD_FRAME) and self.client.last_output is not None
+    return bool(self._hold_frame) and self.client.last_output is not None
 
-  @staticmethod
-  def _hold_left(frame) -> float:
+  def _hold_left(self, frame) -> float:
     """What is left of the hold for `frame`, from its warp's start."""
-    return HOLD_FRAME - (time.perf_counter() - frame.t0)
+    return self._hold_frame - (time.perf_counter() - frame.t0)
 
   def _note_hold(self, held: bool) -> str | None:
     """Why the large model should hand back after this frame, if it should:
@@ -349,13 +381,13 @@ class JetlinkModelState:
     while now - self._holds[0] > HOLD_WINDOW:
       self._holds.popleft()
     self._holds_in_a_row += 1
-    if self._frame_id <= SETTLING_FRAMES:
+    if self._frame_id <= self._settling_frames:
       return None
-    if self._frame_id <= PROVING_FRAMES:
+    if self._proving_holds_fatal and self._frame_id <= PROVING_FRAMES:
       return f'held frame {self._frame_id} of the first {PROVING_FRAMES}'
-    if self._holds_in_a_row >= HOLDS_IN_A_ROW:
+    if self._holds_in_a_row >= self._holds_in_a_row_limit:
       return f'held {self._holds_in_a_row} frames in a row'
-    if len(self._holds) > HOLDS_ALLOWED:
+    if len(self._holds) > self._holds_allowed:
       return f'held {len(self._holds)} frames in {HOLD_WINDOW:.0f} s'
     return None
 
