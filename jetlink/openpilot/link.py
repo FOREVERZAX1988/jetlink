@@ -98,21 +98,38 @@ class WifiWaiting(ConnectionError):
 
 
 def dial(log, deadline: float | None = None, name: str | None = None):
-  """Open the link over Wi-Fi: the comma's gateway, the hotspot it joined
-  (jetlink.comma.wifi). WifiWaiting when the comma is on no Wi-Fi or nothing
-  answers there, which the join retries."""
+  """Open the link over Wi-Fi. Tries the gateway first (the phone-hotspot
+  case), then auto-discovers a jetlink server anywhere on the local subnet
+  (a shared car AP where the phone is an ordinary client). WifiWaiting when
+  the comma is on no Wi-Fi or nothing answers, which the join retries."""
   from jetlink.client import FRAME_TIMEOUT, JetlinkClient
-  host = wifi.gateway()
-  if host is None:
+  if wifi.local_addr() is None:
     raise WifiWaiting("not on Wi-Fi", NOT_ON_WIFI)
-  try:
+
+  def _open(host):
     # the hello says Wi-Fi and the band, so the far end can warn about 2.4 GHz;
     # the panels' record of the dial goes when the link closes
-    client = JetlinkClient.open_tcp(host, timeout=wifi.DIAL_TIMEOUT, link=wifi.link_info(),
-                                    on_close=gadget.clear_link, name=name,
-                                    deadline=FRAME_TIMEOUT if deadline is None else deadline)
-  except OSError as e:
-    raise WifiWaiting(f"nothing answered at {host}: {e}", NO_ANSWER) from e
+    return JetlinkClient.open_tcp(host, timeout=wifi.DIAL_TIMEOUT, link=wifi.link_info(),
+                                  on_close=gadget.clear_link, name=name,
+                                  deadline=FRAME_TIMEOUT if deadline is None else deadline)
+
+  gw = wifi.gateway()
+  host = gw
+  client = None
+  if gw is not None:
+    try:
+      client = _open(gw)
+    except OSError:
+      client = None
+  if client is None:
+    # gateway refused/absent: search the subnet for a phone on a shared AP
+    host = wifi.discover()
+    if host is None:
+      raise WifiWaiting(f"nothing answered at {gw or 'the gateway'}", NO_ANSWER)
+    try:
+      client = _open(host)
+    except OSError as e:
+      raise WifiWaiting(f"nothing answered at {host}: {e}", NO_ANSWER) from e
   gadget.note_link('wifi', host)
   log.warning("jetlink: dialed %s over Wi-Fi", host)
   return client

@@ -642,7 +642,8 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
   op = parts.op
   face = op.model_face()
   ready: dict = {}
-  wifi = parts.settings.mode() == 'wifi'
+  mode = parts.settings.mode()
+  wifi = mode == 'wifi'
   link = links.Link(parts.log, wifi=wifi)
 
   def prepare():
@@ -673,12 +674,22 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
     warp = ready.get('warp') if ready.get('geometry') == (img_w * 2, img_h * 2) else None
     if warp is None:
       raise RuntimeError('no prepared warp for the server model geometry')
-    # wider hold/settling/proof tolerance only for the Wi-Fi link (phone NPU)
-    hold_kw = dict(hold_frame=model_state.WIFI_HOLD_FRAME,
-                   settling_frames=model_state.WIFI_SETTLING_FRAMES,
-                   holds_in_a_row=model_state.WIFI_HOLDS_IN_A_ROW,
-                   holds_allowed=model_state.WIFI_HOLDS_ALLOWED,
-                   proving_holds_fatal=False) if wifi else {}
+    # A phone behind the USB cable (usb/ios) or Wi-Fi answers near the frame
+    # budget, so relax the hold/proof per link; Jetson/Mac keep strict defaults.
+    if wifi:
+      hold_kw = dict(hold_frame=model_state.WIFI_HOLD_FRAME,
+                     settling_frames=model_state.WIFI_SETTLING_FRAMES,
+                     holds_in_a_row=model_state.WIFI_HOLDS_IN_A_ROW,
+                     holds_allowed=model_state.WIFI_HOLDS_ALLOWED,
+                     proving_holds_fatal=False)
+    elif mode in ('usb', 'ios'):
+      hold_kw = dict(hold_frame=model_state.CABLE_HOLD_FRAME,
+                     settling_frames=model_state.CABLE_SETTLING_FRAMES,
+                     holds_in_a_row=model_state.CABLE_HOLDS_IN_A_ROW,
+                     holds_allowed=model_state.CABLE_HOLDS_ALLOWED,
+                     proving_holds_fatal=False)
+    else:
+      hold_kw = {}
     return JetlinkModelState(client, spec, warp, face=face, log=parts.log, event=op.event, **hold_kw)
 
   def connect(should_stop=None):

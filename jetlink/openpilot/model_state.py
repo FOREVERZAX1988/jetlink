@@ -65,28 +65,25 @@ PROVING_FRAMES = 20
 # single slow frame later is the comma's own stall, a warp or a send, which
 # handing back would not fix; only held frames say the host is behind
 SETTLING_FRAMES = 3
-# Wi-Fi hosts (a phone's NPU) have a fixed ~33 ms server inference plus the
-# network round trip, so a frame's wait is ~42 ms - past the USB-tuned 46 ms
-# budget once the comma's own warp/send (~5 ms) is paid. Holding to the full
-# frame keeps the large model in its proof window instead of handing back on
-# frame 4 every join. A held frame still publishes the previous output (one
-# A phone NPU answers near the full frame budget every frame: ~41-43 ms
-# server-side plus the Wi-Fi round trip is a ~45 ms wait, and the comma's
-# own warp/send adds ~5 ms from the warp's start, so the wait window needs
-# to cover that or every frame is a marginal hold. 55 ms keeps a marginal
-# frame in-frame while still bounding a true stall; the 0.2 s client
-# deadline fails a dead host, and modeld's camera-drop filter still hands
-# back on real dropped camera frames.
+# A phone's NPU runs the inference at ~33-43 ms; with the Wi-Fi round trip
+# and the comma's own warp/send (~5 ms) a frame's wait is ~45 ms, right at the
+# 20 Hz budget. The USB-tuned 46 ms hold leaves only ~41 ms after that work, so
+# a phone behind either link holds most frames. These link-specific budgets let
+# the large model stay swapped on a phone without weakening the strict defaults
+# a fast Jetson/Mac keeps. A held frame still publishes the previous output
+# (a plan one frame old), not a dropped camera frame; the 0.2 s client deadline
+# and modeld's camera-drop filter hand back on a real stall.
+#
+# Over the USB cable (usb/ios): the CDC-NCM link adds almost no network time,
+# but the same phone NPU does, so a modestly wider hold and a tolerant proof.
+CABLE_HOLD_FRAME = 0.05
+CABLE_SETTLING_FRAMES = 5
+CABLE_HOLDS_IN_A_ROW = 10
+CABLE_HOLDS_ALLOWED = 80
+# Over Wi-Fi: a 55 ms wait window covers the measured ~45 ms reply; more
+# settling frames and a wider steady-state tolerance for marginal holds.
 WIFI_HOLD_FRAME = 0.055
-# The phone's first returns also carry NPU/transport warm-up past the three
-# frames a Mac's CoreML needs; give a Wi-Fi join more settling frames.
 WIFI_SETTLING_FRAMES = 8
-# Marginal holds are the phone NPU's steady state (a plan one frame old that
-# is replaced as the late reply lands), not a stall. The proof tolerates
-# them; the run/window limits are relaxed enough that a frame-or-two edge
-# past the wider hold does not demote, while a real ~0.75 s stall (15
-# consecutive frames with no new output) still hands back. A host that
-# stopped answering fails at the 0.2 s client deadline first.
 WIFI_HOLDS_IN_A_ROW = 15
 WIFI_HOLDS_ALLOWED = 150
 # frames between asks for the server's telemetry, which rides on the response:
