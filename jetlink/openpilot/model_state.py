@@ -158,16 +158,17 @@ class JetlinkModelState:
   prev_desire: np.ndarray  # for tracking the rising edge of the pulse
 
   def __init__(self, client, spec, warp, *, face, log, event,
-               hold_frame: float = HOLD_FRAME, settling_frames: int = SETTLING_FRAMES,
-               holds_in_a_row: int = HOLDS_IN_A_ROW, holds_allowed: int = HOLDS_ALLOWED,
+               hold_frame: float | None = None, settling_frames: int | None = None,
+               holds_in_a_row: int | None = None, holds_allowed: int | None = None,
                proving_holds_fatal: bool = True):
     self._log = log
-    # per-link hold budget / settling grace. USB/Jetson keep the module
-    # defaults; a Wi-Fi host (phone NPU) is given a wider window, see joining.
-    self._hold_frame = float(hold_frame)
-    self._settling_frames = int(settling_frames)
-    self._holds_in_a_row_limit = int(holds_in_a_row)
-    self._holds_allowed = int(holds_allowed)
+    # Per-link overrides. None means "read the module constant each frame", so
+    # the strict USB/Jetson defaults stay live constants the tests can mock and
+    # a Wi-Fi/USB phone build pins a wider value at construction (see joining).
+    self._hold_frame_override = hold_frame
+    self._settling_frames_override = settling_frames
+    self._holds_in_a_row_override = holds_in_a_row
+    self._holds_allowed_override = holds_allowed
     # USB: any held frame in the proof window proves the host too slow. Over
     # Wi-Fi a phone NPU sits right at the frame budget and holds most frames by
     # a millisecond or two (still a fresh-enough, one-frame-old plan), so the
@@ -360,6 +361,22 @@ class JetlinkModelState:
     self.prepare(bufs, transforms, inputs)
     self.send(after_enqueue is not None)
     return self.end(after_enqueue)
+
+  @property
+  def _hold_frame(self) -> float | None:
+    return HOLD_FRAME if self._hold_frame_override is None else self._hold_frame_override
+
+  @property
+  def _settling_frames(self) -> int:
+    return SETTLING_FRAMES if self._settling_frames_override is None else self._settling_frames_override
+
+  @property
+  def _holds_in_a_row_limit(self) -> int:
+    return HOLDS_IN_A_ROW if self._holds_in_a_row_override is None else self._holds_in_a_row_override
+
+  @property
+  def _holds_allowed(self) -> int:
+    return HOLDS_ALLOWED if self._holds_allowed_override is None else self._holds_allowed_override
 
   @property
   def _can_hold(self) -> bool:
