@@ -451,6 +451,11 @@ private fun Developer(values: SettingsValues, info: SettingsInfo, actions: Setti
         focus.clearFocus()
     }
     FormSection(l10n(R.string.settings_developer), footer = { FormFooter(l10n(R.string.settings_developer_footer)) }) {
+        SwitchRow(
+            l10n(R.string.settings_phone_qnn), values.phoneQnn, { on -> actions.update { it.copy(phoneQnn = on) } },
+            supporting = l10n(R.string.settings_phone_qnn_support),
+        )
+        RowDivider()
         Row(
             Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,

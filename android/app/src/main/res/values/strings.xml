@@ -53,6 +53,8 @@
     <string name="settings_keep_npu_support">Holds the NPU at full speed between frames.</string>
     <string name="settings_keep_cpu">Keep CPU Awake</string>
     <string name="settings_keep_cpu_support">Holds the CPU\'s clocks up between frames.</string>
+    <string name="settings_phone_qnn">Phone\'s Own QNN</string>
+    <string name="settings_phone_qnn_support">Runs the NPU on the QNN the phone ships and the Skel its DSP was signed for, rather than the pair this build carries.</string>
 
     <!-- Settings: display & language -->
     <string name="settings_display">Display</string>

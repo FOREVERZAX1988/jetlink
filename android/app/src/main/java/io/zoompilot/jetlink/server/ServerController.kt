@@ -97,6 +97,10 @@ class ServerController(private val context: Context, private val scope: Coroutin
         put("device", processor.device)
         put("keep_alive", settings.keepNpuAwake)
         put("keep_cpu_warm", settings.keepCpuAwake)
+        // The NPU on the phone's own QNN, in the developer section: the backend,
+        // the Stub and the Skel the vendor shipped for this Hexagon, instead of
+        // the pair this build carries.
+        put("phone_qnn", settings.phoneQnn)
         put("port", settings.port)
         // Bench tools reach the server over Wi-Fi or `adb forward`, and a comma
         // on the phone's hotspot dials it (Wi-Fi link); otherwise the comma

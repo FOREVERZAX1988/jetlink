@@ -191,3 +191,26 @@ Two details of those bytes:
 
 A `README.txt` beside the APK on the release records the same hashes, the base
 it was made from and the commands that made it.
+
+## Which pair is in force, in the log
+
+Two QNN builds in one process take no node of any model, and the refusal is
+silent, so the `npu:` report names the pair it is holding before it names
+anything else: the backend it will load (the app's own `libQnnHtp.so`, or the
+phone's, asked for with onnxruntime's `backend_path`), the Stub beside the app,
+the Skel the DSP will find first along `ADSP_LIBRARY_PATH` -- numbered, in
+search order -- and the phone's own pair for the same architecture. The
+runtime's own lines come first: onnxruntime's logger, which carries the
+execution provider's lines and QNN's beneath them, read back out of `COrt`'s
+ring, because an Android app's stderr has no reader and a provider that takes
+no node of a graph says why there and nowhere else.
+
+Where the app's own pair is the one to distrust -- a Skel the DSP will not take,
+a Stub for another Hexagon -- **Phone's Own QNN** in the app's developer
+settings hands the phone's own libraries over instead: `ADSP_LIBRARY_PATH` puts
+the system DSP directories first, and the QNN session loads the phone's own
+`libQnnHtp.so` (`/vendor/lib64`, else `/system/lib64`, else `/odm/lib64`)
+through `backend_path`. Off, nothing changes: the app's pair runs first, on
+every phone, which is what every Hexagon up to V81 has been served by. The
+report says which of the two was in force, so one APK can try both and the
+lines that name the reason are the same either way.
