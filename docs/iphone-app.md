@@ -27,9 +27,9 @@
 ## 2. Connect the comma
 
 1. **Install zoompilot.** After resetting the comma, enter
-   **`zoompilot/develop`** as the install URL. Already on zoompilot? Select
-   **develop** in **Settings > Software > Target Branch > Non-Prebuilt Branches**.
-   Wait for installation, rebooting, and building to finish.
+   **`zoompilot/main`** as the install URL. Already on zoompilot? Select
+   **main** in **Settings > Software > Target Branch**.
+   Wait for installation and the reboot to finish.
 2. Set **Settings > Models > Jetlink** to **iOS**.
    Leave **Big Model** at its default.
 3. Open Jetlink on the phone and allow **Local Network** access.
