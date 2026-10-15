@@ -251,6 +251,31 @@
       }
     }
 
+    /// The phone's own QNN libraries, opened by their paths before onnxruntime
+    /// is handed the phone's own backend: `backend_path` names the vendor's
+    /// `libQnnHtp.so`, but that library opens its Stub -- and QNN its System
+    /// library and its Prepare -- *by name*, and a name finds the app's own
+    /// copy first, the app's own library directory being the first search path.
+    /// The phone's own backend then ran beside the app's Stub while the DSP was
+    /// handed the vendor's Skel: three builds, three dialects, and no node of
+    /// any model. Opening the phone's own copies here makes every name find the
+    /// phone's own, so the pair is one vendor build.
+    static func phoneLibraries(_ config: [String: Any]) -> [String] {
+      guard let backend = qnnBackend(config) else { return [] }
+      let held = (backend as NSString).deletingLastPathComponent
+      let names = (try? FileManager.default.contentsOfDirectory(atPath: held)) ?? []
+      let wanted =
+        names.filter { $0.hasPrefix("libQnnHtp") && ($0.hasSuffix("Stub.so") || $0.hasSuffix("Prepare.so")) }
+        + names.filter { $0 == "libQnnSystem.so" }
+      var opened: [String] = []
+      for name in wanted {
+        let path = "\(held)/\(name)"
+        // RTLD_GLOBAL: a library opened later, by name, is to find this one.
+        opened.append(dlopen(path, RTLD_NOW | RTLD_GLOBAL) == nil ? "\(path) (would not open)" : path)
+      }
+      return opened
+    }
+
     /// The backend and device the config names. A config without a backend
     /// is onnxruntime's, as every config was before LiteRT.
     static func backend(_ config: [String: Any]) throws -> any EngineBackend {
@@ -273,9 +298,16 @@
         guard let profile = OrtProfile(rawValue: device ?? OrtProfile.htp.rawValue), OrtProfile.available.contains(profile) else {
           throw HostFailure("onnxruntime has no device \(device ?? "")")
         }
+        let phone = qnnBackend(config)
+        // What the phone's own pair is -- the setting, and every library of it
+        // that was opened by path -- goes into the `npu:` report before the
+        // session is made: a pair mixed from two builds is then named in the
+        // log, not guessed at from three directories of the same file names.
+        HostDiagnostics.phoneOwnQnn = (config["phone_qnn"] as? Bool) ?? false
+        HostDiagnostics.phoneLibraries = phoneLibraries(config)
         return OrtBackend(
           profile: profile, preparer: ONNXPreparer(), keepAlive: (config["keep_alive"] as? Bool) ?? true,
-          keepCPUWarm: (config["keep_cpu_warm"] as? Bool) ?? false, chip: chip, qnnBackend: qnnBackend(config))
+          keepCPUWarm: (config["keep_cpu_warm"] as? Bool) ?? false, chip: chip, qnnBackend: phone)
       case let other:
         throw HostFailure("unknown backend \(other)")
       }
