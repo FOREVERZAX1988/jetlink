@@ -70,19 +70,25 @@ SETTLING_FRAMES = 3
 # budget once the comma's own warp/send (~5 ms) is paid. Holding to the full
 # frame keeps the large model in its proof window instead of handing back on
 # frame 4 every join. A held frame still publishes the previous output (one
-# stale plan), never a dropped camera frame. Only used for the Wi-Fi link.
-WIFI_HOLD_FRAME = 0.05
+# A phone NPU answers near the full frame budget every frame: ~41-43 ms
+# server-side plus the Wi-Fi round trip is a ~45 ms wait, and the comma's
+# own warp/send adds ~5 ms from the warp's start, so the wait window needs
+# to cover that or every frame is a marginal hold. 55 ms keeps a marginal
+# frame in-frame while still bounding a true stall; the 0.2 s client
+# deadline fails a dead host, and modeld's camera-drop filter still hands
+# back on real dropped camera frames.
+WIFI_HOLD_FRAME = 0.055
 # The phone's first returns also carry NPU/transport warm-up past the three
 # frames a Mac's CoreML needs; give a Wi-Fi join more settling frames.
 WIFI_SETTLING_FRAMES = 8
-# A phone NPU answers near the full frame budget and holds most frames by a
-# millisecond or two; each held frame is a plan one frame old, not a dropped
-# camera frame. Over Wi-Fi the proof therefore does not fail on marginal
-# holds, and the steady-state run tolerance is widened: only a sustained
-# stall (~0.5 s of nothing new) hands back. The 0.2 s client deadline still
-# fails a dead host before any of this.
-WIFI_HOLDS_IN_A_ROW = 10
-WIFI_HOLDS_ALLOWED = 60
+# Marginal holds are the phone NPU's steady state (a plan one frame old that
+# is replaced as the late reply lands), not a stall. The proof tolerates
+# them; the run/window limits are relaxed enough that a frame-or-two edge
+# past the wider hold does not demote, while a real ~0.75 s stall (15
+# consecutive frames with no new output) still hands back. A host that
+# stopped answering fails at the 0.2 s client deadline first.
+WIFI_HOLDS_IN_A_ROW = 15
+WIFI_HOLDS_ALLOWED = 150
 # frames between asks for the server's telemetry, which rides on the response:
 # every second one, as modeld sent a chestnut's state (20 Hz over 10 Hz)
 TELEMETRY_EVERY = 2
