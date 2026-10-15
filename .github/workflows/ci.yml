@@ -270,11 +270,16 @@ jobs:
     needs: [changes, swift-android]
     if: needs.changes.outputs.apps == 'true'
     runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
     env:
       HAVE_SIGNING: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
+        with:
+          # the tag step reads already-published releases for the build number
+          fetch-depth: 1
 
       - uses: actions/setup-java@v4
         with:
@@ -290,18 +295,22 @@ jobs:
           path: swift-out
 
       - name: Name this build's release tag
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          # What the updater compares with the newest GitHub release. A tag
-          # build is its tag; a cn-branch build is the cn-<sha> prerelease the
-          # cn-prerelease job publishes from this same commit. Another branch
-          # takes its name, which no release carries, so it always checks.
+          # A tag build is its tag. A cn-branch build is
+          # "<appVersion>-<MMDD>-<n>" (0.8.7-1015-1, the 4th build that day is
+          # ...-4; another day is -1016-1), n one past the newest same-day
+          # release so parallel/rerun jobs agree. cn-prerelease reads this tag.
           if [ "$GITHUB_REF_TYPE" = tag ]; then
             tag="$GITHUB_REF_NAME"
           elif [ "$GITHUB_REF_NAME" = cn ]; then
-            tag="cn-${GITHUB_SHA::7}"
+            tag="$(scripts/cn-build-tag.sh)"
           else
             tag="$GITHUB_REF_NAME"
           fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "JETLINK_BUILD_TAG=$tag" >> "$GITHUB_ENV"
           echo "build tag: $tag"
 
@@ -415,21 +424,22 @@ jobs:
       - name: Publish the cn prerelease
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.android.outputs.tag }}
         run: |
           set -euo pipefail
-          # The tag is the commit, so every push gets its own prerelease and a
-          # new push never collides with an old one.
-          TAG="cn-${GITHUB_SHA::7}"
-          NOTES="Builds of the cn branch at ${GITHUB_SHA::7}, for testing. The Android APK is signed with the release key, so it installs over an earlier build; the app's updater finds it through the releases list."
+          # The tag is "<appVersion>-<MMDD>-<n>", the same one the APK was
+          # built with. Same-day reruns replace the files; a new push gets the
+          # next n.
+          NOTES="Builds of the cn branch at ${GITHUB_SHA::7} (tag $TAG), for testing. The Android APK is signed with the release key, so it installs over an earlier build; the app's updater compares this tag."
           APK="$(find dist -name '*.apk' -print -quit)"
           APP="$(find dist -name 'Jetlink-unsigned.zip' -print -quit)"
           [ -n "$APK" ] || { echo "error: no APK in dist" >&2; exit 1; }
           [ -n "$APP" ] || { echo "error: no macOS zip in dist" >&2; exit 1; }
           if gh release view "$TAG" >/dev/null 2>&1; then
-            # a rerun of the same commit: replace the files, keep the release
+            # a rerun of the same build: replace the files, keep the release
             gh release upload "$TAG" --clobber "$APK" "$APP"
           else
-            gh release create "$TAG" --prerelease --title "Jetlink cn ${GITHUB_SHA::7}" \
+            gh release create "$TAG" --prerelease --title "Jetlink cn $TAG" \
               --notes "$NOTES" --target "$GITHUB_SHA" "$APK" "$APP"
           fi
 

@@ -12,6 +12,7 @@ built and the USB-C port is left alone, so ADB keeps working.
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import re
@@ -20,6 +21,7 @@ import socket
 import struct
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 ROUTES = Path('/proc/net/route')
@@ -32,6 +34,124 @@ DIAL_DELAY = 2.0
 
 _RTF_UP = 0x1
 _RTF_GATEWAY = 0x2
+
+# Where a discovered peer is remembered, so subsequent joins dial it directly
+# without another sweep. One line: "host:port:monotonic". Kept out of the
+# params key-value dir, which must not hold extra files.
+PEER_FILE = Path('/data/.jetlink_wifi_peer')
+# how long a remembered peer may be reused before it must answer again
+PEER_TTL_S = 300.0
+# bound the sweep: a phone on the same Wi-Fi answers a TCP connect at once; this
+# caps how long a host that drops the SYN may stall a probe
+DISCOVER_TIMEOUT = 0.25
+# never probe more hosts than this in one sweep
+DISCOVER_MAX_HOSTS = 254
+
+
+def local_addr(interface: str = INTERFACE) -> tuple[str, int] | None:
+  """The interface's IPv4 address and prefix length, e.g. ('10.0.0.44', 24).
+
+  Lets discovery work on a normal AP where the phone is a peer client rather
+  than the gateway. None when the interface has no address."""
+  s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+  try:
+    import fcntl
+    ip = socket.inet_ntoa(fcntl.ioctl(s.fileno(), 0x8915, struct.pack('256s', interface[:15].encode()))[20:24])  # SIOCGIFADDR
+    mask = socket.inet_ntoa(fcntl.ioctl(s.fileno(), 0x891b, struct.pack('256s', interface[:15].encode()))[20:24])  # SIOCGIFNETMASK
+  except (OSError, ImportError):
+    return None
+  finally:
+    s.close()
+  prefix = sum(bin(int(o)).count('1') for o in mask.split('.'))
+  return ip, prefix
+
+
+def _probe(host: str, port: int, timeout: float) -> bool:
+  """True when a jetlink server may be on host:port: the TCP connect succeeds.
+  The real protocol check is the join's own HELLO, so a bare connect (no bytes
+  sent) never disturbs the phone or loads its model."""
+  s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+  s.settimeout(timeout)
+  try:
+    s.connect((host, port))
+    return True
+  except OSError:
+    return False
+  finally:
+    s.close()
+
+
+def _save_peer(host: str, port: int) -> None:
+  try:
+    PEER_FILE.parent.mkdir(parents=True, exist_ok=True)
+    PEER_FILE.write_text(f"{host}:{port}:{time.monotonic()}")
+  except OSError:
+    pass
+
+
+def _saved_peer(port: int) -> str | None:
+  """A still-fresh, answering remembered peer, else None."""
+  try:
+    host, p, ts = PEER_FILE.read_text().strip().split(':')
+    if int(p) != port or time.monotonic() - float(ts) > PEER_TTL_S:
+      return None
+  except (OSError, ValueError):
+    return None
+  return host if _probe(host, port, DIAL_TIMEOUT) else None
+
+
+def discover(port: int = 5599, interface: str = INTERFACE,
+             timeout: float = DISCOVER_TIMEOUT, skip: frozenset[str] | set[str] = frozenset()) -> str | None:
+  """Find a jetlink server on the local Wi-Fi without a fixed address.
+
+  Tries a remembered peer first, then the gateway (the phone-hotspot case),
+  then sweeps the subnet concurrently (the shared-AP case, phone is an
+  ordinary client). Hosts in `skip` (already tried and failed by the caller)
+  are not probed again. Returns the first host whose TCP connect succeeds,
+  remembered for next time. Pure connect probes; no HELLO, so a probe neither
+  starts a session nor loads the phone's model. None when nothing answers."""
+  saved = _saved_peer(port)
+  if saved and saved not in skip:
+    return saved
+
+  gw = gateway(interface)
+  # gateway first (hotspot), then the other hosts on the link (shared AP)
+  candidates: list[str] = []
+  if gw and gw not in skip:
+    candidates.append(gw)
+  addr = local_addr(interface)
+  if addr is not None:
+    ip, prefix = addr
+    net = ipaddress.ip_network(f"{ip}/{prefix}", strict=False)
+    for h in net.hosts():
+      hs = str(h)
+      if hs != ip and hs != gw and hs not in skip:
+        candidates.append(hs)
+      if len(candidates) > DISCOVER_MAX_HOSTS:
+        break
+
+  seen: set[str] = set()
+  ordered: list[str] = []
+  for host in candidates:
+    if host not in seen:
+      seen.add(host)
+      ordered.append(host)
+
+  if not ordered:
+    return None
+  # probe concurrently: a host that drops the SYN waits the full timeout, and a
+  # sequential /24 sweep would take seconds. The gateway is tried first, alone.
+  head, rest = ordered[:1], ordered[1:]
+  for host in head:
+    if _probe(host, port, DIAL_TIMEOUT):
+      _save_peer(host, port)
+      return host
+  with ThreadPoolExecutor(max_workers=32) as pool:
+    for host in pool.map(lambda h: h if _probe(h, port, timeout) else None, rest):
+      if host:
+        _save_peer(host, port)
+        return host
+  return None
 
 
 def gateway(interface: str = INTERFACE, routes: Path = ROUTES) -> str | None:

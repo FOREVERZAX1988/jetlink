@@ -38,8 +38,9 @@ class UpdateManager(
 
     /**
      * Asks GitHub for the newest release with an Android APK and compares its
-     * tag with the installed one. The cn-branch prereleases ("cn-<sha>") are
-     * counted too, so a push to cn shows as an update without a v* tag.
+     * tag with the installed one. Tags are ordered as app version, then
+     * MMDD, then that day's build number ("0.8.7-1015-4"), so only a genuinely
+     * newer build - not a different old cn tag - shows as an update.
      */
     suspend fun check() {
         _state.value = UpdateState.Checking
@@ -50,19 +51,28 @@ class UpdateManager(
                 emptyList()
             }
         }
-        // newest first: the first one with an APK is the update candidate
-        val release = releases.firstOrNull { github.apk(it) != null }
-        if (release == null) {
+        val current = BuildTag.parse(currentTag)
+        // only releases with an APK and an orderable tag; pick the newest
+        var best: Pair<GithubRelease, GithubAsset>? = null
+        var bestTag: BuildTag? = null
+        for (release in releases) {
+            val asset = github.apk(release) ?: continue
+            val candidate = BuildTag.parse(release.tag_name) ?: continue
+            if (bestTag == null || candidate > bestTag) {
+                bestTag = candidate
+                best = release to asset
+            }
+        }
+        if (best == null || bestTag == null) {
             _state.value = UpdateState.Error("no release")
             return
         }
-        val tag = release.tag_name
-        if (tag.isBlank() || tag == currentTag) {
+        val tag = best.first.tag_name
+        if (tag.isBlank() || tag == currentTag || (current != null && bestTag <= current)) {
             _state.value = UpdateState.Current
             return
         }
-        val asset = github.apk(release)!!
-        pending = release to asset
+        pending = best
         _state.value = UpdateState.Available(tag)
     }
 

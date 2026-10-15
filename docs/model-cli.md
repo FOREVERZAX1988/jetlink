@@ -16,8 +16,12 @@ model before a drive, start with [model management](models.md).
   such as previews sunnypilot does not list yet. A comma with a chestnut does not
   show them.
 - From Cinque Terre V3 on, the ONNX comes from comma's model repo on Hugging
-  Face (`commaai/openpilot_driving_models`). A commit that names no model
-  there resolves to the ONNX its own diff, or its pull request's, last had.
+  Face (`commaai/openpilot_driving_models`). When a commit or its pull request
+  names several exports, the newest one wins; if that one isn't on Hugging Face
+  yet, the lookup fails rather than use an older model. A commit that names no
+  model there resolves to the ONNX its own diff, or its pull request's, last had.
+- Jetlink's list can pin a commit to an ONNX, overriding the lookup; see
+  [`catalog/README.md`](../catalog/README.md#pinned-models).
 
 | Path | What is in it |
 | --- | --- |

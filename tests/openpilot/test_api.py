@@ -75,10 +75,9 @@ class TestTheSurface(OpenpilotTest):
     self.assertIsInstance(jo.Status.active_model, property)
 
   def test_the_entry_points_the_fork_names(self):
-    from jetlink.openpilot import owner, provision, warp
+    from jetlink.openpilot import owner, provision
     self.assertEqual(plain(owner.main), '(config)')
-    for module in (provision, warp):
-      self.assertEqual(plain(module.main), '(argv=None)', module)
+    self.assertEqual(plain(provision.main), '(argv=None)')
     self.assertEqual(plain(jo.bind), '(op)')
     self.assertEqual(plain(interface.load_adapter), '(module)')
 
@@ -275,6 +274,12 @@ class TestTheJoinFactory(OpenpilotTest):
     self.assertIs(parts, self.parts)
     self.assertIsInstance(held, link.Link)
     self.assertIs(should_stop, stop)
+
+  def test_the_swap_window_is_the_adapters(self):
+    s = self.join()
+    for engaged in (True, False):
+      self.op.engaged = engaged
+      self.assertIs(s._ask_in_control(), engaged)
 
   def test_the_small_models_reset_is_the_one_prepared(self):
     s = self.join()

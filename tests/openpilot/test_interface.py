@@ -43,13 +43,10 @@ WORKER = {
 MODELD = {
   **WORKER,
   'model_face': '() -> ModelFace',
+  'in_control': '() -> bool',
   'event': '(name: str, **fields: Any) -> None',
 }
-BUILD = {
-  'make_warp': '(cam_w: int, cam_h: int, model_w: int, model_h: int) -> tuple[Callable[..., Any], int]',
-}
-SIDES = {'StatusSide': READERS, 'WorkerSide': WORKER, 'ModelSide': MODELD, 'BuildSide': BUILD,
-         'Openpilot': {**MODELD, **BUILD}}
+SIDES = {'StatusSide': READERS, 'WorkerSide': WORKER, 'ModelSide': MODELD, 'Openpilot': MODELD}
 
 FIELDS = {
   'Keys': ['link', 'offroad', 'progress', 'spec', 'pointers', 'big_model', 'catalog', 'charge_phone', 'preview'],
@@ -66,7 +63,7 @@ def described(protocol: type) -> dict[str, str | None]:
 
 class TestTheContract(unittest.TestCase):
   def test_the_api_version(self):
-    self.assertEqual(jo.API, 2)
+    self.assertEqual(jo.API, 3)
 
   def test_every_side_is_as_pinned(self):
     for name, expected in SIDES.items():

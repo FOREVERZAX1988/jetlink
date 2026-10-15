@@ -120,6 +120,18 @@ public enum Catalog {
     return out
   }
 
+  /// `pinned_pointers`: the extra list's well-formed pins, the ONNX jetlink runs
+  /// for a commit whatever a lookup said. See catalog/README.md.
+  static func pinnedPointers(_ data: JSONObject) -> [(String, Pointer)] {
+    guard let pins = data["pointers"]?.object else { return [] }
+    return pins.compactMap { ref, pin in
+      guard CacheLayout.isRef(ref), let oid = pin["oid"]?.string, CacheLayout.isSHA256(oid),
+        case .int(let size) = pin["size"], size > 0
+      else { return nil }
+      return (ref, Pointer(oid: oid, size: size))
+    }
+  }
+
   static func bundles(_ data: JSON) -> [JSONObject] {
     (data["bundles"]?.array ?? []).compactMap(\.object)
   }

@@ -98,19 +98,49 @@ class WifiWaiting(ConnectionError):
 
 
 def dial(log, deadline: float | None = None, name: str | None = None):
-  """Open the link over Wi-Fi: the comma's gateway, the hotspot it joined
-  (jetlink.comma.wifi). WifiWaiting when the comma is on no Wi-Fi or nothing
-  answers there, which the join retries."""
+  """Open the link over Wi-Fi. Dials the gateway first (the phone-hotspot
+  case); if it refuses and the comma is on a normal LAN, auto-discovers a
+  jetlink server elsewhere on the subnet (a shared car AP where the phone is
+  an ordinary client). WifiWaiting when on no Wi-Fi or when nothing answers,
+  which the join retries."""
   from jetlink.client import FRAME_TIMEOUT, JetlinkClient
-  host = wifi.gateway()
+
+  def _open(host):
+    # the hello says Wi-Fi and the band, so the far end can warn about 2.4 GHz;
+    # the panels' record of the dial goes when the link closes
+    return JetlinkClient.open_tcp(host, timeout=wifi.DIAL_TIMEOUT, link=wifi.link_info(),
+                                  on_close=gadget.clear_link, name=name,
+                                  deadline=FRAME_TIMEOUT if deadline is None else deadline)
+
+  gw = wifi.gateway()
+  if gw is not None:
+    try:
+      client = _open(gw)
+      gadget.note_link('wifi', gw)
+      log.warning("jetlink: dialed %s over Wi-Fi", gw)
+      return client
+    except OSError as gw_err:
+      # The gateway is not the server (a shared-AP router). Search the subnet;
+      # the gateway already had its chance, so discovery skips it.
+      host = wifi.discover(skip={gw})
+      if host is not None:
+        try:
+          client = _open(host)
+          gadget.note_link('wifi', host)
+          log.warning("jetlink: dialed %s over Wi-Fi", host)
+          return client
+        except OSError:
+          pass
+      # nothing else answered: keep the gateway's address/reason, as before
+      raise WifiWaiting(f"nothing answered at {gw}: {gw_err}", NO_ANSWER) from gw_err
+  # no gateway at all
+  if wifi.local_addr() is None:
+    raise WifiWaiting("not on Wi-Fi", NOT_ON_WIFI)
+  host = wifi.discover(skip=set())
   if host is None:
     raise WifiWaiting("not on Wi-Fi", NOT_ON_WIFI)
   try:
-    # the hello says Wi-Fi and the band, so the far end can warn about 2.4 GHz;
-    # the panels' record of the dial goes when the link closes
-    client = JetlinkClient.open_tcp(host, timeout=wifi.DIAL_TIMEOUT, link=wifi.link_info(),
-                                    on_close=gadget.clear_link, name=name,
-                                    deadline=FRAME_TIMEOUT if deadline is None else deadline)
+    client = _open(host)
   except OSError as e:
     raise WifiWaiting(f"nothing answered at {host}: {e}", NO_ANSWER) from e
   gadget.note_link('wifi', host)

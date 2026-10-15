@@ -507,6 +507,26 @@ class TestBigCatalog(ModelsTest):
     self.assertEqual(out['bundles'][1]['models'], [])
     self.assertTrue(self.op.log.has('1 model(s) only newer catalogs list'))
 
+  def test_a_pin_overrides_the_kept_pointer_and_stays_offline(self):
+    right = {'oid': '9' * 64, 'size': 792430559}
+    self.op.store['JetlinkModelPointers'] = {REF_A: {'oid': '8' * 64, 'size': 792487890}, REF_B: POINTERS[REF_B]}
+    out, _ = self.merged(newer={**PINNED, 'pointers': {REF_A: right}})
+    self.assertNotIn('pointers', out, "the model manager's catalog carries no pins")
+    self.assertEqual(self.op.store['JetlinkModelPointers'], {REF_A: right, REF_B: POINTERS[REF_B]})
+    self.assertTrue(self.op.log.has('is pinned to 9999999999999999'))
+    # a list that drops the pin later, or no list at all, leaves it kept
+    self.merged(newer=PINNED)
+    self.merged(newer=OSError('offline'))
+    with mock.patch.object(urllib.request, 'urlopen') as urlopen:
+      self.assertEqual(self.models.resolve_pointer(REF_A), (right['oid'], right['size']))
+    urlopen.assert_not_called()
+
+  def test_a_pin_already_kept_writes_nothing(self):
+    self.op.store['JetlinkModelPointers'] = dict(POINTERS)
+    with mock.patch.object(self.op, 'put') as put:
+      self.merged(newer={**PINNED, 'pointers': {REF_A: POINTERS[REF_A]}})
+    put.assert_not_called()
+
   def test_a_model_the_pinned_catalog_has_keeps_its_build(self):
     out, _ = self.merged()
     self.assertIs(out['bundles'][0], PINNED['bundles'][0])

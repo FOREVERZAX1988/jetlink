@@ -38,10 +38,10 @@ Two rules the swap keeps:
   only; building the JetlinkModelState unpickles a TinyJit, and doing that
   next to the small model running frames on the same device is not safe.
 - never swap while the plan is steering. The two models disagree by ~195 m of
-  planned path, and the swap costs a frame or two. modeld says before every
-  frame whether anything is in control (in_control), from messages it reads
-  anyway; standstill alone is not enough, longitudinal control may still hold
-  the brake.
+  planned path, and the swap costs a frame or two. The adapter says before
+  every frame whether anything is in control (in_control), from openpilot's
+  own messages; standstill alone is not enough, longitudinal control may still
+  hold the brake.
 """
 from __future__ import annotations
 
@@ -114,10 +114,11 @@ class JoiningModelState:
   """Duck-types openpilot's modeld ModelState, with a second one inside.
 
   `progress` is where the join says what it is waiting on (status.Progress),
-  and `log` is cloudlog on a comma.
+  `log` is cloudlog on a comma, and `in_control` the adapter's, asked before
+  every frame; without one, the in_control last written stands.
   """
 
-  def __init__(self, small, connect, build, prepare=None, reset_small=None, *, progress, log, peer=None):
+  def __init__(self, small, connect, build, prepare=None, reset_small=None, *, progress, log, peer=None, in_control=None):
     self._small = small
     self._active = small
     self._connect = connect
@@ -185,9 +186,10 @@ class JoiningModelState:
     # and whether this streak has already skipped one for an app answering again
     self._peer_retried = False
 
-    # in control until modeld says otherwise, so a swap can never happen on no
-    # information
+    # in control until the adapter says otherwise, so a swap can never happen
+    # on no information
     self._in_control = True
+    self._ask_in_control = in_control
     self._stop = threading.Event()
 
     # whether the large model has produced a frame; a first inference that
@@ -294,11 +296,10 @@ class JoiningModelState:
 
   @in_control.setter
   def in_control(self, value):
-    # openpilot or MADS in control, by modeld's own messages, written before
-    # every run() as frame_drop_ratio is: the swap waits for False. A thread
-    # polling selfdrived for it woke ~300 times a second on a drive and took
-    # 6 to 11 % of a core inside modeld (2026-10-05). It lands on the small
-    # model too, as every write does
+    # openpilot or MADS in control, by openpilot's own messages, asked before
+    # every run(): the swap waits for False. A thread polling selfdrived for it
+    # woke ~300 times a second on a drive and took 6 to 11 % of a core inside
+    # modeld (2026-10-05). It lands on the small model too, as every write does
     self._in_control = value
     self._small.in_control = value
 
@@ -316,6 +317,8 @@ class JoiningModelState:
   # -- the frame path ---------------------------------------------------------
 
   def run(self, bufs, transforms, inputs, after_enqueue=None):
+    if self._ask_in_control is not None:
+      self.in_control = self._ask_in_control()
     if self._lagging:
       # the last frame was the large model's last, published as it came
       self._lagging = False
@@ -668,11 +671,13 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
   from jetlink.openpilot import link as links
   # here rather than in build(): the import then costs modeld's main thread
   # before the frame loop, not the frame the swap lands on
+  from jetlink.openpilot import model_state
   from jetlink.openpilot.model_state import JetlinkModelState
   op = parts.op
   face = op.model_face()
   ready: dict = {}
-  wifi = parts.settings.mode() == 'wifi'
+  mode = parts.settings.mode()
+  wifi = mode == 'wifi'
   link = links.Link(parts.log, wifi=wifi)
 
   def prepare():
@@ -703,8 +708,24 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
     warp = ready.get('warp') if ready.get('geometry') == (img_w * 2, img_h * 2) else None
     if warp is None:
       raise RuntimeError('no prepared warp for the server model geometry')
+    # A phone behind the USB cable (usb/ios) or Wi-Fi answers near the frame
+    # budget, so relax the hold/proof per link; Jetson/Mac keep strict defaults.
+    if wifi:
+      hold_kw = {'hold_frame': model_state.WIFI_HOLD_FRAME,
+                 'settling_frames': model_state.WIFI_SETTLING_FRAMES,
+                 'holds_in_a_row': model_state.WIFI_HOLDS_IN_A_ROW,
+                 'holds_allowed': model_state.WIFI_HOLDS_ALLOWED,
+                 'proving_holds_fatal': False}
+    elif mode in ('usb', 'ios'):
+      hold_kw = {'hold_frame': model_state.CABLE_HOLD_FRAME,
+                 'settling_frames': model_state.CABLE_SETTLING_FRAMES,
+                 'holds_in_a_row': model_state.CABLE_HOLDS_IN_A_ROW,
+                 'holds_allowed': model_state.CABLE_HOLDS_ALLOWED,
+                 'proving_holds_fatal': False}
+    else:
+      hold_kw = {}
     return JetlinkModelState(client, spec, warp, face=face, log=parts.log, event=op.event,
-                             preview=parts.settings.preview())
+                             preview=parts.settings.preview(), **hold_kw)
 
   def connect(should_stop=None):
     return links.open_link(parts, link, should_stop)
@@ -719,4 +740,4 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
     return bool(live is not None and live.get('presence'))
 
   return JoiningModelState(small, connect, build, prepare, reset_small=lambda: ready['reset_small'](),
-                           progress=parts.progress, log=parts.log, peer=peer_present)
+                           progress=parts.progress, log=parts.log, peer=peer_present, in_control=op.in_control)

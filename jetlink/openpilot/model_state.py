@@ -13,8 +13,8 @@ frames and context in, 18452 floats out, and holds no control state.
 The split is at `run_policy`. The warp stays on the comma's GPU: its input is a
 2 MB camera buffer already there and its output the 393 KB the link carries
 anyway. The history queues live on the Jetson, shipping them would cost ~10 MB
-a frame instead of ~0.5 MB. Upstream fused warp and policy into one JIT, so
-the fork's build compiles a standalone warp; see warp.
+a frame instead of ~0.5 MB. modeld runs its warp as a JIT of its own, and
+the link runs the same one; see warp.
 
 A model that keeps its own history (openpilot #38916, Cinque Terre V3 on)
 takes the same warped frame and the same scalars; its hidden state never
@@ -22,7 +22,7 @@ leaves the Jetson, so there is no prev_feat to send back. The spec says which.
 
 What openpilot's modeld reads off a ModelState comes from the fork's adapter
 (ModelFace): comma's constants, parser, smoothing and action function.
-tinygrad is warp.Warp's to import: only modeld and the build have it.
+tinygrad is warp.Warp's to import: only modeld has it.
 """
 from __future__ import annotations
 
@@ -43,10 +43,6 @@ SLOW_FRAME = 0.05  # the full 20 Hz budget, not just the largest outliers
 # delay both dwarf, where a dropped frame is the same stale plan plus a count
 # toward selfdrived's modeldLagging. None waits the client's deadline, as before
 HOLD_FRAME = 0.046
-# TCP over Wi-Fi has an extra network round trip on top of the host's
-# inference. Keep the wait inside one 20 Hz frame (50 ms), while USB
-# keeps the original 46 ms so a slow cable host is still visible.
-WIFI_HOLD_FRAME = 0.050
 # What the frames before the host's first answer may wait, which the hold above
 # cannot cover: there is no output to publish again, so there is nothing to fall
 # back on and the wait would be the client's deadline (link.INFERENCE_TIMEOUT,
@@ -98,6 +94,27 @@ WIFI_PROVING_HOLDS = 3
 # single slow frame later is the comma's own stall, a warp or a send, which
 # handing back would not fix; only held frames say the host is behind
 SETTLING_FRAMES = 3
+# A phone's NPU runs the inference at ~33-43 ms; with the Wi-Fi round trip
+# and the comma's own warp/send (~5 ms) a frame's wait is ~45 ms, right at the
+# 20 Hz budget. The USB-tuned 46 ms hold leaves only ~41 ms after that work, so
+# a phone behind either link holds most frames. These link-specific budgets let
+# the large model stay swapped on a phone without weakening the strict defaults
+# a fast Jetson/Mac keeps. A held frame still publishes the previous output
+# (a plan one frame old), not a dropped camera frame; the 0.2 s client deadline
+# and modeld's camera-drop filter hand back on a real stall.
+#
+# Over the USB cable (usb/ios): the CDC-NCM link adds almost no network time,
+# but the same phone NPU does, so a modestly wider hold and a tolerant proof.
+CABLE_HOLD_FRAME = 0.05
+CABLE_SETTLING_FRAMES = 5
+CABLE_HOLDS_IN_A_ROW = 10
+CABLE_HOLDS_ALLOWED = 80
+# Over Wi-Fi: a 55 ms wait window covers the measured ~45 ms reply; more
+# settling frames and a wider steady-state tolerance for marginal holds.
+WIFI_HOLD_FRAME = 0.055
+WIFI_SETTLING_FRAMES = 8
+WIFI_HOLDS_IN_A_ROW = 15
+WIFI_HOLDS_ALLOWED = 150
 # frames between asks for the server's telemetry, which rides on the response:
 # every second one, as modeld sent a chestnut's state (20 Hz over 10 Hz)
 TELEMETRY_EVERY = 2
@@ -182,8 +199,24 @@ class JetlinkModelState:
 
   prev_desire: np.ndarray  # for tracking the rising edge of the pulse
 
-  def __init__(self, client, spec, warp, *, face, log, event, preview: bool = False):
+  def __init__(self, client, spec, warp, *, face, log, event, preview: bool = False,
+               hold_frame: float | None = None, settling_frames: int | None = None,
+               holds_in_a_row: int | None = None, holds_allowed: int | None = None,
+               proving_holds_fatal: bool = True):
     self._log = log
+    # Per-link overrides. None means "read the module constant each frame", so
+    # the strict USB/Jetson defaults stay live constants the tests can mock and
+    # a Wi-Fi/USB phone build pins a wider value at construction (see joining).
+    self._hold_frame_override = hold_frame
+    self._settling_frames_override = settling_frames
+    self._holds_in_a_row_override = holds_in_a_row
+    self._holds_allowed_override = holds_allowed
+    # USB: any held frame in the proof window proves the host too slow. Over
+    # Wi-Fi a phone NPU sits right at the frame budget and holds most frames by
+    # a millisecond or two (still a fresh-enough, one-frame-old plan), so the
+    # proof uses the steady-state rules (a run of holds / too many holds); only
+    # a genuinely stalling host hands back.
+    self._proving_holds_fatal = bool(proving_holds_fatal)
     # (name, **fields): a structured log line, cloudlog.event on a comma
     self._event = event
     self.face = face
@@ -209,9 +242,9 @@ class JetlinkModelState:
     # model manager key off this flag
     self.chestnut = True
 
-    # a warp.Warp, loaded and warmed ahead: its first call costs ~2 s and this
-    # runs on modeld's frame thread. Frames go out of its output as they are,
-    # over either transport
+    # a warp.Warp, loaded and warmed ahead: its first call links the JIT, and
+    # this runs on modeld's frame thread. Frames go out of its output as they
+    # are, over either transport
     self.warp = warp
 
     # a lossless warp's errors go packed to a server that takes them
@@ -394,10 +427,29 @@ class JetlinkModelState:
     return self.end(after_enqueue)
 
   @property
+  def _hold_frame(self) -> float | None:
+    if self._hold_frame_override is not None:
+      return self._hold_frame_override
+    # nothing pinned by the caller (joining pins a per-link budget): a
+    # Wi-Fi link keeps its own wider one, the cable the 46 ms above
+    return WIFI_HOLD_FRAME if self._wifi else HOLD_FRAME
+
+  @property
+  def _settling_frames(self) -> int:
+    return SETTLING_FRAMES if self._settling_frames_override is None else self._settling_frames_override
+
+  @property
+  def _holds_in_a_row_limit(self) -> int:
+    return HOLDS_IN_A_ROW if self._holds_in_a_row_override is None else self._holds_in_a_row_override
+
+  @property
+  def _holds_allowed(self) -> int:
+    return HOLDS_ALLOWED if self._holds_allowed_override is None else self._holds_allowed_override
+
+  @property
   def _can_hold(self) -> bool:
     """Is there an output to publish again instead of waiting?"""
-    limit = WIFI_HOLD_FRAME if self._wifi else HOLD_FRAME
-    return bool(limit) and self.client.last_output is not None
+    return bool(self._hold_frame) and self.client.last_output is not None
 
   @property
   def preview(self) -> bool:
@@ -424,8 +476,7 @@ class JetlinkModelState:
 
   def _hold_left(self, frame) -> float:
     """What is left of the hold for `frame`, from its warp's start."""
-    limit = WIFI_HOLD_FRAME if self._wifi else HOLD_FRAME
-    return limit - (time.perf_counter() - frame.t0)
+    return self._hold_frame - (time.perf_counter() - frame.t0)
 
   def _note_hold(self, held: bool) -> str | None:
     """Why the large model should hand back after this frame, if it should:
@@ -454,15 +505,15 @@ class JetlinkModelState:
         return None
       silence = now - self._last_answer
       return f'no answer for {silence:.0f} s' if silence > PREVIEW_SILENCE else None
-    if self._frame_id <= SETTLING_FRAMES:
+    if self._frame_id <= self._settling_frames:
       return None
-    if self._frame_id <= PROVING_FRAMES:
+    if self._proving_holds_fatal and self._frame_id <= PROVING_FRAMES:
       if self._wifi and len(self._holds) <= WIFI_PROVING_HOLDS:
         return None
       return f'held frame {self._frame_id} of the first {PROVING_FRAMES}'
-    if self._holds_in_a_row >= HOLDS_IN_A_ROW:
+    if self._holds_in_a_row >= self._holds_in_a_row_limit:
       return f'held {self._holds_in_a_row} frames in a row'
-    if len(self._holds) > HOLDS_ALLOWED:
+    if len(self._holds) > self._holds_allowed:
       return f'held {len(self._holds)} frames in {HOLD_WINDOW:.0f} s'
     return None
 

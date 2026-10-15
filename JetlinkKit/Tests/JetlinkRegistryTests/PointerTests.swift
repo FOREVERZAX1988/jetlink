@@ -247,9 +247,9 @@ struct ExportPointerTests {
   }
 
   @Test func exportIDsAreWholeHexWords() {
-    #expect(LFS.exportIDs(in: "Use f78ed37d for the precompiled eGPU driving model") == ["f78ed37d"])
-    #expect(LFS.exportIDs(in: "1a421175-db71-4e3d-9d62-e2166421b02b/12864 and 1a421175 again") == ["1a421175"])
-    #expect(LFS.exportIDs(in: "deadbeefcafe f78ED37d _f78ed37d f78ed37d_") == [])
+    #expect(LFS.exportIDsNewestFirst(in: "Use f78ed37d for the precompiled eGPU driving model") == ["f78ed37d"])
+    #expect(LFS.exportIDsNewestFirst(in: "1a421175-db71-4e3d-9d62-e2166421b02b/12864 and 1a421175 again") == ["1a421175"])
+    #expect(LFS.exportIDsNewestFirst(in: "deadbeefcafe f78ED37d _f78ed37d f78ed37d_") == [])
     #expect(LFS.stripPatchTag("[PATCH 2/3]   Use it") == "Use it")
     #expect(LFS.pythonQuote("a b/c?d") == "a%20b/c%3Fd")
   }
@@ -284,6 +284,55 @@ struct CompiledCommitTests {
     var routes = exportRoutes().merging(compiledRoutes(squash, patchHead("Cinque v3 (#38932)"))) { _, new in new }
     routes[LFS.pullPatchURL(number: "38932")] = .body(patchHead("Use f78ed37d for the precompiled eGPU driving model"))
     #expect(try await LFS.fetchPointer(ref: squash, http: HTTP(session: MockNet(routes).session)) == Pointer(oid: v3OID, size: v3Size))
+  }
+
+  // Mountain Dew (#39047) and MD v3 (#39087), as github served them on
+  // 2026-10-14. The squash's subject names no export; the pull request's
+  // commits name ea1600cb, 870a4823 and 8d736683 in turn, and the last shipped.
+  static let mdRef = "6f4c0faf1f85132734e94aa39c67143f823b9324"
+  static let mdV3Ref = "1e219d7785cfb7b7343c7f2366347fc86e7ce5f2"
+  static let mdFolder = "8d736683-fed4-4e48-96fd-eae5d9d5bc56"
+  static let oldMDFolder = "870a4823-d2ec-4b9a-8015-b947e9901fc7"
+  static let mdPointer = Pointer(oid: "87fe86ca0813c099efddf9173ba503be2e40ea4c5362c36812a44141f4cb07d4", size: 792_430_559)
+
+  func mdRoutes(_ ref: String, _ patch: String, _ number: String, folders: [String]) -> [String: MockNet.Reply] {
+    var routes = compiledRoutes(ref, RegistryFixture.data(patch))
+    routes[LFS.pullPatchURL(number: number)] = .body(RegistryFixture.data("pull_\(number).patch"))
+    routes[LFS.drivingModelsTreeURL] = .body(JSON.array(folders.map { ["type": "directory", "path": .string($0)] }).data())
+    routes["\(LFS.drivingModelsTreeURL)/\(Self.oldMDFolder)?recursive=true"] =
+      .body(JSON.array([onnxEntry("\(Self.oldMDFolder)/12864", oid: String(repeating: "c", count: 64))]).data())
+    routes["\(LFS.drivingModelsTreeURL)/\(Self.mdFolder)?recursive=true"] =
+      .body(JSON.array([onnxEntry("\(Self.mdFolder)/12864", oid: Self.mdPointer.oid, size: Self.mdPointer.size)]).data())
+    return routes
+  }
+
+  @Test func aSquashMergeFollowsTheNewestExportItsPullRequestNamed() async throws {
+    let routes = mdRoutes(Self.mdRef, "patch_6f4c0faf.patch", "39047", folders: [Self.oldMDFolder, Self.mdFolder, v3Folder])
+    #expect(try await LFS.fetchPointer(ref: Self.mdRef, http: HTTP(session: MockNet(routes).session)) == Self.mdPointer)
+  }
+
+  @Test func aNewestExportNotUploadedYetIsNotSwappedForAnOlderOne() async throws {
+    let routes = mdRoutes(Self.mdRef, "patch_6f4c0faf.patch", "39047", folders: [Self.oldMDFolder, v3Folder])
+    let error = await #expect(throws: RegistryError.self) {
+      try await LFS.fetchPointer(ref: Self.mdRef, http: HTTP(session: MockNet(routes).session))
+    }
+    #expect(error?.message.contains("#39047 names export 8d736683, which is not in commaai/openpilot_driving_models yet") == true)
+  }
+
+  @Test func mdV3WaitsForItsExport() async throws {
+    let routes = mdRoutes(Self.mdV3Ref, "patch_1e219d77.patch", "39087", folders: [Self.oldMDFolder, Self.mdFolder])
+    let error = await #expect(throws: RegistryError.self) {
+      try await LFS.fetchPointer(ref: Self.mdV3Ref, http: HTTP(session: MockNet(routes).session))
+    }
+    #expect(error?.message.contains("names export 1365126a") == true)
+  }
+
+  @Test func exportIDsNewestFirstAndNamedExports() {
+    #expect(LFS.exportIDsNewestFirst(in: "a (ea1600cb/12864) b (870a4823/1284) c (8d736683/12864) ea1600cb") == ["ea1600cb", "8d736683", "870a4823"])
+    #expect(LFS.namesExport("8d736683", in: "MD retrained (8d736683/12864)"))
+    #expect(LFS.namesExport("1365126a", in: "1365126a-e71e-4778-be00-8ab92dc82c09/12864"))
+    #expect(!LFS.namesExport("f78ed37d", in: "Use f78ed37d for the precompiled eGPU driving model"))
+    #expect(!LFS.namesExport("8d736683", in: "x8d736683/12864"))
   }
 
   @Test func anOutageReadingThePullRequestIsAFailure() async throws {
