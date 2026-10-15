@@ -16,8 +16,25 @@ import Foundation
 /// Android only. Everywhere else it is a no-op, so a caller needs no guard of
 /// its own.
 package enum HostDiagnostics {
-  /// The most lines one report writes, so a pasted log stays readable.
-  package static let lineLimit = 200
+  /// The most lines one report writes, so a pasted log stays readable. Every
+  /// section is capped on its own as well, and the lines a reason lives in come
+  /// first: a cap that fell on the whole report once hid the one line that names
+  /// the reason, this budget is what the sections at their caps add up to.
+  package static let lineLimit = 320
+
+  /// The runtime's own lines, handed over by the backend that brings
+  /// onnxruntime (`OrtRuntimeLog.install()`), oldest first. It is the one place
+  /// a provider writes its reason for taking no node of a graph -- an Android
+  /// app's stderr has no reader -- and nothing else here can supply it. Nil on
+  /// a build whose backend carries no such ring, and outside Android's report
+  /// it is only carried.
+  nonisolated(unsafe) package static var runtimeLines: (() -> [String])?
+
+  /// The QNN backend library this run loads, when the app asks for the phone's
+  /// own (`OrtBackend.qnnBackend`): nil is the copy beside the app. The report
+  /// prints which of the two, because a backend, a Stub and a Skel from three
+  /// QNN builds are three builds that take no node of any model.
+  nonisolated(unsafe) package static var qnnBackend: String?
 
   /// Writes `reason`, then what this machine says about its NPU runtime.
   ///
@@ -72,8 +89,12 @@ package enum HostDiagnostics {
     /// These probes run through `popen`, one shell each, and every one of them
     /// names this process's pid: a shell's own `/proc/self/maps` is the shell's
     /// (or the grep's, in the pipe), so a probe that said `self` answered about
-    /// itself and found nothing, always.
-    private static var pid: String { String(ProcessInfo.processInfo.processIdentifier) }
+    /// itself and found nothing, always. The pid is the C library's, which is
+    /// this process by definition, and `processFacts` prints it beside the one
+    /// Foundation names and the one the shell's own parent has: a report whose
+    /// pid is not a process read nothing anywhere below, so the three are
+    /// evidence too, and the empty sections are then no evidence at all.
+    private static var pid: String { String(getpid()) }
     /// Two lines of the process this report is about, and how many mappings it
     /// has: a probe that read somewhere else says so here.
     private static var processCommand: String { "head -2 /proc/\(pid)/status; wc -l /proc/\(pid)/maps" }
@@ -93,10 +114,15 @@ package enum HostDiagnostics {
     private static let qnnFiles = ["libQnnHtp.so", "libQnnSystem.so", "libQnnHtpV85Stub.so", "libQnnHtpV85Skel.so"]
     private static let qnnWords = ["qnn", "onnxruntime", "cdsprpc", "adsprpc", "htp", "skel", "snpe", "hexagon"]
     private static let dspWords = ["skel", "qnn", "dsp", "rfsa", "fastrpc"]
-    private static let logWords = ["qnn", "htp", "onnxruntime", "dsp", "adsp", "fastrpc", "fallback", "unsupported", "skel", "stub", "arch", "fail"]
+    private static let logWords = [
+      "qnn", "htp", "onnxruntime", "dsp", "adsp", "fastrpc", "fallback", "unsupported", "skel", "stub", "arch", "fail",
+      "device", "convert", "version", "soc",
+    ]
     /// What a neural runtime calls itself, for the lines that are its own
     /// whatever process wrote them.
-    private static let runtimeWords = ["onnxruntime", "qnn", "adsprpc", "cdsprpc", "fastrpc", "hexagon", "htp", "skel", "stub"]
+    private static let runtimeWords = [
+      "onnxruntime", "qnn", "adsprpc", "cdsprpc", "fastrpc", "hexagon", "htp", "skel", "stub", "device", "version", "arch",
+    ]
     private static let propertyWords = [
       "soc", "board", "hardware", "platform", "qnn", "hexagon", "dsp", "adsp", "cpu.abi",
       "product.model", "product.device", "build.version", "chipset", "soc_id", "vendor.qti",
@@ -105,7 +131,14 @@ package enum HostDiagnostics {
     /// The facts, the ones that could name a reason first.
     private static func gather() -> [String] {
       var lines: [String] = []
-      lines.append(contentsOf: section("this process", shell(processCommand)))
+      // The reason first: a provider that takes no node of a graph writes why
+      // under onnxruntime's logger, and the phone's log holds what QNN, the DSP
+      // and the process itself said around it. The directories come after,
+      // each within its own budget, so nothing above them can be cut off.
+      lines.append(contentsOf: section("the runtime's own lines, as onnxruntime and QNN wrote them", runtimeLines?() ?? []))
+      lines.append(contentsOf: section("this process's own log, its pid's lines", processLog(), cap: 80))
+      lines.append(contentsOf: section("the runtime's lines in the phone's log, whatever pid wrote them", runtimeLog(), cap: 40))
+      lines.append(contentsOf: section("this process", processFacts()))
       let mapped = shell(mapsCommand)
       lines.append(contentsOf: section("the QNN and onnxruntime libraries this process has open", mapped))
       let carried = appLibraries(mapped)
@@ -114,28 +147,48 @@ package enum HostDiagnostics {
       } else {
         // Everything, not only the QNN-named: a Stub the phone cannot use and
         // its absence are the same line here, and the Skel sits beside it.
-        lines.append(contentsOf: section("every library the app itself carries", carried))
+        lines.append(contentsOf: section("every library the app itself carries", carried, cap: 24))
       }
       let arches = htpArches(carried)
       lines.append("the HTP architectures this build carries: \(arches.isEmpty ? "none named" : arches.joined(separator: " "))")
       if !carried.contains(where: { $0.contains("Skel.so") }) {
         lines.append("no Skel beside the Stub: the DSP has none to load, and QNN takes no node of any model")
       }
+      let search: [(directory: String, files: [String])] = adspDirectories().map { directory in
+        (directory: directory, files: named(directory))
+      }
+      lines.append(contentsOf: section("where the Skel is looked for, ADSP_LIBRARY_PATH, in order", skelSearch(search)))
+      lines.append(contentsOf: section("the pair this run is set to use, and the phone's own", pairInForce(search, arch: arches.last)))
       lines.append(contentsOf: section("the app's own QNN, hashed", hashes(mapped)))
-      lines.append(contentsOf: section("where the Skel is looked for, ADSP_LIBRARY_PATH", skelSearch()))
       let system =
         listing("/vendor/lib64") + listing("/vendor/lib") + listing("/system/lib64")
         + listing("/odm/lib64") + listing("/vendor/lib64/qnn") + listing("/system/lib64/qnn")
-      lines.append(contentsOf: section("the phone's own QNN and onnxruntime libraries", matching(system, qnnWords)))
+      lines.append(contentsOf: section("the phone's own QNN and onnxruntime libraries", matching(system, qnnWords), cap: 14))
       let dsp =
         listing("/vendor/lib/rfsa/adsp") + listing("/vendor/lib64/rfsa/adsp") + listing("/vendor/lib64/rfsa/cdsp")
         + listing("/vendor/lib/rfsa/cdsp") + listing("/vendor/dsp") + listing("/vendor/dsp/cdsp")
         + listing("/system/lib/rfsa/adsp") + listing("/odm/lib/rfsa/adsp")
-      lines.append(contentsOf: section("the phone's DSP libraries, the Skel a Hexagon loads", matching(dsp, dspWords)))
+      lines.append(contentsOf: section("the phone's DSP libraries, the Skel a Hexagon loads", matching(dsp, dspWords), cap: 14))
       lines.append(contentsOf: section("the DSP devices this process talks on", shell(deviceCommand)))
-      lines.append(contentsOf: section("the chip", matching(shell("getprop"), propertyWords)))
-      lines.append(contentsOf: section("this process's own log, its pid's lines", processLog()))
-      lines.append(contentsOf: section("the neural runtime's own lines, whatever pid wrote them", runtimeLog()))
+      lines.append(contentsOf: section("the chip, its properties", matching(shell("getprop"), propertyWords), cap: 14))
+      return lines
+    }
+
+    /// This process, as three readings of one pid: the C library's, which is
+    /// this process by definition; Foundation's, printed for comparison; and
+    /// the one the shell that runs every probe has for a parent. A report whose
+    /// pid is not a process has read nothing anywhere, and says so here rather
+    /// than three sections below in silence.
+    private static func processFacts() -> [String] {
+      var lines = [
+        "getpid(): \(getpid())",
+        "ProcessInfo.processIdentifier: \(ProcessInfo.processInfo.processIdentifier)",
+        // The shell that runs these probes is a child of this process, so the
+        // parent of the shell's own parent is this pid: a reading that goes
+        // through neither Foundation nor the C library.
+        "this process, as the shell reads it: \(shell("awk '{print $4}' /proc/$PPID/stat").first ?? "unread")",
+      ]
+      lines.append(contentsOf: shell(processCommand))
       return lines
     }
 
@@ -171,16 +224,56 @@ package enum HostDiagnostics {
       return shell("sha256sum \(files) | sed 's#.*/##'")
     }
 
-    /// `ADSP_LIBRARY_PATH`, which the app sets to its own directory and the
-    /// system's DSP ones: the Skel is loaded from one of them, and a path that
-    /// does not exist is one the Hexagon cannot be handed a Skel from.
-    private static func skelSearch() -> [String] {
-      let value = shell("printenv ADSP_LIBRARY_PATH")
-      var lines = value
-      for directory in (value.first ?? "").split(separator: ";").map(String.init) where !directory.isEmpty {
-        let found = shell("ls -l '\(directory)' 2>&1 | grep -iE 'skel|stub' | sed 's/.* //'")
-        lines.append("\(directory): \(found.isEmpty ? "no Skel, no Stub" : found.joined(separator: " / "))")
+    /// `ADSP_LIBRARY_PATH`'s directories, in the order the DSP searches them:
+    /// the Skel is loaded from the first that holds one, so the order decides
+    /// which of two QNN builds a phone's Hexagon is handed. The app's own
+    /// directory comes first, the system's DSP ones after it.
+    private static func adspDirectories() -> [String] {
+      (shell("printenv ADSP_LIBRARY_PATH").first ?? "").split(separator: ";").map(String.init).filter { !$0.isEmpty }
+    }
+
+    /// The Skel and Stub files one directory holds, by size and name: the two
+    /// halves of the match, one loaded by the app and one by the DSP.
+    private static func named(_ directory: String) -> [String] {
+      shell("ls -l '\(directory)' 2>/dev/null | grep -iE 'skel|stub' | awk '{print $5, $9}'")
+    }
+
+    /// One numbered line per directory: a path that does not exist is one the
+    /// Hexagon cannot be handed a Skel from, and the numbering is the order.
+    private static func skelSearch(_ search: [(directory: String, files: [String])]) -> [String] {
+      guard !search.isEmpty else { return ["ADSP_LIBRARY_PATH is empty: the DSP has nowhere to look for a Skel"] }
+      return search.enumerated().map { index, entry in
+        "\(index + 1). \(entry.directory): \(entry.files.isEmpty ? "no Skel, no Stub" : entry.files.joined(separator: " / "))"
       }
+    }
+
+    /// The pair this run hands QNN, and the phone's own pair for the same
+    /// architecture: the Skel the DSP will find first, the Stub the app will
+    /// load, and what the phone carries instead. Two QNN builds in one process
+    /// take no node of any model, so which pair is in force is the first thing
+    /// to read here, and the phone's own is what a build that carries no pair
+    /// for this Hexagon should have been using.
+    private static func pairInForce(_ search: [(directory: String, files: [String])], arch: String?) -> [String] {
+      var lines: [String] = []
+      lines.append("the QNN backend this run loads: \(qnnBackend ?? "the app's own libQnnHtp.so, beside the app")")
+      let held = search.first { $0.files.contains { $0.lowercased().contains("skel.so") } }
+      if let held, let file = held.files.first(where: { $0.lowercased().contains("skel.so") }) {
+        lines.append("the DSP looks for its Skel in \(held.directory) first, and finds: \(file)")
+      } else {
+        lines.append("no directory in ADSP_LIBRARY_PATH holds a Skel: the DSP has none to load")
+      }
+      guard let arch else {
+        lines.append("this build carries no HTP Stub, so no architecture's pair is in question")
+        return lines
+      }
+      // The Stub the app's own directory holds: by name, the pair is one build
+      // from one QAIRT release, and a Stub from another speaks another dialect.
+      let stub = qnnFiles.first { $0.contains("\(arch)Stub") } ?? "libQnnHtp\(arch)Stub.so"
+      lines.append("the app's Stub for \(arch): \(stub), the Skel it came with beside it")
+      let own = shell(
+        "ls -l /vendor/lib64 /system/lib64 /odm/lib64 /vendor/lib /vendor/lib/rfsa/adsp /system/vendor/lib/rfsa/adsp 2>/dev/null"
+          + " | grep -iE 'libQnnHtp\(arch)(Stub|Skel|CalculatorStub)\\.so' | awk '{print $5, $9}'")
+      lines.append(contentsOf: own.isEmpty ? ["the phone has no \(arch) pair of its own in any of those directories"] : own)
       return lines
     }
 
@@ -202,10 +295,17 @@ package enum HostDiagnostics {
       return arches.sorted().map { "V\($0)" }
     }
 
-    /// A title and the lines under it, or the one line that says it is empty.
-    private static func section(_ title: String, _ body: [String]) -> [String] {
+    /// A title and the lines under it, or the one line that says it is empty. A
+    /// body longer than `cap` is cut and says how many lines it left: a section
+    /// that grew must never be the reason one below it was truncated, and the
+    /// lines a reason lives in are the ones this report keeps.
+    private static func section(_ title: String, _ body: [String], cap: Int = 24) -> [String] {
       guard !body.isEmpty else { return ["\(title): nothing"] }
-      return ["\(title):"] + body.map { "  \($0)" }
+      var lines = ["\(title):"] + body.prefix(cap).map { "  \($0)" }
+      if body.count > cap {
+        lines.append("  ... and \(body.count - cap) more")
+      }
+      return lines
     }
 
     /// The lines of `lines` that say one of `words`, in the order they came.

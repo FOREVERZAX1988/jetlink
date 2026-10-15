@@ -150,6 +150,14 @@ data class SettingsValues(
      * chosen.
      */
     val wifiLink: Boolean = false,
+    /**
+     * The phone's own QNN for the NPU, instead of the one this build carries:
+     * its HTP backend, its Stub and the Skel its DSP was signed for. The
+     * `npu:` lines in the log say which pair was in force. Off by default, and
+     * only in the developer section: a phone whose DSP takes this build's pair
+     * has no use for it, and a phone whose DSP takes neither is a report.
+     */
+    val phoneQnn: Boolean = false,
     /** The UI language; System follows the phone (the default). */
     val language: AppLocale = AppLocale.System,
     /** The colour scheme; System follows the phone (the default). */
@@ -175,6 +183,7 @@ class Settings(context: Context) {
             .putBoolean(KEEP_SCREEN_ON, next.keepScreenOn)
             .putBoolean(DEVELOPER, next.developer)
             .putBoolean(WIFI_LINK, next.wifiLink)
+            .putBoolean(PHONE_QNN, next.phoneQnn)
             .putString(LANGUAGE, next.language.id)
             .putString(THEME, next.theme.id)
             .putString(MIRRORS, next.mirrors.joinToString("\n"))
@@ -206,6 +215,7 @@ class Settings(context: Context) {
             keepScreenOn = prefs.getBoolean(KEEP_SCREEN_ON, defaults.keepScreenOn),
             developer = prefs.getBoolean(DEVELOPER, Chip.isEmulator),
             wifiLink = prefs.getBoolean(WIFI_LINK, defaults.wifiLink),
+            phoneQnn = prefs.getBoolean(PHONE_QNN, defaults.phoneQnn),
             language = AppLocale.of(prefs.getString(LANGUAGE, null)) ?: defaults.language,
             theme = AppTheme.of(prefs.getString(THEME, null)) ?: defaults.theme,
             mirrors = readMirrors(),
@@ -222,6 +232,7 @@ class Settings(context: Context) {
         private const val KEEP_SCREEN_ON = "keepScreenOn"
         private const val DEVELOPER = "developer"
         private const val WIFI_LINK = "wifiLink"
+        private const val PHONE_QNN = "phoneQnn"
         private const val LANGUAGE = "language"
         private const val THEME = "theme"
         private const val MIRRORS = "mirrors"

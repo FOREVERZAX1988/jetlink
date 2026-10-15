@@ -53,9 +53,16 @@ cable reversed.
 
 When an Android phone's NPU profile never leaves **preparing**, the app's log
 answers why by itself: a build that writes no compiled context, and a warm-up
-over 20 seconds, each write the phone's QNN libraries, the ones the app
-brought, the DSP libraries and devices, the chip's properties, and this
-process's own log, under `npu:`. Send those lines with the rest.
+over 20 seconds, each write under `npu:` -- and the reason first, now: the
+runtime's own lines (onnxruntime's logger, which carries QNN's), the phone's log
+around them, the pid this process is, the pair this run is set to use and the
+phone's own pair for the same Hexagon, the QNN libraries the app brought and the
+ones the phone has, the Skel the DSP will find first, the DSP libraries and
+devices, and the chip's properties. Send those lines with the rest. A phone
+whose DSP will not take the pair this build carries can be set to run the
+phone's own QNN libraries instead (**Settings > Developer > Phone's Own QNN**),
+and the report says which pair was in force either way
+([QNN HTP stubs](qnn-htp-stubs.md)).
 
 The libraries the app brought come first, with the directory they were read
 from: the Android app hands the server `ApplicationInfo.nativeLibraryDir`,

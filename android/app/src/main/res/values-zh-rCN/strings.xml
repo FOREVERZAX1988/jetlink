@@ -53,6 +53,8 @@
     <string name="settings_keep_npu_support">帧间维持 NPU 全速运行。</string>
     <string name="settings_keep_cpu">保持 CPU 唤醒</string>
     <string name="settings_keep_cpu_support">帧间维持 CPU 高频运行。</string>
+    <string name="settings_phone_qnn">使用手机自带 QNN</string>
+    <string name="settings_phone_qnn_support">NPU 改用手机自带的 QNN 与它自己 DSP 签名的 Skel，而不是本版本自带的那一套。</string>
 
     <!-- Settings: display & language -->
     <string name="settings_display">显示</string>

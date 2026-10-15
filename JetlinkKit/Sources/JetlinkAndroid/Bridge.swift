@@ -175,9 +175,19 @@
         Mirrors.configure([])
       }
       if let dir = config["native_library_dir"] as? String, !dir.isEmpty {
-        // Where the QNN provider finds the NPU's skel libraries: the app's own,
-        // then the system's DSP directories.
-        setenv("ADSP_LIBRARY_PATH", "\(dir);/system/lib/rfsa/adsp;/system/vendor/lib/rfsa/adsp;/dsp", 1)
+        // Where the QNN provider finds the NPU's Skel libraries: the app's own
+        // directory first, then the system's DSP ones. The DSP loads the Skel
+        // from the first directory that holds one, so this order decides which
+        // build's Skel the phone's Hexagon is handed -- and the app's own Stub
+        // is the build the Skel has to agree with.
+        //
+        // *Phone's Own QNN* (the settings' developer section) puts the phone's
+        // own DSP directories first instead: the Skel its vendor signed for
+        // this Hexagon, for a phone whose DSP will not take the app's. The
+        // `npu:` report prints the order either way.
+        let system = "/system/lib/rfsa/adsp;/system/vendor/lib/rfsa/adsp;/dsp"
+        let phoneOwn = (config["phone_qnn"] as? Bool) ?? false
+        setenv("ADSP_LIBRARY_PATH", phoneOwn ? "\(system);\(dir)" : "\(dir);\(system)", 1)
         // And for the `npu:` report, which cannot find the directory itself:
         // an app may not list /data/app, so its probes need this one handed to
         // them (HostDiagnostics.nativeDirectory).
@@ -220,6 +230,18 @@
       state.serverStarted()
     }
 
+    /// The phone's own QNN backend library, when the app's *Phone's Own QNN*
+    /// asks for one: the copy this phone's vendor shipped, which onnxruntime
+    /// loads instead of the one beside the app (`backend_path`). Nil keeps the
+    /// app's own, which is what every phone and platform ran before, and nil
+    /// too on a phone that has no copy of its own to load.
+    static func qnnBackend(_ config: [String: Any]) -> String? {
+      guard (config["phone_qnn"] as? Bool) ?? false else { return nil }
+      return ["/vendor/lib64/libQnnHtp.so", "/system/lib64/libQnnHtp.so", "/odm/lib64/libQnnHtp.so"].first {
+        FileManager.default.fileExists(atPath: $0)
+      }
+    }
+
     /// The backend and device the config names. A config without a backend
     /// is onnxruntime's.
     static func backend(_ config: [String: Any]) throws -> any EngineBackend {
@@ -244,7 +266,7 @@
         }
         return OrtBackend(
           profile: profile, preparer: ONNXPreparer(), keepAlive: (config["keep_alive"] as? Bool) ?? true,
-          keepCPUWarm: (config["keep_cpu_warm"] as? Bool) ?? false, chip: chip)
+          keepCPUWarm: (config["keep_cpu_warm"] as? Bool) ?? false, chip: chip, qnnBackend: qnnBackend(config))
       case let other:
         throw HostFailure("unknown backend \(other)")
       }
