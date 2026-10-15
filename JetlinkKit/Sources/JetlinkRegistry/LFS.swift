@@ -25,6 +25,9 @@ public struct Pointer: Sendable, Equatable, Hashable {
     self.oid = oid
     self.size = size
   }
+
+  /// `{"oid": ..., "size": ...}`, as pointers.json and the LFS batch API spell it.
+  var json: JSON { ["oid": .string(oid), "size": .int(size)] }
 }
 
 /// Getting a large model's ONNX by its git-lfs oid.
@@ -212,24 +215,31 @@ public enum LFS {
     return String(subject[subject.index(after: close)...].drop { $0.isWhitespace })
   }
 
-  /// The eight-character hex ids a subject names, first mention first:
-  /// `\b[0-9a-f]{8}\b`, which is a whole word of exactly eight lowercase hex digits.
-  static func exportIDs(in subject: String) -> [String] {
+  /// The eight-character hex ids a subject names, the last mention first
+  /// (`_newest_first`): `\b[0-9a-f]{8}\b`, which is a whole word of exactly
+  /// eight lowercase hex digits.
+  static func exportIDsNewestFirst(in subject: String) -> [String] {
     var ids: [String] = []
     var word = ""
     func close() {
-      if CacheLayout.isLowercaseHex(word, count: 8), !ids.contains(word) { ids.append(word) }
+      if CacheLayout.isLowercaseHex(word, count: 8) { ids.append(word) }
       word = ""
     }
     for character in subject {
-      if character.isLetter || character.isNumber || character == "_" {
+      if isWordCharacter(character) {
         word.append(character)
       } else {
         close()
       }
     }
     close()
-    return ids
+    var seen = Set<String>()
+    return ids.reversed().filter { seen.insert($0).inserted }
+  }
+
+  /// A character of a regex `\w` word.
+  static func isWordCharacter(_ character: Character) -> Bool {
+    character.isLetter || character.isNumber || character == "_"
   }
 
   /// A listing of comma's model repo, or of one folder of it, recursively.
@@ -256,6 +266,11 @@ public enum LFS {
   /// its subject names, in comma's model repo; the pointer its own diff deletes;
   /// and for a squash merge, the last pointer its pull request carried, or the
   /// export one of that pull request's commits names.
+  ///
+  /// The newest export named wins: a pull request's commits are in order, and
+  /// Mountain Dew's (#39047) named three before the one it shipped. One that is
+  /// not in the model repo yet stops the search rather than falling back to an
+  /// older one, a different model.
   static func fetchExportPointer(ref: String, http: HTTP, timeout: TimeInterval = pointerTimeout) async throws(RegistryError) -> Pointer {
     let url = commitPatchURL(ref: ref)
     let patch = String(decoding: try await http.get(url, timeout: timeout, limit: patchMax), as: UTF8.self)
@@ -263,11 +278,14 @@ public enum LFS {
       throw .registry("\(url) has no subject line")
     }
     let short = ref.prefix(10)
-    let ids = exportIDs(in: subject)
-    if !ids.isEmpty, let pointer = try await exportPointer(ref: ref, ids: ids, subject: subject, http: http, timeout: timeout) {
-      return pointer
-    }
-    var tried = [ids.isEmpty ? "its subject names no export" : "no folder in \(drivingModelsRepo) for \(ids.joined(separator: ", "))"]
+    let ids = exportIDsNewestFirst(in: subject)
+    let (found, missing) = try await exportPointer(ref: ref, ids: ids, subject: subject, http: http, timeout: timeout)
+    if let found { return found }
+    let first: String =
+      if let missing { "its subject \(notUploaded(missing))" }
+      else if ids.isEmpty { "its subject names no export" }
+      else { "no folder in \(drivingModelsRepo) for \(ids.joined(separator: ", "))" }
+    var tried = [first]
     if let pointer = diffPointer(patch) {
       log.info("\(short, privacy: .public) deletes \(bigONNX, privacy: .public) \(pointer.oid.prefix(16), privacy: .public)")
       return pointer
@@ -280,25 +298,51 @@ public enum LFS {
         log.info("\(short, privacy: .public) merged #\(number, privacy: .public), whose last \(bigONNX, privacy: .public) is \(oid, privacy: .public)")
         return pointer
       }
-      let pullSubjects = patchSubjects(pullPatch).joined(separator: " ")
-      let pullIDs = exportIDs(in: pullSubjects).filter { !ids.contains($0) }
-      if !pullIDs.isEmpty, let pointer = try await exportPointer(ref: ref, ids: pullIDs, subject: pullSubjects, http: http, timeout: timeout) {
-        return pointer
+      if missing == nil {  // an export the subject names and the repo lacks stops the search here too
+        let pullSubjects = patchSubjects(pullPatch).joined(separator: " ")
+        let pullIDs = exportIDsNewestFirst(in: pullSubjects).filter { !ids.contains($0) }
+        let (found, pullMissing) = try await exportPointer(ref: ref, ids: pullIDs, subject: pullSubjects, http: http, timeout: timeout)
+        if let found { return found }
+        tried.append(pullMissing.map { "pull request #\(number) \(notUploaded($0))" } ?? "nor does pull request #\(number)")
       }
-      tried.append("nor does pull request #\(number)")
     }
     throw .registry("\(short) has no \(bigONNX): \(tried.joined(separator: "; ")) (\(JSON.pythonRepr(subject)))")
   }
 
-  /// The ONNX in the first export folder one of `ids` starts, or nil when none does.
-  static func exportPointer(ref: String, ids: [String], subject: String, http: HTTP, timeout: TimeInterval) async throws(RegistryError) -> Pointer? {
+  static func notUploaded(_ export: String) -> String {
+    "names export \(export), which is not in \(drivingModelsRepo) yet"
+  }
+
+  /// Does `subject` name `id` the way comma's model commits name an export:
+  /// the whole uuid, or its first eight and the checkpoint ('8d736683/12864')?
+  /// `\b{id}[-/]`. A bare eight could be any hex word.
+  static func namesExport(_ id: String, in subject: String) -> Bool {
+    var start = subject.startIndex
+    while let found = subject.range(of: id, range: start..<subject.endIndex) {
+      let before = found.lowerBound == subject.startIndex ? nil : subject[subject.index(before: found.lowerBound)]
+      let after = found.upperBound == subject.endIndex ? nil : subject[found.upperBound]
+      let boundary = before.map { !isWordCharacter($0) } ?? true
+      if boundary, after == "-" || after == "/" { return true }
+      start = subject.index(after: found.lowerBound)
+    }
+    return false
+  }
+
+  /// The ONNX in the first export folder one of `ids` starts, and nil; or nil
+  /// and the first id `subject` names as an export that has no folder, where
+  /// the search stops; or nil and nil when no id has a folder.
+  static func exportPointer(ref: String, ids: [String], subject: String, http: HTTP, timeout: TimeInterval) async throws(RegistryError) -> (Pointer?, String?) {
+    guard !ids.isEmpty else { return (nil, nil) }
     let short = ref.prefix(10)
     let folders = try await tree("", http: http, timeout: timeout)
       .filter { $0["type"]?.string == "directory" }
       .compactMap { $0["path"]?.string }
     for export in ids {
       let matches = folders.filter { $0.hasPrefix(export) }
-      if matches.isEmpty { continue }
+      if matches.isEmpty {
+        if namesExport(export, in: subject) { return (nil, export) }
+        continue
+      }
       if matches.count > 1 {
         throw .registry("\(short): \(export) starts \(matches.count) folders in \(drivingModelsRepo)")
       }
@@ -321,9 +365,9 @@ public enum LFS {
         throw .registry("\(path) is not an lfs object")
       }
       log.info("\(short, privacy: .public) names export \(export, privacy: .public): \(path, privacy: .public)")
-      return Pointer(oid: oid, size: size)
+      return (Pointer(oid: oid, size: size), nil)
     }
-    return nil
+    return (nil, nil)
   }
 
   /// `path.rsplit('/', 1)[-1]`.
@@ -361,7 +405,7 @@ public enum LFS {
     let body: JSON = [
       "operation": "download",
       "transfers": ["basic"],
-      "objects": [["oid": .string(pointer.oid), "size": .int(pointer.size)]],
+      "objects": [pointer.json],
     ]
     var request = URLRequest(url: url)
     request.httpMethod = "POST"

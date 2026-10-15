@@ -191,6 +191,27 @@ struct ExtraModelTests {
     #expect(payload.models.count == 13)
   }
 
+  @Test func theListsPinsOverrideTheKeptPointersAndStayOffline() async throws {
+    let tmp = try TemporaryDirectory()
+    let ref = String(repeating: "a", count: 40), other = String(repeating: "c", count: 40)
+    let bad = String(repeating: "b", count: 40), boolSize = String(repeating: "d", count: 40)
+    let right = Pointer(oid: String(repeating: "9", count: 64), size: 792_430_559)
+    let kept: JSONObject = [ref: Pointer(oid: String(repeating: "8", count: 64), size: 792_487_890).json,
+                            other: Pointer(oid: v3OID, size: v3Size).json]
+    tmp.layout.makeRegistryDirectories()
+    try Files.writeJSON(.object(kept), to: tmp.layout.pointersURL)
+    let pins: JSONObject = [ref: right.json, bad: ["oid": "nothex", "size": 1], boolSize: ["oid": .string(right.oid), "size": true]]
+    let extra: JSON = ["bundles": [], "pointers": .object(pins)]
+    _ = await Registry(layout: tmp.layout, session: MockNet(RegistryFixture.catalogRoutes([Catalog.extraURL: .body(extra.data())])).session)
+      .catalog(refresh: true)
+    // kept from now on, with no network
+    let offline = Registry(layout: tmp.layout, session: MockNet().session)
+    #expect(try await offline.resolve(ref: ref) == right)
+    #expect(try await offline.resolve(ref: other) == Pointer(oid: v3OID, size: v3Size))
+    let table = Files.readJSON(tmp.layout.pointersURL)?.object ?? JSONObject()
+    #expect(table[bad] == nil && table[boolSize] == nil)
+  }
+
   @Test func theListIsOnMain() {
     #expect(Catalog.extraURL == "https://raw.githubusercontent.com/zoompilot/jetlink/refs/heads/main/catalog/extra_big_models.json")
   }

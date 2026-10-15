@@ -20,6 +20,28 @@ and a bundle missing one makes it drop the whole list, so copy an existing entry
 | `overrides` | `folder` groups the picker; `lat` and `long` are the model's smoothing, as sunnypilot sets them. |
 | `models` | `[]`. A chestnut has nothing to download, and does not see this list. |
 
-When sunnypilot lists the same commit, its entry wins. When it lists the model
-under another commit, remove ours. Removing an entry moves anyone who picked it
-back to the default model.
+Name a preview after comma's commit, with "Preview" and the commit's date:
+`Mountain Dew Preview (October 08, 2026)`. Don't add version numbers comma
+didn't use. When sunnypilot lists the same commit, its entry wins. When it lists
+the model under another commit, remove ours. Removing an entry moves anyone who
+picked it back to the default model.
+
+## Pinned models
+
+`pointers` pins a commit to the ONNX Jetlink runs for it, overriding what
+Jetlink looked up:
+
+```json
+"pointers": {
+  "<commit>": {"oid": "<the ONNX's SHA-256>", "size": <its bytes>}
+}
+```
+
+Use it when a commit was looked up wrong. Every comma and Jetlink server keeps
+what it looked up for good, so a fix to the lookup alone doesn't reach the ones
+that already have an answer. Each one saves the pins into what it keeps when it
+fetches this list, and keeps them offline after that. A comma on a fork without
+sunnypilot's model manager doesn't fetch this list, so it never gets them. A pin can stay in the list
+indefinitely; removing one only matters for a device that never fetched it.
+Get the values from Hugging Face's listing of the export folder, or
+`jetlink-server models resolve <ref>` on a fixed build.

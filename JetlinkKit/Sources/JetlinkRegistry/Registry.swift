@@ -103,6 +103,7 @@ public final class Registry: Sendable {
         let pinned = try await fetchCatalog(Catalog.url)
         let newer = try await newerCatalogs(after: Catalog.url)
         let extra = try await extraCatalog()
+        keepPins(extra.flatMap(Catalog.pinnedPointers))
         let fresh = JSON.object(Catalog.merge([pinned] + newer + extra))
         let now = Date().timeIntervalSince1970
         raw = fresh
@@ -287,11 +288,23 @@ public final class Registry: Sendable {
     }
   }
 
+  /// The list's pins written over the kept pointers, when one differs:
+  /// `Models.keep_pins`.
+  private func keepPins(_ pins: [(String, Pointer)]) {
+    let known = Dictionary(pointers().map { ($0.ref, $0.pointer) }, uniquingKeysWith: { first, _ in first })
+    let changed = pins.filter { known[$0.0] != $0.1 }
+    if changed.isEmpty { return }
+    savePointers(changed)
+    for (ref, pin) in changed {
+      Registry.log.warning("\(ref.prefix(10), privacy: .public) is pinned to \(pin.oid.prefix(16), privacy: .public)")
+    }
+  }
+
   private func savePointers(_ fresh: [(String, Pointer)]) {
     lock.withLock { _ in
       var known = pointerTable()
       for (ref, pointer) in fresh {
-        known[ref] = ["oid": .string(pointer.oid), "size": .int(pointer.size)]
+        known[ref] = pointer.json
       }
       do {
         try Files.writeJSON(.object(known), to: layout.pointersURL)

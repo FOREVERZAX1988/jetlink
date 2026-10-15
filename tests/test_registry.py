@@ -215,6 +215,14 @@ class TestExtraModels:
     with pytest.raises(NetworkError):
       fetch_catalogs(opener=FakeOpener(self.routes(urllib.error.URLError('down'))))
 
+  def test_the_lists_pins_come_through_and_malformed_ones_do_not(self):
+    from jetlink.registry.catalog import fetch_catalogs
+    good = {'oid': '9' * 64, 'size': 792430559}
+    pins = {'a' * 40: good, 'b' * 40: {'oid': 'nothex', 'size': 1}, 'c' * 40: {'oid': '9' * 64, 'size': True},
+            'd' * 40: {'oid': '9' * 64, 'size': 0}, 'not-a-commit': good, 'e' * 40: 'x'}
+    assert fetch_catalogs(opener=FakeOpener(self.routes({'bundles': [], 'pointers': pins})))['pointers'] == {'a' * 40: good}
+    assert 'pointers' not in fetch_catalogs(opener=FakeOpener(self.routes({'bundles': []})))
+
   def test_the_list_in_this_checkout_is_one_the_comma_can_parse(self):
     """The fields the fork's ModelParser._parse_bundle indexes: one missing and
     the comma drops every catalog it merged this into."""
@@ -225,6 +233,8 @@ class TestExtraModels:
       assert bundle['is_big'] is True and bundle['models'] == []
       assert isinstance(bundle['overrides'], dict) and all(isinstance(v, str) for v in bundle['overrides'].values())
     assert [m.ref for m in parse_catalog(data)] == [b['ref'] for b in sorted(data['bundles'], key=lambda b: -int(b['index']))]
+    from jetlink.registry.catalog import pinned_pointers
+    assert pinned_pointers(data) == data.get('pointers', {}), "every pin in the list is well formed"
 
 
 # --- lfs ---------------------------------------------------------------------
@@ -466,6 +476,43 @@ def test_a_squash_merge_of_a_precompiled_pull_request_follows_the_export_it_name
   routes = {**export_routes(), **compiled_routes(SQUASH, patch_head('Cinque v3 (#38932)'))}
   routes[PULL_PATCH_URL.format(number=38932)] = patch_head('Use f78ed37d for the precompiled eGPU driving model')
   assert fetch_pointer(SQUASH, opener=FakeOpener(routes)) == Pointer(V3_OID, V3_SIZE)
+
+
+# Mountain Dew (#39047) and MD v3 (#39087), as github served them on
+# 2026-10-14. The squash's subject names no export; the pull request's commits
+# name ea1600cb, 870a4823 and 8d736683 in turn, and the last is what shipped.
+MD_REF = '6f4c0faf1f85132734e94aa39c67143f823b9324'
+MD_FOLDER = '8d736683-fed4-4e48-96fd-eae5d9d5bc56'
+MD_POINTER = Pointer('87fe86ca0813c099efddf9173ba503be2e40ea4c5362c36812a44141f4cb07d4', 792430559)
+MD_V3_REF = '1e219d7785cfb7b7343c7f2366347fc86e7ce5f2'
+OLD_MD_FOLDER = '870a4823-d2ec-4b9a-8015-b947e9901fc7'
+
+
+def md_routes(ref: str, patch: str, number: int, folders: list[str]) -> dict:
+  routes = compiled_routes(ref, fixture(patch))
+  routes[PULL_PATCH_URL.format(number=number)] = fixture(f"pull_{number}.patch")
+  routes[DRIVING_MODELS_TREE_URL] = [{'type': 'directory', 'path': f} for f in folders]
+  routes[f"{DRIVING_MODELS_TREE_URL}/{OLD_MD_FOLDER}?recursive=true"] = [onnx_entry(f"{OLD_MD_FOLDER}/12864", oid='c' * 64)]
+  routes[f"{DRIVING_MODELS_TREE_URL}/{MD_FOLDER}?recursive=true"] = [
+    onnx_entry(f"{MD_FOLDER}/12864", oid=MD_POINTER.oid, size=MD_POINTER.size)]
+  return routes
+
+
+def test_a_squash_merge_follows_the_newest_export_its_pull_request_named():
+  opener = FakeOpener(md_routes(MD_REF, 'patch_6f4c0faf.patch', 39047, [OLD_MD_FOLDER, MD_FOLDER, V3_FOLDER]))
+  assert fetch_pointer(MD_REF, opener=opener) == MD_POINTER
+
+
+def test_a_newest_export_not_uploaded_yet_is_not_swapped_for_an_older_one():
+  opener = FakeOpener(md_routes(MD_REF, 'patch_6f4c0faf.patch', 39047, [OLD_MD_FOLDER, V3_FOLDER]))
+  with pytest.raises(RegistryError, match='#39047 names export 8d736683, which is not in commaai/openpilot_driving_models yet'):
+    fetch_pointer(MD_REF, opener=opener)
+
+
+def test_md_v3_waits_for_its_export():
+  opener = FakeOpener(md_routes(MD_V3_REF, 'patch_1e219d77.patch', 39087, [OLD_MD_FOLDER, MD_FOLDER]))
+  with pytest.raises(RegistryError, match='names export 1365126a'):
+    fetch_pointer(MD_V3_REF, opener=opener)
 
 
 def test_an_outage_reading_the_pull_request_is_a_failure():
