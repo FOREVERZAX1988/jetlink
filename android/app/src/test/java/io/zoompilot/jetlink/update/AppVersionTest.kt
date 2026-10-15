@@ -55,6 +55,7 @@ class AppVersionTest {
         assertNull(BuildTag.parse("cn-abc1234"))
         assertNull(BuildTag.parse("0.8.7-1015"))        // missing build number
         assertNull(BuildTag.parse("0.8.7-15-1"))         // day must be MMDD
+        assertNull(BuildTag.parse("v0.8.7-rc1"))         // prerelease suffix, not a build
     }
 
     @Test

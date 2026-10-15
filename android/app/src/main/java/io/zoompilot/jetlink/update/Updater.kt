@@ -64,6 +64,8 @@ data class BuildTag(
 
     companion object {
         private val DATED = Regex("""^v?(\d+)\.(\d+)\.(\d+)-(\d{4})-(\d+)$""")
+        // a bare release tag, with no prerelease suffix: "0.8.7" or "v0.8.7"
+        private val BARE = Regex("""^v?(\d+)\.(\d+)\.(\d+)$""")
 
         fun parse(text: String): BuildTag? {
             val tag = text.trim()
@@ -72,7 +74,10 @@ data class BuildTag(
                 return BuildTag(AppVersion(mj.toInt(), mn.toInt(), pt.toInt()), day.toInt(), n.toInt())
             }
             // a bare release tag: same version, before any dated build of it
-            AppVersion.parse(tag)?.let { return BuildTag(it, 0, 0) }
+            BARE.matchEntire(tag)?.let { m ->
+                val (mj, mn, pt) = m.destructured
+                return BuildTag(AppVersion(mj.toInt(), mn.toInt(), pt.toInt()), 0, 0)
+            }
             return null
         }
     }
