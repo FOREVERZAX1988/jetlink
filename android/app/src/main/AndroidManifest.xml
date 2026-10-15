@@ -43,6 +43,17 @@
              library runs the compiled model through both. -->
         <uses-native-library android:name="libedgetpu_litert.so" android:required="false" />
         <uses-native-library android:name="libedgetpu_util.so" android:required="false" />
+        <!-- The phone's own QNN stack, which some phones keep under /odm: a
+             declaration is how an app's linker namespace is allowed to look
+             outside its own directory at all, and QNN's backend, its Stub, its
+             Prepare and its System library are the four names that have to
+             arrive from one build. The declaration is half of it -- the phone's
+             own public library table is the other half, and the `npu:` report
+             prints both (`HostDiagnostics.qnnNames`). -->
+        <uses-native-library android:name="libQnnHtp.so" android:required="false" />
+        <uses-native-library android:name="libQnnHtpV85Stub.so" android:required="false" />
+        <uses-native-library android:name="libQnnHtpPrepare.so" android:required="false" />
+        <uses-native-library android:name="libQnnSystem.so" android:required="false" />
 
         <activity
             android:name=".MainActivity"

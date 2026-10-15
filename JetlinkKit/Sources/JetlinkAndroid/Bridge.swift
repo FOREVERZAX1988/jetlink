@@ -244,10 +244,47 @@
     /// loads instead of the one beside the app (`backend_path`). Nil keeps the
     /// app's own, which is what every phone and platform ran before, and nil
     /// too on a phone that has no copy of its own to load.
+    ///
+    /// A file is not a path: an app's linker namespace reaches its own
+    /// directory, and the phone's own only for a name the manifest declares
+    /// (`uses-native-library`) *and* the phone's `public.libraries.txt` lists.
+    /// So the path is tried first and the bare name second, and what answered
+    /// is what the report prints (`HostDiagnostics.nameResolution`).
     static func qnnBackend(_ config: [String: Any]) -> String? {
       guard (config["phone_qnn"] as? Bool) ?? false else { return nil }
-      return ["/vendor/lib64/libQnnHtp.so", "/system/lib64/libQnnHtp.so", "/odm/lib64/libQnnHtp.so"].first {
-        FileManager.default.fileExists(atPath: $0)
+      let paths = ["/vendor/lib64/libQnnHtp.so", "/system/lib64/libQnnHtp.so", "/odm/lib64/libQnnHtp.so"]
+      if let opened = paths.first(where: { FileManager.default.fileExists(atPath: $0) && dlopen($0, RTLD_NOW | RTLD_GLOBAL) != nil }) {
+        return opened
+      }
+      return phoneBackendByName()
+    }
+
+    /// The phone's own backend by its bare name, when no path would open: nil
+    /// unless the name answers with a copy that is not the app's own, which is
+    /// the only answer that is the phone's build rather than this app's.
+    static func phoneBackendByName() -> String? {
+      guard dlopen("libQnnHtp.so", RTLD_NOW | RTLD_GLOBAL) != nil else { return nil }
+      let own = HostDiagnostics.nativeDirectory ?? ""
+      return HostDiagnostics.mappedPaths(of: "libQnnHtp.so").first { !$0.hasPrefix(own) }
+    }
+
+    /// The phone's own QNN stack, as this process's namespace answers each name
+    /// the manifest declares: the file the loader mapped for it once the name
+    /// was opened. A name the phone's own directory answers is what the
+    /// declaration and the phone's table buy together; a name only the app's
+    /// own directory answers is the app's own build, whatever the setting says;
+    /// a name nothing answers needs one half or the other.
+    static func phoneByName(_ config: [String: Any]) -> [String] {
+      // The two that decide a pair are opened whatever the setting says, and
+      // the other two only when the phone's own stack is asked for: Prepare is
+      // 88 MB, and a run that wants the app's own QNN has no reason to map it.
+      let names = ((config["phone_qnn"] as? Bool) ?? false) ? HostDiagnostics.qnnNames : ["libQnnHtp.so", "libQnnHtpV85Stub.so"]
+      return names.map { name in
+        guard dlopen(name, RTLD_NOW | RTLD_GLOBAL) != nil else {
+          return "\(name): nothing answers this name -- neither the manifest half nor the phone's table half"
+        }
+        let found = HostDiagnostics.mappedPaths(of: name)
+        return "\(name): \(found.isEmpty ? "opened, and no mapping names it" : found.joined(separator: " and "))"
       }
     }
 
@@ -305,6 +342,11 @@
         // log, not guessed at from three directories of the same file names.
         HostDiagnostics.phoneOwnQnn = (config["phone_qnn"] as? Bool) ?? false
         HostDiagnostics.phoneLibraries = phoneLibraries(config)
+        // After the backend above, never before it: whichever copy the first
+        // open loads is the one every later open by any name or path returns,
+        // so the backend's own open decides the build, and this only says where
+        // the names land.
+        HostDiagnostics.nameResolution = phoneByName(config)
         return OrtBackend(
           profile: profile, preparer: ONNXPreparer(), keepAlive: (config["keep_alive"] as? Bool) ?? true,
           keepCPUWarm: (config["keep_cpu_warm"] as? Bool) ?? false, chip: chip, qnnBackend: phone)

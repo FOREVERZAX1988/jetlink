@@ -262,3 +262,54 @@ the full path of every QNN library the process mapped -- the Stub included.
 QNN's `libQnnHtp.so` opens its Stub by name, so a phone's own backend beside
 the app's Stub is a pair from two builds; that section, not the setting, says
 whether that happened.
+
+## Two builds are not one: what each file says of itself (2026-10-15)
+
+A phone that keeps its own QNN under `/odm` has a **release** of its own, and the
+app has another. On the phone this was written for:
+
+| file | release | NPU-scheduler interface |
+| --- | --- | --- |
+| `/odm/lib64/libQnnHtp.so` | `v2.48.5.260901221701` | no |
+| `/odm/lib64/libQnnHtpV85Stub.so` | `v2.48.5.260901221701` | no |
+| `/odm/lib/rfsa/adsp/libQnnHtpV85Skel.so` | `v2.48.5.260901221701` | no |
+| the app's `libQnnHtp.so` / `V85Stub.so` | `v2.51.40.260930230134` | **yes** (`qnn::IScheduler`, `NpuSchedulerFactory`) |
+
+Both are complete V85 stacks, five files each, with the same file names and no
+byte the same. The two facts above are the ones `adb` used to be needed for --
+the release, and whether the build carries the NPU-scheduler interface that a
+phone's FastRPC names when it refuses a handle *without priority token*. The
+`npu:` report now reads them out of the files themselves (string runs of the
+form `v<version>.<build stamp>`, and `qnn::IScheduler`'s mangled name), so a
+log from a phone with no `adb` says what the two builds are.
+
+## A declared name is half a name (2026-10-15)
+
+`uses-native-library` is how an app's linker namespace is allowed to look
+outside its own directory, and the manifest declares QNN's four names
+(`libQnnHtp.so`, `libQnnHtpV85Stub.so`, `libQnnHtpPrepare.so`,
+`libQnnSystem.so`). The other half is the phone's own: Android resolves a
+declared name against `/system/etc`, `/vendor/etc` and `/odm/etc`
+`public.libraries.txt`, and a name no table lists is a name no declaration
+reaches -- the app's own copy answers it, or nothing does.
+
+So the backend is tried by path first and by bare name second (`Host.qnnBackend`
+/ `phoneBackendByName`), and the report says what each attempt answered:
+
+```
+the phone's own QNN, by name, as this namespace answers it:
+  libQnnHtp.so: /data/app/~~.../io.zoompilot.jetlink.android-.../lib/arm64/libQnnHtp.so
+  libQnnHtpV85Stub.so: /data/app/~~.../lib/arm64/libQnnHtpV85Stub.so
+the public library tables, the other half of a declared name:
+  /system/etc/public.libraries.txt: 41 names; of QNN: none
+  /vendor/etc/public.libraries.txt: 3 names; of QNN: none
+  /odm/etc/public.libraries.txt: not there
+  of the declared names, a phone table lists: none, so no declaration reaches the phone's own QNN
+```
+
+Every name landing under `/data/app` is the app's own copy answering its own
+declaration: the manifest half is in place and the phone's half is missing, and
+no setting in the app can supply it.
+
+The first section is the answer to *can this app reach the phone's own build at
+all*; the second is why, and neither is visible in a crash log.

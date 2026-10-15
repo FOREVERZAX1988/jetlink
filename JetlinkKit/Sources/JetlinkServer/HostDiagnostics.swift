@@ -47,6 +47,18 @@ package enum HostDiagnostics {
   /// app's Stub of the same name (`Host.phoneLibraries`).
   nonisolated(unsafe) package static var phoneLibraries: [String] = []
 
+  /// The QNN library names the Android manifest declares
+  /// (`uses-native-library`): the names an app's linker namespace is allowed to
+  /// look for outside the app's own directory. The report prints what each one
+  /// answered, because the declaration is half of the pair -- the phone's own
+  /// `public.libraries.txt` is the other half, and it is the phone that decides
+  /// whether a name reaches `/odm/lib64` or this app's own directory.
+  package static let qnnNames = ["libQnnHtp.so", "libQnnHtpV85Stub.so", "libQnnHtpPrepare.so", "libQnnSystem.so"]
+
+  /// What each of those names answered this run, in order, set by the Android
+  /// app before the session is made (`Host.phoneByName`).
+  nonisolated(unsafe) package static var nameResolution: [String] = []
+
   /// Writes `reason`, then what this machine says about its NPU runtime.
   ///
   /// For the engine's thread, where a second costs nothing, and never for a
@@ -79,6 +91,7 @@ package enum HostDiagnostics {
     private static let spacing: TimeInterval = 60
     /// One `ls -l` per directory per `spacing`, with the time it was read.
     nonisolated(unsafe) private static var listings: [String: (at: Date, lines: [String])] = [:]
+    nonisolated(unsafe) private static var facts: [String: (at: Date, line: String)] = [:]
 
     /// The app's own directory of libraries, as the Android app names it
     /// (`ApplicationInfo.nativeLibraryDir`), handed over at start. A probe
@@ -169,6 +182,9 @@ package enum HostDiagnostics {
       }
       lines.append(contentsOf: section("where the Skel is looked for, ADSP_LIBRARY_PATH, in order", skelSearch(search)))
       lines.append(contentsOf: section("the pair this run is set to use, and the phone's own", pairInForce(search, arch: arches.last)))
+      lines.append(contentsOf: section("the phone's own QNN, by name, as this namespace answers it", nameResolution))
+      lines.append(contentsOf: section("the QNN builds in question, as the files say of themselves", buildFacts(arch: arches.last)))
+      lines.append(contentsOf: section("the public library tables, the other half of a declared name", publicTables()))
       lines.append(contentsOf: section("the app's own QNN, hashed", hashes(mapped)))
       let system =
         listing("/vendor/lib64") + listing("/vendor/lib") + listing("/system/lib64")
@@ -351,6 +367,131 @@ package enum HostDiagnostics {
         "/vendor/lib64", "/system/lib64", "/odm/lib64", "/vendor/lib",
         "/odm/lib/rfsa/adsp", "/vendor/lib/rfsa/adsp", "/vendor/lib/rfsa/cdsp", "/system/vendor/lib/rfsa/adsp",
       ]
+    }
+
+    /// Where a library name resolved: every file this process has mapped for
+    /// it, read after `dlopen` answered the name. Two paths for one name is the
+    /// picture to look for here -- the app's own build and the phone's own, in
+    /// one process, is the mismatch that takes no node of any model -- and one
+    /// path under the app's own directory for a name the phone was supposed to
+    /// answer is the other: the declaration and the phone's table did not meet.
+    package static func mappedPaths(of name: String) -> [String] {
+      let here = selfMaps()
+      let lines = here.isEmpty ? shell(mapsCommand) : here
+      return lines.filter { ($0 as NSString).lastPathComponent == name }
+    }
+
+    /// The phone's own QNN and this app's own, each read as its file says of
+    /// itself: the release it is (`v2.48.5.260901221701`) and whether it
+    /// carries the NPU-scheduler interface (`qnn::IScheduler`). Those are the
+    /// two things a pasted log otherwise cannot say -- `adb` reads them, and
+    /// the report is what a phone with no `adb` has instead -- and they are
+    /// what a phone whose FastRPC refuses a handle "without priority token" is
+    /// read against: a vendor's build older than that interface beside a
+    /// library that has it is two builds of one name, and no setting mixes them
+    /// into a pair that runs.
+    private static func buildFacts(arch: String?) -> [String] {
+      let names = ["libQnnHtp.so"] + (arch.map { ["libQnnHtp\($0)Stub.so", "libQnnHtp\($0)Skel.so"] } ?? [])
+      var directories = ownDirectories() + (appDirectory(mappedLibraries()).map { [$0] } ?? [])
+      var seen: Set<String> = []
+      directories = directories.filter { seen.insert($0).inserted }
+      var lines: [String] = []
+      for directory in directories {
+        for name in names where FileManager.default.fileExists(atPath: "\(directory)/\(name)") {
+          lines.append(fact("\(directory)/\(name)"))
+        }
+      }
+      guard !lines.isEmpty else {
+        return ["no \(names.joined(separator: " or ")) in any of: \(directories.joined(separator: " "))"]
+      }
+      return lines
+    }
+
+    /// One library file as one line: where it is, how large it is, the release
+    /// it says it is, and whether it carries the scheduler interface. Read once
+    /// a minute per file, as the directory listings are: they do not change
+    /// inside one, and a report follows its predecessor by seconds.
+    private static func fact(_ path: String) -> String {
+      if let held = facts[path], Date().timeIntervalSince(held.at) < spacing { return held.line }
+      let size = ((try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? NSNumber)?.intValue ?? 0
+      let read = scan(path)
+      let release = read.release.map { "QNN \($0)" } ?? "no release string in it"
+      let line = "\(path)  \(size) B  \(release)  NPU-scheduler interface: \(read.scheduler ? "yes" : "no")"
+      facts[path] = (at: Date(), line: line)
+      return line
+    }
+
+    /// A library file, read as what it says about itself: the first string in
+    /// it of the form `v2.51.40.260930230134` -- a version ending in a build
+    /// stamp, which is what tells a QNN release from every other dotted number
+    /// a library holds -- and whether `qnn::IScheduler`'s mangled name is in
+    /// it. Read here, in this process, through Foundation: a phone carries no
+    /// `strings`. Only a file of 16 MiB or less is read at all, QNN's own
+    /// Prepare being 88 MB and its release the one line of it nobody needs.
+    private static func scan(_ path: String, cap: Int = 16 << 20) -> (release: String?, scheduler: Bool) {
+      let size = ((try? FileManager.default.attributesOfItem(atPath: path))?[.size] as? NSNumber)?.intValue ?? 0
+      guard size > 0, size <= cap, let data = FileManager.default.contents(atPath: path) else { return (nil, false) }
+      var release: String?
+      var scheduler = false
+      var run: [UInt8] = []
+      func examine() {
+        guard run.count >= 6 else { return }
+        let text = String(decoding: run, as: UTF8.self)
+        if text.contains("IScheduler") || text.contains("NpuSchedulerFactory") { scheduler = true }
+        if release == nil, let found = releaseToken(text) { release = found }
+      }
+      for byte in data {
+        if byte >= 0x20, byte < 0x7F {
+          run.append(byte)
+          // A printable region longer than this is examined as it goes: no
+          // string of interest is 64 KiB long, and the memory is kept small.
+          if run.count >= 64 << 10 {
+            examine()
+            run = []
+          }
+        } else {
+          examine()
+          run = []
+        }
+      }
+      examine()
+      return (release, scheduler)
+    }
+
+    /// `v2.51.40.260930230134`: a version whose last part is a build stamp of
+    /// eight digits or more, which no other dotted number in a library is.
+    private static func releaseToken(_ text: String) -> String? {
+      guard text.hasPrefix("v") else { return nil }
+      let parts = text.dropFirst().split(separator: ".", omittingEmptySubsequences: false)
+      guard (4...5).contains(parts.count), let stamp = parts.last, stamp.count >= 8,
+        parts.allSatisfy({ !$0.isEmpty && $0.allSatisfy { $0.isNumber } })
+      else { return nil }
+      return text
+    }
+
+    /// The tables Android resolves a declared name against: a name in the
+    /// manifest reaches the phone's own directories only when the phone's own
+    /// `public.libraries.txt` lists it, so this prints what each table holds and
+    /// then the answer -- which of the declared names a table has, if any.
+    private static func publicTables() -> [String] {
+      let paths = ["/system/etc/public.libraries.txt", "/vendor/etc/public.libraries.txt", "/odm/etc/public.libraries.txt"]
+      var lines: [String] = []
+      var tables: [String: [String]] = [:]
+      for path in paths {
+        guard let text = try? String(contentsOfFile: path, encoding: .utf8) else {
+          lines.append("\(path): not there")
+          continue
+        }
+        let names = text.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+          .filter { !$0.isEmpty && !$0.hasPrefix("#") }
+        tables[path] = names
+        let qnn = names.filter { $0.lowercased().contains("qnn") }
+        lines.append("\(path): \(names.count) names; of QNN: \(qnn.isEmpty ? "none" : qnn.joined(separator: " "))")
+      }
+      let declared = qnnNames.filter { name in tables.values.contains { $0.contains(name) } }
+      let matched = declared.isEmpty ? "none, so no declaration reaches the phone's own QNN" : declared.joined(separator: " ")
+      lines.append("of the declared names, a phone table lists: \(matched)")
+      return lines
     }
 
     /// The HTP architectures the app's own QNN carries, which is every arch an
