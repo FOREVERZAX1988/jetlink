@@ -150,6 +150,14 @@ class LoadTest(OpenpilotTest):
     self.init_device.assert_not_called()
     self.assertTrue(self.op.log.has('no usable gadget (no configfs), staying on the small model'))
 
+  def test_over_wifi_no_gadget_is_needed(self):
+    self.op.set_mode('wifi')
+    with mock.patch.object(self.jl, 'enabled', return_value=True), \
+         mock.patch.object(gadget, 'link_configured', return_value=False) as link_configured, \
+         mock.patch.object(self.parts.warps, 'built', return_value=True):
+      self.assertTrue(self.jl.prepare())
+    link_configured.assert_not_called()
+
   def test_the_link_off_says_no_before_any_setup(self):
     with mock.patch.object(self.jl, 'enabled', return_value=False), \
          mock.patch.object(gadget, 'link_configured') as link_configured:
@@ -228,6 +236,22 @@ class TestTheJoinFactory(OpenpilotTest):
     self.join()
     link, background = self.present.call_args.args
     self.assertIs(background, background_thread)
+
+  def test_on_wifi_the_lossless_warp_is_loaded_when_the_build_made_one(self):
+    from jetlink.openpilot import link
+    self.parts.op.set_mode('wifi')
+    with mock.patch.object(self.parts.warps, 'is_cached', return_value=True) as cached, \
+         mock.patch.object(link, 'Link', wraps=link.Link) as made:
+      self.join()
+    cached.assert_called_once_with(1928, 1208, 512, 256, lossless=True)
+    self.loaded.assert_called_once_with(1928, 1208, 512, 256, lossless=True)
+    self.assertTrue(made.call_args.kwargs['wifi'])
+
+  def test_on_wifi_without_a_lossless_warp_the_plain_one_sends_raw(self):
+    self.parts.op.set_mode('wifi')
+    with mock.patch.object(self.parts.warps, 'is_cached', return_value=False):
+      self.join()
+    self.loaded.assert_called_once_with(1928, 1208, 512, 256, lossless=False)
 
   def test_without_a_record_it_is_this_devices_geometry(self):
     self.join()
