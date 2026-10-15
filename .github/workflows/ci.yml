@@ -394,6 +394,57 @@ jobs:
         # UseSynthesizedInitializer, because the event structs keep their
         # memberwise initializers on purpose (01-contracts.md section 7).
 
+  linux-server:
+    name: Linux server (${{ matrix.flavor }})
+    # The release tarballs a Jetson or Linux PC installs, built the one way
+    # scripts/build-linux.sh builds them (same as release.yml), so a cn push
+    # publishes a server for every app prerelease.
+    needs: changes
+    if: needs.changes.outputs.apps == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # the Jetson build (TensorRT 10) and the PC build (TensorRT 11.3),
+          # native runners so the binary runs for the smoke check
+          - {flavor: linux-aarch64, runner: ubuntu-22.04-arm}
+          - {flavor: linux-x86_64, runner: ubuntu-22.04}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Cache the pinned headers and onnxruntime
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/jetlink-build
+          key: jetlink-server-cn-${{ matrix.flavor }}-${{ hashFiles('scripts/build-linux.sh') }}
+
+      - name: Build the server tarball
+        run: scripts/build-linux.sh "${{ matrix.flavor }}"
+        # dist/jetlink-server-<version>-<flavor>.tar.gz and its .sha256
+
+      - name: Check the tarball
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum -c jetlink-server-*-"${{ matrix.flavor }}".tar.gz.sha256)
+          tar -xzf dist/jetlink-server-*-"${{ matrix.flavor }}".tar.gz -C "$RUNNER_TEMP"
+          cd "$RUNNER_TEMP"/jetlink-server-*-"${{ matrix.flavor }}"
+          [ "$(bin/jetlink-server --version)" = "$(cat VERSION)" ]
+          bin/jetlink-server serve --help >/dev/null
+          if bin/jetlink-server backends --backend trt; then
+            echo "error: trt passed on a runner without a GPU" >&2
+            exit 1
+          fi
+
+      - name: Upload the server tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-server-${{ matrix.flavor }}
+          path: dist/jetlink-server-*-${{ matrix.flavor }}.tar.gz*
+          retention-days: 14
+
   cn-prerelease:
     name: cn prerelease
     # Every push to the cn branch publishes its Android and macOS builds as a
@@ -401,7 +452,7 @@ jobs:
     # a v* tag (the GitHub releases list, not the "latest" endpoint, which
     # skips prereleases).
     if: github.ref == 'refs/heads/cn'
-    needs: [android, app]
+    needs: [android, app, linux-server]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -421,6 +472,13 @@ jobs:
           name: Jetlink-unsigned
           path: dist
 
+      - name: Download the Linux servers
+        uses: actions/download-artifact@v4
+        with:
+          pattern: linux-server-*
+          path: dist
+          merge-multiple: true
+
       - name: Publish the cn prerelease
         env:
           GH_TOKEN: ${{ github.token }}
@@ -429,17 +487,20 @@ jobs:
           set -euo pipefail
           # The tag is "<appVersion>-<MMDD>-<n>", the same one the APK was
           # built with. Same-day reruns replace the files; a new push gets the
-          # next n.
-          NOTES="Builds of the cn branch at ${GITHUB_SHA::7} (tag $TAG), for testing. The Android APK is signed with the release key, so it installs over an earlier build; the app's updater compares this tag."
-          APK="$(find dist -name '*.apk' -print -quit)"
-          APP="$(find dist -name 'Jetlink-unsigned.zip' -print -quit)"
+          # next n. One prerelease carries the APK, the macOS app and both
+          # Linux server tarballs, as a v* release does.
+          NOTES="Builds of the cn branch at ${GITHUB_SHA::7} (tag $TAG), for testing. The Android APK is signed with the release key, so it installs over an earlier build; the app's updater compares this tag. Jetson/Linux servers are the jetlink-server-* tarballs."
+          APK="$(find dist -maxdepth 2 -name '*.apk' -print -quit)"
+          APP="$(find dist -maxdepth 2 -name 'Jetlink-unsigned.zip' -print -quit)"
+          SERVERS=( $(find dist -maxdepth 2 -name 'jetlink-server-*.tar.gz' -print) )
           [ -n "$APK" ] || { echo "error: no APK in dist" >&2; exit 1; }
           [ -n "$APP" ] || { echo "error: no macOS zip in dist" >&2; exit 1; }
+          [ "${#SERVERS[@]}" -ge 2 ] || { echo "error: expected two Linux server tarballs, got ${#SERVERS[@]}" >&2; exit 1; }
           if gh release view "$TAG" >/dev/null 2>&1; then
             # a rerun of the same build: replace the files, keep the release
-            gh release upload "$TAG" --clobber "$APK" "$APP"
+            gh release upload "$TAG" --clobber "$APK" "$APP" "${SERVERS[@]}"
           else
             gh release create "$TAG" --prerelease --title "Jetlink cn $TAG" \
-              --notes "$NOTES" --target "$GITHUB_SHA" "$APK" "$APP"
+              --notes "$NOTES" --target "$GITHUB_SHA" "$APK" "$APP" "${SERVERS[@]}"
           fi
 
