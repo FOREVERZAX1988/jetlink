@@ -196,8 +196,10 @@ struct ExtraModelTests {
     let ref = String(repeating: "a", count: 40), other = String(repeating: "c", count: 40)
     let bad = String(repeating: "b", count: 40), boolSize = String(repeating: "d", count: 40)
     let right = Pointer(oid: String(repeating: "9", count: 64), size: 792_430_559)
-    let kept: JSONObject = [ref: Pointer(oid: String(repeating: "8", count: 64), size: 792_487_890).json,
-                            other: Pointer(oid: v3OID, size: v3Size).json]
+    let kept: JSONObject = [
+      ref: Pointer(oid: String(repeating: "8", count: 64), size: 792_487_890).json,
+      other: Pointer(oid: v3OID, size: v3Size).json,
+    ]
     tmp.layout.makeRegistryDirectories()
     try Files.writeJSON(.object(kept), to: tmp.layout.pointersURL)
     let pins: JSONObject = [ref: right.json, bad: ["oid": "nothex", "size": 1], boolSize: ["oid": .string(right.oid), "size": true]]
