@@ -46,6 +46,11 @@ struct SettingsScreen: View {
           Text("Changing the processor prepares models again.")
         }
         Section {
+          Picker("Appearance", selection: $settings.appearance) {
+            Text("System").tag(AppearanceChoice.system)
+            Text("Light").tag(AppearanceChoice.light)
+            Text("Dark").tag(AppearanceChoice.dark)
+          }
           Toggle("Keep Screen On", isOn: $settings.keepScreenOn)
         } header: {
           Text("Display")

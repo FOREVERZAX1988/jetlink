@@ -29,6 +29,7 @@ struct RootView: View {
         SettingsScreen()
       }
     }
+    .preferredColorScheme(app.settings.appearance.colorScheme)
     .tabBarMinimizeBehavior(.onScrollDown)
     .tabViewBottomAccessory(isEnabled: tab != .status) {
       StatusAccessory(state: app.status)
