@@ -151,3 +151,43 @@ wants one build for all three; if the device still refuses the model with the
 V85 Stub in place, the next step is that same QAIRT build's `libQnnHtp.so`,
 `libQnnHtpPrepare.so` and `libQnnSystem.so` (not the pair alone), and the
 `npu:` lines name the version that answered.
+
+## The matched set, and the release that carries it
+
+Taken the next day (2026-10-15): the trio the AAR supplies was replaced by the
+same QAIRT build's, so the Stub, its Skel, the backend and the context
+preparer are all 2.51.40.260930. The rest of the archive is byte-identical to
+the APK it was made from, so a Hexagon up to V81 keeps the pair it had: the
+V68 to V81 Stubs and Skels are still the AAR's, beside a 2.51.40 backend.
+
+| file | bytes | SHA-256 |
+| --- | --- | --- |
+| `libQnnHtp.so` | 4,158,272 | `aaaf6f963ff6d87db516b231182b9be68893fe58498ce510f1cb4ad0c95df0ef` |
+| `libQnnHtpPrepare.so` | 88,234,712 | `5d6fa39ff1af44e61fa7b57c047b0ad8c132e7185bcb7a8abe4fec348f4a7c56` |
+| `libQnnSystem.so` | 4,125,232 | `199371bf2d3e61188bdfd19fbc6c34273d53ba11794444d85ef60e482807ce54` |
+
+Qualcomm's license keeps these libraries inside an app, so the set is
+published as an APK rather than committed: `app-release-v85matched.apk`
+(112,698,391 B,
+`fb53d34d9dba883376c71e9e024cbd1ee8607467bb6dc28b17f6225333f0f895`, signed
+with the release key) sits beside the CI build's `app-release.apk` on the
+`cn-204f17c` release, whose own APK is untouched. Its `BUILD_TAG` is
+`cn-204f17c`, the tag it is published under, so the app's updater reads it as
+current rather than as an update always one behind. The pair's hashes above
+are unchanged: this APK carries the pair the commit already recorded.
+
+Two details of those bytes:
+
+- The Skel in a packaged APK is not the file the SDK hands over. AGP processes
+  the `jniLibs` ones, and the copy here differs from the repository's
+  `libQnnHtpV85Skel.so` in 503 bytes -- its trailing signature region zeroed,
+  the shape the AAR's own Skels have. The checkout's file hashes
+  `b06247fa38ffad5b8c55a83ff7d4b5500a69282944c0942253fb57b38eaf6b40`; a phone
+  that refuses the model with the matched set in place has that verbatim copy
+  to try before doubting the build.
+- The CI releases are signed with a debug key a runner generates, a different
+  one each time (`.github/workflows/release.yml`), where this APK and the
+  other hand-built ones share the release key (`043da762...`).
+
+A `README.txt` beside the APK on the release records the same hashes, the base
+it was made from and the commands that made it.
