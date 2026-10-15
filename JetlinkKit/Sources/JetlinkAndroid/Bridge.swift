@@ -181,11 +181,20 @@
         // build's Skel the phone's Hexagon is handed -- and the app's own Stub
         // is the build the Skel has to agree with.
         //
-        // *Phone's Own QNN* (the settings' developer section) puts the phone's
-        // own DSP directories first instead: the Skel its vendor signed for
-        // this Hexagon, for a phone whose DSP will not take the app's. The
-        // `npu:` report prints the order either way.
-        let system = "/system/lib/rfsa/adsp;/system/vendor/lib/rfsa/adsp;/dsp"
+        // *Phone's Own QNN* (the settings' developer section) puts these
+        // directories first instead: the Skel its vendor signed for this
+        // Hexagon, for a phone whose DSP will not take the app's. The `npu:`
+        // report prints the order either way.
+        //
+        // Every directory a phone has been seen to keep a Skel in, not only
+        // the older /system ones: the phone this was written for keeps the
+        // vendor's whole V85 set under /odm -- the Skel in
+        // /odm/lib/rfsa/adsp, which no /system path reaches -- and a DSP
+        // handed none of its own falls back to the app's, which is the pair
+        // this setting is turned on to stop using.
+        let system =
+          "/system/lib/rfsa/adsp;/system/vendor/lib/rfsa/adsp;/vendor/lib/rfsa/adsp;"
+          + "/vendor/lib/rfsa/cdsp;/odm/lib/rfsa/adsp;/dsp"
         let phoneOwn = (config["phone_qnn"] as? Bool) ?? false
         setenv("ADSP_LIBRARY_PATH", phoneOwn ? "\(system);\(dir)" : "\(dir);\(system)", 1)
         // And for the `npu:` report, which cannot find the directory itself:
