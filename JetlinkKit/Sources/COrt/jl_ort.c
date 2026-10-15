@@ -136,8 +136,13 @@ char *jl_session_create(jl_env *env, const char *model_path, const char *provide
   TRY(api()->CreateSessionOptions(&so));
   char *error = take(api()->SetSessionGraphOptimizationLevel(so, ORT_ENABLE_ALL));
   if (error == NULL) {
-    // errors only: the CoreML partitioner is chatty
-    error = take(api()->SetSessionLogSeverityLevel(so, 3));
+    // A QNN session keeps onnxruntime's own words: QNN's reason for taking no
+    // node of a graph is one it says below an error -- a Stub it cannot open,
+    // a Skel the DSP will not take, a backend that is not its Stub's build --
+    // and the `npu:` report reads them out of the phone's log. The CoreML
+    // partitioner is chatty, so an Apple session keeps errors alone.
+    int severity = provider != NULL && strcmp(provider, "QNN") == 0 ? 1 : 3;
+    error = take(api()->SetSessionLogSeverityLevel(so, severity));
   }
   // One thread each way, and none that spin between frames: the CPU's share
   // of an accelerator's session is a couple of nodes, and a pool spinning for
