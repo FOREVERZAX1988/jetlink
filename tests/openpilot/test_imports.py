@@ -25,6 +25,7 @@ from pathlib import Path
 import pytest
 
 import jetlink.openpilot
+from jetlink.openpilot.testing import HEAVY_JETLINK
 
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGE = ROOT / 'jetlink'
@@ -37,9 +38,6 @@ MODULES = sorted({'jetlink.openpilot', *(m.name for m in pkgutil.walk_packages(j
 OWNER_PATH = ('jetlink.openpilot.owner', 'jetlink.openpilot', 'jetlink.openpilot.interface', 'jetlink.openpilot.settings',
               'jetlink.comma.owner', 'jetlink.comma.gadget', 'jetlink.comma.lending', 'jetlink.comma.port',
               'jetlink.comma.root', 'jetlink.transport.ffs')
-# jetlink's own heavy half, which the owner must not reach either: numpy, and
-# urllib with ssl and email behind it
-HEAVY_JETLINK = ('jetlink.client', 'jetlink.spec', 'jetlink.queues', 'jetlink.registry')
 
 BLOCKER = '''
 import importlib, json, sys
@@ -92,6 +90,8 @@ def test_the_owner_path_is_the_standard_library_and_jetlink():
   assert foreign == [], f"the owner's path loads {foreign}; it stays resident for the whole drive"
   heavy = sorted(m for m in loaded if m.startswith(HEAVY_JETLINK))
   assert heavy == [], f"the owner's path loads jetlink's heavy half: {heavy}"
+  # the kit is the fork's tests', never a drive's
+  assert 'jetlink.openpilot.testing' not in loaded
 
 
 HEAP = '''

@@ -13,6 +13,9 @@ cleared JetlinkSpec on a comma once when a suite ran on the device.
 
 The module is also an adapter module, adapter() and owner_config(), for the
 entry points that take --adapter; JETLINK_FAKE_ROOT says where its files go.
+Its top level is the standard library and jetlink's light half, as a real
+one's must be (testing.check_adapter holds it to that): numpy is imported where
+it is used.
 """
 from __future__ import annotations
 
@@ -21,12 +24,12 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 from unittest import mock
 
-import numpy as np
-
 from jetlink.openpilot.interface import MODES, Keys, ModelFace, OwnerConfig
+# one copy, published for forks; their names here are the ones the tests use
+from jetlink.openpilot.testing import FakeDevice, FakeTensor, RecordingLog, fake_jit, fake_tinygrad  # noqa: F401
 
 # the fork's names, so a log line or an assertion reads as it would on a comma
 KEYS = Keys(link='JetlinkLink', offroad='IsOffroad', progress='AcceleratorProgress', spec='JetlinkSpec',
@@ -36,46 +39,6 @@ CHESTNUT_IDS = frozenset({(0xADD1, 0x0001), (0x3801, 0x0001), (0x174C, 0x2464), 
 # (cam_w, cam_h, model_w, model_h): a comma 3X, and a comma four
 TICI = (1928, 1208, 512, 256)
 MICI = (1344, 760, 512, 256)
-
-
-class RecordingLog:
-  """cloudlog's face, keeping every line: (level, message with its arguments)."""
-
-  def __init__(self):
-    self.records: list[tuple[str, str]] = []
-
-  def _add(self, level: str, msg, *args, **kwargs) -> None:
-    text = str(msg)
-    if args:
-      try:
-        text = text % args
-      except (TypeError, ValueError):
-        text = f"{text} {args}"
-    self.records.append((level, text))
-
-  def debug(self, msg, *args, **kwargs):
-    self._add('debug', msg, *args)
-
-  def info(self, msg, *args, **kwargs):
-    self._add('info', msg, *args)
-
-  def warning(self, msg, *args, **kwargs):
-    self._add('warning', msg, *args)
-
-  def error(self, msg, *args, **kwargs):
-    self._add('error', msg, *args)
-
-  def exception(self, msg, *args, **kwargs):
-    self._add('exception', msg, *args)
-
-  def critical(self, msg, *args, **kwargs):
-    self._add('critical', msg, *args)
-
-  def lines(self, level: str | None = None) -> list[str]:
-    return [text for lvl, text in self.records if level is None or lvl == level]
-
-  def has(self, fragment: str, level: str | None = None) -> bool:
-    return any(fragment in text for text in self.lines(level))
 
 
 class FakeParser:
@@ -271,26 +234,6 @@ class OpenpilotTest(unittest.TestCase):
     return p.start()
 
 
-# -- tinygrad, over numpy -------------------------------------------------------
-# The fork's tinygrad is not jetlink's to install. What jetlink calls of it is
-# small, and these stand-ins do it with numpy; the fork's tests run the real one.
-
-class FakeTensor:
-  def __init__(self, data=None, device=None, dtype=None):
-    self.array = np.asarray(data) if data is not None else np.zeros(0)
-    self.device = device
-
-  def realize(self, *others):
-    return self
-
-  def assign(self, value):
-    self.array[...] = value
-    return self
-
-  def numpy(self):
-    return self.array
-
-
 # -- a fork's small model, of each shape jetlink resets ---------------------------
 # Each builder returns the model, the buffers its reset must zero in place,
 # and the ones it must leave alone; all start as ones.
@@ -306,12 +249,14 @@ class SmallModel:
 
 
 def queue(device='CPU'):
+  import numpy as np
   return FakeTensor(np.ones((4, 8), np.float32), device=device)
 
 
 def starpilot():
   """StarPilot's CatalogModelState: GPU and NPY tensors and numpy views, and
   none of state_pairs, packed_input, lat_delay, desire_key or numpy_inputs."""
+  import numpy as np
   m = SmallModel(input_queues={'img_q': queue(), 'feat_q': queue(), 'npy_inputs': queue('NPY')},
                  npy={'desire': np.ones(8, np.float32), 'traffic_convention': np.ones(2, np.float32)},
                  prev_desire=np.ones(8, np.float32))
@@ -321,6 +266,7 @@ def starpilot():
 
 def stock():
   """Upstream modeld's ModelState: recurrent state and one packed upload, no lat_delay."""
+  import numpy as np
   packed = np.ones(16, np.float32)
   m = SmallModel(input_queues={'state_img_q': queue(), 'state_feat_q': queue(), 'desire': queue()},
                  state_pairs={'state_img_q': 'next_state_img_q', 'state_feat_q': 'next_state_feat_q'},
@@ -332,6 +278,7 @@ def stock():
 
 def v2_native():
   """A modeld_v2 native bundle: its adapter keeps stock modeld's layout."""
+  import numpy as np
   packed = np.ones(16, np.float32)
   adapter = SimpleNamespace(is_native=True, input_queues={'state_img_q': queue(), 'desire': queue()},
                             state_pairs={'state_img_q': 'next_state_img_q'}, packed_input=packed)
@@ -343,6 +290,7 @@ def v2_native():
 
 def v2_legacy():
   """A modeld_v2 legacy bundle: GPU history queues, an NPY tensor, numpy inputs."""
+  import numpy as np
   packed = np.ones(16, np.float32)
   adapter = SimpleNamespace(is_native=False, input_queues={'img_q': queue(), 'packed_npy_inputs': queue('NPY')},
                             numpy_inputs={'desire': packed[:8], 'rest': packed[8:]})
@@ -353,32 +301,3 @@ def v2_legacy():
 
 
 SHAPES = (starpilot, stock, v2_native, v2_legacy)
-
-
-class FakeDevice:
-  DEFAULT = 'CPU'
-
-
-def fake_jit(fn=None, prune=False):
-  """TinyJit as a decorator or a wrapper: the function as it is."""
-  if fn is None:
-    return lambda f: f
-  return fn
-
-
-def fake_tinygrad(get_worker_pool=None) -> dict[str, ModuleType]:
-  """sys.modules entries for what jetlink imports of tinygrad; patch them in
-  with mock.patch.dict(sys.modules, fake_tinygrad())."""
-  def module(name, **attrs):
-    m = ModuleType(name)
-    m.__dict__.update(attrs)
-    return m
-  return {
-    'tinygrad': module('tinygrad', Tensor=FakeTensor, TinyJit=fake_jit, Device=FakeDevice),
-    'tinygrad.tensor': module('tinygrad.tensor', Tensor=FakeTensor),
-    'tinygrad.device': module('tinygrad.device', Device=FakeDevice),
-    'tinygrad.engine': module('tinygrad.engine'),
-    'tinygrad.engine.jit': module('tinygrad.engine.jit', TinyJit=fake_jit),
-    'tinygrad.engine.worker': module('tinygrad.engine.worker',
-                                     get_worker_pool=get_worker_pool or mock.Mock(name='get_worker_pool')),
-  }
