@@ -22,7 +22,6 @@ inside the function that needs it.
 """
 from __future__ import annotations
 
-import contextlib
 import ctypes
 import pickle
 from pathlib import Path
@@ -37,13 +36,21 @@ COHERENT_WRITEBACK = (1 << 31) | (3 << 26)
 
 
 def init_device(log) -> None:
-  """Bring the GPU up now, on the caller's thread.
+  """Bring the GPU up now, on the caller's thread, and turn tinygrad's
+  compile pool off for the process.
 
   tinygrad initialises the device on its first kernel run and spawns a libusb
   event thread doing it. A thread created after config_realtime_process(7, 54)
   inherits SCHED_FIFO 54 and the core-7 pin and preempts the frame loop,
   enough to drop ~5% of frames. Failure is not a reason to refuse the accelerator.
   """
+  try:
+    # modeld never needs the pool (engine/worker.py), and its PARALLEL idle
+    # interpreters' handler threads would inherit FIFO 54 on core 7
+    from tinygrad.helpers import PARALLEL
+    PARALLEL.value = 0
+  except Exception:
+    log.exception("jetlink: could not turn tinygrad's compile pool off")
   try:
     from tinygrad.tensor import Tensor
     Tensor([0.0]).realize()
@@ -205,11 +212,6 @@ def reset_queues(queues, arrays, prev_desire=None):
   linked to, and the reset allocates and compiles nothing, so it may run on
   the frame thread. What an adapter's small_reset returns."""
   from tinygrad import Tensor, TinyJit
-  try:
-    from tinygrad.helpers import PARALLEL, Context  # noqa: F401  (PARALLEL: Context needs it to exist)
-    in_process = Context(PARALLEL=0)
-  except ImportError:   # a tinygrad without the pool
-    in_process = contextlib.nullcontext()
   queues, arrays = tuple(queues), tuple(arrays)
 
   @TinyJit
@@ -217,15 +219,11 @@ def reset_queues(queues, arrays, prev_desire=None):
     Tensor.realize(*(q.assign(0) for q in queues))
 
   # TinyJit captures on its second call, and one with nothing to run raises
-  # there. Its few kernels compile here, in this process: more than one would
-  # start tinygrad's compile pool (engine/worker.py), PARALLEL spawned
-  # interpreters idle for modeld's life, their handler threads at SCHED_FIFO
-  # 54 on core 7 once modeld is realtime. modeld's own warmup compiles one
-  # kernel at a time and never starts it
+  # there. Its kernels compile here, after init_device() turned the compile
+  # pool off
   if queues:
-    with in_process:
-      for _ in range(3):
-        clear()
+    for _ in range(3):
+      clear()
 
   def reset():
     if queues:

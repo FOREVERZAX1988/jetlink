@@ -22,7 +22,6 @@ from unittest import mock
 import numpy as np
 
 from jetlink.openpilot import warp
-from jetlink.openpilot.testing import FakeContext
 from tests.openpilot import fakes
 from tests.openpilot.fakes import OpenpilotTest
 
@@ -153,17 +152,15 @@ class TestInitDevice(unittest.TestCase):
   loop's core."""
 
   def setUp(self):
-    self.pool = mock.Mock(name='get_worker_pool')
-    p = mock.patch.dict(sys.modules, fakes.fake_tinygrad(get_worker_pool=self.pool))
+    p = mock.patch.dict(sys.modules, fakes.fake_tinygrad())
     p.start()
     self.addCleanup(p.stop)
     self.log = fakes.RecordingLog()
 
-  def test_the_device_comes_up_and_no_compile_pool_starts(self):
+  def test_the_device_comes_up(self):
     with mock.patch.object(fakes.FakeTensor, 'realize', autospec=True) as realize:
       warp.init_device(self.log)
     realize.assert_called_once()
-    self.pool.assert_not_called()
     self.assertEqual(self.log.records, [])
 
   def test_a_device_that_will_not_come_up_is_logged_not_raised(self):
@@ -366,20 +363,14 @@ class TestPrepareReset(unittest.TestCase):
   def test_the_reset_an_adapter_builds_is_captured_ahead_and_zeroes_in_place(self):
     # TinyJit captures on its second call: three ahead, then one per reset
     calls = []
-
-    def jit(fn):
-      # the settings each call ran under: the capture compiles, the reset replays
-      return lambda: (calls.append(list(FakeContext.active)), fn())[1]
-
-    self.modules['tinygrad'].TinyJit = jit
+    self.modules['tinygrad'].TinyJit = lambda fn: lambda: (calls.append(1), fn())[1]
     queue, array = fakes.queue(), np.ones(4)
     held = queue.array
     reset = warp.reset_queues([queue], [array])
-    # compiled in this process: tinygrad's pool would start PARALLEL idle workers for modeld's life
-    self.assertEqual(calls, [[{'PARALLEL': 0}]] * 3)
+    self.assertEqual(len(calls), 3)
     queue.array[...], array[...] = 1, 1
     reset()
-    self.assertEqual(calls[3:], [[]])
+    self.assertEqual(len(calls), 4)
     self.assertIs(queue.array, held)
     np.testing.assert_array_equal(held, 0)
     np.testing.assert_array_equal(array, 0)
@@ -397,17 +388,23 @@ class TestPrepareReset(unittest.TestCase):
 
 
 class TestNoCompilePool(unittest.TestCase):
-  """Over the real tinygrad: capturing a reset of more than one queue, which
-  compiles more than one kernel, starts no compile pool."""
+  """Over the real tinygrad, as prepare() and the join run them: after
+  init_device(), capturing a reset of more than one queue, which compiles
+  more than one kernel, starts no compile pool."""
 
   def test_a_reset_of_several_queues_starts_no_pool(self):
     try:
       from tinygrad import Tensor
       from tinygrad.engine import worker
+      from tinygrad.helpers import PARALLEL
     except ImportError:
       self.skipTest('no tinygrad')
     if worker.worker_pool is not None:
       self.skipTest('a pool from an earlier test in this process')
+    self.addCleanup(setattr, PARALLEL, 'value', PARALLEL.value)
+    log = fakes.RecordingLog()
+    warp.init_device(log)
+    self.assertEqual(log.records, [])
     queues = [Tensor.ones(4, 4).contiguous().realize(), Tensor.ones(8).contiguous().realize()]
     reset = warp.reset_queues(queues, [])
     queues[0].assign(Tensor.ones(4, 4)).realize()
