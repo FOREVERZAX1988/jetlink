@@ -151,6 +151,7 @@ def main(demo=False):
   model = small_model
   model = HOOKS.attach(model, small_model, 1, 2)
   while True:
+    model.frame_drop_ratio = 0.
     model.run(1, 2, 3)
     if HOOKS.handed_over(model):
       pass
@@ -183,6 +184,11 @@ class TestCheckSeam(unittest.TestCase):
   def test_a_dropped_attach(self):
     source = GOOD.replace('model = HOOKS.attach(', 'HOOKS.attach(')
     self.assertEqual(self.seam(source), ["modeld.py: attach()'s result is dropped: modeld would never run the joined model"])
+
+  def test_no_frame_drop_ratio_written(self):
+    source = GOOD.replace('    model.frame_drop_ratio = 0.\n', '')
+    self.assertEqual(self.seam(source), [("modeld.py: main() never writes model.frame_drop_ratio: a host that drops "
+                                          "camera frames would never hand back")])
 
   def test_the_frame_loops_reads(self):
     source = GOOD.replace('HOOKS.handed_over(model)', 'False').replace('HOOKS.state(model)', "'none'")

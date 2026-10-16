@@ -171,6 +171,9 @@ def check_seam(modeld_path: str | Path) -> list[str]:
   elif not any(isinstance(c.func, ast.Attribute) and c.func.attr == 'run' and isinstance(c.func.value, ast.Name)
                and c.func.value.id == bound and at(c) > at(attach) for c in calls):
     problems.append(f"attach()'s result, {bound}, is never run: modeld would keep driving the model it had")
+  elif not any(isinstance(n, ast.Attribute) and isinstance(n.ctx, ast.Store) and n.attr == 'frame_drop_ratio'
+               and isinstance(n.value, ast.Name) and n.value.id == bound and at(n) > at(attach) for n in nodes):
+    problems.append(f"main() never writes {bound}.frame_drop_ratio: a host that drops camera frames would never hand back")
   problems += [f"main() never calls {facade}.{hook}(model)" for hook in ('handed_over', 'state') if not called(hook, facade)]
   return [f"{path.name}: {p}" for p in problems]
 
