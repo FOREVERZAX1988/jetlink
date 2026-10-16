@@ -443,6 +443,24 @@ class TestPrepareReset(unittest.TestCase):
     np.testing.assert_array_equal(packed, 0)
     np.testing.assert_array_equal(model.prev_desire, 0)
 
+  def test_this_forks_stock_modeld_and_its_npy_views(self):
+    # this fork's own stock modeld (FOREVERZAX1988/openpilot) keeps neither
+    # state_pairs nor a packed buffer: its history is its own queues and its
+    # host inputs are the views in npy, so a legacy bundle's treatment is
+    # applied to the model itself. The NPY upload tensor is not a queue
+    packed = np.ones(16, np.float32)
+    upload = self.queue(device='NPY')
+    model = SimpleNamespace(input_queues={'img_q': self.queue(), 'feat_q': self.queue(),
+                                          'packed_npy_inputs': upload},
+                            npy={'desire': packed[:8], 'prev_feat': packed[8:]},
+                            prev_desire=np.ones(8))
+    with mock.patch.object(upload, 'assign', side_effect=AssertionError('an NPY tensor is not a queue')):
+      warp.prepare_reset(model)()
+    for name in ('img_q', 'feat_q'):
+      np.testing.assert_array_equal(model.input_queues[name].array, 0)
+    np.testing.assert_array_equal(packed, 0)
+    np.testing.assert_array_equal(model.prev_desire, 0)
+
   def test_a_model_with_no_state_on_the_gpu_captures_nothing(self):
     # a TinyJit with nothing to run raises at its capture
     self.modules['tinygrad'].TinyJit = lambda fn: mock.Mock(side_effect=AssertionError('nothing to capture'))

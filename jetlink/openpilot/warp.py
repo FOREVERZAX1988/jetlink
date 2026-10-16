@@ -50,12 +50,18 @@ def init_device(log) -> None:
     log.exception("jetlink: could not bring the gpu up before modeld goes realtime")
   # the same trap for tinygrad's compile pool (engine/worker.py): created on
   # the first compile, after modeld goes realtime, its handler threads sat at
-  # SCHED_FIFO 54 on core 7. An older tinygrad or PARALLEL=0 is not a failure
+  # SCHED_FIFO 54 on core 7. A tinygrad without one at all (this fork's pin,
+  # 66ee3cfb4) has nothing to start, and PARALLEL=0 is a build choice: neither
+  # is a failure, and neither is worth a traceback at every ignition
   try:
     from tinygrad.engine.worker import get_worker_pool
-    get_worker_pool()
-  except Exception:
-    log.exception("jetlink: could not start tinygrad's compile pool before modeld goes realtime")
+  except ImportError:
+    log.warning("jetlink: this tinygrad has no compile pool to start before modeld goes realtime")
+  else:
+    try:
+      get_worker_pool()
+    except Exception:
+      log.exception("jetlink: could not start tinygrad's compile pool before modeld goes realtime")
 
 
 def lossless_path(path) -> Path:
@@ -243,18 +249,33 @@ def prepare_reset(model):
   ModelState, and a modeld_v2 native bundle's adapter: the recurrent state on
   the GPU (state_pairs) and one packed host buffer (packed_input), as their
   warmup zeroes them. A modeld_v2 legacy bundle's adapter: history queues on
-  the GPU, and numpy inputs. The fork's tests pin those names.
+  the GPU, and numpy inputs. And a model with neither name -- this fork's own
+  stock modeld (FOREVERZAX1988/openpilot), whose history is its own queues and
+  whose host inputs are the views in `npy` -- is read the way a legacy bundle
+  is, off the model itself: a missing state_pairs is a model that packs
+  nothing, not a model that cannot be reset. The fork's tests pin those names.
   """
   from tinygrad import Tensor, TinyJit
+
+  def queues_and_numpy_inputs(holder, numpy_inputs: str):
+    """Everything a model that packs nothing zeroes: every queue but the NPY
+    upload, and every numpy input. An NPY tensor is not a queue to assign --
+    the numpy views over it are. numpy_inputs: the attribute's name on the
+    holder, which this fork's stock modeld calls npy."""
+    queues = tuple(q for q in getattr(holder, 'input_queues', {}).values() if q.device != 'NPY')
+    arrays = tuple(getattr(holder, numpy_inputs, {}).values())
+    return queues, arrays
 
   adapter = getattr(model, 'adapter', None)
   if adapter is None or adapter.is_native:
     keeper = model if adapter is None else adapter
-    queues = tuple(keeper.input_queues[name] for name in keeper.state_pairs)
-    arrays = (keeper.packed_input,)
+    if hasattr(keeper, 'state_pairs'):
+      queues = tuple(keeper.input_queues[name] for name in keeper.state_pairs)
+      arrays = (keeper.packed_input,)
+    else:
+      queues, arrays = queues_and_numpy_inputs(keeper, 'numpy_inputs' if hasattr(keeper, 'numpy_inputs') else 'npy')
   else:
-    queues = tuple(q for q in adapter.input_queues.values() if q.device != 'NPY')
-    arrays = tuple(adapter.numpy_inputs.values())
+    queues, arrays = queues_and_numpy_inputs(adapter, 'numpy_inputs')
 
   @TinyJit
   def clear():
