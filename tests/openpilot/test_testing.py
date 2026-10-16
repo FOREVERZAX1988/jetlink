@@ -14,12 +14,11 @@ import tempfile
 import textwrap
 import unittest
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 from unittest import mock
 
 from jetlink.openpilot import interface
 from jetlink.openpilot.hooks import Off
-from jetlink.openpilot.stock import Stock
 from jetlink.openpilot.testing import FakeJoinedModel, FakeSubMaster, Guard, check_adapter, check_fallback, check_seam
 from tests.openpilot.test_hooks import SIGNATURES
 from tests.openpilot import fakes
@@ -297,41 +296,18 @@ class TestCheckFallback(unittest.TestCase):
 
 
 class TestFakeSubMaster(unittest.TestCase):
-  def test_stocks_in_control_over_it(self):
-    idle = {'carState': SimpleNamespace(), 'carControl': SimpleNamespace(enabled=False, latActive=False, longActive=False),
-            'selfdriveState': SimpleNamespace(enabled=False, active=False)}
-    made = []
-
-    def submaster(services):
-      made.append(FakeSubMaster(services, **idle))
-      return made[-1]
-    messaging = ModuleType('openpilot.cereal.messaging')
-    messaging.SubMaster = submaster
-    cereal = ModuleType('openpilot.cereal')
-    cereal.messaging = messaging
-    with mock.patch.dict(sys.modules, {'openpilot': ModuleType('openpilot'), 'openpilot.cereal': cereal,
-                                       'openpilot.cereal.messaging': messaging}):
-      op = Stock()
-      self.assertIs(op.in_control(), False)
-      [sm] = made
-      sm['carControl'].latActive = True
-      self.assertIs(op.in_control(), True)
-      sm['carControl'].latActive = False
-      sm.valid['carState'] = False
-      self.assertIs(op.in_control(), True)
-    self.assertEqual(sm.timeouts, [0, 0, 0])
-
+  # Stock's in_control() over it: test_stock's TestInControl
   def test_what_a_reader_sees(self):
     sm = FakeSubMaster(['modelV2', 'carState'], modelV2=SimpleNamespace(big=True))
     self.assertEqual((sm.seen, sm.alive, sm.valid), ({'modelV2': True, 'carState': False},) * 3)
-    self.assertFalse(sm.all_alive() or sm.all_checks())
-    self.assertTrue(sm.all_checks(['modelV2']))
+    self.assertFalse(sm.all_alive() or sm.all_valid())
+    self.assertTrue(sm.all_alive(['modelV2']) and sm.all_valid(['modelV2']))
+    sm.data['carState'] = SimpleNamespace()
     sm.update(0)
-    self.assertEqual(sm.updated, {'modelV2': True, 'carState': False})
-    sm.alive['modelV2'] = False
+    self.assertFalse(sm.seen['carState'], 'never alive, so never received')
+    sm.alive['carState'] = True
     sm.update(0)
-    self.assertEqual((sm.frame, sm.recv_frame, sm.updated), (2, {'modelV2': 1, 'carState': 0},
-                                                             {'modelV2': False, 'carState': False}))
+    self.assertEqual((sm.seen['carState'], sm.timeouts), (True, [0, 0]))
     self.assertTrue(sm['modelV2'].big)
 
   def test_a_service_with_no_message_reads_blank(self):

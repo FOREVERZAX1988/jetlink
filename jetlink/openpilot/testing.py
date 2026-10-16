@@ -15,7 +15,7 @@ the fakes jetlink's own tests share.
                          attach() once the small model is built and its
                          result run, handed_over() read
   check_fallback(obj)    the fork's own hooks for no usable jetlink: each
-                         answers as Off does
+                         answers as Off does, over HOOK_CALLS
   install_guard()        an audit hook a conftest starts and stops around each
                          test, which records a reach for the machine's own
                          params, /dev/shm records, sysfs or sudo
@@ -186,6 +186,16 @@ def check_seam(modeld_path: str | Path) -> list[str]:
 
 # -- the fork's fallback ------------------------------------------------------------------
 
+_MODEL = object()
+# every hook a fork's lines may call, and the arguments each is checked with:
+# the one list of them (jetlink's tests hold Hooks to it)
+HOOK_CALLS = {'should_run': [(False, None, None)], 'status': [()], 'reason': [()], 'prepare': [(False,), (True,)],
+              'attach': [(_MODEL, object(), 1928, 1208)], 'handed_over': [(_MODEL,)], 'state': [(_MODEL,)],
+              'shutdown_step': [(False,), (True, 'test')], 'request_shutdown': [('test',)], 'shutdown_pending': [()],
+              'model_state': [('f' * 40,)], 'should_extend_catalog': [()], 'extend_catalog': [({'bundles': []},)],
+              'runtime': [()], 'swap_events': [(0.01,)]}
+
+
 def check_fallback(fallback, hooks: Iterable[str] | None = None, *, link_on=None) -> list[str]:
   """The problems of the fork's own hooks for a jetlink that is missing or
   too old to have Off: each of `hooks`, the ones the fork's lines call (by
@@ -198,22 +208,16 @@ def check_fallback(fallback, hooks: Iterable[str] | None = None, *, link_on=None
   it reads the machine's own."""
   from jetlink.openpilot.events import Flags
   from jetlink.openpilot.hooks import Off
-  model, catalog = object(), {'bundles': []}
-  calls = {'should_run': [(False, None, None)], 'status': [()], 'reason': [()], 'prepare': [(False,), (True,)],
-           'attach': [(model, object(), 1928, 1208)], 'handed_over': [(model,)], 'state': [(model,)],
-           'shutdown_step': [(False,), (True, 'test')], 'request_shutdown': [('test',)], 'shutdown_pending': [()],
-           'model_state': [('f' * 40,)], 'should_extend_catalog': [()], 'extend_catalog': [(catalog,)],
-           'runtime': [()], 'swap_events': [(0.01,)]}
 
   def flags(tracker):
     found = tracker.update(True, False, True, state='ready')
     return tuple(bool(getattr(found, f)) for f in Flags._fields), bool(tracker.settling)
   problems = []
-  for name in hooks if hooks is not None else [n for n in calls if hasattr(fallback, n)]:
-    if name not in calls or not callable(getattr(fallback, name, None)):
-      problems.append(f"{name}(): missing" if name in calls else f"{name}(): not a hook")
+  for name in hooks if hooks is not None else [n for n in HOOK_CALLS if hasattr(fallback, n)]:
+    if name not in HOOK_CALLS or not callable(getattr(fallback, name, None)):
+      problems.append(f"{name}(): missing" if name in HOOK_CALLS else f"{name}(): not a hook")
       continue
-    for args in calls[name]:
+    for args in HOOK_CALLS[name]:
       try:
         got, want = getattr(fallback, name)(*args), getattr(Off(), name)(*args)
         if name == 'swap_events':
@@ -337,16 +341,16 @@ class _Blank:
 
 class FakeSubMaster:
   """cereal's SubMaster over fixed messages, for an adapter's engaged() and
-  in_control() tests. A service given a message is seen, alive and valid,
-  and received (updated) on each update(); any other is none of them, and
-  reads as a blank message whose every field is falsy. A test changes `data`,
-  `alive` and `valid` as it goes. update() keeps its timeouts: in_control()
-  is on modeld's frame thread and must never wait (all 0). In for the real
-  one: mock.patch.object(messaging, 'SubMaster', lambda services:
-  FakeSubMaster(services, **messages)). Unlike cereal's: a service is seen
-  from construction, not from its first receive; `frame` starts at 0, not
-  -1; a blank field is falsy but equals nothing (a capnp default equals 0 or
-  False); and there is no freq_ok, logMonoTime or recv_time."""
+  in_control() tests: what Stock and StarPilot's adapter read of it. A
+  service given a message is seen, alive and valid; any other is none of
+  them until update() receives it, and reads as a blank message whose every
+  field is falsy. A test changes `data`, `alive` and `valid` as it goes.
+  update() keeps its timeouts: in_control() is on modeld's frame thread and
+  must never wait (all 0). In for the real one: mock.patch.object(messaging,
+  'SubMaster', lambda services: FakeSubMaster(services, **messages)). Unlike
+  cereal's: a service is seen from construction, not from its first receive;
+  a blank field is falsy but equals nothing (a capnp default equals 0 or
+  False); and there is no updated, frame, freq_ok or logMonoTime."""
 
   def __init__(self, services: Iterable[str] = (), **messages):
     self.services = list(dict.fromkeys([*services, *messages]))
@@ -354,18 +358,12 @@ class FakeSubMaster:
     self.seen = {s: s in messages for s in self.services}
     self.alive = dict(self.seen)
     self.valid = dict(self.seen)
-    self.frame = 0
-    self.recv_frame = dict.fromkeys(self.services, 0)
-    self.updated = dict.fromkeys(self.services, False)
     self.timeouts: list[float] = []
 
   def update(self, timeout: float = 100) -> None:
     self.timeouts.append(timeout)
-    self.frame += 1
     for s in self.services:
-      self.updated[s] = s in self.data and self.alive[s]
-      if self.updated[s]:
-        self.seen[s], self.recv_frame[s] = True, self.frame
+      self.seen[s] = self.seen[s] or (s in self.data and self.alive[s])
 
   def all_alive(self, service_list=None) -> bool:
     return all(self.alive[s] for s in service_list or self.services)
@@ -373,11 +371,8 @@ class FakeSubMaster:
   def all_valid(self, service_list=None) -> bool:
     return all(self.valid[s] for s in service_list or self.services)
 
-  def all_checks(self, service_list=None) -> bool:
-    return self.all_alive(service_list) and self.all_valid(service_list)
-
   def __getitem__(self, service: str):
-    if service not in self.updated:
+    if service not in self.seen:
       raise KeyError(service)   # not subscribed, as cereal's
     return self.data.get(service, _BLANK)
 

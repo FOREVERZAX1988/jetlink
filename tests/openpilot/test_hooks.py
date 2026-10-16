@@ -17,7 +17,7 @@ from unittest import mock
 from jetlink.openpilot import STATES, Flags, Status, hooks
 from jetlink.openpilot.status import Runtime
 from jetlink.openpilot.hooks import COMPATIBLE, Hooks, Off
-from jetlink.openpilot.testing import FakeJoinedModel, RecordingLog
+from jetlink.openpilot.testing import HOOK_CALLS, FakeJoinedModel, RecordingLog
 from tests.openpilot.fakes import OpenpilotTest
 from tests.openpilot.test_api import plain
 
@@ -107,9 +107,11 @@ class TestTheSurface(unittest.TestCase):
         with self.subTest(f'{cls.__name__}.{name}'):
           self.assertEqual(plain(getattr(cls(3, object) if cls is Hooks else cls(), name)), expected)
 
-  def test_the_table_covers_every_hook(self):
-    # swap_events' answer is a tracker, TestSwapEvents'
-    self.assertEqual(set(OFF), set(SIGNATURES) - {'swap_events'})
+  def test_the_tables_cover_every_hook(self):
+    # testing.HOOK_CALLS is the one list, which a fork's check_fallback runs:
+    # a hook missing from it fails here. swap_events' answer is a tracker, TestSwapEvents'
+    self.assertEqual(set(SIGNATURES), set(HOOK_CALLS))
+    self.assertEqual(set(OFF), set(HOOK_CALLS) - {'swap_events'})
 
   def test_todays_api_is_accepted(self):
     from jetlink.openpilot import API
@@ -402,10 +404,9 @@ class TestTheLinkOff(unittest.TestCase):
   def test_every_hook_binds_or_not_by_the_one_list(self):
     # handed_over and state read the model alone; attach waits for prepare's yes
     self.assertEqual(set(OFF) - hooks.BINDS_WITH_LINK_OFF - {'handed_over', 'state', 'attach'}, set(UNBOUND))
-    args = {'shutdown_step': (True,), 'request_shutdown': ('test',), 'model_state': ('f' * 40,), 'extend_catalog': (CATALOG,)}
     for name in sorted(hooks.BINDS_WITH_LINK_OFF):
       with self.subTest(name), mock.patch.object(hooks, 'bind') as bind:
-        getattr(Hooks(3, lambda: SimpleNamespace(log=RecordingLog()), link_on=lambda: False), name)(*args.get(name, ()))
+        getattr(Hooks(3, lambda: SimpleNamespace(log=RecordingLog()), link_on=lambda: False), name)(*HOOK_CALLS[name][-1])
         bind.assert_called_once()
 
   def test_the_status_binds_as_ever(self):

@@ -27,7 +27,7 @@ from unittest import mock
 import numpy as np
 
 from jetlink.comma import port, root
-from jetlink.openpilot import interface, stock
+from jetlink.openpilot import interface, stock, testing
 from jetlink.openpilot.interface import Openpilot
 from jetlink.openpilot.stock import Stock
 from tests import load_script
@@ -69,29 +69,20 @@ class FakeParams:
     self.world.params.pop(key, None)
 
 
-class FakeSubMaster:
-  """cereal's SubMaster, answering what the world says."""
+class FakeSubMaster(testing.FakeSubMaster):
+  """The kit's, over the world's messages, failing as the world says."""
 
   def __init__(self, world, services):
     if world.sm_error is not None:
       raise world.sm_error
+    super().__init__(services, **{s: world.messages[s] for s in services if s in world.messages})
     self.world = world
-    self.services = list(services)
     world.submasters.append(self)
 
   def update(self, timeout=100):
-    self.world.updates.append(timeout)
     if self.world.update_error is not None:
       raise self.world.update_error
-
-  def all_alive(self, service_list=None):
-    return self.world.alive
-
-  def all_valid(self, service_list=None):
-    return self.world.valid
-
-  def __getitem__(self, name):
-    return self.world.messages[name]
+    super().update(timeout)
 
 
 class FakeLog(fakes.RecordingLog):
@@ -119,10 +110,8 @@ class World:
     self.device = device
     self.log = FakeLog()
     self.submasters: list[FakeSubMaster] = []
-    self.updates: list = []
     self.sm_error: Exception | None = None
     self.update_error: Exception | None = None
-    self.alive = self.valid = True
     self.messages = {
       'carState': SimpleNamespace(),
       'carControl': SimpleNamespace(enabled=False, latActive=False, longActive=False),
@@ -353,7 +342,7 @@ class TestModeld(StockTest):
 class TestInControl(StockTest):
   def test_nothing_engaged(self):
     assert self.op.in_control() is False
-    assert self.world.updates == [0]
+    assert self.world.submasters[0].timeouts == [0]
     assert self.world.submasters[0].services == ['carState', 'carControl', 'selfdriveState']
 
   def test_each_engagement_counts(self):
@@ -366,9 +355,11 @@ class TestInControl(StockTest):
     assert len(self.world.submasters) == 1
 
   def test_stale_or_invalid_counts_as_in_control(self):
-    self.world.alive = False
+    assert self.op.in_control() is False
+    [sm] = self.world.submasters
+    sm.alive['carState'] = False
     assert self.op.in_control() is True
-    self.world.alive, self.world.valid = True, False
+    sm.alive['carState'], sm.valid['carControl'] = True, False
     assert self.op.in_control() is True
 
   def test_a_failure_counts_as_in_control_and_logs_once(self):
@@ -397,6 +388,7 @@ class TestInControl(StockTest):
     class Fork(Stock):
       IN_CONTROL_SERVICES = ('carState', 'carControl', 'carControlSP')
     del self.world.messages['selfdriveState']
+    self.world.messages['carControlSP'] = SimpleNamespace()
     fork = Fork()
     assert fork.in_control() is False and self.world.log.lines('error') == []
     self.world.messages['carControl'].latActive = True
