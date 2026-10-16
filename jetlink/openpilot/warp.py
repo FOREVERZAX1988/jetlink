@@ -249,7 +249,8 @@ def prepare_reset(model):
 
   Its history is stale after the Jetson ran, so a fallback starts from the
   zero history modeld's warmup leaves it at. Nothing is allocated or compiled
-  on the failure frame. jetlink's own, for an adapter without small_reset
+  on the failure frame, so never through modeld_v2's reset_warmup_buffers(),
+  which compiles on it. jetlink's own, for an adapter without small_reset
   (interface.ModelSide).
 
   The small model is whatever the fork's modeld runs, and each keeps its
