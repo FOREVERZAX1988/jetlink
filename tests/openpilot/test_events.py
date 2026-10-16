@@ -30,7 +30,7 @@ class SwapEventsTest(unittest.TestCase):
   def step(self, state='none', big=False, alive=True, fresh=True, enabled=False, mads=False) -> set[str]:
     """One tick, `alive` being modelV2's and `fresh` the state message's, wired
     as zoompilot's adapter reads them; what was raised, by name."""
-    self.flags = self.swap.update(fresh and alive, state, big and alive, enabled or mads)
+    self.flags = self.swap.update(fresh and alive, big and alive, enabled or mads, state)
     return {name for name in EVENTS if getattr(self.flags, name)}
 
   def drive_big(self, **kwargs) -> None:
@@ -227,7 +227,7 @@ class TestOffer(SwapEventsTest):
     self.assertFalse(self.offered(enabled=True))
 
   def test_running_big_suppresses_a_pending_status_from_previous_frame(self):
-    self.assertFalse(self.swap.update(True, 'ready', True, True).offer)
+    self.assertFalse(self.swap.update(True, True, True, 'ready').offer)
 
   def test_missing_invalid_or_stale_messages_never_announce(self):
     for wiring in ({'alive': False}, {'fresh': False}):

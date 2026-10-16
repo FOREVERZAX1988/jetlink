@@ -78,7 +78,7 @@ class TestTheSurface(OpenpilotTest):
   def test_the_swap_events_selfdrived_maps(self):
     self.assertEqual(jo.Flags._fields, ('offer', 'link_lost', 'no_entry', 'chime', 'settling'))
     self.assertEqual(plain(jo.SwapEvents), '(tick_s)')
-    self.assertEqual(plain(jo.SwapEvents.update), '(self, fresh, state, big, in_control)')
+    self.assertEqual(plain(jo.SwapEvents.update), '(self, fresh, big, in_control, state)')
     self.assertIsInstance(jo.SwapEvents.settling, property)
     # a plain re-export: the module imports on its own too
     from jetlink.openpilot import events

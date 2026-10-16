@@ -72,16 +72,16 @@ class SwapEvents:
   def settling(self) -> bool:
     return self._settle > 0
 
-  def update(self, fresh: bool, state: str, big: bool, in_control: bool) -> Flags:
-    """One tick of the caller's loop.
+  def update(self, fresh: bool, big: bool, in_control: bool, state: str) -> Flags:
+    """One tick of the caller's loop, in hooks.SwapTracker.update's order.
 
     `fresh`: modelV2 and the fork's state message are seen, alive and valid
-    this tick. `state`: the joining model's big_model_state, its STATES name
-    (str() of a capnp enum, never its .raw number, which matches no state). `big`:
-    modelV2.big, from a modelV2 alive and valid this tick. `in_control`: the
-    fork's meaning of something steering or able to (zoompilot: openpilot or
-    MADS, MADS even paused), the same rule the swap waits on (the adapter's
-    engaged())."""
+    this tick. `big`: modelV2.big, from a modelV2 alive and valid this tick.
+    `in_control`: the fork's meaning of something steering or able to
+    (zoompilot: openpilot or MADS, MADS even paused), the same rule the swap
+    waits on (the adapter's engaged()). `state`: the joining model's
+    big_model_state, its STATES name (str() of a capnp enum, never its .raw
+    number, which matches no state)."""
     # a stale state neither offers the switch nor rearms the offer
     if fresh:
       self._state = state

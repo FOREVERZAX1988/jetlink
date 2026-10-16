@@ -287,6 +287,6 @@ class SwapTracker:
       self._ticks = (self._ticks + 1) % self._every
       state = getattr(self._runtime, 'state', None)
       fresh = fresh and state is not None
-    flags = self._hooks._net('swap_events.update', None, self._events.update, fresh, state or 'none', big, in_control)
+    flags = self._hooks._net('swap_events.update', None, self._events.update, fresh, big, in_control, state or 'none')
     self._ok = flags is not None
     return NO_EVENTS if flags is None else flags
