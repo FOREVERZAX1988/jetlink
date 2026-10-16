@@ -134,7 +134,12 @@ class Warps:
     frames, tfm = tuple(specs['input_frame'][0]), tuple(specs['M_inv'][0])
     if len(frames) != 2 or frames[0] != 2 or tfm != (2, 3, 3):
       raise RuntimeError(f"the warp takes frames {frames} and transforms {tfm}, not two of each")
-    made = tuple(getattr(captured.ret, 'shape', ()))
+    # a lossless build (with_errors) returns the warped frame and its MED
+    # errors: the frame is the one the model eats and Warp reads the errors
+    # beside it (jetlink.lossless), over the same graph
+    ret = captured.ret
+    frame = ret[0] if isinstance(ret, (tuple, list)) else ret
+    made = tuple(getattr(frame, 'shape', ()))
     if made != (2, 6, model_h // 2, model_w // 2):
       raise RuntimeError(f"the warp makes {made}, not a {model_w}x{model_h} model's input")
     return warp
