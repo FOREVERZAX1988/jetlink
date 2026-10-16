@@ -29,7 +29,8 @@ PACKAGE = ROOT / 'jetlink'
 PAYLOAD = ('jetlink', 'LICENSE', 'pyproject.toml', 'README.md')
 
 # What the comma starts or imports: the owner (python -m), the provisioning run
-# it starts (python -m), and what modeld and the fork's adapter import
+# it starts (python -m), what modeld and the fork's hook lines and adapter
+# import, and the kit the fork's tests import
 ENTRIES = (
   'jetlink.openpilot.owner',
   'jetlink.openpilot.provision',
@@ -37,9 +38,11 @@ ENTRIES = (
   'jetlink.openpilot.joining',
   'jetlink.openpilot.model_state',
   'jetlink.openpilot.warp',
+  'jetlink.openpilot.hooks',
+  'jetlink.openpilot.stock',
+  'jetlink.openpilot.events',
+  'jetlink.openpilot.testing',
 )
-# entry points still to come; each joins the walk once its file is there
-LATER = ('jetlink.openpilot.hooks', 'jetlink.openpilot.stock', 'jetlink.openpilot.events', 'jetlink.openpilot.testing')
 
 # What the payload may import from outside itself: the standard library, what
 # the comma's venv has, and the fork's tinygrad, which modeld brings. onnx is
@@ -100,7 +103,7 @@ def imports_of(name: str, tree: ast.Module) -> tuple[set[str], set[str]]:
 def graph() -> dict[str, tuple[Path, ast.Module, set[str]]]:
   """Every module on the comma's graph: its file, its tree, what else it imports."""
   modules = {}
-  todo = [*ENTRIES, *(m for m in LATER if module_file(m))]
+  todo = list(ENTRIES)
   while todo:
     name = todo.pop()
     if name in modules:
@@ -175,7 +178,7 @@ def test_the_payload_alone_runs_the_comma(tmp_path):
   # every module the walk found is in the copy
   assert [n for n, (f, _, _) in graph().items() if not (tmp_path / f.relative_to(ROOT)).is_file()] == []
 
-  names = [*ENTRIES, *(m for m in LATER if module_file(m)), 'jetlink.comma.owner', 'jetlink.comma.root']
+  names = [*ENTRIES, 'jetlink.comma.owner', 'jetlink.comma.root']
   # -I: no PYTHONPATH, no user site and no current directory, so only the copy
   # and the interpreter's own packages (numpy) are there
   out = subprocess.run([sys.executable, '-I', '-c', CHECK, str(tmp_path), json.dumps(names)], cwd=tmp_path,
