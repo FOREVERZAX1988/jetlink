@@ -91,6 +91,12 @@ class OwnerTest(unittest.TestCase):
     kwargs.setdefault('chestnut_ids', CHESTNUT_IDS)
     return owner.Owner(*(args or ((),)), **kwargs)
 
+  def stopped(self, o) -> None:
+    """manager stops the owner, without another step: it reads the same
+    setting, and finds a chestnut on its own."""
+    o.stop = True
+    o.run()
+
   def root_calls(self, command: str) -> list[str]:
     """What the owner asked jetlink-root.sh `command` to do, in order."""
     return [c.args[1] for c in self.root_run.call_args_list if c.args[0] == command]
@@ -380,8 +386,7 @@ class TestWhatItIsTold(OwnerTest):
       first = self.owner()
       self.heard(first, sleep_after=0.0)
       if clean:
-        first.stop = True
-        first.run()
+        self.stopped(first)
         self.assertFalse(gadget.STATUS.exists())
       second = self.make()   # not self.owner(), which passes on a hello of its own
       self.addCleanup(second.cable.close)
@@ -549,8 +554,7 @@ class TestNobodyCanBorrow(OwnerTest):
     # a chestnut turning up stops the owner with the link still on
     o = self.owner()
     o.step()
-    o.stop = True
-    o.run()
+    self.stopped(o)
     self.assertIsNone(gadget.gadget_error())
 
   def test_parked_it_still_provisions(self):
@@ -617,8 +621,7 @@ class TestTheToggle(OwnerTest):
   def test_stopping_gives_the_port_back(self):
     o = self.owner()
     o.lender.start.return_value = True
-    o.stop = True
-    o.run()
+    self.stopped(o)
     o.port.off.assert_called_once()
 
 
@@ -633,6 +636,9 @@ class TestVmTuning(OwnerTest):
   def setUp(self):
     super().setUp()
     comma_fakes.proc_sys(self.tmp, comma_fakes.STOCK)
+    # udc's knobs, so a restore that ran reads as one that worked
+    comma_fakes.pe_params(self.tmp).mkdir()
+    comma_fakes.udc_glue(self.tmp).mkdir()
     self.root_run.side_effect = self.run_script
 
   def run_script(self, *args: str, timeout: float = root.TIMEOUT) -> bool:
@@ -642,12 +648,17 @@ class TestVmTuning(OwnerTest):
   def tuned(self) -> bool:
     return comma_fakes.read_all(self.tmp, comma_fakes.TUNED) == comma_fakes.TUNED
 
+  def assertRestored(self, vm: list[str], udc: list[str] | None = None) -> None:
+    self.assertEqual(self.root_calls('vm'), vm)
+    self.assertEqual(self.root_calls('udc'), vm if udc is None else udc)
+    self.assertFalse(self.tuned())
+    self.assertFalse(comma_fakes.record(self.tmp).exists(), 'the restore never ran')
+
   def test_applied_once_on_start_and_kept_on_exit(self):
     o = self.owner()
     o.step()
     o.step()
-    o.stop = True
-    o.run()
+    self.stopped(o)
     self.assertEqual(self.root_calls('vm'), ['apply'], "an exit with the link on is a restart; the next owner keeps them")
     self.assertEqual(self.root_calls('udc'), ['apply'])
     self.assertTrue(self.tuned())
@@ -660,35 +671,60 @@ class TestVmTuning(OwnerTest):
     self.assertEqual(self.root_calls('vm'), ['apply', 'apply'])
     self.assertEqual(comma_fakes.record(self.tmp).read_text(), stock)
 
-  def test_nothing_happens_when_disabled(self):
+  def test_disabled_nothing_is_applied_and_the_restore_runs_once(self):
+    # for a tuning an owner before this one left; without its record a no-op
     self.write('JetlinkLink', b'0')
-    self.owner().step()
-    self.assertEqual(self.root_calls('vm') + self.root_calls('udc'), [])
-    self.assertFalse(comma_fakes.record(self.tmp).exists())
+    o = self.owner()
+    o.step()
+    o.step()
+    self.assertRestored(['restore'])
 
   def test_disabling_mid_run_restores(self):
     o = self.owner()
     o.step()
     self.write('JetlinkLink', b'0')
     o.step()
-    self.assertEqual(self.root_calls('vm'), ['apply', 'restore'])
-    self.assertEqual(self.root_calls('udc'), ['apply', 'restore'])
-    self.assertFalse(comma_fakes.record(self.tmp).exists(), 'the restore never ran')
+    self.assertRestored(['apply', 'restore'])
 
-  def stopped(self, o) -> None:
-    """manager stops the owner before another step: it reads the same setting."""
-    o.stop = True
-    o.run()
+  def test_turned_off_it_is_restored_once_not_every_step(self):
+    o = self.owner()
+    o.step()
+    self.write('JetlinkLink', b'0')
+    o.step()
+    o.step()
+    self.stopped(o)
+    self.assertRestored(['apply', 'restore'])
+
+  def test_a_failed_restore_is_tried_again_at_the_stop(self):
+    o = self.owner()
+    o.step()
+    self.root_run.side_effect = lambda *a, **k: a != ('vm', 'restore') and self.run_script(*a, **k)
+    self.write('JetlinkLink', b'0')
+    o.step()
+    o.step()
+    self.assertEqual(self.root_calls('vm'), ['apply', 'restore'], 'a failure is not retried every step')
+    self.root_run.side_effect = self.run_script
+    self.stopped(o)
+    self.assertRestored(['apply', 'restore', 'restore'])
 
   def test_a_stop_after_turning_it_off_restores(self):
     o = self.owner()
     o.step()
     self.write('JetlinkLink', b'0')
     self.stopped(o)
-    self.assertEqual(self.root_calls('vm'), ['apply', 'restore'])
-    self.assertEqual(self.root_calls('udc'), ['apply', 'restore'])
-    self.assertFalse(self.tuned())
-    self.assertFalse(comma_fakes.record(self.tmp).exists(), 'the restore never ran')
+    self.assertRestored(['apply', 'restore'])
+
+  def test_a_stop_restores_what_an_owner_before_applied(self):
+    # restarted with the link on, which keeps it; turned off before the next
+    # owner has stepped, so this one never applied it
+    first = self.owner()
+    first.step()
+    self.stopped(first)
+    self.assertTrue(self.tuned())
+    second = self.owner()
+    self.write('JetlinkLink', b'0')
+    self.stopped(second)
+    self.assertRestored(['apply', 'restore'])
 
   def test_a_stop_for_a_chestnut_restores(self):
     # the link stays on, but manager stops the owner and the comma hosts the chestnut
@@ -696,23 +732,13 @@ class TestVmTuning(OwnerTest):
     o.step()
     self.chestnut.return_value = True
     self.stopped(o)
-    self.assertEqual(self.root_calls('vm'), ['apply', 'restore'])
-    self.assertEqual(self.root_calls('udc'), ['apply', 'restore'])
-    self.assertFalse(comma_fakes.record(self.tmp).exists())
-
-  def test_a_stop_after_a_step_turned_it_off_restores_once(self):
-    o = self.owner()
-    o.step()
-    self.write('JetlinkLink', b'0')
-    o.step()
-    self.stopped(o)
-    self.assertEqual(self.root_calls('vm'), ['apply', 'restore'])
-    self.assertEqual(self.root_calls('udc'), ['apply', 'restore'])
+    self.assertRestored(['apply', 'restore'])
+    o.port.off.assert_called_once()
 
   def test_a_stop_that_cannot_tell_keeps_them(self):
     o = self.owner()
     o.step()
-    self.chestnut.side_effect = OSError('no /sys')
+    self.chestnut.side_effect = Exception('a bug')
     with mock.patch.object(gadget.log, 'exception') as log:
       self.stopped(o)
     log.assert_called_once()
@@ -734,18 +760,15 @@ class TestDraw(OwnerTest):
     o = self.owner()
     o.step()
     o.step()
-    o.stop = True
-    o.run()
+    self.stopped(o)
     self.assertEqual(self.root_calls('draw'), ['off'])
-    self.assertEqual(self.root_calls('vm') + self.root_calls('udc'), ['apply', 'apply'], 'an exit with the link on keeps the tuning')
 
   def test_a_stop_after_turning_it_off_gives_it_back_on_an_empty_port(self):
     self.empty()
     o = self.owner()
     o.step()
     self.write('JetlinkLink', b'0')
-    o.stop = True
-    o.run()
+    self.stopped(o)
     self.assertEqual(self.root_calls('draw'), ['off', 'on'])
 
   def test_a_stop_after_turning_it_off_keeps_it_with_a_host_in(self):
@@ -754,9 +777,8 @@ class TestDraw(OwnerTest):
     o.step()
     self.empty(False)
     self.write('JetlinkLink', b'0')
-    o.stop = True
     with mock.patch.object(gadget.log, 'warning') as log:
-      o.run()
+      self.stopped(o)
     self.assertEqual(self.root_calls('draw'), ['off'])
     said = [c for c in log.call_args_list if 'draws nothing' in c.args[0]]
     self.assertEqual(len(said), 1, 'no later step gives it back, so it is said once')
@@ -770,8 +792,7 @@ class TestDraw(OwnerTest):
     self.empty(False)
     o.port.off.side_effect = self.empty
     self.write('JetlinkLink', b'0')
-    o.stop = True
-    o.run()
+    self.stopped(o)
     self.assertEqual(self.root_calls('draw'), ['off'])
 
   def test_usb_waits_for_the_port_to_empty(self):
@@ -837,11 +858,44 @@ class TestDraw(OwnerTest):
     o.step()
     self.assertEqual(self.root_calls('draw'), ['off'])
 
-  def test_disabled_from_the_start_it_is_left_alone(self):
+  def test_disabled_from_the_start_it_is_given_back_once(self):
+    # for a cut an owner before this one left; letting go of the voter is safe to repeat
     self.empty()
     self.write('JetlinkLink', b'0')
-    self.owner().step()
-    self.assertEqual(self.root_calls('draw'), [])
+    o = self.owner()
+    o.step()
+    o.step()
+    self.assertEqual(self.root_calls('draw'), ['on'])
+
+  def test_a_stop_gives_back_a_cut_an_owner_before_made(self):
+    # cut on an empty port and restarted with the link on; the next owner
+    # starts with a host in, so it never cut it itself
+    self.empty()
+    first = self.owner()
+    first.step()
+    self.stopped(first)
+    self.empty(False)
+    second = self.owner()
+    second.step()
+    self.empty()
+    self.write('JetlinkLink', b'0')
+    self.stopped(second)
+    self.assertEqual(self.root_calls('draw'), ['off', 'on'])
+
+  def test_a_stop_for_a_chestnut_keeps_it(self):
+    # the comma powers the chestnut, so the cut does nothing; giving it back
+    # needs an empty port
+    self.empty()
+    o = self.owner()
+    o.step()
+    self.power_role.return_value = 'source'
+    self.chestnut.return_value = True
+    with mock.patch.object(gadget.log, 'warning') as warning, mock.patch.object(gadget.log, 'info') as info:
+      self.stopped(o)
+    self.assertEqual(self.root_calls('draw'), ['off'])
+    o.port.off.assert_called_once()
+    self.assertFalse([c for c in warning.call_args_list if 'USB-C' in c.args[0]], 'a chestnut is not a host')
+    self.assertEqual(len([c for c in info.call_args_list if 'powers what is on' in c.args[0]]), 1)
 
   def test_a_failure_is_not_retried_every_step(self):
     self.empty()
@@ -1578,8 +1632,7 @@ class TestTheStatusRecord(OwnerTest):
     # only an owner that died leaves a heartbeat behind to go stale
     o = self.owner()
     self.record(o)
-    o.stop = True
-    o.run()
+    self.stopped(o)
     self.assertIsNone(gadget.owner_status())
     self.assertFalse(gadget.STATUS.exists())
 
@@ -1869,8 +1922,7 @@ class TestOneOwnerAtATime(OwnerTest):
 
   def test_the_lock_goes_with_the_owner(self):
     first = self.owner()
-    first.stop = True
-    first.run()
+    self.stopped(first)
     self.assertIsNone(first.lock_fd)
     second = self.owner()
     second.stop = True

@@ -176,6 +176,9 @@ class Owner:
     self.dormant = False
     # the link mode the root tuning was applied for, None while stock
     self.tuned: str | None = None
+    # the tuning put back since the link was last on: None not yet asked,
+    # False a restore failed (release_tuning)
+    self.released: bool | None = None
     # the draw from the USB-C port: cut by this owner, and the mode it was
     # last settled for (steer_draw)
     self.cut = False
@@ -634,14 +637,13 @@ class Owner:
       self.release_tuning()
       return
     self.link_step(mode == 'ios')
+    self.released = None
     if self.tuned != mode:
       # jetlink-root.sh vm: the recording VM tuning the gadget's reads need;
       # udc: the USB device side kept on for a host that powers the port
       # (port.py). While the link is on. After the step, so the first gadget
-      # does not wait on them. Put back only when the link is not wanted,
-      # turned off or a chestnut on the port (release_tuning). Any other stop
-      # keeps them: a restart or an update of manager with the link on starts
-      # an owner that applies them again, and a reboot clears them
+      # does not wait on them. Put back only when the link is not wanted
+      # (release_tuning)
       if self.tuned is None:
         root.run('vm', 'apply')
         root.run('udc', 'apply')
@@ -649,31 +651,43 @@ class Owner:
     self.steer_draw(mode)
 
   def link_wanted(self) -> bool:
-    """Is the link still wanted: set on, and no chestnut on the port, which
-    manager stops this for? Asked at a stop, which may come before a step has
-    seen the setting. A failure to tell is a yes, which keeps the tuning as a
-    stop always did: a wrong keep costs a little memory headroom until a
-    reboot, and a wrong restore brings back, mid-drive, the gadget stalls the
-    tuning is there to stop."""
+    """Is the link still wanted at a stop: set on, and no chestnut on the
+    port? Settings.mode() reads an unreadable param as 'off', as manager
+    does, so that is not wanted. The except only guards a bug: anything
+    raised in the stop's finally would skip the teardown after it. manager's
+    own chestnut test is chestnut_present(), cached 2 s, and this walks the
+    USB ids itself, so a chestnut mid-re-enumeration can read as absent here
+    and keep the tuning for that drive; accepted."""
     try:
       return self.settings.mode() != 'off' and not port.chestnut_attached(self.port.chestnut_ids)
     except Exception:
       gadget.log.exception("jetlink: could not tell whether the link is still wanted; keeping its tuning")
       return True
 
-  def release_tuning(self) -> None:
-    """The link is not wanted: the port, its draw and the root tuning back as
-    AGNOS boots them. The draw first, while a hold still keeps the far end on
-    the port: letting go of one can drop it for a DRP toggle, and an empty port
-    read in that moment would give the draw back with a host still in. The
-    restores on the port's short timeout, since at a stop they come before
-    the FunctionFS close, inside manager's 5 s."""
+  def release_tuning(self, final: bool = False) -> bool:
+    """The link is not wanted, turned off or a chestnut on the port: the
+    port, its draw and the root tuning go back as AGNOS boots them, at a step
+    and at the stop manager makes of it, which often comes before a step has
+    seen the setting. Any other stop keeps them for the owner manager starts
+    next, which applies them again; a reboot clears them.
+
+    The draw first, while a hold still keeps the far end on the port: letting
+    go of one can drop it for a DRP toggle, and an empty port read in that
+    moment would give the draw back with a host still in. It is given back
+    only on an empty port, so it stays cut with a chestnut on, which the
+    comma powers and where the cut does nothing. The tuning is restored
+    whatever `tuned` says, since an owner before this one may have applied
+    it: once when the link goes, and again at the stop (final) if that
+    failed. On the port's short timeout, since at a stop it comes before the
+    FunctionFS close, inside manager's 5 s. True when the draw is still cut."""
     self.steer_draw('off')
     self.port.off()
-    if self.tuned:
-      root.run('vm', 'restore', timeout=root.PORT_TIMEOUT)
-      root.run('udc', 'restore', timeout=root.PORT_TIMEOUT)
-      self.tuned = None
+    if self.released is None or (final and not self.released):
+      vm = root.run('vm', 'restore', timeout=root.PORT_TIMEOUT)
+      self.released = root.run('udc', 'restore', timeout=root.PORT_TIMEOUT) and vm
+      if self.released:
+        self.tuned = None
+    return self.cut
 
   def steer_draw(self, mode: str) -> None:
     """jetlink-root.sh draw: no current drawn from the USB-C port while the
@@ -689,13 +703,13 @@ class Owner:
     it holds for every plug after. Given back only on an empty port too, so
     neither a change of mode nor the link turned off with a host still in
     lets the charger draw from it. Kept on a stop with the link wanted, like
-    the tuning. A start assumes the draw stock, so a cut left by a stop with a
-    host still in, or by a dead owner, with the link turned off lasts until
-    the reboot that clears it."""
+    the tuning (release_tuning). A start assumes the draw stock, so the link
+    off gives it back on an empty port even uncut here: an owner before this
+    one may have cut it, and letting go of the voter is safe to repeat."""
     if mode == self.draw_for:
       return
     want = mode != 'off'
-    if want != self.cut:
+    if want != self.cut or not want:
       if mode != 'ios' and port.power_role() != 'none':
         return   # something is on the port; looked at again next step
       if want:
@@ -1015,16 +1029,17 @@ class Owner:
         time.sleep(max(0.0, POLL - (time.monotonic() - started)))
     finally:
       # first, inside manager's 5 s: it stops this when a chestnut turns up,
-      # and the comma has to host that. The tuning and the draw go back with
-      # the port only when the link is not wanted: manager stops this the
-      # moment the link is turned off, often before a step has seen it. Any
-      # other stop keeps them for the owner manager starts next
+      # and the comma has to host that. The tuning and the draw go with the
+      # port when the link is not wanted (release_tuning)
       if self.link_wanted():
         self.port.off()
-      else:
-        self.release_tuning()
-        if self.cut:
-          gadget.log.warning("jetlink: a host is still on the USB-C port; the comma draws nothing from it until a reboot")
+      elif self.release_tuning(final=True):
+        if port.power_role() == 'source':
+          gadget.log.info("jetlink: the comma powers what is on the USB-C port; its draw stays cut, "
+                          "which does nothing there, until a reboot")
+        else:
+          gadget.log.warning("jetlink: a host is still on the USB-C port; the comma draws nothing from it "
+                             "until a reboot")
       self.lender.stop()
       # about this process's lender; with no owner there is nothing to borrow
       # anyway, and a chestnut may be why it stopped

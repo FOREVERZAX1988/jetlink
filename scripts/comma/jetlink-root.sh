@@ -625,10 +625,9 @@ sysctl_write() {
   put "$2" "$PROC_SYS/${1//.//}" "could not set $1=$2"
 }
 
-# Applied while the link is on, so a device with the link off runs stock
-# values. The owner restores them when the link is turned off or a chestnut
-# takes the port, and keeps them on any other exit, since the next owner
-# applies them again over the same record. A reboot resets them.
+# apply records the stock values, once a boot, and writes the link's; restore
+# writes the record back and drops it, and without one does nothing. Either
+# is safe to repeat. A reboot resets them.
 vm_apply() {
   local pair key value had="" rec="" failed=0
   # A key already in the record keeps its first value: a second apply must
@@ -691,9 +690,8 @@ cmd_vm() {
 }
 
 # The port's input current while the link is on; see USB_ICL_VOTER. off forces
-# the limit to 0 and on gives the charger its own limit back. The owner gives
-# it back when the link is turned off or a chestnut takes the port, and only
-# on an empty port; any other exit keeps it, and a reboot clears it.
+# the limit to 0 and on gives the charger its own limit back; either is safe
+# to repeat. A reboot clears it.
 cmd_draw() {
   case "${1:-}" in
     off) force_voter "$USB_ICL_VOTER" 0 "to stop drawing from the port" || exit 1 ;;
