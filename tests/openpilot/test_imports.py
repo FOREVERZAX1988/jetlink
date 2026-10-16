@@ -12,6 +12,9 @@ even where openpilot is importable (the fork's venv puts its checkout on every
 path). The owner's path is held to the standard library and jetlink's light
 half, because it stays resident for the whole drive. And a scan of the source
 finds an import tucked inside a function, which no import runs.
+
+stock.py is the one exception (the plan's rule 1): it imports openpilot, but
+only inside a method, and its top level stays on the owner's path.
 """
 from __future__ import annotations
 
@@ -36,10 +39,12 @@ MODULES = sorted({'jetlink.openpilot', *(m.name for m in pkgutil.walk_packages(j
 # what stays resident for the whole drive, at about 10 MB: the gadget owner and
 # everything it opens. The provisioning run and modeld are the heavy half
 OWNER_PATH = ('jetlink.openpilot.owner', 'jetlink.openpilot', 'jetlink.openpilot.interface', 'jetlink.openpilot.settings',
-              'jetlink.comma.owner', 'jetlink.comma.gadget', 'jetlink.comma.lending', 'jetlink.comma.port',
+              'jetlink.openpilot.stock', 'jetlink.comma.owner', 'jetlink.comma.gadget', 'jetlink.comma.lending', 'jetlink.comma.port',
               'jetlink.comma.root', 'jetlink.transport.ffs')
 # a fork's hook module imports the hooks, and the owner imports that module
 HOOKS = ('jetlink.openpilot.hooks',)
+# the base adapter, which may import openpilot inside a method and nowhere else
+STOCK = PACKAGE / 'openpilot' / 'stock.py'
 
 BLOCKER = '''
 import importlib, json, sys
@@ -135,7 +140,9 @@ def _imports(path: Path) -> list[tuple[str, int, bool]]:
 def test_no_source_in_jetlink_names_openpilot():
   offenders = []
   for path in sorted(PACKAGE.rglob('*.py')):
-    for module, line, _ in _imports(path):
+    for module, line, top in _imports(path):
+      if path == STOCK and not top:
+        continue
       if module.split('.')[0] in BLOCKED and module.split('.')[0] != 'tinygrad':
         offenders.append(f"{path.relative_to(ROOT)}:{line} imports {module}")
   assert offenders == []
@@ -148,3 +155,10 @@ def test_tinygrad_is_only_ever_imported_where_it_is_used():
                for path in sorted(PACKAGE.rglob('*.py'))
                for module, line, top in _imports(path) if module.split('.')[0] == 'tinygrad' and top]
   assert offenders == []
+
+
+def test_stock_names_openpilot_only_inside_a_method():
+  # the one file the guard above lets through, and only this far
+  lazy = [module for module, _, top in _imports(STOCK) if module.split('.')[0] == 'openpilot' and not top]
+  assert lazy, "stock.py imports no openpilot: drop its exception above"
+  assert 'jetlink.openpilot.stock' in MODULES   # so the blocked import above runs it
