@@ -20,10 +20,15 @@ The fork's guard, inside a function so a jetlink that fails to import lands
 in it too:
 
   try:
-    from jetlink.openpilot.hooks import Hooks
-    HOOKS = Hooks(API, adapter, link_on=link_on)
+    from jetlink.openpilot.hooks import Hooks, Off
+    HOOKS = Hooks(API, adapter, link_on=link_on, log=cloudlog)
   except Exception as e:
     HOOKS = Off(str(e), link_on=link_on)
+
+where cloudlog() imports and returns the fork's cloudlog: a bind that fails
+is logged there, in the drive's log, before any adapter is there to log with
+(without one, Python's logging, which an openpilot process sends to stderr).
+A factory, so that the guard imports nothing heavy.
 
 Off is here for a jetlink that imports but cannot be used (another API). The
 fork still needs its own answer for no jetlink at all, a checkout missing or
@@ -34,24 +39,30 @@ run is told only to someone who turned it on.
 Imported by every process that imports the fork's hook module, the resident
 gadget owner among them: the standard library and jetlink's light half only.
 Construction checks the API and nothing more; the adapter is built and bound
-on the first hook that needs it, once per process.
+on the first hook that needs it, once per process. handed_over() and state()
+read the model alone and never bind.
 """
 from __future__ import annotations
 
 import threading
-from collections import namedtuple
 from collections.abc import Callable
 
-from jetlink.openpilot import API, bind
+from jetlink.openpilot import API, Flags, SwapEvents, bind
 
 # the APIs a fork's adapter may be written to: today's, and after a bump the
 # previous one too, for one minor release (jetlink/openpilot/__init__.py)
-COMPATIBLE = frozenset({3})
+COMPATIBLE = frozenset({API})
 
-# what selfdrived is told when the swap events cannot run: none at all. The
-# fields of events.Flags, read by name
-_Flags = namedtuple('_Flags', 'offer link_lost no_entry chime settling')
-NO_EVENTS = _Flags(False, False, False, False, False)
+# what selfdrived is told when the swap events cannot run: none at all
+NO_EVENTS = Flags(False, False, False, False, False)
+
+
+def _text(error: BaseException) -> str:
+  """An error as a log line says it, from an error whose str() may raise too."""
+  try:
+    return f"{type(error).__name__}: {error}"
+  except Exception:
+    return type(error).__name__
 
 
 class _Hooks:
@@ -61,6 +72,8 @@ class _Hooks:
   def __init__(self, reason: str = '', link_on: Callable[[], bool] | None = None):
     self._why = reason
     self._link_on = link_on
+    # the joining model's handovers as handed_over() last saw them, in this process
+    self._handovers = 0
 
   def _call(self, name: str, default, *args):
     return default
@@ -96,10 +109,20 @@ class _Hooks:
     return model if joined is None else joined
 
   def handed_over(self, model) -> bool:
-    return self._call('handed_over', False, model)
+    """Jetlink.handed_over's, off the model alone: modeld asks every frame."""
+    try:
+      handovers = getattr(model, 'handovers', 0)
+      changed, self._handovers = bool(handovers != self._handovers), handovers
+    except Exception:
+      return False
+    return changed
 
   def state(self, model) -> str:
-    return self._call('state', 'none', model)
+    """Jetlink.state's, off the model alone."""
+    try:
+      return getattr(model, 'big_model_state', 'none')
+    except Exception:
+      return 'none'
 
   def shutdown_step(self, should_shutdown: bool, reason: str = '') -> bool:
     return self._call('shutdown_step', should_shutdown, should_shutdown, reason)
@@ -119,39 +142,9 @@ class _Hooks:
   def extend_catalog(self, catalog: dict) -> dict:
     return self._call('extend_catalog', catalog, catalog)
 
-  def swap_events(self, tick_s: float) -> SwapEvents:
-    """selfdrived's swap-event tracker, once, every `tick_s` (events.SwapEvents)."""
-    return SwapEvents(None, None)
-
-
-class SwapEvents:
-  """events.SwapEvents behind the net: update() is no event at all when it
-  fails, and settling False; the failure is logged as the hooks' are. Inert
-  without a tracker."""
-
-  def __init__(self, events, hooks: Hooks | None):
-    self._events = events
-    self._hooks = hooks
-    self._ok = events is not None
-
-  @property
-  def settling(self) -> bool:
-    try:
-      return self._ok and bool(self._events.settling)
-    except Exception:
-      return False
-
-  def update(self, fresh, state, big, in_control):
-    if self._events is None:
-      return NO_EVENTS
-    try:
-      flags, self._ok = self._events.update(fresh, state, big, in_control), True
-      self._hooks._failed.pop('swap_events.update', None)
-      return flags
-    except Exception as e:
-      self._ok = False
-      self._hooks._failure('swap_events.update', e)
-      return NO_EVENTS
+  def swap_events(self, tick_s: float) -> SwapTracker:
+    """selfdrived's swap-event tracker, updated every `tick_s` (events.SwapEvents)."""
+    return SwapTracker(None, None)
 
 
 class Off(_Hooks):
@@ -161,7 +154,8 @@ class Off(_Hooks):
 class Hooks(_Hooks):
   """Jetlink over the fork's adapter, for an adapter written to `api`.
   adapter_factory() makes it, on first use. Raises at once for an API this
-  jetlink does not accept."""
+  jetlink does not accept. `log` is a logger, or a function that returns one,
+  for what fails before the adapter's log is there."""
 
   def __init__(self, api: int, adapter_factory: Callable[[], object], *, link_on: Callable[[], bool] | None = None,
                log=None):
@@ -191,22 +185,32 @@ class Hooks(_Hooks):
       self._log = getattr(op, 'log', None) or self._log
       return bind(op)
     except Exception as e:
-      self._why = f"jetlink failed to start: {type(e).__name__}: {e}"
-      self._logger().exception("jetlink: %s", self._why)
+      self._why = f"jetlink failed to start: {_text(e)}"
+      self._report("jetlink: %s", self._why)
       return False
 
-  def _logger(self):
-    if self._log is None:
-      import logging
-      self._log = logging.getLogger('jetlink')
-    return self._log
+  def _report(self, msg: str, *args) -> None:
+    """A failure to the log, in the except block that caught it. A log that
+    fails is let go: nothing a hook does may raise."""
+    try:
+      if not hasattr(self._log, 'exception'):
+        try:
+          self._log = self._log() if callable(self._log) else None
+        except Exception:
+          self._log = None
+        if not hasattr(self._log, 'exception'):
+          import logging
+          self._log = logging.getLogger('jetlink')
+      self._log.exception(msg, *args)
+    except Exception:
+      pass
 
   def _call(self, name: str, default, *args):
     try:
       jetlink = self._jetlink()
       if jetlink is not None:
         result = getattr(jetlink, name)(*args)
-        self._failed.pop(name, None)
+        self._cleared(name)
         return result
     except Exception as e:
       self._failure(name, e)
@@ -214,17 +218,48 @@ class Hooks(_Hooks):
 
   def _failure(self, name: str, error: Exception) -> None:
     # once per distinct error: the UI would log a failing status five times a second
-    text = f"{type(error).__name__}: {error}"
+    text = _text(error)
     if self._failed.get(name) != text:
       self._failed[name] = text
-      self._logger().exception("jetlink: %s() failed: %s", name, text)
+      self._report("jetlink: %s() failed: %s", name, text)
 
-  def swap_events(self, tick_s: float) -> SwapEvents:
-    """Pure bookkeeping, so it needs no adapter, and imported here so that
-    selfdrived never imports jetlink at its top."""
+  def _cleared(self, name: str) -> None:
+    self._failed.pop(name, None)
+
+  def swap_events(self, tick_s: float) -> SwapTracker:
+    """Bookkeeping alone, so it binds nothing."""
     try:
-      from jetlink.openpilot.events import SwapEvents as Tracker
-      return SwapEvents(Tracker(tick_s), self)
+      return SwapTracker(SwapEvents(tick_s), self)
     except Exception as e:
       self._failure('swap_events', e)
-      return SwapEvents(None, None)
+      return SwapTracker(None, None)
+
+
+class SwapTracker:
+  """events.SwapEvents behind the net: update() is no event at all when it
+  fails, and settling False; the failure is logged as the hooks' are. Inert
+  without a tracker."""
+
+  def __init__(self, events: SwapEvents | None, hooks: Hooks | None):
+    self._events = events
+    self._hooks = hooks
+    self._ok = events is not None
+
+  @property
+  def settling(self) -> bool:
+    try:
+      return self._ok and bool(self._events.settling)
+    except Exception:
+      return False
+
+  def update(self, fresh, state, big, in_control) -> Flags:
+    if self._events is None:
+      return NO_EVENTS
+    try:
+      flags, self._ok = self._events.update(fresh, state, big, in_control), True
+      self._hooks._cleared('swap_events.update')
+      return flags
+    except Exception as e:
+      self._ok = False
+      self._hooks._failure('swap_events.update', e)
+      return NO_EVENTS

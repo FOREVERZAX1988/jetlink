@@ -193,9 +193,10 @@ class Jetlink:
     return changed
 
   def state(self, model) -> str:
-    """What modeld publishes as the big model's state: the joining model's
-    big_model_state, one of STATES, else 'none'. A fork's capnp enum holds
-    exactly STATES, so a value outside it would raise on the frame thread."""
+    """What modeld publishes as the big model's state: the model's
+    big_model_state as it is, one of STATES on a joining model, and 'none' for
+    a model without one. A fork's capnp enum holds exactly STATES, so a value
+    outside it would raise on the frame thread."""
     return getattr(model, 'big_model_state', 'none')
 
   def request_shutdown(self, reason: str = '') -> bool:

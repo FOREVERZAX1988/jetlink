@@ -7,15 +7,14 @@ See the LICENSE file in the root directory for more details.
 The facade a fork's hook lines call: every hook answers, whatever jetlink
 does, and the answer on a failure is the one the link off gets.
 """
-import sys
 import threading
 import time
 import unittest
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 from unittest import mock
 
-from jetlink.openpilot import Status, hooks
-from jetlink.openpilot.hooks import COMPATIBLE, NO_EVENTS, Hooks, Off
+from jetlink.openpilot import STATES, Flags, Status, hooks
+from jetlink.openpilot.hooks import COMPATIBLE, Hooks, Off
 from jetlink.openpilot.testing import FakeJoinedModel, RecordingLog
 from tests.openpilot.fakes import OpenpilotTest
 from tests.openpilot.test_api import plain
@@ -41,17 +40,17 @@ CATALOG = {'bundles': []}
 
 
 def answers(h) -> dict:
-  """Every hook's answer, two for shutdown_step: a power-off not wanted and wanted."""
-  joined = FakeJoinedModel(state='running')
-  joined.hand_over()
+  """Every hook's answer, two for shutdown_step: a power-off not wanted and
+  wanted. modeld's own model, as it runs with the link off."""
+  own = object()
   return {
     'should_run': h.should_run(False, None, None),
     'status': h.status(),
     'reason': h.reason(),
     'prepare': h.prepare(False),
     'attach': h.attach('model', object(), 1, 1),
-    'handed_over': h.handed_over(joined),
-    'state': h.state(joined),
+    'handed_over': h.handed_over(own),
+    'state': h.state(own),
     'shutdown_step': (h.shutdown_step(False), h.shutdown_step(True, 'test')),
     'request_shutdown': h.request_shutdown('test'),
     'shutdown_pending': h.shutdown_pending(),
@@ -142,7 +141,8 @@ class TestAFailingJetlink(unittest.TestCase):
     h = over(Broken(), log)
     for _ in range(3):
       answers(h)
-    self.assertEqual(len(log.lines('exception')), len(OFF))
+    # all but handed_over and state, which read the model alone
+    self.assertEqual(len(log.lines('exception')), len(OFF) - 2)
     self.assertTrue(log.has("status() failed: RuntimeError: status"))
 
   def test_a_failure_is_logged_again_once_it_changes_or_has_cleared(self):
@@ -213,23 +213,88 @@ class TestBinding(unittest.TestCase):
     self.assertIsNone(h.reason())
 
 
-def tracker(update=None, settling=False, fail_init=False):
-  """A stand-in jetlink.openpilot.events whose SwapEvents answers `update`
-  (an exception raises), for sys.modules."""
-  class SwapEvents:
-    def __init__(self, tick_s):
-      if fail_init:
-        raise RuntimeError('no tracker')
-      self.tick_s = tick_s
-      self.settling = settling
+class Unprintable(Exception):
+  def __str__(self):
+    raise RuntimeError('no str')
 
-    def update(self, fresh, state, big, in_control):
-      if isinstance(answer := update(), Exception):
-        raise answer
-      return answer
-  events = ModuleType('jetlink.openpilot.events')
-  events.SwapEvents = SwapEvents
-  return mock.patch.dict(sys.modules, {'jetlink.openpilot.events': events})
+
+class RaisingLog:
+  def __getattr__(self, name):
+    def fail(*args, **kwargs):
+      raise RuntimeError('the log is down')
+    return fail
+
+
+class TestNothingEscapes(unittest.TestCase):
+  def test_a_log_that_raises(self):
+    h = over(Broken(), RaisingLog())
+    self.assertEqual(answers(h), OFF)
+    self.assertEqual(h.swap_events(0).update(True, 'ready', False, True), hooks.NO_EVENTS)
+
+  def test_an_error_whose_str_raises(self):
+    log = RecordingLog()
+
+    class Odd:
+      def __getattr__(self, name):
+        def fail(*args):
+          raise Unprintable()
+        return fail
+    self.assertEqual(answers(over(Odd(), log)), OFF)
+    self.assertTrue(log.has("status() failed: Unprintable"))
+
+  def test_both_at_bind(self):
+    def factory():
+      raise Unprintable()
+    h = Hooks(3, factory, log=RaisingLog(), link_on=lambda: True)
+    self.assertEqual(answers(h), {**OFF, 'reason': "jetlink failed to start: Unprintable"})
+
+  def test_a_model_whose_reads_raise(self):
+    class Odd:
+      @property
+      def handovers(self):
+        raise RuntimeError('no count')
+      big_model_state = handovers
+    for h in (Off(), Hooks(3, mock.Mock())):
+      self.assertEqual((h.handed_over(Odd()), h.state(Odd())), (False, 'none'))
+
+  def test_a_log_factory_is_asked_once_and_one_that_raises_is_logging(self):
+    log, asked = RecordingLog(), []
+
+    def factory():
+      asked.append(1)
+      return log
+
+    def adapter():
+      raise RuntimeError('no params')
+    answers(Hooks(3, adapter, log=factory))
+    self.assertEqual(asked, [1])
+    self.assertEqual(log.lines('exception'), ["jetlink: jetlink failed to start: RuntimeError: no params"])
+
+    def failing():
+      raise RuntimeError('no cloudlog')
+    with self.assertLogs('jetlink', 'ERROR'):
+      answers(Hooks(3, adapter, log=failing))
+
+
+class TestTheModelsReads(unittest.TestCase):
+  def test_a_handover_is_the_count_moving_across_a_run_and_binds_nothing(self):
+    factory = mock.Mock()
+    for h in (Off(), Hooks(3, factory)):
+      model = FakeJoinedModel()
+      self.assertFalse(h.handed_over(model))
+      model.hand_over()
+      self.assertTrue(h.handed_over(model))
+      self.assertFalse(h.handed_over(model))
+      model.hand_over('ready')
+      model.hand_over('running')
+      self.assertTrue(h.handed_over(model))
+    factory.assert_not_called()
+
+  def test_the_state_is_the_models_and_none_for_one_without(self):
+    for h in (Off(), Hooks(3, mock.Mock())):
+      self.assertEqual(h.state(FakeJoinedModel(state='retrying')), 'retrying')
+      self.assertEqual(h.state(object()), 'none')
+      self.assertFalse(h.handed_over(object()))
 
 
 class TestSwapEvents(unittest.TestCase):
@@ -237,47 +302,52 @@ class TestSwapEvents(unittest.TestCase):
 
   def test_off_is_no_event_at_all(self):
     events = Off('why').swap_events(0.01)
-    self.assertEqual(events.update(*self.ARGS), NO_EVENTS)
-    self.assertEqual(NO_EVENTS._fields, ('offer', 'link_lost', 'no_entry', 'chime', 'settling'))
-    self.assertFalse(any(NO_EVENTS))
+    self.assertEqual(events.update(*self.ARGS), hooks.NO_EVENTS)
+    self.assertIsInstance(hooks.NO_EVENTS, Flags)
+    self.assertFalse(any(hooks.NO_EVENTS))
     self.assertFalse(events.settling)
 
-  def test_the_trackers_answers_pass_through(self):
-    flags = SimpleNamespace(offer=True)
-    with tracker(lambda: flags, settling=True):
-      events = Hooks(3, mock.Mock()).swap_events(0.01)
-    self.assertEqual(events._events.tick_s, 0.01)
-    self.assertIs(events.update(*self.ARGS), flags)
+  def test_over_the_real_tracker(self):
+    factory = mock.Mock()
+    events = Hooks(3, factory).swap_events(0.01)
+    # ready while in control: offered, for a while
+    self.assertTrue(events.update(True, 'ready', False, True).offer)
+    # the swap: a second of no entry, and settling
+    flags = events.update(True, 'running', True, False)
+    self.assertTrue(flags.no_entry and flags.settling)
     self.assertTrue(events.settling)
+    for _ in range(100):
+      flags = events.update(True, 'running', True, False)
+    self.assertFalse(flags.no_entry or events.settling)
+    factory.assert_not_called()
 
   def test_a_failing_update_is_no_event_logged_once_and_not_settling(self):
     log = RecordingLog()
-    outcomes = iter([RuntimeError('a'), RuntimeError('a'), 'flags', RuntimeError('a')])
-    with tracker(lambda: next(outcomes), settling=True):
-      events = Hooks(3, mock.Mock(), log=log).swap_events(0.01)
-    self.assertEqual(events.update(*self.ARGS), NO_EVENTS)
-    self.assertFalse(events.settling)
-    self.assertEqual([events.update(*self.ARGS) for _ in range(3)], [NO_EVENTS, 'flags', NO_EVENTS])
+    events = Hooks(3, mock.Mock(), log=log).swap_events(0.01)
+    events.update(True, 'running', True, False)
+    self.assertTrue(events.settling)
+    outcomes = iter([RuntimeError('a'), RuntimeError('a'), Flags(True, False, False, False, False), RuntimeError('a')])
+
+    def update(*args):
+      if isinstance(answer := next(outcomes), Exception):
+        raise answer
+      return answer
+    with mock.patch.object(events._events, 'update', update):
+      self.assertEqual(events.update(*self.ARGS), hooks.NO_EVENTS)
+      self.assertFalse(events.settling)
+      self.assertEqual([events.update(*self.ARGS).offer for _ in range(3)], [False, True, False])
     self.assertEqual(log.lines('exception'), ["jetlink: swap_events.update() failed: RuntimeError: a"] * 2)
 
-  def test_a_tracker_that_will_not_build_is_inert(self):
+  def test_a_period_it_cannot_count_is_inert_and_said(self):
     log = RecordingLog()
-    with tracker(fail_init=True):
-      events = Hooks(3, mock.Mock(), log=log).swap_events(0.01)
-    self.assertEqual((events.update(*self.ARGS), events.settling), (NO_EVENTS, False))
-    self.assertTrue(log.has("swap_events() failed: RuntimeError: no tracker"))
+    events = Hooks(3, mock.Mock(), log=log).swap_events(0)
+    self.assertEqual((events.update(*self.ARGS), events.settling), (hooks.NO_EVENTS, False))
+    self.assertTrue(log.has("swap_events() failed: ValueError: SwapEvents needs the loop period"))
 
   def test_a_settling_that_raises_is_false(self):
-    with tracker(lambda: 'flags'):
-      events = Hooks(3, mock.Mock()).swap_events(0.01)
-    type(events._events).settling = property(lambda self: 1 / 0)
-    self.assertFalse(events.settling)
-
-  def test_it_builds_nothing_of_the_adapters(self):
-    factory = mock.Mock()
-    with tracker(lambda: 'flags'):
-      Hooks(3, factory).swap_events(0.01).update(*self.ARGS)
-    factory.assert_not_called()
+    events = Hooks(3, mock.Mock()).swap_events(0.01)
+    with mock.patch.object(type(events._events), 'settling', property(lambda self: 1 / 0)):
+      self.assertFalse(events.settling)
 
 
 class TestOverTheRealJetlink(OpenpilotTest):
@@ -290,28 +360,19 @@ class TestOverTheRealJetlink(OpenpilotTest):
     found = answers(self.h)
     self.assertIsInstance(found.pop('status'), Status)
     found.pop('extend_catalog')
-    # off the model it is handed, and the catalog is hardware, not the setting
-    expected = {**OFF, 'handed_over': True, 'state': 'running', 'should_extend_catalog': True}
+    # the catalog is hardware, not the setting
+    expected = {**OFF, 'should_extend_catalog': True}
     del expected['status'], expected['extend_catalog']
     self.assertEqual(found, expected)
     self.assertEqual(self.op.log.lines('exception'), [])
 
-  def test_a_handover_is_the_count_moving_across_a_run(self):
-    model = FakeJoinedModel()
-    self.assertFalse(self.h.handed_over(model))
-    model.hand_over()
-    self.assertTrue(self.h.handed_over(model))
-    self.assertFalse(self.h.handed_over(model))
-    model.hand_over('ready')
+  def test_jetlinks_own_reads_of_the_model(self):
+    model = FakeJoinedModel(state='retrying')
+    self.assertFalse(self.jl.handed_over(model))
     model.hand_over('running')
-    self.assertTrue(self.h.handed_over(model))
-
-  def test_the_state_is_the_joining_models_and_none_for_any_other(self):
-    from jetlink.openpilot import STATES
-    self.assertEqual(self.h.state(FakeJoinedModel(state='retrying')), 'retrying')
-    self.assertEqual(self.h.state(object()), 'none')
-    self.assertFalse(self.h.handed_over(object()))
-    self.assertIn(self.h.state(object()), STATES)
+    self.assertEqual((self.jl.handed_over(model), self.jl.handed_over(model)), (True, False))
+    self.assertEqual((self.jl.state(model), self.jl.state(object())), ('running', 'none'))
+    self.assertIn(self.jl.state(object()), STATES)
 
 
 if __name__ == '__main__':
