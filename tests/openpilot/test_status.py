@@ -9,8 +9,12 @@ is on the other end, the progress the panels show, and which icon that is.
 Every answer follows from the setting, the pick, the spec record, the gadget's
 files and whether the build made a warp for this camera; no link IO.
 """
+import ast
+import inspect
+import os
 import time
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -420,7 +424,7 @@ class BuildEtaTest(OpenpilotTest):
   def report(self, *args, size=1_850_000_000):
     seen = []
     with mock.patch.object(self.parts.models, 'selected_model', return_value={'size': size}), \
-         mock.patch.object(self.parts.progress, 'report', lambda *a: seen.append(a)):
+         mock.patch.object(self.parts.progress, 'report', lambda *a, **kw: seen.append(a + (kw,))):
       for call in args:
         self.parts.progress.report_with_eta(*call)
     return seen
@@ -502,7 +506,7 @@ class TestIcon(unittest.TestCase):
 class TestTheSnapshot(OpenpilotTest):
   def test_its_fields_are_only_ever_added(self):
     self.assertEqual(Status._fields, ('enabled', 'mode', 'transport', 'present', 'port', 'ready', 'reason', 'progress',
-                                      'model', 'default_model', 'standin'))
+                                      'model', 'default_model', 'standin', 'running', 'active'))
 
   def test_a_model_in_the_list_says_whether_it_is_built_or_downloaded(self):
     models = [{'name': 'Built', 'ref': 'r1', 'oid': 'b' * 64, 'size': 10},
@@ -568,6 +572,196 @@ class TestTheSnapshot(OpenpilotTest):
          mock.patch.object(self.parts.models, 'default_model_name', return_value='Default'):
       s = self.jl.status()
     self.assertEqual((s.model, s.default_model, s.active_model), ('Picked', 'Default', None))
+
+
+def fixture(**fields) -> Status:
+  """A snapshot as zoompilot's tests/helpers.jetlink_status() builds it: by
+  keyword, from the fields Status had before running and active."""
+  base = {'enabled': False, 'mode': 'usb' if fields.get('enabled') else 'off', 'transport': 'USB', 'present': False,
+          'port': None, 'ready': False, 'reason': None, 'progress': None, 'model': None, 'default_model': None}
+  return Status(**{**base, **fields})
+
+
+class TestTheForksFixtures(unittest.TestCase):
+  def test_the_old_fields_alone_still_make_one(self):
+    # positionally, and by keyword as zoompilot's helpers do
+    s = Status(True, 'usb', 'USB', True, 'host', True, None, None, 'm', 'd')
+    self.assertEqual((s.standin, s.running, s.active), (None, None, False))
+    self.assertEqual(fixture(enabled=True, ready=True).phase, 'prepared')
+    self.assertEqual(status.failed('boom', 'usb').reason_code, 'status_failed')
+
+
+class TestWhatThePanelsDerive(unittest.TestCase):
+  """zoompilot's accelerator_link.link_status and ui_state_zp's jetlink_view
+  and _enforce_usb_port, ported, on the same inputs as its tests."""
+
+  @staticmethod
+  def link_status(s) -> str:
+    if s.present:
+      return f"Jetlink connected: {s.transport}."
+    if s.port is None:
+      return ""
+    return "Nothing on the USB port." if s.port == "empty" else "A device is on the USB port."
+
+  def test_port_state_is_the_status_line(self):
+    line = {'connected': lambda s: f"Jetlink connected: {s.transport}.", 'empty': lambda s: "Nothing on the USB port.",
+            'device': lambda s: "A device is on the USB port.", None: lambda s: ""}
+    cases = [({'port': 'empty'}, 'empty'), ({'port': 'host'}, 'device'), ({'present': True, 'port': 'host'}, 'connected'),
+             ({'port': None}, None), ({'present': True, 'port': None}, 'connected'),
+             ({'present': True, 'transport': 'iOS over USB (192.168.60.3)'}, 'connected')]
+    for fields, expected in cases:
+      with self.subTest(fields):
+        s = fixture(**fields)
+        self.assertEqual(s.port_state, expected)
+        self.assertEqual(line[s.port_state](s), self.link_status(s))
+
+  def test_shown_is_jetlink_view(self):
+    cases = [({}, False), ({'present': True, 'ready': True, 'enabled': True}, True),
+             ({'present': True, 'progress': {'stage': 'upload', 'frac': 0.5, 'msg': ''}}, True),
+             ({'progress': {}}, True), ({'enabled': True}, True), ({'ready': True, 'port': 'host'}, False)]
+    for fields, expected in cases:
+      with self.subTest(fields):
+        s = fixture(**fields)
+        self.assertEqual(s.shown, expected)
+        self.assertEqual(s.shown, s.enabled or s.present or s.progress is not None)
+
+  def test_holds_port_is_the_setting(self):
+    # ADB off while the link is on; beside a chestnut enabled is already False
+    for enabled in (False, True):
+      self.assertEqual(fixture(enabled=enabled, present=not enabled).holds_port, enabled)
+
+
+class TestPhase(unittest.TestCase):
+  def test_each_phase_and_what_outranks_what(self):
+    on = {'enabled': True}
+    cases = [
+      ({}, 'off'),
+      ({'running': 'running', 'active': True}, 'off'),     # the setting first, then
+      ({**on, 'reason': status.NO_WARP, 'running': 'running', 'active': True}, 'unavailable'),
+      ({**on, 'running': 'running', 'active': True, 'progress': {'stage': 'connect'}}, 'active'),
+      ({**on, 'running': 'ready', 'ready': True, 'progress': {'stage': 'connect'}}, 'waiting'),
+      ({**on, 'running': 'retrying', 'progress': {'stage': 'connect'}}, 'reconnecting'),
+      ({**on, 'running': 'retrying', 'progress': {'stage': 'build', 'frac': 0.2}}, 'reconnecting'),
+      ({**on, 'running': 'running', 'ready': True}, 'reconnecting'),  # stopped answering: about to hand back
+      ({**on, 'running': 'joining', 'progress': {'stage': 'build', 'frac': 0.2}}, 'preparing'),
+      ({**on, 'progress': {'stage': 'download', 'frac': 0.3}, 'ready': True}, 'preparing'),
+      ({**on, 'progress': {'stage': 'waiting'}}, 'preparing'),
+      ({**on, 'progress': {'stage': 'failed'}}, 'preparing'),
+      ({**on, 'running': 'joining'}, 'connecting'),
+      ({**on, 'running': 'joining', 'ready': True, 'progress': {'stage': 'connect'}}, 'connecting'),
+      ({**on, 'progress': {'stage': 'connect', 'msg': 'connecting'}}, 'connecting'),   # a provisioning run's
+      ({**on, 'ready': True}, 'prepared'),
+      ({**on, 'ready': True, 'progress': {'stage': 'ready'}}, 'prepared'),
+      ({**on, 'standin': 'Cinque Terre V3'}, 'prepared'),
+      ({**on}, 'preparing'),                             # nothing built and nothing working on it yet
+    ]
+    for fields, expected in cases:
+      with self.subTest(fields):
+        self.assertEqual(fixture(**fields).phase, expected)
+    self.assertEqual({p for _, p in cases}, set(status.PHASES))
+
+  def test_every_combination_is_a_phase(self):
+    seen = {fixture(enabled=e, reason=r, ready=rd, running=st, active=a, progress=g).phase
+            for e in (False, True) for r in (None, status.STOPPED) for rd in (False, True)
+            for st in (None, 'joining', 'retrying', 'ready', 'running') for a in (False, True)
+            for g in (None, {'stage': 'connect'}, {'stage': 'build'}, {'stage': 'ready'}, {})}
+    self.assertEqual(seen, set(status.PHASES))
+
+
+class TestCodes(unittest.TestCase):
+  def test_each_reason_has_its_code(self):
+    from jetlink.comma import owner
+    cases = [(None, None), (status.NO_WARP, 'no_warp'), (status.STOPPED, 'service_stopped'),
+             ("the service keeps stopping (5 times in 10 min), waiting 60 s before starting it again", 'backing_off'),
+             (status.failure('RuntimeError: boom', 'usb'), 'status_failed'),
+             ('the lender could not listen: address in use', 'gadget')]
+    for reason, code in cases:
+      with self.subTest(reason):
+        self.assertEqual(fixture(enabled=True, reason=reason).reason_code, code)
+    self.assertEqual({c for _, c in cases} - {None}, set(status.REASON_CODES))
+    # the owner's own words, which the code is read from
+    self.assertIn(f'f"{status.BACKING_OFF} (', inspect.getsource(owner))
+
+  def test_every_progress_code_jetlink_reports_is_listed(self):
+    reported = set()
+    for path in Path(status.__file__).parents[1].rglob('*.py'):
+      for node in ast.walk(ast.parse(path.read_text())):
+        if not isinstance(node, ast.Call) or getattr(node.func, 'attr', None) not in ('report', '_report'):
+          continue
+        given = [k.value for k in node.keywords if k.arg == 'code']
+        if node.func.attr == '_report' and len(node.args) > 2:
+          given.append(node.args[2])
+        reported |= {g.value for g in given if isinstance(g, ast.Constant)}
+    # the client's upload and the server's stages pass through report_with_eta as stage names
+    self.assertEqual(reported | {'upload', 'patch', 'parse', 'build', 'load'}, set(status.PROGRESS_CODES))
+
+  def test_a_code_and_its_args_travel_beside_the_message(self):
+    progress = status.Progress(SimpleNamespace(keys=SimpleNamespace(progress='p'), put=mock.Mock()))
+    progress.report('download', 0.5, 'downloading 1 of 2 MB', code='downloading', args={'got_mb': 1, 'total_mb': 2})
+    progress.op.put.assert_called_once_with('p', {'stage': 'download', 'frac': 0.5, 'msg': 'downloading 1 of 2 MB',
+                                                  'drops': 0, 'code': 'downloading', 'args': {'got_mb': 1, 'total_mb': 2}})
+
+  def test_the_build_says_its_estimate_as_args(self):
+    seen = []
+    progress = status.Progress(SimpleNamespace(), size=lambda: 1_850_000_000)
+    with mock.patch.object(progress, 'report', lambda *a, **kw: seen.append(kw)):
+      progress.report_with_eta('build', 0.8, 'building the engine')
+      progress.report_with_eta('upload', 0.5, '380/766 MB')
+    self.assertEqual(seen, [{'code': 'build', 'args': {'eta_s': 60}}, {'code': 'upload', 'args': {}}])
+
+
+class TestTheRuntimeRecord(OpenpilotTest):
+  """modeld's record (gadget.MODELD) as the snapshot reads it: fresh, from a
+  live process that did not stop, and active only on a recent answer."""
+
+  def write(self, **fields):
+    now = time.monotonic()
+    gadget.write_record(gadget.MODELD, {'pid': os.getpid(), 'at': now, 'stopping': False, 'state': 'running',
+                                        'active': True, 'last_output_at': now - 0.05, **fields})
+
+  def test_a_live_record_with_a_fresh_answer_is_active(self):
+    self.write()
+    self.assertEqual(status.runtime(), ('running', True))
+
+  def test_an_answer_too_old_when_written_is_not_active(self):
+    now = time.monotonic()
+    self.write(at=now, last_output_at=now - status.OUTPUT_FRESH - 0.05)
+    self.assertEqual(status.runtime(), ('running', False))
+    self.write(state='ready', active=False)
+    self.assertEqual(status.runtime(), ('ready', False))
+
+  def test_a_stale_stopping_or_dead_record_is_none(self):
+    self.write(at=time.monotonic() - gadget.HEARTBEAT_TIMEOUT - 0.5)
+    self.assertEqual(status.runtime(), (None, False))
+    self.write(stopping=True, state='unavailable')
+    self.assertEqual(status.runtime(), (None, False))
+    self.write()
+    with mock.patch.object(gadget.os, 'kill', side_effect=ProcessLookupError):
+      self.assertEqual(status.runtime(), (None, False))
+    for pid in (0, -1, None, '12'):
+      self.write(pid=pid)
+      self.assertEqual(status.runtime(), (None, False), pid)
+
+  def test_no_record_or_one_that_is_not_one_is_none(self):
+    self.assertEqual(status.runtime(), (None, False))
+    for text in ('nope', '[]', '{"pid": 1}', '{"at": "x"}'):
+      gadget.MODELD.write_text(text)
+      self.assertEqual(status.runtime(), (None, False), text)
+
+  def test_a_process_that_is_not_ours_to_signal_is_alive(self):
+    with mock.patch.object(gadget.os, 'kill', side_effect=PermissionError):
+      self.assertTrue(gadget.pid_alive(1))
+
+  def test_the_snapshot_carries_it(self):
+    self.op.set_mode('usb')
+    self.patch(self.parts.warps, 'built', return_value=True)
+    self.patch(gadget, 'gadget_error', return_value=None)
+    self.write()
+    s = self.jl.status()
+    self.assertEqual((s.running, s.active, s.phase), ('running', True, 'active'))
+    gadget.MODELD.unlink()
+    s = self.jl.status()
+    self.assertEqual((s.running, s.active), (None, False))
 
 
 if __name__ == '__main__':

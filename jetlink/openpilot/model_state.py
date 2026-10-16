@@ -195,6 +195,8 @@ class JetlinkModelState:
     self._holds: deque[float] = deque()
     self._holds_in_a_row = 0
     self.behind: str | None = None
+    # whether the last frame published the one before it: the runtime record's
+    self.held = False
 
   def slice_outputs(self, model_outputs: np.ndarray, output_slices: dict[str, slice]) -> dict[str, np.ndarray]:
     return {k: model_outputs[np.newaxis, v] for k, v in output_slices.items()}
@@ -284,7 +286,7 @@ class JetlinkModelState:
         self.trips.record(time.perf_counter() - frame.t0, self.client.last_timings[2])
         raise
     t4 = time.perf_counter()
-    held = model_output is None
+    held = self.held = model_output is None
     self.behind = self._note_hold(held)
     self.trips.record(t4 - frame.t0, self.client.last_timings[2])
     outputs = self._outputs(self.client.last_output if held else model_output)

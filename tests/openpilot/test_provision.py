@@ -115,7 +115,7 @@ class TestProvisionCost(OpenpilotTest):
     resolve.assert_called_once_with('f' * 40)
     args = d.client.ensure_engine.call_args.args
     assert args[0] == 'deadbeef' and args[1] == 4096
-    self.progress.report.assert_any_call('connect', 0.0, 'finding model')
+    self.progress.report.assert_any_call('connect', 0.0, 'finding model', code='finding_model')
 
   def test_a_pointer_that_cannot_be_looked_up_is_a_failed_provision(self):
     # the ordinary failure path: logged, backed off, tried again next poll
@@ -266,7 +266,7 @@ class TestFetching(OpenpilotTest):
     with mock.patch.object(self.parts.models, 'fetch_shipped_model', return_value=Path('/x')) as fetch:
       self.assertEqual(d.fetch_model(), Path('/x'))
     fetch.call_args.kwargs['progress'](0.5)
-    progress.report.assert_called_once_with('download', 0.5, 'downloading')
+    progress.report.assert_called_once_with('download', 0.5, 'downloading', code='downloading', args={})
     self.assertFalse(fetch.call_args.kwargs['should_stop']())
     d.request_stop()
     self.assertTrue(fetch.call_args.kwargs['should_stop']())
@@ -279,7 +279,8 @@ class TestFetching(OpenpilotTest):
       self.assertIsNone(d.fetch_model())
       self.assertIsNone(d.fetch_model())
     fetch.assert_called_once()
-    progress.report.assert_called_once_with('failed', 1.0, 'download failed, retrying later')
+    progress.report.assert_called_once_with('failed', 1.0, 'download failed, retrying later',
+                                            code='download_failed')
 
 
 class TestTheLoan(OpenpilotTest):
@@ -360,7 +361,7 @@ class TestTheRun(OpenpilotTest):
     d = self.worker()
     d.provision.side_effect = RuntimeError('the jetson went away')
     assert d.run() is False
-    self.parts.progress.report.assert_called_with('failed', 1.0, 'see the log')
+    self.parts.progress.report.assert_called_with('failed', 1.0, 'see the log', code='failed')
 
   def test_no_loan_is_left_for_the_next_run(self):
     d = self.worker()
@@ -399,7 +400,8 @@ class TestTheRun(OpenpilotTest):
     self.patch(self.parts.models, 'shipped_model_path', return_value=Path('/m.onnx'))
     gadget.wait_for_host.return_value = False
     assert d.run() is False
-    self.parts.progress.report.assert_called_with('waiting', 0.0, 'downloaded, builds when the jetson is on')
+    self.parts.progress.report.assert_called_with('waiting', 0.0, 'downloaded, builds when the jetson is on',
+                                                  code='downloaded_waiting_host')
 
   def test_only_a_pick_neither_built_nor_here_is_downloaded(self):
     d = provision.ProvisioningRun(self.parts)

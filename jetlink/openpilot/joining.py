@@ -45,6 +45,7 @@ Two rules the swap keeps:
 """
 from __future__ import annotations
 
+import os
 import threading
 import time
 
@@ -117,6 +118,10 @@ LAGS = (BEHIND, BAD_OUTPUT)
 # and as the panel's one line says it while the join tries again
 RECONNECTING = {LOST: 'reconnecting', BEHIND: 'fell behind, reconnecting', NOT_UP: 'load failed, reconnecting',
                 BAD_OUTPUT: 'bad output, reconnecting'}
+# and as its progress code's `why` (status.PROGRESS_CODES 'reconnecting')
+RECONNECT_WHY = {LOST: 'lost', BEHIND: 'behind', NOT_UP: 'load_failed', BAD_OUTPUT: 'bad_output'}
+# how often the runtime record (gadget.MODELD) is rewritten without a handover
+RECORD_PERIOD = 1.0
 
 
 class JoiningModelState:
@@ -124,10 +129,12 @@ class JoiningModelState:
 
   `progress` is where the join says what it is waiting on (status.Progress),
   `log` is cloudlog on a comma, and `in_control` the adapter's, asked before
-  every frame; without one, the in_control last written stands.
+  every frame; without one, the in_control last written stands. `name` is
+  the catalog's name for a model's sha256, for the runtime record.
   """
 
-  def __init__(self, small, connect, build, prepare=None, reset_small=None, *, progress, log, in_control=None):
+  def __init__(self, small, connect, build, prepare=None, reset_small=None, *, progress, log, in_control=None,
+               name=None):
     self._small = small
     self._active = small
     self._connect = connect
@@ -202,8 +209,19 @@ class JoiningModelState:
     # modelDataV2SP, not a param: a chestnut's load is over once, this never is
     self._loading = True
 
+    # the runtime record's: when the large model's last answer (not a held
+    # frame) came, and a wake for its writer on a handover. The frame thread
+    # assigns them and nothing else; the writer thread reads the rest itself.
+    # The path is taken now, so a test's stays its own
+    self._output_at = 0.0
+    self._record = threading.Event()
+    self._record_path = gadget.MODELD
+    self._name = name
+
     self._thread = threading.Thread(target=self._join_loop, daemon=True)
     self._thread.start()
+    self._writer = threading.Thread(target=self._write_loop, daemon=True)
+    self._writer.start()
 
   # -- what modeld reads ------------------------------------------------------
   # A read not defined here follows the model that is driving (__getattr__):
@@ -354,17 +372,20 @@ class JoiningModelState:
                         (done - started) * 1e3, (failed - started) * 1e3,
                         (demoted - failed) * 1e3, (done - demoted) * 1e3)
       return result
+    if not getattr(big, 'held', False):
+      self._output_at = time.monotonic()
     if self._loading:
       # a connected engine can still fail its first inference; only announce
       # readiness after a frame the caller can publish
       self._loading = False
       self._announce = True
       self._rejoin.set()
+      self._record.set()
       self._log.warning("jetlink: large model joined mid-drive, modelV2.big is now true")
     if big.behind:
       # this frame's output is published as it came; its stall is forgiven now
       self._lagging = True
-      self._handovers += 1
+      self._handed_over()
       self._log.warning("jetlink: large model %s, the small model drives from the next", big.behind)
     return result
 
@@ -396,7 +417,7 @@ class JoiningModelState:
       return
     self._big = big
     self._joined_at = time.monotonic()
-    self._handovers += 1
+    self._handed_over()
     self._active = big
 
   def _demote(self, why: str) -> None:
@@ -413,10 +434,14 @@ class JoiningModelState:
       self._retired = (big, why)
     self._back_off()
     self._active = self._small
-    self._handovers += 1
+    self._handed_over()
     self._loading = True
     if self._reset_small is not None:
       self._reset_small()
+
+  def _handed_over(self) -> None:
+    self._handovers += 1
+    self._record.set()
 
   def _close_retired(self, retired, why: str) -> None:
     """Say goodbye over the retired large model's link, then close it if it
@@ -473,7 +498,7 @@ class JoiningModelState:
 
   # -- background -------------------------------------------------------------
 
-  def _report(self, stage: str, msg: str) -> None:
+  def _report(self, stage: str, msg: str, code: str, args: dict | None = None) -> None:
     """Tell the UI what the join is waiting on.
 
     Offroad the record carries a provisioning run's progress; without this, a
@@ -483,7 +508,8 @@ class JoiningModelState:
     # the count is the diagnosis. A link that runs for minutes and then goes,
     # again and again, is the cable, and the cable is the one thing the
     # driver can do something about
-    self._progress.report(stage, 0.0, msg, drops=self._drops if self._drops >= DROPS_TO_BLAME_CABLE else 0)
+    self._progress.report(stage, 0.0, msg, drops=self._drops if self._drops >= DROPS_TO_BLAME_CABLE else 0,
+                          code=code, args=args)
 
   def _note_link_loss(self, why: str) -> None:
     """Off the frame thread: what the comma's USB-C port sees now, next to the
@@ -498,7 +524,7 @@ class JoiningModelState:
     # has still been replugged
     self._host_left = not gadget.host_attached()
     self._log.warning("jetlink: %s, %s; drop %d, lag %d this drive", why, port, self._drops, self._lags)
-    self._report('connect', RECONNECTING[why])
+    self._report('connect', RECONNECTING[why], 'reconnecting', {'why': RECONNECT_WHY[why]})
 
   def _join_loop(self) -> None:
     """Open the link and get the engine ready. No tinygrad in here."""
@@ -539,7 +565,7 @@ class JoiningModelState:
       self._rejoin.clear()
       if self._wait_out_back_off():
         return
-      self._report('connect', 'waiting for jetlink')
+      self._report('connect', 'waiting for jetlink', 'waiting_for_host')
       try:
         # the connect can take minutes when the picked model still has to be
         # built, so it is handed the flag close() sets rather than polled
@@ -551,7 +577,7 @@ class JoiningModelState:
         # (link.ModelMissing), and what the panel should show meanwhile
         delay = getattr(e, 'retry_after', REJOIN_DELAY)
         if waiting := getattr(e, 'waiting', None):
-          self._report('connect', waiting)
+          self._report('connect', waiting, 'model_missing')
         self._log.warning("jetlink: not joined yet (%s), retrying in %.0fs", e, delay)
         if self._stop.wait(delay):
           return
@@ -564,7 +590,7 @@ class JoiningModelState:
         self._available = True
         self._joined = (client, spec)
       self._log.warning("jetlink: link ready, waiting for a window to swap")
-      self._report('connect', READY)
+      self._report('connect', READY, 'ready_waiting_window')
       self._keep_alive()
 
   def _wait_out_back_off(self) -> bool:
@@ -623,11 +649,50 @@ class JoiningModelState:
         joined[0].close()
         return
 
+  def _write_loop(self) -> None:
+    """The runtime record, once a second and on every handover: tmpfs IO and a
+    catalog read for the name, so never on the frame thread, and off modeld's
+    realtime core first (_join_loop). The last one, after close(), is stopping."""
+    background_thread()
+    names: dict[str, str] = {}
+    failing = False
+    while True:
+      stopping = self._stop.is_set()
+      try:
+        gadget.write_record(self._record_path, self._runtime(names, stopping))
+        failing = False
+      except Exception:
+        if not failing:   # once, not every second
+          self._log.exception("jetlink: could not write the runtime record")
+        failing = True
+      if stopping:
+        return
+      self._record.wait(RECORD_PERIOD)
+      self._record.clear()
+
+  def _runtime(self, names: dict[str, str], stopping: bool) -> dict:
+    big = self._big
+    spec = getattr(big, 'spec', None)
+    sha = getattr(spec, 'sha256', None)
+    if sha and sha not in names:
+      try:
+        names[sha] = self._name(sha) if self._name is not None else sha[:16]
+      except Exception:
+        names[sha] = sha[:16]
+    return {'pid': os.getpid(), 'at': time.monotonic(), 'stopping': stopping, 'state': self.big_model_state,
+            'handovers': self._handovers, 'active': big is not None and self._active is big,
+            'last_output_at': self._output_at, 'held': bool(getattr(big, 'held', False)),
+            'sha256': sha, 'name': names.get(sha), 'checkpoint': getattr(spec, 'checkpoint', None),
+            'transport': gadget.link_kind() if big is not None else None, 'drops': self._drops, 'lags': self._lags}
+
   def close(self) -> None:
     first = not self._stop.is_set()   # the leave is said once; cleanups close twice
     self._stop.set()
     self._available = False
     self._rejoin.set()
+    # after the stop: the writer's next record is its last, and says stopping
+    self._record.set()
+    self._writer.join(1.0)
     self._progress.clear()
     with self._lock:
       joined, self._joined = self._joined, None
@@ -689,4 +754,5 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
     return links.open_link(parts, link, should_stop)
 
   return JoiningModelState(small, connect, build, prepare, reset_small=lambda: ready['reset_small'](),
-                           progress=parts.progress, log=parts.log, in_control=op.in_control)
+                           progress=parts.progress, log=parts.log, in_control=op.in_control,
+                           name=parts.models.name_for)

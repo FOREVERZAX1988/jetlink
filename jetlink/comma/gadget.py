@@ -174,6 +174,10 @@ OWNER_LOCK = Path("/dev/shm/jetlink/owner.lock")
 # what the server's last hello said (lending.SERVER_FIELDS), kept apart from
 # the status record so a clean stop leaves it for the next owner
 SERVER = Path("/dev/shm/jetlink/server.json")
+# the joining model's runtime record, rewritten by a thread in modeld once a
+# second and on every handover: whether the big model drives, for a reader
+# with no modelV2 (status.runtime). modeld's close() leaves it stopping
+MODELD = Path("/dev/shm/jetlink/modeld.json")
 # how long a host that stopped reading configured still counts as there. The
 # owner holds the gadget for as long as the link is enabled, so presence no
 # longer blinks at every handover; what is left to bridge is a USB3 link
@@ -420,6 +424,12 @@ def dormant() -> bool:
     pid = int(read(DORMANT))
   except ValueError:
     return False
+  return pid_alive(pid)
+
+
+def pid_alive(pid) -> bool:
+  if not isinstance(pid, int) or pid <= 0:
+    return False   # 0 and below name process groups, never one process
   try:
     os.kill(pid, 0)
   except ProcessLookupError:

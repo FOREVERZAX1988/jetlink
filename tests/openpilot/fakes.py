@@ -173,7 +173,7 @@ def owner_config() -> OwnerConfig:
 # its records in /dev/shm, the gadget in configfs and FunctionFS, the UDC and
 # the USB-C port in sysfs, and the lend socket
 GADGET_FILES = ('LINK', 'NET_STATUS', 'GADGET_STATUS', 'LENDER_STATUS', 'DORMANT', 'SHUTDOWN_REQUEST', 'STATUS',
-                'STARTS', 'OWNER_LOCK', 'SERVER', 'CC_ORIENTATION')
+                'STARTS', 'OWNER_LOCK', 'SERVER', 'CC_ORIENTATION', 'MODELD')
 # the USB-C port's sysfs, by the name of its fake under a test's root
 PORT_FILES = {'POWER_ROLE': 'current_pr', 'DATA_ROLE': 'current_dr', 'CONTRACT': 'contract',
               'TYPEC_MODE': 'typec_mode', 'CHARGER': 'real_type', 'UDC_MODE': 'udc-mode', 'USB_DEVICES': 'usb-devices',

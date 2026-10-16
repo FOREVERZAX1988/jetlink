@@ -11,6 +11,7 @@ is pinned: modeld gets a working model immediately, a swap never lands on an
 engaged frame, a large model that dies mid-drive falls back without losing the
 frame, and a small-model failure still belongs to modeld.
 """
+import os
 import sys
 import tempfile
 import threading
@@ -23,7 +24,8 @@ from unittest import mock
 import numpy as np
 
 import jetlink.openpilot as jo
-from jetlink.openpilot import interface, joining, link, warp
+from jetlink.comma import gadget
+from jetlink.openpilot import interface, joining, link, status, warp
 from jetlink.openpilot.joining import REJOIN_DELAY_QUICK, STABLE_SECONDS, JoiningModelState
 from tests.openpilot import fakes
 from tests.openpilot.fakes import OpenpilotTest, RecordingLog, isolate
@@ -161,15 +163,17 @@ class JoiningBase(unittest.TestCase):
 
 
 class JoiningTest(JoiningBase):
-  def test_only_the_join_thread_runs_and_it_leaves_modelds_realtime_core_first(self):
-    # created after config_realtime_process(7, 54), it inherits SCHED_FIFO on
-    # core 7 and drops it before anything else. Nothing polls for in_control:
+  def test_only_the_join_and_record_threads_run_and_they_leave_modelds_realtime_core_first(self):
+    # created after config_realtime_process(7, 54), they inherit SCHED_FIFO on
+    # core 7 and drop it before anything else. Nothing polls for in_control:
     # the frame asks it
     events = []
-    with mock.patch.object(joining, 'background_thread', lambda: events.append(threading.current_thread().name)):
+    with mock.patch.object(joining, 'background_thread', lambda: events.append(threading.current_thread().name)), \
+         mock.patch.object(gadget, 'write_record', lambda *a: events.append(('write', threading.current_thread().name))):
       s = self._state()
-      self.assertTrue(wait_for(lambda: events))
-    self.assertEqual(events, [s._thread.name])
+      self.assertTrue(wait_for(lambda: len(events) >= 3))
+    self.assertEqual(sorted(e for e in events if isinstance(e, str)), sorted([s._thread.name, s._writer.name]))
+    self.assertLess(events.index(s._writer.name), events.index(('write', s._writer.name)))
 
   def test_runs_the_small_model_immediately(self):
     s = self._state()
@@ -234,7 +238,8 @@ class JoiningTest(JoiningBase):
       while self.connect_calls < 2 and time.monotonic() < deadline:
         time.sleep(0.01)
     self.assertGreaterEqual(self.connect_calls, 2, 'waited REJOIN_DELAY, not MODEL_WAIT')
-    self.progress.report.assert_any_call('connect', 0.0, 'big model not downloaded yet', drops=0)
+    self.progress.report.assert_any_call('connect', 0.0, 'big model not downloaded yet', drops=0, code='model_missing',
+                                         args=None)
     self.assertFalse(s.big_model_available)
 
   def test_close_with_pending_model_clears_availability(self):
@@ -369,7 +374,7 @@ class JoiningTest(JoiningBase):
     s.in_control = False
     said = []
     self.progress.clear.side_effect = lambda: said.append('cleared')
-    self.progress.report.side_effect = lambda stage, frac, msg, drops=0: said.append(msg)
+    self.progress.report.side_effect = lambda stage, frac, msg, drops=0, **codes: said.append(msg)
     # the join thread is held at its wait until both are in
     gate, wait = threading.Event(), s._rejoin.wait
     s._rejoin.wait = lambda timeout=None: gate.wait() and wait(timeout)
@@ -1217,6 +1222,122 @@ class NotFiniteTest(JoiningBase):
   def test_one_the_server_finds(self):
     # Status.NOT_FINITE, which the client raises without failing the link
     self.check(lambda client: client.not_finite.add(2))
+
+
+class RuntimeRecordTest(JoiningBase):
+  """modeld's record of what it runs (gadget.MODELD), for a reader with no
+  modelV2: a thread of its own writes it, the frame thread only assigns."""
+
+  def setUp(self):
+    super().setUp()
+    self.big.spec = SimpleNamespace(sha256='a' * 64, checkpoint='ckpt')
+    self.writes = []
+    real = gadget.write_record
+
+    def write(path, record):
+      self.writes.append(threading.current_thread())
+      real(path, record)
+
+    self.patch = mock.patch.object(gadget, 'write_record', write)
+    self.patch.start()
+    self.addCleanup(self.patch.stop)
+    # a handover wakes the writer; only a test that waits for it would see this period
+    p = mock.patch.object(joining, 'RECORD_PERIOD', 30.0)
+    p.start()
+    self.addCleanup(p.stop)
+
+  def _named(self, name=lambda sha: 'Big Model'):
+    s = self._make(self.small, self._connect, self._build, name=name)
+    self.addCleanup(self._close, s)
+    self._wait_joined(s)
+    return s
+
+  @staticmethod
+  def _record():
+    import json
+    return json.loads(gadget.read(gadget.MODELD) or '{}')   # {} before the first write
+
+  def test_the_big_model_driving_is_said_at_once(self):
+    s = self._named()
+    s.in_control = False
+    self.assertEqual(self._run(s), {'from': 'big'})
+    self.assertTrue(wait_for(lambda: status.runtime() == ('running', True)))
+    record = self._record()
+    self.assertEqual({k: record[k] for k in ('state', 'handovers', 'active', 'held', 'sha256', 'name', 'checkpoint',
+                                             'transport', 'drops', 'lags', 'stopping')},
+                     {'state': 'running', 'handovers': 1, 'active': True, 'held': False, 'sha256': 'a' * 64,
+                      'name': 'Big Model', 'checkpoint': 'ckpt', 'transport': 'usb', 'drops': 0, 'lags': 0,
+                      'stopping': False})
+    self.assertEqual(record['pid'], os.getpid())
+
+  def test_a_hand_back_is_said_at_once(self):
+    s = self._named()
+    s.in_control = False
+    self._run(s)
+    self.big.raises = RuntimeError('link gone')
+    self.assertEqual(self._run(s), {'from': 'small'})
+    self.assertTrue(wait_for(lambda: self._record().get('handovers') == 2))
+    record = self._record()
+    self.assertEqual((record['state'], record['active'], record['drops'], record['sha256']), ('retrying', False, 1, None))
+    self.assertEqual(status.runtime(), ('retrying', False))
+
+  def test_a_held_frame_is_not_an_answer(self):
+    s = self._named()
+    s.in_control = False
+    self._run(s)
+    answered = s._output_at
+    self.assertGreater(answered, 0)
+    self.big.held = True
+    self._run(s)
+    self.assertEqual(s._output_at, answered)
+    self.big.held = False
+    self._run(s)
+    self.assertGreater(s._output_at, answered)
+
+  def test_the_frame_thread_does_no_record_io(self):
+    # SCHED_FIFO on modeld's core: the file, the link kind and the catalog's
+    # name are the writer's
+    names = []
+    s = self._named(name=lambda sha: names.append(threading.current_thread()) or 'Big Model')
+    s.in_control = False
+    kinds = []
+    real_kind = gadget.link_kind
+    with mock.patch.object(gadget, 'link_kind', lambda *a: kinds.append(threading.current_thread()) or real_kind(*a)):
+      for _ in range(5):
+        self._run(s)
+      self.assertTrue(wait_for(lambda: self._record().get('active')))
+      self.big.raises = RuntimeError('link gone')
+      self._run(s)
+      self.assertTrue(wait_for(lambda: self._record().get('handovers') == 2))
+    for seen in (self.writes, kinds, names):
+      self.assertTrue(seen)
+      self.assertEqual({t.name for t in seen}, {s._writer.name})
+
+  def test_close_leaves_it_stopping(self):
+    s = self._named()
+    s.in_control = False
+    self._run(s)
+    s.close()
+    self.assertFalse(s._writer.is_alive())
+    record = self._record()
+    self.assertEqual((record['stopping'], record['state']), (True, 'unavailable'))
+    self.assertEqual(status.runtime(), (None, False))
+
+  def test_a_record_that_cannot_be_written_is_said_once(self):
+    self.patch.stop()
+    with mock.patch.object(gadget, 'write_record', side_effect=OSError('no space')) as write, \
+         mock.patch.object(joining, 'RECORD_PERIOD', 0.005):
+      s = self._named()
+      self.assertTrue(wait_for(lambda: write.call_count >= 3))
+      s.close()
+    self.patch.start()
+    self.assertEqual(self.log.lines('exception'), ['jetlink: could not write the runtime record'])
+
+  def test_a_name_that_cannot_be_looked_up_is_the_sha(self):
+    s = self._named(name=mock.Mock(side_effect=ValueError('bad catalog')))
+    s.in_control = False
+    self._run(s)
+    self.assertTrue(wait_for(lambda: self._record().get('name') == 'a' * 16))
 
 
 class AnyForkTest(OpenpilotTest):
