@@ -14,8 +14,8 @@ cleared JetlinkSpec on a comma once when a suite ran on the device.
 The module is also an adapter module, adapter() and owner_config(), for the
 entry points that take --adapter; JETLINK_FAKE_ROOT says where its files go.
 Its top level is the standard library and jetlink's light half, as a real
-one's must be (testing.check_adapter holds it to that): numpy is imported where
-it is used.
+one's must be (testing.check_adapter holds it to that): numpy is imported
+where it is used (ones()).
 """
 from __future__ import annotations
 
@@ -238,6 +238,12 @@ class OpenpilotTest(unittest.TestCase):
 # Each builder returns the model, the buffers its reset must zero in place,
 # and the ones it must leave alone; all start as ones.
 
+def ones(*shape: int):
+  """A float32 buffer of ones; numpy imported here, so the top level stays light."""
+  import numpy as np
+  return np.ones(shape, np.float32)
+
+
 class SmallModel:
   """A fork's ModelState of some shape: its attributes, and a run()."""
 
@@ -249,40 +255,36 @@ class SmallModel:
 
 
 def queue(device='CPU'):
-  import numpy as np
-  return FakeTensor(np.ones((4, 8), np.float32), device=device)
+  return FakeTensor(ones(4, 8), device=device)
 
 
 def starpilot():
   """StarPilot's CatalogModelState: GPU and NPY tensors and numpy views, and
   none of state_pairs, packed_input, lat_delay, desire_key or numpy_inputs."""
-  import numpy as np
   m = SmallModel(input_queues={'img_q': queue(), 'feat_q': queue(), 'npy_inputs': queue('NPY')},
-                 npy={'desire': np.ones(8, np.float32), 'traffic_convention': np.ones(2, np.float32)},
-                 prev_desire=np.ones(8, np.float32))
+                 npy={'desire': ones(8), 'traffic_convention': ones(2)},
+                 prev_desire=ones(8))
   q = m.input_queues
   return m, [q['img_q'].array, q['feat_q'].array, *m.npy.values(), m.prev_desire], [q['npy_inputs'].array]
 
 
 def stock():
   """Upstream modeld's ModelState: recurrent state and one packed upload, no lat_delay."""
-  import numpy as np
-  packed = np.ones(16, np.float32)
+  packed = ones(16)
   m = SmallModel(input_queues={'state_img_q': queue(), 'state_feat_q': queue(), 'desire': queue()},
                  state_pairs={'state_img_q': 'next_state_img_q', 'state_feat_q': 'next_state_feat_q'},
                  packed_input=packed, npy={'desire': packed[:8], 'traffic_convention': packed[8:10]},
-                 prev_desire=np.ones(8, np.float32))
+                 prev_desire=ones(8))
   q = m.input_queues
   return m, [q['state_img_q'].array, q['state_feat_q'].array, packed, m.prev_desire], [q['desire'].array]
 
 
 def v2_native():
   """A modeld_v2 native bundle: its adapter keeps stock modeld's layout."""
-  import numpy as np
-  packed = np.ones(16, np.float32)
+  packed = ones(16)
   adapter = SimpleNamespace(is_native=True, input_queues={'state_img_q': queue(), 'desire': queue()},
                             state_pairs={'state_img_q': 'next_state_img_q'}, packed_input=packed)
-  m = SmallModel(adapter=adapter, prev_desire=np.ones(8, np.float32), desire_key='desire', numpy_inputs={},
+  m = SmallModel(adapter=adapter, prev_desire=ones(8), desire_key='desire', numpy_inputs={},
                  lat_delay=0.1, PLANPLUS_CONTROL=1.0)
   q = adapter.input_queues
   return m, [q['state_img_q'].array, packed, m.prev_desire], [q['desire'].array]
@@ -290,11 +292,10 @@ def v2_native():
 
 def v2_legacy():
   """A modeld_v2 legacy bundle: GPU history queues, an NPY tensor, numpy inputs."""
-  import numpy as np
-  packed = np.ones(16, np.float32)
+  packed = ones(16)
   adapter = SimpleNamespace(is_native=False, input_queues={'img_q': queue(), 'packed_npy_inputs': queue('NPY')},
                             numpy_inputs={'desire': packed[:8], 'rest': packed[8:]})
-  m = SmallModel(adapter=adapter, prev_desire=np.ones(8, np.float32), desire_key='desire',
+  m = SmallModel(adapter=adapter, prev_desire=ones(8), desire_key='desire',
                  numpy_inputs=adapter.numpy_inputs, lat_delay=0.1, PLANPLUS_CONTROL=1.0)
   q = adapter.input_queues
   return m, [q['img_q'].array, packed, m.prev_desire], [q['packed_npy_inputs'].array]

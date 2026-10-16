@@ -116,6 +116,21 @@ def owner_config():
     ''', owner_config='')
     self.assertEqual(check_adapter(m), [f"{m.__name__}.owner_config(): missing"])
 
+  def test_a_module_that_prints_as_it_imports(self):
+    m = self.module('''
+      print('hello from the fork')
+
+      def adapter():
+        from tests.openpilot import fakes
+        return fakes.FakeOpenpilot()
+    ''')
+    self.assertEqual(check_adapter(m), [])
+
+  def test_a_probe_that_hangs_is_a_problem(self):
+    with mock.patch.object(subprocess, 'run', side_effect=subprocess.TimeoutExpired('python', 120)):
+      self.assertEqual(check_adapter(fakes), [(f"{fakes.__name__} did not import and build its owner_config() in a fresh "
+                                               "interpreter within 120 s")])
+
   def test_a_module_that_will_not_import_fresh(self):
     m = self.module('''
       import sys
@@ -177,6 +192,28 @@ class TestCheckSeam(unittest.TestCase):
   def test_hooks_on_another_object_do_not_count(self):
     source = GOOD.replace('HOOKS.prepare(', 'other.prepare(')
     self.assertEqual(self.seam(source), ["modeld.py: main() never calls HOOKS.prepare()"])
+
+  def test_a_body_in_one_try_keeps_its_order(self):
+    # zoompilot's modeld_v2 shape: everything in main() inside one try/finally
+    body = GOOD.split('\n', 2)[2]
+    source = 'def main(demo=False):\n  try:\n' + textwrap.indent(body, '  ') + '  finally:\n    pass\n'
+    self.assertEqual(self.seam(source), [])
+    bad = source.replace('    HOOKS.prepare(CHESTNUT)  # before going realtime\n', '').replace(
+      '    config_realtime_process(7, 54)\n', '    config_realtime_process(7, 54)\n    HOOKS.prepare(CHESTNUT)\n')
+    self.assertEqual(len(self.seam(bad)), 1)
+
+  def test_attach_by_keyword_and_annotated(self):
+    source = GOOD.replace('model = HOOKS.attach(model, small_model, 1, 2)',
+                          'model: object = HOOKS.attach(model, small=small_model, cam_w=1, cam_h=2)')
+    self.assertEqual(self.seam(source), [])
+    late = source.replace('  small_model = ModelState(1, 2, False) if CHESTNUT else None\n', '').replace(
+      '  model = small_model\n', '  model = None\n') + '  small_model = None\n'
+    self.assertEqual(self.seam(late), ["modeld.py: attach() comes before small_model is built"])
+
+  def test_a_joined_model_the_loop_never_runs(self):
+    source = GOOD.replace('model = HOOKS.attach(', 'joined = HOOKS.attach(')
+    self.assertEqual(self.seam(source), [("modeld.py: attach()'s result, joined, is never run: modeld would keep driving "
+                                          "the model it had")])
 
   def test_no_seam_at_all(self):
     self.assertEqual(self.seam('def main():\n  config_realtime_process(7, 54)\n'),

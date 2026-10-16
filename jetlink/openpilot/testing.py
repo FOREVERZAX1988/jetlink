@@ -71,21 +71,27 @@ def _foreign(names, own: str, heavy, allowed=()) -> list[str]:
 
 def check_adapter(module: ModuleType, *, heavy: tuple[str, ...] = ()) -> list[str]:
   """The adapter module's problems. Its top level imports the standard
-  library alone, as manager and the resident owner import it; owner_config()
-  may import the fork's light modules, and none of `heavy` (the fork's own
-  heavy ones, as 'openpilot.common.params'). Both in a fresh interpreter on
-  this one's path, so a module this process has loaded already counts."""
+  library alone, as manager and the resident owner import it. owner_config()
+  may import more: anything of the fork's own package that pulls in no third
+  party, so 'openpilot.common.params' passes unless it is named in `heavy`. A
+  fork should name its heavy modules there (params, swaglog, cereal). Both
+  in a fresh interpreter on this one's path, so a module this process has
+  loaded already counts."""
   name = module.__name__
   problems = [f"{name}.{member}(): missing" for member in ('adapter', 'owner_config')
               if not callable(getattr(module, member, None))]
   if problems:
     return problems
   # on this interpreter's path, as a fork's CI has set it up
-  run = subprocess.run([sys.executable, '-c', _PROBE, name], capture_output=True, text=True, timeout=120,
-                       env={**os.environ, 'PYTHONPATH': os.pathsep.join(p for p in sys.path if p)})
-  if run.returncode != 0:
+  try:
+    run = subprocess.run([sys.executable, '-c', _PROBE, name], capture_output=True, text=True, timeout=120,
+                         env={**os.environ, 'PYTHONPATH': os.pathsep.join(p for p in sys.path if p)})
+    # the probe's line is the last: the module may print as it imports
+    found = json.loads(run.stdout.strip().splitlines()[-1])
+  except subprocess.TimeoutExpired:
+    return [f"{name} did not import and build its owner_config() in a fresh interpreter within 120 s"]
+  except (IndexError, ValueError):
     return [f"{name} does not import in a fresh interpreter: {run.stderr.strip()[-500:]}"]
-  found = json.loads(run.stdout)
   # its own packages' __init__s, which run first
   if top := _foreign(found['import'], '', heavy, {name.rsplit('.', i)[0] for i in range(name.count('.') + 1)}):
     problems.append(f"{name}'s top level imports {top}: manager and the resident owner import it")
@@ -121,40 +127,50 @@ def check_seam(modeld_path: str | Path) -> list[str]:
   """The problems of a modeld's main() with the hooks, read off its source
   (importing a modeld costs tinygrad and a vision stream). The hooks are
   found as the receiver of attach(model, small, cam_w, cam_h): the fork's
-  module (jetlink_adapter.attach) or its Hooks (HOOKS.attach) alike."""
+  module (jetlink_adapter.attach) or its Hooks (HOOKS.attach) alike. Calls
+  are ordered as the source reads, so one in a branch that never runs (an
+  `if False:`) counts as made."""
   path = Path(modeld_path)
   main = next((n for n in ast.parse(path.read_text(), filename=str(path)).body
                if isinstance(n, ast.FunctionDef) and n.name == 'main'), None)
   if main is None:
     return [f"{path.name}: no main()"]
-  # each call and store, by the statement of main() it is in: the order they run in
-  calls = [(i, n) for i, s in enumerate(main.body) for n in ast.walk(s) if isinstance(n, ast.Call)]
-  stores = [(i, n.id) for i, s in enumerate(main.body) for n in ast.walk(s)
-            if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)]
 
-  def called(name: str, facade: str | None = None) -> list[int]:
-    return [i for i, c in calls if (c.func.attr if isinstance(c.func, ast.Attribute) else getattr(c.func, 'id', None)) == name
+  def at(n: ast.AST) -> tuple[int, int]:
+    return n.lineno, n.col_offset
+  nodes = list(ast.walk(main))
+  calls = sorted((n for n in nodes if isinstance(n, ast.Call)), key=at)
+
+  def called(name: str, facade: str | None = None) -> list[tuple[int, int]]:
+    return [at(c) for c in calls if (c.func.attr if isinstance(c.func, ast.Attribute) else getattr(c.func, 'id', None)) == name
             and (facade is None or isinstance(c.func, ast.Attribute) and ast.unparse(c.func.value) == facade)]
 
-  attach = next(((i, c) for i, c in calls if isinstance(c.func, ast.Attribute) and c.func.attr == 'attach'
-                 and len(c.args) == 4), None)
+  attach = next((c for c in calls if isinstance(c.func, ast.Attribute) and c.func.attr == 'attach'
+                 and len(c.args) + len(c.keywords) == 4), None)
   if attach is None:
     return [f"{path.name}: main() never calls attach(model, small, cam_w, cam_h)"]
-  at, call = attach
-  facade = ast.unparse(call.func.value)
+  facade = ast.unparse(attach.func.value)
   problems, prepare, realtime = [], called('prepare', facade), called('config_realtime_process')
   if not prepare:
     problems.append(f"main() never calls {facade}.prepare()")
   elif realtime and prepare[0] >= realtime[0]:
     problems.append("prepare() comes after config_realtime_process(): the GPU's thread would inherit the realtime core")
-  elif prepare[0] >= at:
+  elif prepare[0] >= at(attach):
     problems.append("attach() comes before prepare(), so the link never joins")
   if not realtime:
     problems.append("main() never calls config_realtime_process()")
-  if isinstance(small := call.args[1], ast.Name) and not any(i < at and n == small.id for i, n in stores):
+  small = attach.args[1] if len(attach.args) > 1 else next((k.value for k in attach.keywords if k.arg == 'small'), None)
+  if isinstance(small, ast.Name) and not any(isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store) and n.id == small.id
+                                             and at(n) < at(attach) for n in nodes):
     problems.append(f"attach() comes before {small.id} is built")
-  if not any(isinstance(n, ast.Assign) and n.value is call for n in ast.walk(main)):
+  # the name its result is bound to, which the frame loop must run
+  bound = next((t.id for n in nodes if isinstance(n, (ast.Assign, ast.AnnAssign)) and n.value is attach
+                for t in getattr(n, 'targets', [getattr(n, 'target', None)]) if isinstance(t, ast.Name)), None)
+  if bound is None:
     problems.append("attach()'s result is dropped: modeld would never run the joined model")
+  elif not any(isinstance(c.func, ast.Attribute) and c.func.attr == 'run' and isinstance(c.func.value, ast.Name)
+               and c.func.value.id == bound and at(c) > at(attach) for c in calls):
+    problems.append(f"attach()'s result, {bound}, is never run: modeld would keep driving the model it had")
   problems += [f"main() never calls {facade}.{hook}(model)" for hook in ('handed_over', 'state') if not called(hook, facade)]
   return [f"{path.name}: {p}" for p in problems]
 
