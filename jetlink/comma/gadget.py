@@ -471,10 +471,8 @@ def pending_shutdown() -> str | None:
   """
   if not SHUTDOWN_REQUEST.exists():
     return None
-  try:
-    return str(json.loads(read(SHUTDOWN_REQUEST)).get('reason', ''))
-  except ValueError:
-    return None
+  record = read_record(SHUTDOWN_REQUEST)
+  return None if record is None else str(record.get('reason', ''))
 
 
 def finish_shutdown() -> None:
