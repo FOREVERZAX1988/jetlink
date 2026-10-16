@@ -15,6 +15,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from jetlink.openpilot import STATES, Flags, Status, hooks
+from jetlink.openpilot.status import Runtime
 from jetlink.openpilot.hooks import COMPATIBLE, Hooks, Off
 from jetlink.openpilot.testing import FakeJoinedModel, RecordingLog
 from tests.openpilot.fakes import OpenpilotTest
@@ -37,7 +38,6 @@ SIGNATURES = {
   'extend_catalog': '(catalog)',
   'swap_events': '(tick_s)',
   'runtime': '()',
-  'in_control': '()',
 }
 CATALOG = {'bundles': []}
 
@@ -61,23 +61,21 @@ def answers(h) -> dict:
     'should_extend_catalog': h.should_extend_catalog(),
     'extend_catalog': h.extend_catalog(CATALOG) is CATALOG,
     'runtime': h.runtime(),
-    'in_control': h.in_control(),
   }
 
 
 # the link off: modeld keeps its model, the catalog stays as fetched, a
-# power-off that is wanted goes ahead, and something may be in control
+# power-off that is wanted goes ahead
 OFF = {'should_run': False, 'status': None, 'reason': None, 'prepare': False, 'attach': 'model',
        'handed_over': False, 'state': 'none', 'shutdown_step': (False, True), 'request_shutdown': False,
        'shutdown_pending': False, 'model_state': None, 'should_extend_catalog': False, 'extend_catalog': True,
-       'runtime': None, 'in_control': True}
+       'runtime': None}
 # what answers without binding when link_on() says the link is off
-UNBOUND = ('should_run', 'reason', 'runtime', 'in_control')
+UNBOUND = ('should_run', 'reason', 'runtime')
 
 
 def unbound(h) -> dict:
-  return {'should_run': h.should_run(False, None, None), 'reason': h.reason(), 'runtime': h.runtime(),
-          'in_control': h.in_control()}
+  return {'should_run': h.should_run(False, None, None), 'reason': h.reason(), 'runtime': h.runtime()}
 
 
 class Broken:
@@ -267,7 +265,7 @@ class TestNothingEscapes(unittest.TestCase):
   def test_a_log_that_raises(self):
     h = over(Broken(), RaisingLog())
     self.assertEqual(answers(h), OFF)
-    self.assertEqual(h.swap_events(0).update(True, 'ready', False, True), hooks.NO_EVENTS)
+    self.assertEqual(h.swap_events(0).update(True, False, True, state='ready'), hooks.NO_EVENTS)
 
   def test_an_error_whose_str_raises(self):
     log = RecordingLog()
@@ -336,11 +334,12 @@ class TestTheModelsReads(unittest.TestCase):
 
 
 class TestSwapEvents(unittest.TestCase):
-  ARGS = (True, 'running', True, False)
+  ARGS = (True, True, False)
+  STATE = {'state': 'running'}
 
   def test_off_is_no_event_at_all(self):
     events = Off('why').swap_events(0.01)
-    self.assertEqual(events.update(*self.ARGS), hooks.NO_EVENTS)
+    self.assertEqual(events.update(*self.ARGS, **self.STATE), hooks.NO_EVENTS)
     self.assertIsInstance(hooks.NO_EVENTS, Flags)
     self.assertFalse(any(hooks.NO_EVENTS))
     self.assertFalse(events.settling)
@@ -349,20 +348,20 @@ class TestSwapEvents(unittest.TestCase):
     factory = mock.Mock()
     events = Hooks(3, factory).swap_events(0.01)
     # ready while in control: offered, for a while
-    self.assertTrue(events.update(True, 'ready', False, True).offer)
+    self.assertTrue(events.update(True, False, True, state='ready').offer)
     # the swap: a second of no entry, and settling
-    flags = events.update(True, 'running', True, False)
+    flags = events.update(True, True, False, state='running')
     self.assertTrue(flags.no_entry and flags.settling)
     self.assertTrue(events.settling)
     for _ in range(100):
-      flags = events.update(True, 'running', True, False)
+      flags = events.update(True, True, False, state='running')
     self.assertFalse(flags.no_entry or events.settling)
     factory.assert_not_called()
 
   def test_a_failing_update_is_no_event_logged_once_and_not_settling(self):
     log = RecordingLog()
     events = Hooks(3, mock.Mock(), log=log).swap_events(0.01)
-    events.update(True, 'running', True, False)
+    events.update(True, True, False, state='running')
     self.assertTrue(events.settling)
     outcomes = iter([RuntimeError('a'), RuntimeError('a'), Flags(True, False, False, False, False), RuntimeError('a')])
 
@@ -371,15 +370,15 @@ class TestSwapEvents(unittest.TestCase):
         raise answer
       return answer
     with mock.patch.object(events._events, 'update', update):
-      self.assertEqual(events.update(*self.ARGS), hooks.NO_EVENTS)
+      self.assertEqual(events.update(*self.ARGS, **self.STATE), hooks.NO_EVENTS)
       self.assertFalse(events.settling)
-      self.assertEqual([events.update(*self.ARGS).offer for _ in range(3)], [False, True, False])
+      self.assertEqual([events.update(*self.ARGS, **self.STATE).offer for _ in range(3)], [False, True, False])
     self.assertEqual(log.lines('exception'), ["jetlink: swap_events.update() failed: RuntimeError: a"] * 2)
 
   def test_a_period_it_cannot_count_is_inert_and_said(self):
     log = RecordingLog()
     events = Hooks(3, mock.Mock(), log=log).swap_events(0)
-    self.assertEqual((events.update(*self.ARGS), events.settling), (hooks.NO_EVENTS, False))
+    self.assertEqual((events.update(*self.ARGS, **self.STATE), events.settling), (hooks.NO_EVENTS, False))
     self.assertTrue(log.has("swap_events() failed: ValueError: SwapEvents needs the loop period"))
 
   def test_a_settling_that_raises_is_false(self):
@@ -396,7 +395,7 @@ class TestTheLinkOff(unittest.TestCase):
     h = Hooks(3, factory, link_on=lambda: False)
     self.assertEqual(unbound(h), {name: OFF[name] for name in UNBOUND})
     tracker = h.swap_events(0.01)
-    self.assertEqual(tracker.update(True, 'none', False, h.in_control), hooks.NO_EVENTS)
+    self.assertEqual([tracker.update(True, False, True) for _ in range(30)], [hooks.NO_EVENTS] * 30)
     factory.assert_not_called()
 
   def test_the_status_binds_as_ever(self):
@@ -410,50 +409,48 @@ class TestTheLinkOff(unittest.TestCase):
     def fails():
       raise OSError('no params')
     jetlink = mock.Mock(**{'enabled.return_value': True, 'reason.return_value': 'gadget', 'runtime.return_value': 'rt'})
-    op = SimpleNamespace(log=RecordingLog(), in_control=mock.Mock(return_value=False))
+    op = SimpleNamespace(log=RecordingLog())
     h = Hooks(3, lambda: op, link_on=fails)
     with mock.patch.object(hooks, 'bind', return_value=jetlink) as bind:
       self.assertEqual((h.should_run(False, None, None), h.reason(), h.runtime()), (True, 'gadget', 'rt'))
-      self.assertIs(h.in_control(), False)
     bind.assert_called_once_with(op)
-    op.in_control.assert_called_once_with()
 
 
-class TestInControl(unittest.TestCase):
-  def test_it_is_the_adapters_rule(self):
-    op = SimpleNamespace(log=RecordingLog(), in_control=mock.Mock(return_value=False))
-    h = Hooks(3, lambda: op, link_on=lambda: True)
-    with mock.patch.object(hooks, 'bind', return_value=object()):
-      self.assertIs(h.in_control(), False)
-      op.in_control.return_value = 1
-      self.assertIs(h.in_control(), True)
+class TestTheTrackersRuntime(unittest.TestCase):
+  """Without a state of the fork's own, the tracker reads modeld's runtime record."""
 
-  def test_a_failure_is_in_control_and_logged_once(self):
-    log = RecordingLog()
-    op = SimpleNamespace(log=log, in_control=mock.Mock(side_effect=RuntimeError('no msgq')))
-    h = Hooks(3, lambda: op)
-    with mock.patch.object(hooks, 'bind', return_value=object()):
-      self.assertEqual([h.in_control(), h.in_control()], [True, True])
-    self.assertEqual(log.lines('exception'), ["jetlink: in_control() failed: RuntimeError: no msgq"])
+  def tracker(self, answers):
+    h = Hooks(3, mock.Mock())
+    h.runtime = mock.Mock(side_effect=answers)
+    return h, h.swap_events(0.01)
 
-  def test_an_adapter_that_will_not_build_is_in_control(self):
-    def factory():
-      raise RuntimeError('no params')
-    self.assertTrue(Hooks(3, factory, log=RecordingLog()).in_control())
-    self.assertTrue(Off('why').in_control())
+  def test_it_reads_the_record_every_fifth_of_a_second_and_holds_it(self):
+    h, tracker = self.tracker(lambda: Runtime('ready'))
+    offers = [tracker.update(True, False, True).offer for _ in range(45)]
+    self.assertEqual(h.runtime.call_count, 3)   # ticks 0, 20 and 40
+    self.assertTrue(all(offers))
 
-  def test_the_tracker_starts_its_reader_on_the_first_tick(self):
-    # Stock's SubMaster answers True until it has heard something: asked cold
-    # at a state gone straight from 'none' to 'ready', the driver would be offered
-    asked = []
-    tracker = Hooks(3, mock.Mock()).swap_events(0.01)
-    for _ in range(5):
-      tracker.update(True, 'none', False, lambda: asked.append(1) or False)
-    self.assertEqual(asked, [1], 'once, idle as it is')
-    self.assertFalse(tracker.update(True, 'ready', False, lambda: asked.append(1) or False).offer)
-    self.assertEqual(asked, [1, 1])
-    self.assertEqual(Off().swap_events(0.01).update(True, 'ready', False, lambda: asked.append(1)), hooks.NO_EVENTS)
-    self.assertEqual(asked, [1, 1])
+  def test_no_record_or_none_live_is_not_fresh(self):
+    # a gap holds the last state, so a running big model is not taken for gone
+    for answer in (None, Runtime()):
+      with self.subTest(answer):
+        answers = iter([Runtime('running')] + [answer] * 10)
+        h, tracker = self.tracker(lambda answers=answers: next(answers))
+        tracker.update(True, True, False)
+        flags = [tracker.update(True, True, False) for _ in range(150)]
+        self.assertFalse(any(f.link_lost for f in flags))
+        self.assertTrue(tracker._events.running)
+
+  def test_a_state_of_the_forks_own_never_reads_the_record(self):
+    h, tracker = self.tracker(lambda: Runtime('none'))
+    self.assertTrue(tracker.update(True, False, True, state='ready').offer)
+    h.runtime.assert_not_called()
+
+  def test_off_reads_nothing(self):
+    off = Off()
+    off.runtime = mock.Mock()
+    self.assertEqual(off.swap_events(0.01).update(True, False, True), hooks.NO_EVENTS)
+    off.runtime.assert_not_called()
 
 
 class TestOverTheRealJetlink(OpenpilotTest):
@@ -477,17 +474,14 @@ class TestOverTheRealJetlink(OpenpilotTest):
     gated = Hooks(3, lambda: self.op, link_on=lambda: False)
     self.assertEqual(unbound(gated), unbound(self.h))
 
-  def test_runtime_and_in_control_with_the_link_on(self):
+  def test_runtime_with_the_link_on(self):
     from jetlink.comma import gadget
-    from jetlink.openpilot.status import Runtime
     self.op.set_mode('usb')
     self.assertEqual(self.h.runtime(), Runtime())
     now = time.monotonic()
     gadget.write_record(gadget.MODELD, {'pid': os.getpid(), 'at': now, 'state': 'running', 'active': True,
                                         'last_output_at': now})
     self.assertEqual(self.h.runtime()[:2], ('running', True))
-    self.op.engaged = False
-    self.assertIs(self.h.in_control(), False)
     self.op.chestnut = True
     self.parts._chestnut = None
     self.assertIsNone(Hooks(3, lambda: self.op).runtime())

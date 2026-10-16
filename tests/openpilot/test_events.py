@@ -10,7 +10,6 @@ same name: offer is its bigModelAvailable, link_lost bigModelLinkLost, no_entry
 bigModelLoading and chime bigModelReady. What runs openpilot itself (the state
 machines, the alert texts, selfdrived's source) stays in the fork.
 """
-import random
 import unittest
 
 from jetlink.openpilot.events import Flags, SwapEvents
@@ -22,8 +21,6 @@ EVENTS = ('offer', 'link_lost', 'no_entry', 'chime')
 
 class SwapEventsTest(unittest.TestCase):
   tick_s = DT_CTRL
-  # in_control handed over as a function, which every test passes the same way
-  asked = False
 
   def setUp(self):
     self.swap = SwapEvents(self.tick_s)
@@ -33,8 +30,7 @@ class SwapEventsTest(unittest.TestCase):
   def step(self, state='none', big=False, alive=True, fresh=True, enabled=False, mads=False) -> set[str]:
     """One tick, `alive` being modelV2's and `fresh` the state message's, wired
     as zoompilot's adapter reads them; what was raised, by name."""
-    in_control = enabled or mads
-    self.flags = self.swap.update(fresh and alive, state, big and alive, (lambda: in_control) if self.asked else in_control)
+    self.flags = self.swap.update(fresh and alive, state, big and alive, enabled or mads)
     return {name for name in EVENTS if getattr(self.flags, name)}
 
   def drive_big(self, **kwargs) -> None:
@@ -278,69 +274,6 @@ class TestSeconds(SwapEventsTest):
 
   def test_the_offer_is_three_seconds(self):
     self.assertEqual(self.ticks_with('offer', state='ready', enabled=True), 60)
-
-
-# every test above again, in_control a function
-for _cls in (TestSettling, TestHandBack, TestSwitching, TestOffer, TestSeconds):
-  globals()[f'{_cls.__name__}Asked'] = type(f'{_cls.__name__}Asked', (_cls,), {'asked': True})
-
-
-class TestInControlAsked(unittest.TestCase):
-  """in_control as a function: asked once a tick unless the link is idle,
-  and the flags a bool gives."""
-
-  def update(self, swap, fresh, state, big, in_control) -> tuple[Flags, int]:
-    asked = []
-    flags = swap.update(fresh, state, big, lambda: asked.append(1) or in_control)
-    return flags, len(asked)
-
-  def test_the_flags_and_the_bookkeeping_are_a_bools(self):
-    rng = random.Random(20261016)
-    by_bool, by_function = SwapEvents(DT_CTRL), SwapEvents(DT_CTRL)
-    fresh, state, big, in_control = True, 'none', False, False
-    for _ in range(200_000):
-      # each changes now and then, so offers, swaps, falls and warnings all come up
-      fresh = fresh if rng.random() > .02 else not fresh
-      state = state if rng.random() > .01 else rng.choice(STATES)
-      big = big if rng.random() > .01 else not big
-      in_control = in_control if rng.random() > .005 else not in_control
-      flags, asked = self.update(by_function, fresh, state, big, in_control)
-      self.assertEqual(flags, by_bool.update(fresh, state, big, in_control))
-      self.assertLessEqual(asked, 1)
-    self.assertEqual(vars(by_function), vars(by_bool))
-
-  def test_idle_never_asks(self):
-    # the link off, or on with nothing joined: a state of 'none', and no modelV2.big
-    swap = SwapEvents(DT_CTRL)
-    asks = [self.update(swap, fresh, 'none', False, True)[1] for fresh in [True, False] * 500]
-    self.assertEqual(sum(asks), 0)
-
-  def test_a_link_that_stirs_is_asked_every_tick_until_idle_again(self):
-    # a lazy reader (StarPilot's AOL grace) is warm long before an offer or a fall
-    swap = SwapEvents(DT_CTRL)
-    asks = [self.update(swap, True, 'joining', False, False)[1] for _ in range(300)]
-    asks += [self.update(swap, False, 'none', False, False)[1] for _ in range(10)]   # a gap holds 'joining'
-    asks += [self.update(swap, True, 'running', True, False)[1] for _ in range(300)]
-    self.assertEqual(asks, [1] * 610)
-    # handed back to nothing: asked through the settling second, then idle
-    asks = [self.update(swap, True, 'none', False, False)[1] for _ in range(300)]
-    self.assertEqual(asks, [1] * (swap.switching_ticks + 1) + [0] * (299 - swap.switching_ticks))
-
-  def test_the_offer_the_fall_and_the_warning_are_asked(self):
-    swap = SwapEvents(DT_CTRL)
-    self.assertEqual(self.update(swap, True, 'ready', False, True), (Flags(True, False, False, False, False), 1))
-    for _ in range(200):
-      self.update(swap, True, 'running', True, True)
-    # the fall while in control warns, asked each tick, and a disengage ends it
-    self.assertTrue(self.update(swap, True, 'none', False, True)[0].link_lost)
-    self.assertEqual(self.update(swap, True, 'none', False, False), (Flags(False, False, False, False, True), 1))
-
-  def test_a_function_that_raises_is_something_in_control(self):
-    swap = SwapEvents(DT_CTRL)
-
-    def fails():
-      raise RuntimeError('no msgq')
-    self.assertTrue(swap.update(True, 'ready', False, fails).offer)
 
 
 if __name__ == '__main__':

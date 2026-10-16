@@ -27,7 +27,7 @@ gadget owner among them: the standard library and jetlink's light half only.
 Construction checks the API and nothing more; the adapter is built and bound
 on the first hook that needs it, once per process. handed_over() and state()
 read the model alone and never bind, and with link_on() saying the link is
-off, nor do should_run(), reason(), runtime() and in_control(). Others bind
+off, nor do should_run(), reason() and runtime(). Others bind
 with the link off too: shutdown_step(), which hardwared calls from boot to
 clear a power-off request it did not write, and status(), whose snapshot
 names the big model from the model library (the catalog param and
@@ -46,6 +46,8 @@ COMPATIBLE = frozenset({API})
 
 # what selfdrived is told when the swap events cannot run: none at all
 NO_EVENTS = Flags(False, False, False, False, False)
+# how often the swap events read modeld's runtime record without a state of the fork's own
+RUNTIME_POLL_S = 0.2
 
 
 def _text(error: BaseException) -> str:
@@ -132,12 +134,6 @@ class _Hooks:
     chestnut test's USB walk once per parts.CHESTNUT_TTL, as status()."""
     return None if self._off() else self._call('runtime', None)
 
-  def in_control(self) -> bool:
-    """The adapter's in_control(), the rule the swap waits on, for
-    selfdrived's swap events. True with the link off or unusable, and on a
-    failure: something may be in control."""
-    return True
-
   def shutdown_step(self, should_shutdown: bool, reason: str = '') -> bool:
     return self._call('shutdown_step', should_shutdown, should_shutdown, reason)
 
@@ -158,7 +154,7 @@ class _Hooks:
 
   def swap_events(self, tick_s: float) -> SwapTracker:
     """selfdrived's swap-event tracker, updated every `tick_s` (events.SwapEvents)."""
-    return SwapTracker(None, None)
+    return SwapTracker(None, None, tick_s)
 
 
 class Off(_Hooks):
@@ -180,7 +176,6 @@ class Hooks(_Hooks):
     # the adapter's once bound; until then the fork's, or the standard library's
     self._log = log
     self._bound = None
-    self._adapter = None
     self._binding = threading.Lock()
     # hook -> the failure last logged for it, cleared by a call that works
     self._failed: dict[str, str] = {}
@@ -198,9 +193,7 @@ class Hooks(_Hooks):
     try:
       op = self._factory()
       self._log = getattr(op, 'log', None) or self._log
-      jetlink = bind(op)
-      self._adapter = op
-      return jetlink
+      return bind(op)
     except Exception as e:
       self._why = f"jetlink failed to start: {_text(e)}"
       self._report("jetlink: %s", self._why)
@@ -244,14 +237,10 @@ class Hooks(_Hooks):
       return default if jetlink is None else getattr(jetlink, name)(*args)
     return self._net(name, default, call)
 
-  def in_control(self) -> bool:
-    if self._off():
-      return True
-    return self._net('in_control', True, lambda: self._jetlink() is None or bool(self._adapter.in_control()))
-
   def swap_events(self, tick_s: float) -> SwapTracker:
-    """Bookkeeping alone, so it binds nothing."""
-    return SwapTracker(self._net('swap_events', None, SwapEvents, tick_s), self)
+    """Bookkeeping alone, so it binds nothing: selfdrived builds it once,
+    link on or off."""
+    return SwapTracker(self._net('swap_events', None, SwapEvents, tick_s), self, tick_s)
 
 
 class SwapTracker:
@@ -259,11 +248,14 @@ class SwapTracker:
   fails, and settling False; the failure is logged as the hooks' are. Inert
   without a tracker."""
 
-  def __init__(self, events: SwapEvents | None, hooks: Hooks | None):
+  def __init__(self, events: SwapEvents | None, hooks: Hooks | None, tick_s: float):
     self._events = events
     self._hooks = hooks
     self._ok = events is not None
-    self._warm = False
+    # runtime() a few times a second: modeld rewrites its record once a second
+    self._every = max(round(RUNTIME_POLL_S / tick_s), 1) if events is not None else 1
+    self._ticks = 0
+    self._runtime = None
 
   @property
   def settling(self) -> bool:
@@ -272,17 +264,19 @@ class SwapTracker:
     except Exception:
       return False
 
-  def update(self, fresh, state, big, in_control) -> Flags:
-    """SwapEvents.update. An in_control function is asked once on the first
-    update as well, idle or not: a reader it starts lazily (Stock's
-    SubMaster, StarPilot's AOL grace) answers True until it has heard
-    anything, which would be a false offer had a state gone straight from
-    'none' to 'ready' between two of the caller's reads."""
+  def update(self, fresh: bool, big: bool, in_control: bool, state: str | None = None) -> Flags:
+    """SwapEvents.update. `state` is the fork's own message's, where it has
+    one (zoompilot: modelDataV2SP.acceleratorState); without it the tracker
+    reads modeld's runtime record (hooks.runtime()), and a tick without a
+    live one is not fresh."""
     if self._events is None:
       return NO_EVENTS
-    if not self._warm and callable(in_control):
-      self._warm = True
-      self._hooks._net('in_control', None, in_control)
-    flags = self._hooks._net('swap_events.update', None, self._events.update, fresh, state, big, in_control)
+    if state is None:
+      if self._ticks == 0:
+        self._runtime = self._hooks.runtime()
+      self._ticks = (self._ticks + 1) % self._every
+      state = getattr(self._runtime, 'state', None)
+      fresh = fresh and state is not None
+    flags = self._hooks._net('swap_events.update', None, self._events.update, fresh, state or 'none', big, in_control)
     self._ok = flags is not None
     return NO_EVENTS if flags is None else flags

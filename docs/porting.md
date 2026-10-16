@@ -118,13 +118,12 @@ When Jetlink fails, every hook answers as if the link were off, so a Jetlink
 bug never takes manager, modeld, hardwared or the UI down. `Hooks` raises for
 an API it does not accept, and `Off` gives the reason as the offroad alert to
 someone who turned the link on. With `link_on()` saying the link is off,
-`should_run()`, `reason()`, `runtime()` and `in_control()` answer without
+`should_run()`, `reason()` and `runtime()` answer without
 binding Jetlink to your adapter; `status()` and `shutdown_step()` still bind.
 The snippets below call the result `HOOKS`:
 `HOOKS = jetlink_adapter.hooks()`. A checkout that is missing or too old has
 no `Off`, so it needs your own fallback. It only answers the hooks a link
-that never runs reaches; the others wait for a yes from `prepare()` or a
-`runtime()`:
+that never runs reaches; `attach()` waits for a yes from `prepare()`:
 
 ```python
 class _NoJetlink:
@@ -138,6 +137,7 @@ class _NoJetlink:
   def state(self, model): return 'none'
   def shutdown_step(self, should_shutdown, reason=''): return should_shutdown
   def runtime(self): return None
+  def swap_events(self, tick_s): return None
 ```
 
 A fork with sunnypilot's model manager also sets `KEYS.big_model` and
@@ -215,33 +215,29 @@ without one, `HOOKS.runtime()` carries it.
 ## selfdrived
 
 The big model joins mid-drive and can leave again. The swap events tell the
-driver and hold the errors a switch causes. The state comes from modeld's
-runtime record, a file modeld rewrites once a second, so read it a few times
-a second. The tracker is made once, the first time the link is on this drive:
+driver and hold the errors a switch causes. Build the tracker once, link on
+or off; it binds nothing, and your fallback for no jetlink answers `None`:
 
 ```python
-    self.jetlink_swaps = None     # in __init__
-    self.jetlink_runtime = None
+    self.jetlink_swaps = HOOKS.swap_events(DT_CTRL)   # in __init__
 ```
 
 ```python
-    if self.sm.frame % 20 == 0:   # in update_events()
-      self.jetlink_runtime = HOOKS.runtime()
-      if self.jetlink_swaps is None and self.jetlink_runtime is not None:
-        self.jetlink_swaps = HOOKS.swap_events(DT_CTRL)
-    if self.jetlink_swaps is not None:
-      running = getattr(self.jetlink_runtime, 'state', None)
+    if self.jetlink_swaps is not None:   # in update_events()
       model_ok = self.sm.alive['modelV2'] and self.sm.valid['modelV2']
-      flags = self.jetlink_swaps.update(model_ok and running is not None, running or 'none',
-                                        model_ok and self.sm['modelV2'].big, HOOKS.in_control)
+      # in control: the same rule as your adapter's engaged() (zoompilot: self.enabled or self.mads.enabled)
+      flags = self.jetlink_swaps.update(model_ok, model_ok and self.sm['modelV2'].big, self.enabled)
       if flags.no_entry:
         self.events.add(EventName.bigModelLoading)   # no engaging for the second after a swap
 ```
 
-`HOOKS.in_control` goes in uncalled: it is your adapter's rule, the one the
-swap itself waits on, and the tracker asks it once a tick while the link is
-not idle and never while it is. A rule that builds its readers lazily is
-asked from the first tick the link stirs, long before an offer or a fall.
+The third argument must be the same rule as your adapter's `engaged()`, the
+one the swap itself waits on: openpilot engaged, or, in a fork with a
+lateral-only mode, that mode armed or paused (zoompilot passes
+`self.enabled or self.mads.enabled`, MADS paused included). The tracker
+reads the big model's state from modeld's runtime record a few times a
+second. A fork that publishes the state on a message of its own passes it as
+`state=`, with the first argument saying both messages are alive and valid.
 
 `offer`, `link_lost` and `chime` need events of your own; `jetlink/openpilot/events.py`
 says what each means. `settling` is a switch's dropped camera frame, which
@@ -323,7 +319,8 @@ def test_the_modeld_seam():
   assert check_seam('openpilot/selfdrive/modeld/modeld.py') == []
 
 def test_the_fallback():
-  hooks = ('should_run', 'status', 'reason', 'prepare', 'handed_over', 'state', 'shutdown_step', 'runtime')
+  hooks = ('should_run', 'status', 'reason', 'prepare', 'handed_over', 'state', 'shutdown_step', 'runtime',
+           'swap_events')
   assert check_fallback(jetlink_adapter._NoJetlink('jetlink is missing'), hooks, link_on=jetlink_adapter.link_on) == []
 ```
 

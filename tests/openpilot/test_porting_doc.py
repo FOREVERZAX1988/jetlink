@@ -24,7 +24,6 @@ from unittest import mock
 
 from jetlink.openpilot import SHUTDOWN_TIMEOUT, Flags, Status
 from jetlink.openpilot.hooks import Hooks, Off, SwapTracker
-from jetlink.openpilot.status import Runtime
 from jetlink.openpilot.stock import Stock
 from jetlink.openpilot.testing import check_fallback
 from tests.test_comma_payload import PAYLOAD
@@ -92,8 +91,7 @@ def parameters(cls, name: str) -> list[str]:
 
 # the hooks a link that never runs does not reach: each only inside an `if`
 # whose test has this in it
-GATED = {'attach': 'HOOKS.prepare(', 'swap_events': 'self.jetlink_runtime is not None',
-         'in_control': 'self.jetlink_swaps is not None'}
+GATED = {'attach': 'HOOKS.prepare('}
 
 
 def gates(name: str) -> list[list[str]]:
@@ -113,7 +111,7 @@ def gates(name: str) -> list[list[str]]:
 def test_the_page_has_its_snippets():
   assert len(TREES) >= 10
   assert {'prepare', 'attach', 'handed_over', 'state', 'shutdown_step', 'reason', 'status', 'swap_events',
-          'should_run', 'runtime', 'in_control'} <= hooks_used() | set(re.findall(r'HOOKS\.(\w+)\(', TEXT))
+          'should_run', 'runtime'} <= hooks_used() | set(re.findall(r'HOOKS\.(\w+)\(', TEXT))
 
 
 def test_every_hook_it_calls_is_a_hook():
@@ -171,8 +169,6 @@ def test_what_it_reads_is_there():
   assert read_off('status') - public(Status) == set()
   assert read_off('flags') - set(Flags._fields) == set()
   assert read_off('self.jetlink_swaps') - public(SwapTracker) == set()
-  assert {ast.literal_eval(n.args[1]) for n in NODES if isinstance(n, ast.Call) and ast.unparse(n.func) == 'getattr'
-          and ast.unparse(n.args[0]) == 'self.jetlink_runtime'} <= set(Runtime._fields)
   for attr in re.findall(r'`status\.(\w+)', TEXT):
     assert hasattr(Status, attr), attr
 

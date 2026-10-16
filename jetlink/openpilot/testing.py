@@ -203,10 +203,10 @@ def check_fallback(fallback, hooks: Iterable[str] | None = None, *, link_on=None
            'attach': [(model, object(), 1928, 1208)], 'handed_over': [(model,)], 'state': [(model,)],
            'shutdown_step': [(False,), (True, 'test')], 'request_shutdown': [('test',)], 'shutdown_pending': [()],
            'model_state': [('f' * 40,)], 'should_extend_catalog': [()], 'extend_catalog': [(catalog,)],
-           'runtime': [()], 'in_control': [()], 'swap_events': [(0.01,)]}
+           'runtime': [()], 'swap_events': [(0.01,)]}
 
   def flags(tracker):
-    found = tracker.update(True, 'ready', False, True)
+    found = tracker.update(True, False, True, state='ready')
     return tuple(bool(getattr(found, f)) for f in Flags._fields), bool(tracker.settling)
   problems = []
   for name in hooks if hooks is not None else [n for n in calls if hasattr(fallback, n)]:

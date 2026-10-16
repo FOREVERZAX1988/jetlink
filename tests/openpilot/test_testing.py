@@ -285,13 +285,13 @@ class TestCheckFallback(unittest.TestCase):
     class Raising(NoJetlink):
       def status(self): raise RuntimeError('boom')
     Raising.nonsense = Raising.status
-    self.assertEqual(check_fallback(Raising(), ['status', 'in_control', 'nonsense']),
-                     ["status() raised RuntimeError: boom", "in_control(): missing", "nonsense(): not a hook"])
+    self.assertEqual(check_fallback(Raising(), ['status', 'attach', 'nonsense']),
+                     ["status() raised RuntimeError: boom", "attach(): missing", "nonsense(): not a hook"])
 
   def test_no_swap_events_or_inert_ones(self):
     flags = SimpleNamespace(offer=False, link_lost=False, no_entry=False, chime=False, settling=False)
-    for answer, problems in ((None, 0), (SimpleNamespace(settling=False, update=lambda *a: flags), 0),
-                             (SimpleNamespace(settling=True, update=lambda *a: flags), 1)):
+    for answer, problems in ((None, 0), (SimpleNamespace(settling=False, update=lambda *a, **k: flags), 0),
+                             (SimpleNamespace(settling=True, update=lambda *a, **k: flags), 1)):
       fallback = SimpleNamespace(swap_events=lambda tick_s, answer=answer: answer)
       self.assertEqual(len(check_fallback(fallback)), problems, answer)
 

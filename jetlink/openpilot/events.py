@@ -29,7 +29,6 @@ errors that frame raises.
 """
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import NamedTuple
 
 # how long each lasts, in seconds; SwapEvents counts them in the caller's ticks.
@@ -73,7 +72,7 @@ class SwapEvents:
   def settling(self) -> bool:
     return self._settle > 0
 
-  def update(self, fresh: bool, state: str, big: bool, in_control: bool | Callable[[], bool]) -> Flags:
+  def update(self, fresh: bool, state: str, big: bool, in_control: bool) -> Flags:
     """One tick of the caller's loop.
 
     `fresh`: modelV2 and the fork's state message are seen, alive and valid
@@ -81,26 +80,12 @@ class SwapEvents:
     (str() of a capnp enum, never its .raw number, which matches no state). `big`:
     modelV2.big, from a modelV2 alive and valid this tick. `in_control`: the
     fork's meaning of something steering or able to (zoompilot: openpilot or
-    MADS, MADS even paused), the same rule the swap waits on: a bool, or a
-    function, asked once a tick while the link is anything but idle (a state
-    other than 'none', modelV2.big, or an event still counting) and never
-    while it is. A rule that builds its readers lazily is so asked from the
-    first tick the link stirs, seconds before an offer or a fall can need
-    it. One that raises is something in control."""
-    if callable(in_control):
-      counting = self._offer or self._handback or self._switching or self._settle
-      if (state if fresh else self._state) == 'none' and not (big or self.running or counting):
-        in_control = False   # idle: nothing below reads it
-      else:
-        try:
-          in_control = bool(in_control())
-        except Exception:
-          in_control = True
-
+    MADS, MADS even paused), the same rule the swap waits on (the adapter's
+    engaged())."""
     # a stale state neither offers the switch nor rearms the offer
     if fresh:
       self._state = state
-      if state != 'ready' or big:
+      if self._state != 'ready' or big:
         # ended by the swap as well as by the link going: an offer still on
         # screen after the switch reads as if it had not happened
         self.offered = False
