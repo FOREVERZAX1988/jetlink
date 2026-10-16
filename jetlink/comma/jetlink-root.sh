@@ -6,19 +6,19 @@
 # Everything jetlink does as root on the comma, in one place. The owner runs it
 # through jetlink/comma/root.py, which is sudo -n and a timeout:
 #
-#   sudo scripts/comma/jetlink-root.sh gadget            # the gadget for a Jetson or a Mac
-#   sudo scripts/comma/jetlink-root.sh gadget --ios      # the gadget for an iPhone
-#   sudo scripts/comma/jetlink-root.sh net               # after a bind, iOS only: address, DHCP
-#   sudo scripts/comma/jetlink-root.sh rps               # the cable's receive work onto core 6, read back
-#   sudo scripts/comma/jetlink-root.sh check             # what is there now
-#   sudo scripts/comma/jetlink-root.sh teardown
-#   sudo scripts/comma/jetlink-root.sh port hold|off     # the USB-C port held as the device, or let go
-#   sudo scripts/comma/jetlink-root.sh port device|reset # ask the far end to host over USB PD, or reset PD
-#   sudo scripts/comma/jetlink-root.sh port source       # ask the far end for the source role: the comma charges it
-#   sudo scripts/comma/jetlink-root.sh udc apply|restore # the USB device controller kept a device and its debug log off, or stock
-#   sudo scripts/comma/jetlink-root.sh udc start|stop    # its device side turned on, or off
-#   sudo scripts/comma/jetlink-root.sh vm apply|restore  # the link's VM tuning, or the stock values
-#   sudo scripts/comma/jetlink-root.sh draw off|on       # no current drawn from the port, or the charger's own
+#   sudo jetlink/comma/jetlink-root.sh gadget            # the gadget for a Jetson or a Mac
+#   sudo jetlink/comma/jetlink-root.sh gadget --ios      # the gadget for an iPhone
+#   sudo jetlink/comma/jetlink-root.sh net               # after a bind, iOS only: address, DHCP
+#   sudo jetlink/comma/jetlink-root.sh rps               # the cable's receive work onto core 6, read back
+#   sudo jetlink/comma/jetlink-root.sh check             # what is there now
+#   sudo jetlink/comma/jetlink-root.sh teardown
+#   sudo jetlink/comma/jetlink-root.sh port hold|off     # the USB-C port held as the device, or let go
+#   sudo jetlink/comma/jetlink-root.sh port device|reset # ask the far end to host over USB PD, or reset PD
+#   sudo jetlink/comma/jetlink-root.sh port source       # ask the far end for the source role: the comma charges it
+#   sudo jetlink/comma/jetlink-root.sh udc apply|restore # the USB device controller kept a device and its debug log off, or stock
+#   sudo jetlink/comma/jetlink-root.sh udc start|stop    # its device side turned on, or off
+#   sudo jetlink/comma/jetlink-root.sh vm apply|restore  # the link's VM tuning, or the stock values
+#   sudo jetlink/comma/jetlink-root.sh draw off|on       # no current drawn from the port, or the charger's own
 #
 # For the comma four and the comma 3X only. Both are SDM845 on the same AGNOS
 # kernel (4.9, dwc3 at a600000.dwc3), with configfs, FunctionFS and NCM built

@@ -43,7 +43,7 @@ GADGET_TX_ALIGN = 16 * 1024
 
 # The comma's gadget as a USB host finds it: these IDs (pid.codes' test
 # allocation; get a real PID before distributing this), which
-# scripts/comma/jetlink-root.sh presents, then the link's interface by its class
+# jetlink/comma/jetlink-root.sh presents, then the link's interface by its class
 # triple (transport/ffs.py), because the comma set to iOS presents a composite
 # gadget and a reordered config could move the number. Endpoint addresses are
 # read from the descriptors, never assumed: FunctionFS renumbers them at bind.

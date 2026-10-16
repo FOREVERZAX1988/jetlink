@@ -12,6 +12,7 @@ bench-only.
 """
 from __future__ import annotations
 
+import importlib.util
 import logging
 import os
 import shutil
@@ -52,9 +53,31 @@ def fake_run(monkeypatch):
 
 # -- the wrapper ------------------------------------------------------------
 
-def test_the_script_is_the_checkouts():
-  assert root.SCRIPT == REPO / 'scripts' / 'comma' / 'jetlink-root.sh'
+def test_the_script_is_the_packages():
+  assert root.SCRIPT == REPO / 'jetlink' / 'comma' / 'jetlink-root.sh'
   assert root.SCRIPT.is_file()
+  assert os.access(root.SCRIPT, os.X_OK)
+
+
+def _root_in(tree: Path):
+  # root.py loaded from `tree`, a checkout laid out as the comma has it
+  spec = importlib.util.spec_from_file_location('jetlink_root_copy', tree / 'jetlink' / 'comma' / 'root.py')
+  module = importlib.util.module_from_spec(spec)
+  spec.loader.exec_module(module)
+  return module
+
+
+def test_a_tree_with_only_the_old_script_still_finds_it(tmp_path):
+  # through v0.8.7 the script was the checkout's scripts/comma/; after v0.9.x this goes
+  (tmp_path / 'jetlink' / 'comma').mkdir(parents=True)
+  shutil.copy(REPO / 'jetlink' / 'comma' / 'root.py', tmp_path / 'jetlink' / 'comma')
+  old = tmp_path / 'scripts' / 'comma' / 'jetlink-root.sh'
+  old.parent.mkdir(parents=True)
+  old.write_text('#!/bin/sh\n')
+  assert _root_in(tmp_path).SCRIPT == old
+  # and the package's own wins when both are there
+  shutil.copy(REPO / 'jetlink' / 'comma' / 'jetlink-root.sh', tmp_path / 'jetlink' / 'comma')
+  assert _root_in(tmp_path).SCRIPT == tmp_path / 'jetlink' / 'comma' / 'jetlink-root.sh'
 
 
 @pytest.mark.parametrize('args, timeout', [

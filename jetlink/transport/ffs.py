@@ -11,7 +11,7 @@ has CONFIG_USB_F_FS built in, while a host needs no kernel driver at all, which
 an L4T rootfs stripped of the gadget modules does not have. See
 docs/transport.md.
 
-Bring-up (scripts/comma/jetlink-root.sh gadget does all of this):
+Bring-up (jetlink/comma/jetlink-root.sh gadget does all of this):
     configfs gadget -> functions/ffs.jetlink -> mount -t functionfs
     write descriptors + strings to ep0 -> ep1 (OUT) and ep2 (IN) appear
     echo <udc> > UDC

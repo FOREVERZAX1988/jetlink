@@ -4,7 +4,7 @@ Copyright (c) 2026-, Zeph Leggett.
 This file is part of jetlink and is licensed under the MIT License.
 See the LICENSE file in the root directory for more details.
 
-Root on the comma: scripts/comma/jetlink-root.sh under sudo -n, and nothing
+Root on the comma: jetlink/comma/jetlink-root.sh under sudo -n, and nothing
 else. The script leaves its own record of the gadget and its network in
 /dev/shm (jetlink-gadget, jetlink-net), so a False here only says the call
 failed; the reason is in the log line and, for the gadget, in those files.
@@ -27,9 +27,14 @@ log = logging.getLogger('jetlink.comma')
 
 AGNOS = os.path.isfile('/AGNOS')
 
+# Next to this file, so the package alone is all the comma runs. Through
+# v0.8.7 it was the checkout's scripts/comma/; that stays a fallback for one
+# release, for a tree that has only the old one. Drop it after v0.9.x.
 # Resolved, so that <openpilot>/jetlink, a symlink into jetlink_repo, still
-# leads to the checkout's scripts.
-SCRIPT = Path(__file__).resolve().parents[2] / 'scripts' / 'comma' / 'jetlink-root.sh'
+# leads to the checkout.
+SCRIPT = Path(__file__).resolve().with_name('jetlink-root.sh')
+if not SCRIPT.is_file():
+  SCRIPT = SCRIPT.parents[2] / 'scripts' / 'comma' / SCRIPT.name
 
 # sudo, configfs, and for iOS nmcli and dnsmasq
 TIMEOUT = 30.0

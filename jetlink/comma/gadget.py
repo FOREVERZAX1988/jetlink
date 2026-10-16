@@ -146,7 +146,7 @@ UDC_PATH = Path(UDC_SYSFS)
 # the network function jetlink-root.sh gadget --ios adds after ffs.jetlink. Its
 # netdev is not usb0, which the modem holds, but whatever the kernel names it
 NET_FUNCTION = 'ncm.usb0'
-# written by scripts/comma/jetlink-root.sh gadget, which the owner runs when the
+# written by jetlink/comma/jetlink-root.sh gadget, which the owner runs when the
 # link is on and there is no gadget: "ok", or "error: <reason>"
 GADGET_STATUS = Path("/dev/shm/jetlink-gadget")
 # the owner's own: "error: the lender could not listen: <reason>" while nothing
