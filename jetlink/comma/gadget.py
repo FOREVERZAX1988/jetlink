@@ -12,8 +12,8 @@ Holding ep0 needs sysfs and a unix socket; `openpilot.common.swaglog` costs
 28 MB because it drags numpy, capnp and zmq in to publish a log line, and
 `openpilot.common.params` imports swaglog, so a module that touches either
 prices the owner out of being minimal. Measured on the comma: python plus this
-plus the FunctionFS transport is 10.4 MB against 47.5 MB for the daemon that
-imported the world.
+plus the FunctionFS transport is 10.4 MB against 47.5 MB with openpilot's
+modules imported.
 
 Nothing in jetlink.comma may import openpilot or knows a param: the settings
 come from jetlink.openpilot.settings, over the directory and the keys the
@@ -158,11 +158,10 @@ CC_ORIENTATION = Path('/sys/class/power_supply/usb/typec_cc_orientation')
 # sleep. Presence comes from this, not the UDC; a marker whose writer is dead is
 # a leftover from a kill
 DORMANT = Path("/dev/shm/jetlink-dormant")
-# hardwared's request to power the Jetson off; see backend.shutdown
+# hardwared's request to power the Jetson off; see request_shutdown
 SHUTDOWN_REQUEST = Path("/dev/shm/jetlink-shutdown")
-# the owner's status record: everything the readers used to take from the
-# files above one by one, rewritten whole every step, which makes it the
-# owner's heartbeat too. A clean stop removes it
+# the owner's status record: the owner's state in one file, rewritten whole
+# every step, which makes it the owner's heartbeat too. A clean stop removes it
 STATUS = Path("/dev/shm/jetlink/status.json")
 # how old that record may be before a reader takes its owner for gone: six of
 # its 0.5 s steps. A wait inside a step renews it (Owner.beat)
@@ -181,11 +180,9 @@ SERVER = Path("/dev/shm/jetlink/server.json")
 # second and on every handover: whether the big model drives, for a reader
 # with no modelV2 (status.runtime). modeld's close() leaves it stopping
 MODELD = Path("/dev/shm/jetlink/modeld.json")
-# how long a host that stopped reading configured still counts as there. The
-# owner holds the gadget for as long as the link is enabled, so presence no
-# longer blinks at every handover; what is left to bridge is a USB3 link
-# recovery passing through "addressed", and a bounce made on purpose when a
-# host will not enumerate (wait_for_host)
+# how long a host that stopped reading configured still counts as there: long
+# enough to bridge a USB3 link recovery passing through "addressed", and a
+# bounce made on purpose when a host will not enumerate (wait_for_host)
 PRESENCE_HOLD = 5.0
 
 
@@ -332,8 +329,8 @@ def wait_for_host(timeout: float, bounce=None, should_stop=None, report=None, mo
   """Wait for the Jetson to enumerate us, bouncing a bus that stalled.
 
   The gadget stays bound throughout. An unbind is an unplug as the far end sees
-  it, and while one boots it takes ~50 s a cycle: doing that on a timer landed
-  an unplug on a box that was seconds from enumerating.
+  it, and while one boots it takes ~50 s a cycle, so an unbind on a timer can
+  land on a box seconds from enumerating.
 
   The one case that needs an edge is a host that took the bind as a wake, reset
   the bus and stopped. The UDC then sits in default or addressed with the CC

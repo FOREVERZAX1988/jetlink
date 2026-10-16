@@ -102,8 +102,8 @@ LOG_BYTES = 1 << 20
 
 def logger(path: Path) -> logging.Logger:
   """The owner's log, to stderr and `path`: swaglog costs 28 MB, so the owner
-  keeps its own. The worker's lines go to the drive; these are for a bench
-  session, which wants them after the drive."""
+  keeps its own. The worker's lines go to the drive's log; these stay for
+  reading afterwards."""
   log = logging.getLogger('jetlink.owner')
   log.setLevel(logging.INFO)
   handlers: list[logging.Handler] = [logging.StreamHandler()]
@@ -184,10 +184,9 @@ class Owner:
     self.cut = False
     self.draw_for: str | None = None
     # when there was last something to do. The hold runs from here, not from
-    # process start: this daemon is not restarted at ignition any more, so a
-    # hold measured from its birth expires once and never applies again, and
-    # every wake released the gadget a second later with the jetson still
-    # coming up
+    # process start: this daemon lives across ignitions, so a hold measured
+    # from its birth would expire once and then release the gadget on every
+    # wake with the jetson still coming up
     self.idle_since = time.monotonic()
     self.next_attempt = 0.0
     self.next_gadget_attempt = 0.0
@@ -476,8 +475,8 @@ class Owner:
     # the far end may still be waking; give it the hold before letting go
     self.idle_since = time.monotonic()
     # after the run, not before it: a run writes JetlinkSpec itself, so a mark
-    # taken at spawn always differs by the time it exits and every successful
-    # provision started a second one
+    # taken at spawn would always differ by the time it exits and every
+    # successful provision would start a second one
     self.note_marks()
     return False
 
@@ -769,9 +768,9 @@ class Owner:
     if reason is not None and not self.lender.lent:
       if self.worker_running():
         if self.shutting_down:
-          # the run asking the jetson. Stopping it here restarted it every
-          # step, half a second, less than it takes to start: on the bench
-          # nothing ever asked, and hardwared gave up after its 25 s
+          # the run asking the jetson. Stopping it here would restart it every
+          # half-second step, less than it takes to start, so nothing would
+          # ever ask and hardwared would give up after its 25 s
           return
         self.stop_worker()
       if time.monotonic() < self.next_shutdown_run:
@@ -973,7 +972,7 @@ class Owner:
     still holds the gadget) would clear that owner's records, overwrite its
     status record and release its port hold. The kernel lets an flock go with
     the process however it dies, and the fd is not inherited by a run.
-    Without a /dev/shm to lock in, the owner runs as it did before."""
+    Without a /dev/shm to lock in, the owner runs unlocked."""
     try:
       gadget.OWNER_LOCK.parent.mkdir(parents=True, exist_ok=True)
       fd = os.open(gadget.OWNER_LOCK, os.O_RDWR | os.O_CREAT, 0o644)

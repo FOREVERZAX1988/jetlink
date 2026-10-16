@@ -7,8 +7,8 @@ See the LICENSE file in the root directory for more details.
 Who may do endpoint IO on the gadget, while one process owns it throughout.
 
 The owner (owner.py) holds ep0 for as long as the link is on, and nothing else
-ever does: when two processes took turns at it, every change of owner was an
-unplug, a fresh libusb open and a fresh server session as the Jetson saw it.
+ever does: to the Jetson, a change of who holds ep0 is an unplug, a fresh
+libusb open and a fresh server session.
 
 What still has to change hands is the right to read the endpoint files.
 FunctionFS keeps a queued read queued until something completes it, so a second

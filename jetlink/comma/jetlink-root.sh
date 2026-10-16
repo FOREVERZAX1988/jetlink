@@ -23,7 +23,7 @@
 # For the comma four and the comma 3X only. Both are SDM845 on the same AGNOS
 # kernel (4.9, dwc3 at a600000.dwc3), with configfs, FunctionFS and NCM built
 # in and no modules to load.
-# The 3X is assumed from the kernel it shares with the four; only the four has been on the bench.
+# The 3X is assumed from the kernel it shares with the four; only the four is tested.
 #
 # gadget: the USB gadget, chosen by the comma's Jetlink setting. The
 # comma is the USB device and the host runs the model; docs/transport.md says
@@ -75,15 +75,15 @@ SYS_NET=${JETLINK_SYS_NET:-/sys/class/net}
 # phone's reply, and under load 4.9 hands it to ksoftirqd, which waits behind
 # any SCHED_FIFO thread on its core. With f0 (cores 4-7) each connection hashed
 # to one of them: 4 is card/controlsd/selfdrived, 5 the ui, 87 and 77 % busy on
-# a drive. A ui-like FIFO 53 load on the receive core took the bench's link from
-# 7.6 to 12.4 ms (p90 36 to 47 ms round trip); on core 6, 7.7 (2026-10-07).
+# a drive. A ui-like FIFO 53 load on the receive core took the link from 7.6 to
+# 12.4 ms (p90 36 to 47 ms round trip); on core 6, 7.7.
 # The kernel keeps only the cores online at the write, so with the big cores
 # parked it reads 00: the owner steers again once a drive starts.
 RPS_CPUS=40
 # No connection tracking on the cable. AGNOS builds conntrack and the legacy
-# tables in, so every packet to and from the phone was tracked and walked four
-# empty tables: NOTRACK in raw for the cable's netdev took 0.37 ms off a TCP
-# frame's send on the bench (2026-10-07), and covers the TCP that frame
+# tables in, so every packet to and from the phone would be tracked and walk four
+# empty tables: NOTRACK in raw for the cable's netdev takes 0.37 ms off a TCP
+# frame's send, and covers the TCP that frame
 # datagrams fall back to. The rules carry a comment and are replaced as a set:
 # the netdev's name moves between binds, and usb0 is the modem's when it has one.
 IPTABLES=${JETLINK_IPTABLES:-iptables-legacy}
@@ -107,9 +107,9 @@ UDC_GLUE=${JETLINK_UDC_GLUE:-/sys/devices/platform/soc/a600000.ssusb}
 PE_PARAMS=${JETLINK_PE_PARAMS:-/sys/module/policy_engine/parameters}
 # And Qualcomm's FunctionFS logs four lines to an IPC debug ring for every USB
 # request, inside io_submit on modeld's frame thread: about 200 a frame, into
-# a buffer only debugfs reads. Turned off on a recording bench, the frame's
-# io_submit went from 1.20 to 0.88 ms and frames from 21.14 to 20.86 ms at
-# p50 (2026-10-07). 1 turns it off; stock is 0.
+# a buffer only debugfs reads. Turned off while recording, the frame's
+# io_submit goes from 1.20 to 0.88 ms and frames from 21.14 to 20.86 ms at
+# p50. 1 turns it off; stock is 0.
 FFS_LOG_OFF=${JETLINK_FFS_LOG_OFF:-/sys/kernel/debug/ipc_logging/f_fs/log_disable}
 USB_PSY=${JETLINK_USB_PSY:-/sys/class/power_supply/usb}
 
@@ -126,24 +126,22 @@ USB_ICL_VOTER=${JETLINK_USB_ICL_VOTER:-/sys/kernel/debug/pmic-votable/USB_ICL}
 
 # vm: loggerd's dirty pages pile up until the kernel reclaims them
 # synchronously, right while a FunctionFS transfer allocates its buffer: gadget
-# reads stalled 200-350 ms and the big model fell back. Capping dirty memory
+# reads stall 200-350 ms and the big model falls back. Capping dirty memory
 # keeps that reclaim cheap. System-wide, since the gadget read shares the
 # kernel with every writer.
 # Not vm.min_free_kbytes: a 128 MB floor takes about three times that out of
 # MemAvailable, 360 MB on a 3.6 GB comma, and openpilot's LOW MEMORY alert
-# reads MemTotal-MemAvailable against 90 %. Drives at 80 % showed 90 and
-# alerted. vm.extra_free_kbytes (Android's) instead has kswapd keep that much
+# reads MemTotal-MemAvailable against 90 %, so a drive at 80 % would alert. vm.extra_free_kbytes (Android's) instead has kswapd keep that much
 # more free ahead of the allocators, leaving the direct-reclaim floor where it
-# is: 32 MB took a 3-minute recording bench from 49 direct-reclaim stalls (the
+# is: 32 MB took 3 minutes of recording from 49 direct-reclaim stalls (the
 # longest 148 ms) to none, for 2.7 points on that gauge, as the kernel takes
-# it out of MemAvailable about 2.5 times; 64 MB added nothing but cost 4.5
-# (2026-10-07). A drive sits near 71 %.
+# it out of MemAvailable about 2.5 times; 64 MB adds nothing but costs 4.5.
+# A drive sits near 71 %.
 # And the socket buffer caps, for the iPhone's TCP link: transport/tcp.py asks
 # for 4 MB, which turns autotuning off, and the kernel clamps it to these, 224
 # KB on AGNOS and so 448 KB of buffer. A 393 KB frame in 1448-byte segments does
-# not fit, so the send waited on the phone's ACKs: 6 to 50 ms, following its
-# round trip. With 4 MB the frame goes in one write and the send took ~4 ms
-# (a tester's comma, 2026-10-04). Only a socket that asks gets more; one set up
+# not fit, so the send waits on the phone's ACKs: 6 to 50 ms, following its
+# round trip. With 4 MB the frame goes in one write and the send takes ~4 ms. Only a socket that asks gets more; one set up
 # before the apply keeps the old cap until the phone reconnects.
 VM_SYSCTLS=(vm.dirty_bytes=16777216 vm.dirty_background_bytes=8388608 vm.extra_free_kbytes=32768
             net.core.wmem_max=4194304 net.core.rmem_max=4194304)
@@ -363,7 +361,7 @@ cmd_gadget() {
     echo 0x02   > bDeviceSubClass
     echo 0x01   > bDeviceProtocol
   else
-    # the plain gadget, as it has always been: class per interface
+    # the plain gadget: class per interface
     echo 0x0100 > bcdDevice
     echo 0x00   > bDeviceClass
     echo 0x00   > bDeviceSubClass
@@ -631,8 +629,8 @@ sysctl_write() {
 vm_apply() {
   local pair key value had="" rec="" failed=0
   # A key already in the record keeps its first value: a second apply must
-  # not record our own. One missing from it, a key a newer version added
-  # since the first apply of this boot, is recorded now, while it is stock.
+  # not record our own. One missing from it (added by a newer jetlink
+  # since this boot's first apply) is recorded now, while it is stock.
   [[ -e "$SYSCTL_PREV" ]] && had=$(cat "$SYSCTL_PREV" 2>/dev/null)
   for pair in "${VM_SYSCTLS[@]}"; do
     key=${pair%%=*}
