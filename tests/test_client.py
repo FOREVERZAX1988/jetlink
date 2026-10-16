@@ -95,9 +95,10 @@ class FramesInFlight(SocketPairTest):
     self.client.spec = _spec()
     self.client.deadline = 0.5
 
-  def send(self, frame_id: int) -> int:
+  def send(self, frame_id: int, skip_if_busy: bool = False):
     spec = self.client.spec
-    return self.client.infer_begin(bytes(spec.warped_nbytes), bytes(spec.packed_nbytes), frame_id=frame_id)
+    return self.client.infer_begin(bytes(spec.warped_nbytes), bytes(spec.packed_nbytes), frame_id=frame_id,
+                                   skip_if_busy=skip_if_busy)
 
   def answer(self, status=P.Status.OK) -> None:
     """The far end takes one request and answers it with its frame id in
@@ -160,6 +161,31 @@ class FramesInFlight(SocketPairTest):
     # held frames keep going out without waiting, so a quiet host shows
     # here, not in a wait
     self.client.deadline = 0.05
+    self.send(1)
+    time.sleep(0.06)
+    with self.assertRaises(LinkError) as quiet:
+      self.send(2)
+    self.assertIn('no answer to 1 frames', str(quiet.exception))
+    self.assertTrue(self.client.dead)
+
+  def test_a_patient_client_holds_a_frame_its_host_is_behind_on(self):
+    # a preview (model_state.preview sets client.patient): nothing in it can
+    # take control, so a host that owes answers is behind, not gone. The frame
+    # is one the caller said it can do without -- the loop publishes the answer
+    # it already has -- and the link survives the stall
+    self.client.deadline = 0.05
+    self.client.patient = True
+    self.send(1)
+    time.sleep(0.06)
+    self.assertIsNone(self.send(2, skip_if_busy=True))
+    self.assertFalse(self.client.dead, 'a stall a preview can wait out is not the link\'s')
+    self.assertGreater(self.client.waiting_for(), 0.05, 'the frame is still the host\'s to answer')
+
+  def test_a_patient_client_still_loses_a_link_no_frame_could_be_spared_from(self):
+    # skip_if_busy False: the caller has nothing to publish instead (the first
+    # frame of a session), so the stall is the link's even for a preview
+    self.client.deadline = 0.05
+    self.client.patient = True
     self.send(1)
     time.sleep(0.06)
     with self.assertRaises(LinkError) as quiet:

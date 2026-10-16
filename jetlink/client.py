@@ -122,6 +122,15 @@ class JetlinkClient:
     # keeps its link, and the joining state serves the frame from the small
     # model (model_state.FrameFailed)
     self.tolerate_failed = False
+    # Whether a stall past the deadline is the link's failure or only the
+    # frames'. A preview sets this, as it sets tolerate_failed and for the same
+    # reason: it never takes control, so a host that is behind can be waited
+    # out -- the frames it owes are held, and the picture is handed back by the
+    # joining state's silence rule (model_state.PREVIEW_SILENCE), which is what
+    # a preview is held to and the only thing it is held to. Only a frame the
+    # caller said it can do without (skip_if_busy) is held this way; the wheel's
+    # reads are untouched
+    self.patient = False
     # whether the last reply's own status was OK: an answer that carried no
     # output is still an answer, which a preview's silence rule counts
     self.last_failed = False
@@ -419,7 +428,9 @@ class JetlinkClient:
     infer_end stopped waiting for is read by the next drain or infer_end. A
     host that has answered none of them for the client's deadline is gone,
     not slow, and the link is done here, before another frame goes out to
-    it. `deadline` bounds this frame's send.
+    it. A patient client (a preview, `patient`) does not lose the link over
+    that: the frame is held like one the link cannot take, when the caller
+    said it can do without it. `deadline` bounds this frame's send.
 
     `skip_if_busy` says the caller can do without this frame's reply: it
     holds the last output, as JetlinkModelState.end does. A frame the link
@@ -438,6 +449,17 @@ class JetlinkClient:
     if self.dead:
       raise LinkError("link previously failed")
     if self.waiting_for() > self.deadline:
+      if self.patient and skip_if_busy:
+        # a preview is held to silence and to nothing else. A host that owes
+        # answers for longer than a frame budget is behind, not gone, and this
+        # frame is one the caller said it can do without: it goes the way of a
+        # frame the link cannot take below, unsent, and the loop publishes the
+        # newest answer it already has. Abandoning the link over a stall the
+        # host comes back from serves the frame from the small model anyway and
+        # then makes the join sit out its backoff, seconds of a picture the
+        # preview was drawing (2026-10-17: one such stall every 5 to 30 s of a
+        # Wi-Fi preview, 22 demotions in 22 minutes)
+        return None
       self.dead = True
       raise LinkError(f"no answer to {len(self._in_flight)} frames in {self.deadline:.1f}s; link abandoned")
     packed = _as_bytes(packed, self.spec.packed_nbytes, 'packed')

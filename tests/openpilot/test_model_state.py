@@ -62,6 +62,9 @@ class FakeClient:
     # and not the link's, and the frames whose answer carries no output at all
     # (a NOT_FINITE from the server)
     self.tolerate_failed = False
+    # and a preview's link: a host that is behind rather than gone holds the
+    # frames it owes instead of costing the link (client.patient)
+    self.patient = False
     self.last_failed = False
     self.failed: set[int] = set()
     self.t = SimpleNamespace()
@@ -667,6 +670,15 @@ class TestAPreview(ModelStateTest):
     self.frames(state, 8)
     self.assertEqual((state.trips.held, state.trips.pipelined), (7, 0))
     self.assertIsNone(state.behind)
+
+  def test_the_link_is_told_the_preview_is_patient(self):
+    # a stall past the client's deadline is a host behind, not gone, so the
+    # preview's link holds the frame; the wheel's still hands the picture back
+    # over one (client.patient)
+    _, client = self.make_late(preview=True)
+    self.assertTrue(client.patient)
+    self.assertTrue(client.tolerate_failed, 'both are set from state.preview')
+    self.assertFalse(self.make_late(preview=False)[1].patient)
 
   def test_the_same_host_hands_a_driving_link_back(self):
     state, client = self.make_late(preview=False)

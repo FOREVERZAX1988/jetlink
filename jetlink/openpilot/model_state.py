@@ -498,6 +498,11 @@ class JetlinkModelState:
     # the link reads it too, so a host that is there but cannot answer a frame
     # keeps its link where the wheel would hand one back (client.tolerate_failed)
     self.client.tolerate_failed = self._preview
+    # and so a host that is behind, rather than gone, holds the frames it owes
+    # instead of costing the link (client.patient): a stall a preview can wait
+    # out is not the small model's cue, and the silence rule above is what hands
+    # the picture back in the end
+    self.client.patient = self._preview
 
   @property
   def pipeline(self) -> bool:
