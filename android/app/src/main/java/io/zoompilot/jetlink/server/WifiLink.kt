@@ -36,12 +36,14 @@ class WifiLink(context: Context) {
         }
     }
 
+    @Suppress("DEPRECATION")  // the fallback below, deprecated in favour of the mode above it
     private fun create(): WifiManager.WifiLock = try {
         // The mode that asks the stack for low latency and no power save, which
         // is what the reply needs (API 29; the phone here reports
         // WIFI_FEATURE_LOW_LATENCY). The older high-performance mode is the
         // fallback for a stack that will not take it: createWifiLock is the
-        // call that refuses a mode it does not know.
+        // call that refuses a mode it does not know, and a phone old enough to
+        // refuse knows only the one it deprecates.
         wifi.createWifiLock(WifiManager.WIFI_MODE_FULL_LOW_LATENCY, TAG)
     } catch (e: IllegalArgumentException) {
         wifi.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, TAG)
@@ -58,7 +60,10 @@ class WifiLink(context: Context) {
          * a server too old to name one is not a reason to hold one, and neither
          * is a link that is not connected yet -- `medium` is only sent while
          * one is.
+         *
+         * An empty name is not a medium either: a lock held on a guess is
+         * battery spent on a guess.
          */
-        fun wanted(medium: String?): Boolean = medium != null && !medium.startsWith("usb")
+        fun wanted(medium: String?): Boolean = !medium.isNullOrEmpty() && !medium.startsWith("usb")
     }
 }
