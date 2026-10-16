@@ -69,8 +69,8 @@ STRUCTS = {
   'carControl': ('opendbc_repo/opendbc/car/car.capnp', 'CarControl'),
   'selfdriveState': ('openpilot/cereal/log.capnp', 'SelfdriveState'),
 }
-# what Stock.small_reset zeroes, as the class assigns it
-MODEL_STATE = ('openpilot.selfdrive.modeld.modeld', 'ModelState', ('input_queues', 'state_pairs', 'packed_input', 'prev_desire'))
+# where Stock.small_reset's ModelState is: it zeroes stock's _MODEL_STATE and prev_desire
+MODEL_STATE = ('openpilot.selfdrive.modeld.modeld', 'ModelState')
 # (file under the package, text): upstream behaviour stock.py copies, and the
 # modeld seam the hook lines go into (docs/porting.md)
 ANCHORS = [
@@ -316,7 +316,7 @@ def check(checkout: Path) -> list[tuple[str, str, str]]:
       results.append(('OK', f"engaged() {struct}.{field}", '') if field in declared else
                      ('MISSING', f"engaged() {struct}.{field}", f"not in {rel}"))
 
-  module, cls, attrs = MODEL_STATE
+  (module, cls), attrs = MODEL_STATE, (*stock['_MODEL_STATE'], 'prev_desire')
   node, err = lookup(package, module, cls)
   if err:
     results.append(('MISSING', f"{module}:{cls}", err))

@@ -17,31 +17,16 @@ modeld alone, where that module is already loaded.
 
 Data are class attributes, behaviour small methods, each a fork may override;
 one override point per value: a fork sets KEYS and CATALOG_SELECTOR, and the
-interface's keys and catalog_selector read them. Both are jetlink's contract: renaming or removing one, or changing what one
-means, is a breaking change and bumps API. The paths and literals here are
+interface's keys and catalog_selector read them. Both are jetlink's contract:
+renaming or removing one, or changing what one means, is a breaking change
+and bumps API. The paths and literals here are
 checked against commaai/openpilot by scripts/upstream (the upstream-paths CI
 job), weekly against master.
 
-A fork's adapter module, whose top level must import without a jetlink
-checkout (manager builds its process list from it), defines the subclass
-lazily:
-
-  def _adapter_class():
-    from jetlink.openpilot.stock import Stock
-
-    class Adapter(Stock):
-      KEYS = Keys(...)                      # the fork's param names
-      def engaged(self, sm): ...            # its engagement rule
-    return Adapter
-
-  def adapter():
-    return _adapter_class()()
-
-  def owner_config():
-    return _adapter_class().owner_config()
-
-The class's module names the adapter module the provisioning run is started
-with, so defined there it needs no ADAPTER_MODULE.
+A fork's adapter module defines its subclass lazily, as its top level must
+import without a jetlink checkout: docs/porting.md, "The adapter module".
+Defined there, the class's module names the adapter module the provisioning
+run is started with, so it needs no ADAPTER_MODULE.
 """
 from __future__ import annotations
 
@@ -60,6 +45,8 @@ from jetlink.openpilot.interface import Keys, ModelFace, OwnerConfig
 RETRY_S = 5.0
 # what the base engaged() reads, by service: only those in IN_CONTROL_SERVICES
 _ENGAGED = {'carControl': ('enabled', 'latActive', 'longActive'), 'selfdriveState': ('enabled', 'active')}
+# what marks stock modeld's ModelState, which small_reset() zeroes (and its prev_desire)
+_MODEL_STATE = ('input_queues', 'state_pairs', 'packed_input')
 
 
 class Stock:
@@ -91,7 +78,6 @@ class Stock:
     # nothing imported here: owner_config() builds one in the owner
     self._stores: dict[Path, object] = {}
     self._params_after = 0.0
-    self._services = list(self.IN_CONTROL_SERVICES)
     self._sm = None
     self._sm_after = 0.0
     self._in_control_error: str | None = None
@@ -121,9 +107,8 @@ class Stock:
   def params_dir(self) -> Path:
     # params.cc and hw.h's rule: PARAMS_ROOT, else /data/params on a comma and
     # $HOME/.comma<OPENPILOT_PREFIX>/params elsewhere, then /<OPENPILOT_PREFIX,
-    # or d>. HOME unset gives /.comma, as the C++ concatenation does
-    # (zoompilot's copy gives a relative .comma). The environment only, per
-    # call, so it follows a prefix as Params does
+    # or d>. HOME unset gives /.comma, as the C++ concatenation does. The
+    # environment only, per call, so it follows a prefix as Params does
     prefix = os.environ.get('OPENPILOT_PREFIX', '')
     store = os.environ.get('PARAMS_ROOT')
     if store is None:
@@ -234,9 +219,10 @@ class Stock:
           return True
         self._sm_after = time.monotonic() + RETRY_S
         from openpilot.cereal import messaging
-        self._sm = messaging.SubMaster(self._services)
+        self._sm = messaging.SubMaster(list(self.IN_CONTROL_SERVICES))
+      services = self.IN_CONTROL_SERVICES
       self._sm.update(0)
-      result = not (self._sm.all_alive(self._services) and self._sm.all_valid(self._services)) or self.engaged(self._sm)
+      result = not (self._sm.all_alive(services) and self._sm.all_valid(services)) or self.engaged(self._sm)
     except Exception as e:
       # once per distinct error: this runs 20 times a second
       if self._in_control_error != (text := f"{type(e).__name__}: {e}"):
@@ -256,7 +242,7 @@ class Stock:
     """Stock modeld's ModelState, as its warmup leaves it: the recurrent state
     on the GPU, the packed host inputs and the desire edge, zeroed in place.
     None for another shape, so jetlink's own reset runs."""
-    if not all(hasattr(small, name) for name in ('input_queues', 'state_pairs', 'packed_input')):
+    if not all(hasattr(small, name) for name in _MODEL_STATE):
       return None
     from jetlink.openpilot.warp import reset_for_stock
     return reset_for_stock(small, getattr(small, 'prev_desire', None))
