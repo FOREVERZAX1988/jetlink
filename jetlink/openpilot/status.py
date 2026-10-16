@@ -22,7 +22,7 @@ from jetlink.comma import gadget
 
 # -- progress -----------------------------------------------------------------
 # Written by the provisioning run and the joining state, read by the UI: a
-# param today (Keys.progress), because the writer is another process.
+# param (Keys.progress), because the writer is another process.
 
 # Each report is a file write, and the UI reads it at 5 Hz. An upload reports
 # once per 4 MB chunk, 440 of them for a 1.7 GB model, and onroad that is IO a

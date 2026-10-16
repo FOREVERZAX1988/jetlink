@@ -16,8 +16,8 @@ fork's hook lines call them through (hooks.py) and the kit its CI runs
 (testing.py). API names its version: an adapter declares the one it was
 written to, hooks.Hooks refuses one it does not accept, and the fork treats
 that as jetlink being absent, an offroad alert and no link rather than a
-crash. Everything else in this package is jetlink's own and changes without
-notice.
+crash. Everything else in this package is internal to jetlink and may change
+at any time.
 
 API changes only for a breaking change to the contract: removing or renaming
 anything in it, changing what one of its members means, or making an optional

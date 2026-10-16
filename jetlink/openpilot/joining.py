@@ -25,12 +25,10 @@ the previous frame's output is published again (a held frame,
 model_state.HOLD_FRAME) and the camera frame is not dropped. Too many holds
 hand the drive back to the small model, as a lost link does.
 
-Shadow frames, every frame sent to the host while the small model drove, were
-tried and removed (2026-10-05). They cost the comma ~9 ms of every frame for
-as long as the window stayed shut, a whole drive with MADS on, which starved
-the driver monitoring model under selfdrived's frequency floor (commIssue).
-Their proof, scored after the small model's own frame, could not pass behind
-a small model that took most of the frame, however fast the host.
+No frames go to the host while the small model drives. Sending them costs
+the comma ~9 ms of every frame for as long as the window stays shut (a whole
+drive with MADS on), which starves the driver monitoring model under
+selfdrived's frequency floor (commIssue).
 
 Two rules the swap keeps:
 
@@ -63,26 +61,24 @@ REJOIN_DELAY = 5.0
 REJOIN_DELAY_MAX = 60.0
 STABLE_SECONDS = 60.0
 # after a join that held: a link that ran for minutes and then went is a USB
-# drop, and the host re-enumerates a rebound gadget in under a second. The
-# rest of the old delay was the driver's time, not the Jetson's
+# drop, and the host re-enumerates a rebound gadget in under a second
 REJOIN_DELAY_QUICK = 1.0
 # failures in a streak retried that quickly before the doubling starts. A
 # demote is mostly one late frame, a tail of the link or the host and not a
-# dead one: on a phone's cable each one cost 5 to 60 s on the small model,
-# five times in nine minutes on an iPad (2026-10-03). A link that fails on
-# its heels this many times is backed off as before
+# dead one, and a full backoff costs 5 to 60 s on the small model. A link
+# that fails on its heels this many times is backed off as usual
 QUICK_RETRIES = 3
 # how often a link that is ready but has nowhere to land gets checked, and
 # how long the check may take; both off the frame loop
 KEEPALIVE_PERIOD = 10.0
 PING_TIMEOUT = 2.0
 # how often a backoff looks at the gadget. A host that configures it again
-# after it went away is a replug, which the backoff is not for: one waited 16 s
-# for a Jetson that was back in 0.4 (2026-09-29)
+# after it went away is a replug, which the backoff is not for: a replugged
+# Jetson is back in under half a second
 REPLUG_POLL = 0.25
-# link drops in one drive before the status names the cable. One is weather;
-# the 2026-09-07 evening drive had six in twelve minutes, every one the
-# USB-C port losing its host, and nothing the driver could see said so
+# link drops in one drive before the status names the cable. One is chance;
+# repeated drops are almost always the USB-C port losing its host, and nothing
+# else the driver can see says so
 DROPS_TO_BLAME_CABLE = 2
 # A host slower than the camera but never that slow (an iPhone that has warmed
 # up: 55 ms a frame drops one camera frame in ten) still has modeld skipping
@@ -95,8 +91,8 @@ DROPS_TO_BLAME_CABLE = 2
 DROP_LIMIT = 0.0075
 # the small model drives the first frames of every modeld start, even with the
 # large model ready: its first run in a process costs ~1.3 s, which the first
-# fallback frame paid (25 dropped frames, commIssue) when the large model had
-# driven from frame one. Nothing is in control at a modeld start
+# fallback frame would pay (25 dropped frames, commIssue) if the large model
+# drove from frame one. Nothing is in control at a modeld start
 SMALL_WARMUP_FRAMES = 3
 # the panel's line while a ready link waits for the window
 READY = 're-engage to switch'
@@ -146,7 +142,7 @@ class JoiningModelState:
     self._log = log
 
     # whatever the swap would otherwise do on the frame loop, done now on
-    # modeld's main thread before the frame loop exists; at the swap it cost
+    # modeld's main thread before the frame loop exists; at the swap it costs
     # a 1.5 s frame
     if prepare is not None:
       try:
@@ -314,17 +310,15 @@ class JoiningModelState:
   @in_control.setter
   def in_control(self, value):
     # openpilot or MADS in control, by openpilot's own messages, asked before
-    # every run(): the swap waits for False. A thread polling selfdrived for it
-    # woke ~300 times a second on a drive and took 6 to 11 % of a core inside
-    # modeld (2026-10-05)
+    # every run(): the swap waits for False. Not a thread polling selfdrived:
+    # that wakes ~300 times a second and takes 6 to 11 % of a core inside modeld
     self._in_control = value
 
   def __getattr__(self, name):
-    # Only for names this class does not define. Without it, a comma or
-    # sunnypilot sync that adds one read was an AttributeError on the frame
-    # thread, which modeld re-raises: modeld dead for the drive, on jetlink
-    # devices only. Reads only; a new write lands here and nowhere else, so
-    # each one modeld makes has its own setter above
+    # Only for names this class does not define, so a read that a comma or
+    # sunnypilot sync adds is not an AttributeError on the frame thread (modeld
+    # re-raises it and is dead for the drive). Reads only; a write lands on
+    # this object alone, so each one modeld makes has its own setter above
     if name.startswith('_'):
       # also what keeps __init__ from recursing before _active exists
       raise AttributeError(name)
@@ -365,8 +359,8 @@ class JoiningModelState:
       # this one is retryable. after_enqueue is dropped, the large model may
       # already have called it
       result = self._small.run(bufs, transforms, inputs, None)
-      # all of it is one modeld frame, 42 to 107 ms on the 2026-09-29 drives
-      # with the small model warm. The dropped camera frames are forgiven
+      # all of it is one modeld frame, 42 to 107 ms measured with the small
+      # model warm. The dropped camera frames are forgiven
       # (modeld sees the model change), but the log should say which part it was
       done = time.monotonic()
       self._log.warning("jetlink: fallback frame %.0f ms: link %.0f, demote %.0f, small model %.0f",
@@ -504,8 +498,8 @@ class JoiningModelState:
     """Tell the UI what the join is waiting on.
 
     Offroad the record carries a provisioning run's progress; without this, a
-    Jetson that is not plugged in looked like one six seconds from loading. No
-    fraction to give, and the panel does not invent one.
+    Jetson that is not plugged in looks like one about to load. No fraction to
+    give, and the panel does not invent one.
     """
     # the count is the diagnosis. A link that runs for minutes and then goes,
     # again and again, is the cable, and the cable is the one thing the
@@ -574,10 +568,9 @@ class JoiningModelState:
         # built, so it is handed the flag close() sets rather than polled
         client, spec = self._connect(self._stop.is_set)
       except Exception as e:
-        # expected while the Jetson boots. Not exception(): a stack trace every
-        # 5 s for the first minute of every drive is noise
-        # a failure that knows when it is worth asking again says so
-        # (link.ModelMissing), and what the panel should show meanwhile
+        # expected while the Jetson boots, so no stack trace. A failure that
+        # knows when it is worth asking again says so (link.ModelMissing), and
+        # what the panel should show meanwhile
         delay = getattr(e, 'retry_after', REJOIN_DELAY)
         if waiting := getattr(e, 'waiting', None):
           self._report('connect', waiting, getattr(e, 'code', None))
@@ -756,8 +749,8 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
   def prepare():
     from jetlink.openpilot.warp import Warp, prepare_reset
     # the gadget first, so the Jetson enumerates while the warp loads. Left to
-    # the join thread the bind landed ~3 s later, behind the small model's
-    # first frame, and one ignition had a 655 ms frame during the bind
+    # the join thread the bind lands ~3 s later, behind the small model's
+    # first frame, and can stall a frame by hundreds of ms
     links.present_early(link, background_thread)
     cached = parts.spec.load()
     if cached is not None:

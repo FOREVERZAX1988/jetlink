@@ -41,8 +41,8 @@ def init_device(log) -> None:
 
   tinygrad initialises the device on its first kernel run and spawns a libusb
   event thread doing it. A thread created after config_realtime_process(7, 54)
-  inherits SCHED_FIFO 54 and the core-7 pin and preempts the frame loop; that
-  cost 5% of frames once. Failure is not a reason to refuse the accelerator.
+  inherits SCHED_FIFO 54 and the core-7 pin and preempts the frame loop,
+  enough to drop ~5% of frames. Failure is not a reason to refuse the accelerator.
   """
   try:
     from tinygrad.tensor import Tensor
@@ -123,11 +123,10 @@ class Warp:
 
   openpilot's warp takes both frames as one buffer, so start() copies the
   camera buffers in, as modeld does, and the transforms beside them. Two
-  things the JIT alone does not do, measured on the comma with the warp
-  jetlink once built itself (2026-10-06):
+  things the JIT alone does not do, measured on the comma:
   - Its output lives in GPU memory the CPU reads through its cache. tinygrad
     maps a QCOM buffer write-combined, which the CPU reads uncached: copying
-    the 393 KB out took 2.9 ms, the kernel's copy straight from that mapping
+    the 393 KB out takes 2.9 ms, the kernel's copy straight from that mapping
     7.3 ms. The Adreno 630 is IO-coherent, so KGSL memory flagged IOCOHERENT
     and write-back is right to read once the GPU is done: 0.22 ms for the
     kernel's copy, the GPU's own time unchanged. It moves before the first

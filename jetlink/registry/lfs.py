@@ -13,15 +13,15 @@ ask a jetlink server for. The bytes themselves are on comma's LFS servers,
 which is GitLab and not GitHub: each is asked in turn because which one has an
 object varies with the model's age.
 
-Since openpilot #38930 (2026-09-16) a commit can ship a precompiled tinygrad
+Since openpilot #38930 a commit can ship a precompiled tinygrad
 pkl instead, with no ONNX in the tree at all; Cinque Terre V3 is one. Its
 subject names the export ("Use f78ed37d for the precompiled eGPU driving
 model") and the ONNX is in comma's HuggingFace model repo, in the folder that
 id starts. sunnypilot's model builds find it the same way. That repo speaks
 the LFS batch protocol too, so it is one more endpoint to ask.
 
-Not every such commit names its export. ResAction's pull request (#39037,
-2026-10-05) adds the ONNX in one commit and replaces it with the pkl in the
+Not every such commit names its export. ResAction's pull request (#39037)
+adds the ONNX in one commit and replaces it with the pkl in the
 next, subject "compiled", and a squash merge's subject only names the pull
 request. The pointer is still in a diff: the one the commit's own patch
 deletes, or the last one its pull request's patch carries.
@@ -301,8 +301,7 @@ def lfs_download(href: str, pointer: Pointer, dest: Path, progress: ProgressFn |
   A half-written model must never sit where the next start would hand it to a
   backend to build from. A transfer that stalls or is stopped keeps its .part,
   and the next call carries on from it with a Range request: 755 MB over a
-  car's connection need not arrive in one go (2026-10-06, one 30 s stall 85 s
-  in threw a whole download away). Only bytes that prove wrong are dropped.
+  car's connection need not arrive in one go. Only bytes that prove wrong are dropped.
   """
   opener = opener or urllib.request.urlopen
   dest = Path(dest)

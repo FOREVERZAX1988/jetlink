@@ -23,8 +23,7 @@ second: gate it on the state being 'none', or at least drop it on no_entry
 
 Either way the switch costs modeld a frame or two, and a frame the camera
 dropped is an invalid pose from the model and a localizer soft disable on the
-next tick: every return of a user's big model was a TAKE CONTROL IMMEDIATELY
-(2026-10-04). So a switch is `settling` for a second, which selfdrived must
+next tick (TAKE CONTROL IMMEDIATELY). So a switch is `settling` for a second, which selfdrived must
 treat as it does a native big model's load: hold the comm and localization
 errors that frame raises.
 """

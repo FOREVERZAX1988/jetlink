@@ -110,7 +110,7 @@ class JetlinkClient:
     # frames the server never answered this session, for the log: a lost
     # datagram is one, and to the caller a held frame like any late reply
     self.frames_lost = 0
-    # take a server's offer of frame datagrams (_take_datagrams); the bench's A/B turns it off
+    # take a server's offer of frame datagrams (_take_datagrams); False keeps frames on the stream, for A/B runs
     self.allow_datagrams = True
 
   # -- construction ---------------------------------------------------------
@@ -132,8 +132,8 @@ class JetlinkClient:
     """This end is the USB gadget, over a gadget another process owns.
 
     The owner holds ep0 and the UDC bind for as long as the link is enabled,
-    so a drive starting or ending is no longer an unplug the host has to
-    recover from. See FfsTransport.borrowed.
+    so a drive starting or ending is not an unplug the host has to recover
+    from. See FfsTransport.borrowed.
     """
     from jetlink.transport.ffs import FfsTransport
     return cls(FfsTransport.borrowed(mount, udc, bounce=bounce, owner_gadget=owner_gadget), **kw)

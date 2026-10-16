@@ -173,8 +173,8 @@ class ProvisioningRun:
     except EngineMissing:
       # the server has nothing to build from, and neither have we: fetch the
       # model and hand it over in this run. The owner lends the link for the
-      # whole run, so leaving after the download only put the build a
-      # WORKER_BACKOFF later, five minutes of a finished download doing nothing
+      # whole run; leaving after the download would put the build a
+      # WORKER_BACKOFF later
       if model_path is not None or (model_path := self.fetch_model()) is None:
         raise
       # a download of minutes can outlast the session; a hello starts a new one
@@ -266,7 +266,7 @@ class ProvisioningRun:
     finished = False
     try:
       # the bytes first, and with no Jetson: a parked car whose Jetson is
-      # switched with the ignition never has one to wait for (2026-10-06)
+      # switched with the ignition never has one to wait for
       if self.needs_download() and self.fetch_model() is None:
         return False
       if not self.open_link():

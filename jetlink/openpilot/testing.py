@@ -250,7 +250,8 @@ class Guard:
   """Records, between start() and stop(), every open, listing, socket connect
   or root-script run that reaches a forbidden path. Recorded, not refused:
   many of the paths are read inside `except OSError`, so a refusal would only
-  hide the reach. A suite run on a comma once cleared the live JetlinkSpec."""
+  hide the reach. A test that reaches the live params store can clear a
+  real setting such as JetlinkSpec."""
 
   def __init__(self, forbidden: tuple[str, ...] = FORBIDDEN):
     self.forbidden = tuple(forbidden)

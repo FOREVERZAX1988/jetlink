@@ -120,7 +120,7 @@ _infer_resp = struct.Struct(INFER_RESP_FMT)
 # of at most DATAGRAM_PAYLOAD, each behind a DATAGRAM_HEADER. The comma's kernel
 # cuts a datagram into IP fragments after netfilter and routing, so the stack's
 # per-packet work runs once a datagram, about 7 times a frame, where TCP runs it
-# for each of ~272 segments: 7.35 to 4.3 ms a frame on the bench (2026-10-07).
+# for each of ~272 segments: measured 7.35 vs 4.3 ms a frame.
 # The server offers it in HELLO_RESP (frame_port, frame_token) on the cable only.
 # A datagram with another token is from an earlier session and is dropped.
 DATAGRAM_MAGIC = 0x4D52464A  # b'JFRM'

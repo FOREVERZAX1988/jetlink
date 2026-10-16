@@ -19,9 +19,8 @@ Data are class attributes, behaviour small methods, each a fork may override;
 one override point per value: a fork sets KEYS and CATALOG_SELECTOR, and the
 interface's keys and catalog_selector read them. Both are jetlink's contract:
 renaming or removing one, or changing what one means, is a breaking change
-and bumps API. The paths and literals here are
-checked against commaai/openpilot by scripts/upstream (the upstream-paths CI
-job), weekly against master.
+and bumps API. scripts/upstream (the upstream-paths CI job) checks the paths
+and literals here against commaai/openpilot master weekly.
 
 A fork's adapter module defines its subclass lazily, as its top level must
 import without a jetlink checkout: docs/porting.md, "The adapter module".

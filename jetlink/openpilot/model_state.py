@@ -43,7 +43,7 @@ SLOW_FRAME = 0.05  # the full 20 Hz budget, not just the largest outliers
 # would be dropped: modeld's own work around run() takes the rest of the 50 ms.
 # A held frame is a plan one frame old, which the 10 s plan and the actuator
 # delay both dwarf, where a dropped frame is the same stale plan plus a count
-# toward selfdrived's modeldLagging. None waits the client's deadline, as before
+# toward selfdrived's modeldLagging. None waits the client's full deadline
 HOLD_FRAME = 0.046
 # Held frames the large model may make before it is behind rather than
 # tailing: this many in a row, or more than HOLDS_ALLOWED within HOLD_WINDOW.
@@ -59,8 +59,7 @@ HOLD_WINDOW = 10.0
 # The first frames after a swap, which the fork holds engagement off for (a
 # second at 20 Hz): a single held frame among them is behind. A host cold from
 # a reconnect proves itself here, before anyone can engage, rather than at the
-# wheel, where an iPhone's every return was a soft disable within a second
-# (2026-10-04)
+# wheel, where a slow host's return is a soft disable within a second
 PROVING_FRAMES = 20
 # the first of them never hand back, held or not: the first after a join
 # carries the history reset, and a Mac's is ~100 ms of CoreML warm-up. A

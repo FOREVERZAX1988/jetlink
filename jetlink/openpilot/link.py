@@ -31,8 +31,8 @@ CONNECT_TIMEOUT = 45.0
 CONNECT_DELAY = 0.5
 # four frame periods, and four times the slowest frame seen. A host that goes
 # silent with no USB edge (a hung server, a phone's cable) costs one frame this
-# long plus the small model's, inside modelV2's 0.5 s alive limit; 0.5 s here
-# flashed commIssue on top of the fallback
+# long plus the small model's, inside modelV2's 0.5 s alive limit; at 0.5 s
+# here commIssue flashes on top of the fallback
 INFERENCE_TIMEOUT = 0.2
 # between joins while neither end has the picked model and nothing else is built
 MODEL_WAIT = 60.0
@@ -105,7 +105,7 @@ class Link:
   def open(self, deadline: float | None = None):
     """The client, opening one if we have not got one yet, or if the one held
     is dead: a big model retired after a link loss closes its client, and
-    reusing it failed the next attempt with EBADF, 5 s after every loss."""
+    reusing it fails the next attempt with EBADF."""
     if self.client is not None and self.client.dead:
       self.close()
     if self.client is None:
@@ -303,10 +303,9 @@ def stand_in(parts, hello: dict, pick: str, built) -> tuple[str, int] | None:
 
   The server's hello says what it has: the model it has loaded and the ones it
   has built. The pick wins whenever the server has it. Otherwise the model it
-  has loaded drives, so the iPhone the user set to Cinque Terre V3 serves that
-  rather than whatever the comma last built on some other server (ResAction on
-  the Jetson, 2026-10-07); then the comma's own record of the last model built,
-  if this server has it too. A server that lists nothing has only the record
+  has loaded drives, so a phone set to its own model serves that rather than
+  whatever the comma last built on some other server; then the comma's own
+  record of the last model built, if this server has it too. A server that lists nothing has only the record
   to go on."""
   cached = hello.get('cached_models')
   have = None
@@ -332,7 +331,7 @@ def open_link(parts, link: Link, should_stop=None):
 
   The picked model is built here if the Jetson has not got it, minutes with
   the small model driving: a provisioning run works offroad only, so a model
-  picked in the driveway cost the whole drive otherwise. Only reached with
+  picked in the driveway would otherwise cost the whole drive. Only reached with
   the small model driving (the join loop stops asking once joined), so a build
   here never unloads an engine that is steering. Whatever this attempt cannot
   use stays on `link`, still open, for the next one.
@@ -357,7 +356,7 @@ def open_link(parts, link: Link, should_stop=None):
     built = parts.spec.ready_spec()
     standin = stand_in(parts, hello, sha256, built)
     if standin is not None:
-      # the user's choice (2026-10-06): a model already built drives until the
+      # by design, a model already built drives until the
       # pick is fetched and built, which a provisioning run does parked, rather
       # than the small model. Building here would unload it, and uploading
       # would share the link with its frames
@@ -377,9 +376,8 @@ def open_link(parts, link: Link, should_stop=None):
   except EngineMissing as e:
     # neither end has the bytes. Fetching them is a provisioning run's job;
     # clear the record if it named this model, so the next one does. The link
-    # is fine and stays on `link`: closing it left a read queued that the next
-    # attempt's open had to bounce the gadget for, every 7 s for a whole drive
-    # (2026-10-06)
+    # is fine and stays on `link`: closing it leaves a read queued that the
+    # next attempt's open has to bounce the gadget for
     parts.spec.clear_ready(sha256)
     raise ModelMissing(str(e)) from e
   except BaseException:
