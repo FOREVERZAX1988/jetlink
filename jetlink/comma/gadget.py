@@ -430,7 +430,15 @@ def dormant() -> bool:
 
 
 def request_shutdown(reason: str) -> bool:
-  return _write(SHUTDOWN_REQUEST, json.dumps({'reason': reason}), "write the shutdown request")
+  """Hand the owner a power-off request, whole or not at all: a partial one (a
+  full /dev/shm) is one the owner cannot read, so it never takes it. False,
+  and logged, when it cannot be written."""
+  try:
+    write_record(SHUTDOWN_REQUEST, {'reason': reason})
+    return True
+  except OSError:
+    log.exception("jetlink: could not write the shutdown request")
+    return False
 
 
 def pending_shutdown() -> str | None:

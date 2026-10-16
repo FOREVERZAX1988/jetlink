@@ -396,3 +396,26 @@ class TestDormant(unittest.TestCase):
     self.assertEqual(gadget.pending_shutdown(), 'car battery')
     gadget.finish_shutdown()
     self.assertIsNone(gadget.pending_shutdown())
+
+  def test_a_shutdown_request_that_cannot_be_written_whole_is_not_written(self):
+    # a full /dev/shm: write_text truncates, writes part and raises. A partial
+    # request is one the owner cannot read, so it would never take it
+    real = Path.write_text
+
+    def full(path, text, *args, **kwargs):
+      real(path, text[:5])
+      raise OSError(28, 'No space left on device')
+
+    with unittest.mock.patch.object(Path, 'write_text', full), \
+         unittest.mock.patch.object(gadget, 'log') as log:
+      self.assertFalse(gadget.request_shutdown('car battery'))
+    log.exception.assert_called_once_with("jetlink: could not write the shutdown request")
+    self.assertFalse(gadget.SHUTDOWN_REQUEST.exists())
+    self.assertEqual(list(self.tmp.iterdir()), [], 'nor its temporary')
+
+  def test_a_shutdown_request_replaces_one_there_whole(self):
+    gadget.SHUTDOWN_REQUEST.write_text('{"rea')
+    self.assertIsNone(gadget.pending_shutdown())
+    self.assertTrue(gadget.request_shutdown('car battery'))
+    self.assertEqual(gadget.pending_shutdown(), 'car battery')
+    self.assertEqual(list(self.tmp.iterdir()), [gadget.SHUTDOWN_REQUEST])

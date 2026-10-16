@@ -40,7 +40,7 @@ from jetlink.openpilot.status import Status
 API = 3
 
 __all__ = ['API', 'MODES', 'STATES', 'Jetlink', 'Keys', 'ModelFace', 'Openpilot', 'OwnerConfig', 'Status', 'bind',
-           'conformance']
+           'conformance', 'SHUTDOWN_TIMEOUT']
 
 # how long a power-off request waits for the owner's run to shut the Jetson
 # down before it is withdrawn. Wake from suspend is ~8 s to a server
@@ -66,6 +66,9 @@ class Jetlink:
     self._failures: dict[str, str] = {}
     # when this process asked for the Jetson to power off, until it was taken
     self._shutdown_asked: float | None = None
+    # shutdown_step: has it run in this process, and has it said yes
+    self._stepped = False
+    self._may_power_off = False
 
   def _read(self, what: str, read, fallback):
     """read(), or fallback(error) when it raises. The readers never raise:
@@ -192,9 +195,47 @@ class Jetlink:
     the Jetson powered off later, when nobody wants it off, and the log says
     the request went unanswered."""
     try:
-      pending = gadget.SHUTDOWN_REQUEST.exists()
+      return self._pending()
     except Exception:
       return False
+
+  def shutdown_step(self, should_shutdown: bool, reason: str = '') -> bool:
+    """hardwared, every loop: may the device power off now? True once it may
+    (put DoShutdown), and from then on. False while should_shutdown is False
+    and nothing has been asked. The first True asks once (request_shutdown):
+    True at once when there was nothing to ask, otherwise once the owner has
+    taken the request, or SHUTDOWN_TIMEOUT after asking, when it is withdrawn.
+    Once asked, should_shutdown is not read again, and the caller keeps no
+    timer. A stat a call. Never raises: a failure once a power-off is wanted
+    is a yes, since a jetlink bug must not keep a comma on to drain the car's
+    battery, and one before then is a no."""
+    if self._may_power_off:
+      return True
+    try:
+      first, self._stepped = not self._stepped, True
+      # a request this process did not write: a partial one, or one from a
+      # hardwared that has since restarted. Left, the owner would power the
+      # Jetson off whenever it next saw one, maybe a drive later
+      if first and self._shutdown_asked is None:
+        gadget.finish_shutdown()
+      if self._shutdown_asked is None and not should_shutdown:
+        return False
+      asked = self._shutdown_asked is not None or self.request_shutdown(reason)
+      self._may_power_off = not asked or not self._pending()
+    except Exception:
+      self._log.exception("jetlink: the shutdown step failed")
+      if self._shutdown_asked is not None:
+        # nobody follows the request any more, so it must not stay for the owner
+        try:
+          gadget.finish_shutdown()
+        except Exception:
+          pass
+      self._may_power_off = should_shutdown or self._shutdown_asked is not None
+    return self._may_power_off
+
+  def _pending(self) -> bool:
+    """shutdown_pending(), raising."""
+    pending = gadget.SHUTDOWN_REQUEST.exists()
     asked, now = self._shutdown_asked, time.monotonic()
     if asked is None:
       return pending
