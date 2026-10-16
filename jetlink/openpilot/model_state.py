@@ -362,14 +362,15 @@ class JetlinkModelState:
     if self._parsed is not None and self._parsed[0] is model_output:
       return self._parsed[1]
     # the server checks first (Status.NOT_FINITE, which the client raises as
-    # this). This is for one that did not, or bytes the link changed: a NaN
-    # must not reach the planner. A sum allocates nothing, and any NaN or inf
-    # makes it one; these outputs are far from float32's overflow
+    # this). This is for one that did not, or bytes the link changed: a raw
+    # inf is a corrupt output even where the parser would clip it finite. A
+    # sum allocates nothing, and any NaN or inf makes it one; these outputs
+    # are far from overflow
     if not np.isfinite(model_output.sum()):
       raise NotFinite(f"frame {self._frame_id}: the output is not finite")
     outputs_dict = self.parser.parse_outputs(self.slice_outputs(model_output, self.output_slices))
-    # a finite output can still parse to inf (the exp of a garbage std)
-    if not all(np.isfinite(value).all() for value in outputs_dict.values()):
+    # a finite output can still parse to inf, by a parser that does not clip
+    if not np.isfinite(sum(float(value.sum()) for value in outputs_dict.values())):
       raise NotFinite(f"frame {self._frame_id}: the parsed output is not finite")
     if SEND_RAW_PRED:
       outputs_dict['raw_pred'] = model_output.copy()

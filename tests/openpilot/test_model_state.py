@@ -403,14 +403,15 @@ class TestTheFace(ModelStateTest):
     self.assertTrue((out['plan'] == 2.0).all())
 
   def test_an_output_that_is_not_finite_never_reaches_the_parser(self):
-    # the joining model hands back on it (joining.BAD_OUTPUT)
+    # the joining model hands back on it (joining.BAD_OUTPUT), even an inf
+    # std that modeld's parser would clip to a finite one
     for bad in (np.nan, np.inf, -np.inf):
       with self.subTest(bad):
         client = FakeClient()
         client.output[slice(*SLICES['plan'])][7] = bad
         state = self.make(spec_for(STATEFUL), client)
         state.parser = mock.Mock()
-        with self.assertRaisesRegex(P.NotFinite, 'frame 1'):
+        with self.assertRaisesRegex(P.NotFinite, 'frame 1: the output'):
           self.frames(state, 1)
         state.parser.parse_outputs.assert_not_called()
         self.assertEqual(state.trips.frames, 1, 'counted for the leave')
@@ -419,7 +420,7 @@ class TestTheFace(ModelStateTest):
     client = FakeClient()
     state = self.make(spec_for(STATEFUL), client)
     state.parser = mock.Mock(**{'parse_outputs.return_value': {'plan': np.array([1.0, np.inf], np.float32)}})
-    with self.assertRaisesRegex(P.NotFinite, 'parsed'):
+    with self.assertRaisesRegex(P.NotFinite, 'frame 1: the parsed output'):
       self.frames(state, 1)
 
   def test_one_the_server_found_is_raised_and_counted(self):
