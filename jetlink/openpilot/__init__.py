@@ -36,6 +36,7 @@ from __future__ import annotations
 import time
 
 from jetlink.comma import gadget
+from jetlink.openpilot.events import Flags, SwapEvents
 from jetlink.openpilot.interface import MODES, STATES, Keys, ModelFace, Openpilot, OwnerConfig, conformance
 from jetlink.openpilot.parts import Parts, for_this_process
 from jetlink.openpilot.status import Status
@@ -48,7 +49,7 @@ from jetlink.openpilot.status import Status
 API = 3
 
 __all__ = ['API', 'MODES', 'STATES', 'Jetlink', 'Keys', 'ModelFace', 'Openpilot', 'OwnerConfig', 'Status', 'bind',
-           'conformance', 'SHUTDOWN_TIMEOUT']
+           'conformance', 'SHUTDOWN_TIMEOUT', 'Flags', 'SwapEvents']
 
 # how long a power-off request waits for the owner's run to shut the Jetson
 # down before it is withdrawn. Wake from suspend is ~8 s to a server

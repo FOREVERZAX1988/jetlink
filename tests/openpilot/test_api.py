@@ -54,7 +54,7 @@ def plain(fn) -> str:
 
 # what the package exports: the contract, and nothing jetlink keeps to itself
 EXPORTS = ['API', 'MODES', 'STATES', 'Jetlink', 'Keys', 'ModelFace', 'Openpilot', 'OwnerConfig', 'Status', 'bind',
-           'conformance', 'SHUTDOWN_TIMEOUT']
+           'conformance', 'SHUTDOWN_TIMEOUT', 'Flags', 'SwapEvents']
 
 
 class TestTheSurface(OpenpilotTest):
@@ -71,6 +71,15 @@ class TestTheSurface(OpenpilotTest):
     self.assertEqual(sorted(jo.__all__), sorted(EXPORTS))
     for name in EXPORTS:
       self.assertTrue(hasattr(jo, name), name)
+
+  def test_the_swap_events_selfdrived_maps(self):
+    self.assertEqual(jo.Flags._fields, ('offer', 'link_lost', 'no_entry', 'chime', 'settling'))
+    self.assertEqual(plain(jo.SwapEvents), '(tick_s)')
+    self.assertEqual(plain(jo.SwapEvents.update), '(self, fresh, state, big, in_control)')
+    self.assertIsInstance(jo.SwapEvents.settling, property)
+    # a plain re-export: the module imports on its own too
+    from jetlink.openpilot import events
+    self.assertIs(jo.SwapEvents, events.SwapEvents)
 
   def test_what_the_ui_calls_on_a_status(self):
     self.assertEqual(plain(jo.Status.icon), '(self, started, model_seen, running_big, state)')

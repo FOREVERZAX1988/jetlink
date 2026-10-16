@@ -16,6 +16,11 @@ up (the joining model hands back on a held frame in that second), and the chime
 at the end of it says the driver can. When it leaves, the small model drives on
 and the driver is told (link_lost); nothing disengages.
 
+The fork's own chime on a rising modelV2.big, a native big model's, must not
+fire for a joined one, or it says engage now at the start of the no-entry
+second: gate it on the state being 'none', or at least drop it on no_entry
+(zoompilot drops it on no_entry or chime, then adds it on chime).
+
 Either way the switch costs modeld a frame or two, and a frame the camera
 dropped is an invalid pose from the model and a localizer soft disable on the
 next tick: every return of a user's big model was a TAKE CONTROL IMMEDIATELY
@@ -50,6 +55,9 @@ def _tick(left: int) -> tuple[bool, int]:
 
 class SwapEvents:
   def __init__(self, tick_s: float):
+    # checked once here: update() runs in selfdrived's loop and never raises
+    if not tick_s > 0 or round(SWITCHING_S / tick_s) < 1:
+      raise ValueError(f"SwapEvents needs the loop period in seconds, short enough to count a {SWITCHING_S:g} s switch: {tick_s}")
     self.offer_ticks = round(OFFER_S / tick_s)
     self.handback_ticks = round(HANDBACK_S / tick_s)
     self.switching_ticks = round(SWITCHING_S / tick_s)
@@ -66,7 +74,8 @@ class SwapEvents:
     """One tick of the caller's loop.
 
     `fresh`: modelV2 and the fork's state message are seen, alive and valid
-    this tick. `state`: the joining model's big_model_state (STATES). `big`:
+    this tick. `state`: the joining model's big_model_state, its STATES name
+    (str() of a capnp enum, never its .raw number, which matches no state). `big`:
     modelV2.big, from a modelV2 alive and valid this tick. `in_control`: the
     fork's meaning of something steering or able to (zoompilot: openpilot or
     MADS, MADS even paused), the same rule the swap waits on."""

@@ -12,7 +12,8 @@ machines, the alert texts, selfdrived's source) stays in the fork.
 """
 import unittest
 
-from jetlink.openpilot.events import HANDBACK_S, OFFER_S, SWITCHING_S, Flags, SwapEvents
+from jetlink.openpilot.events import Flags, SwapEvents
+from jetlink.openpilot.interface import STATES
 
 DT_CTRL = 0.01   # zoompilot's selfdrived
 EVENTS = ('offer', 'link_lost', 'no_entry', 'chime')
@@ -25,7 +26,6 @@ class SwapEventsTest(unittest.TestCase):
     self.swap = SwapEvents(self.tick_s)
     self.OFFER_TICKS, self.HANDBACK_TICKS, self.SWITCHING_TICKS = (self.swap.offer_ticks, self.swap.handback_ticks,
                                                                    self.swap.switching_ticks)
-    self.flags = Flags(False, False, False, False, False)
 
   def step(self, state='none', big=False, alive=True, fresh=True, enabled=False, mads=False) -> set[str]:
     """One tick, `alive` being modelV2's and `fresh` the state message's, wired
@@ -110,7 +110,7 @@ class TestHandBack(SwapEventsTest):
     # disengages: there is no failure flag, and a fall is link_lost alone
     self.assertEqual(Flags._fields, (*EVENTS, 'settling'))
     self.drive_big(enabled=True, mads=True)
-    for state in ('retrying', 'unavailable', 'joining', 'ready', 'none'):
+    for state in [s for s in STATES if s != 'running']:
       self.assertLessEqual(self.step(state=state, enabled=True, mads=True), {'link_lost'})
       self.assertLessEqual(self.step(state=state, alive=False, enabled=True, mads=True), {'link_lost'})
 
@@ -244,9 +244,14 @@ class TestSeconds(SwapEventsTest):
   tick_s = 0.05
 
   def test_the_ticks_are_the_seconds_at_the_callers_rate(self):
-    self.assertEqual((self.OFFER_TICKS, self.HANDBACK_TICKS, self.SWITCHING_TICKS),
-                     (round(OFFER_S / 0.05), round(HANDBACK_S / 0.05), round(SWITCHING_S / 0.05)))
     self.assertEqual((self.OFFER_TICKS, self.HANDBACK_TICKS, self.SWITCHING_TICKS), (60, 100, 20))
+
+  def test_a_period_that_cannot_count_the_switch_is_refused(self):
+    # at construction, never in the loop
+    for tick_s in (0, -0.01, float('nan'), 2.0, 5.0):
+      with self.subTest(tick_s=tick_s), self.assertRaises(ValueError):
+        SwapEvents(tick_s)
+    self.assertEqual(SwapEvents(1.0).switching_ticks, 1)
 
   def test_a_swap_is_a_second_of_no_entry_and_settling_then_the_chime(self):
     self.step(state='ready')
