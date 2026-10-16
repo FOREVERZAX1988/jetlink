@@ -368,6 +368,9 @@ class JetlinkModelState:
     if not np.isfinite(model_output.sum()):
       raise NotFinite(f"frame {self._frame_id}: the output is not finite")
     outputs_dict = self.parser.parse_outputs(self.slice_outputs(model_output, self.output_slices))
+    # a finite output can still parse to inf (the exp of a garbage std)
+    if not all(np.isfinite(value).all() for value in outputs_dict.values()):
+      raise NotFinite(f"frame {self._frame_id}: the parsed output is not finite")
     if SEND_RAW_PRED:
       outputs_dict['raw_pred'] = model_output.copy()
     self._parsed = (model_output, outputs_dict)

@@ -415,6 +415,13 @@ class TestTheFace(ModelStateTest):
         state.parser.parse_outputs.assert_not_called()
         self.assertEqual(state.trips.frames, 1, 'counted for the leave')
 
+  def test_a_finite_output_that_parses_to_inf_is_not_finite_either(self):
+    client = FakeClient()
+    state = self.make(spec_for(STATEFUL), client)
+    state.parser = mock.Mock(**{'parse_outputs.return_value': {'plan': np.array([1.0, np.inf], np.float32)}})
+    with self.assertRaisesRegex(P.NotFinite, 'parsed'):
+      self.frames(state, 1)
+
   def test_one_the_server_found_is_raised_and_counted(self):
     client = FakeClient()
     client.not_finite.add(2)
