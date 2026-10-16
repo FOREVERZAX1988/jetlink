@@ -186,12 +186,16 @@ def check_seam(modeld_path: str | Path) -> list[str]:
 
 # -- the fork's fallback ------------------------------------------------------------------
 
-def check_fallback(fallback, hooks: Iterable[str] | None = None) -> list[str]:
+def check_fallback(fallback, hooks: Iterable[str] | None = None, *, link_on=None) -> list[str]:
   """The problems of the fork's own hooks for a jetlink that is missing or
   too old to have Off: each of `hooks`, the ones the fork's lines call (by
-  default every hook it has), there and answering as Off does, the link off.
-  reason() is the fork's to word, a str or None; swap_events() may be None
-  where the fork's lines check for it."""
+  default every hook it has, so pass them to have a missing one named),
+  there and answering as Off does, the link off. reason() is the fork's to
+  word, a str or None, and None while `link_on()`, the fork's read of the
+  setting, says off: nobody who left the link off is nagged. swap_events()
+  may be None where the fork's lines check for it. link_on() reads the
+  params store, so the test sets PARAMS_ROOT or OPENPILOT_PREFIX first, or
+  it reads the machine's own."""
   from jetlink.openpilot.events import Flags
   from jetlink.openpilot.hooks import Off
   model, catalog = object(), {'bundles': []}
@@ -218,7 +222,12 @@ def check_fallback(fallback, hooks: Iterable[str] | None = None) -> list[str]:
         problems.append(f"{name}() raised {type(e).__name__}: {e}")
         continue
       if name == 'reason':
-        same = got is None or isinstance(got, str)
+        try:
+          off = link_on is not None and not link_on()
+        except Exception as e:
+          problems.append(f"link_on() raised {type(e).__name__}: {e}")
+          continue
+        same = got is None or (isinstance(got, str) and not off)
       else:
         same = got is want if any(want is a for a in args) else (type(got), got) == (type(want), want)
       if not same:
@@ -312,14 +321,31 @@ class FakeJoinedModel:
     self.closed = True
 
 
+class _Blank:
+  """A message never received, as cereal's SubMaster holds one: every field
+  reads falsy, a nested one too."""
+
+  def __getattr__(self, name: str):
+    if name.startswith('__'):
+      raise AttributeError(name)
+    return self
+
+  def __bool__(self) -> bool:
+    return False
+
+
 class FakeSubMaster:
   """cereal's SubMaster over fixed messages, for an adapter's engaged() and
   in_control() tests. A service given a message is seen, alive and valid,
-  and received on each update(); any other is none of them. A test changes
-  `data`, `alive` and `valid` as it goes. update() keeps its timeouts:
-  in_control() is on modeld's frame thread and must never wait (all 0).
-  In for the real one: mock.patch.object(messaging, 'SubMaster',
-  lambda services: FakeSubMaster(services, **messages))."""
+  and received (updated) on each update(); any other is none of them, and
+  reads as a blank message whose every field is falsy. A test changes `data`,
+  `alive` and `valid` as it goes. update() keeps its timeouts: in_control()
+  is on modeld's frame thread and must never wait (all 0). In for the real
+  one: mock.patch.object(messaging, 'SubMaster', lambda services:
+  FakeSubMaster(services, **messages)). Unlike cereal's: a service is seen
+  from construction, not from its first receive; `frame` starts at 0, not
+  -1; a blank field is falsy but equals nothing (a capnp default equals 0 or
+  False); and there is no freq_ok, logMonoTime or recv_time."""
 
   def __init__(self, services: Iterable[str] = (), **messages):
     self.services = list(dict.fromkeys([*services, *messages]))
@@ -329,13 +355,15 @@ class FakeSubMaster:
     self.valid = dict(self.seen)
     self.frame = 0
     self.recv_frame = dict.fromkeys(self.services, 0)
+    self.updated = dict.fromkeys(self.services, False)
     self.timeouts: list[float] = []
 
   def update(self, timeout: float = 100) -> None:
     self.timeouts.append(timeout)
     self.frame += 1
     for s in self.services:
-      if s in self.data and self.alive[s]:
+      self.updated[s] = s in self.data and self.alive[s]
+      if self.updated[s]:
         self.seen[s], self.recv_frame[s] = True, self.frame
 
   def all_alive(self, service_list=None) -> bool:
@@ -348,7 +376,12 @@ class FakeSubMaster:
     return self.all_alive(service_list) and self.all_valid(service_list)
 
   def __getitem__(self, service: str):
-    return self.data[service]
+    if service not in self.updated:
+      raise KeyError(service)   # not subscribed, as cereal's
+    return self.data.get(service, _BLANK)
+
+
+_BLANK = _Blank()
 
 
 def _level(name: str):

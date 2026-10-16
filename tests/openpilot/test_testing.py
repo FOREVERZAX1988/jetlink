@@ -255,6 +255,16 @@ class TestCheckFallback(unittest.TestCase):
   def test_off_and_a_good_fallback_pass(self):
     self.assertEqual(check_fallback(Off('why', link_on=lambda: True)), [])
     self.assertEqual(check_fallback(NoJetlink()), [])
+    self.assertEqual(check_fallback(NoJetlink(), link_on=lambda: True), [])
+
+  def test_with_the_link_off_the_reason_is_none(self):
+    self.assertEqual(check_fallback(Off('why', link_on=lambda: False), link_on=lambda: False), [])
+    self.assertEqual(check_fallback(NoJetlink(), ['reason'], link_on=lambda: False),
+                     ["reason() answered 'jetlink is missing', where the link off is None"])
+
+    def fails():
+      raise OSError('no params')
+    self.assertEqual(check_fallback(NoJetlink(), ['reason'], link_on=fails), ["link_on() raised OSError: no params"])
 
   def test_it_knows_every_hook(self):
     self.assertEqual(check_fallback(Off(), SIGNATURES), [])
@@ -317,10 +327,18 @@ class TestFakeSubMaster(unittest.TestCase):
     self.assertFalse(sm.all_alive() or sm.all_checks())
     self.assertTrue(sm.all_checks(['modelV2']))
     sm.update(0)
+    self.assertEqual(sm.updated, {'modelV2': True, 'carState': False})
     sm.alive['modelV2'] = False
     sm.update(0)
-    self.assertEqual((sm.frame, sm.recv_frame), (2, {'modelV2': 1, 'carState': 0}))
+    self.assertEqual((sm.frame, sm.recv_frame, sm.updated), (2, {'modelV2': 1, 'carState': 0},
+                                                             {'modelV2': False, 'carState': False}))
     self.assertTrue(sm['modelV2'].big)
+
+  def test_a_service_with_no_message_reads_blank(self):
+    sm = FakeSubMaster(['carControl'])
+    self.assertFalse(sm['carControl'].enabled or sm['carControl'].mads.enabled)
+    with self.assertRaises(KeyError):
+      sm['selfdriveState']
 
 
 class TestTheFakes(unittest.TestCase):
