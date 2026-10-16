@@ -91,7 +91,7 @@ jobs:
         run: |
           # what the installer runs or installs, and what the comma runs as
           # root; the bench scripts are not held to it yet
-          shellcheck install.sh scripts/jetlink jetlink/comma/jetlink-root.sh tests/installer/*.sh
+          shellcheck install.sh scripts/jetlink jetlink/comma/jetlink-root.sh scripts/comma/jetlink-root.sh tests/installer/*.sh
 
       - name: Run the installer scenarios
         run: tests/installer/run.sh

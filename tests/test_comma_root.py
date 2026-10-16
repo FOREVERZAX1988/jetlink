@@ -80,6 +80,15 @@ def test_a_tree_with_only_the_old_script_still_finds_it(tmp_path):
   assert _root_in(tmp_path).SCRIPT == tmp_path / 'jetlink' / 'comma' / 'jetlink-root.sh'
 
 
+def test_the_old_path_forwards_to_the_script(tmp_path):
+  # an owner from before the move still runs scripts/comma/jetlink-root.sh; after v0.9.x this goes
+  old = REPO / 'scripts' / 'comma' / 'jetlink-root.sh'
+  assert os.access(old, os.X_OK)
+  proc_sys(tmp_path, STOCK)
+  assert run_script(tmp_path, 'vm', 'apply', script=old).returncode == 0
+  assert read_all(tmp_path, TUNED) == TUNED
+
+
 @pytest.mark.parametrize('args, timeout', [
   (('gadget',), None),
   (('gadget', '--ios'), None),
