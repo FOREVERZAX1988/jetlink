@@ -304,10 +304,8 @@ class JoiningModelState:
   @frame_drop_ratio.setter
   def frame_drop_ratio(self, value):
     # modeld's frameDropPerc / 100, written before every run(). Read here, by
-    # the lag rule. Kept on the small model only for a fork whose tests pin
-    # that every write reaches it; goes when zoompilot's seam test is retargeted
+    # the lag rule; no small model reads it
     self._frame_drop_ratio = value
-    self._small.frame_drop_ratio = value
 
   @property
   def in_control(self) -> bool:
