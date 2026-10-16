@@ -1252,7 +1252,7 @@ class RuntimeRecordTest(JoiningBase):
     s = self._named()
     s.in_control = False
     self.assertEqual(self._run(s), {'from': 'big'})
-    self.assertTrue(wait_for(lambda: status.runtime() == ('running', True)))
+    self.assertTrue(wait_for(lambda: status.runtime()[:2] == ('running', True)))
     record = self._record()
     self.assertEqual({k: record[k] for k in ('state', 'handovers', 'active', 'held', 'sha256', 'name', 'checkpoint',
                                              'transport', 'drops', 'lags', 'stopping')},
@@ -1278,7 +1278,7 @@ class RuntimeRecordTest(JoiningBase):
 
       def poll():
         while not stop.is_set():
-          running, active = status.runtime()
+          running, active = status.runtime()[:2]
           phase = Status(True, 'usb', 'USB', True, 'host', True, None, None, 'm', 'd', None, running, active).phase
           if not phases or phases[-1] != phase:
             phases.append(phase)
@@ -1303,7 +1303,7 @@ class RuntimeRecordTest(JoiningBase):
     self.assertTrue(wait_for(lambda: self._record().get('handovers') == 2))
     record = self._record()
     self.assertEqual((record['state'], record['active'], record['drops'], record['sha256']), ('retrying', False, 1, None))
-    self.assertEqual(status.runtime(), ('retrying', False))
+    self.assertEqual(status.runtime()[:2], ('retrying', False))
 
   def test_a_held_frame_is_not_an_answer(self):
     s = self._named()
@@ -1367,7 +1367,7 @@ class RuntimeRecordTest(JoiningBase):
     self.assertFalse(s._writer.is_alive())
     record = self._record()
     self.assertEqual((record['stopping'], record['state']), (True, 'unavailable'))
-    self.assertEqual(status.runtime(), (None, False))
+    self.assertEqual(status.runtime()[:2], (None, False))
 
   def test_a_record_that_cannot_be_written_is_said_once(self):
     with mock.patch.object(gadget, 'write_record', side_effect=OSError('no space')) as write, \

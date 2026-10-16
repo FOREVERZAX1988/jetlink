@@ -509,7 +509,8 @@ class TestIcon(unittest.TestCase):
 class TestTheSnapshot(OpenpilotTest):
   def test_its_fields_are_only_ever_added(self):
     self.assertEqual(Status._fields, ('enabled', 'mode', 'transport', 'present', 'port', 'ready', 'reason', 'progress',
-                                      'model', 'default_model', 'standin', 'running', 'active'))
+                                      'model', 'default_model', 'standin', 'running', 'active', 'running_sha256',
+                                      'running_checkpoint'))
 
   def test_a_model_in_the_list_says_whether_it_is_built_or_downloaded(self):
     models = [{'name': 'Built', 'ref': 'r1', 'oid': 'b' * 64, 'size': 10},
@@ -734,38 +735,47 @@ class TestTheRuntimeRecord(OpenpilotTest):
 
   def test_a_live_record_with_a_fresh_answer_is_active(self):
     self.write()
-    self.assertEqual(status.runtime(), ('running', True))
+    self.assertEqual(status.runtime()[:2], ('running', True))
+
+  def test_which_model_drives_is_told_only_while_it_does(self):
+    # what a fork's companion shows of the model on the road (StarPilot's Galaxy)
+    self.write(sha256='ab' * 32, checkpoint='cinque-v3')
+    self.assertEqual(status.runtime(), status.Runtime('running', True, 'ab' * 32, 'cinque-v3'))
+    self.write(sha256='ab' * 32, checkpoint='cinque-v3', active=False)
+    self.assertEqual(status.runtime(), status.Runtime('running', False, None, None))
+    self.write(sha256=7, checkpoint=['x'])
+    self.assertEqual(status.runtime(), status.Runtime('running', True, None, None))
 
   def test_an_answer_too_old_when_written_is_not_active(self):
     now = time.monotonic()
     self.write(at=now, last_output_at=now - status.OUTPUT_FRESH - 0.05)
-    self.assertEqual(status.runtime(), ('running', False))
+    self.assertEqual(status.runtime()[:2], ('running', False))
     self.write(state='ready', active=False)
-    self.assertEqual(status.runtime(), ('ready', False))
+    self.assertEqual(status.runtime()[:2], ('ready', False))
 
   def test_a_record_too_old_to_drive_still_says_what_runs(self):
     # a modeld frozen for 2 s: not driving, but not gone for HEARTBEAT_TIMEOUT
     at = time.monotonic() - status.ACTIVE_FRESH - 0.5
     self.write(at=at, last_output_at=at - 0.05)
-    self.assertEqual(status.runtime(), ('running', False))
+    self.assertEqual(status.runtime()[:2], ('running', False))
 
   def test_a_stale_stopping_or_dead_record_is_none(self):
     self.write(at=time.monotonic() - gadget.HEARTBEAT_TIMEOUT - 0.5)
-    self.assertEqual(status.runtime(), (None, False))
+    self.assertEqual(status.runtime()[:2], (None, False))
     self.write(stopping=True, state='unavailable')
-    self.assertEqual(status.runtime(), (None, False))
+    self.assertEqual(status.runtime()[:2], (None, False))
     self.write()
     with mock.patch.object(gadget.os, 'kill', side_effect=ProcessLookupError):
-      self.assertEqual(status.runtime(), (None, False))
+      self.assertEqual(status.runtime()[:2], (None, False))
     for pid in (0, -1, None, '12', True, 2 ** 80):
       self.write(pid=pid)
-      self.assertEqual(status.runtime(), (None, False), pid)
+      self.assertEqual(status.runtime()[:2], (None, False), pid)
 
   def test_no_record_or_one_that_is_not_one_is_none(self):
-    self.assertEqual(status.runtime(), (None, False))
+    self.assertEqual(status.runtime()[:2], (None, False))
     for text in ('nope', '[]', '{"pid": 1}', '{"at": "x"}'):
       gadget.MODELD.write_text(text)
-      self.assertEqual(status.runtime(), (None, False), text)
+      self.assertEqual(status.runtime()[:2], (None, False), text)
 
   def test_a_process_that_is_not_ours_to_signal_is_alive(self):
     with mock.patch.object(gadget.os, 'kill', side_effect=PermissionError):

@@ -230,23 +230,32 @@ OUTPUT_FRESH = 0.25
 ACTIVE_FRESH = 1.5
 
 
-def runtime() -> tuple[str | None, bool]:
-  """(the joining model's state, does the big model drive now) from modeld's
-  runtime record (gadget.MODELD), or (None, False) without a live one: no
-  modeld with the link since boot, or one that stopped, died or stopped
-  writing (gadget.HEARTBEAT_TIMEOUT, as the owner's). Never raises."""
+class Runtime(NamedTuple):
+  state: str | None = None        # the joining model's state (STATES)
+  active: bool = False            # the big model drives modeld's frames now
+  sha256: str | None = None       # and which model it is, while it does
+  checkpoint: str | None = None
+
+
+def runtime() -> Runtime:
+  """The joining model's state, whether the big model drives now and which
+  model it is, from modeld's runtime record (gadget.MODELD); Runtime() without
+  a live one: no modeld with the link since boot, or one that stopped, died
+  or stopped writing (gadget.HEARTBEAT_TIMEOUT, as the owner's). Never raises."""
   record = gadget.read_record(gadget.MODELD)
   try:
     if record is None or record.get('stopping') or not gadget.owner_alive(record) \
        or not gadget.pid_alive(record.get('pid')):
-      return None, False
+      return Runtime()
     state = record.get('state')
     # the answer's age when written: the writer wakes once a second, the frames 20 times
     answered = record['at'] - record.get('last_output_at', 0.0) < OUTPUT_FRESH
     active = bool(record.get('active')) and answered and time.monotonic() - record['at'] < ACTIVE_FRESH
-    return (state if isinstance(state, str) else None), active
+    sha, checkpoint = (record.get('sha256'), record.get('checkpoint')) if active else (None, None)
+    return Runtime(state if isinstance(state, str) else None, active,
+                   sha if isinstance(sha, str) else None, checkpoint if isinstance(checkpoint, str) else None)
   except (TypeError, KeyError):
-    return None, False
+    return Runtime()
 
 
 # -- the snapshot ----------------------------------------------------------------
@@ -272,6 +281,8 @@ class Status(NamedTuple):
   standin: str | None = None    # the last model built, which drives while the pick is not ready
   running: str | None = None    # the joining model's state (STATES) in a live modeld, by its record (runtime)
   active: bool = False          # the big model drives modeld's frames now, by the same record
+  running_sha256: str | None = None      # the model it drives with, while active
+  running_checkpoint: str | None = None
 
   @property
   def runnable(self) -> bool:
@@ -385,7 +396,7 @@ def read(parts, mode: str) -> Status:
   """Everything at once, over the link setting the caller read: each file once."""
   record, live = owner_record()
   enabled = parts.enabled(mode)
-  running, active = runtime() if enabled else (None, False)
+  live_model = runtime() if enabled else Runtime()
   reason = unavailable(parts, record) if enabled else None
   # the last model the server built; the pick's, or the stand-in that drives
   # until the pick is built (link.open_link)
@@ -404,8 +415,10 @@ def read(parts, mode: str) -> Status:
     model=parts.models.selected_model_name(),
     default_model=parts.models.default_model_name(),
     standin=parts.models.name_for(built) if built is not None and not ready else None,
-    running=running,
-    active=active,
+    running=live_model.state,
+    active=live_model.active,
+    running_sha256=live_model.sha256,
+    running_checkpoint=live_model.checkpoint,
   )
 
 
