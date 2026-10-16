@@ -9,6 +9,9 @@
     <!-- The model catalog and downloads. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- The Wi-Fi lock that keeps the radio out of power save while a comma is
+         served over Wi-Fi (server.WifiLink). -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <!-- One of the permissions a connectedDevice foreground service needs
          before the comma is plugged in. -->
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />

@@ -36,12 +36,16 @@ import kotlinx.coroutines.withContext
  * Runs the server while Jetlink is on: a foreground service of the
  * connectedDevice type, so it keeps serving the comma with the screen off
  * and the app in the background, for a whole drive. It holds the comma's USB
- * connection, a wake lock while a comma is connected, and a notification
- * that says how things stand.
+ * connection, a wake lock and a Wi-Fi lock while a comma is connected (see
+ * WifiLink: over Wi-Fi the radio's own power save is the frame's worst wait),
+ * and a notification that says how things stand.
  */
 class ServerService : LifecycleService() {
     private val graph get() = applicationContext.graph
     private var wakeLock: PowerManager.WakeLock? = null
+    // built on first use: a service is constructed before its context is
+    // attached, and this asks for one
+    private val wifiLink by lazy { WifiLink(this) }
 
     private val usbEvents = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -92,10 +96,15 @@ class ServerService : LifecycleService() {
                 StatusText.subtitle(
                     this@ServerService,
                     StatusState(run, snapshot, usb = usb, wifiLink = values.wifiLink, presence = present),
-                ) to snapshot.connected
-            }.distinctUntilChanged().collectLatest { (text, connected) ->
+                ) to (snapshot.connected to snapshot.medium?.name)
+            }.distinctUntilChanged().collectLatest { (text, link) ->
+                val (connected, medium) = link
                 getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(text))
                 holdWakeLock(connected)
+                // the radio is not the CPU: the wake lock above keeps the
+                // frames' thread running and this keeps the radio out of power
+                // save between them, which is what a Wi-Fi reply waits on
+                wifiLink.hold(connected, medium)
             }
         }
     }
@@ -116,6 +125,7 @@ class ServerService : LifecycleService() {
         unregisterReceiver(usbEvents)
         graph.presence.stop()
         holdWakeLock(false)
+        wifiLink.hold(false, null)
         graph.scope.launch(Dispatchers.IO) {
             graph.usb.disconnect()
             graph.server.stop()
