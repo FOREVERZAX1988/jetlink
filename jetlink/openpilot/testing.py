@@ -14,10 +14,13 @@ the fakes jetlink's own tests share.
   check_seam(path)       a modeld's main(): prepare() before it goes realtime,
                          attach() once the small model is built and its
                          result run, handed_over() read
+  check_fallback(obj)    the fork's own hooks for no usable jetlink: each
+                         answers as Off does
   install_guard()        an audit hook a conftest starts and stops around each
                          test, which records a reach for the machine's own
                          params, /dev/shm records, sysfs or sudo
-  FakeJoinedModel, RecordingLog, and tinygrad over numpy (fake_tinygrad)
+  FakeJoinedModel, FakeSubMaster, RecordingLog, and tinygrad over numpy
+  (fake_tinygrad)
 
 The checks return their problems, [] when there are none, so one assertion
 shows them all: assertEqual(check_adapter(adapter_module), []).
@@ -33,6 +36,7 @@ import os
 import subprocess
 import sys
 import time
+from collections.abc import Iterable
 from pathlib import Path
 from types import ModuleType
 
@@ -180,6 +184,48 @@ def check_seam(modeld_path: str | Path) -> list[str]:
   return [f"{path.name}: {p}" for p in problems]
 
 
+# -- the fork's fallback ------------------------------------------------------------------
+
+def check_fallback(fallback, hooks: Iterable[str] | None = None) -> list[str]:
+  """The problems of the fork's own hooks for a jetlink that is missing or
+  too old to have Off: each of `hooks`, the ones the fork's lines call (by
+  default every hook it has), there and answering as Off does, the link off.
+  reason() is the fork's to word, a str or None; swap_events() may be None
+  where the fork's lines check for it."""
+  from jetlink.openpilot.events import Flags
+  from jetlink.openpilot.hooks import Off
+  model, catalog = object(), {'bundles': []}
+  calls = {'should_run': [(False, None, None)], 'status': [()], 'reason': [()], 'prepare': [(False,), (True,)],
+           'attach': [(model, object(), 1928, 1208)], 'handed_over': [(model,)], 'state': [(model,)],
+           'shutdown_step': [(False,), (True, 'test')], 'request_shutdown': [('test',)], 'shutdown_pending': [()],
+           'model_state': [('f' * 40,)], 'should_extend_catalog': [()], 'extend_catalog': [(catalog,)],
+           'runtime': [()], 'in_control': [()], 'swap_events': [(0.01,)]}
+
+  def flags(tracker):
+    found = tracker.update(True, 'ready', False, True)
+    return tuple(bool(getattr(found, f)) for f in Flags._fields), bool(tracker.settling)
+  problems = []
+  for name in hooks if hooks is not None else [n for n in calls if hasattr(fallback, n)]:
+    if name not in calls or not callable(getattr(fallback, name, None)):
+      problems.append(f"{name}(): missing" if name in calls else f"{name}(): not a hook")
+      continue
+    for args in calls[name]:
+      try:
+        got, want = getattr(fallback, name)(*args), getattr(Off(), name)(*args)
+        if name == 'swap_events':
+          got, want = (want, want) if got is None else (flags(got), flags(want))
+      except Exception as e:
+        problems.append(f"{name}() raised {type(e).__name__}: {e}")
+        continue
+      if name == 'reason':
+        same = got is None or isinstance(got, str)
+      else:
+        same = got is want if any(want is a for a in args) else (type(got), got) == (type(want), want)
+      if not same:
+        problems.append(f"{name}() answered {got!r}, where the link off is {want!r}")
+  return problems
+
+
 # -- the guard ------------------------------------------------------------------------
 
 # the machine's own params store, jetlink's records, sysfs, FunctionFS and a
@@ -264,6 +310,45 @@ class FakeJoinedModel:
 
   def close(self) -> None:
     self.closed = True
+
+
+class FakeSubMaster:
+  """cereal's SubMaster over fixed messages, for an adapter's engaged() and
+  in_control() tests. A service given a message is seen, alive and valid,
+  and received on each update(); any other is none of them. A test changes
+  `data`, `alive` and `valid` as it goes. update() keeps its timeouts:
+  in_control() is on modeld's frame thread and must never wait (all 0).
+  In for the real one: mock.patch.object(messaging, 'SubMaster',
+  lambda services: FakeSubMaster(services, **messages))."""
+
+  def __init__(self, services: Iterable[str] = (), **messages):
+    self.services = list(dict.fromkeys([*services, *messages]))
+    self.data = dict(messages)
+    self.seen = {s: s in messages for s in self.services}
+    self.alive = dict(self.seen)
+    self.valid = dict(self.seen)
+    self.frame = 0
+    self.recv_frame = dict.fromkeys(self.services, 0)
+    self.timeouts: list[float] = []
+
+  def update(self, timeout: float = 100) -> None:
+    self.timeouts.append(timeout)
+    self.frame += 1
+    for s in self.services:
+      if s in self.data and self.alive[s]:
+        self.seen[s], self.recv_frame[s] = True, self.frame
+
+  def all_alive(self, service_list=None) -> bool:
+    return all(self.alive[s] for s in service_list or self.services)
+
+  def all_valid(self, service_list=None) -> bool:
+    return all(self.valid[s] for s in service_list or self.services)
+
+  def all_checks(self, service_list=None) -> bool:
+    return self.all_alive(service_list) and self.all_valid(service_list)
+
+  def __getitem__(self, service: str):
+    return self.data[service]
 
 
 def _level(name: str):

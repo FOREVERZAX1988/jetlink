@@ -14,10 +14,14 @@ import tempfile
 import textwrap
 import unittest
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
 from unittest import mock
 
 from jetlink.openpilot import interface
-from jetlink.openpilot.testing import FakeJoinedModel, Guard, check_adapter, check_seam
+from jetlink.openpilot.hooks import Off
+from jetlink.openpilot.stock import Stock
+from jetlink.openpilot.testing import FakeJoinedModel, FakeSubMaster, Guard, check_adapter, check_fallback, check_seam
+from tests.openpilot.test_hooks import SIGNATURES
 from tests.openpilot import fakes
 
 # zoompilot's modelds, where a checkout sits beside this one; never in CI
@@ -234,6 +238,89 @@ class TestCheckSeam(unittest.TestCase):
     for path in MODELDS:
       with self.subTest(path.name):
         self.assertEqual(check_seam(path), [])
+
+
+class NoJetlink:
+  """A fork's fallback for no jetlink at all, as docs/porting.md's."""
+  def should_run(self, started, params, CP): return False
+  def status(self): return None
+  def reason(self): return "jetlink is missing"
+  def prepare(self, chestnut): return False
+  def handed_over(self, model): return False
+  def shutdown_step(self, should_shutdown, reason=''): return should_shutdown
+  def runtime(self): return None
+
+
+class TestCheckFallback(unittest.TestCase):
+  def test_off_and_a_good_fallback_pass(self):
+    self.assertEqual(check_fallback(Off('why', link_on=lambda: True)), [])
+    self.assertEqual(check_fallback(NoJetlink()), [])
+
+  def test_it_knows_every_hook(self):
+    self.assertEqual(check_fallback(Off(), SIGNATURES), [])
+
+  def test_a_wrong_answer_is_named(self):
+    class Wrong(NoJetlink):
+      def prepare(self, chestnut): return chestnut
+      def shutdown_step(self, should_shutdown, reason=''): return False
+      def should_run(self, started, params, CP): return 0
+      def attach(self, model, small, cam_w, cam_h): return small
+    problems = check_fallback(Wrong())
+    self.assertEqual(problems[:2] + problems[3:], ["should_run() answered 0, where the link off is False",
+                                                   "prepare() answered True, where the link off is False",
+                                                   "shutdown_step() answered False, where the link off is True"])
+    self.assertRegex(problems[2], r"^attach\(\) answered <object .*>, where the link off is <object .*>$")
+
+  def test_a_hook_the_fork_calls_must_be_there_and_answer(self):
+    class Raising(NoJetlink):
+      def status(self): raise RuntimeError('boom')
+    Raising.nonsense = Raising.status
+    self.assertEqual(check_fallback(Raising(), ['status', 'in_control', 'nonsense']),
+                     ["status() raised RuntimeError: boom", "in_control(): missing", "nonsense(): not a hook"])
+
+  def test_no_swap_events_or_inert_ones(self):
+    flags = SimpleNamespace(offer=False, link_lost=False, no_entry=False, chime=False, settling=False)
+    for answer, problems in ((None, 0), (SimpleNamespace(settling=False, update=lambda *a: flags), 0),
+                             (SimpleNamespace(settling=True, update=lambda *a: flags), 1)):
+      fallback = SimpleNamespace(swap_events=lambda tick_s, answer=answer: answer)
+      self.assertEqual(len(check_fallback(fallback)), problems, answer)
+
+
+class TestFakeSubMaster(unittest.TestCase):
+  def test_stocks_in_control_over_it(self):
+    idle = {'carState': SimpleNamespace(), 'carControl': SimpleNamespace(enabled=False, latActive=False, longActive=False),
+            'selfdriveState': SimpleNamespace(enabled=False, active=False)}
+    made = []
+
+    def submaster(services):
+      made.append(FakeSubMaster(services, **idle))
+      return made[-1]
+    messaging = ModuleType('openpilot.cereal.messaging')
+    messaging.SubMaster = submaster
+    cereal = ModuleType('openpilot.cereal')
+    cereal.messaging = messaging
+    with mock.patch.dict(sys.modules, {'openpilot': ModuleType('openpilot'), 'openpilot.cereal': cereal,
+                                       'openpilot.cereal.messaging': messaging}):
+      op = Stock()
+      self.assertIs(op.in_control(), False)
+      [sm] = made
+      sm['carControl'].latActive = True
+      self.assertIs(op.in_control(), True)
+      sm['carControl'].latActive = False
+      sm.valid['carState'] = False
+      self.assertIs(op.in_control(), True)
+    self.assertEqual(sm.timeouts, [0, 0, 0])
+
+  def test_what_a_reader_sees(self):
+    sm = FakeSubMaster(['modelV2', 'carState'], modelV2=SimpleNamespace(big=True))
+    self.assertEqual((sm.seen, sm.alive, sm.valid), ({'modelV2': True, 'carState': False},) * 3)
+    self.assertFalse(sm.all_alive() or sm.all_checks())
+    self.assertTrue(sm.all_checks(['modelV2']))
+    sm.update(0)
+    sm.alive['modelV2'] = False
+    sm.update(0)
+    self.assertEqual((sm.frame, sm.recv_frame), (2, {'modelV2': 1, 'carState': 0}))
+    self.assertTrue(sm['modelV2'].big)
 
 
 class TestTheFakes(unittest.TestCase):
