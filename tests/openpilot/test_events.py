@@ -10,6 +10,7 @@ same name: offer is its bigModelAvailable, link_lost bigModelLinkLost, no_entry
 bigModelLoading and chime bigModelReady. What runs openpilot itself (the state
 machines, the alert texts, selfdrived's source) stays in the fork.
 """
+import random
 import unittest
 
 from jetlink.openpilot.events import Flags, SwapEvents
@@ -21,6 +22,8 @@ EVENTS = ('offer', 'link_lost', 'no_entry', 'chime')
 
 class SwapEventsTest(unittest.TestCase):
   tick_s = DT_CTRL
+  # in_control handed over as a function, which every test passes the same way
+  asked = False
 
   def setUp(self):
     self.swap = SwapEvents(self.tick_s)
@@ -30,7 +33,8 @@ class SwapEventsTest(unittest.TestCase):
   def step(self, state='none', big=False, alive=True, fresh=True, enabled=False, mads=False) -> set[str]:
     """One tick, `alive` being modelV2's and `fresh` the state message's, wired
     as zoompilot's adapter reads them; what was raised, by name."""
-    self.flags = self.swap.update(fresh and alive, state, big and alive, enabled or mads)
+    in_control = enabled or mads
+    self.flags = self.swap.update(fresh and alive, state, big and alive, (lambda: in_control) if self.asked else in_control)
     return {name for name in EVENTS if getattr(self.flags, name)}
 
   def drive_big(self, **kwargs) -> None:
@@ -276,6 +280,60 @@ class TestSeconds(SwapEventsTest):
 
   def test_the_offer_is_three_seconds(self):
     self.assertEqual(self.ticks_with('offer', state='ready', enabled=True), 60)
+
+
+# every test above again, in_control a function
+for _cls in (TestSettling, TestHandBack, TestSwitching, TestOffer, TestSeconds):
+  globals()[f'{_cls.__name__}Asked'] = type(f'{_cls.__name__}Asked', (_cls,), {'asked': True})
+
+
+class TestInControlAsked(unittest.TestCase):
+  """in_control as a function: asked only on a tick that needs it, at most
+  once, and the flags a bool gives."""
+
+  def update(self, swap, fresh, state, big, in_control) -> tuple[Flags, int]:
+    asked = []
+    flags = swap.update(fresh, state, big, lambda: asked.append(1) or in_control)
+    return flags, len(asked)
+
+  def test_the_flags_and_the_bookkeeping_are_a_bools(self):
+    rng = random.Random(20261016)
+    by_bool, by_function = SwapEvents(DT_CTRL), SwapEvents(DT_CTRL)
+    fresh, state, big, in_control = True, 'none', False, False
+    for _ in range(200_000):
+      # each changes now and then, so offers, swaps, falls and warnings all come up
+      fresh = fresh if rng.random() > .02 else not fresh
+      state = state if rng.random() > .01 else rng.choice(STATES)
+      big = big if rng.random() > .01 else not big
+      in_control = in_control if rng.random() > .005 else not in_control
+      flags, asked = self.update(by_function, fresh, state, big, in_control)
+      self.assertEqual(flags, by_bool.update(fresh, state, big, in_control))
+      self.assertLessEqual(asked, 1)
+    self.assertEqual(vars(by_function), vars(by_bool))
+
+  def test_a_drive_on_the_big_model_never_asks(self):
+    swap = SwapEvents(DT_CTRL)
+    self.assertEqual(sum(self.update(swap, True, 'running', True, True)[1] for _ in range(1000)), 0)
+    # a fall with nothing in control: asked at the fall, and no warning to count down
+    self.assertEqual(sum(self.update(swap, True, 'none', False, False)[1] for _ in range(1000)), 1)
+
+  def test_the_offer_the_fall_and_the_warning_ask(self):
+    swap = SwapEvents(DT_CTRL)
+    self.assertEqual(self.update(swap, True, 'ready', False, True), (Flags(True, False, False, False, False), 1))
+    self.assertEqual(self.update(swap, True, 'ready', False, True)[1], 0, 'offered once')
+    for _ in range(200):
+      self.update(swap, True, 'running', True, True)
+    # the fall, then every tick of the warning, which a disengage ends
+    asks = [self.update(swap, True, 'retrying', False, True)[1] for _ in range(swap.handback_ticks + 3)]
+    self.assertEqual(asks, [1] * swap.handback_ticks + [0] * 3)
+    self.assertEqual(self.update(swap, True, 'ready', False, False)[1], 1)
+
+  def test_a_function_that_raises_is_something_in_control(self):
+    swap = SwapEvents(DT_CTRL)
+
+    def fails():
+      raise RuntimeError('no msgq')
+    self.assertTrue(swap.update(True, 'ready', False, fails).offer)
 
 
 if __name__ == '__main__':

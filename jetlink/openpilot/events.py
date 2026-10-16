@@ -30,6 +30,7 @@ errors that frame raises.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import NamedTuple
 
 # how long each lasts, in seconds; SwapEvents counts them in the caller's ticks.
@@ -73,7 +74,7 @@ class SwapEvents:
   def settling(self) -> bool:
     return self._settle > 0
 
-  def update(self, fresh: bool, state: str, big: bool, in_control: bool) -> Flags:
+  def update(self, fresh: bool, state: str, big: bool, in_control: bool | Callable[[], bool]) -> Flags:
     """One tick of the caller's loop.
 
     `fresh`: modelV2 and the fork's state message are seen, alive and valid
@@ -81,7 +82,21 @@ class SwapEvents:
     (str() of a capnp enum, never its .raw number, which matches no state). `big`:
     modelV2.big, from a modelV2 alive and valid this tick. `in_control`: the
     fork's meaning of something steering or able to (zoompilot: openpilot or
-    MADS, MADS even paused), the same rule the swap waits on."""
+    MADS, MADS even paused), the same rule the swap waits on: a bool, or a
+    function asked only on a tick that needs it (an offer, a fall, the
+    link-lost warning's countdown) and at most once a tick; one that raises
+    is something in control."""
+    answer = None if callable(in_control) else bool(in_control)
+
+    def controlled() -> bool:
+      nonlocal answer
+      if answer is None:
+        try:
+          answer = bool(in_control())
+        except Exception:
+          answer = True
+      return answer
+
     # a stale state neither offers the switch nor rearms the offer
     if fresh:
       self._state = state
@@ -90,7 +105,7 @@ class SwapEvents:
         # screen after the switch reads as if it had not happened
         self.offered = False
         self._offer = 0
-      elif in_control and not self.offered and self._handback == 0:
+      elif not self.offered and self._handback == 0 and controlled():
         # with nothing in control it swaps at once and the chime says so. Once
         # per readiness, not at every stop, and after the link-lost warning,
         # which would hide it
@@ -102,11 +117,11 @@ class SwapEvents:
     if running != self.running:
       self._settle = self.switching_ticks + 1   # counted down below, this tick included
       self._switching = self.switching_ticks + 1 if running else 0   # the no-entry, then the chime
-      if not running and in_control:
+      if not running and controlled():
         self._handback = self.handback_ticks
     self.running = running
     self._settle = max(self._settle - 1, 0)
-    if not in_control:
+    if self._handback and not controlled():
       self._handback = 0
 
     offer, self._offer = _tick(self._offer)
