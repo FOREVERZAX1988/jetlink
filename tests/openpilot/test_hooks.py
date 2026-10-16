@@ -7,6 +7,7 @@ See the LICENSE file in the root directory for more details.
 The facade a fork's hook lines call: every hook answers, whatever jetlink
 does, and the answer on a failure is the one the link off gets.
 """
+import os
 import threading
 import time
 import unittest
@@ -35,6 +36,8 @@ SIGNATURES = {
   'should_extend_catalog': '()',
   'extend_catalog': '(catalog)',
   'swap_events': '(tick_s)',
+  'runtime': '()',
+  'in_control': '()',
 }
 CATALOG = {'bundles': []}
 
@@ -57,14 +60,24 @@ def answers(h) -> dict:
     'model_state': h.model_state('f' * 40),
     'should_extend_catalog': h.should_extend_catalog(),
     'extend_catalog': h.extend_catalog(CATALOG) is CATALOG,
+    'runtime': h.runtime(),
+    'in_control': h.in_control(),
   }
 
 
-# the link off: modeld keeps its model, the catalog stays as fetched, and a
-# power-off that is wanted goes ahead
+# the link off: modeld keeps its model, the catalog stays as fetched, a
+# power-off that is wanted goes ahead, and something may be in control
 OFF = {'should_run': False, 'status': None, 'reason': None, 'prepare': False, 'attach': 'model',
        'handed_over': False, 'state': 'none', 'shutdown_step': (False, True), 'request_shutdown': False,
-       'shutdown_pending': False, 'model_state': None, 'should_extend_catalog': False, 'extend_catalog': True}
+       'shutdown_pending': False, 'model_state': None, 'should_extend_catalog': False, 'extend_catalog': True,
+       'runtime': None, 'in_control': True}
+# what answers without binding when link_on() says the link is off
+UNBOUND = ('should_run', 'reason', 'runtime', 'in_control')
+
+
+def unbound(h) -> dict:
+  return {'should_run': h.should_run(False, None, None), 'reason': h.reason(), 'runtime': h.runtime(),
+          'in_control': h.in_control()}
 
 
 class Broken:
@@ -375,6 +388,70 @@ class TestSwapEvents(unittest.TestCase):
       self.assertFalse(events.settling)
 
 
+class TestTheLinkOff(unittest.TestCase):
+  """link_on() saying off: manager, hardwared and selfdrived load nothing of jetlink."""
+
+  def test_the_loop_hooks_answer_without_binding(self):
+    factory = mock.Mock()
+    h = Hooks(3, factory, link_on=lambda: False)
+    self.assertEqual(unbound(h), {name: OFF[name] for name in UNBOUND})
+    tracker = h.swap_events(0.01)
+    self.assertEqual(tracker.update(True, 'none', False, h.in_control), hooks.NO_EVENTS)
+    factory.assert_not_called()
+
+  def test_the_status_binds_as_ever(self):
+    # the UI shows the big model's name with the link off, from the model library
+    factory = mock.Mock(return_value=SimpleNamespace(log=RecordingLog()))
+    with mock.patch.object(hooks, 'bind', return_value=SimpleNamespace(status=lambda: 'snapshot')):
+      self.assertEqual(Hooks(3, factory, link_on=lambda: False).status(), 'snapshot')
+    factory.assert_called_once_with()
+
+  def test_a_setting_that_cannot_be_read_is_on(self):
+    def fails():
+      raise OSError('no params')
+    jetlink = mock.Mock(**{'enabled.return_value': True, 'reason.return_value': 'gadget', 'runtime.return_value': 'rt'})
+    h = over(jetlink)
+    h._link_on = fails
+    self.assertEqual((h.should_run(False, None, None), h.reason(), h.runtime()), (True, 'gadget', 'rt'))
+    self.assertTrue(h.in_control())
+
+
+class TestInControl(unittest.TestCase):
+  def test_it_is_the_adapters_rule(self):
+    op = SimpleNamespace(log=RecordingLog(), in_control=mock.Mock(return_value=False))
+    h = Hooks(3, lambda: op, link_on=lambda: True)
+    with mock.patch.object(hooks, 'bind', return_value=object()):
+      self.assertIs(h.in_control(), False)
+      op.in_control.return_value = 1
+      self.assertIs(h.in_control(), True)
+
+  def test_a_failure_is_in_control_and_logged_once(self):
+    log = RecordingLog()
+    op = SimpleNamespace(log=log, in_control=mock.Mock(side_effect=RuntimeError('no msgq')))
+    h = Hooks(3, lambda: op)
+    with mock.patch.object(hooks, 'bind', return_value=object()):
+      self.assertEqual([h.in_control(), h.in_control()], [True, True])
+    self.assertEqual(log.lines('exception'), ["jetlink: in_control() failed: RuntimeError: no msgq"])
+
+  def test_an_adapter_that_will_not_build_is_in_control(self):
+    def factory():
+      raise RuntimeError('no params')
+    self.assertTrue(Hooks(3, factory, log=RecordingLog()).in_control())
+    self.assertTrue(Off('why').in_control())
+
+  def test_the_tracker_starts_its_reader_on_the_first_tick(self):
+    # Stock's SubMaster answers True until it has heard something: asked cold
+    # at a fall, a disengaged driver would be warned
+    asked = []
+    tracker = Hooks(3, mock.Mock()).swap_events(0.01)
+    for _ in range(5):
+      tracker.update(True, 'running', True, lambda: asked.append(1) or False)
+    self.assertEqual(asked, [1])
+    tracker.update(True, 'running', True, False)
+    self.assertEqual(Off().swap_events(0.01).update(True, 'ready', False, lambda: asked.append(1)), hooks.NO_EVENTS)
+    self.assertEqual(asked, [1])
+
+
 class TestOverTheRealJetlink(OpenpilotTest):
   def setUp(self):
     super().setUp()
@@ -390,6 +467,26 @@ class TestOverTheRealJetlink(OpenpilotTest):
     del expected['status'], expected['extend_catalog']
     self.assertEqual(found, expected)
     self.assertEqual(self.op.log.lines('exception'), [])
+
+  def test_the_link_off_gated_or_not_is_the_same_answer(self):
+    self.op.set_mode('off')
+    gated = Hooks(3, lambda: self.op, link_on=lambda: False)
+    self.assertEqual(unbound(gated), unbound(self.h))
+
+  def test_runtime_and_in_control_with_the_link_on(self):
+    from jetlink.comma import gadget
+    from jetlink.openpilot.status import Runtime
+    self.op.set_mode('usb')
+    self.assertEqual(self.h.runtime(), Runtime())
+    now = time.monotonic()
+    gadget.write_record(gadget.MODELD, {'pid': os.getpid(), 'at': now, 'state': 'running', 'active': True,
+                                        'last_output_at': now})
+    self.assertEqual(self.h.runtime()[:2], ('running', True))
+    self.op.engaged = False
+    self.assertIs(self.h.in_control(), False)
+    self.op.chestnut = True
+    self.parts._chestnut = None
+    self.assertIsNone(Hooks(3, lambda: self.op).runtime())
 
   def test_jetlinks_own_reads_of_the_model(self):
     model = FakeJoinedModel(state='retrying')

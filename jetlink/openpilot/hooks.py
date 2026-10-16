@@ -26,7 +26,12 @@ Imported by every process that imports the fork's hook module, the resident
 gadget owner among them: the standard library and jetlink's light half only.
 Construction checks the API and nothing more; the adapter is built and bound
 on the first hook that needs it, once per process. handed_over() and state()
-read the model alone and never bind.
+read the model alone and never bind, and with link_on() saying the link is
+off, nor do should_run(), reason(), runtime() and in_control(): manager,
+hardwared and selfdrived load nothing of jetlink's heavy half then. status()
+binds either way: the snapshot names the big model from the model library
+(the catalog param and jetlink.registry's default), which the UI shows with
+the link off too.
 """
 from __future__ import annotations
 
@@ -65,9 +70,17 @@ class _Hooks:
   def _call(self, name: str, default, *args):
     return default
 
+  def _off(self) -> bool:
+    """link_on() says the link is off. Unknown, or a link_on() that raises,
+    is not off: the hook asks jetlink, as without one."""
+    try:
+      return self._link_on is not None and not self._link_on()
+    except Exception:
+      return False
+
   def should_run(self, started, params, CP) -> bool:
     """manager's should_run for the gadget owner."""
-    return self._call('enabled', False)
+    return False if self._off() else self._call('enabled', False)
 
   def status(self):
     return self._call('status', None)
@@ -75,11 +88,14 @@ class _Hooks:
   def reason(self) -> str | None:
     """Why jetlink cannot run here, told to someone who turned the link on,
     else Jetlink.reason's. The call first: a bind that fails sets the why."""
-    answer = self._call('reason', None)
     try:
-      return self._why if self._why and (self._link_on is None or self._link_on()) else answer
+      on = self._link_on is None or bool(self._link_on())
     except Exception:
-      return answer
+      on = None   # unknown: jetlink's answer, and the why told to nobody
+    if on is False:
+      return None
+    answer = self._call('reason', None)
+    return self._why if self._why and on else answer
 
   def prepare(self, chestnut: bool) -> bool:
     """modeld, before config_realtime_process. A chestnut runs the large
@@ -108,6 +124,18 @@ class _Hooks:
       return Jetlink.state(self, model)
     except Exception:
       return 'none'
+
+  def runtime(self):
+    """What modeld runs, from its runtime record (Jetlink.runtime): a
+    status.Runtime, or None with the link off or unusable, or a chestnut
+    fitted. Cheap enough for selfdrived's loop."""
+    return None if self._off() else self._call('runtime', None)
+
+  def in_control(self) -> bool:
+    """The adapter's in_control(), the rule the swap waits on, for
+    selfdrived's swap events. True with the link off or unusable, and on a
+    failure: something may be in control."""
+    return True
 
   def shutdown_step(self, should_shutdown: bool, reason: str = '') -> bool:
     return self._call('shutdown_step', should_shutdown, should_shutdown, reason)
@@ -151,6 +179,7 @@ class Hooks(_Hooks):
     # the adapter's once bound; until then the fork's, or the standard library's
     self._log = log
     self._bound = None
+    self._adapter = None
     self._binding = threading.Lock()
     # hook -> the failure last logged for it, cleared by a call that works
     self._failed: dict[str, str] = {}
@@ -168,7 +197,9 @@ class Hooks(_Hooks):
     try:
       op = self._factory()
       self._log = getattr(op, 'log', None) or self._log
-      return bind(op)
+      jetlink = bind(op)
+      self._adapter = op
+      return jetlink
     except Exception as e:
       self._why = f"jetlink failed to start: {_text(e)}"
       self._report("jetlink: %s", self._why)
@@ -212,6 +243,11 @@ class Hooks(_Hooks):
       return default if jetlink is None else getattr(jetlink, name)(*args)
     return self._net(name, default, call)
 
+  def in_control(self) -> bool:
+    if self._off():
+      return True
+    return self._net('in_control', True, lambda: self._jetlink() is None or bool(self._adapter.in_control()))
+
   def swap_events(self, tick_s: float) -> SwapTracker:
     """Bookkeeping alone, so it binds nothing."""
     return SwapTracker(self._net('swap_events', None, SwapEvents, tick_s), self)
@@ -226,6 +262,7 @@ class SwapTracker:
     self._events = events
     self._hooks = hooks
     self._ok = events is not None
+    self._warm = False
 
   @property
   def settling(self) -> bool:
@@ -235,8 +272,14 @@ class SwapTracker:
       return False
 
   def update(self, fresh, state, big, in_control) -> Flags:
+    """SwapEvents.update. An in_control function is asked once on the first
+    update as well: the reader it starts (Stock's SubMaster) answers True
+    until it has heard anything, a false warning at the first tick that asks."""
     if self._events is None:
       return NO_EVENTS
+    if not self._warm and callable(in_control):
+      self._warm = True
+      self._hooks._net('in_control', None, in_control)
     flags = self._hooks._net('swap_events.update', None, self._events.update, fresh, state, big, in_control)
     self._ok = flags is not None
     return NO_EVENTS if flags is None else flags

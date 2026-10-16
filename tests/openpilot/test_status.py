@@ -794,6 +794,25 @@ class TestTheRuntimeRecord(OpenpilotTest):
     runtime.assert_not_called()
     self.assertEqual((s.running, s.active, s.phase), (None, False, 'off'))
 
+  def test_runtime_is_the_snapshots_running_alone(self):
+    # Jetlink.runtime(), for selfdrived's loop: what status() says of modeld
+    # in every case, and no param read for it (spec, progress, the models)
+    self.patch(self.parts.warps, 'built', return_value=True)
+    self.patch(gadget, 'gadget_error', return_value=None)
+    for record in (False, True):
+      if record:
+        self.write(sha256='ab' * 32, checkpoint='cinque-v3')
+      for mode, chestnut in (('usb', False), ('off', False), ('usb', True), ('ios', False)):
+        with self.subTest(record=record, mode=mode, chestnut=chestnut):
+          self.op.set_mode(mode)
+          self.op.chestnut, self.parts._chestnut = chestnut, None
+          s = self.jl.status()
+          with mock.patch.object(self.op, 'get', side_effect=AssertionError('a param read')), \
+               mock.patch.object(status, 'read', side_effect=AssertionError('the snapshot')):
+            found = self.jl.runtime()
+          self.assertEqual(tuple(found or status.Runtime()), (s.running, s.active, s.running_sha256, s.running_checkpoint))
+          self.assertEqual(found is None, not s.enabled)
+
 
 if __name__ == '__main__':
   unittest.main()

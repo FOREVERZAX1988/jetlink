@@ -109,6 +109,14 @@ class Jetlink:
     mode = self._mode()
     return self._read('the status', lambda: status.read(self._parts, mode), lambda error: status.failed(error, mode))
 
+  def runtime(self):
+    """What modeld runs (status.Runtime), the part of status() that changes
+    while driving, for a loop: the setting, the chestnut test (cached) and
+    modeld's record, nothing else. None where status().running is None for
+    want of the link: off, or beside a chestnut."""
+    from jetlink.openpilot import status
+    return status.runtime() if self.enabled() else None
+
   def model_state(self, ref: str) -> str | None:
     """One catalog model for the picker's list: 'ready' (built on the Jetson),
     'downloaded' (on the comma) or None. Asked when a list opens."""

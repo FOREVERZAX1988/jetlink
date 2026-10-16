@@ -45,6 +45,7 @@ JETLINK = {
   'shutdown_step': "(should_shutdown, reason='')",
   'should_extend_catalog': '()',
   'extend_catalog': '(catalog)',
+  'runtime': '()',
 }
 
 
