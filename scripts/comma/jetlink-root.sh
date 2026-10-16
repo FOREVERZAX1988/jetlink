@@ -18,7 +18,7 @@
 #   sudo scripts/comma/jetlink-root.sh udc apply|restore # the USB device controller kept a device and its debug log off, or stock
 #   sudo scripts/comma/jetlink-root.sh udc start|stop    # its device side turned on, or off
 #   sudo scripts/comma/jetlink-root.sh vm apply|restore  # the link's VM tuning, or the stock values
-#   sudo scripts/comma/jetlink-root.sh draw off|on       # no current drawn from the port (iOS), or the charger's own
+#   sudo scripts/comma/jetlink-root.sh draw off|on       # no current drawn from the port, or the charger's own
 #
 # For the comma four and the comma 3X only. Both are SDM845 on the same AGNOS
 # kernel (4.9, dwc3 at a600000.dwc3), with configfs, FunctionFS and NCM built
@@ -115,7 +115,8 @@ USB_PSY=${JETLINK_USB_PSY:-/sys/class/power_supply/usb}
 
 # draw: the charger's USB_ICL voter, the input current limit on the port. As
 # the sink the charger draws up to 900 mA from whatever powers the port, though
-# the comma runs on its own supply. An iPhone powers what it plugs into with
+# the comma runs on its own supply. A 3X browns out the moment it draws from a
+# laptop (PMIC power-off reason UVLO). An iPhone powers what it plugs into with
 # little current; under that draw its supply sags, the charger's weak-charger
 # and reverse-boost handlers cut and restore the input in a loop, and the phone
 # never sees a device. Forced to 0 the input is suspended: the port still reads
@@ -689,7 +690,7 @@ cmd_vm() {
   esac
 }
 
-# The port's input current while the link is iOS; see USB_ICL_VOTER. off forces
+# The port's input current while the link is on; see USB_ICL_VOTER. off forces
 # the limit to 0 and on gives the charger its own limit back. Like udc and vm,
 # undone only by on, never at an exit; a reboot clears it.
 cmd_draw() {

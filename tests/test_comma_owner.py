@@ -67,6 +67,10 @@ class OwnerTest(unittest.TestCase):
     p = mock.patch.object(owner.port, 'Port', mock.Mock())
     self.addCleanup(p.stop)
     p.start()
+    # no policy engine, as off a comma; TestDraw sets what is on the port
+    p = mock.patch.object(owner.port, 'power_role', mock.Mock(return_value=None))
+    self.addCleanup(p.stop)
+    self.power_role = p.start()
 
   def write(self, key: str, value: bytes) -> None:
     path = self.params / key
@@ -668,16 +672,14 @@ class TestVmTuning(OwnerTest):
 
 
 class TestDraw(OwnerTest):
-  """No current drawn from the port while the link is iOS, kept on exit like the tuning."""
+  """No current drawn from the port while the link is on, cut and given back
+  only on an empty port (an iPhone is cut at once), kept on exit like the tuning."""
 
-  def test_usb_leaves_it_alone(self):
-    o = self.owner()
-    o.step()
-    o.step()
-    self.assertEqual(self.root_calls('draw'), [])
+  def empty(self, empty: bool = True) -> None:
+    self.power_role.return_value = 'none' if empty else 'sink'
 
-  def test_ios_cuts_it_once_and_an_exit_keeps_it(self):
-    self.write('JetlinkLink', b'2')
+  def test_usb_cuts_it_on_an_empty_port_and_an_exit_keeps_it(self):
+    self.empty()
     o = self.owner()
     o.step()
     o.step()
@@ -685,19 +687,77 @@ class TestDraw(OwnerTest):
     o.run()
     self.assertEqual(self.root_calls('draw'), ['off'])
 
-  def test_leaving_ios_gives_it_back(self):
-    for setting in (b'1', b'0'):
-      with self.subTest(setting=setting):
-        self.root_run.reset_mock()
-        self.write('JetlinkLink', b'2')
-        o = self.owner()
-        o.step()
-        self.write('JetlinkLink', setting)
-        o.step()
-        self.assertEqual(self.root_calls('draw'), ['off', 'on'])
+  def test_usb_waits_for_the_port_to_empty(self):
+    # a comma up on a port's power alone would go dark at the cut
+    self.empty(False)
+    o = self.owner()
+    o.step()
+    o.step()
+    self.assertEqual(self.root_calls('draw'), [])
+    self.empty()
+    o.step()
+    self.assertEqual(self.root_calls('draw'), ['off'])
+
+  def test_without_a_policy_engine_it_is_left_alone(self):
+    o = self.owner()
+    o.step()
+    self.assertEqual(self.root_calls('draw'), [])
+
+  def test_ios_cuts_it_at_once(self):
+    self.empty(False)
+    self.write('JetlinkLink', b'2')
+    o = self.owner()
+    o.step()
+    o.step()
+    self.assertEqual(self.root_calls('draw'), ['off'])
+
+  def test_a_change_of_mode_keeps_it(self):
+    # leaving iOS with a laptop in gave the draw back, and a 3X browned out
+    self.empty(False)
+    self.write('JetlinkLink', b'2')
+    o = self.owner()
+    o.step()
+    self.write('JetlinkLink', b'1')
+    o.step()
+    self.empty()
+    o.step()
+    self.assertEqual(self.root_calls('draw'), ['off'])
+
+  def test_turning_the_link_off_gives_it_back_once_the_port_is_empty(self):
+    self.empty()
+    o = self.owner()
+    o.step()
+    self.empty(False)
+    self.write('JetlinkLink', b'0')
+    o.step()
+    o.step()
+    self.assertEqual(self.root_calls('draw'), ['off'])
+    self.empty()
+    o.step()
+    o.step()
+    self.assertEqual(self.root_calls('draw'), ['off', 'on'])
+
+  def test_turned_back_on_before_the_port_empties_nothing_moves(self):
+    self.empty()
+    o = self.owner()
+    o.step()
+    self.empty(False)
+    self.write('JetlinkLink', b'0')
+    o.step()
+    self.write('JetlinkLink', b'1')
+    o.step()
+    self.empty()
+    o.step()
+    self.assertEqual(self.root_calls('draw'), ['off'])
+
+  def test_disabled_from_the_start_it_is_left_alone(self):
+    self.empty()
+    self.write('JetlinkLink', b'0')
+    self.owner().step()
+    self.assertEqual(self.root_calls('draw'), [])
 
   def test_a_failure_is_not_retried_every_step(self):
-    self.write('JetlinkLink', b'2')
+    self.empty()
     self.root_run.return_value = False
     o = self.owner()
     o.step()

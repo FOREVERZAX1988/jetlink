@@ -304,6 +304,7 @@ The cache is `--cache DIR`, else `$JETLINK_CACHE`, else:
 | `port hold`, `port off` | Keeps the USB-C port the device end of a USB link. |
 | `port device`, `port reset` | Asks the far end over USB PD to take the host role (a data role swap), or resets USB PD. |
 | `udc apply`, `udc restore` | While the link is on, keeps the USB device side on whenever a host powers the port; `restore` is stock. `udc start`, `udc stop` turn it on or off now. |
+| `draw off`, `draw on` | While the link is on, draws no current from the USB-C port: the comma runs on its own supply, and a 3X browns out drawing from a laptop. Cut and given back only with the port empty, or for an iPhone at once. |
 | `vm apply`, `vm restore` | Sets and undoes the VM tuning the link needs while the comma records. |
 | `check` | By hand, `sudo scripts/comma/jetlink-root.sh check`: what is built and the negotiated bus speed. |
 | `teardown` | Removes the gadget. |

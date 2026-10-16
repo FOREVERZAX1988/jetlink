@@ -176,6 +176,10 @@ class Owner:
     self.dormant = False
     # the link mode the root tuning was applied for, None while stock
     self.tuned: str | None = None
+    # the draw from the USB-C port: cut by this owner, and the mode it was
+    # last settled for (steer_draw)
+    self.cut = False
+    self.draw_for: str | None = None
     # when there was last something to do. The hold runs from here, not from
     # process start: this daemon is not restarted at ignition any more, so a
     # hold measured from its birth expires once and never applies again, and
@@ -630,31 +634,55 @@ class Owner:
       if self.tuned:
         root.run('vm', 'restore')
         root.run('udc', 'restore')
-        if self.tuned == 'ios':
-          root.run('draw', 'on', timeout=root.PORT_TIMEOUT)
         self.tuned = None
+      self.steer_draw(mode)
       self.port.off()
       return
     self.link_step(mode == 'ios')
     if self.tuned != mode:
       # jetlink-root.sh vm: the recording VM tuning the gadget's reads need;
       # udc: the USB device side kept on for a host that powers the port
-      # (port.py); draw, iOS only: no current drawn from the port, which an
-      # iPhone cannot supply. While the link is on. After the step, so the
-      # first gadget does not wait on them. Put back only when the link is
-      # turned off or leaves iOS, never on exit: manager stops this at
-      # ignition, just as the contention starts, and a phone plugged in before
-      # it is back should still come up. A start assumes the draw stock, so a
-      # cut a dead iOS owner left lasts until the reboot that clears it
+      # (port.py). While the link is on. After the step, so the first gadget
+      # does not wait on them. Put back only when the link is turned off,
+      # never on exit: manager stops this at ignition, just as the contention
+      # starts, and a host plugged in before it is back should still come up
       if self.tuned is None:
         root.run('vm', 'apply')
         root.run('udc', 'apply')
-      if mode == 'ios':
-        if root.run('draw', 'off', timeout=root.PORT_TIMEOUT):
-          gadget.log.info("jetlink: drawing no current from the USB-C port, for an iPhone")
-      elif self.tuned == 'ios':
-        root.run('draw', 'on', timeout=root.PORT_TIMEOUT)
       self.tuned = mode
+    self.steer_draw(mode)
+
+  def steer_draw(self, mode: str) -> None:
+    """jetlink-root.sh draw: no current drawn from the USB-C port while the
+    link is on, in every mode. The comma runs on its own supply, and drawing
+    from the host's port only costs it. A 3X browns out the instant it draws
+    from a laptop (PMIC power-off reason UVLO), whether at the plug or at a
+    draw given back with the laptop still in; an iPhone sags under the draw
+    and never sees a device.
+
+    Cut only on an empty port, or for an iPhone, which cannot power a comma:
+    a comma up with nothing on the port has another supply, and one powered
+    through the port would go dark at the cut. The cut is a forced voter, so
+    it holds for every plug after. Given back only on an empty port too, so
+    neither a change of mode nor the link turned off with a host still in
+    lets the charger draw from it. Kept on exit, like the tuning. A start
+    assumes the draw stock, so a cut a dead owner left with the link turned
+    off lasts until the reboot that clears it."""
+    if mode == self.draw_for:
+      return
+    want = mode != 'off'
+    if want != self.cut:
+      if mode != 'ios' and port.power_role() != 'none':
+        return   # something is on the port; looked at again next step
+      if want:
+        self.cut = root.run('draw', 'off', timeout=root.PORT_TIMEOUT)
+        if self.cut:
+          gadget.log.info("jetlink: drawing no current from the USB-C port")
+      else:
+        root.run('draw', 'on', timeout=root.PORT_TIMEOUT)
+        self.cut = False
+    # settled, or failed, which is not retried every step
+    self.draw_for = mode
 
   def ensure_lender(self) -> None:
     """Listen for borrowers, or say why not and try again later.
