@@ -247,13 +247,14 @@ def runtime() -> Runtime:
     if record is None or record.get('stopping') or not gadget.owner_alive(record) \
        or not gadget.pid_alive(record.get('pid')):
       return Runtime()
-    state = record.get('state')
     # the answer's age when written: the writer wakes once a second, the frames 20 times
     answered = record['at'] - record.get('last_output_at', 0.0) < OUTPUT_FRESH
     active = bool(record.get('active')) and answered and time.monotonic() - record['at'] < ACTIVE_FRESH
-    sha, checkpoint = (record.get('sha256'), record.get('checkpoint')) if active else (None, None)
-    return Runtime(state if isinstance(state, str) else None, active,
-                   sha if isinstance(sha, str) else None, checkpoint if isinstance(checkpoint, str) else None)
+
+    def text(key: str, shown: bool = True) -> str | None:
+      value = record.get(key)
+      return value if shown and isinstance(value, str) else None
+    return Runtime(text('state'), active, text('sha256', active), text('checkpoint', active))
   except (TypeError, KeyError):
     return Runtime()
 
@@ -321,8 +322,10 @@ class Status(NamedTuple):
     reason = self.reason
     if reason is None:
       return None
-    if reason in (NO_WARP, STOPPED):
-      return 'no_warp' if reason == NO_WARP else 'service_stopped'
+    if reason == NO_WARP:
+      return 'no_warp'
+    if reason == STOPPED:
+      return 'service_stopped'
     if reason.startswith(gadget.BACKING_OFF):
       return 'backing_off'
     return 'status_failed' if reason.startswith(STATUS_FAILED) else 'gadget'
