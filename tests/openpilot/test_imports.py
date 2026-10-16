@@ -112,9 +112,9 @@ print(tracemalloc.get_traced_memory()[0])
 
 
 def test_the_owner_path_costs_under_a_megabyte_more_than_the_comma_owner():
-  # a proxy for the owner's PSS on the comma, which bench A measures: the
-  # Python heap its imports allocate in a fresh interpreter, over the comma
-  # layer's own owner (0.6 MB when this was written, typing 0.4 of it)
+  # a proxy for the owner's PSS on the comma: the Python heap its imports
+  # allocate in a fresh interpreter, over the comma layer's own owner
+  # (about 0.6 MB, typing 0.4 of it)
   def heap(module: str) -> int:
     run = subprocess.run([sys.executable, '-S', '-c', HEAP, module], cwd=ROOT, capture_output=True, text=True,
                          timeout=120)

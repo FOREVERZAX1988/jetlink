@@ -29,9 +29,9 @@ def test_an_empty_buffer_has_no_bytes():
 
 
 def test_a_context_fills_its_structs_where_the_kernel_reads_them(monkeypatch):
-  # the real context only builds on Linux, so a mistake in its setup reached a
-  # comma with every test here green (2026-10-06: a view made before its array
-  # failed every link); this builds it anywhere, with the syscalls faked
+  # the real context only builds on Linux, so a mistake in its setup (a view
+  # made before its array) would reach a comma with every other test green;
+  # this builds it anywhere, with the syscalls faked
   from types import SimpleNamespace
 
   from jetlink.transport import aio as module

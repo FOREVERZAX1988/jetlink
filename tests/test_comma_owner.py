@@ -222,10 +222,8 @@ class TestParked(OwnerTest):
     self.assertTrue(o.dormant)
 
   def test_a_run_that_wakes_the_jetson_gets_the_hold_before_letting_go(self):
-    # bench 2026-09-10: a run finished 2.5 s after the wake, the owner released
-    # the gadget 1 ms later, and the jetson was still enumerating. The hold used
-    # to run from process start, which expires once and never applies again now
-    # that this is not restarted at ignition
+    # a run can finish seconds after the wake, with the Jetson still
+    # enumerating; the hold runs from the wake, not from process start
     o = self.owner()
     o.idle_since = time.monotonic() - owner.DORMANT_HOLD
     o.worker = mock.Mock(**{'poll.return_value': 0, 'returncode': 0})
@@ -349,9 +347,8 @@ class TestWhatItIsTold(OwnerTest):
   which is the run's exit status."""
 
   def test_every_hello_passed_on_refreshes_the_far_end(self):
-    # memory reinstalled-jetson-not-reprovisioned: the record was refreshed
-    # only by a run that had work, so a Jetson moved to always-on power was
-    # still let go, drive after drive
+    # a run with no work never refreshes the record, so without this a Jetson
+    # moved to always-on power would still be let go every drive
     o = self.owner()
     self.heard(o, sleep_after=0.0)
     o.idle_since = time.monotonic() - owner.DORMANT_HOLD
@@ -467,8 +464,8 @@ class TestShutdown(OwnerTest):
     assert 'shut down' in o.spawn_worker.call_args.args[0]
 
   def test_the_run_it_starts_is_left_to_ask(self):
-    # the run asking the jetson was stopped and started again every step, half
-    # a second, less than it takes to start: on the bench nothing ever asked
+    # a step is half a second, less than a run takes to start: restarting it
+    # every step would mean nothing ever asks
     o = self.owner()
     self.request()
     o.step()
@@ -820,7 +817,8 @@ class TestDraw(OwnerTest):
     self.assertEqual(self.root_calls('draw'), ['off'])
 
   def test_a_change_of_mode_keeps_it(self):
-    # leaving iOS with a laptop in gave the draw back, and a 3X browned out
+    # leaving iOS with a host still in must not give the draw back: a 3X on
+    # the port browns out
     self.empty(False)
     self.write('JetlinkLink', b'2')
     o = self.owner()
@@ -1264,8 +1262,7 @@ class TestSwitchingMode(OwnerTest):
     self.setup_gadget.assert_not_called()
 
   def test_a_switch_just_after_a_build_is_not_held_back(self):
-    # the bench: a switch a minute after the last one waited out a backoff
-    # that only a failed build should set, and logged every step meanwhile
+    # only a failed build sets the backoff
     o = self.switched()
     o.step()
     self.assertTrue(o.built_ios)
@@ -1326,9 +1323,8 @@ class TestSwitchingMode(OwnerTest):
 class TestLeavingIos(IosTest):
   """Out of iOS, parked, nothing on the comma's side holds the switch back: an
   iOS gadget lends nobody the endpoint files, so the rebuild pulls nothing out
-  from under a borrower. A borrower waiting for a phone that never dials, and
-  a run stuck with a silent one, used to keep the comma on iOS until a power
-  cycle."""
+  from under a borrower, even one waiting for a phone that never dials or a
+  run stuck with a silent one."""
 
   def setUp(self):
     super().setUp()
@@ -1352,7 +1348,7 @@ class TestLeavingIos(IosTest):
     self.assert_usb(o)
 
   def test_a_real_borrower_is_told_the_cable_at_once_and_the_usb_gadget_after_the_switch(self):
-    # nobody waits at the lender for a phone any more: a borrower in iOS is
+    # nobody waits at the lender for a phone: a borrower in iOS is
     # told the cable and listens for the dial itself, so a switch out of iOS
     # finds nothing of a borrower's under the rebuild
     o = self.make()
@@ -1767,7 +1763,7 @@ class TestACrashLoop(OwnerTest):
     self.assertEqual(len(steps), 2)
 
   def test_owners_that_stop_cleanly_never_wait(self):
-    # the bench turns the link off and on again as often as it likes
+    # turning the link off and on again any number of times never counts
     for _ in range(owner.CRASH_FREE + 3):
       self.run_two_steps()
       self.assertEqual(owner._starts(), [], 'a clean stop was counted as a death')
@@ -2018,7 +2014,7 @@ class TestABusyEp0(OwnerTest):
 
 class TestSetup(OwnerTest):
   def test_the_owner_creates_the_gadget_when_there_is_none(self):
-    # nothing sets it up at boot any more
+    # nothing sets it up at boot
     o = self.owner(presented=False)
     with mock.patch.object(gadget, 'link_configured', return_value=False), \
          mock.patch.object(gadget, 'setup_gadget', return_value=True) as setup:

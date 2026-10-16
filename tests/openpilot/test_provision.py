@@ -377,7 +377,7 @@ class TestTheRun(OpenpilotTest):
 
   def test_the_bytes_come_first_and_need_no_jetson(self):
     # a car whose Jetson is switched with the ignition has none while parked,
-    # which is when there is time to download (2026-10-06)
+    # which is when there is time to download
     d = self.worker()
     order = []
     self.patch(d, 'needs_download', mock.Mock(return_value=True))

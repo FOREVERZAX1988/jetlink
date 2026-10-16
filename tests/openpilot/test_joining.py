@@ -228,8 +228,8 @@ class JoiningTest(JoiningBase):
     self.assertEqual(s.big_model_state, 'running')
 
   def test_a_model_neither_end_has_is_asked_for_again_slowly_and_said(self):
-    # a hello and a gadget bounce every 7 s for a whole drive (2026-10-06):
-    # only a provisioning run's download changes the answer
+    # retrying would be a hello and a gadget bounce every 7 s for the whole
+    # drive: only a provisioning run's download changes the answer
     from jetlink.openpilot.link import ModelMissing
     self.connect_error = ModelMissing('server has no engine for 1563b85f6bd00d9e (have 0 of the model)')
     self.connect_error.retry_after = 0.05
@@ -257,7 +257,7 @@ class JoiningTest(JoiningBase):
     self.assertTrue(s.chestnut)
     self.assertIs(s.client, self.big.client)
     # No warmup at the swap: the warp was prepared in __init__ and a frame
-    # over the link here was two dropped camera frames on the car.
+    # over the link here costs two dropped camera frames.
     self.assertFalse(self.big.warmed)
 
   def test_large_model_failure_demotes_and_keeps_the_frame(self):
@@ -450,8 +450,8 @@ class JoiningTest(JoiningBase):
     self.assertEqual(s.big_model_state, 'unavailable')
 
   def test_a_lost_link_is_counted_and_repeated_drops_blame_the_cable(self):
-    # every drop on the 2026-09-07 drives was the USB port letting go, and the
-    # driver saw "Big Model Failed" six times with no hint of a cause
+    # a drop is most often the USB port letting go, and "Big Model Failed"
+    # alone gives the driver no hint of a cause
     s = self._state()
     self._wait_joined(s)
     s.in_control = False
@@ -477,9 +477,8 @@ class JoiningTest(JoiningBase):
     self._wait_reported(s, 'waiting for jetlink', drops=2)
 
   def test_a_lag_demote_says_why_over_the_live_link(self):
-    # the phone's log carried no reason and none of the comma's numbers: a
-    # session there was the big model's time plus the backoff, and nothing
-    # said which. The leave carries what the comma measured
+    # the host cannot tell the big model's time from the backoff on its own,
+    # so the leave carries what the comma measured
     s = self._driving(dead=False)
     self.big.trips = mock.Mock(summary=lambda: {'frames': 7, 'p50_ms': 41.5})
     s.frame_drop_ratio = joining.DROP_LIMIT * 2
@@ -566,9 +565,9 @@ class JoiningTest(JoiningBase):
 
   def test_failures_back_off_and_a_stable_join_starts_over(self):
     # A demote is mostly one late frame: the first few are retried in a
-    # second. A link that dies on its first frame every time used to cost a
-    # swap, a demote and a chime every REJOIN_DELAY for the drive, so a streak
-    # past QUICK_RETRIES doubles as before.
+    # second. A link that dies on its first frame every time would cost a
+    # swap, a demote and a chime each retry, so a streak past QUICK_RETRIES
+    # doubles the delay.
     s = self._state()
     s._joined_at = 0.0
     delays = []
@@ -666,9 +665,8 @@ class JoiningTest(JoiningBase):
 class WaitingTest(JoiningBase):
   """Until the window opens the comma runs its own model and nothing else: the
   large model is built on the swap frame, and a ready link only hears a
-  keepalive ping. Frames sent to the host while the small model drove (shadow
-  frames) starved the driver monitoring model on a comma whose small model took
-  most of the frame (2026-10-05)."""
+  keepalive ping. Frames sent to the host while the small model drives starve
+  the driver monitoring model when the small model takes most of the frame."""
 
   def test_nothing_reaches_the_large_model_until_the_swap(self):
     build = mock.Mock(wraps=self._build)
@@ -1262,8 +1260,8 @@ class RuntimeRecordTest(JoiningBase):
     self.assertEqual(record['pid'], os.getpid())
 
   def test_a_swap_reads_connecting_until_it_answers_never_reconnecting(self):
-    # a 150 ms first frame read waiting, reconnecting, active (2026-10-16
-    # review). The writer is woken every 10 ms here, so it writes inside the frame
+    # a 150 ms first frame must not read waiting, reconnecting, active. The
+    # writer is woken every 10 ms here, so it writes inside the frame
     answered = self.big.run
 
     def slow(*a, **kw):

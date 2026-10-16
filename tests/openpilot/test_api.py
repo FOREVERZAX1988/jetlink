@@ -412,8 +412,8 @@ class PoweringOffWithoutWaiting(OpenpilotTest):
       self.assertFalse(self.jl.shutdown_pending())
 
   def test_the_owner_takes_it_as_it_always_has(self):
-    # the Jetson on the user's supply is armed with --poweroff: what reaches
-    # it has to be the owner's shutdown run, as before
+    # a Jetson on always-on supply is armed with --poweroff: what reaches it
+    # has to be the owner's shutdown run
     from jetlink.comma.owner import Owner
     o = Owner((), settings=self.parts.settings, chestnut_ids=())
     self.addCleanup(o.cable.close)
@@ -516,7 +516,7 @@ class ThePowerOffStep(OpenpilotTest):
       self.assertTrue(self.jl.shutdown_step(True))
       self.assertTrue(self.jl.shutdown_step(False))
     self.assertEqual(self.op.log.lines('exception'), ['jetlink: the shutdown step failed'])
-    # nobody follows it now: an owner finding it a drive later must not act on it
+    # nobody follows it: an owner finding it a drive later must not act on it
     self.assertFalse(gadget.SHUTDOWN_REQUEST.exists())
 
   def test_a_failure_with_a_power_off_wanted_is_yes(self):

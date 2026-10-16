@@ -5,7 +5,7 @@ This file is part of jetlink and is licensed under the MIT License.
 See the LICENSE file in the root directory for more details.
 
 A graph that keeps its own history (openpilot #38916, Cinque Terre V3 on), as
-the comma sees it: the spec read off the graph, and the parity bench's
+the comma sees it: the spec read off the graph, and the parity check's
 reference, which loops the graph's state itself. The server's loop is checked
 over the link in tests/test_swift_server.py.
 """

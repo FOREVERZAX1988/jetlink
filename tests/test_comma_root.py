@@ -7,8 +7,8 @@ See the LICENSE file in the root directory for more details.
 The comma's one root script and its wrapper. The wrapper against a fake
 subprocess.run; the script's port and vm subcommands against a fake debugfs
 and /proc/sys (tests/comma_fakes.py), run without sudo through its override
-variables. gadget, net, check and teardown need a real configfs and are
-bench-only.
+variables. gadget, net, check and teardown need a real configfs and are not
+tested here.
 """
 from __future__ import annotations
 
@@ -60,7 +60,7 @@ def test_the_script_is_the_packages():
 
 @pytest.mark.skipif(shutil.which('git') is None or not (REPO / '.git').exists(), reason='needs a git checkout')
 def test_the_script_is_executable_in_git():
-  # so a checkout's copy, and the old path's stub, run as themselves too
+  # so a checkout's copy, and the stub under scripts/comma, run as themselves too
   for path in (root.SCRIPT.resolve(), REPO / 'scripts' / 'comma' / 'jetlink-root.sh'):
     entry = subprocess.run(['git', 'ls-files', '-s', str(path.relative_to(REPO))], cwd=REPO, capture_output=True, text=True,
                            check=True).stdout

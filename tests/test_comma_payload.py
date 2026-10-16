@@ -46,7 +46,7 @@ ENTRIES = (
 
 # What the payload may import from outside itself: the standard library, what
 # the comma's venv has, and the fork's tinygrad, which modeld brings. onnx is
-# only behind spec_from_onnx, for a bench
+# only behind spec_from_onnx, a developer tool
 OUTSIDE = set(sys.stdlib_module_names) | {'numpy', 'tinygrad', 'onnx'}
 # the fork's openpilot, which only the base adapter imports, inside its methods
 HOST = {'jetlink.openpilot.stock': {'openpilot'}}

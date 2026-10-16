@@ -58,8 +58,8 @@ class HoldingTheLink(ClockedTest):
   """A link the attempt could not use stays open for the next one.
 
   Closing it unbinds the UDC, and while a Jetson boots the join loop asks
-  again every few seconds: that was an unplug every cycle, and one of them
-  landed on the enumeration.
+  again every few seconds: that would be an unplug every cycle, and one of
+  them can land on the enumeration.
   """
 
   def setUp(self):
@@ -113,7 +113,7 @@ class HoldingTheLink(ClockedTest):
 
 
 class BorrowingTheGadget(OpenpilotTest):
-  """modeld does not bring the gadget up any more.
+  """modeld does not bring the gadget up.
 
   jetlinkd holds ep0 and the bind for as long as the link is enabled, so the
   comma stays enumerated across the ignition edge; modeld asks for the endpoint
@@ -283,9 +283,8 @@ class PresentingEarly(OpenpilotTest):
 class BuildingOnroad(OpenpilotTest):
   """The picked model is built with the small model driving.
 
-  a provisioning run works offroad only, so a model picked in the driveway and
-  driven off on used to cost the whole drive: modeld would not even present
-  the gadget, and the panel said a device was on the USB port.
+  a provisioning run works offroad only, so without this a model picked in
+  the driveway and driven off on would cost the whole drive.
   """
 
   ENTRY = {'name': 'CTM v2', 'ref': 'f' * 40, 'oid': 'a' * 64, 'size': 766 << 20}
@@ -311,7 +310,7 @@ class BuildingOnroad(OpenpilotTest):
     assert self.op.log.has(f"orin trt 10.3, engine ready, loaded {'a' * 16}")
 
   def test_the_last_model_built_drives_while_the_pick_is_not_ready(self):
-    # the user's choice (2026-10-06): not the small model. No upload and no
+    # by design, not the small model. No upload and no
     # build here: either would cost the model that is steering
     standin = mock.Mock(sha256='b' * 64, nbytes=123)
     self.patch(self.parts.spec, 'ready_spec', return_value=standin)
@@ -335,9 +334,9 @@ class BuildingOnroad(OpenpilotTest):
     self.parts.spec.ready_spec.return_value = record
 
   def test_the_model_the_server_has_loaded_drives_over_the_record(self):
-    # 2026-10-07: the comma picked BMRLNAP v6, the iPhone was serving Cinque
-    # Terre V3, and the comma's record named ResAction from another server;
-    # the iPhone was made to switch to ResAction
+    # the comma picked one model, the server has another loaded, and the
+    # comma's record names a third from another server: the server must not
+    # be made to switch to the record's
     size_for = self.patch(self.parts.models, 'size_for', return_value=99)
     self.patch(self.parts.models, 'name_for', return_value='Cinque Terre V3')
     self.hello(loaded='c' * 64, cached=['c' * 64, 'r' * 64])
@@ -412,7 +411,7 @@ class BuildingOnroad(OpenpilotTest):
   def test_bytes_neither_end_has_are_a_parked_job(self):
     # Downloading a gigabyte is the one part of provisioning that needs the
     # internet, and it is not something to start mid-drive. The link is fine:
-    # closing it cost a gadget bounce per retry for a whole drive (2026-10-06)
+    # closing it would cost a gadget bounce per retry for the whole drive
     from jetlink.client import EngineMissing
     self.ensure.side_effect = EngineMissing('no engine')
     self.link.client = self.client

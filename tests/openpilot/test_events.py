@@ -84,8 +84,7 @@ class TestHandBack(SwapEventsTest):
     self.assertEqual(self.step(state='retrying', mads=True), {'link_lost'})
 
   def test_a_mads_only_fall_warns(self):
-    # lateral only, cruise off: the 2026-09-29 drives lost the link three
-    # times like this with no alert at all
+    # lateral only, cruise off: a lost link still needs an alert
     self.drive_big(mads=True)
     self.assertEqual(self.step(state='retrying', mads=True), {'link_lost'})
     self.assertEqual(1 + self.ticks_with('link_lost', state='retrying', mads=True), self.HANDBACK_TICKS)
@@ -118,9 +117,9 @@ class TestHandBack(SwapEventsTest):
     self.assertEqual(self.step(state='none', enabled=True), set())
 
   def test_the_adapter_never_raises_big_model_failed(self):
-    # upstream's text for that says to restart the car, which the 2026-09-29
-    # drive showed after a Mac was unplugged while engaged. Nothing here
-    # disengages: there is no failure flag, and a fall is link_lost alone
+    # upstream's text for that says to restart the car, wrong for a host
+    # unplugged while engaged. Nothing here disengages: there is no failure
+    # flag, and a fall is link_lost alone
     self.assertEqual(Flags._fields, (*EVENTS, 'settling'))
     self.drive_big(enabled=True, mads=True)
     for state in [s for s in STATES if s != 'running']:
@@ -194,8 +193,7 @@ class TestOffer(SwapEventsTest):
       self.assertFalse(self.offered(available=True, mads=True))
 
   def test_the_swap_ends_it_at_once(self):
-    # 2026-09-29: the offer came back for ~0.9 s after the chime had expired,
-    # reading as if the switch had not happened
+    # an offer still up after the swap reads as if the switch had not happened
     self.assertTrue(self.offered(available=True, mads=True))
     self.assertTrue(self.offered(available=True, mads=True))
     self.assertFalse(self.offered(big=True))

@@ -4,7 +4,7 @@ Copyright (c) 2026-, Zeph Leggett.
 This file is part of jetlink and is licensed under the MIT License.
 See the LICENSE file in the root directory for more details.
 
-The bench's ways of borrowing the gadget: scripts/comma/jetlink_hold.py, which
+The developer tools that borrow the gadget: scripts/comma/jetlink_hold.py, which
 keeps the Jetson awake, and bench_link.py --loan. Against a real Lender, as
 the owner runs it, on a socket of the test's own.
 """

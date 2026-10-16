@@ -30,8 +30,8 @@ ROOT = Path(__file__).resolve().parents[1]
 # What the fork imports from each module, and the members it calls, reads or
 # patches: its adapter (openpilot/sunnypilot/jetlink_adapter), which calls
 # jetlink.openpilot's API, and its tests, which also run jetlink's comma side
-# on the fork's own tinygrad and openpilot (fork branch jetlink-host-adapter,
-# 2026-09-29). The fork runs against whatever jetlink_repo is pinned: a name
+# on the fork's own tinygrad and openpilot. The fork runs against whatever
+# jetlink_repo is pinned: a name
 # dropped here breaks that build.
 FORK_IMPORTS = {
   'jetlink.openpilot': ('API', 'MODES', 'STATES', 'Status', 'bind'),

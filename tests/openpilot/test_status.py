@@ -44,7 +44,7 @@ class SelectionTest(OpenpilotTest):
       self.patch(target, name, return_value=value)
 
   def test_the_last_model_built_stands_in_while_the_pick_is_not_ready(self):
-    # the user's choice (2026-10-06): it drives until the pick is fetched and built
+    # by design: it drives until the pick is fetched and built
     self.configure(model='ResAction', spec_sha='b' * 64, ready=True)
     self.patch(self.parts.models, 'name_for', return_value='Cinque Terre V3')
     s = self.jl.status()
@@ -172,7 +172,7 @@ class SelectionTest(OpenpilotTest):
     self.assertTrue(self.jl.enabled())
 
   def test_the_setting_follows_the_store_the_adapter_names(self):
-    # a bench shell under its own OPENPILOT_PREFIX, as Params follows it
+    # a shell under its own OPENPILOT_PREFIX, as Params follows it
     self.configure(model='m')
     self.assertTrue(self.jl.enabled())
     elsewhere = self.tmp / 'params' / 'other'
@@ -405,8 +405,8 @@ class TestProgress(OpenpilotTest):
     self.assertEqual(self.parts.progress.read(), {'stage': 'build', 'frac': 1.0, 'msg': '', 'drops': 0})
 
   def test_a_report_with_no_fraction_always_goes_through(self):
-    # 2026-10-04 tester drive: a rejoin's 're-engage to switch' came 50 ms after its
-    # 'waiting for jetlink', was held, and the panel said waiting for the whole drive
+    # a rejoin's 're-engage to switch' can come 50 ms after its 'waiting for
+    # jetlink'; holding it would leave the panel saying waiting for the drive
     self.parts.progress.report('connect', 0.0, 'waiting for jetlink')
     self.parts.progress.report('connect', 0.0, 're-engage to switch')
     self.assertEqual(self.parts.progress.read()['msg'], 're-engage to switch')
