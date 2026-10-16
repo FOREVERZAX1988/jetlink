@@ -1232,7 +1232,7 @@ class RuntimeRecordTest(JoiningBase):
     self.big.spec = SimpleNamespace(sha256='a' * 64, checkpoint='ckpt')
     # a hand-back and a first answer wake the writer; only a test that waits
     # for the period would see it
-    p = mock.patch.object(joining, 'RECORD_PERIOD', 30.0)
+    p = mock.patch.object(gadget, 'RECORD_PERIOD', 30.0)
     p.start()
     self.addCleanup(p.stop)
 
@@ -1269,7 +1269,7 @@ class RuntimeRecordTest(JoiningBase):
       return answered(*a, **kw)
 
     self.big.run = slow
-    with mock.patch.object(joining, 'RECORD_PERIOD', 0.01):
+    with mock.patch.object(gadget, 'RECORD_PERIOD', 0.01):
       s = self._named()
       s.in_control = False
       phases, stop = [], threading.Event()
@@ -1369,7 +1369,7 @@ class RuntimeRecordTest(JoiningBase):
 
   def test_a_record_that_cannot_be_written_is_said_once(self):
     with mock.patch.object(gadget, 'write_record', side_effect=OSError('no space')) as write, \
-         mock.patch.object(joining, 'RECORD_PERIOD', 0.005):
+         mock.patch.object(gadget, 'RECORD_PERIOD', 0.005):
       s = self._named()
       self.assertTrue(wait_for(lambda: write.call_count >= 3))
       s.close()

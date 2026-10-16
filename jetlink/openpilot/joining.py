@@ -116,8 +116,6 @@ LAGS = (BEHIND, BAD_OUTPUT)
 RECONNECTING = {LOST: ('reconnecting', 'lost'), BEHIND: ('fell behind, reconnecting', 'behind'),
                 NOT_UP: ('load failed, reconnecting', 'load_failed'),
                 BAD_OUTPUT: ('bad output, reconnecting', 'bad_output')}
-# how often the runtime record (gadget.MODELD) is rewritten without a handover
-RECORD_PERIOD = 1.0
 # how long a model name the catalog had not resolved stays the sha's
 NAME_RETRY = 30.0
 
@@ -671,7 +669,7 @@ class JoiningModelState:
         failing = True
       if stopping:
         return
-      self._record.wait(RECORD_PERIOD)
+      self._record.wait(gadget.RECORD_PERIOD)
 
   def _runtime(self, pid: int, names: dict, kinds: dict, stopping: bool) -> dict:
     big = self._big

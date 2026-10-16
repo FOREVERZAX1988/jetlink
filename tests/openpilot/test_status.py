@@ -754,7 +754,8 @@ class TestTheRuntimeRecord(OpenpilotTest):
     self.assertEqual(status.runtime()[:2], ('ready', False))
 
   def test_a_record_too_old_to_drive_still_says_what_runs(self):
-    # a modeld frozen for 2 s: not driving, but not gone for HEARTBEAT_TIMEOUT
+    # a modeld frozen for two writer periods: not driving, but not gone for HEARTBEAT_TIMEOUT
+    self.assertLess(status.ACTIVE_FRESH + 0.5, gadget.HEARTBEAT_TIMEOUT)
     at = time.monotonic() - status.ACTIVE_FRESH - 0.5
     self.write(at=at, last_output_at=at - 0.05)
     self.assertEqual(status.runtime()[:2], ('running', False))

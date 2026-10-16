@@ -180,6 +180,8 @@ SERVER = Path("/dev/shm/jetlink/server.json")
 # second and on every handover: whether the big model drives, for a reader
 # with no modelV2 (status.runtime). modeld's close() leaves it stopping
 MODELD = Path("/dev/shm/jetlink/modeld.json")
+# how often modeld rewrites that record without a handover
+RECORD_PERIOD = 1.0
 # how long a host that stopped reading configured still counts as there: long
 # enough to bridge a USB3 link recovery passing through "addressed", and a
 # bounce made on purpose when a host will not enumerate (wait_for_host)

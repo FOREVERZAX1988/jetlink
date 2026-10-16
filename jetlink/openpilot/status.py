@@ -225,10 +225,10 @@ def reason(parts, mode: str) -> str | None:
 # was written: five frames at 20 Hz, so a held frame or two still counts
 OUTPUT_FRESH = 0.25
 # and while the record itself is this recent: a modeld that froze stops
-# reading as driving within it. Two writer periods (joining.RECORD_PERIOD),
-# since the writer runs at background priority and a late write must not read
-# as a hand-back; below the owner's HEARTBEAT_TIMEOUT, which `running` keeps
-ACTIVE_FRESH = 2.0
+# reading as driving within it. Two writer periods, since the writer runs at
+# background priority and a late write must not read as a hand-back; below the
+# owner's HEARTBEAT_TIMEOUT, which `running` keeps
+ACTIVE_FRESH = 2 * gadget.RECORD_PERIOD
 
 
 class Runtime(NamedTuple):
