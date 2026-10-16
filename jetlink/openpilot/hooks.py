@@ -273,8 +273,10 @@ class SwapTracker:
 
   def update(self, fresh, state, big, in_control) -> Flags:
     """SwapEvents.update. An in_control function is asked once on the first
-    update as well: the reader it starts (Stock's SubMaster) answers True
-    until it has heard anything, a false warning at the first tick that asks."""
+    update as well, idle or not: a reader it starts lazily (Stock's
+    SubMaster, StarPilot's AOL grace) answers True until it has heard
+    anything, which would be a false offer had a state gone straight from
+    'none' to 'ready' between two of the caller's reads."""
     if self._events is None:
       return NO_EVENTS
     if not self._warm and callable(in_control):

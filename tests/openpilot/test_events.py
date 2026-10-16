@@ -288,8 +288,8 @@ for _cls in (TestSettling, TestHandBack, TestSwitching, TestOffer, TestSeconds):
 
 
 class TestInControlAsked(unittest.TestCase):
-  """in_control as a function: asked only on a tick that needs it, at most
-  once, and the flags a bool gives."""
+  """in_control as a function: asked once a tick unless the link is idle,
+  and the flags a bool gives."""
 
   def update(self, swap, fresh, state, big, in_control) -> tuple[Flags, int]:
     asked = []
@@ -311,22 +311,31 @@ class TestInControlAsked(unittest.TestCase):
       self.assertLessEqual(asked, 1)
     self.assertEqual(vars(by_function), vars(by_bool))
 
-  def test_a_drive_on_the_big_model_never_asks(self):
+  def test_idle_never_asks(self):
+    # the link off, or on with nothing joined: a state of 'none', and no modelV2.big
     swap = SwapEvents(DT_CTRL)
-    self.assertEqual(sum(self.update(swap, True, 'running', True, True)[1] for _ in range(1000)), 0)
-    # a fall with nothing in control: asked at the fall, and no warning to count down
-    self.assertEqual(sum(self.update(swap, True, 'none', False, False)[1] for _ in range(1000)), 1)
+    asks = [self.update(swap, fresh, 'none', False, True)[1] for fresh in [True, False] * 500]
+    self.assertEqual(sum(asks), 0)
 
-  def test_the_offer_the_fall_and_the_warning_ask(self):
+  def test_a_link_that_stirs_is_asked_every_tick_until_idle_again(self):
+    # a lazy reader (StarPilot's AOL grace) is warm long before an offer or a fall
+    swap = SwapEvents(DT_CTRL)
+    asks = [self.update(swap, True, 'joining', False, False)[1] for _ in range(300)]
+    asks += [self.update(swap, False, 'none', False, False)[1] for _ in range(10)]   # a gap holds 'joining'
+    asks += [self.update(swap, True, 'running', True, False)[1] for _ in range(300)]
+    self.assertEqual(asks, [1] * 610)
+    # handed back to nothing: asked through the settling second, then idle
+    asks = [self.update(swap, True, 'none', False, False)[1] for _ in range(300)]
+    self.assertEqual(asks, [1] * (swap.switching_ticks + 1) + [0] * (299 - swap.switching_ticks))
+
+  def test_the_offer_the_fall_and_the_warning_are_asked(self):
     swap = SwapEvents(DT_CTRL)
     self.assertEqual(self.update(swap, True, 'ready', False, True), (Flags(True, False, False, False, False), 1))
-    self.assertEqual(self.update(swap, True, 'ready', False, True)[1], 0, 'offered once')
     for _ in range(200):
       self.update(swap, True, 'running', True, True)
-    # the fall, then every tick of the warning, which a disengage ends
-    asks = [self.update(swap, True, 'retrying', False, True)[1] for _ in range(swap.handback_ticks + 3)]
-    self.assertEqual(asks, [1] * swap.handback_ticks + [0] * 3)
-    self.assertEqual(self.update(swap, True, 'ready', False, False)[1], 1)
+    # the fall while in control warns, asked each tick, and a disengage ends it
+    self.assertTrue(self.update(swap, True, 'none', False, True)[0].link_lost)
+    self.assertEqual(self.update(swap, True, 'none', False, False), (Flags(False, False, False, False, True), 1))
 
   def test_a_function_that_raises_is_something_in_control(self):
     swap = SwapEvents(DT_CTRL)

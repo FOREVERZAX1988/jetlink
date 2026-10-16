@@ -410,10 +410,13 @@ class TestTheLinkOff(unittest.TestCase):
     def fails():
       raise OSError('no params')
     jetlink = mock.Mock(**{'enabled.return_value': True, 'reason.return_value': 'gadget', 'runtime.return_value': 'rt'})
-    h = over(jetlink)
-    h._link_on = fails
-    self.assertEqual((h.should_run(False, None, None), h.reason(), h.runtime()), (True, 'gadget', 'rt'))
-    self.assertTrue(h.in_control())
+    op = SimpleNamespace(log=RecordingLog(), in_control=mock.Mock(return_value=False))
+    h = Hooks(3, lambda: op, link_on=fails)
+    with mock.patch.object(hooks, 'bind', return_value=jetlink) as bind:
+      self.assertEqual((h.should_run(False, None, None), h.reason(), h.runtime()), (True, 'gadget', 'rt'))
+      self.assertIs(h.in_control(), False)
+    bind.assert_called_once_with(op)
+    op.in_control.assert_called_once_with()
 
 
 class TestInControl(unittest.TestCase):
@@ -441,15 +444,16 @@ class TestInControl(unittest.TestCase):
 
   def test_the_tracker_starts_its_reader_on_the_first_tick(self):
     # Stock's SubMaster answers True until it has heard something: asked cold
-    # at a fall, a disengaged driver would be warned
+    # at a state gone straight from 'none' to 'ready', the driver would be offered
     asked = []
     tracker = Hooks(3, mock.Mock()).swap_events(0.01)
     for _ in range(5):
-      tracker.update(True, 'running', True, lambda: asked.append(1) or False)
-    self.assertEqual(asked, [1])
-    tracker.update(True, 'running', True, False)
+      tracker.update(True, 'none', False, lambda: asked.append(1) or False)
+    self.assertEqual(asked, [1], 'once, idle as it is')
+    self.assertFalse(tracker.update(True, 'ready', False, lambda: asked.append(1) or False).offer)
+    self.assertEqual(asked, [1, 1])
     self.assertEqual(Off().swap_events(0.01).update(True, 'ready', False, lambda: asked.append(1)), hooks.NO_EVENTS)
-    self.assertEqual(asked, [1])
+    self.assertEqual(asked, [1, 1])
 
 
 class TestOverTheRealJetlink(OpenpilotTest):
