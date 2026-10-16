@@ -136,6 +136,14 @@ class TestAFailingJetlink(unittest.TestCase):
   def test_it_never_raises_into_its_caller(self):
     self.assertEqual(answers(over(Broken())), OFF)
 
+  def test_a_joined_link_is_the_model_modeld_runs(self):
+    joined, small = object(), object()
+    jetlink = mock.Mock(**{'attach.return_value': joined})
+    self.assertIs(over(jetlink).attach('model', small, 1928, 1208), joined)
+    jetlink.attach.assert_called_once_with(small, 1928, 1208)
+    jetlink.attach.return_value = None
+    self.assertEqual(over(jetlink).attach('model', small, 1928, 1208), 'model')
+
   def test_each_failure_is_logged_once(self):
     log = RecordingLog()
     h = over(Broken(), log)
