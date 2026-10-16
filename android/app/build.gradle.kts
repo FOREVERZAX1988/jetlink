@@ -88,8 +88,6 @@ android {
             // The NPU's skel libraries are loaded by the DSP from a real file,
             // so native libraries are extracted to nativeLibraryDir.
             useLegacyPackaging = true
-            // onnxruntime's Java binding; the server calls the C API.
-            excludes += "**/libonnxruntime4j_jni.so"
             // The phone's own QNN set (`src/main/jniLibs`) is the phone's
             // bytes, and the firmware checks them as they are, so nothing
             // here rewrites them on the way into the APK.
@@ -117,6 +115,18 @@ android {
 val onnxruntimeAar: Configuration by configurations.creating {
     isCanBeConsumed = false
     isTransitive = false
+}
+
+/**
+ * `onnxruntime-android-qnn` with what it depends on: its own AAR, which holds
+ * `libonnxruntime.so`, and the `com.qualcomm.qti:qnn-runtime` AAR it names --
+ * the backend, its context preparer, its System library, QNN's GPU and DSP
+ * backends and the HTP pairs for the Hexagons up to V81. Its Java binding is
+ * not wanted: the server calls the C API.
+ */
+val onnxRuntimeNatives: Configuration by configurations.creating {
+    isCanBeConsumed = false
+    isTransitive = true
 }
 
 /**
@@ -159,6 +169,7 @@ dependencies {
     debugImplementation(libs.compose.ui.tooling)
 
     onnxruntimeAar(variantOf(libs.onnxruntime.qnn) { artifactType("aar") })
+    onnxRuntimeNatives(libs.onnxruntime.qnn)
     litertAar(variantOf(libs.litert) { artifactType("aar") })
     litertNpu(variantOf(libs.litert.npu) { artifactType("zip") })
 
@@ -249,9 +260,9 @@ abstract class LiteRtLibraries @Inject constructor(
 }
 
 /**
- * onnxruntime's native libraries, out of its AAR: `libonnxruntime.so` with the
- * QNN provider, QNN's HTP pairs for the Hexagons up to V81, its GPU and DSP
- * backends and its System library, all as the AAR lays them out.
+ * onnxruntime's native libraries, out of its AARs: `libonnxruntime.so` with
+ * the QNN provider, QNN's HTP pairs for the Hexagons up to V81, its GPU and
+ * DSP backends and its System library, all as the AARs lay them out.
  *
  * Whatever `src/main/jniLibs/arm64-v8a` holds wins over the AAR's copy of the
  * same name, which is how the phone's own QNN set replaces the backend, the
@@ -263,18 +274,21 @@ abstract class OnnxRuntimeLibraries @Inject constructor(
     private val files: FileSystemOperations,
     private val archives: ArchiveOperations,
 ) : DefaultTask() {
-    @get:InputFiles @get:PathSensitive(PathSensitivity.NONE) abstract val aar: ConfigurableFileCollection
-    /** The names `src/main/jniLibs/arm64-v8a` holds, which are not taken from the AAR. */
+    @get:InputFiles @get:PathSensitive(PathSensitivity.NONE) abstract val aars: ConfigurableFileCollection
+    /** The names `src/main/jniLibs/arm64-v8a` holds, which are not taken from the AARs. */
     @get:Input abstract val overrides: ListProperty<String>
     @get:OutputDirectory abstract val outputDir: DirectoryProperty
 
     @TaskAction
     fun extract() {
         val ours = overrides.get().map { "jni/arm64-v8a/$it" }
+        val trees = aars.files.map { archives.zipTree(it) }
         files.sync {
-            from(archives.zipTree(aar.singleFile)) {
+            from(trees) {
                 include("jni/arm64-v8a/*.so")
                 if (ours.isNotEmpty()) exclude(*ours.toTypedArray())
+                // onnxruntime's Java binding; the server calls the C API.
+                exclude("jni/arm64-v8a/libonnxruntime4j_jni.so")
                 eachFile { path = "arm64-v8a/$name" }
             }
             includeEmptyDirs = false
@@ -284,7 +298,7 @@ abstract class OnnxRuntimeLibraries @Inject constructor(
 }
 
 val onnxRuntimeLibraries = tasks.register<OnnxRuntimeLibraries>("onnxRuntimeLibraries") {
-    aar.from(onnxruntimeAar)
+    aars.from(onnxRuntimeNatives)
     overrides.set(file("src/main/jniLibs/arm64-v8a").listFiles()?.map { it.name } ?: emptyList<String>())
     outputDir.set(layout.buildDirectory.dir("onnxruntime/jniLibs"))
 }
