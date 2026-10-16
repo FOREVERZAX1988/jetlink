@@ -91,7 +91,7 @@ class ProcessorTest {
 
     @Test
     fun aTensorNpuThatTookNoModelSaysTheGpuRunsIt() {
-        // what a Pixel 10 Pro Fold off Google's EdgeTPU allowlist reported (2026-10-03)
+        // what a Tensor phone off Google's EdgeTPU allowlist reports
         assertTrue(Processor.Auto.fellBack("GPU(fp16)", automatic = Processor.TensorNpu))
         assertEquals("Automatic (GPU)", Processor.Auto.summary("GPU(fp16)", automatic = Processor.TensorNpu))
         assertEquals("NPU (GPU)", Processor.TensorNpu.summary("GPU(fp16)", automatic = Processor.TensorNpu))

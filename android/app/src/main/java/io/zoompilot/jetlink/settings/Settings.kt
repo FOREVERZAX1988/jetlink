@@ -24,7 +24,7 @@ enum class Processor(val backend: Backend, val device: String, val title: String
 
     /**
      * The whole model on the NPU, prepared as the iPhone's. QNN, a Snapdragon's: the fastest
-     * choice on the first one measured (an 8+ Gen 1, 2026-10-03), several times the GPU's speed.
+     * choice measured on an 8+ Gen 1, several times the GPU's speed.
      */
     Npu(Backend.Ort, "htp-whole", "NPU"),
 
@@ -40,7 +40,7 @@ enum class Processor(val backend: Backend, val device: String, val title: String
 
     /**
      * The vision trunk on the NPU, the rest on the GPU: the Mac's split. QNN, a Snapdragon's.
-     * Listed after the GPU: on the first phone measured it was the slowest of the three.
+     * Listed after the GPU: the slowest of the three measured on an 8+ Gen 1.
      */
     NpuGpu(Backend.Ort, "htp", "NPU + GPU"),
 
@@ -72,9 +72,8 @@ enum class Processor(val backend: Backend, val device: String, val title: String
 
     companion object {
         /**
-         * A stored choice. `gpu` was QNN on the Adreno before LiteRT drove
-         * every phone's GPU, and `litert-gpu` LiteRT's before the backend was
-         * a setting of its own: both are the GPU now.
+         * A stored choice. Older apps stored the GPU as `litert-gpu`, which
+         * reads as [Gpu].
          */
         fun of(device: String?): Processor? = if (device == "litert-gpu") Gpu else entries.firstOrNull { it.device == device }
 
@@ -155,7 +154,7 @@ class Settings(context: Context) {
         val port = prefs.getInt(PORT, defaults.port)
         return SettingsValues(
             port = if (port in 1..65535) port else defaults.port,
-            // a QNN choice from before a phone without a Snapdragon was told apart
+            // a stored QNN choice on a phone without a Snapdragon falls back to the default
             processor = Processor.of(prefs.getString(PROCESSOR, null))
                 ?.takeIf { it in Chip.processors(it) }
                 ?: defaults.processor,
@@ -187,10 +186,8 @@ class Settings(context: Context) {
         }
 
         /**
-         * A processor stored before Automatic: `gpu` was every phone's
-         * default then, the only other choice off a Snapdragon was the CPU,
-         * and Automatic runs a Snapdragon on the GPU too, so it becomes
-         * Automatic. Null leaves what is stored.
+         * A processor stored before Automatic existed: `gpu` was the default
+         * then, so it becomes Automatic. Null leaves what is stored.
          */
         fun migratedProcessor(stored: String?): String? = if (Processor.of(stored) == Processor.Gpu) Processor.Auto.device else null
     }

@@ -61,9 +61,9 @@ struct HeroCard: View {
 
   // MARK: connected, no frames
 
-  /// An empty ring here read as the big model still driving (an iPad tester,
-  /// 2026-10-04): say who drives and what switches it, as the comma's own
-  /// "Big Model Ready: Re-engage to switch" does.
+  /// An empty ring here reads as the big model still driving, so say who
+  /// drives and what switches it, as the comma's own "Big Model Ready:
+  /// Re-engage to switch" does.
   private var smallModel: some View {
     card {
       ContentUnavailableView {
