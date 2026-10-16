@@ -27,14 +27,9 @@ log = logging.getLogger('jetlink.comma')
 
 AGNOS = os.path.isfile('/AGNOS')
 
-# Next to this file, so the package alone is all the comma runs. Through
-# v0.8.7 it was the checkout's scripts/comma/; that stays a fallback for one
-# release, for a tree that has only the old one. Drop it after v0.9.x.
-# Resolved, so that <openpilot>/jetlink, a symlink into jetlink_repo, still
-# leads to the checkout.
-SCRIPT = Path(__file__).resolve().with_name('jetlink-root.sh')
-if not SCRIPT.is_file():
-  SCRIPT = SCRIPT.parents[2] / 'scripts' / 'comma' / SCRIPT.name
+# Next to this file, so the package alone is all the comma runs. A path
+# through the <openpilot>/jetlink symlink is fine: bash only opens it.
+SCRIPT = Path(__file__).with_name('jetlink-root.sh')
 
 # sudo, configfs, and for iOS nmcli and dnsmasq
 TIMEOUT = 30.0

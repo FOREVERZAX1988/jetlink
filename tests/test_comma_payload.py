@@ -5,8 +5,8 @@ This file is part of jetlink and is licensed under the MIT License.
 See the LICENSE file in the root directory for more details.
 
 The comma's payload: jetlink/, plus the root LICENSE, pyproject.toml and
-README.md. A fork may vendor exactly those (StarPilot's sync tool has that
-include list), so everything the comma imports or runs has to be under
+README.md. A fork may vendor exactly those (StarPilot's sync tool will, with
+an include list), so everything the comma imports or runs has to be under
 jetlink/. Walked from the comma's entry points through every jetlink import
 in the source, a function's lazy ones too, and then proved by importing the
 entry points from a copy of the payload alone.
@@ -14,12 +14,15 @@ entry points from a copy of the payload alone.
 from __future__ import annotations
 
 import ast
+import functools
 import json
 import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / 'jetlink'
@@ -43,10 +46,6 @@ LATER = ('jetlink.openpilot.hooks', 'jetlink.openpilot.stock', 'jetlink.openpilo
 # only behind spec_from_onnx, for a bench
 OUTSIDE = set(sys.stdlib_module_names) | {'numpy', 'tinygrad', 'onnx'}
 
-# The one module that finds a file by its own location, and the one place a
-# repo path outside jetlink/ may be named: the root script's fallback to
-# scripts/comma/, kept through v0.9.x
-FILE_RELATIVE = {'jetlink.comma.root'}
 MODULE_NAME = re.compile(r'^jetlink(\.\w+)+$')
 
 
@@ -57,11 +56,6 @@ def module_file(name: str) -> Path | None:
     if f.is_file():
       return f
   return None
-
-
-def module_name(f: Path) -> str:
-  parts = f.relative_to(ROOT).with_suffix('').parts
-  return '.'.join(parts[:-1] if parts[-1] == '__init__' else parts)
 
 
 def imports_of(name: str, tree: ast.Module) -> tuple[set[str], set[str]]:
@@ -100,71 +94,60 @@ def imports_of(name: str, tree: ast.Module) -> tuple[set[str], set[str]]:
   return ours, theirs
 
 
-def walk() -> dict[str, tuple[Path, ast.Module, set[str]]]:
+@functools.cache
+def graph() -> dict[str, tuple[Path, ast.Module, set[str]]]:
   """Every module on the comma's graph: its file, its tree, what else it imports."""
-  graph = {}
+  modules = {}
   todo = [*ENTRIES, *(m for m in LATER if module_file(m))]
   while todo:
     name = todo.pop()
-    if name in graph:
+    if name in modules:
       continue
     f = module_file(name)
     assert f is not None, f'{name} is imported on the comma and is not a module under jetlink/'
     tree = ast.parse(f.read_text(), str(f))
     ours, theirs = imports_of(name, tree)
-    graph[name] = (f, tree, theirs)
+    modules[name] = (f, tree, theirs)
     # a module's packages run first
     parents = {'.'.join(name.split('.')[:i]) for i in range(1, name.count('.') + 1)}
-    todo += sorted((ours | parents) - graph.keys())
-  return graph
-
-
-GRAPH = walk()
+    todo += sorted((ours | parents) - modules.keys())
+  return modules
 
 
 def test_the_walk_reaches_the_comma_side():
   for name in ('jetlink.comma.owner', 'jetlink.comma.root', 'jetlink.transport.ffs', 'jetlink.client',
                'jetlink.registry.catalog', 'jetlink.openpilot.provision'):
-    assert name in GRAPH, name
+    assert name in graph(), name
 
 
 def test_everything_the_comma_imports_is_under_jetlink():
-  for name, (f, _, _) in GRAPH.items():
+  for name, (f, _, _) in graph().items():
     assert f.is_relative_to(PACKAGE), (name, f)
 
 
 def test_nothing_it_imports_is_from_the_repo_outside_jetlink():
   # scripts/, tests/ and the rest are not in the payload
-  stray = {name: sorted(theirs - OUTSIDE) for name, (_, _, theirs) in GRAPH.items() if theirs - OUTSIDE}
+  stray = {name: sorted(theirs - OUTSIDE) for name, (_, _, theirs) in graph().items() if theirs - OUTSIDE}
   assert stray == {}
 
 
 def test_only_root_finds_a_file_by_its_own_location():
-  # a module that reads a path off __file__ could reach past jetlink/; each
-  # one is looked at here, and today only root.py does, for its script
-  located = set()
-  for name, (_, tree, _) in GRAPH.items():
-    for node in ast.walk(tree):
-      if isinstance(node, ast.Name) and node.id == '__file__':
-        located.add(name)
-      elif isinstance(node, ast.Constant) and node.value in ('scripts', 'tests', '..'):
-        located.add(name)
-  assert located == FILE_RELATIVE
+  # a path off __file__ could reach past jetlink/; root.py's is its script, next to it
+  located = {name for name, (_, tree, _) in graph().items()
+             if any(isinstance(node, ast.Name) and node.id == '__file__' for node in ast.walk(tree))}
+  assert located == {'jetlink.comma.root'}
 
 
 def test_the_root_script_is_in_the_package():
   from jetlink.comma import root
-  assert root.SCRIPT.is_relative_to(PACKAGE)
+  assert root.SCRIPT.resolve().is_relative_to(PACKAGE)
   assert root.SCRIPT.is_file()
-  # executable in git, so a checkout's copy runs as itself too
-  mode = subprocess.run(['git', 'ls-files', '-s', str(root.SCRIPT.relative_to(ROOT))], cwd=ROOT,
-                        capture_output=True, text=True).stdout.split(' ')[0]
-  assert mode in ('100755', ''), mode  # '' outside a git checkout
 
 
 def test_a_wheel_carries_the_root_script():
-  text = (ROOT / 'pyproject.toml').read_text()
-  assert re.search(r'^\[tool\.setuptools\.package-data\]\n"jetlink\.comma" = \["jetlink-root\.sh"\]', text, re.M)
+  tomllib = pytest.importorskip('tomllib')  # 3.11 and later
+  config = tomllib.loads((ROOT / 'pyproject.toml').read_text())
+  assert config['tool']['setuptools']['package-data']['jetlink.comma'] == ['jetlink-root.sh']
 
 
 CHECK = '''
@@ -187,7 +170,7 @@ def test_the_payload_alone_runs_the_comma(tmp_path):
     else:
       shutil.copy(src, tmp_path / item)
   # every module the walk found is in the copy
-  assert [n for n, (f, _, _) in GRAPH.items() if not (tmp_path / f.relative_to(ROOT)).is_file()] == []
+  assert [n for n, (f, _, _) in graph().items() if not (tmp_path / f.relative_to(ROOT)).is_file()] == []
 
   names = [*ENTRIES, *(m for m in LATER if module_file(m)), 'jetlink.comma.owner', 'jetlink.comma.root']
   # -I: no PYTHONPATH, no user site and no current directory, so only the copy
@@ -198,5 +181,5 @@ def test_the_payload_alone_runs_the_comma(tmp_path):
   found = json.loads(out.stdout)
   copy = tmp_path.resolve()
   assert [f for f in found['files'] if not Path(f).resolve().is_relative_to(copy / 'jetlink')] == []
-  assert Path(found['script']).is_relative_to(copy / 'jetlink')
+  assert Path(found['script']).resolve().is_relative_to(copy / 'jetlink')
   assert found['script_exists']

@@ -28,7 +28,8 @@ Port **5600** is the default; **0** disables it.
 ## 2. Connect the comma
 
 The comma runs an openpilot fork with Jetlink support (zoompilot, StarPilot).
-Steps 1 and 2 are zoompilot's; on another fork, follow its own docs for them.
+The comma's steps and its home-button icon below are zoompilot's; on another
+fork, follow its own docs.
 
 1. **Install zoompilot.** After resetting the comma, enter
    **`zoompilot/main`** as the install URL. Already on zoompilot? Select
