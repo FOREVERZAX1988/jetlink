@@ -323,8 +323,14 @@ class JoiningModelState:
       # the last frame was the large model's last, published as it came
       self._lagging = False
       self._demote(BEHIND)
-    elif self._active is not self._small and self._frame_drop_ratio > DROP_LIMIT:
-      # modeld is behind the large model; this frame is the small model's
+    elif (self._active is not self._small and self._frame_drop_ratio > DROP_LIMIT
+          and not getattr(self._active, 'preview', False)):
+      # modeld is behind the large model; this frame is the small model's.
+      # Not in a preview: it never takes control, so a host that is slow but
+      # answering is the feature there, and the hold counts are spared it on
+      # the same reason (model_state._note_hold). Held to this rule a preview
+      # handed the large model back seconds after every join and then waited
+      # out the backoff, which is the picture the app is drawing
       self._log.warning("jetlink: modeld dropped %.2f %% of camera frames behind the large model, "
                         "the small model drives from this one", self._frame_drop_ratio * 100)
       self._demote(BEHIND)

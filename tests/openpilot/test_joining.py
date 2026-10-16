@@ -876,6 +876,22 @@ class LagTest(JoiningBase):
     self.assertEqual(handed_back_at, 20)
     self.assertEqual(self.s._lags, 1)
 
+  def test_a_preview_keeps_a_host_that_is_slow_but_answering(self):
+    # The drop counts are a rule for the wheel. A preview never takes control,
+    # so it is held to PREVIEW_SILENCE and to nothing else, as model_state
+    # spares it the hold counts. Handed back on the drops anyway, the large
+    # model went seconds after every join and the next one waited out the
+    # backoff: the app's link read waiting for comma most of the time.
+    self.big.preview = True
+    handovers = self.s.handovers
+    for _ in range(60):
+      self.assertEqual(self.frame(skipped=2), {'from': 'big'})
+    self.assertEqual(self.s.handovers, handovers)
+    self.assertEqual(self.s._lags, 0)
+    self.assertTrue(self.s.chestnut)
+    self.reset.assert_not_called()
+    self.assertFalse(self.log.has('of camera frames behind the large model'))
+
   def test_the_small_models_dropped_frames_are_its_own(self):
     self.hand_back()
     for _ in range(20):
