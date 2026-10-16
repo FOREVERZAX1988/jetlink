@@ -800,10 +800,10 @@ class TestTheRuntimeRecord(OpenpilotTest):
     self.patch(self.parts.warps, 'built', return_value=True)
     self.patch(gadget, 'gadget_error', return_value=None)
     for record in (False, True):
-      if record:
-        self.write(sha256='ab' * 32, checkpoint='cinque-v3')
       for mode, chestnut in (('usb', False), ('off', False), ('usb', True), ('ios', False)):
         with self.subTest(record=record, mode=mode, chestnut=chestnut):
+          if record:   # fresh for each, so a slow run never ages it past ACTIVE_FRESH between the two reads
+            self.write(sha256='ab' * 32, checkpoint='cinque-v3')
           self.op.set_mode(mode)
           self.op.chestnut, self.parts._chestnut = chestnut, None
           s = self.jl.status()
