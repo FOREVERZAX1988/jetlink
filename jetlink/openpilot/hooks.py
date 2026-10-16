@@ -27,11 +27,11 @@ gadget owner among them: the standard library and jetlink's light half only.
 Construction checks the API and nothing more; the adapter is built and bound
 on the first hook that needs it, once per process. handed_over() and state()
 read the model alone and never bind, and with link_on() saying the link is
-off, nor do should_run(), reason(), runtime() and in_control(): manager,
-hardwared and selfdrived load nothing of jetlink's heavy half then. status()
-binds either way: the snapshot names the big model from the model library
-(the catalog param and jetlink.registry's default), which the UI shows with
-the link off too.
+off, nor do should_run(), reason(), runtime() and in_control(). Others bind
+with the link off too: shutdown_step(), which hardwared calls from boot to
+clear a power-off request it did not write, and status(), whose snapshot
+names the big model from the model library (the catalog param and
+jetlink.registry's default), which the UI shows with the link off.
 """
 from __future__ import annotations
 
@@ -128,7 +128,8 @@ class _Hooks:
   def runtime(self):
     """What modeld runs, from its runtime record (Jetlink.runtime): a
     status.Runtime, or None with the link off or unusable, or a chestnut
-    fitted. Cheap enough for selfdrived's loop."""
+    fitted. Cheap enough for selfdrived's loop: two small files, and the
+    chestnut test's USB walk once per parts.CHESTNUT_TTL, as status()."""
     return None if self._off() else self._call('runtime', None)
 
   def in_control(self) -> bool:

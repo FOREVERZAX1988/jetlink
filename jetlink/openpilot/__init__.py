@@ -111,9 +111,10 @@ class Jetlink:
 
   def runtime(self):
     """What modeld runs (status.Runtime), the part of status() that changes
-    while driving, for a loop: the setting, the chestnut test (cached) and
-    modeld's record, nothing else. None where status().running is None for
-    want of the link: off, or beside a chestnut."""
+    while driving, for a loop: the setting, the chestnut test and modeld's
+    record, nothing else. The chestnut test may walk the USB devices in sysfs,
+    once per parts.CHESTNUT_TTL (2 s), as status() does. None where
+    status().running is None for want of the link: off, or beside a chestnut."""
     from jetlink.openpilot import status
     return status.runtime() if self.enabled() else None
 
