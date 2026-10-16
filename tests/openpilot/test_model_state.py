@@ -22,6 +22,7 @@ from unittest import mock
 
 import numpy as np
 
+from jetlink import protocol as P
 from jetlink.openpilot import model_state
 from jetlink.spec import ModelSpec
 from tests.openpilot import fakes
@@ -74,6 +75,9 @@ class FakeClient:
     # whether each frame asked
     self.busy: set[int] = set()
     self.skippable = []
+    # frames (by frame_id) the server answers Status.NOT_FINITE, which the
+    # client raises, the link kept
+    self.not_finite: set[int] = set()
 
   def infer_begin(self, data, packed, frame_id, reset=False, want_state=False, skip_if_busy=False):
     self.skippable.append(skip_if_busy)
@@ -89,6 +93,8 @@ class FakeClient:
     if hold is not None and (seq in self.late or seq in self.keep):
       return None
     self._in_flight.remove(seq)
+    if seq in self.not_finite:
+      raise P.NotFinite(f'inference output is not finite: NOT_FINITE (frame {seq})')
     self.last_output = self.output
     self._piggyback()
     return self.output
@@ -404,9 +410,19 @@ class TestTheFace(ModelStateTest):
         client.output[slice(*SLICES['plan'])][7] = bad
         state = self.make(spec_for(STATEFUL), client)
         state.parser = mock.Mock()
-        with self.assertRaisesRegex(model_state.NotFinite, 'frame 1'):
+        with self.assertRaisesRegex(P.NotFinite, 'frame 1'):
           self.frames(state, 1)
         state.parser.parse_outputs.assert_not_called()
+        self.assertEqual(state.trips.frames, 1, 'counted for the leave')
+
+  def test_one_the_server_found_is_raised_and_counted(self):
+    client = FakeClient()
+    client.not_finite.add(2)
+    state = self.make(spec_for(STATEFUL), client)
+    self.frames(state, 1)
+    with self.assertRaisesRegex(P.NotFinite, 'NOT_FINITE'):
+      self.frames(state, 1)
+    self.assertEqual(state.trips.frames, 2)
 
   def test_closing_it_closes_its_link(self):
     client = mock.Mock()

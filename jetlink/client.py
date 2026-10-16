@@ -507,7 +507,8 @@ class JetlinkClient:
   def _take_reply(self, msg: Message) -> np.ndarray:
     """One INFER_RESP off the stream: checked against the frame it answers,
     its timings and telemetry kept, the frame and any older one taken out of
-    flight. Raises, with the link dead, on anything but a good answer."""
+    flight. Raises NotFinite on Status.NOT_FINITE, the link kept, and with
+    the link dead on anything else but a good answer."""
     while self._in_flight and self._in_flight[0].seq != msg.seq:
       # an older frame the server never answered: it answers in order, so a
       # frame that fell out of its session (a hello between), or whose
@@ -524,6 +525,10 @@ class JetlinkClient:
       raise LinkError('inference response is missing its header')
     fid, status, gpu_us, queue_us, total_us = P.unpack_infer_resp(msg.payload)
     self.last_timings = (gpu_us, queue_us, total_us)
+    if status == P.Status.NOT_FINITE and fid == frame_id:
+      # the server's session goes on, keeping nothing of the frame
+      # (Session.infer), so the link stays and last_output is the one before
+      raise P.NotFinite(f"inference output is not finite: NOT_FINITE (frame {fid})")
     if status != P.Status.OK:
       self.dead = True
       raise LinkError(f"inference failed: {_name(P.Status, status)} (frame {fid})")

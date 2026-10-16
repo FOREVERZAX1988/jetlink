@@ -202,3 +202,9 @@ class Status(IntEnum):
   BAD_SHAPE = 2
   INFER_FAILED = 3
   NOT_FINITE = 4      # model produced NaN/Inf; caller must fall back
+
+
+class NotFinite(ValueError):
+  """A frame's output with a NaN or an inf in it, by the server's word
+  (Status.NOT_FINITE) or the comma's own check: the host answered, with
+  nothing to drive on, and the link is as good as it was. Not a LinkError."""

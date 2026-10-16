@@ -352,63 +352,20 @@ class TestPrepareReset(unittest.TestCase):
     p.start()
     self.addCleanup(p.stop)
 
-  def queue(self, device='CPU'):
-    return fakes.FakeTensor(np.ones((4, 8), np.float32), device=device)
-
-  def test_stock_modelds_model(self):
-    # the recurrent state is zeroed, the views of the packed upload through
-    # it, and the warp's output is not history
-    packed = np.ones(64, np.uint8)
-    model = SimpleNamespace(input_queues={'state_img_q': self.queue(), 'state_feat_q': self.queue(),
-                                          'desire': self.queue(), 'new_img': self.queue()},
-                            state_pairs={'state_img_q': 'next_state_img_q', 'state_feat_q': 'next_state_feat_q'},
-                            packed_input=packed, prev_desire=np.ones(8))
-    warp.prepare_reset(model)()
-    for name in ('state_img_q', 'state_feat_q'):
-      np.testing.assert_array_equal(model.input_queues[name].array, 0)
-    for name in ('desire', 'new_img'):
-      np.testing.assert_array_equal(model.input_queues[name].array, 1)
-    np.testing.assert_array_equal(packed, 0)
-    np.testing.assert_array_equal(model.prev_desire, 0)
-
-  def test_a_modeld_v2_native_bundle(self):
-    packed = np.ones(64, np.uint8)
-    adapter = SimpleNamespace(is_native=True, input_queues={'state_img_q': self.queue(), 'desire': self.queue()},
-                              state_pairs={'state_img_q': 'next_state_img_q'}, packed_input=packed)
-    model = SimpleNamespace(adapter=adapter, prev_desire=np.ones(8))
-    warp.prepare_reset(model)()
-    np.testing.assert_array_equal(adapter.input_queues['state_img_q'].array, 0)
-    np.testing.assert_array_equal(adapter.input_queues['desire'].array, 1)
-    np.testing.assert_array_equal(packed, 0)
-    np.testing.assert_array_equal(model.prev_desire, 0)
-
-  def test_a_modeld_v2_legacy_bundle_and_its_npy_tensor(self):
-    # numpy inputs on the adapter; the NPY tensor is not a queue, and its
-    # numpy views are what zero it
-    packed = np.ones(16, np.float32)
-    npy = self.queue(device='NPY')
-    adapter = SimpleNamespace(is_native=False, input_queues={'img_q': self.queue(), 'packed_npy_inputs': npy},
-                              numpy_inputs={'desire': packed[:8], 'rest': packed[8:]})
-    model = SimpleNamespace(adapter=adapter, prev_desire=np.ones(8))
-    with mock.patch.object(npy, 'assign', side_effect=AssertionError('an NPY tensor is not a queue')):
-      warp.prepare_reset(model)()
-    np.testing.assert_array_equal(adapter.input_queues['img_q'].array, 0)
-    np.testing.assert_array_equal(packed, 0)
-    np.testing.assert_array_equal(model.prev_desire, 0)
-
-  def test_any_other_model_state_with_queues_starpilots(self):
-    # no state_pairs, packed_input or adapter: every queue on the GPU, and
-    # its numpy inputs, here npy; never its own _reset_state()
-    npy_tensor = self.queue(device='NPY')
-    npy = {'desire': np.ones(8, np.float32), 'traffic_convention': np.ones(2, np.float32)}
-    model = SimpleNamespace(input_queues={'img_q': self.queue(), 'feat_q': self.queue(), 'npy': npy_tensor},
-                            npy=npy, prev_desire=np.ones(8), _reset_state=mock.Mock(side_effect=AssertionError))
-    with mock.patch.object(npy_tensor, 'assign', side_effect=AssertionError('an NPY tensor is not a queue')):
-      warp.prepare_reset(model)()
-    for name in ('img_q', 'feat_q'):
-      np.testing.assert_array_equal(model.input_queues[name].array, 0)
-    for array in (*npy.values(), model.prev_desire):
-      np.testing.assert_array_equal(array, 0)
+  def test_every_small_model_shape_is_zeroed_in_place_and_nothing_else(self):
+    # stock modeld's recurrent state and packed upload, modeld_v2's two
+    # bundle kinds, and StarPilot's queues and numpy views. Not the warp's
+    # output, which is no history, nor an NPY tensor, which its numpy views zero
+    for shape in fakes.SHAPES:
+      with self.subTest(shape.__name__):
+        model, zeroed, kept = shape()
+        held = [id(b) for b in zeroed]
+        warp.prepare_reset(model)()
+        self.assertEqual([id(b) for b in zeroed], held)
+        for b in zeroed:
+          np.testing.assert_array_equal(b, 0)
+        for b in kept:
+          np.testing.assert_array_equal(b, 1)
 
   def test_the_reset_an_adapter_builds_is_captured_ahead_and_zeroes_in_place(self):
     # TinyJit captures on its second call: three ahead, then one per reset
@@ -418,7 +375,7 @@ class TestPrepareReset(unittest.TestCase):
       return lambda: (calls.append(1), fn())[1]
 
     self.modules['tinygrad'].TinyJit = jit
-    queue, array = self.queue(), np.ones(4)
+    queue, array = fakes.queue(), np.ones(4)
     held = queue.array
     reset = warp.reset_queues([queue], [array])
     self.assertEqual(len(calls), 3)

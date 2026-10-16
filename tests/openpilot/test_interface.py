@@ -56,8 +56,9 @@ JOINED = {'handovers': None, 'big_model_state': None, 'chestnut': None, 'get_act
           'lat_delay': None, 'run': RUN, 'close': '() -> None'}
 MODELS = {'SmallModel': SMALL, 'JoinedModel': JOINED}
 # the members an implementation may lack: jetlink reads them with getattr and a fallback
-OPTIONAL = {'StatusSide': (), 'WorkerSide': (), 'ModelSide': ('small_reset',), 'Openpilot': ('small_reset',),
-            'SmallModel': ('desire_key', 'numpy_inputs', 'lat_delay', 'PLANPLUS_CONTROL'), 'JoinedModel': ()}
+OPTIONAL = {'ModelSide': {'small_reset'}, 'Openpilot': {'small_reset'},
+            'SmallModel': {'desire_key', 'numpy_inputs', 'lat_delay', 'PLANPLUS_CONTROL'},
+            'JoinedModel': {'get_action_from_model', 'constants', 'LAT_SMOOTH_SECONDS', 'LONG_SMOOTH_SECONDS', 'lat_delay'}}
 
 FIELDS = {
   'Keys': ['link', 'offroad', 'progress', 'spec', 'pointers', 'big_model', 'catalog', 'charge_phone'],
@@ -88,10 +89,9 @@ class TestTheContract(unittest.TestCase):
 
   def test_the_optional_members_are_as_pinned(self):
     # each of these is additive: an adapter or a model without it still conforms
-    for name, expected in OPTIONAL.items():
+    for name in (*SIDES, *MODELS):
       with self.subTest(name):
-        cls = getattr(interface, name)
-        self.assertEqual(tuple(n for c in reversed(cls.__mro__) for n in vars(c).get('_optional', ())), expected)
+        self.assertEqual(interface.optional(getattr(interface, name)), OPTIONAL.get(name, set()))
 
   def test_the_data_it_hands_over_is_as_pinned(self):
     for name, expected in FIELDS.items():

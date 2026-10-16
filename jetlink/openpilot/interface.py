@@ -82,11 +82,8 @@ class ModelFace:
 
 # The sides are typing Protocols so a type checker can hold the adapter to
 # them; conformance() is the check both repos run. A parameter jetlink passes
-# by keyword is keyword-only here, and only those names must match. A member
-# named in a protocol's _optional is one jetlink reads with getattr and a
-# fallback: conformance() passes an object without it and holds one with it to
-# its signature, and adding one keeps API. A type checker still asks for it;
-# typing has no optional member.
+# by keyword is keyword-only here, and only those names must match. The
+# members in OPTIONAL are ones jetlink reads with getattr and a fallback.
 
 class StatusSide(Protocol):
   """Every reader: manager, the UI, hardwared, the model manager."""
@@ -147,10 +144,8 @@ class ModelSide(WorkerSide, Protocol):
   def event(self, name: str, **fields: Any) -> None:
     """A structured log line (cloudlog.event)."""
 
-  _optional = ('small_reset',)
-
   def small_reset(self, small: Any) -> Callable[[], None] | None:
-    """Optional: the reset of the fork's small model for a hand-back, or None
+    """Optional (OPTIONAL): the reset of the fork's small model for a hand-back, or None
     for jetlink's own (warp.prepare_reset, which knows stock modeld's,
     modeld_v2's and a ModelState with GPU queues and numpy inputs). Asked once
     on modeld's main thread before the frame loop. The reset runs on the
@@ -171,7 +166,6 @@ class SmallModel(Protocol):
   the rest is optional, read with getattr: the frame's desire key and numpy
   inputs (modeld_v2), the lateral delay a joining large model starts on, and
   sunnypilot's planplus gain."""
-  _optional = ('desire_key', 'numpy_inputs', 'lat_delay', 'PLANPLUS_CONTROL')
   desire_key: str
   numpy_inputs: Any
   lat_delay: float
@@ -183,9 +177,10 @@ class SmallModel(Protocol):
 
 class JoinedModel(Protocol):
   """What attach returns and modeld reads off and writes onto every frame.
-  frame_drop_ratio is written, lat_delay read and written. constants through
-  LONG_SMOOTH_SECONDS are modeld_v2's reads; like any name it does not define,
-  they follow the model that drives."""
+  frame_drop_ratio is written, lat_delay read and written. lat_delay and the
+  face (get_action_from_model through LONG_SMOOTH_SECONDS, modeld_v2's reads)
+  follow the model that drives, like any name it does not define, so over a
+  stock modeld's small model they are there only while the large one drives."""
   handovers: int                    # moves on every swap and hand-back; modeld forgives that frame's drops
   big_model_state: str              # one of STATES
   chestnut: bool                    # modelV2.big
@@ -201,6 +196,23 @@ class JoinedModel(Protocol):
 
   def close(self) -> None:
     """Let go of the link at modeld's exit."""
+
+
+# The members of each protocol an implementation may lack: jetlink reads them
+# with getattr and a fallback. conformance() passes an object without one and
+# holds one with it to its signature, and adding one keeps API. Kept out of
+# the protocols, where a name would be a member itself; a type checker still
+# asks for these, as typing has no optional member
+OPTIONAL: dict[type, tuple[str, ...]] = {
+  ModelSide: ('small_reset',),
+  SmallModel: ('desire_key', 'numpy_inputs', 'lat_delay', 'PLANPLUS_CONTROL'),
+  JoinedModel: ('get_action_from_model', 'constants', 'LAT_SMOOTH_SECONDS', 'LONG_SMOOTH_SECONDS', 'lat_delay'),
+}
+
+
+def optional(protocol: type) -> frozenset[str]:
+  """The members of `protocol` an implementation may lack, inherited ones included."""
+  return frozenset(name for cls in protocol.__mro__ for name in OPTIONAL.get(cls, ()))
 
 
 def load_adapter(module: str) -> Openpilot:
@@ -250,10 +262,10 @@ def conformance(obj: object, protocol: type) -> list[str]:
   jetlink pins the interface with it, and the fork's tests run it against the
   real adapter."""
   problems = []
-  optional = {name for cls in protocol.__mro__ for name in vars(cls).get('_optional', ())}
+  may_lack = optional(protocol)
   for name, expected in members(protocol).items():
     if not hasattr(obj, name):
-      if name not in optional:
+      if name not in may_lack:
         problems.append(f"{name}: missing")
       continue
     if expected is None:

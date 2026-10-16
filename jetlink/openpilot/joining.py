@@ -50,7 +50,7 @@ import time
 
 from jetlink import protocol as P
 from jetlink.comma import gadget
-from jetlink.openpilot.model_state import JetlinkModelState, NotFinite
+from jetlink.openpilot.model_state import JetlinkModelState
 from jetlink.transport.priority import background_thread
 
 # after a join fails or the large model dies mid-drive. Long enough not to
@@ -112,6 +112,8 @@ SMALL_READS = ('desire_key', 'numpy_inputs')
 NOT_UP = 'could not bring up the large model'
 # and as the leave says it to the server (protocol.Msg.LEAVE)
 LEAVING = {LOST: P.LEAVE_LOST, BEHIND: P.LEAVE_BEHIND}
+# the demotes that count as lag, which says nothing about the cable
+LAGS = (BEHIND, BAD_OUTPUT)
 # and as the panel's one line says it while the join tries again
 RECONNECTING = {LOST: 'reconnecting', BEHIND: 'fell behind, reconnecting', NOT_UP: 'load failed, reconnecting',
                 BAD_OUTPUT: 'bad output, reconnecting'}
@@ -155,8 +157,8 @@ class JoiningModelState:
     # the large model state, from the swap until it hands back: always _active.
     # Only the frame thread assigns it
     self._big = None
-    # what the frame thread let go of and why (LOST, BEHIND, or a build that
-    # failed), for the join thread to say goodbye to and close or keep.
+    # what the frame thread let go of and why (LOST, BEHIND, BAD_OUTPUT, or a
+    # build that failed), for the join thread to say goodbye to and close or keep.
     # Assigned under the lock
     self._retired: tuple[object, str] | None = None
     self._lock = threading.Lock()
@@ -281,8 +283,10 @@ class JoiningModelState:
   @frame_drop_ratio.setter
   def frame_drop_ratio(self, value):
     # modeld's frameDropPerc / 100, written before every run(). Read here, by
-    # the lag rule, and nowhere else
+    # the lag rule. Kept on the small model only for a fork whose tests pin
+    # that every write reaches it; goes when zoompilot's seam test is retargeted
     self._frame_drop_ratio = value
+    self._small.frame_drop_ratio = value
 
   @property
   def in_control(self) -> bool:
@@ -336,7 +340,7 @@ class JoiningModelState:
     except Exception as e:
       failed = time.monotonic()
       self._log.exception("jetlink: large model failed mid-drive, back to the small model")
-      self._demote(BAD_OUTPUT if isinstance(e, NotFinite) else LOST)
+      self._demote(BAD_OUTPUT if isinstance(e, P.NotFinite) else LOST)
       demoted = time.monotonic()
       # re-run the frame rather than propagate: modeld's fallback is permanent,
       # this one is retryable. after_enqueue is dropped, the large model may
@@ -401,7 +405,7 @@ class JoiningModelState:
     the link, moments later. Counted as a lost link or a hand-back for lag,
     and backed off."""
     big, self._big = self._big, None
-    if why in (BEHIND, BAD_OUTPUT):
+    if why in LAGS:
       self._lags += 1
     else:
       self._drops += 1
@@ -667,8 +671,7 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
       geometry = parts.warps.geometry()[2:]
     try:
       # the fork's own reset of its small model, else jetlink's from its shape
-      hook = getattr(op, 'small_reset', None)
-      ready['reset_small'] = (hook(small) if hook is not None else None) or prepare_reset(small)
+      ready['reset_small'] = getattr(op, 'small_reset', lambda small: None)(small) or prepare_reset(small)
       warp = Warp(parts.warps.load(cam_w, cam_h, *geometry), face.frame_size(cam_w, cam_h))
     except Exception:
       link.close()

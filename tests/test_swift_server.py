@@ -370,10 +370,14 @@ def test_a_frame_that_is_not_finite_feeds_nothing_back(queued):
 
 
 def test_nonfinite_output_is_reported_not_returned(queued):
+  # and the link stays: the session goes on, and the next frame is answered
   warped, packed = queued_frames(1)[0]
+  good = packed.copy()
   packed[queued.spec.packed_layout['traffic_convention'][0]] = np.inf
-  with pytest.raises(LinkError, match='NOT_FINITE'):
+  with pytest.raises(P.NotFinite, match='NOT_FINITE'):
     queued.infer(warped, packed, reset=True)
+  assert not queued.dead
+  assert np.all(np.isfinite(queued.infer(warped, good)))
 
 
 def test_telemetry_piggybacks_only_when_asked(queued):

@@ -253,14 +253,11 @@ def prepare_reset(model):
   new tensors, which its JIT is not linked to. The fork's tests pin those names.
   """
   adapter = getattr(model, 'adapter', None)
-  if adapter is not None and not adapter.is_native:
-    queues = [q for q in adapter.input_queues.values() if q.device != 'NPY']
-    arrays = adapter.numpy_inputs.values()
-  elif adapter is not None or hasattr(model, 'state_pairs'):
-    keeper = model if adapter is None else adapter
+  keeper = model if adapter is None else adapter
+  if adapter.is_native if adapter is not None else hasattr(model, 'state_pairs'):
     queues = [keeper.input_queues[name] for name in keeper.state_pairs]
     arrays = (keeper.packed_input,)
   else:
-    queues = [q for q in model.input_queues.values() if q.device != 'NPY']
-    arrays = (model.numpy_inputs if hasattr(model, 'numpy_inputs') else model.npy).values()
+    queues = [q for q in keeper.input_queues.values() if q.device != 'NPY']
+    arrays = (keeper.numpy_inputs if hasattr(keeper, 'numpy_inputs') else keeper.npy).values()
   return reset_queues(queues, arrays, getattr(model, 'prev_desire', None))

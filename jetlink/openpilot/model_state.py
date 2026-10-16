@@ -34,6 +34,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from jetlink.protocol import NotFinite
+
 SEND_RAW_PRED = os.getenv('SEND_RAW_PRED')
 SLOW_FRAME = 0.05  # the full 20 Hz budget, not just the largest outliers
 # How far into a frame end() waits for the reply before publishing the
@@ -72,10 +74,6 @@ TELEMETRY_EVERY = 2
 TELEMETRY_PERIOD = 1.0
 # frames Trips keeps the timings of: a minute at 20 Hz
 TRIPS_KEPT = 1200
-
-
-class NotFinite(ValueError):
-  """A NaN or an inf in the host's output: it answered, with nothing to drive on."""
 
 
 class Trips:
@@ -268,8 +266,9 @@ class JetlinkModelState:
   def end(self, after_enqueue: Callable[[], None] | None = None) -> dict[str, np.ndarray]:
     """The sent frame's output, as modeld blocks on a chestnut's, but not past
     HOLD_FRAME once there is an output to publish again: a frame that long
-    is a dropped camera frame. Only a stall past the client's deadline raises,
-    into the joining state's demotion to the small model."""
+    is a dropped camera frame. Only a stall past the client's deadline, or an
+    output that is not finite, raises, into the joining state's demotion to
+    the small model."""
     frame, self._frame = self._frame, None
     # publish health while the Jetson works
     if after_enqueue is not None:
@@ -278,12 +277,17 @@ class JetlinkModelState:
     if frame.seq is None:
       model_output = None   # not sent (see send): held
     else:
-      model_output = self.client.infer_end(frame.seq, hold=self._hold_left(frame) if self._can_hold else None)
+      try:
+        model_output = self.client.infer_end(frame.seq, hold=self._hold_left(frame) if self._can_hold else None)
+      except NotFinite:
+        # answered, so the leave's summary counts it
+        self.trips.record(time.perf_counter() - frame.t0, self.client.last_timings[2])
+        raise
     t4 = time.perf_counter()
     held = model_output is None
     self.behind = self._note_hold(held)
-    outputs = self._outputs(self.client.last_output if held else model_output)
     self.trips.record(t4 - frame.t0, self.client.last_timings[2])
+    outputs = self._outputs(self.client.last_output if held else model_output)
     # a frame past the budget is a dropped camera frame; send against reply
     # says which end it was. Held frames are a steady few on a marginal host,
     # so after the first they go to the log at TELEMETRY_PERIOD
@@ -356,10 +360,11 @@ class JetlinkModelState:
     gives the same dict again: the parser's softmax works in place on it."""
     if self._parsed is not None and self._parsed[0] is model_output:
       return self._parsed[1]
-    # the server checks first (Status.NOT_FINITE, a LinkError). This is for
-    # one that did not, or bytes the link changed: a NaN must not reach the
-    # planner, and the joining model hands back on it as a lag (BAD_OUTPUT)
-    if not np.isfinite(model_output).all():
+    # the server checks first (Status.NOT_FINITE, which the client raises as
+    # this). This is for one that did not, or bytes the link changed: a NaN
+    # must not reach the planner. A sum allocates nothing, and any NaN or inf
+    # makes it one; these outputs are far from float32's overflow
+    if not np.isfinite(model_output.sum()):
       raise NotFinite(f"frame {self._frame_id}: the output is not finite")
     outputs_dict = self.parser.parse_outputs(self.slice_outputs(model_output, self.output_slices))
     if SEND_RAW_PRED:

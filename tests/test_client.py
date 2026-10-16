@@ -175,6 +175,21 @@ class FramesInFlight(SocketPairTest):
       self.client.drain()
     self.assertTrue(self.client.dead)
 
+  def test_a_frame_the_server_found_not_finite_is_raised_and_the_link_kept(self):
+    # the server's session goes on, keeping nothing of that frame
+    # (Session.infer), so the next frame is answered over the same link
+    for i, status in enumerate((P.Status.OK, P.Status.NOT_FINITE, P.Status.OK), 1):
+      seq = self.send(i)
+      self.answer(status)
+      if status == P.Status.OK:
+        self.assertEqual(self.client.infer_end(seq)[0], i)
+        continue
+      with self.assertRaisesRegex(P.NotFinite, 'frame 2'):
+        self.client.infer_end(seq)
+      self.assertFalse(self.client.dead)
+      self.assertEqual(self.client.waiting_for(), 0.0)
+      self.assertEqual(self.client.last_output[0], 1.0, 'a held frame publishes the last good one')
+
   def test_a_hello_forgets_the_frames_of_the_session_before(self):
     self.send(1)
 

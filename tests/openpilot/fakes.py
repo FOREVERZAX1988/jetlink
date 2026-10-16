@@ -291,6 +291,70 @@ class FakeTensor:
     return self.array
 
 
+# -- a fork's small model, of each shape jetlink resets ---------------------------
+# Each builder returns the model, the buffers its reset must zero in place,
+# and the ones it must leave alone; all start as ones.
+
+class SmallModel:
+  """A fork's ModelState of some shape: its attributes, and a run()."""
+
+  def __init__(self, **attrs):
+    self.__dict__.update(attrs)
+
+  def run(self, bufs, transforms, inputs, after_enqueue=None):
+    return {'from': 'small'}
+
+
+def queue(device='CPU'):
+  return FakeTensor(np.ones((4, 8), np.float32), device=device)
+
+
+def starpilot():
+  """StarPilot's CatalogModelState: GPU and NPY tensors and numpy views, and
+  none of state_pairs, packed_input, lat_delay, desire_key or numpy_inputs."""
+  m = SmallModel(input_queues={'img_q': queue(), 'feat_q': queue(), 'npy_inputs': queue('NPY')},
+                 npy={'desire': np.ones(8, np.float32), 'traffic_convention': np.ones(2, np.float32)},
+                 prev_desire=np.ones(8, np.float32))
+  q = m.input_queues
+  return m, [q['img_q'].array, q['feat_q'].array, *m.npy.values(), m.prev_desire], [q['npy_inputs'].array]
+
+
+def stock():
+  """Upstream modeld's ModelState: recurrent state and one packed upload, no lat_delay."""
+  packed = np.ones(16, np.float32)
+  m = SmallModel(input_queues={'state_img_q': queue(), 'state_feat_q': queue(), 'desire': queue()},
+                 state_pairs={'state_img_q': 'next_state_img_q', 'state_feat_q': 'next_state_feat_q'},
+                 packed_input=packed, npy={'desire': packed[:8], 'traffic_convention': packed[8:10]},
+                 prev_desire=np.ones(8, np.float32))
+  q = m.input_queues
+  return m, [q['state_img_q'].array, q['state_feat_q'].array, packed, m.prev_desire], [q['desire'].array]
+
+
+def v2_native():
+  """A modeld_v2 native bundle: its adapter keeps stock modeld's layout."""
+  packed = np.ones(16, np.float32)
+  adapter = SimpleNamespace(is_native=True, input_queues={'state_img_q': queue(), 'desire': queue()},
+                            state_pairs={'state_img_q': 'next_state_img_q'}, packed_input=packed)
+  m = SmallModel(adapter=adapter, prev_desire=np.ones(8, np.float32), desire_key='desire', numpy_inputs={},
+                 lat_delay=0.1, PLANPLUS_CONTROL=1.0)
+  q = adapter.input_queues
+  return m, [q['state_img_q'].array, packed, m.prev_desire], [q['desire'].array]
+
+
+def v2_legacy():
+  """A modeld_v2 legacy bundle: GPU history queues, an NPY tensor, numpy inputs."""
+  packed = np.ones(16, np.float32)
+  adapter = SimpleNamespace(is_native=False, input_queues={'img_q': queue(), 'packed_npy_inputs': queue('NPY')},
+                            numpy_inputs={'desire': packed[:8], 'rest': packed[8:]})
+  m = SmallModel(adapter=adapter, prev_desire=np.ones(8, np.float32), desire_key='desire',
+                 numpy_inputs=adapter.numpy_inputs, lat_delay=0.1, PLANPLUS_CONTROL=1.0)
+  q = adapter.input_queues
+  return m, [q['img_q'].array, packed, m.prev_desire], [q['packed_npy_inputs'].array]
+
+
+SHAPES = (starpilot, stock, v2_native, v2_legacy)
+
+
 class FakeDevice:
   DEFAULT = 'CPU'
 
