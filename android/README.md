@@ -170,13 +170,16 @@ carries `libQnnHtpV*Stub.so` and its Skel for V68 to V81, where the Snapdragon
 8 Elite Gen 5's V81 is the last: an APK assembled from Maven alone serves no
 newer Hexagon. The first Snapdragon tried (an SM8975, 2026-10-14) is a
 Snapdragon 8 Elite Gen 6, `htp_version: 85` in Qualcomm AI Hub's chipset table,
-past it, so this fork carries the missing pair: `app/src/main/jniLibs/arm64-v8a/`
-holds the V85 Stub and its Skel, 14 MB together, out of the full QAIRT SDK
-(2.51.40.260930) from Qualcomm's developer site or Package Manager. Qualcomm's
-license allows the pair inside an app only, so it is this fork's and not
-upstream's, and a checkout without it still serves every Hexagon up to V81.
+past it, so this fork carries its own QNN set: `app/src/main/jniLibs/arm64-v8a/`
+holds the five files of one build -- the backend, its context preparer, its
+System library, and the V85 Stub and its Skel -- as the phone of 2026-10-16
+holds them under `/odm`, where the same five of a newer build are refused by
+the firmware's FastRPC (`v2.48.5` against `v2.51.40`; docs/qnn-htp-stubs.md has
+both sets and their hashes). Qualcomm's license allows these libraries inside an
+app only, so they are this fork's and not upstream's, and a checkout without
+them still serves every Hexagon up to V81 through the AAR's own libraries.
 [QNN HTP stubs](../docs/qnn-htp-stubs.md) records the mapping, what each source
-carries, the pair's hashes, and the keywords to search with.
+carries, both sets' hashes, and the keywords to search with.
 
 The NPU path follows LiteRT 2.2.0's source. LiteRT's Google Tensor plugin
 (`libLiteRtCompilerPlugin_google_tensor.so`, which the APK carries) hands the

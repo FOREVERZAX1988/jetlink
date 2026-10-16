@@ -123,10 +123,12 @@ ls "$QNN_SDK_ROOT"/lib/aarch64-android/libQnnHtpV*Stub.so
 ls "$QNN_SDK_ROOT"/lib/hexagon-v8*/unsigned/libQnnHtpV*Skel.so
 ```
 
-## The V85 pair this fork carries
+## The V85 pair this fork carried first
 
-`android/app/src/main/jniLibs/arm64-v8a/` holds the pair, 14 MB together, out
-of QAIRT **2.51.40.260930**:
+The first answer to a V85 phone, and still what a checkout carrying only the
+pair gets: `android/app/src/main/jniLibs/arm64-v8a/` held it, 14 MB together,
+out of QAIRT **2.51.40.260930**. (The checkout holds the phone's own five
+since 2026-10-16, next section.)
 
 | file | from the SDK | bytes | SHA-256 |
 | --- | --- | --- | --- |
@@ -151,6 +153,47 @@ wants one build for all three; if the device still refuses the model with the
 V85 Stub in place, the next step is that same QAIRT build's `libQnnHtp.so`,
 `libQnnHtpPrepare.so` and `libQnnSystem.so` (not the pair alone), and the
 `npu:` lines name the version that answered.
+
+## The phone's own set, in the checkout (2026-10-16)
+
+A phone that refuses one build of the set serves it when the five files are its
+own, the ones under `/odm`. The SM8975 of 2026-10-16 said why in its log: the
+firmware's FastRPC opens a Skel through a URI naming its build
+(`...?qnn_2_51_40_skel_handle_invoke`) and refuses a handle **without priority
+token** -- an interface 2.51's `qnn::IScheduler` has and 2.48.5 does not. Its
+own 2.48.5 five open it, and the model reached the Hexagon.
+
+`src/main/jniLibs/arm64-v8a/` holds those five now, so a plain build of this
+checkout carries the set that runs:
+
+| file | bytes | SHA-256 |
+| --- | --- | --- |
+| `libQnnHtp.so` | 3,778,744 | `1108ace00a71059d8b8bde5e63a3c7e296dcdb33e88d789d5e6cc88200a27d59` |
+| `libQnnHtpPrepare.so` | 88,128,192 | `8879389024c43226e6c7b441b55146a9d4fd941f931bc2a7bfbc8626645bc02e` |
+| `libQnnSystem.so` | 4,052,904 | `8b2f9dffd181bb4753491e78881573a36d5f3ac1af2ca1f61ca24a4e6f2fd9f8` |
+| `libQnnHtpV85Stub.so` | 779,448 | `3064fd029b4d483fc1365304e4f9a0f06215bef2506d4fa8b6fc6c37209e3880` |
+| `libQnnHtpV85Skel.so` | 12,582,764 | `1d4abb21e93817924f8cbcc6535b0b12e14d40276983e5b37caa32744034add9` |
+
+They came off that phone's `/odm/lib64` and `/odm/lib/rfsa/adsp`, and they say
+`v2.48.5.260901221701` of themselves -- one build, with no `qnn::IScheduler`,
+which the `npu:` report reads out of the files. Three of the five share their
+names with libraries `onnxruntime-android-qnn` 1.29.0's AAR ships, so the
+`onnxRuntimeLibraries` task leaves the AAR's copy of a name out when this
+directory holds it: whatever `src/main/jniLibs` carries is what the APK
+carries. `build.gradle.kts` pins the five hashes and fails on a partial set,
+which QNN would swallow.
+
+Two things to know about shipping it:
+
+- **The pair for every Hexagon up to V81 is still the AAR's**, in the same APK
+  beside a 2.48.5 backend: the mismatch "One build per Stub, Skel and HTP
+  library" warns about. A phone whose Hexagon is V68 to V81 may now find its
+  NPU refused where it used to run, and falls back to the GPU profile. A
+  checkout without the set (upstream's) is unchanged.
+- **The bytes are the phone's.** `packaging.jniLibs.keepDebugSymbols` keeps
+  AGP from rewriting these five on the way into the APK; the 503-byte
+  difference an earlier packaged Skel had came of exactly that kind of
+  processing, and the phone's own bytes are the ones known to open the handle.
 
 ## The matched set, and the release that carries it
 
