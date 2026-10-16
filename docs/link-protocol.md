@@ -89,7 +89,7 @@ settings):
 - Comma side: the `jetlink.comma` package. The owner holds the gadget and lends
   modeld its endpoints, or on the cable the right to take the phone's dial:
   whoever holds the loan listens for it, the owner while nobody does. Every
-  root step goes through `scripts/comma/jetlink-root.sh`. See the
+  root step goes through `jetlink/comma/jetlink-root.sh`. See the
   [installation reference](installation-reference.md#custom-usb-integrations).
 
 ### Bus speed
@@ -107,7 +107,7 @@ frame on the bench Jetson, and keeping it awake with nothing to carry costs
 
 Negotiated speed on the comma: `/sys/class/udc/*/current_speed`
 (`super-speed` is USB 3, `high-speed` USB 2), also printed with the built
-gadget by `sudo scripts/comma/jetlink-root.sh check`.
+gadget by `sudo jetlink/comma/jetlink-root.sh check`.
 
 ### The network link on a Linux host
 

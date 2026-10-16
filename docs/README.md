@@ -3,6 +3,8 @@
 ## Set up
 
 Choose your computer. Each guide covers installation and connection.
+The comma runs an openpilot fork with Jetlink support (zoompilot, StarPilot);
+the guides give zoompilot's steps and settings.
 
 - [Jetson](jetson.md)
 - [Mac](macos-app.md)

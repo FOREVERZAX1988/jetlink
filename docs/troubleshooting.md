@@ -43,7 +43,7 @@ For a direct iPhone cable that will not connect, leave it plugged in for
 30 seconds, then run over SSH on the comma:
 
 ```bash
-sudo /data/openpilot/jetlink_repo/scripts/comma/jetlink-root.sh check
+sudo /data/openpilot/jetlink_repo/jetlink/comma/jetlink-root.sh check
 grep 'USB-C' /data/log/jetlink-owner.log | tail -n 40
 sudo dmesg | grep -iE 'usbpd|type-?c|swap|weak charger|reverse boost' | tail -n 60
 ```
