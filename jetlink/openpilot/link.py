@@ -52,6 +52,7 @@ class ModelMissing(RuntimeError):
   (joining._join_loop)."""
   retry_after = MODEL_WAIT
   waiting = 'big model not downloaded yet'
+  code = 'model_missing'   # waiting's progress code (status.PROGRESS_CODES)
 
 
 def _left(deadline: float | None, default: float) -> float:

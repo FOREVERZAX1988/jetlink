@@ -266,7 +266,7 @@ class TestFetching(OpenpilotTest):
     with mock.patch.object(self.parts.models, 'fetch_shipped_model', return_value=Path('/x')) as fetch:
       self.assertEqual(d.fetch_model(), Path('/x'))
     fetch.call_args.kwargs['progress'](0.5)
-    progress.report.assert_called_once_with('download', 0.5, 'downloading', code='downloading', args={})
+    progress.report.assert_called_once_with('download', 0.5, 'downloading', code='downloading', args=None)
     self.assertFalse(fetch.call_args.kwargs['should_stop']())
     d.request_stop()
     self.assertTrue(fetch.call_args.kwargs['should_stop']())

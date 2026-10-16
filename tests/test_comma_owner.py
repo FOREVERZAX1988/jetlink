@@ -1728,10 +1728,13 @@ class TestTheStatusRecord(OwnerTest):
     gadget.STATUS.parent.mkdir(parents=True, exist_ok=True)
     (gadget.STATUS.parent / '.status.json.4242').write_text('{"half')
     (gadget.STATUS.parent / '.server.json.4242').write_text('{')
+    # a live modeld's runtime record, mid-write, is not a leftover
+    (gadget.STATUS.parent / f'.modeld.json.{os.getpid()}').write_text('{')
     o = self.make()
     self.addCleanup(o.cable.close)
-    o.adopt()
-    self.assertEqual([n for n in os.listdir(gadget.STATUS.parent) if n.startswith('.')], [])
+    with mock.patch.object(gadget, 'pid_alive', side_effect=lambda pid: pid == os.getpid()):
+      o.adopt()
+    self.assertEqual([n for n in os.listdir(gadget.STATUS.parent) if n.startswith('.')], [f'.modeld.json.{os.getpid()}'])
 
 
 class TestACrashLoop(OwnerTest):

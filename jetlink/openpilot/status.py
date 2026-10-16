@@ -15,7 +15,6 @@ Light at module level: the package imports it, and the owner imports the package
 """
 from __future__ import annotations
 
-import json
 import time
 from typing import NamedTuple
 
@@ -31,13 +30,15 @@ from jetlink.comma import gadget
 PROGRESS_MIN_INTERVAL = 0.25
 
 # what a progress record's `code` may be, for a fork that words the line
-# itself; `msg` stays the English one. `args` with them: downloading
-# {got_mb, total_mb}, download_stalled {retry_s}, reconnecting {why: lost,
-# behind, load_failed or bad_output}, build {eta_s}. upload to load are the
-# stage names, the server's own while it builds
+# itself; `msg` stays the English one. `args`, where a code has them:
+# downloading and upload {got_mb, total_mb}, download_stalled {retry_s},
+# reconnecting {why: lost, behind, load_failed or bad_output}, build {eta_s}.
+# From upload on they are stage names, and the server's stages are its own:
+# a server can add one, so a fork falls back to `msg` for a code it does not
+# know. A server message with no stage has no code
 PROGRESS_CODES = ('waiting_for_host', 'finding_model', 'model_missing', 'ready_waiting_window', 'reconnecting',
                   'connecting', 'downloading', 'download_stalled', 'download_failed', 'downloaded_waiting_host',
-                  'engine_ready', 'failed', 'upload', 'patch', 'parse', 'build', 'load')
+                  'engine_ready', 'failed', 'upload', 'patch', 'parse', 'convert', 'compile', 'build', 'load', 'warm')
 
 
 def estimated_build_seconds(size: int) -> int:
@@ -84,7 +85,9 @@ class Progress:
     self._last = (stage, now)
     record = {'stage': stage, 'frac': round(frac, 4), 'msg': msg, 'drops': drops}
     if code is not None:
-      record.update(code=code, args=args or {})
+      record['code'] = code
+    if args:
+      record['args'] = args
     try:
       self.op.put(self.op.keys.progress, record)
     except Exception:
@@ -100,13 +103,14 @@ class Progress:
     """Progress, with how long the build still has to run, from the model's
     size. Only the build: the upload reports MB of MB and a connect has nothing
     to predict."""
-    args = {}
-    if stage == 'build':
-      size = self._size() if self._size is not None else None
-      if size:
-        left = estimated_build_seconds(size) * max(0.0, 1.0 - frac)
-        msg, args['eta_s'] = _eta(left), round(left)
-    self.report(stage, frac, msg, code=stage, args=args)
+    args = None
+    size = self._size() if self._size is not None and stage in ('build', 'upload') else None
+    if size and stage == 'build':
+      left = estimated_build_seconds(size) * max(0.0, 1.0 - frac)
+      msg, args = _eta(left), {'eta_s': round(left)}
+    elif size:
+      args = {'got_mb': int(frac * size) >> 20, 'total_mb': size >> 20}
+    self.report(stage, frac, msg, code=stage or None, args=args)
 
 
 # -- what is on the other end -------------------------------------------------
@@ -187,8 +191,7 @@ def usb_port() -> str | None:
 
 # the offroad alert's text for a device whose checkout has no warp for its camera
 NO_WARP = "no warp built for this camera"
-# how the owner's crash-loop backoff starts its record's error, and a failed snapshot its reason
-BACKING_OFF = "the service keeps stopping"
+# how a failed snapshot starts its reason (the owner's backoff: gadget.BACKING_OFF)
 STATUS_FAILED = "jetlink status failed"
 # Status.reason_code: the reason's kind, for a fork with its own words. Any
 # reason that is none of the others is the gadget's, its text the detail
@@ -221,6 +224,10 @@ def reason(parts, mode: str) -> str | None:
 # a big model drives while its last answer was this recent when the record
 # was written: five frames at 20 Hz, so a held frame or two still counts
 OUTPUT_FRESH = 0.25
+# and while the record itself is this recent: a modeld that froze stops
+# reading as driving within it (StarPilot's 1.5 s). `running` keeps the
+# owner's HEARTBEAT_TIMEOUT
+ACTIVE_FRESH = 1.5
 
 
 def runtime() -> tuple[str | None, bool]:
@@ -228,22 +235,26 @@ def runtime() -> tuple[str | None, bool]:
   runtime record (gadget.MODELD), or (None, False) without a live one: no
   modeld with the link since boot, or one that stopped, died or stopped
   writing (gadget.HEARTBEAT_TIMEOUT, as the owner's). Never raises."""
+  record = gadget.read_record(gadget.MODELD)
   try:
-    record = json.loads(gadget.read(gadget.MODELD))
-    if record.get('stopping') or not gadget.owner_alive(record) or not gadget.pid_alive(record.get('pid')):
+    if record is None or record.get('stopping') or not gadget.owner_alive(record) \
+       or not gadget.pid_alive(record.get('pid')):
       return None, False
     state = record.get('state')
-    # the age when written: the writer wakes once a second, the frames 20 times
-    age = record['at'] - record.get('last_output_at', 0.0)
-    return (state if isinstance(state, str) else None), bool(record.get('active')) and age < OUTPUT_FRESH
-  except (ValueError, TypeError, KeyError, AttributeError):
+    # the answer's age when written: the writer wakes once a second, the frames 20 times
+    answered = record['at'] - record.get('last_output_at', 0.0) < OUTPUT_FRESH
+    active = bool(record.get('active')) and answered and time.monotonic() - record['at'] < ACTIVE_FRESH
+    return (state if isinstance(state, str) else None), active
+  except (TypeError, KeyError):
     return None, False
 
 
 # -- the snapshot ----------------------------------------------------------------
 
-# Status.phase, in the order it is decided (see there)
-PHASES = ('off', 'unavailable', 'active', 'waiting', 'reconnecting', 'preparing', 'connecting', 'prepared')
+# Status.phase, in the order it is decided (see there). Plain strings, and
+# like the codes only ever added to: a fork maps one it does not know to its
+# own default
+PHASES = ('unavailable', 'off', 'active', 'waiting', 'reconnecting', 'failed', 'preparing', 'connecting', 'prepared')
 
 
 class Status(NamedTuple):
@@ -301,23 +312,26 @@ class Status(NamedTuple):
       return None
     if reason in (NO_WARP, STOPPED):
       return 'no_warp' if reason == NO_WARP else 'service_stopped'
-    if reason.startswith(BACKING_OFF):
+    if reason.startswith(gadget.BACKING_OFF):
       return 'backing_off'
     return 'status_failed' if reason.startswith(STATUS_FAILED) else 'gadget'
 
   @property
   def phase(self) -> str:
     """One of PHASES, what a panel's state chip says, decided in that order.
-    The setting and whether the link can run come first, then what modeld
-    says it runs (the record outranks a progress line that may be a drive
-    old), then the progress stage, then the records. A big model that stopped
+    Why the link cannot run comes first (a failed snapshot has the reason
+    with enabled False), then the setting, then what a live modeld says it
+    runs, then the progress stage, then the records. Without a live record
+    the progress line decides, and it can be a drive old: a modeld that is
+    never closed leaves its join's last 'connect' line, which reads
+    connecting offroad, as the icon reads loading. A big model that stopped
     answering while it drives is reconnecting: it is about to hand back. A
     build inside a join is preparing; a connect is connecting, a join's or a
     provisioning run's."""
-    if not self.enabled:
-      return 'off'
     if self.reason is not None:
       return 'unavailable'
+    if not self.enabled:
+      return 'off'
     if self.active:
       return 'active'
     if self.running == 'ready':
@@ -325,6 +339,8 @@ class Status(NamedTuple):
     if self.running in ('retrying', 'running'):
       return 'reconnecting'
     stage = str((self.progress or {}).get('stage') or '')
+    if stage == 'failed':
+      return 'failed'
     if stage not in ('', 'ready', 'connect'):
       return 'preparing'
     if self.running == 'joining' or stage == 'connect':
@@ -368,8 +384,8 @@ class Status(NamedTuple):
 def read(parts, mode: str) -> Status:
   """Everything at once, over the link setting the caller read: each file once."""
   record, live = owner_record()
-  running, active = runtime()
   enabled = parts.enabled(mode)
+  running, active = runtime() if enabled else (None, False)
   reason = unavailable(parts, record) if enabled else None
   # the last model the server built; the pick's, or the stand-in that drives
   # until the pick is built (link.open_link)

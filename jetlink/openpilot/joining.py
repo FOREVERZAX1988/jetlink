@@ -115,13 +115,15 @@ NOT_UP = 'could not bring up the large model'
 LEAVING = {LOST: P.LEAVE_LOST, BEHIND: P.LEAVE_BEHIND}
 # the demotes that count as lag, which says nothing about the cable
 LAGS = (BEHIND, BAD_OUTPUT)
-# and as the panel's one line says it while the join tries again
-RECONNECTING = {LOST: 'reconnecting', BEHIND: 'fell behind, reconnecting', NOT_UP: 'load failed, reconnecting',
-                BAD_OUTPUT: 'bad output, reconnecting'}
-# and as its progress code's `why` (status.PROGRESS_CODES 'reconnecting')
-RECONNECT_WHY = {LOST: 'lost', BEHIND: 'behind', NOT_UP: 'load_failed', BAD_OUTPUT: 'bad_output'}
+# and as the panel's one line says it while the join tries again, with the
+# `why` of its progress code (status.PROGRESS_CODES 'reconnecting')
+RECONNECTING = {LOST: ('reconnecting', 'lost'), BEHIND: ('fell behind, reconnecting', 'behind'),
+                NOT_UP: ('load failed, reconnecting', 'load_failed'),
+                BAD_OUTPUT: ('bad output, reconnecting', 'bad_output')}
 # how often the runtime record (gadget.MODELD) is rewritten without a handover
 RECORD_PERIOD = 1.0
+# how long a model name the catalog had not resolved stays the sha's
+NAME_RETRY = 30.0
 
 
 class JoiningModelState:
@@ -210,9 +212,10 @@ class JoiningModelState:
     self._loading = True
 
     # the runtime record's: when the large model's last answer (not a held
-    # frame) came, and a wake for its writer on a handover. The frame thread
-    # assigns them and nothing else; the writer thread reads the rest itself.
-    # The path is taken now, so a test's stays its own
+    # frame) came, and a wake for its writer on a hand-back and the first
+    # answer. The frame thread assigns them and nothing else; the writer
+    # thread reads the rest itself. The path is taken now, so a test's stays
+    # its own
     self._output_at = 0.0
     self._record = threading.Event()
     self._record_path = gadget.MODELD
@@ -417,7 +420,8 @@ class JoiningModelState:
       return
     self._big = big
     self._joined_at = time.monotonic()
-    self._handed_over()
+    # no wake: the record says the swap with the first answer, which wakes it
+    self._handovers += 1
     self._active = big
 
   def _demote(self, why: str) -> None:
@@ -498,7 +502,7 @@ class JoiningModelState:
 
   # -- background -------------------------------------------------------------
 
-  def _report(self, stage: str, msg: str, code: str, args: dict | None = None) -> None:
+  def _report(self, stage: str, msg: str, code: str | None, args: dict | None = None) -> None:
     """Tell the UI what the join is waiting on.
 
     Offroad the record carries a provisioning run's progress; without this, a
@@ -524,7 +528,8 @@ class JoiningModelState:
     # has still been replugged
     self._host_left = not gadget.host_attached()
     self._log.warning("jetlink: %s, %s; drop %d, lag %d this drive", why, port, self._drops, self._lags)
-    self._report('connect', RECONNECTING[why], 'reconnecting', {'why': RECONNECT_WHY[why]})
+    msg, code = RECONNECTING[why]
+    self._report('connect', msg, 'reconnecting', {'why': code})
 
   def _join_loop(self) -> None:
     """Open the link and get the engine ready. No tinygrad in here."""
@@ -577,7 +582,7 @@ class JoiningModelState:
         # (link.ModelMissing), and what the panel should show meanwhile
         delay = getattr(e, 'retry_after', REJOIN_DELAY)
         if waiting := getattr(e, 'waiting', None):
-          self._report('connect', waiting, 'model_missing')
+          self._report('connect', waiting, getattr(e, 'code', None))
         self._log.warning("jetlink: not joined yet (%s), retrying in %.0fs", e, delay)
         if self._stop.wait(delay):
           return
@@ -650,16 +655,24 @@ class JoiningModelState:
         return
 
   def _write_loop(self) -> None:
-    """The runtime record, once a second and on every handover: tmpfs IO and a
-    catalog read for the name, so never on the frame thread, and off modeld's
-    realtime core first (_join_loop). The last one, after close(), is stopping."""
+    """The runtime record (gadget.MODELD), once a second, on a hand-back and on
+    the first answer after a swap: tmpfs IO, the link record and a catalog
+    read for the name, so never on the frame thread, and off modeld's realtime
+    core first (_join_loop). The last one, after close(), is stopping.
+
+    status.runtime reads pid, at, stopping, state, active and last_output_at;
+    handovers, held, sha256, name, checkpoint, transport, drops and lags have
+    no reader in jetlink yet, they are for forks (StarPilot's sha and
+    checkpoint, a drive's counts)."""
     background_thread()
-    names: dict[str, str] = {}
+    pid, names, kinds = os.getpid(), {}, {}
     failing = False
     while True:
+      # before the record is built: a wake from here on is for the next one
+      self._record.clear()
       stopping = self._stop.is_set()
       try:
-        gadget.write_record(self._record_path, self._runtime(names, stopping))
+        gadget.write_record(self._record_path, self._runtime(pid, names, kinds, stopping))
         failing = False
       except Exception:
         if not failing:   # once, not every second
@@ -668,22 +681,42 @@ class JoiningModelState:
       if stopping:
         return
       self._record.wait(RECORD_PERIOD)
-      self._record.clear()
 
-  def _runtime(self, names: dict[str, str], stopping: bool) -> dict:
+  def _runtime(self, pid: int, names: dict, kinds: dict, stopping: bool) -> dict:
     big = self._big
+    state = self.big_model_state
+    swapped_at = self._joined_at   # after the state: a swap sets it before _active
+    if state == 'running' and self._output_at < swapped_at:
+      # swapped in and not answered yet: the swap is still landing, not a
+      # model that stopped answering
+      state = 'joining'
     spec = getattr(big, 'spec', None)
     sha = getattr(spec, 'sha256', None)
-    if sha and sha not in names:
-      try:
-        names[sha] = self._name(sha) if self._name is not None else sha[:16]
-      except Exception:
-        names[sha] = sha[:16]
-    return {'pid': os.getpid(), 'at': time.monotonic(), 'stopping': stopping, 'state': self.big_model_state,
+    if big is not None and swapped_at not in kinds:
+      # once per swap: the gadget the link runs on does not change under it
+      kinds.clear()
+      kinds[swapped_at] = gadget.link_kind()
+    return {'pid': pid, 'at': time.monotonic(), 'stopping': stopping, 'state': state,
             'handovers': self._handovers, 'active': big is not None and self._active is big,
             'last_output_at': self._output_at, 'held': bool(getattr(big, 'held', False)),
-            'sha256': sha, 'name': names.get(sha), 'checkpoint': getattr(spec, 'checkpoint', None),
-            'transport': gadget.link_kind() if big is not None else None, 'drops': self._drops, 'lags': self._lags}
+            'sha256': sha, 'name': self._name_of(sha, names) if sha else None,
+            'checkpoint': getattr(spec, 'checkpoint', None),
+            'transport': kinds.get(swapped_at) if big is not None else None, 'drops': self._drops,
+            'lags': self._lags}
+
+  def _name_of(self, sha: str, names: dict) -> str:
+    """The catalog's name, kept once it is one. The sha's stand-in (a row not
+    resolved yet, or a lookup that failed) is asked again after NAME_RETRY."""
+    name, retry_at = names.get(sha, (None, 0.0))
+    if time.monotonic() >= retry_at:
+      try:
+        name = self._name(sha) if self._name is not None else None
+      except Exception:
+        name = None
+      real = bool(name) and name != sha[:16]
+      name = name if real else sha[:16]
+      names[sha] = (name, float('inf') if real else time.monotonic() + NAME_RETRY)
+    return name
 
   def close(self) -> None:
     first = not self._stop.is_set()   # the leave is said once; cleanups close twice

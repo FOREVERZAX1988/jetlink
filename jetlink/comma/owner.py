@@ -953,7 +953,7 @@ class Owner:
 
     A power-off request ends it: hardwared waits 25 s for the owner to take
     one, and the Jetson on its own supply stays on otherwise."""
-    self.backing_off = (f"the service keeps stopping ({died} times in {CRASH_WINDOW / 60:.0f} min), "
+    self.backing_off = (f"{gadget.BACKING_OFF} ({died} times in {CRASH_WINDOW / 60:.0f} min), "
                         f"waiting {until - time.monotonic():.0f} s before starting it again")
     gadget.log.warning("jetlink: %s", self.backing_off)
     self.publish_status()

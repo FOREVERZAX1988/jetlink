@@ -10,8 +10,8 @@ Every answer follows from the setting, the pick, the spec record, the gadget's
 files and whether the build made a warp for this camera; no link IO.
 """
 import ast
-import inspect
 import os
+import re
 import time
 import unittest
 from pathlib import Path
@@ -19,7 +19,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from jetlink.comma import gadget
-from jetlink.openpilot import status
+from jetlink.openpilot import link, status
 from jetlink.openpilot.status import Status
 from tests.openpilot.fakes import OpenpilotTest
 
@@ -447,9 +447,12 @@ class BuildEtaTest(OpenpilotTest):
     self.assertEqual(seen[0][2], 'building the engine')
 
 
-def snapshot(present=True, ready=False, progress=None) -> Status:
-  return Status(enabled=True, mode='usb', transport='USB', present=present, port='host', ready=ready, reason=None,
-                progress=progress, model='m', default_model='d')
+def snapshot(**fields) -> Status:
+  """A snapshot as zoompilot's tests/helpers.jetlink_status() builds it: by
+  keyword, from the fields Status had before running and active."""
+  base = {'enabled': False, 'mode': 'usb' if fields.get('enabled') else 'off', 'transport': 'USB', 'present': False,
+          'port': None, 'ready': False, 'reason': None, 'progress': None, 'model': None, 'default_model': None}
+  return Status(**{**base, **fields})
 
 
 class TestIcon(unittest.TestCase):
@@ -471,7 +474,7 @@ class TestIcon(unittest.TestCase):
     for fields, expected in cases:
       with self.subTest(fields):
         # onroad inputs are ignored offroad
-        self.assertEqual(snapshot(**fields).icon(False, True, True, 'running'), expected)
+        self.assertEqual(snapshot(**{'present': True, **fields}).icon(False, True, True, 'running'), expected)
 
   def test_onroad(self):
     cases = [
@@ -574,21 +577,14 @@ class TestTheSnapshot(OpenpilotTest):
     self.assertEqual((s.model, s.default_model, s.active_model), ('Picked', 'Default', None))
 
 
-def fixture(**fields) -> Status:
-  """A snapshot as zoompilot's tests/helpers.jetlink_status() builds it: by
-  keyword, from the fields Status had before running and active."""
-  base = {'enabled': False, 'mode': 'usb' if fields.get('enabled') else 'off', 'transport': 'USB', 'present': False,
-          'port': None, 'ready': False, 'reason': None, 'progress': None, 'model': None, 'default_model': None}
-  return Status(**{**base, **fields})
-
-
 class TestTheForksFixtures(unittest.TestCase):
   def test_the_old_fields_alone_still_make_one(self):
     # positionally, and by keyword as zoompilot's helpers do
     s = Status(True, 'usb', 'USB', True, 'host', True, None, None, 'm', 'd')
     self.assertEqual((s.standin, s.running, s.active), (None, None, False))
-    self.assertEqual(fixture(enabled=True, ready=True).phase, 'prepared')
-    self.assertEqual(status.failed('boom', 'usb').reason_code, 'status_failed')
+    self.assertEqual(snapshot(enabled=True, ready=True).phase, 'prepared')
+    failed = status.failed('boom', 'usb')
+    self.assertEqual((failed.reason_code, failed.phase), ('status_failed', 'unavailable'))
 
 
 class TestWhatThePanelsDerive(unittest.TestCase):
@@ -611,42 +607,42 @@ class TestWhatThePanelsDerive(unittest.TestCase):
              ({'present': True, 'transport': 'iOS over USB (192.168.60.3)'}, 'connected')]
     for fields, expected in cases:
       with self.subTest(fields):
-        s = fixture(**fields)
+        s = snapshot(**fields)
         self.assertEqual(s.port_state, expected)
         self.assertEqual(line[s.port_state](s), self.link_status(s))
 
-  def test_shown_is_jetlink_view(self):
-    cases = [({}, False), ({'present': True, 'ready': True, 'enabled': True}, True),
-             ({'present': True, 'progress': {'stage': 'upload', 'frac': 0.5, 'msg': ''}}, True),
-             ({'progress': {}}, True), ({'enabled': True}, True), ({'ready': True, 'port': 'host'}, False)]
+  def test_shown_on_zoompilots_view_cases(self):
+    cases = [({}, False),                                                     # nothing to show
+             ({'present': True, 'ready': True, 'enabled': True}, True),        # an attached accelerator
+             ({'present': True, 'progress': {'stage': 'upload', 'frac': 0.5, 'msg': ''}}, True),   # progress alone
+             ({'progress': {'stage': 'upload'}}, True), ({'enabled': True}, True), ({'ready': True, 'port': 'host'}, False)]
     for fields, expected in cases:
       with self.subTest(fields):
-        s = fixture(**fields)
-        self.assertEqual(s.shown, expected)
-        self.assertEqual(s.shown, s.enabled or s.present or s.progress is not None)
+        self.assertEqual(snapshot(**fields).shown, expected)
 
   def test_holds_port_is_the_setting(self):
     # ADB off while the link is on; beside a chestnut enabled is already False
     for enabled in (False, True):
-      self.assertEqual(fixture(enabled=enabled, present=not enabled).holds_port, enabled)
+      self.assertEqual(snapshot(enabled=enabled, present=not enabled).holds_port, enabled)
 
 
 class TestPhase(unittest.TestCase):
   def test_each_phase_and_what_outranks_what(self):
     on = {'enabled': True}
     cases = [
-      ({}, 'off'),
-      ({'running': 'running', 'active': True}, 'off'),     # the setting first, then
+      ({'reason': 'jetlink status failed: boom'}, 'unavailable'),   # a failed snapshot: the reason, link off
       ({**on, 'reason': status.NO_WARP, 'running': 'running', 'active': True}, 'unavailable'),
+      ({}, 'off'),
+      ({'running': 'running', 'active': True}, 'off'),
       ({**on, 'running': 'running', 'active': True, 'progress': {'stage': 'connect'}}, 'active'),
       ({**on, 'running': 'ready', 'ready': True, 'progress': {'stage': 'connect'}}, 'waiting'),
       ({**on, 'running': 'retrying', 'progress': {'stage': 'connect'}}, 'reconnecting'),
       ({**on, 'running': 'retrying', 'progress': {'stage': 'build', 'frac': 0.2}}, 'reconnecting'),
       ({**on, 'running': 'running', 'ready': True}, 'reconnecting'),  # stopped answering: about to hand back
+      ({**on, 'progress': {'stage': 'failed'}, 'ready': True}, 'failed'),
       ({**on, 'running': 'joining', 'progress': {'stage': 'build', 'frac': 0.2}}, 'preparing'),
       ({**on, 'progress': {'stage': 'download', 'frac': 0.3}, 'ready': True}, 'preparing'),
       ({**on, 'progress': {'stage': 'waiting'}}, 'preparing'),
-      ({**on, 'progress': {'stage': 'failed'}}, 'preparing'),
       ({**on, 'running': 'joining'}, 'connecting'),
       ({**on, 'running': 'joining', 'ready': True, 'progress': {'stage': 'connect'}}, 'connecting'),
       ({**on, 'progress': {'stage': 'connect', 'msg': 'connecting'}}, 'connecting'),   # a provisioning run's
@@ -657,57 +653,74 @@ class TestPhase(unittest.TestCase):
     ]
     for fields, expected in cases:
       with self.subTest(fields):
-        self.assertEqual(fixture(**fields).phase, expected)
+        self.assertEqual(snapshot(**fields).phase, expected)
     self.assertEqual({p for _, p in cases}, set(status.PHASES))
 
   def test_every_combination_is_a_phase(self):
-    seen = {fixture(enabled=e, reason=r, ready=rd, running=st, active=a, progress=g).phase
+    seen = {snapshot(enabled=e, reason=r, ready=rd, running=st, active=a, progress=g).phase
             for e in (False, True) for r in (None, status.STOPPED) for rd in (False, True)
             for st in (None, 'joining', 'retrying', 'ready', 'running') for a in (False, True)
-            for g in (None, {'stage': 'connect'}, {'stage': 'build'}, {'stage': 'ready'}, {})}
+            for g in (None, {'stage': 'connect'}, {'stage': 'build'}, {'stage': 'ready'}, {'stage': 'failed'}, {})}
     self.assertEqual(seen, set(status.PHASES))
+
+
+# what jetlink's own servers report as a stage (JetlinkKit), by the calls that report one
+SWIFT_SOURCES = Path(__file__).parents[2] / 'JetlinkKit' / 'Sources'
+SWIFT_STAGE = re.compile(r'\b(?:report|progress|paced)\("([a-z_]+)"')
 
 
 class TestCodes(unittest.TestCase):
   def test_each_reason_has_its_code(self):
-    from jetlink.comma import owner
     cases = [(None, None), (status.NO_WARP, 'no_warp'), (status.STOPPED, 'service_stopped'),
-             ("the service keeps stopping (5 times in 10 min), waiting 60 s before starting it again", 'backing_off'),
+             (f"{gadget.BACKING_OFF} (5 times in 10 min), waiting 60 s before starting it again", 'backing_off'),
              (status.failure('RuntimeError: boom', 'usb'), 'status_failed'),
              ('the lender could not listen: address in use', 'gadget')]
     for reason, code in cases:
       with self.subTest(reason):
-        self.assertEqual(fixture(enabled=True, reason=reason).reason_code, code)
+        self.assertEqual(snapshot(enabled=True, reason=reason).reason_code, code)
     self.assertEqual({c for _, c in cases} - {None}, set(status.REASON_CODES))
-    # the owner's own words, which the code is read from
-    self.assertIn(f'f"{status.BACKING_OFF} (', inspect.getsource(owner))
 
-  def test_every_progress_code_jetlink_reports_is_listed(self):
+  def test_every_progress_code_jetlink_and_its_servers_report_is_listed(self):
     reported = set()
     for path in Path(status.__file__).parents[1].rglob('*.py'):
       for node in ast.walk(ast.parse(path.read_text())):
-        if not isinstance(node, ast.Call) or getattr(node.func, 'attr', None) not in ('report', '_report'):
+        name = getattr(getattr(node, 'func', None), 'attr', None)
+        if not isinstance(node, ast.Call) or name not in ('report', '_report', 'progress_cb'):
           continue
         given = [k.value for k in node.keywords if k.arg == 'code']
-        if node.func.attr == '_report' and len(node.args) > 2:
+        if name == '_report' and len(node.args) > 2:
           given.append(node.args[2])
-        reported |= {g.value for g in given if isinstance(g, ast.Constant)}
-    # the client's upload and the server's stages pass through report_with_eta as stage names
-    self.assertEqual(reported | {'upload', 'patch', 'parse', 'build', 'load'}, set(status.PROGRESS_CODES))
+        if name == 'progress_cb':   # the client's own stage, which report_with_eta passes on as the code
+          given.append(node.args[0])
+        reported |= {g.value for g in given if isinstance(g, ast.Constant) and g.value}
+    reported.add(link.ModelMissing.code)
+    if not SWIFT_SOURCES.is_dir():
+      self.assertLessEqual(reported, set(status.PROGRESS_CODES))
+      self.skipTest('no JetlinkKit checkout: its stages are not checked')
+    for path in SWIFT_SOURCES.rglob('*.swift'):
+      reported |= set(SWIFT_STAGE.findall(path.read_text()))
+    self.assertEqual(reported, set(status.PROGRESS_CODES))
 
   def test_a_code_and_its_args_travel_beside_the_message(self):
     progress = status.Progress(SimpleNamespace(keys=SimpleNamespace(progress='p'), put=mock.Mock()))
     progress.report('download', 0.5, 'downloading 1 of 2 MB', code='downloading', args={'got_mb': 1, 'total_mb': 2})
     progress.op.put.assert_called_once_with('p', {'stage': 'download', 'frac': 0.5, 'msg': 'downloading 1 of 2 MB',
                                                   'drops': 0, 'code': 'downloading', 'args': {'got_mb': 1, 'total_mb': 2}})
+    progress.report('connect', 0.0, 'waiting for jetlink', code='waiting_for_host', args={})
+    self.assertEqual(progress.op.put.call_args.args[1], {'stage': 'connect', 'frac': 0.0, 'msg': 'waiting for jetlink',
+                                                         'drops': 0, 'code': 'waiting_for_host'})
 
-  def test_the_build_says_its_estimate_as_args(self):
+  def test_the_server_stages_are_the_codes_with_their_numbers(self):
     seen = []
     progress = status.Progress(SimpleNamespace(), size=lambda: 1_850_000_000)
     with mock.patch.object(progress, 'report', lambda *a, **kw: seen.append(kw)):
       progress.report_with_eta('build', 0.8, 'building the engine')
-      progress.report_with_eta('upload', 0.5, '380/766 MB')
-    self.assertEqual(seen, [{'code': 'build', 'args': {'eta_s': 60}}, {'code': 'upload', 'args': {}}])
+      progress.report_with_eta('upload', 0.5, '882/1764 MB')
+      progress.report_with_eta('compile', 0.5, 'compiling')
+      progress.report_with_eta('', 0.0, 'a message with no stage')
+    self.assertEqual(seen, [{'code': 'build', 'args': {'eta_s': 60}},
+                            {'code': 'upload', 'args': {'got_mb': 882, 'total_mb': 1764}},
+                            {'code': 'compile', 'args': None}, {'code': None, 'args': None}])
 
 
 class TestTheRuntimeRecord(OpenpilotTest):
@@ -730,6 +743,12 @@ class TestTheRuntimeRecord(OpenpilotTest):
     self.write(state='ready', active=False)
     self.assertEqual(status.runtime(), ('ready', False))
 
+  def test_a_record_too_old_to_drive_still_says_what_runs(self):
+    # a modeld frozen for 2 s: not driving, but not gone for HEARTBEAT_TIMEOUT
+    at = time.monotonic() - status.ACTIVE_FRESH - 0.5
+    self.write(at=at, last_output_at=at - 0.05)
+    self.assertEqual(status.runtime(), ('running', False))
+
   def test_a_stale_stopping_or_dead_record_is_none(self):
     self.write(at=time.monotonic() - gadget.HEARTBEAT_TIMEOUT - 0.5)
     self.assertEqual(status.runtime(), (None, False))
@@ -738,7 +757,7 @@ class TestTheRuntimeRecord(OpenpilotTest):
     self.write()
     with mock.patch.object(gadget.os, 'kill', side_effect=ProcessLookupError):
       self.assertEqual(status.runtime(), (None, False))
-    for pid in (0, -1, None, '12'):
+    for pid in (0, -1, None, '12', True, 2 ** 80):
       self.write(pid=pid)
       self.assertEqual(status.runtime(), (None, False), pid)
 
@@ -752,16 +771,18 @@ class TestTheRuntimeRecord(OpenpilotTest):
     with mock.patch.object(gadget.os, 'kill', side_effect=PermissionError):
       self.assertTrue(gadget.pid_alive(1))
 
-  def test_the_snapshot_carries_it(self):
+  def test_the_snapshot_carries_it_and_reads_it_only_with_the_link_on(self):
     self.op.set_mode('usb')
     self.patch(self.parts.warps, 'built', return_value=True)
     self.patch(gadget, 'gadget_error', return_value=None)
     self.write()
     s = self.jl.status()
     self.assertEqual((s.running, s.active, s.phase), ('running', True, 'active'))
-    gadget.MODELD.unlink()
-    s = self.jl.status()
-    self.assertEqual((s.running, s.active), (None, False))
+    self.op.set_mode('off')
+    with mock.patch.object(status, 'runtime') as runtime:
+      s = self.jl.status()
+    runtime.assert_not_called()
+    self.assertEqual((s.running, s.active, s.phase), (None, False, 'off'))
 
 
 if __name__ == '__main__':

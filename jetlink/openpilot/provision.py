@@ -104,7 +104,7 @@ class ProvisioningRun:
       got = frac
       got_mb, total_mb = int(frac * size) >> 20, size >> 20
       parts.progress.report('download', frac, f"downloading {got_mb} of {total_mb} MB" if size else 'downloading',
-                            code='downloading', args={'got_mb': got_mb, 'total_mb': total_mb} if size else {})
+                            code='downloading', args={'got_mb': got_mb, 'total_mb': total_mb} if size else None)
 
     def retrying(error, delay: float) -> None:
       parts.progress.report('download', got, f"download stalled, retrying in {delay:.0f} s",

@@ -167,6 +167,9 @@ STATUS = Path("/dev/shm/jetlink/status.json")
 # how old that record may be before a reader takes its owner for gone: six of
 # its 0.5 s steps. A wait inside a step renews it (Owner.beat)
 HEARTBEAT_TIMEOUT = 3.0
+# how the owner's crash-loop backoff starts its record's error, which
+# status.Status.reason_code reads it by
+BACKING_OFF = "the service keeps stopping"
 # the owner's start times, for its crash-loop backoff (see the owner)
 STARTS = Path("/dev/shm/jetlink/starts.json")
 # held with flock by the owner for its whole life, so there is only ever one
@@ -203,22 +206,31 @@ def write_record(path: Path, record) -> None:
 
 def clear_leftovers(directory: Path) -> None:
   """The temporaries a writer killed between its write and its rename left
-  in `directory`. For the owner's start, when nothing else writes there."""
+  in `directory`, for the owner's start. Only a dead writer's (write_record
+  names them by pid): modeld writes its runtime record there too, and a
+  live one's is mid-write."""
   try:
     for leftover in directory.glob('.*.json.*'):
-      leftover.unlink(missing_ok=True)
+      pid = leftover.name.rsplit('.', 1)[-1]
+      if not (pid.isdigit() and pid_alive(int(pid))):
+        leftover.unlink(missing_ok=True)
   except OSError:
     pass
+
+
+def read_record(path: Path) -> dict | None:
+  """A JSON record write_record wrote, or None: missing, or not a record."""
+  try:
+    record = json.loads(read(path))
+  except ValueError:
+    return None
+  return record if isinstance(record, dict) else None
 
 
 def owner_status() -> dict | None:
   """The owner's status record, or None without one: no owner has run since
   boot, the last one stopped cleanly, or it is one too old to write it."""
-  try:
-    record = json.loads(read(STATUS))
-  except ValueError:
-    return None
-  return record if isinstance(record, dict) else None
+  return read_record(STATUS)
 
 
 def owner_alive(record: dict) -> bool:
@@ -428,11 +440,11 @@ def dormant() -> bool:
 
 
 def pid_alive(pid) -> bool:
-  if not isinstance(pid, int) or pid <= 0:
+  if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
     return False   # 0 and below name process groups, never one process
   try:
     os.kill(pid, 0)
-  except ProcessLookupError:
+  except (ProcessLookupError, OverflowError, ValueError):
     return False
   except PermissionError:
     pass  # alive, just not ours to signal
