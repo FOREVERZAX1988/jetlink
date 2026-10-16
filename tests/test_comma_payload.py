@@ -45,6 +45,8 @@ LATER = ('jetlink.openpilot.hooks', 'jetlink.openpilot.stock', 'jetlink.openpilo
 # the comma's venv has, and the fork's tinygrad, which modeld brings. onnx is
 # only behind spec_from_onnx, for a bench
 OUTSIDE = set(sys.stdlib_module_names) | {'numpy', 'tinygrad', 'onnx'}
+# the fork's openpilot, which only the base adapter imports, inside its methods
+HOST = {'jetlink.openpilot.stock': {'openpilot'}}
 
 MODULE_NAME = re.compile(r'^jetlink(\.\w+)+$')
 
@@ -127,7 +129,8 @@ def test_everything_the_comma_imports_is_under_jetlink():
 
 def test_nothing_it_imports_is_from_the_repo_outside_jetlink():
   # scripts/, tests/ and the rest are not in the payload
-  stray = {name: sorted(theirs - OUTSIDE) for name, (_, _, theirs) in graph().items() if theirs - OUTSIDE}
+  stray = {name: sorted(rest) for name, (_, _, theirs) in graph().items()
+           if (rest := theirs - OUTSIDE - HOST.get(name, set()))}
   assert stray == {}
 
 

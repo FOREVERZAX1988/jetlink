@@ -137,11 +137,21 @@ def _imports(path: Path) -> list[tuple[str, int, bool]]:
   return found
 
 
+def _in_a_function(path: Path) -> set[int]:
+  """The lines of every import nested in a function: a module-level try or if is not."""
+  lines = set()
+  for fn in ast.walk(ast.parse(path.read_text(), filename=str(path))):
+    if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+      lines |= {node.lineno for node in ast.walk(fn) if isinstance(node, (ast.Import, ast.ImportFrom))}
+  return lines
+
+
 def test_no_source_in_jetlink_names_openpilot():
   offenders = []
   for path in sorted(PACKAGE.rglob('*.py')):
-    for module, line, top in _imports(path):
-      if path == STOCK and not top:
+    lazy = _in_a_function(path) if path == STOCK else set()
+    for module, line, _ in _imports(path):
+      if module.split('.')[0] == 'openpilot' and line in lazy:
         continue
       if module.split('.')[0] in BLOCKED and module.split('.')[0] != 'tinygrad':
         offenders.append(f"{path.relative_to(ROOT)}:{line} imports {module}")
@@ -159,6 +169,6 @@ def test_tinygrad_is_only_ever_imported_where_it_is_used():
 
 def test_stock_names_openpilot_only_inside_a_method():
   # the one file the guard above lets through, and only this far
-  lazy = [module for module, _, top in _imports(STOCK) if module.split('.')[0] == 'openpilot' and not top]
+  lazy = [module for module, line, _ in _imports(STOCK) if module.split('.')[0] == 'openpilot' and line in _in_a_function(STOCK)]
   assert lazy, "stock.py imports no openpilot: drop its exception above"
   assert 'jetlink.openpilot.stock' in MODULES   # so the blocked import above runs it

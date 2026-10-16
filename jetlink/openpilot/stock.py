@@ -15,8 +15,9 @@ openpilot.common.basedir (os alone); anything under common.hardware loads
 capnp, swaglog loads zmq, and model_face() imports modeld itself, so it is for
 modeld alone, where that module is already loaded.
 
-Data are class attributes, behaviour small methods, each a fork may override.
-Both are jetlink's contract: renaming or removing one, or changing what one
+Data are class attributes, behaviour small methods, each a fork may override;
+one override point per value: a fork sets KEYS and CATALOG_SELECTOR, and the
+interface's keys and catalog_selector read them. Both are jetlink's contract: renaming or removing one, or changing what one
 means, is a breaking change and bumps API. The paths and literals here are
 checked against commaai/openpilot by scripts/upstream (the upstream-paths CI
 job), weekly against master.
@@ -45,14 +46,20 @@ with, so defined there it needs no ADAPTER_MODULE.
 from __future__ import annotations
 
 import os
+import time
 from functools import cached_property
 from pathlib import Path
 
+# root.AGNOS is openpilot's own test for a comma (common.hardware.AGNOS), which
+# that package answers only after loading capnp; root is on the owner's path
+from jetlink.comma import root
 from jetlink.openpilot.interface import Keys, ModelFace, OwnerConfig
 
-# openpilot's own test for a comma (common.hardware.AGNOS), which that package
-# answers only after loading capnp
-_AGNOS = os.path.isfile('/AGNOS')
+# how long a Params or SubMaster that failed to load is left before the next
+# try: in_control() asks on every realtime frame
+RETRY_S = 5.0
+# what the base engaged() reads, by service: only those in IN_CONTROL_SERVICES
+_ENGAGED = {'carControl': ('enabled', 'latActive', 'longActive'), 'selfdriveState': ('enabled', 'active')}
 
 
 class Stock:
@@ -71,7 +78,9 @@ class Stock:
   # CHESTNUT_USB_IDS + CHESTNUT_ROM_USB_IDS, which CI holds this to): written
   # out, as the owner cannot import that package
   CHESTNUT_IDS = frozenset({(0xADD1, 0x0001), (0x3801, 0x0001), (0x174C, 0x2464), (0x174C, 0x2463)})
-  # what in_control() reads; carState too, so a dead card counts as in control
+  # what in_control() reads; carState too, so a dead card counts as in control.
+  # It goes with engaged(): the base reads only the services listed here, so a
+  # fork that adds one (zoompilot's carControlSP) overrides engaged() to read it
   IN_CONTROL_SERVICES = ('carState', 'carControl', 'selfdriveState')
   # modeld's driving warp, which its SConscript compiles per camera
   WARP_DIR = 'openpilot/selfdrive/modeld/models'
@@ -81,11 +90,15 @@ class Stock:
   def __init__(self):
     # nothing imported here: owner_config() builds one in the owner
     self._stores: dict[Path, object] = {}
+    self._params_after = 0.0
+    self._services = list(self.IN_CONTROL_SERVICES)
     self._sm = None
+    self._sm_after = 0.0
     self._in_control_error: str | None = None
 
   # -- the readers --------------------------------------------------------------
 
+  # the interface's members, over the class attributes a fork sets
   @property
   def keys(self) -> Keys:
     return self.KEYS
@@ -107,13 +120,15 @@ class Stock:
 
   def params_dir(self) -> Path:
     # params.cc and hw.h's rule: PARAMS_ROOT, else /data/params on a comma and
-    # ~/.comma<OPENPILOT_PREFIX>/params elsewhere, then /<OPENPILOT_PREFIX, or
-    # d>. The environment only, per call, so it follows a prefix as Params does
+    # $HOME/.comma<OPENPILOT_PREFIX>/params elsewhere, then /<OPENPILOT_PREFIX,
+    # or d>. HOME unset gives /.comma, as the C++ concatenation does
+    # (zoompilot's copy gives a relative .comma). The environment only, per
+    # call, so it follows a prefix as Params does
     prefix = os.environ.get('OPENPILOT_PREFIX', '')
-    root = os.environ.get('PARAMS_ROOT')
-    if root is None:
-      root = '/data/params' if _AGNOS else os.path.join(os.environ.get('HOME', ''), '.comma' + prefix, 'params')
-    return Path(root) / os.environ.get('OPENPILOT_PREFIX', 'd')
+    store = os.environ.get('PARAMS_ROOT')
+    if store is None:
+      store = '/data/params' if root.AGNOS else os.environ.get('HOME', '') + '/.comma' + prefix + '/params'
+    return Path(store) / os.environ.get('OPENPILOT_PREFIX', 'd')
 
   def _params(self):
     # one Params per store: making one costs more than the read on a comma, and
@@ -121,8 +136,15 @@ class Stock:
     where = self.params_dir()
     store = self._stores.get(where)
     if store is None:
-      from openpilot.common.params import Params
-      store = self._stores[where] = Params()
+      # one that failed to load is not tried again for RETRY_S: get() is on the UI's frame
+      if time.monotonic() < self._params_after:
+        raise RuntimeError("openpilot's Params failed to load, retrying shortly")
+      try:
+        from openpilot.common.params import Params
+        store = self._stores[where] = Params()
+      except Exception:
+        self._params_after = time.monotonic() + RETRY_S
+        raise
     return store
 
   def get(self, key: str):
@@ -166,7 +188,7 @@ class Stock:
     from openpilot.common.hardware.hw import Paths
     if hasattr(Paths, 'model_root'):
       return Path(Paths.model_root())
-    return Path('/data/media/0/models') if _AGNOS else Path(Paths.comma_home()) / 'media' / '0' / 'models'
+    return Path('/data/media/0/models') if root.AGNOS else Path(Paths.comma_home()) / 'media' / '0' / 'models'
 
   # -- modeld ---------------------------------------------------------------------
 
@@ -196,21 +218,25 @@ class Stock:
                      get_action_from_model=self.action_function())
 
   def engaged(self, sm) -> bool:
-    """Is openpilot in control, off fresh and valid IN_CONTROL_SERVICES? Either
-    axis counts, as does selfdrived's own enabled or active."""
-    cc, ss = sm['carControl'], sm['selfdriveState']
-    return bool(cc.enabled or cc.latActive or cc.longActive or ss.enabled or ss.active)
+    """Is openpilot in control, off fresh and valid IN_CONTROL_SERVICES?
+    carControl's enabled or either axis, or selfdriveState's enabled or active,
+    of those services the fork lists."""
+    return any(getattr(sm[service], field) for service, fields in _ENGAGED.items()
+               if service in self.IN_CONTROL_SERVICES for field in fields)
 
   def in_control(self) -> bool:
     # on modeld's frame thread before every frame: a poll that never waits, and
     # a service late or invalid, or any failure, holds the swap off, never modeld
     try:
-      services = list(self.IN_CONTROL_SERVICES)
       if self._sm is None:
+        # one try per RETRY_S, not one per frame
+        if time.monotonic() < self._sm_after:
+          return True
+        self._sm_after = time.monotonic() + RETRY_S
         from openpilot.cereal import messaging
-        self._sm = messaging.SubMaster(services)
+        self._sm = messaging.SubMaster(self._services)
       self._sm.update(0)
-      result = not (self._sm.all_alive(services) and self._sm.all_valid(services)) or self.engaged(self._sm)
+      result = not (self._sm.all_alive(self._services) and self._sm.all_valid(self._services)) or self.engaged(self._sm)
     except Exception as e:
       # once per distinct error: this runs 20 times a second
       if self._in_control_error != (text := f"{type(e).__name__}: {e}"):
@@ -232,9 +258,8 @@ class Stock:
     None for another shape, so jetlink's own reset runs."""
     if not all(hasattr(small, name) for name in ('input_queues', 'state_pairs', 'packed_input')):
       return None
-    from jetlink.openpilot.warp import reset_queues
-    return reset_queues([small.input_queues[name] for name in small.state_pairs], (small.packed_input,),
-                        getattr(small, 'prev_desire', None))
+    from jetlink.openpilot.warp import reset_for_stock
+    return reset_for_stock(small, getattr(small, 'prev_desire', None))
 
   # -- the adapter module's, for jetlinkd --------------------------------------------
 
@@ -245,7 +270,7 @@ class Stock:
     op = cls()
     # the provisioning run starts in the checkout with it on the path, where
     # the launch script links jetlink in
-    return OwnerConfig(params_dir=op.params_dir(), keys=op.keys, chestnut_ids=frozenset(cls.CHESTNUT_IDS),
+    return OwnerConfig(params_dir=op.params_dir(), keys=op.keys, chestnut_ids=cls.CHESTNUT_IDS,
                        adapter=cls.ADAPTER_MODULE or cls.__module__, cwd=Path(BASEDIR), env={'PYTHONPATH': BASEDIR},
                        log_file=cls.OWNER_LOG)
 

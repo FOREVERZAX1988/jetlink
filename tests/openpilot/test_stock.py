@@ -14,8 +14,6 @@ these tests say what Stock does with them.
 """
 from __future__ import annotations
 
-import ast
-import importlib.util
 import json
 import os
 import subprocess
@@ -28,10 +26,11 @@ from unittest import mock
 
 import numpy as np
 
-from jetlink.comma import port
+from jetlink.comma import port, root
 from jetlink.openpilot import interface, stock
 from jetlink.openpilot.interface import Openpilot
 from jetlink.openpilot.stock import Stock
+from tests import load_script
 from tests.openpilot import fakes
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -186,7 +185,9 @@ class StockTest(unittest.TestCase):
   model_root = False
 
   def setUp(self):
-    self.tmp = Path(tempfile.mkdtemp())
+    tmp = tempfile.TemporaryDirectory()
+    self.addCleanup(tmp.cleanup)
+    self.tmp = Path(tmp.name)
     fakes.isolate(self, self.tmp)
     self.world = World(self.tmp, model_root=self.model_root)
     for p in (mock.patch.dict(sys.modules, self.world.modules()),
@@ -197,15 +198,6 @@ class StockTest(unittest.TestCase):
     os.environ.pop('PARAMS_ROOT', None)
     os.environ.pop('OPENPILOT_PREFIX', None)
     self.op = Stock()
-
-
-class TestTheFake(unittest.TestCase):
-  def test_it_stubs_exactly_what_stock_imports(self):
-    imported = set()
-    for node in ast.walk(ast.parse(SOURCE.read_text())):
-      if isinstance(node, ast.ImportFrom) and (node.module or '').split('.')[0] == 'openpilot':
-        imported |= {(node.module, alias.name) for alias in node.names}
-    assert imported == set(World(Path(tempfile.mkdtemp())).names)
 
 
 class TestShape(StockTest):
@@ -244,10 +236,16 @@ class TestParams(StockTest):
     self.world.params_error = RuntimeError('params_last_error')
     assert self.op.get('JetlinkSpec') is None
 
-  def test_get_is_none_when_params_cannot_be_made(self):
-    self.world.names[('openpilot.common.params', 'Params')] = mock.Mock(side_effect=OSError('no library'))
-    with mock.patch.dict(sys.modules, self.world.modules()):
-      assert Stock().get('JetlinkSpec') is None
+  def test_get_is_none_when_params_cannot_be_made_and_backs_off(self):
+    made = self.world.names[('openpilot.common.params', 'Params')] = mock.Mock(side_effect=OSError('no library'))
+    with mock.patch.dict(sys.modules, self.world.modules()), mock.patch.object(stock.time, 'monotonic') as now:
+      now.return_value = 100.0
+      op = Stock()
+      assert [op.get('JetlinkSpec') for _ in range(3)] == [None] * 3
+      assert made.call_count == 1
+      now.return_value += stock.RETRY_S
+      assert op.get('JetlinkSpec') is None
+      assert made.call_count == 2
 
   def test_put_and_remove_go_through_and_may_raise(self):
     self.op.put('JetlinkSpec', {'a': 1}, block=True)
@@ -273,8 +271,13 @@ class TestParams(StockTest):
     os.environ['PARAMS_ROOT'] = str(self.tmp / 'pr')
     assert self.op.params_dir() == self.tmp / 'pr' / 'p1'
     del os.environ['PARAMS_ROOT'], os.environ['OPENPILOT_PREFIX']
-    with mock.patch.object(stock, '_AGNOS', True):
+    with mock.patch.object(root, 'AGNOS', True):
       assert self.op.params_dir() == Path('/data/params/d')
+
+  def test_params_dir_without_home_is_the_c_plus_pluses(self):
+    # getenv("HOME") + "/.comma": an absolute /.comma, never a relative one
+    del os.environ['HOME']
+    assert self.op.params_dir() == Path('/.comma/params/d')
 
 
 class TestDevice(StockTest):
@@ -289,7 +292,7 @@ class TestDevice(StockTest):
 
   def test_model_root_without_paths_model_root(self):
     assert self.op.model_root() == self.tmp / 'home' / '.comma' / 'media' / '0' / 'models'
-    with mock.patch.object(stock, '_AGNOS', True):
+    with mock.patch.object(root, 'AGNOS', True):
       assert self.op.model_root() == Path('/data/media/0/models')
 
   def usb(self, *devices):
@@ -378,9 +381,26 @@ class TestInControl(StockTest):
     assert self.op.in_control() is True
     assert len(self.world.log.lines('error')) == 2
 
-  def test_no_submaster_counts_as_in_control(self):
+  def test_no_submaster_counts_as_in_control_and_backs_off(self):
     self.world.sm_error = OSError('no msgq')
-    assert self.op.in_control() is True
+    with mock.patch.object(stock.time, 'monotonic') as now:
+      now.return_value = 100.0
+      assert [self.op.in_control() for _ in range(20)] == [True] * 20
+      assert len(self.world.log.lines('error')) == 1   # tried once
+      self.world.sm_error = None
+      assert self.op.in_control() is True and self.world.submasters == []
+      now.return_value += stock.RETRY_S
+      assert self.op.in_control() is False and len(self.world.submasters) == 1
+
+  def test_the_base_rule_reads_only_the_listed_services(self):
+    # a fork that lists another service and keeps the base engaged()
+    class Fork(Stock):
+      IN_CONTROL_SERVICES = ('carState', 'carControl', 'carControlSP')
+    del self.world.messages['selfdriveState']
+    fork = Fork()
+    assert fork.in_control() is False and self.world.log.lines('error') == []
+    self.world.messages['carControl'].latActive = True
+    assert fork.in_control() is True
 
   def test_a_forks_engagement_rule(self):
     class Fork(Stock):
@@ -479,27 +499,11 @@ def test_owner_config_imports_only_basedir(tmp_path):
   assert foreign == []
 
 
-def test_the_top_level_is_the_standard_library_and_jetlink():
-  # the owner imports it; openpilot goes inside a method
-  top = []
-  for node in ast.parse(SOURCE.read_text()).body:
-    if isinstance(node, ast.Import):
-      top += [alias.name for alias in node.names]
-    elif isinstance(node, ast.ImportFrom):
-      top.append(node.module)
-  foreign = [m for m in top if m.split('.')[0] not in sys.stdlib_module_names and m.split('.')[0] != 'jetlink']
-  assert foreign == [] and 'jetlink.openpilot.interface' in top
-
 
 def _upstream(name: str):
-  # scripts/upstream is not a package: the checkers run as python3 -I scripts
-  path = ROOT / 'scripts' / 'upstream' / f'{name}.py'
-  spec = importlib.util.spec_from_file_location(f'upstream_{name}', path)
-  module = importlib.util.module_from_spec(spec)
-  with mock.patch.object(sys, 'path', [str(path.parent), *sys.path]):
-    spec.loader.exec_module(module)
-  return module
-
+  # the checker as CI runs it, with check_imports' own path edit kept to this test
+  with mock.patch.object(sys, 'path', list(sys.path)), mock.patch.dict(sys.modules):
+    return load_script(ROOT / 'scripts' / 'upstream' / f'{name}.py')
 
 def test_the_upstream_checker_reads_stocks_literals():
   # what check_paths holds the tree to is what Stock holds
@@ -509,6 +513,7 @@ def test_the_upstream_checker_reads_stocks_literals():
   assert values['KEYS']['offroad'] == Stock.KEYS.offroad
 
 
-def test_the_upstream_import_check_sees_every_import_the_fake_stubs():
+def test_the_fake_stubs_exactly_what_stock_imports(tmp_path):
+  # read off stock.py as the upstream check reads it, so a new import cannot slip past either
   found = set(_upstream('check_imports').openpilot_imports(SOURCE))
-  assert found == set(World(Path(tempfile.mkdtemp())).names)
+  assert found == set(World(tmp_path).names)

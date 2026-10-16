@@ -235,6 +235,15 @@ def reset_queues(queues, arrays, prev_desire=None):
   return reset
 
 
+def reset_for_stock(state, prev_desire=None):
+  """The reset of stock modeld's ModelState layout, captured now, as its warmup
+  zeroes it: the recurrent state on the GPU (input_queues named by
+  state_pairs) and the one packed host buffer (packed_input), and the desire
+  edge. `state` is the ModelState, or a modeld_v2 native bundle's adapter,
+  which keeps the same layout."""
+  return reset_queues([state.input_queues[name] for name in state.state_pairs], (state.packed_input,), prev_desire)
+
+
 def prepare_reset(model):
   """Capture the small model's reset before driving, keeping its JIT's buffer identities.
 
@@ -254,10 +263,9 @@ def prepare_reset(model):
   """
   adapter = getattr(model, 'adapter', None)
   keeper = model if adapter is None else adapter
+  prev_desire = getattr(model, 'prev_desire', None)
   if adapter.is_native if adapter is not None else hasattr(model, 'state_pairs'):
-    queues = [keeper.input_queues[name] for name in keeper.state_pairs]
-    arrays = (keeper.packed_input,)
-  else:
-    queues = [q for q in keeper.input_queues.values() if q.device != 'NPY']
-    arrays = (keeper.numpy_inputs if hasattr(keeper, 'numpy_inputs') else keeper.npy).values()
-  return reset_queues(queues, arrays, getattr(model, 'prev_desire', None))
+    return reset_for_stock(keeper, prev_desire)
+  queues = [q for q in keeper.input_queues.values() if q.device != 'NPY']
+  arrays = (keeper.numpy_inputs if hasattr(keeper, 'numpy_inputs') else keeper.npy).values()
+  return reset_queues(queues, arrays, prev_desire)
