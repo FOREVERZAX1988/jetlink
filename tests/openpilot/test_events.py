@@ -93,6 +93,15 @@ class TestHandBack(SwapEventsTest):
     self.assertEqual(self.step(state='retrying'), set())
     self.assertEqual(self.step(state='retrying', enabled=True), set())
 
+  def test_a_gap_in_the_state_is_no_fall(self):
+    # porting.md's selfdrived passes 'none' and fresh False when a status read fails
+    self.drive_big(enabled=True)
+    for _ in range(50):
+      self.assertEqual(self.step(state='none', big=True, fresh=False, enabled=True), set())
+      self.assertFalse(self.flags.settling)
+    self.assertEqual(self.step(state='running', big=True, enabled=True), set())
+    self.assertIn('link_lost', self.step(state='none', big=True, enabled=True))
+
   def test_a_fall_while_disengaged_is_silent(self):
     self.drive_big()
     self.assertEqual(self.step(state='retrying'), set())

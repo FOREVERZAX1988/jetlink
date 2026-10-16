@@ -63,6 +63,9 @@ class SwapEvents:
     self.switching_ticks = round(SWITCHING_S / tick_s)
     self.offered = False
     self.running = False
+    # the state as last seen fresh: a gap in the fork's status or message holds
+    # it, never reads as the link going
+    self._state = 'none'
     # ticks left of each event, and of the settling after a switch either way
     self._offer = self._handback = self._switching = self._settle = 0
 
@@ -81,6 +84,7 @@ class SwapEvents:
     MADS, MADS even paused), the same rule the swap waits on."""
     # a stale state neither offers the switch nor rearms the offer
     if fresh:
+      self._state = state
       if state != 'ready' or big:
         # ended by the swap as well as by the link going: an offer still on
         # screen after the switch reads as if it had not happened
@@ -94,7 +98,7 @@ class SwapEvents:
         self._offer = self.offer_ticks
 
     # a chestnut dropping modelV2.big is its own fork's failure event, not this
-    running = bool(big) and state != 'none'
+    running = bool(big) and self._state != 'none'
     if running != self.running:
       self._settle = self.switching_ticks + 1   # counted down below, this tick included
       self._switching = self.switching_ticks + 1 if running else 0   # the no-entry, then the chime
