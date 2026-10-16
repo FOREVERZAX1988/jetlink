@@ -396,6 +396,39 @@ class TestPrepareReset(unittest.TestCase):
     np.testing.assert_array_equal(packed, 0)
     np.testing.assert_array_equal(model.prev_desire, 0)
 
+  def test_any_other_model_state_with_queues_starpilots(self):
+    # no state_pairs, packed_input or adapter: every queue on the GPU, and
+    # its numpy inputs, here npy; never its own _reset_state()
+    npy_tensor = self.queue(device='NPY')
+    npy = {'desire': np.ones(8, np.float32), 'traffic_convention': np.ones(2, np.float32)}
+    model = SimpleNamespace(input_queues={'img_q': self.queue(), 'feat_q': self.queue(), 'npy': npy_tensor},
+                            npy=npy, prev_desire=np.ones(8), _reset_state=mock.Mock(side_effect=AssertionError))
+    with mock.patch.object(npy_tensor, 'assign', side_effect=AssertionError('an NPY tensor is not a queue')):
+      warp.prepare_reset(model)()
+    for name in ('img_q', 'feat_q'):
+      np.testing.assert_array_equal(model.input_queues[name].array, 0)
+    for array in (*npy.values(), model.prev_desire):
+      np.testing.assert_array_equal(array, 0)
+
+  def test_the_reset_an_adapter_builds_is_captured_ahead_and_zeroes_in_place(self):
+    # TinyJit captures on its second call: three ahead, then one per reset
+    calls = []
+
+    def jit(fn):
+      return lambda: (calls.append(1), fn())[1]
+
+    self.modules['tinygrad'].TinyJit = jit
+    queue, array = self.queue(), np.ones(4)
+    held = queue.array
+    reset = warp.reset_queues([queue], [array])
+    self.assertEqual(len(calls), 3)
+    queue.array[...], array[...] = 1, 1
+    reset()
+    self.assertEqual(len(calls), 4)
+    self.assertIs(queue.array, held)
+    np.testing.assert_array_equal(held, 0)
+    np.testing.assert_array_equal(array, 0)
+
   def test_a_model_with_no_state_on_the_gpu_captures_nothing(self):
     # a TinyJit with nothing to run raises at its capture
     self.modules['tinygrad'].TinyJit = lambda fn: mock.Mock(side_effect=AssertionError('nothing to capture'))

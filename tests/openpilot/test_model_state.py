@@ -396,6 +396,18 @@ class TestTheFace(ModelStateTest):
     self.assertEqual(out['plan'].shape, (1, 990))
     self.assertTrue((out['plan'] == 2.0).all())
 
+  def test_an_output_that_is_not_finite_never_reaches_the_parser(self):
+    # the joining model hands back on it (joining.BAD_OUTPUT)
+    for bad in (np.nan, np.inf, -np.inf):
+      with self.subTest(bad):
+        client = FakeClient()
+        client.output[slice(*SLICES['plan'])][7] = bad
+        state = self.make(spec_for(STATEFUL), client)
+        state.parser = mock.Mock()
+        with self.assertRaisesRegex(model_state.NotFinite, 'frame 1'):
+          self.frames(state, 1)
+        state.parser.parse_outputs.assert_not_called()
+
   def test_closing_it_closes_its_link(self):
     client = mock.Mock()
     self.make(spec_for(STATEFUL), client).close()

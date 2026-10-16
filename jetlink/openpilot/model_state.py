@@ -74,6 +74,10 @@ TELEMETRY_PERIOD = 1.0
 TRIPS_KEPT = 1200
 
 
+class NotFinite(ValueError):
+  """A NaN or an inf in the host's output: it answered, with nothing to drive on."""
+
+
 class Trips:
   """What the comma measures of its frames over the link: the whole run, warp
   to parsed output, which is the frame as modeld waits on it, against the
@@ -352,8 +356,11 @@ class JetlinkModelState:
     gives the same dict again: the parser's softmax works in place on it."""
     if self._parsed is not None and self._parsed[0] is model_output:
       return self._parsed[1]
-    # the non-finite check runs on the server (Status.NOT_FINITE -> LinkError),
-    # so modeld's big->small failover fires as it does for a chestnut
+    # the server checks first (Status.NOT_FINITE, a LinkError). This is for
+    # one that did not, or bytes the link changed: a NaN must not reach the
+    # planner, and the joining model hands back on it as a lag (BAD_OUTPUT)
+    if not np.isfinite(model_output).all():
+      raise NotFinite(f"frame {self._frame_id}: the output is not finite")
     outputs_dict = self.parser.parse_outputs(self.slice_outputs(model_output, self.output_slices))
     if SEND_RAW_PRED:
       outputs_dict['raw_pred'] = model_output.copy()

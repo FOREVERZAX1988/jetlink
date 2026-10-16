@@ -50,6 +50,7 @@ import time
 
 from jetlink import protocol as P
 from jetlink.comma import gadget
+from jetlink.openpilot.model_state import JetlinkModelState, NotFinite
 from jetlink.transport.priority import background_thread
 
 # after a join fails or the large model dies mid-drive. Long enough not to
@@ -101,12 +102,19 @@ READY = 're-engage to switch'
 # why a demote happened, as the log says it
 LOST = 'lost jetlink'
 BEHIND = 'jetlink fell behind'
+# a NaN or an inf in an output: a host that answers, wrongly. A lag and not a
+# drop, the link is kept, and the next swap starts the host from a reset
+BAD_OUTPUT = 'jetlink output not finite'
+# what modeld_v2 builds the frame's inputs from: the small bundle's desire
+# name and optional slots, read off the small model whichever drives
+SMALL_READS = ('desire_key', 'numpy_inputs')
 # why a built model was let go before it drove
 NOT_UP = 'could not bring up the large model'
 # and as the leave says it to the server (protocol.Msg.LEAVE)
 LEAVING = {LOST: P.LEAVE_LOST, BEHIND: P.LEAVE_BEHIND}
 # and as the panel's one line says it while the join tries again
-RECONNECTING = {LOST: 'reconnecting', BEHIND: 'fell behind, reconnecting', NOT_UP: 'load failed, reconnecting'}
+RECONNECTING = {LOST: 'reconnecting', BEHIND: 'fell behind, reconnecting', NOT_UP: 'load failed, reconnecting',
+                BAD_OUTPUT: 'bad output, reconnecting'}
 
 
 class JoiningModelState:
@@ -171,6 +179,9 @@ class JoiningModelState:
     self._lagging = False
     # modeld's share of dropped camera frames, for the frame about to run
     self._frame_drop_ratio = 0.0
+    # set by the large model's first frame: the join thread clears the
+    # progress, which is params IO and not the frame thread's
+    self._announce = False
     # frames the small model has run since start
     self._small_frames = 0
     # whether the host had let go of the gadget when the last link was lost,
@@ -198,10 +209,10 @@ class JoiningModelState:
   # function, which sunnypilot keeps on the ModelState so a custom small bundle
   # can carry its own. Swaps and demotes happen inside run(), so what is read
   # after it belongs to the model whose output it is. What the loop writes
-  # lands on both. The frame's inputs are built for the small bundle (its
-  # desire name, its optional slots); the large model reads the desire under
-  # any name and the loop always supplies what it needs, so a swap can land on
-  # any frame
+  # lands on both, but for what only this reads. The frame's inputs are built
+  # for the small bundle (SMALL_READS, off the small model whichever drives);
+  # the large model reads the desire under any name and the loop always
+  # supplies what it needs, so a swap can land on any frame
 
   @property
   def big_model_available(self) -> bool:
@@ -242,14 +253,6 @@ class JoiningModelState:
     return getattr(self._active, 'client', None)
 
   @property
-  def desire_key(self) -> str:
-    return self._small.desire_key
-
-  @property
-  def numpy_inputs(self):
-    return self._small.numpy_inputs
-
-  @property
   def lat_delay(self):
     return self._active.lat_delay
 
@@ -278,9 +281,8 @@ class JoiningModelState:
   @frame_drop_ratio.setter
   def frame_drop_ratio(self, value):
     # modeld's frameDropPerc / 100, written before every run(). Read here, by
-    # the lag rule; it lands on the small model too, as every write does
+    # the lag rule, and nowhere else
     self._frame_drop_ratio = value
-    self._small.frame_drop_ratio = value
 
   @property
   def in_control(self) -> bool:
@@ -291,9 +293,8 @@ class JoiningModelState:
     # openpilot or MADS in control, by openpilot's own messages, asked before
     # every run(): the swap waits for False. A thread polling selfdrived for it
     # woke ~300 times a second on a drive and took 6 to 11 % of a core inside
-    # modeld (2026-10-05). It lands on the small model too, as every write does
+    # modeld (2026-10-05)
     self._in_control = value
-    self._small.in_control = value
 
   def __getattr__(self, name):
     # Only for names this class does not define. Without it, a comma or
@@ -304,7 +305,8 @@ class JoiningModelState:
     if name.startswith('_'):
       # also what keeps __init__ from recursing before _active exists
       raise AttributeError(name)
-    return getattr(self._active, name)
+    # a small model without one of SMALL_READS has none, whichever drives
+    return getattr(self._small if name in SMALL_READS else self._active, name)
 
   # -- the frame path ---------------------------------------------------------
 
@@ -331,10 +333,10 @@ class JoiningModelState:
     started = time.monotonic()
     try:
       result = big.run(bufs, transforms, inputs, after_enqueue)
-    except Exception:
+    except Exception as e:
       failed = time.monotonic()
       self._log.exception("jetlink: large model failed mid-drive, back to the small model")
-      self._demote(LOST)
+      self._demote(BAD_OUTPUT if isinstance(e, NotFinite) else LOST)
       demoted = time.monotonic()
       # re-run the frame rather than propagate: modeld's fallback is permanent,
       # this one is retryable. after_enqueue is dropped, the large model may
@@ -352,7 +354,8 @@ class JoiningModelState:
       # a connected engine can still fail its first inference; only announce
       # readiness after a frame the caller can publish
       self._loading = False
-      self._progress.clear()
+      self._announce = True
+      self._rejoin.set()
       self._log.warning("jetlink: large model joined mid-drive, modelV2.big is now true")
     if big.behind:
       # this frame's output is published as it came; its stall is forgiven now
@@ -379,7 +382,7 @@ class JoiningModelState:
     try:
       t0 = time.monotonic()
       big = self._build(client, spec)
-      big.lat_delay = self._small.lat_delay
+      big.lat_delay = getattr(self._small, 'lat_delay', big.lat_delay)
       self._log.warning("jetlink: built the large model state in %.0f ms", (time.monotonic() - t0) * 1000)
     except Exception:
       self._log.exception("jetlink: could not bring up the large model, staying small")
@@ -398,7 +401,7 @@ class JoiningModelState:
     the link, moments later. Counted as a lost link or a hand-back for lag,
     and backed off."""
     big, self._big = self._big, None
-    if why == BEHIND:
+    if why in (BEHIND, BAD_OUTPUT):
       self._lags += 1
     else:
       self._drops += 1
@@ -506,6 +509,16 @@ class JoiningModelState:
       # a dead link, and close() sets this. An idle wake per second is not
       # free on modeld's core
       self._rejoin.wait()
+      if self._announce:
+        # the large model's first frame is out. Before the retired one below,
+        # whose reconnecting line is newer; woken for this alone, wait again.
+        # A demote or close sets its own flag before the event, so clearing
+        # the event and then looking misses neither
+        self._announce = False
+        self._progress.clear()
+        self._rejoin.clear()
+        if self._retired is None and not self._stop.is_set():
+          continue
       with self._lock:
         retired, self._retired = self._retired, None
       if retired is not None:
@@ -635,9 +648,6 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
   what the link will hand back; another geometry is rejected.
   """
   from jetlink.openpilot import link as links
-  # here rather than in build(): the import then costs modeld's main thread
-  # before the frame loop, not the frame the swap lands on
-  from jetlink.openpilot.model_state import JetlinkModelState
   op = parts.op
   face = op.model_face()
   ready: dict = {}
@@ -656,7 +666,9 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
     else:
       geometry = parts.warps.geometry()[2:]
     try:
-      ready['reset_small'] = prepare_reset(small)
+      # the fork's own reset of its small model, else jetlink's from its shape
+      hook = getattr(op, 'small_reset', None)
+      ready['reset_small'] = (hook(small) if hook is not None else None) or prepare_reset(small)
       warp = Warp(parts.warps.load(cam_w, cam_h, *geometry), face.frame_size(cam_w, cam_h))
     except Exception:
       link.close()

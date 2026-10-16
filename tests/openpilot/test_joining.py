@@ -11,16 +11,23 @@ is pinned: modeld gets a working model immediately, a swap never lands on an
 engaged frame, a large model that dies mid-drive falls back without losing the
 frame, and a small-model failure still belongs to modeld.
 """
+import sys
 import tempfile
 import threading
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
-from jetlink.openpilot import joining
+import numpy as np
+
+import jetlink.openpilot as jo
+from jetlink.openpilot import interface, joining, link, model_state, warp
 from jetlink.openpilot.joining import REJOIN_DELAY_QUICK, STABLE_SECONDS, JoiningModelState
-from tests.openpilot.fakes import RecordingLog, isolate
+from tests.openpilot import fakes
+from tests.openpilot.fakes import OpenpilotTest, RecordingLog, isolate
+from tests.openpilot.test_model_state import STATEFUL, FakeClient, FakeWarp, spec_for
 
 
 class FakeModel:
@@ -188,7 +195,7 @@ class JoiningTest(JoiningBase):
     self.addCleanup(self._close, s)
     self._wait_joined(s)
     self.assertEqual([self._run(s) for _ in range(3)], [{'from': 'small'}, {'from': 'small'}, {'from': 'big'}])
-    self.assertFalse(self.small.in_control, 'lands on the small model too')
+    self.assertFalse(hasattr(self.small, 'in_control'), 'nothing reads it there')
 
   def test_late_boot_announces_availability_without_switching(self):
     booted = threading.Event()
@@ -327,7 +334,45 @@ class JoiningTest(JoiningBase):
     self.big.run = inspect
     self.assertEqual(self._run(s), {'from': 'big'})
     self.assertFalse(s._loading)
+    self.assertTrue(wait_for(lambda: self.progress.clear.called))
     self.progress.clear.assert_called_once()
+
+  def test_the_frame_thread_leaves_the_progress_clear_to_the_join_thread(self):
+    # a params remove is disk IO, and modeld's frame thread is realtime
+    s = self._state()
+    self._wait_joined(s)
+    s.in_control = False
+    cleared = []
+    self.progress.clear.side_effect = lambda: cleared.append(threading.current_thread())
+    t0 = time.monotonic()
+    self.assertEqual(self._run(s), {'from': 'big'})
+    self.assertEqual(cleared, [], 'cleared on the frame thread')
+    self.assertTrue(wait_for(lambda: cleared))
+    self.assertLess(time.monotonic() - t0, 0.5)
+    self.assertEqual(cleared, [s._thread])
+    # and woken for that alone, the join thread does not reconnect
+    time.sleep(0.05)
+    self.assertEqual(self.connect_calls, 1)
+
+  def test_a_hand_back_on_the_heels_of_the_join_is_not_wiped_by_its_clear(self):
+    # both land before the join thread wakes: the clear goes first, and the
+    # panel is left saying the newer thing
+    s = self._state()
+    self._wait_joined(s)
+    s.in_control = False
+    said = []
+    self.progress.clear.side_effect = lambda: said.append('cleared')
+    self.progress.report.side_effect = lambda stage, frac, msg, drops=0: said.append(msg)
+    # the join thread is held at its wait until both are in
+    gate, wait = threading.Event(), s._rejoin.wait
+    s._rejoin.wait = lambda timeout=None: gate.wait() and wait(timeout)
+    self.assertEqual(self._run(s), {'from': 'big'})
+    self.big.raises = RuntimeError('link gone')
+    self.assertEqual(self._run(s), {'from': 'small'})
+    self.assertNotIn('cleared', said)
+    gate.set()
+    self.assertTrue(wait_for(lambda: 'reconnecting' in said))
+    self.assertEqual(said[said.index('cleared'):], ['cleared', 'reconnecting'])
 
   def test_prepare_failure_uses_startup_fallback_not_a_slow_swap(self):
     order = []
@@ -1091,6 +1136,179 @@ class ModeldV2FaceTest(JoiningBase):
     self.big.raises = RuntimeError('link died')
     self.assertEqual(s.run({}, {}, inputs), {'from': 'small'})
     self.assertIs(self.small.seen_inputs, inputs)
+
+
+class ProtocolTest(JoiningBase):
+  """The models either side of attach, as interface pins them."""
+
+  def test_any_forks_small_model_conforms_and_so_does_what_attach_returns(self):
+    self.assertEqual(jo.conformance(FakeModel('small'), interface.SmallModel), [])
+    self.assertEqual(jo.conformance(FakeV2Model('small'), interface.SmallModel), [])
+    self.small = FakeV2Model('small')
+    self.assertEqual(jo.conformance(self._state(), interface.JoinedModel), [])
+
+  def test_a_read_the_small_model_lacks_is_absent_whichever_drives(self):
+    # the frame's inputs are the small bundle's; the large model's never stand in
+    self.big.desire_key, self.big.numpy_inputs = 'desire_pulse', {}
+    s = self._state()
+    self._wait_joined(s)
+    s.in_control = False
+    self.assertEqual(self._run(s), {'from': 'big'})
+    self.assertFalse(hasattr(s, 'desire_key'))
+    self.assertFalse(hasattr(s, 'numpy_inputs'))
+
+  def test_a_small_model_without_a_lateral_delay_leaves_the_large_ones(self):
+    del self.small.lat_delay
+    self.big.lat_delay = 0.2
+    s = self._state()
+    self._wait_joined(s)
+    s.in_control = False
+    self.assertEqual(self._run(s), {'from': 'big'})
+    self.assertEqual(self.big.lat_delay, 0.2)
+
+
+class NotFiniteTest(JoiningBase):
+  """A host that answers with a NaN or an inf: the comma's own check hands
+  back on that frame, as a lag, over a link it keeps."""
+
+  ARGS = ({k: SimpleNamespace(data=np.zeros(8, np.uint8)) for k in ('img', 'big_img')},
+          {'img': np.eye(3), 'big_img': np.eye(3)},
+          {'desire': np.zeros(8, np.float32), 'traffic_convention': np.zeros(2, np.float32),
+           'action_t': np.zeros(2, np.float32)})
+
+  def test_a_nan_or_an_inf_hands_back_on_its_frame_and_keeps_the_link(self):
+    for bad in (np.nan, np.inf):
+      with self.subTest(bad):
+        client = FakeClient()
+        client.leave, client.close = mock.Mock(), mock.Mock()
+        spec = spec_for(STATEFUL)
+        self.big = model_state.JetlinkModelState(client, spec, FakeWarp(np.zeros(np.prod(spec.warped_shape), np.uint8)),
+                                                 face=fakes.FACE, log=self.log, event=lambda name, **fields: None)
+        self.small.calls = 0
+        s = self._state()
+        self._wait_joined(s)
+        s.in_control = False
+        self.assertNotIn('from', s.run(*self.ARGS))
+        client.output = client.output.copy()
+        client.output[3] = bad
+        self.assertEqual(s.run(*self.ARGS), {'from': 'small'}, 'the frame is re-run on the small model')
+        self.assertEqual(self.small.calls, 1)
+        self.assertEqual((s._lags, s._drops), (1, 0))
+        self.assertFalse(s.chestnut)
+        self.assertTrue(wait_for(lambda c=client: c.leave.called))
+        self.assertEqual(client.leave.call_args.args, (joining.BAD_OUTPUT,))
+        self._wait_reported(s, 'bad output, reconnecting')
+        self.assertFalse(client.dead)
+        client.close.assert_not_called()
+
+
+class Small:
+  """A fork's small model of some shape: what it runs, and the attributes it has."""
+
+  def __init__(self, **attrs):
+    self.__dict__.update(attrs)
+
+  def run(self, bufs, transforms, inputs, after_enqueue=None):
+    return {'from': 'small'}
+
+
+def queue(device='CPU'):
+  return fakes.FakeTensor(np.ones((4, 8), np.float32), device=device)
+
+
+def starpilot():
+  """StarPilot's CatalogModelState: GPU and NPY tensors, numpy views, nothing else."""
+  m = Small(input_queues={'img_q': queue(), 'feat_q': queue(), 'npy_inputs': queue('NPY')},
+            npy={'desire': np.ones(8, np.float32), 'traffic_convention': np.ones(2, np.float32)},
+            prev_desire=np.ones(8, np.float32))
+  return m, [m.input_queues['img_q'].array, m.input_queues['feat_q'].array, *m.npy.values(), m.prev_desire]
+
+
+def stock():
+  """Upstream modeld's ModelState: no lat_delay."""
+  packed = np.ones(16, np.float32)
+  m = Small(input_queues={'state_img_q': queue(), 'state_feat_q': queue()},
+            state_pairs={'state_img_q': 'next_state_img_q', 'state_feat_q': 'next_state_feat_q'},
+            packed_input=packed, npy={'desire': packed[:8], 'traffic_convention': packed[8:10]},
+            prev_desire=np.ones(8, np.float32))
+  return m, [m.input_queues['state_img_q'].array, m.input_queues['state_feat_q'].array, packed, m.prev_desire]
+
+
+def v2_native():
+  packed = np.ones(16, np.float32)
+  adapter = SimpleNamespace(is_native=True, input_queues={'state_img_q': queue()},
+                            state_pairs={'state_img_q': 'next_state_img_q'}, packed_input=packed)
+  m = Small(adapter=adapter, prev_desire=np.ones(8, np.float32), desire_key='desire', numpy_inputs={},
+            lat_delay=0.1, PLANPLUS_CONTROL=1.0)
+  return m, [adapter.input_queues['state_img_q'].array, packed, m.prev_desire]
+
+
+def v2_legacy():
+  packed = np.ones(16, np.float32)
+  adapter = SimpleNamespace(is_native=False, input_queues={'img_q': queue(), 'packed_npy_inputs': queue('NPY')},
+                            numpy_inputs={'desire': packed[:8], 'rest': packed[8:]})
+  m = Small(adapter=adapter, prev_desire=np.ones(8, np.float32), desire_key='desire',
+            numpy_inputs=adapter.numpy_inputs, lat_delay=0.1, PLANPLUS_CONTROL=1.0)
+  return m, [adapter.input_queues['img_q'].array, packed, m.prev_desire]
+
+
+class AnyForkTest(OpenpilotTest):
+  """Every fork's small model joins through join(), swaps and hands back, and
+  its history is zeroed after, in the buffers its own JIT is linked to."""
+
+  def setUp(self):
+    super().setUp()
+    self.patch(joining, 'SMALL_WARMUP_FRAMES', 0)
+    p = mock.patch.dict(sys.modules, fakes.fake_tinygrad())
+    p.start()
+    self.addCleanup(p.stop)
+    self.patch(link, 'present_early')
+    self.patch(warp, 'Warp')
+    self.patch(self.parts.warps, 'load')
+    self.big = FakeModel('big', chestnut=True, client=mock.Mock(dead=False))
+    self.patch(link, 'open_link', return_value=(self.big.client, SimpleNamespace(model_hw=(128, 256))))
+    self.patch(joining, 'JetlinkModelState', return_value=self.big)
+    self.op.engaged = False
+
+  def hand_back(self, small, buffers):
+    held = [id(b) for b in buffers]
+    s = joining.join(self.parts, 1928, 1208, small)
+    self.addCleanup(lambda: (s.close(), s._thread.join(5)))
+    self.assertTrue(wait_for(lambda: s._joined is not None))
+    for b in buffers:
+      b.fill(1)   # what the small model's frames leave behind
+    self.assertEqual(s.run({}, {}, {}), {'from': 'big'})
+    self.big.raises = RuntimeError('link gone')
+    self.assertEqual(s.run({}, {}, {}), {'from': 'small'})
+    self.assertEqual([id(b) for b in buffers], held)
+    return s
+
+  def test_every_small_model_shape_is_reset_in_place(self):
+    for shape in (starpilot, stock, v2_native, v2_legacy):
+      with self.subTest(shape.__name__):
+        self.big.raises, self.big.lat_delay = None, 0.0
+        small, buffers = shape()
+        self.hand_back(small, buffers)
+        for b in buffers:
+          np.testing.assert_array_equal(b, 0)
+        # the large model started on the small one's lateral delay, or its own
+        self.assertEqual(self.big.lat_delay, getattr(small, 'lat_delay', 0.0))
+
+  def test_the_adapters_own_reset_is_used_and_none_falls_back(self):
+    reset = mock.Mock()
+    self.op.small_reset = mock.Mock(return_value=reset)
+    small, buffers = starpilot()
+    self.hand_back(small, buffers)
+    self.op.small_reset.assert_called_once_with(small)
+    reset.assert_called_once_with()
+    np.testing.assert_array_equal(buffers[0], 1)   # jetlink's guess was not made
+
+    self.big.raises = None
+    self.op.small_reset = mock.Mock(return_value=None)
+    small, buffers = starpilot()
+    self.hand_back(small, buffers)
+    for b in buffers:
+      np.testing.assert_array_equal(b, 0)
 
 
 if __name__ == '__main__':

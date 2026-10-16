@@ -206,35 +206,20 @@ def _make_coherent(out) -> None:
   out.allocate(opaque=mem)
 
 
-def prepare_reset(model):
-  """Capture the small model's reset before driving, keeping its JIT's buffer identities.
-
-  Its history is stale after the Jetson ran, so a fallback starts from the
-  zero history modeld's warmup leaves it at. Nothing is allocated or compiled
-  on the failure frame.
-
-  The small model is whatever bundle the user picked, on stock modeld or
-  modeld_v2, and each keeps its history its own way. Stock modeld's
-  ModelState, and a modeld_v2 native bundle's adapter: the recurrent state on
-  the GPU (state_pairs) and one packed host buffer (packed_input), as their
-  warmup zeroes them. A modeld_v2 legacy bundle's adapter: history queues on
-  the GPU, and numpy inputs. The fork's tests pin those names.
-  """
+def reset_queues(queues, arrays, prev_desire=None):
+  """A small model's reset, captured now: `queues`, its tensors on the GPU,
+  zeroed by one TinyJit, then `prev_desire` and each numpy array in `arrays`
+  in place. Every buffer keeps its identity, which the model's own JIT is
+  linked to, and the reset allocates and compiles nothing, so it may run on
+  the frame thread. What an adapter's small_reset returns."""
   from tinygrad import Tensor, TinyJit
-
-  adapter = getattr(model, 'adapter', None)
-  if adapter is None or adapter.is_native:
-    keeper = model if adapter is None else adapter
-    queues = tuple(keeper.input_queues[name] for name in keeper.state_pairs)
-    arrays = (keeper.packed_input,)
-  else:
-    queues = tuple(q for q in adapter.input_queues.values() if q.device != 'NPY')
-    arrays = tuple(adapter.numpy_inputs.values())
+  queues, arrays = tuple(queues), tuple(arrays)
 
   @TinyJit
   def clear():
     Tensor.realize(*(q.assign(0) for q in queues))
 
+  # TinyJit captures on its second call, and one with nothing to run raises there
   if queues:
     for _ in range(3):
       clear()
@@ -242,8 +227,40 @@ def prepare_reset(model):
   def reset():
     if queues:
       clear()
-    model.prev_desire.fill(0)
+    if prev_desire is not None:
+      prev_desire.fill(0)
     for array in arrays:
       array.fill(0)
 
   return reset
+
+
+def prepare_reset(model):
+  """Capture the small model's reset before driving, keeping its JIT's buffer identities.
+
+  Its history is stale after the Jetson ran, so a fallback starts from the
+  zero history modeld's warmup leaves it at. Nothing is allocated or compiled
+  on the failure frame. jetlink's own, for an adapter without small_reset
+  (interface.ModelSide).
+
+  The small model is whatever the fork's modeld runs, and each keeps its
+  history its own way. Stock modeld's ModelState, and a modeld_v2 native
+  bundle's adapter: the recurrent state on the GPU (state_pairs) and one
+  packed host buffer (packed_input), as their warmup zeroes them. A modeld_v2
+  legacy bundle's adapter: history queues on the GPU, and numpy inputs. Any
+  other ModelState with input_queues (StarPilot's): every queue on the GPU,
+  and its numpy inputs (numpy_inputs, or npy); its own _reset_state() makes
+  new tensors, which its JIT is not linked to. The fork's tests pin those names.
+  """
+  adapter = getattr(model, 'adapter', None)
+  if adapter is not None and not adapter.is_native:
+    queues = [q for q in adapter.input_queues.values() if q.device != 'NPY']
+    arrays = adapter.numpy_inputs.values()
+  elif adapter is not None or hasattr(model, 'state_pairs'):
+    keeper = model if adapter is None else adapter
+    queues = [keeper.input_queues[name] for name in keeper.state_pairs]
+    arrays = (keeper.packed_input,)
+  else:
+    queues = [q for q in model.input_queues.values() if q.device != 'NPY']
+    arrays = (model.numpy_inputs if hasattr(model, 'numpy_inputs') else model.npy).values()
+  return reset_queues(queues, arrays, getattr(model, 'prev_desire', None))
