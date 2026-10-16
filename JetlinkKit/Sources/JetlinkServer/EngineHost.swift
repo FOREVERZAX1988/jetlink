@@ -446,11 +446,16 @@ public final class EngineHost: @unchecked Sendable {
 
   /// Warm runs start this long after the comma was last seen: a joined comma
   /// that hears nothing for 0.2 s hands back, so it has left, and a run on
-  /// zeros stays out of a drive's history. A hello waits out the gap too, so
-  /// its first frame never queues behind a warm run.
-  static let warmIdleAfter: TimeInterval = 5
-  /// And stop this long after: its rejoin backs off to 60 s, and a parked
-  /// comma should not cost the battery all night.
+  /// zeros stays out of a drive's history. A hello waits out the gap too; a
+  /// first frame that does queue behind a warm run is one the comma forgives
+  /// (model_state.SETTLING_FRAMES). Equal to the frame path's own keep-warm
+  /// (CPUKeepWarm.idleSeconds), so the engine never goes cold between a
+  /// hand-back and the rejoin that follows it.
+  static let warmIdleAfter: TimeInterval = 1
+  /// And stop this long after, unless a comma is still connected: a parked
+  /// comma should not cost the battery all night, but a connected one backing
+  /// off between rejoins is mid-drive, and a cold engine's first frame is
+  /// ~100 ms on an iPad.
   static let warmFor: TimeInterval = 120
 
   /// One run on zeros between sessions, at the server's tick, so the next
@@ -462,8 +467,9 @@ public final class EngineHost: @unchecked Sendable {
   func warmIfIdle(now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
     lock.lock()
     defer { lock.unlock() }
+    let idle = now - lastSeenAt
     guard let loaded, loaded.engine.coolsWhenIdle, !benchmarking, !warmFailed,
-      (Self.warmIdleAfter...Self.warmFor).contains(now - lastSeenAt)
+      idle >= Self.warmIdleAfter, session != nil || idle <= Self.warmFor
     else { return false }
     do {
       try Self.stageZeros(loaded.staging, spec: loaded.spec)
