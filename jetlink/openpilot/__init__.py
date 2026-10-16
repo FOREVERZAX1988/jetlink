@@ -16,9 +16,17 @@ the adapter checks it exactly and treats any other value as jetlink being
 absent, an offroad alert and no link rather than a crash. Everything else in
 this package is jetlink's own and changes without notice.
 
-API changes only for a breaking change to the contract. A new Status field, a
-new Jetlink method, or a new interface member that jetlink reads with getattr
-and a fallback, is additive and keeps it.
+API changes only for a breaking change to the contract: removing or renaming
+anything in it, changing what one of its members means, or making an optional
+member required. A new Status field, a new Jetlink method, or a new interface
+member that jetlink reads with getattr and a fallback, is additive and keeps
+it. A bump keeps the previous API working for one minor release, so a fork can
+move its pin and then its adapter. Two removals broke this rule and landed at
+API 2 without a bump: fd0af4d took Jetlink.shutdown() away, and 0f87696
+BuildSide.make_warp, changing what warp_path names; an adapter written to
+24e8917's API 2 still passed the check and then failed. Each release that
+changes the contract says how in its CHANGELOG section (Forks,
+docs/publishing.md).
 
 Imported by the resident gadget owner, so nothing heavy at module level: the
 parts a heavy process uses are imported when it first uses them.

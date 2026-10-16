@@ -1,3 +1,4 @@
+<!-- Each release: a "Jetlink vX.Y.Z" heading underlined with =, newest first. A release that changes the fork contract ends with a **Forks** group (docs/publishing.md). -->
 Jetlink v0.8.7
 ==============
 **Models**
