@@ -74,6 +74,7 @@ class _Hooks:
     self._link_on = link_on
     # the joining model's handovers as handed_over() last saw them, in this process
     self._handovers = 0
+    self._prepared = False
 
   def _call(self, name: str, default, *args):
     return default
@@ -101,10 +102,14 @@ class _Hooks:
   def prepare(self, chestnut: bool) -> bool:
     """modeld, before config_realtime_process. A chestnut runs the large
     model itself and never asks jetlink."""
-    return not chestnut and self._call('prepare', False)
+    self._prepared = bool(not chestnut and self._call('prepare', False))
+    return self._prepared
 
   def attach(self, model, small, cam_w: int, cam_h: int):
-    """modeld, once `small` is built: the model to run, `model` unless the link joined."""
+    """modeld, once `small` is built: the model to run, `model` unless the link
+    joined. Binds nothing unless prepare() said yes in this process."""
+    if not self._prepared:
+      return model
     joined = self._call('attach', None, small, cam_w, cam_h)
     return model if joined is None else joined
 

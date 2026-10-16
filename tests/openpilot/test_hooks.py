@@ -138,19 +138,36 @@ class TestAFailingJetlink(unittest.TestCase):
 
   def test_a_joined_link_is_the_model_modeld_runs(self):
     joined, small = object(), object()
-    jetlink = mock.Mock(**{'attach.return_value': joined})
-    self.assertIs(over(jetlink).attach('model', small, 1928, 1208), joined)
+    jetlink = mock.Mock(**{'prepare.return_value': True, 'attach.return_value': joined})
+    h = over(jetlink)
+    self.assertTrue(h.prepare(False))
+    self.assertIs(h.attach('model', small, 1928, 1208), joined)
     jetlink.attach.assert_called_once_with(small, 1928, 1208)
     jetlink.attach.return_value = None
-    self.assertEqual(over(jetlink).attach('model', small, 1928, 1208), 'model')
+    self.assertEqual(h.attach('model', small, 1928, 1208), 'model')
+
+  def test_without_a_yes_from_prepare_attach_asks_nothing(self):
+    jetlink = mock.Mock(**{'prepare.return_value': True})
+    for chestnut, prepared in ((True, True), (False, False)):
+      with self.subTest(chestnut=chestnut, prepared=prepared):
+        jetlink.reset_mock()
+        jetlink.prepare.return_value = prepared
+        h = over(jetlink)
+        self.assertFalse(h.prepare(chestnut))
+        self.assertEqual(h.attach('model', object(), 1928, 1208), 'model')
+        jetlink.attach.assert_not_called()
+    factory = mock.Mock()
+    self.assertEqual(Hooks(3, factory).attach('model', object(), 1, 1), 'model')
+    factory.assert_not_called()
 
   def test_each_failure_is_logged_once(self):
     log = RecordingLog()
     h = over(Broken(), log)
     for _ in range(3):
       answers(h)
-    # all but handed_over and state, which read the model alone
-    self.assertEqual(len(log.lines('exception')), len(OFF) - 2)
+    # all but handed_over and state, which read the model alone, and attach,
+    # which asks nothing without a yes from prepare
+    self.assertEqual(len(log.lines('exception')), len(OFF) - 3)
     self.assertTrue(log.has("status() failed: RuntimeError: status"))
 
   def test_a_failure_is_logged_again_once_it_changes_or_has_cleared(self):
