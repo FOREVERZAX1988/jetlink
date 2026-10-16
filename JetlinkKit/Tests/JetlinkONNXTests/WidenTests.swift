@@ -54,7 +54,7 @@ import Testing
 
   /// Every fp16 bit pattern: the SHA-256 of numpy 2.5.3's table on Apple
   /// silicon (`np.arange(65536).astype(np.uint16).view(np.float16).astype(np.float32)`
-  /// as little-endian bytes), 2026-09-27.
+  /// as little-endian bytes).
   @Test func everyPatternMatchesNumpy() {
     let all = Self.widen((0..<65536).map { UInt16($0) })
     var bytes: [UInt8] = []

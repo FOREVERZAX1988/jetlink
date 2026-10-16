@@ -1,8 +1,8 @@
 import Foundation
 import Observation
 
-/// The server's output, as a Logs view sees it. The Mac fills it from the
-/// Python server's stderr, the iPhone from the in-process server's log sink.
+/// The server's output, as a Logs view sees it, filled from the in-process
+/// server's log sink.
 @MainActor
 @Observable
 public final class LogBuffer {

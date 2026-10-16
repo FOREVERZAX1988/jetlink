@@ -63,8 +63,8 @@ struct SpecTests {
     #expect(open.hiddenRange == 2000..<2580 && open.replyCount == 2000)
   }
 
-  /// A 766 MB model's frame, whichever layout: one 16 KB read on the comma
-  /// down (it was five), and 64 KB less up for a queued one.
+  /// A 766 MB model's frame, whichever layout: one 16 KB read on the comma,
+  /// and 64 KB less up for a queued one.
   @Test("A big model's reply fits the one read the comma keeps posted")
   func bigModel() {
     let slices = [NamedSlice("plan", 917..<1907), NamedSlice("hidden_state", 2066..<18450), NamedSlice("pad", 18450..<18452)]

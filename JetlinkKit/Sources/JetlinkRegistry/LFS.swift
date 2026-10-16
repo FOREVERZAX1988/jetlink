@@ -39,17 +39,16 @@ public struct Pointer: Sendable, Equatable, Hashable {
 /// LFS servers, which are asked in turn because which one has an object
 /// varies with the model's age.
 ///
-/// Since openpilot #38930 (2026-09-16) a commit can ship a precompiled
+/// Since openpilot #38930 a commit can ship a precompiled
 /// tinygrad pkl instead, with no ONNX in the tree at all; Cinque Terre V3 is
 /// one. Its subject names the export ("Use f78ed37d for the precompiled eGPU
 /// driving model") and the ONNX is in comma's HuggingFace model repo, in the
 /// folder that id starts. That repo speaks the LFS batch protocol too, so it
 /// is one more endpoint to ask.
 ///
-/// Not every such commit names its export. ResAction's pull request (#39037,
-/// 2026-10-05) adds the ONNX in one commit and replaces it with the pkl in the
-/// next, subject "compiled", and a squash merge's subject only names the pull
-/// request. The pointer is still in a diff: the one the commit's own patch
+/// Not every such commit names its export. A pull request can add the ONNX in
+/// one commit and swap it for the pkl in the next (ResAction, #39037), and a
+/// squash merge's subject only names the pull request. The pointer is still in a diff: the one the commit's own patch
 /// deletes, or the last one its pull request's patch carries.
 ///
 /// This mirrors `jetlink/registry/lfs.py`: same URLs, same endpoint order,
@@ -268,7 +267,7 @@ public enum LFS {
   /// export one of that pull request's commits names.
   ///
   /// The newest export named wins: a pull request's commits are in order, and
-  /// Mountain Dew's (#39047) named three before the one it shipped. One that is
+  /// one can name several exports before the one it ships (#39047). One that is
   /// not in the model repo yet stops the search rather than falling back to an
   /// older one, a different model.
   static func fetchExportPointer(ref: String, http: HTTP, timeout: TimeInterval = pointerTimeout) async throws(RegistryError) -> Pointer {

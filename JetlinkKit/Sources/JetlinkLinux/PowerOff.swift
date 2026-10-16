@@ -10,7 +10,7 @@
   /// installer passes only on a Jetson whose owner said yes.
   public enum PowerOff {
     /// `ServerHooks.shutdown` on Linux. Every request is answered ok, as the
-    /// Python server did, so the comma sees what it always saw; once the
+    /// Python server answers, so the comma sees the same reply; once the
     /// reply is written the box syncs, then powers off when `enabled`.
     public static func hook(enabled: Bool) -> @Sendable (String) -> (@Sendable () -> Void)? {
       hook(enabled: enabled, powerOff: systemctlPowerOff, log: ServerLog(category: "power"))

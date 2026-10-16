@@ -13,7 +13,7 @@ import Testing
 #endif
 
 /// What the Python does, as JetlinkKit/Scripts/make_conformance_fixtures.py
-/// wrote it into Fixtures/conformance. docs/conformance.md has the story.
+/// wrote it into Fixtures/conformance. docs/conformance.md explains it.
 enum Conformance {
   static func url(_ name: String) -> URL { Fixture.url("conformance/\(name)") }
   static func data(_ name: String) throws -> Data { try Data(contentsOf: url(name)) }

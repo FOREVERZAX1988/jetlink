@@ -320,7 +320,7 @@ public final class LiteRtBackend: EngineBackend {
 }
 
 extension LiteRtBackend {
-  /// LiteRT's lines since `start` into jetlink's log, which a tester shares:
+  /// LiteRT's lines since `start` into jetlink's log:
   /// why the NPU took no model, which LiteRT says only in Android's log.
   func copyLiteRtLog(since start: Date) {
     #if os(Android)

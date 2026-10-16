@@ -37,7 +37,7 @@ public struct DialTarget: Sendable, Equatable, CustomStringConvertible {
 /// The jetlink server over TCP: a listener, one comma at a time, and the
 /// engine host they share. The Swift form of `server/main.py`'s `_serve`.
 ///
-/// One difference from the Python: a new connection takes over from the one
+/// Unlike the Python server, a new connection takes over from the one
 /// being served instead of waiting behind it. A comma only ever has one
 /// connection open, so a second one means the first is dead (a pulled cable
 /// the keepalive has not noticed yet), and the reconnect must not wait for it.
@@ -46,7 +46,7 @@ public struct DialTarget: Sendable, Equatable, CustomStringConvertible {
 /// USB gadget. Over a USB network link the comma listens and the phone dials
 /// it, so an accepted connection on the comma is the proof of a phone. A
 /// dialed connection is served the same way, and the listener stays open
-/// beside it for benches and a Mac on the LAN. The server can be the USB host
+/// beside it for test tools and a Mac on the LAN. The server can be the USB host
 /// instead, as the Python server is with `--transport usb`: it opens the
 /// gadget's vendor interface whenever the comma is on the bus.
 ///

@@ -6,7 +6,7 @@
 
   @Suite("Status page hardware")
   struct PageHardwareTests {
-    /// The bench Jetson's telemetry, as LinuxHost makes it there.
+    /// The fixture Jetson's telemetry, as LinuxHost makes it there.
     static let jetsonGPU = GPUTelemetry(read: { TegraTelemetry(root: jetson).read() }, name: nil, tegra: true)
 
     func valid(_ object: [String: Any]) -> Bool {

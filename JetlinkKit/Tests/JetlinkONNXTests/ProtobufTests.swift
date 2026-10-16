@@ -5,7 +5,7 @@ import Testing
 @testable import JetlinkONNX
 
 // The expected bytes are what Python's protobuf (upb, protobuf 7.36.1, onnx
-// 1.22) wrote for the same messages on 2026-09-26.
+// 1.22) writes for the same messages.
 @Suite struct ProtobufTests {
   @Test func varintsRoundTrip() throws {
     let values: [UInt64] = [0, 1, 127, 128, 300, 16_383, 16_384, UInt64(Int32.max), UInt64(bitPattern: -1), .max]

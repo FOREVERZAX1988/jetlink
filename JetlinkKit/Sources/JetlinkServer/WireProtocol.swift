@@ -23,7 +23,7 @@ public enum Wire {
   /// TCP keeps the rule so one client speaks to every transport the same way.
   public static let packetMultiple = Pinned.packetMultiple
   /// The gadget pads every message it sends to a whole burst, so none ends on
-  /// a short packet: dwc3 flushed its TX FIFO past one about once in 400
+  /// a short packet: dwc3 flushes its TX FIFO past one about once in 400
   /// frames. A USB host reads each message to that boundary. Host to device
   /// keeps the one-byte pad instead. `protocol.GADGET_TX_ALIGN`.
   public static let gadgetTxAlign = Pinned.gadgetTxAlign

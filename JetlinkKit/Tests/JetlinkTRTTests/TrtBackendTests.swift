@@ -99,7 +99,7 @@ extension Recorded<Event> {
       let jp7 = try backend {
         ($0.major, $0.minor, $0.patch, $0.build) = (10, 16, 2, 10)
       }
-      // the bench Jetson's plans, as the Python server named them
+      // a Jetson's plans, as the Python server named them
       let cache = try ServerCache(root: tmp.url, backend: jp7)
       let entry = try cache.entry("b0669bc51ec95a6a8bccf3ddf614098148ee1447025d99f4dd5e5d501ca41868")
       #expect(entry.path.lastPathComponent == "b0669bc51ec95a6a.trt10.16.2.10.Orin-sm87.plan")

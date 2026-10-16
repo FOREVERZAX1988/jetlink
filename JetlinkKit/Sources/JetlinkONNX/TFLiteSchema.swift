@@ -409,7 +409,7 @@ enum TFLite {
     }()
 
     let codeTables = codes.map { op -> FlatBufferBuilder.Offset in
-      // deprecated_builtin_code, custom_code, version, builtin_code. The old
+      // deprecated_builtin_code, custom_code, version, builtin_code. The deprecated
       // byte field holds codes below 127 and 127
       // (PLACEHOLDER_FOR_GREATER_OP_CODES) for the rest.
       b.startTable(fields: 4)

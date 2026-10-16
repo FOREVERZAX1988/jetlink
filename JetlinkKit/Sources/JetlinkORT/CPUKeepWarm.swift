@@ -3,14 +3,11 @@ import Foundation
 /// Keeps the CPU clocked up between the frames of a Neural Engine session.
 ///
 /// Paced at 20 Hz on an M1 Pro, the Neural Engine build ran 39.3 ms mean and
-/// 53.9 ms p99, against 30 ms back to back. Keeping one CPU core busy while
-/// frames arrive made it 32.1 and 36.3, with no frame over 50 ms in 1,200
-/// (2026-09-24). Keeping the Neural Engine busy with a small model changed
-/// little, and so did keeping the CPU busy only around each frame's arrival
-/// (49.6 ms p99) or one millisecond in two (52.7): the CPU side of the
-/// prediction, CoreML's dispatch and the ops it leaves on the CPU, runs
-/// slowly whenever the clocks have dropped, and they drop within
-/// milliseconds.
+/// 53.9 ms p99, against 30 ms back to back; one busy CPU core made it 32.1
+/// and 36.3. The CPU side of the prediction (CoreML's dispatch and the ops
+/// it leaves on the CPU) runs slowly once the clocks drop, and they drop
+/// within milliseconds. Keeping the Neural Engine busy, or the CPU busy only
+/// around each frame, did not help.
 ///
 /// So while frames arrive, a thread at the frame path's priority stays busy.
 /// It does no useful work, touches nothing of the model's, and stops a second

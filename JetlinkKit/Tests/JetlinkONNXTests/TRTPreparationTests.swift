@@ -6,8 +6,8 @@ import Testing
 
 /// The `.plain` layout held to Python's `onnx_patch.patch_file`, the call the
 /// TensorRT build made: trt.json has the counts or the error Python gave for
-/// each graph, and `<graph>.trt.model.expected.onnx` the file it wrote, made
-/// once before the Python server went. The files must match byte for byte.
+/// each graph, and `<graph>.trt.model.expected.onnx` the file it wrote. The
+/// fixtures are frozen; the files must match byte for byte.
 @Suite struct TRTPreparationTests {
   static let python = PreparationTests.results("trt.json")
 

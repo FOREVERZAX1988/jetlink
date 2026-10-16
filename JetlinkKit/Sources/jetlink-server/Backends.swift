@@ -33,8 +33,7 @@
         valueName: "dir"))
     var tensorrtLibs: String?
 
-    /// The options, with "auto" read as each backend's default device, as
-    /// the Python server's --device took it.
+    /// The options, with "auto" read as each backend's default device.
     func options(keepAlive: Bool = true, keepCPUWarm: Bool = true) -> BackendOptions {
       BackendOptions(
         device: device == "auto" ? nil : device, keepAlive: keepAlive, keepCPUWarm: keepCPUWarm, gpuTiming: gpuTiming,
@@ -75,7 +74,7 @@
     /// TensorRT, if it loads here and the GPU answers. A build without
     /// TensorRT's headers has the fake shim, which never loads.
     /// JETLINK_FAULT_CUDA_AFTER=N makes every frame after the first N fail
-    /// as a sticky CUDA error does, for the fatal exit's acceptance run (H6).
+    /// as a sticky CUDA error does, to test the fatal exit.
     func trt() throws -> any EngineBackend {
       #if os(Linux)
         var index = 0

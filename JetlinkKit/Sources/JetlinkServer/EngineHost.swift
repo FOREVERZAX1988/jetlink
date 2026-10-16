@@ -454,9 +454,9 @@ public final class EngineHost: @unchecked Sendable {
   static let warmFor: TimeInterval = 120
 
   /// One run on zeros between sessions, at the server's tick, so the next
-  /// join's first frame finds an accelerator that cools when idle awake: an
-  /// iPad's Neural Engine left idle for 20 to 60 s took 67 to 123 ms on that
-  /// frame against about 30 after it, and the comma holds a frame past 46 ms.
+  /// join's first frame finds an accelerator that cools when idle awake: a
+  /// Neural Engine left idle for 20 to 60 s takes 67 to 123 ms on that frame
+  /// against about 30 after it, and the comma holds a frame past 46 ms.
   /// Returns whether it ran.
   @discardableResult
   func warmIfIdle(now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
