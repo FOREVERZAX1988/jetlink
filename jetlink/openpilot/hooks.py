@@ -16,25 +16,11 @@ and shutdown_step() says yes to a power-off that is wanted, since a broken
 jetlink must never keep a comma on to drain the car's battery. selfdrived's
 swap events (swap_events()) answer no event at all.
 
-The fork's guard, inside a function so a jetlink that fails to import lands
-in it too:
-
-  try:
-    from jetlink.openpilot.hooks import Hooks, Off
-    HOOKS = Hooks(API, adapter, link_on=link_on, log=cloudlog)
-  except Exception as e:
-    HOOKS = Off(str(e), link_on=link_on)
-
-where cloudlog() imports and returns the fork's cloudlog: a bind that fails
-is logged there, in the drive's log, before any adapter is there to log with
-(without one, Python's logging, which an openpilot process sends to stderr).
-A factory, so that the guard imports nothing heavy.
-
-Off is here for a jetlink that imports but cannot be used (another API). The
-fork still needs its own answer for no jetlink at all, a checkout missing or
-too old to have this module: that one cannot live in jetlink. link_on() is
-the fork's stdlib read of the Jetlink setting, so the reason a link cannot
-run is told only to someone who turned it on.
+The fork's guard, which builds Hooks or else Off inside a function, and its
+own fallback for no jetlink at all: docs/porting.md, "The adapter module".
+Off is for a jetlink that imports but cannot be used (another API); link_on()
+is the fork's stdlib read of the setting, so the reason a link cannot run is
+told only to someone who turned it on.
 
 Imported by every process that imports the fork's hook module, the resident
 gadget owner among them: the standard library and jetlink's light half only.
@@ -47,7 +33,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable
 
-from jetlink.openpilot import API, Flags, SwapEvents, bind
+from jetlink.openpilot import API, Flags, Jetlink, SwapEvents, bind
 
 # the APIs a fork's adapter may be written to: today's, and after a bump the
 # previous one too, for one minor release (jetlink/openpilot/__init__.py)
@@ -79,15 +65,6 @@ class _Hooks:
   def _call(self, name: str, default, *args):
     return default
 
-  def _unusable(self) -> str | None:
-    """Why jetlink cannot run here, told to someone who turned the link on."""
-    if not self._why:
-      return None
-    try:
-      return self._why if self._link_on is None or self._link_on() else None
-    except Exception:
-      return None
-
   def should_run(self, started, params, CP) -> bool:
     """manager's should_run for the gadget owner."""
     return self._call('enabled', False)
@@ -96,8 +73,13 @@ class _Hooks:
     return self._call('status', None)
 
   def reason(self) -> str | None:
+    """Why jetlink cannot run here, told to someone who turned the link on,
+    else Jetlink.reason's. The call first: a bind that fails sets the why."""
     answer = self._call('reason', None)
-    return self._unusable() or answer
+    try:
+      return self._why if self._why and (self._link_on is None or self._link_on()) else answer
+    except Exception:
+      return answer
 
   def prepare(self, chestnut: bool) -> bool:
     """modeld, before config_realtime_process. A chestnut runs the large
@@ -113,19 +95,17 @@ class _Hooks:
     joined = self._call('attach', None, small, cam_w, cam_h)
     return model if joined is None else joined
 
+  # Jetlink's own two, which read the model and self._handovers alone: modeld
+  # asks every frame, so they never bind
   def handed_over(self, model) -> bool:
-    """Jetlink.handed_over's, off the model alone: modeld asks every frame."""
     try:
-      handovers = getattr(model, 'handovers', 0)
-      changed, self._handovers = bool(handovers != self._handovers), handovers
+      return bool(Jetlink.handed_over(self, model))
     except Exception:
       return False
-    return changed
 
   def state(self, model) -> str:
-    """Jetlink.state's, off the model alone."""
     try:
-      return getattr(model, 'big_model_state', 'none')
+      return Jetlink.state(self, model)
     except Exception:
       return 'none'
 
@@ -200,44 +180,41 @@ class Hooks(_Hooks):
     try:
       if not hasattr(self._log, 'exception'):
         try:
-          self._log = self._log() if callable(self._log) else None
+          log = self._log()   # a factory; None or a logger raises here too
         except Exception:
-          self._log = None
-        if not hasattr(self._log, 'exception'):
+          log = None
+        if not hasattr(log, 'exception'):
           import logging
-          self._log = logging.getLogger('jetlink')
+          log = logging.getLogger('jetlink')
+        self._log = log
       self._log.exception(msg, *args)
     except Exception:
       pass
 
-  def _call(self, name: str, default, *args):
+  def _net(self, name: str, default, fn, *args):
+    """fn(*args), or default when it raises. Logged once per distinct error
+    (the UI would log a failing status five times a second), again after a
+    call that works."""
     try:
-      jetlink = self._jetlink()
-      if jetlink is not None:
-        result = getattr(jetlink, name)(*args)
-        self._cleared(name)
-        return result
+      result = fn(*args)
     except Exception as e:
-      self._failure(name, e)
-    return default
-
-  def _failure(self, name: str, error: Exception) -> None:
-    # once per distinct error: the UI would log a failing status five times a second
-    text = _text(error)
-    if self._failed.get(name) != text:
-      self._failed[name] = text
-      self._report("jetlink: %s() failed: %s", name, text)
-
-  def _cleared(self, name: str) -> None:
+      text = _text(e)
+      if self._failed.get(name) != text:
+        self._failed[name] = text
+        self._report("jetlink: %s() failed: %s", name, text)
+      return default
     self._failed.pop(name, None)
+    return result
+
+  def _call(self, name: str, default, *args):
+    def call():
+      jetlink = self._jetlink()
+      return default if jetlink is None else getattr(jetlink, name)(*args)
+    return self._net(name, default, call)
 
   def swap_events(self, tick_s: float) -> SwapTracker:
     """Bookkeeping alone, so it binds nothing."""
-    try:
-      return SwapTracker(SwapEvents(tick_s), self)
-    except Exception as e:
-      self._failure('swap_events', e)
-      return SwapTracker(None, None)
+    return SwapTracker(self._net('swap_events', None, SwapEvents, tick_s), self)
 
 
 class SwapTracker:
@@ -260,11 +237,6 @@ class SwapTracker:
   def update(self, fresh, state, big, in_control) -> Flags:
     if self._events is None:
       return NO_EVENTS
-    try:
-      flags, self._ok = self._events.update(fresh, state, big, in_control), True
-      self._hooks._cleared('swap_events.update')
-      return flags
-    except Exception as e:
-      self._ok = False
-      self._hooks._failure('swap_events.update', e)
-      return NO_EVENTS
+    flags = self._hooks._net('swap_events.update', None, self._events.update, fresh, state, big, in_control)
+    self._ok = flags is not None
+    return NO_EVENTS if flags is None else flags
