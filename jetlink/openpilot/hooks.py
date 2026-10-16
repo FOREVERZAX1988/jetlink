@@ -26,12 +26,9 @@ Imported by every process that imports the fork's hook module, the resident
 gadget owner among them: the standard library and jetlink's light half only.
 Construction checks the API and nothing more; the adapter is built and bound
 on the first hook that needs it, once per process. handed_over() and state()
-read the model alone and never bind, and with link_on() saying the link is
-off, nor do should_run(), reason() and runtime(). Others bind
-with the link off too: shutdown_step(), which hardwared calls from boot to
-clear a power-off request it did not write, and status(), whose snapshot
-names the big model from the model library (the catalog param and
-jetlink.registry's default), which the UI shows with the link off.
+read the model alone and never bind. With link_on() saying the link is off,
+the only hooks that bind are BINDS_WITH_LINK_OFF's; every other one answers
+as the link off, modeld's prepare() among them.
 """
 from __future__ import annotations
 
@@ -43,6 +40,14 @@ from jetlink.openpilot import API, Flags, Jetlink, SwapEvents, bind
 # the APIs a fork's adapter may be written to: today's, and after a bump the
 # previous one too, for one minor release (jetlink/openpilot/__init__.py)
 COMPATIBLE = frozenset({API})
+
+# the hooks that ask jetlink with link_on() saying off. status(): the UI shows
+# the big model's name from the model library. shutdown_step(): hardwared
+# clears, from boot, a power-off request it did not write; and the request
+# and its wait, for a link turned off while one is pending. The model
+# manager's: the catalog is hardware and the library, not the setting
+BINDS_WITH_LINK_OFF = frozenset({'status', 'shutdown_step', 'request_shutdown', 'shutdown_pending', 'model_state',
+                                 'should_extend_catalog', 'extend_catalog'})
 
 # what selfdrived is told when the swap events cannot run: none at all
 NO_EVENTS = Flags(False, False, False, False, False)
@@ -60,7 +65,8 @@ def _text(error: BaseException) -> str:
 
 class _Hooks:
   """The hooks and the answer each gets with the link off. _call(name,
-  default, *args) is Jetlink.<name>(*args), or default."""
+  default, *args) is Jetlink.<name>(*args), or default with the link off;
+  _run() the same without asking link_on()."""
 
   def __init__(self, reason: str = '', link_on: Callable[[], bool] | None = None):
     self._why = reason
@@ -69,34 +75,37 @@ class _Hooks:
     self._handovers = 0
     self._prepared = False
 
-  def _call(self, name: str, default, *args):
-    return default
-
-  def _off(self) -> bool:
-    """link_on() says the link is off. Unknown, or a link_on() that raises,
-    is not off: the hook asks jetlink, as without one."""
+  def _link(self) -> bool | None:
+    """link_on()'s answer, or None without one or for one that raises, which
+    counts as on: the hook asks jetlink, as without link_on()."""
     try:
-      return self._link_on is not None and not self._link_on()
+      return None if self._link_on is None else bool(self._link_on())
     except Exception:
-      return False
+      return None
+
+  def _call(self, name: str, default, *args):
+    if name not in BINDS_WITH_LINK_OFF and self._link() is False:
+      return default
+    return self._run(name, default, *args)
+
+  def _run(self, name: str, default, *args):
+    return default
 
   def should_run(self, started, params, CP) -> bool:
     """manager's should_run for the gadget owner."""
-    return False if self._off() else self._call('enabled', False)
+    return self._call('enabled', False)
 
   def status(self):
     return self._call('status', None)
 
   def reason(self) -> str | None:
     """Why jetlink cannot run here, told to someone who turned the link on,
-    else Jetlink.reason's. The call first: a bind that fails sets the why."""
-    try:
-      on = self._link_on is None or bool(self._link_on())
-    except Exception:
-      on = None   # unknown: jetlink's answer, and the why told to nobody
+    else Jetlink.reason's. The call first: a bind that fails sets the why.
+    Without link_on() the why is told; with one that raises, nobody is."""
+    on = True if self._link_on is None else self._link()
     if on is False:
       return None
-    answer = self._call('reason', None)
+    answer = self._run('reason', None)
     return self._why if self._why and on else answer
 
   def prepare(self, chestnut: bool) -> bool:
@@ -110,7 +119,8 @@ class _Hooks:
     joined. Binds nothing unless prepare() said yes in this process."""
     if not self._prepared:
       return model
-    joined = self._call('attach', None, small, cam_w, cam_h)
+    # past prepare()'s yes: the setting has had its say for this modeld
+    joined = self._run('attach', None, small, cam_w, cam_h)
     return model if joined is None else joined
 
   # Jetlink's own two, which read the model and self._handovers alone: modeld
@@ -132,7 +142,7 @@ class _Hooks:
     status.Runtime, or None with the link off or unusable, or a chestnut
     fitted. Cheap enough for selfdrived's loop: two small files, and the
     chestnut test's USB walk once per parts.CHESTNUT_TTL, as status()."""
-    return None if self._off() else self._call('runtime', None)
+    return self._call('runtime', None)
 
   def shutdown_step(self, should_shutdown: bool, reason: str = '') -> bool:
     return self._call('shutdown_step', should_shutdown, should_shutdown, reason)
@@ -231,7 +241,7 @@ class Hooks(_Hooks):
     self._failed.pop(name, None)
     return result
 
-  def _call(self, name: str, default, *args):
+  def _run(self, name: str, default, *args):
     def call():
       jetlink = self._jetlink()
       return default if jetlink is None else getattr(jetlink, name)(*args)

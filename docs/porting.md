@@ -118,8 +118,10 @@ When Jetlink fails, every hook answers as if the link were off, so a Jetlink
 bug never takes manager, modeld, hardwared or the UI down. `Hooks` raises for
 an API it does not accept, and `Off` gives the reason as the offroad alert to
 someone who turned the link on. With `link_on()` saying the link is off,
-`should_run()`, `reason()` and `runtime()` answer without
-binding Jetlink to your adapter; `status()` and `shutdown_step()` still bind.
+only the UI's `status()`, hardwared's shutdown hooks and the model manager's
+catalog hooks bind Jetlink to your adapter (`BINDS_WITH_LINK_OFF` in
+`jetlink/openpilot/hooks.py`); every other hook answers as the link off
+without it, modeld's `prepare()` among them.
 The snippets below call the result `HOOKS`:
 `HOOKS = jetlink_adapter.hooks()`. A checkout that is missing or too old has
 no `Off`, so it needs your own fallback. It only answers the hooks a link

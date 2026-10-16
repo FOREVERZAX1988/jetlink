@@ -71,11 +71,12 @@ OFF = {'should_run': False, 'status': None, 'reason': None, 'prepare': False, 'a
        'shutdown_pending': False, 'model_state': None, 'should_extend_catalog': False, 'extend_catalog': True,
        'runtime': None}
 # what answers without binding when link_on() says the link is off
-UNBOUND = ('should_run', 'reason', 'runtime')
+UNBOUND = ('should_run', 'reason', 'runtime', 'prepare')
 
 
 def unbound(h) -> dict:
-  return {'should_run': h.should_run(False, None, None), 'reason': h.reason(), 'runtime': h.runtime()}
+  return {'should_run': h.should_run(False, None, None), 'reason': h.reason(), 'runtime': h.runtime(),
+          'prepare': h.prepare(False)}
 
 
 class Broken:
@@ -397,6 +398,15 @@ class TestTheLinkOff(unittest.TestCase):
     tracker = h.swap_events(0.01)
     self.assertEqual([tracker.update(True, False, True) for _ in range(30)], [hooks.NO_EVENTS] * 30)
     factory.assert_not_called()
+
+  def test_every_hook_binds_or_not_by_the_one_list(self):
+    # handed_over and state read the model alone; attach waits for prepare's yes
+    self.assertEqual(set(OFF) - hooks.BINDS_WITH_LINK_OFF - {'handed_over', 'state', 'attach'}, set(UNBOUND))
+    args = {'shutdown_step': (True,), 'request_shutdown': ('test',), 'model_state': ('f' * 40,), 'extend_catalog': (CATALOG,)}
+    for name in sorted(hooks.BINDS_WITH_LINK_OFF):
+      with self.subTest(name), mock.patch.object(hooks, 'bind') as bind:
+        getattr(Hooks(3, lambda: SimpleNamespace(log=RecordingLog()), link_on=lambda: False), name)(*args.get(name, ()))
+        bind.assert_called_once()
 
   def test_the_status_binds_as_ever(self):
     # the UI shows the big model's name with the link off, from the model library
