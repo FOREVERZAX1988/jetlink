@@ -13,7 +13,7 @@ the fakes jetlink's own tests share.
                          answers a bool at once
   check_seam(path)       a modeld's main(): prepare() before it goes realtime,
                          attach() once the small model is built and its
-                         result run, handed_over() and state() read
+                         result run, handed_over() read
   install_guard()        an audit hook a conftest starts and stops around each
                          test, which records a reach for the machine's own
                          params, /dev/shm records, sysfs or sudo
@@ -129,7 +129,8 @@ def check_seam(modeld_path: str | Path) -> list[str]:
   found as the receiver of attach(model, small, cam_w, cam_h): the fork's
   module (jetlink_adapter.attach) or its Hooks (HOOKS.attach) alike. Calls
   are ordered as the source reads, so one in a branch that never runs (an
-  `if False:`) counts as made."""
+  `if False:`) counts as made. state() is the fork's to publish where it has
+  a message for it, so it is not asked for."""
   path = Path(modeld_path)
   main = next((n for n in ast.parse(path.read_text(), filename=str(path)).body
                if isinstance(n, ast.FunctionDef) and n.name == 'main'), None)
@@ -144,6 +145,9 @@ def check_seam(modeld_path: str | Path) -> list[str]:
   def called(name: str, facade: str | None = None) -> list[tuple[int, int]]:
     return [at(c) for c in calls if (c.func.attr if isinstance(c.func, ast.Attribute) else getattr(c.func, 'id', None)) == name
             and (facade is None or isinstance(c.func, ast.Attribute) and ast.unparse(c.func.value) == facade)]
+
+  def stored(target: str) -> list[tuple[int, int]]:
+    return [at(n) for n in nodes if isinstance(getattr(n, 'ctx', None), ast.Store) and ast.unparse(n) == target]
 
   attach = next((c for c in calls if isinstance(c.func, ast.Attribute) and c.func.attr == 'attach'
                  and len(c.args) + len(c.keywords) == 4), None)
@@ -160,21 +164,19 @@ def check_seam(modeld_path: str | Path) -> list[str]:
   if not realtime:
     problems.append("main() never calls config_realtime_process()")
   small = attach.args[1] if len(attach.args) > 1 else next((k.value for k in attach.keywords if k.arg == 'small'), None)
-  if isinstance(small, ast.Name) and not any(isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store) and n.id == small.id
-                                             and at(n) < at(attach) for n in nodes):
+  if isinstance(small, ast.Name) and not any(p < at(attach) for p in stored(small.id)):
     problems.append(f"attach() comes before {small.id} is built")
   # the name its result is bound to, which the frame loop must run
   bound = next((t.id for n in nodes if isinstance(n, (ast.Assign, ast.AnnAssign)) and n.value is attach
                 for t in getattr(n, 'targets', [getattr(n, 'target', None)]) if isinstance(t, ast.Name)), None)
   if bound is None:
     problems.append("attach()'s result is dropped: modeld would never run the joined model")
-  elif not any(isinstance(c.func, ast.Attribute) and c.func.attr == 'run' and isinstance(c.func.value, ast.Name)
-               and c.func.value.id == bound and at(c) > at(attach) for c in calls):
+  elif not any(p > at(attach) for p in called('run', bound)):
     problems.append(f"attach()'s result, {bound}, is never run: modeld would keep driving the model it had")
-  elif not any(isinstance(n, ast.Attribute) and isinstance(n.ctx, ast.Store) and n.attr == 'frame_drop_ratio'
-               and isinstance(n.value, ast.Name) and n.value.id == bound and at(n) > at(attach) for n in nodes):
+  elif not any(p > at(attach) for p in stored(f'{bound}.frame_drop_ratio')):
     problems.append(f"main() never writes {bound}.frame_drop_ratio: a host that drops camera frames would never hand back")
-  problems += [f"main() never calls {facade}.{hook}(model)" for hook in ('handed_over', 'state') if not called(hook, facade)]
+  if not called('handed_over', facade):
+    problems.append(f"main() never calls {facade}.handed_over(model)")
   return [f"{path.name}: {p}" for p in problems]
 
 
@@ -185,6 +187,8 @@ def check_seam(modeld_path: str | Path) -> list[str]:
 FORBIDDEN = ('/data/', '/dev/shm/', '/dev/ffs', '/sys/', str(Path.home() / '.comma') + os.sep)
 # read by a library on import, never jetlink's own reach: tinygrad's CPU quota
 ALLOWED = ('/sys/fs/cgroup/cpu.max',)
+# the audit events Guard reads a path from, and the argument it is
+_PATH_ARG = {'open': 0, 'os.listdir': 0, 'os.scandir': 0, 'socket.connect': 1}
 
 
 class Guard:
@@ -215,7 +219,7 @@ class Guard:
       if (hit := next((str(a) for a in argv if 'jetlink-root.sh' in str(a) or str(a) == 'sudo'), None)) is not None:
         touched.append(f"{event} {hit}")
       return
-    index = {'open': 0, 'os.listdir': 0, 'os.scandir': 0, 'socket.connect': 1}.get(event)
+    index = _PATH_ARG.get(event)
     value = args[index] if index is not None and len(args) > index else None
     if isinstance(value, (str, bytes, os.PathLike)):
       path = os.path.abspath(os.fsdecode(value))

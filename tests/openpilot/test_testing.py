@@ -191,9 +191,12 @@ class TestCheckSeam(unittest.TestCase):
                                           "camera frames would never hand back")])
 
   def test_the_frame_loops_reads(self):
-    source = GOOD.replace('HOOKS.handed_over(model)', 'False').replace('HOOKS.state(model)', "'none'")
-    self.assertEqual(self.seam(source), ["modeld.py: main() never calls HOOKS.handed_over(model)",
-                                         "modeld.py: main() never calls HOOKS.state(model)"])
+    source = GOOD.replace('HOOKS.handed_over(model)', 'False')
+    self.assertEqual(self.seam(source), ["modeld.py: main() never calls HOOKS.handed_over(model)"])
+
+  def test_state_is_the_forks_to_publish(self):
+    # a fork with no message for the state reads it off Status.running instead
+    self.assertEqual(self.seam(GOOD.replace('HOOKS.state(model)', "'none'")), [])
 
   def test_hooks_on_another_object_do_not_count(self):
     source = GOOD.replace('HOOKS.prepare(', 'other.prepare(')
