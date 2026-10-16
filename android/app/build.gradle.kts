@@ -90,6 +90,16 @@ android {
             useLegacyPackaging = true
             // onnxruntime's Java binding; the server calls the C API.
             excludes += "**/libonnxruntime4j_jni.so"
+            // The phone's own QNN set (`src/main/jniLibs`) is the phone's
+            // bytes, and the firmware checks them as they are, so nothing
+            // here rewrites them on the way into the APK.
+            keepDebugSymbols += listOf(
+                "**/libQnnHtp.so",
+                "**/libQnnHtpPrepare.so",
+                "**/libQnnSystem.so",
+                "**/libQnnHtpV85Stub.so",
+                "**/libQnnHtpV85Skel.so",
+            )
         }
     }
 
@@ -140,8 +150,12 @@ dependencies {
     implementation(libs.compose.material.icons)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
-    // libonnxruntime.so with the QNN provider, and the QNN runtime's libraries
-    implementation(libs.onnxruntime.qnn)
+    // onnxruntime's native libraries arrive through `onnxRuntimeLibraries`
+    // below, which leaves the AAR's own copies of the libraries
+    // `src/main/jniLibs` holds out of the APK. The AAR is not an
+    // `implementation` dependency for the same reason: the server calls
+    // onnxruntime's C API, its Java binding is not wanted, and its telemetry
+    // provider is removed from the merge (AndroidManifest.xml).
     debugImplementation(libs.compose.ui.tooling)
 
     onnxruntimeAar(variantOf(libs.onnxruntime.qnn) { artifactType("aar") })
@@ -234,6 +248,47 @@ abstract class LiteRtLibraries @Inject constructor(
     }
 }
 
+/**
+ * onnxruntime's native libraries, out of its AAR: `libonnxruntime.so` with the
+ * QNN provider, QNN's HTP pairs for the Hexagons up to V81, its GPU and DSP
+ * backends and its System library, all as the AAR lays them out.
+ *
+ * Whatever `src/main/jniLibs/arm64-v8a` holds wins over the AAR's copy of the
+ * same name, which is how the phone's own QNN set replaces the backend, the
+ * context preparer and the System library the AAR ships
+ * [docs/qnn-htp-stubs.md]. A checkout without that set gets the AAR's own
+ * three, as before.
+ */
+abstract class OnnxRuntimeLibraries @Inject constructor(
+    private val files: FileSystemOperations,
+    private val archives: ArchiveOperations,
+) : DefaultTask() {
+    @get:InputFiles @get:PathSensitive(PathSensitivity.NONE) abstract val aar: ConfigurableFileCollection
+    /** The names `src/main/jniLibs/arm64-v8a` holds, which are not taken from the AAR. */
+    @get:Input abstract val overrides: ListProperty<String>
+    @get:OutputDirectory abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun extract() {
+        val ours = overrides.get().map { "jni/arm64-v8a/$it" }
+        files.sync {
+            from(archives.zipTree(aar.singleFile)) {
+                include("jni/arm64-v8a/*.so")
+                if (ours.isNotEmpty()) exclude(*ours.toTypedArray())
+                eachFile { path = "arm64-v8a/$name" }
+            }
+            includeEmptyDirs = false
+            into(outputDir)
+        }
+    }
+}
+
+val onnxRuntimeLibraries = tasks.register<OnnxRuntimeLibraries>("onnxRuntimeLibraries") {
+    aar.from(onnxruntimeAar)
+    overrides.set(file("src/main/jniLibs/arm64-v8a").listFiles()?.map { it.name } ?: emptyList<String>())
+    outputDir.set(layout.buildDirectory.dir("onnxruntime/jniLibs"))
+}
+
 val liteRtLibraries = tasks.register<LiteRtLibraries>("liteRtLibraries") {
     aar.from(litertAar)
     npu.from(litertNpu)
@@ -243,25 +298,58 @@ val liteRtLibraries = tasks.register<LiteRtLibraries>("liteRtLibraries") {
 }
 
 /**
- * The V85 pair this build carries for an SM8975, a Snapdragon 8 Elite Gen 6:
- * `libQnnHtpV85Stub.so` and `libQnnHtpV85Skel.so` in `src/main/jniLibs`, the
- * two files QAIRT lays out under `lib/aarch64-android/` and
- * `lib/hexagon-v85/unsigned/` [docs/qnn-htp-stubs.md]. Maven's qnn-runtime
- * stops at V81, so this fork carries the pair; a checkout without it still
- * builds and serves every Hexagon up to V81. Half of it is an error: QNN
- * refuses a model in silence, which is the failure the pair ends.
+ * The QNN set this build carries, and what it has to be.
+ *
+ * `src/main/jniLibs/arm64-v8a` holds the five files of one QNN build: the
+ * backend, its context preparer, its System library, and the V85 Stub and
+ * Skel for an SM8975, a Snapdragon 8 Elite Gen 6. They are the phone's own,
+ * 2.48.5, which is the set this Hexagon opens: the same five of 2.51.40 are
+ * refused by the firmware's FastRPC, which asks a Skel for a priority token
+ * its build does not have [docs/qnn-htp-stubs.md].
+ *
+ * Five files of one build, or none of them: half a set is a failure QNN
+ * swallows in silence, so the build fails here instead. The hashes are what
+ * the build was matched against, and what the running phone reports.
+ *
+ * A checkout without the set still builds and serves every Hexagon up to V81
+ * through the AAR's own libraries (`onnxRuntimeLibraries`), which is what
+ * upstream carries; leaving out the V85 pair alone then fails the build, as
+ * it did before.
  */
 run {
-    val v85 = fileTree("src/main/jniLibs/arm64-v8a") { include("libQnnHtpV85*.so") }
-    check(v85.files.size == 2) {
-        "src/main/jniLibs/arm64-v8a holds ${v85.files.map { it.name }}: the V85 pair is the " +
-            "Stub and its Skel together, or nothing at all"
+    val phone = linkedMapOf(
+        "libQnnHtp.so" to "1108ace00a71059d8b8bde5e63a3c7e296dcdb33e88d789d5e6cc88200a27d59",
+        "libQnnHtpPrepare.so" to "8879389024c43226e6c7b441b55146a9d4fd941f931bc2a7bfbc8626645bc02e",
+        "libQnnSystem.so" to "8b2f9dffd181bb4753491e78881573a36d5f3ac1af2ca1f61ca24a4e6f2fd9f8",
+        "libQnnHtpV85Stub.so" to "3064fd029b4d483fc1365304e4f9a0f06215bef2506d4fa8b6fc6c37209e3880",
+        "libQnnHtpV85Skel.so" to "1d4abb21e93817924f8cbcc6535b0b12e14d40276983e5b37caa32744034add9",
+    )
+    val dir = file("src/main/jniLibs/arm64-v8a")
+    val held = phone.keys.filter { File(dir, it).isFile }
+    check(held.isEmpty() || held.size == phone.size) {
+        "src/main/jniLibs/arm64-v8a holds $held: a QNN set is the five files of one build, " +
+            "or none of them"
+    }
+    if (held.isEmpty()) {
+        val v85 = fileTree("src/main/jniLibs/arm64-v8a") { include("libQnnHtpV85*.so") }
+        check(v85.files.size == 2) {
+            "src/main/jniLibs/arm64-v8a holds ${v85.files.map { it.name }}: the V85 pair is the " +
+                "Stub and its Skel together, or nothing at all"
+        }
+    }
+    held.forEach { name ->
+        val sha = MessageDigest.getInstance("SHA-256").digest(File(dir, name).readBytes())
+            .joinToString("") { "%02x".format(it) }
+        check(sha == phone[name]) {
+            "$name has SHA-256 $sha, not the ${phone[name]} of the set this build was matched against"
+        }
     }
 }
 
 androidComponents {
     onVariants { variant ->
         variant.sources.jniLibs?.addGeneratedSourceDirectory(swiftBuild, SwiftBuild::outputDir)
+        variant.sources.jniLibs?.addGeneratedSourceDirectory(onnxRuntimeLibraries, OnnxRuntimeLibraries::outputDir)
         variant.sources.jniLibs?.addGeneratedSourceDirectory(liteRtLibraries, LiteRtLibraries::outputDir)
     }
 }
