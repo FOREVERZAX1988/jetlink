@@ -123,8 +123,13 @@ class FakeClient:
     back = next((i for i, f in enumerate(self._in_flight) if f in self.keep), len(self._in_flight))
     taken, self._in_flight = self._in_flight[:back], self._in_flight[back:]
     if taken:
-      self.last_output = self.output
-      self._piggyback()
+      # a frame the server answered without an output is answered all the same
+      # (client._take_reply with tolerate_failed): the link is there, and there
+      # is nothing to publish off it
+      self.last_failed = any(f in self.failed for f in taken)
+      if not self.last_failed:
+        self.last_output = self.output
+        self._piggyback()
     return len(taken)
 
   def _piggyback(self):
@@ -134,6 +139,24 @@ class FakeClient:
   @property
   def unanswered(self):
     return len(self._in_flight)
+
+
+class FakeClock:
+  """model_state's clock, in steps. Everything else here runs a frame in
+  microseconds, so a rule that reads time (the preview's silence, whole
+  seconds) cannot be exercised against the wall clock at all: this advances a
+  fixed amount per read instead, which makes it deterministic."""
+
+  def __init__(self, step: float = 0.5):
+    self.now = 0.0
+    self.step = step
+
+  def monotonic(self) -> float:
+    self.now += self.step
+    return self.now
+
+  def perf_counter(self) -> float:
+    return self.now
 
 
 class FakeWarp:
@@ -158,11 +181,11 @@ class ModelStateTest(unittest.TestCase):
     self.log = fakes.RecordingLog()
     self.events = []
 
-  def make(self, spec, client, face=fakes.FACE, warped=None, preview=False):
+  def make(self, spec, client, face=fakes.FACE, warped=None, preview=False, pipeline=None):
     warped = np.zeros(np.prod(spec.warped_shape), np.uint8) if warped is None else warped
     return model_state.JetlinkModelState(client, spec, FakeWarp(warped), face=face, log=self.log,
                                          event=lambda name, **fields: self.events.append((name, fields)),
-                                         preview=preview)
+                                         preview=preview, pipeline=pipeline)
 
   def run_frames(self, inputs: dict, n: int = 3, client=None, after_enqueue=None):
     """`n` frames driven. Returns the spec, the state, the client and the
@@ -234,7 +257,7 @@ class TestWire(ModelStateTest):
     self.assertEqual((summary['frames'], summary['over']), (100, 1))
     self.assertEqual((summary['p50_ms'], summary['max_ms'], summary['server_ms']), (30.0, 200.0, 25.0))
     self.assertEqual(summary['p99_ms'], 30.0, 'p99 is the 99th of a hundred, as the server takes it')
-    self.assertEqual(model_state.Trips().summary(), {'frames': 0, 'over': 0, 'held': 0, 'span_s': 0.0})
+    self.assertEqual(model_state.Trips().summary(), {'frames': 0, 'over': 0, 'held': 0, 'pipelined': 0, 'span_s': 0.0})
 
   def test_a_queued_model_gets_the_frame_and_twelve_floats_too(self):
     spec, state, client, warped = self.run_frames(QUEUED)
@@ -626,10 +649,23 @@ class TestAPreview(ModelStateTest):
     client.late = set(range(2, 20))
     return self.make(spec_for(STATEFUL), client, preview=preview), client
 
-  def test_held_frames_in_a_row_are_kept(self):
+  def test_a_late_host_keeps_the_link_and_no_frame_waits_for_it(self):
     state, client = self.make_late(preview=True)
     self.frames(state, 8)
-    self.assertEqual(state.trips.held, 7)
+    # the frames after the first never waited for their own reply, so none of
+    # them is late: the host is slow and keeps the link (state.pipeline)
+    self.assertEqual((state.trips.held, state.trips.pipelined), (0, 7))
+    self.assertIsNone(state.behind)
+
+  def test_a_preview_that_still_waits_holds_its_frames(self):
+    # pipeline=False: the same late host, the frame loop waiting for its own
+    # reply as it did before the pipeline existed, one held frame each
+    client = FakeClient()
+    client.late = set(range(2, 20))
+    state = self.make(spec_for(STATEFUL), client, preview=True, pipeline=False)
+    self.assertFalse(state.pipeline)
+    self.frames(state, 8)
+    self.assertEqual((state.trips.held, state.trips.pipelined), (7, 0))
     self.assertIsNone(state.behind)
 
   def test_the_same_host_hands_a_driving_link_back(self):
@@ -642,6 +678,86 @@ class TestAPreview(ModelStateTest):
     with mock.patch.object(model_state, 'PREVIEW_SILENCE', 0.0):
       self.frames(state, 8)
     self.assertIn('no answer for', state.behind or '')
+
+
+class TestAPipelinedPreview(ModelStateTest):
+  """A preview's frame loop never waits for the frame's own reply: the newest
+  answer is published, that reply is read by a later frame, and the host's work
+  runs against the camera's next frame instead of adding to it. The wait is
+  what put a phone's Wi-Fi frame past the camera's 50 ms, and a frame past it
+  is a camera frame dropped behind the large model -- the demote that took the
+  picture away (JETLINK_WIFI_LINK_1016)."""
+
+  def late_state(self, preview: bool = True):
+    """A host slower than the hold on every frame after its first."""
+    client = FakeClient()
+    client.late = set(range(2, 20))
+    return self.make(spec_for(STATEFUL), client, preview=preview), client
+
+  def test_no_frame_after_the_first_waits_for_its_own_reply(self):
+    state, client = self.late_state()
+    self.assertTrue(state.pipeline)
+    self.frames(state, 8)
+    # only the first frame waits, and it waits its own budget: there is no
+    # output to publish yet, so it is the one frame that has nothing to fall
+    # back on (model_state._first_frame_budget)
+    self.assertEqual(client.holds, [None])
+    self.assertEqual(client.deadlines, [model_state.FIRST_FRAME_TIMEOUT])
+
+  def test_the_newest_answer_is_what_a_pipelined_frame_publishes(self):
+    state, client = self.late_state()
+    outs = self.frames(state, 4)
+    # the answer in hand, the same array parsed once: the parser's softmax
+    # works in place on it, so the dict is the one already made
+    self.assertIs(outs[1], outs[0])
+    self.assertEqual(state.trips.pipelined, 3)
+    self.assertEqual(state.trips.frames, 4)
+
+  def test_a_link_that_will_not_take_a_frame_is_not_waited_for_either(self):
+    # skip_if_busy: a frame the link cannot take without draining earlier ones
+    # is not sent at all, and the frame publishes the newest answer
+    state, client = self.late_state()
+    client.busy = {3, 4}
+    outs = self.frames(state, 4)
+    self.assertEqual([frame_id for _, _, frame_id, _ in client.sent], [1, 2])
+    self.assertEqual(state.trips.pipelined, 1, 'only the frame that went out on a pipeline')
+    self.assertIs(outs[2], outs[1], 'a frame that was not sent publishes the newest answer')
+
+  def test_the_wheel_never_pipelines(self):
+    state, client = self.late_state(preview=False)
+    self.assertFalse(state.pipeline)
+    self.frames(state, 8)
+    self.assertEqual(state.trips.pipelined, 0)
+    self.assertTrue((state.behind or '').startswith('held frame'), state.behind)
+
+  def test_a_driven_away_preview_waits_for_its_own_reply_again(self):
+    # joining clears `preview` the moment anything can be in control; the
+    # pipeline reads it, so the wheel gets the frame loop it always had
+    state, client = self.late_state()
+    self.frames(state, 1)
+    state.preview = False
+    self.assertFalse(state.pipeline)
+    self.frames(state, 2)
+    self.assertEqual(state.trips.pipelined, 0)
+
+  def test_the_silence_clock_is_the_hosts_answers_not_this_frames_reply(self):
+    """A pipelined frame is never its own reply, so the rule cannot read
+    'this frame was not answered in time' as silence: a host whose every frame
+    is late answers every frame, and one that has stopped answering loses the
+    picture at PREVIEW_SILENCE (5 s), as a preview always has. The clock steps
+    0.5 s a read, so the sixteen frames below outlast it only where no answer
+    ever comes back."""
+    late, _ = self.late_state()
+    with mock.patch.object(model_state, 'time', FakeClock()):
+      self.frames(late, 16)
+    self.assertIsNone(late.behind, 'a late answer is still an answer')
+
+    client = FakeClient()
+    client.keep = set(range(2, 40))          # nothing comes back at all
+    silent = self.make(spec_for(STATEFUL), client, preview=True)
+    with mock.patch.object(model_state, 'time', FakeClock()):
+      self.frames(silent, 16)
+    self.assertIn('no answer for', silent.behind or '')
 
 
 class TestAPreviewFrameTheHostCannotAnswer(ModelStateTest):
@@ -676,8 +792,11 @@ class TestAPreviewFrameTheHostCannotAnswer(ModelStateTest):
     client.failed.add(2)
     with mock.patch.object(model_state, 'PREVIEW_SILENCE', 0.0):
       # an answer that carried no output is still an answer: a host that goes
-      # on failing its frames is not a host that went quiet
-      again = self.frames(state, 1)[0]
+      # on failing its frames is not a host that went quiet. A pipelined frame
+      # publishes the newest answer, so the answer to frame 2 is read by frame
+      # 3's prepare() -- and it is that reading, not frame 2's own wait, that
+      # restarts the clock
+      again = self.frames(state, 2)[0]
     self.assertIs(again, first)
     self.assertIsNone(state.behind)
     self.assertFalse(client.dead)

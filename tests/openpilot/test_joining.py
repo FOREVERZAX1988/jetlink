@@ -963,7 +963,7 @@ class PreviewEndsTest(JoiningBase):
     s.in_control = True
     self._run(s)
     self.assertFalse(self.big.preview)
-    self.assertTrue(self.log.has("in control, a preview's silence rule no longer applies"))
+    self.assertTrue(self.log.has("in control, a preview's silence rule and its frame pipeline no longer apply"))
 
   def test_a_frame_the_host_answered_without_an_output_keeps_the_join(self):
     # the host is there and its answer carried nothing the link can publish:

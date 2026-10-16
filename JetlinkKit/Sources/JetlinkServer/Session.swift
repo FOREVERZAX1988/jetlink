@@ -573,6 +573,9 @@ final class Session: @unchecked Sendable {
       // a frame whose reply was late published the one before it again; a
       // shadowed frame went out with the small model driving, never waited for
       if let held = number("held"), held > 0 { line += ", \(Int(held)) held" }
+      // a preview's pipelined frames published the newest answer without ever
+      // waiting for their own, which is what a frame on a phone's Wi-Fi does
+      if let pipelined = number("pipelined"), pipelined > 0 { line += ", \(Int(pipelined)) pipelined" }
       if let shadowed = number("shadowed"), shadowed > 0 { line += "; \(Int(shadowed)) more ran with the small model driving" }
     }
     if let drops = number("drops"), let lags = number("lags") {

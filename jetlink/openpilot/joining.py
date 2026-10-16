@@ -344,7 +344,9 @@ class JoiningModelState:
       # keeps what it was built with. From the frame anything can be in
       # control, the rules written for the wheel are the ones that count
       self._active.preview = False
-      self._log.warning("jetlink: in control, a preview's silence rule no longer applies")
+      # (the pipeline a preview's frames ran under is `preview` too:
+      # model_state.pipeline, so the frame loop waits for its own reply again)
+      self._log.warning("jetlink: in control, a preview's silence rule and its frame pipeline no longer apply")
     return self._run_big(bufs, transforms, inputs, after_enqueue)
 
   def _run_big(self, bufs, transforms, inputs, after_enqueue):

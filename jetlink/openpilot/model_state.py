@@ -148,6 +148,7 @@ class Trips:
     self.frames = 0          # frames waited for and published
     self.over = 0            # frames past SLOW_FRAME, the whole 20 Hz budget
     self.held = 0            # frames whose reply was late and published the previous one
+    self.pipelined = 0       # frames that published the previous one without waiting at all
     self.started = time.monotonic()
     self._whole_ms: deque[float] = deque(maxlen=TRIPS_KEPT)
     self._server_ms: deque[float] = deque(maxlen=TRIPS_KEPT)
@@ -160,10 +161,11 @@ class Trips:
     self._server_ms.append(server_us / 1e3)
 
   def summary(self) -> dict:
-    """frames, over, held, span_s, and over the frames kept: p50_ms, p99_ms,
-    max_ms of the whole frame and server_ms, the server's mean total."""
+    """frames, over, held, pipelined, span_s, and over the frames kept:
+    p50_ms, p99_ms, max_ms of the whole frame and server_ms, the server's mean
+    total."""
     out = {'frames': self.frames, 'over': self.over, 'held': self.held,
-           'span_s': round(time.monotonic() - self.started, 1)}
+           'pipelined': self.pipelined, 'span_s': round(time.monotonic() - self.started, 1)}
     if self._whole_ms:
       whole = sorted(self._whole_ms)
       out.update(p50_ms=round(whole[len(whole) // 2], 1), p99_ms=round(whole[int(0.99 * (len(whole) - 1))], 1),
@@ -200,6 +202,7 @@ class JetlinkModelState:
   prev_desire: np.ndarray  # for tracking the rising edge of the pulse
 
   def __init__(self, client, spec, warp, *, face, log, event, preview: bool = False,
+               pipeline: bool | None = None,
                hold_frame: float | None = None, settling_frames: int | None = None,
                holds_in_a_row: int | None = None, holds_allowed: int | None = None,
                proving_holds_fatal: bool = True):
@@ -238,6 +241,11 @@ class JetlinkModelState:
     # interface.Keys.preview); see the property. Set here, and it tells the link
     # as well: a preview keeps a host whose frame carried no output
     self.preview = preview
+    # Whether a frame's own reply is waited for at all; a preview's is not (see
+    # the property). Read together with `preview`, so a state the fork stops
+    # calling a preview gets the wheel's frame loop back -- not a flag anyone
+    # has to remember to clear
+    self._pipeline = True if pipeline is None else bool(pipeline)
     # not chestnut hardware, but the same role: modelV2.big, the UI and the
     # model manager key off this flag
     self.chestnut = True
@@ -318,7 +326,12 @@ class JetlinkModelState:
     self.warp.start(_address(bufs['img']), _address(bufs['big_img']), transforms['img'], transforms['big_img'])
     t1 = time.perf_counter()
     # the GPU is warping; nothing below is an input to it
-    self.client.drain()
+    if self.client.drain():
+      # the host answered since the last frame. For a pipelined frame, which
+      # never waits for its own reply, this is the only clock the silence rule
+      # has: the frames that arrive late are the normal shape there, not a host
+      # that has gone quiet
+      self._last_answer = time.monotonic()
     self.log_telemetry()
 
     # Model decides when action is completed, so desire input is just a pulse triggered on rising edge.
@@ -374,8 +387,17 @@ class JetlinkModelState:
     if after_enqueue is not None:
       after_enqueue()
     waiting_from = time.perf_counter()
+    pipelined = False
     if frame.seq is None:
       model_output = None   # not sent (see send): held
+    elif self.pipeline and self.client.last_output is not None:
+      # a pipelined frame does not wait for its own reply: the newest answer is
+      # published (prepare()'s drain() read it) and this frame's reply is read
+      # by a later frame. Nothing waited, so nothing here is late -- the host
+      # is working on this frame while the camera brings up the next one
+      model_output = None
+      pipelined = True
+      self.trips.pipelined += 1
     elif self._can_hold:
       model_output = self.client.infer_end(frame.seq, hold=self._hold_left(frame))
     else:
@@ -383,25 +405,33 @@ class JetlinkModelState:
       # again: this frame waits its own budget, not one 20 Hz frame
       model_output = self.client.infer_end(frame.seq, deadline=self._first_frame_budget)
     t4 = time.perf_counter()
-    held = model_output is None
-    self.behind = self._note_hold(held)
-    if held and self.client.last_failed and self.client.last_output is None:
+    # a frame that published the previous output, for one of two reasons: its
+    # reply was late (a held frame, and the host is behind) or it was not
+    # waited for at all (a pipelined frame, where being an answer behind is the
+    # shape of the loop)
+    earlier = model_output is None
+    held = earlier and not pipelined
+    self.behind = self._note_pipeline() if pipelined else self._note_hold(held)
+    if earlier and self.client.last_failed and self.client.last_output is None:
       # the host answered and the answer carried no output, on a frame with
       # none earlier in this session to publish again: there is nothing to hold.
       # A preview keeps the link and the joining state serves this frame from
       # the small model, rather than handing the picture back to it
       raise FrameFailed(f"inference failed on frame {self._frame_id} before any output")
-    outputs = self._outputs(self.client.last_output if held else model_output)
+    outputs = self._outputs(self.client.last_output if earlier else model_output)
     self.trips.record(t4 - frame.t0, self.client.last_timings[2])
     # a frame past the budget is a dropped camera frame; send against reply
-    # says which end it was. Held frames are a steady few on a marginal host,
-    # so after the first they go to the log at TELEMETRY_PERIOD
-    log_hold = held and (self.trips.held <= 3 or t4 - self._last_hold_logged >= TELEMETRY_PERIOD)
+    # says which end it was. Held frames are a steady few on a marginal host
+    # and a pipeline's are every frame, so after the first they go to the log
+    # at TELEMETRY_PERIOD
+    stale = held or pipelined
+    log_hold = stale and (self.trips.held + self.trips.pipelined <= 3 or t4 - self._last_hold_logged >= TELEMETRY_PERIOD)
     if self._frame_id <= 3 or t4 - frame.t0 > SLOW_FRAME or log_hold:
       note = ''
-      if held:
+      if stale:
         self._last_hold_logged = t4
-        note = f', held ({self.trips.held} so far{", not sent" if frame.seq is None else ""})'
+        note = (', pipelined' if pipelined else
+                f', held ({self.trips.held} so far{", not sent" if frame.seq is None else ""})')
       # persisted on the comma so a drive can separate server execution from
       # receive stalls once the Jetson is offline; server total excludes USB
       gpu_us, queue_us, total_us = self.client.last_timings
@@ -470,6 +500,44 @@ class JetlinkModelState:
     self.client.tolerate_failed = self._preview
 
   @property
+  def pipeline(self) -> bool:
+    """Is this frame loop pipelined: never waiting for the frame's own reply,
+    publishing the newest answer the host has sent instead?
+
+    A preview's, and only a preview's. Nothing in a preview can take control,
+    so what a pipelined frame publishes is what a held frame publishes -- the
+    answer before this one -- while the wait it skips is not free: end() blocks
+    modeld's frame thread, and a wait that runs into the camera's 50 ms is
+    camera frames dropped behind the large model. With the wait gone the host's
+    work overlaps the camera's own frame: each frame goes out as its warp
+    finishes, prepare()'s drain() reads whatever the host has answered since,
+    and the loop's own cost falls to the warp and the pack. The host's own
+    queue stops being empty, which is the point -- it was the accelerator that
+    sat idle, not the link that was slow.
+
+    `preview` is what this reads, so a state the fork stops calling a preview
+    (joining, the moment anything can be in control) waits for its own reply
+    again, wheels first. A host that stops answering entirely is the joining
+    state's silence rule as before: PREVIEW_SILENCE, which here reads the last
+    answer drain() took rather than any one frame's own reply.
+    """
+    return self._pipeline and self.preview
+
+  def _note_pipeline(self) -> str | None:
+    """Why a frame should hand the picture back: silence, and only silence,
+    which is what a preview is held to. Read by a pipelined frame and by a held
+    frame of a preview that still waits (the frames before the host's first
+    answer, and any state built with pipeline=False)."""
+    if self.client.last_failed:
+      # the host answered; only what it said was unusable. The link is there,
+      # and a preview is held to the link, so the clock restarts and it goes on
+      # being the model the app is running
+      self._last_answer = time.monotonic()
+      return None
+    silence = time.monotonic() - self._last_answer
+    return f'no answer for {silence:.0f} s' if silence > PREVIEW_SILENCE else None
+
+  @property
   def _first_frame_budget(self) -> float:
     """What the frames before the host's first answer of this session may wait."""
     return WIFI_FIRST_FRAME_TIMEOUT if self._wifi else FIRST_FRAME_TIMEOUT
@@ -497,14 +565,7 @@ class JetlinkModelState:
       self._holds.popleft()
     self._holds_in_a_row += 1
     if self.preview:
-      if self.client.last_failed:
-        # the host answered; only what it said was unusable. The link is there,
-        # and a preview is held to the link, so the clock restarts and it goes
-        # on being the model the app is running
-        self._last_answer = now
-        return None
-      silence = now - self._last_answer
-      return f'no answer for {silence:.0f} s' if silence > PREVIEW_SILENCE else None
+      return self._note_pipeline()
     if self._frame_id <= self._settling_frames:
       return None
     if self._proving_holds_fatal and self._frame_id <= PROVING_FRAMES:
