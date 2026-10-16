@@ -15,6 +15,7 @@ these tests say what Stock does with them.
 from __future__ import annotations
 
 import ast
+import importlib.util
 import json
 import os
 import subprocess
@@ -489,3 +490,25 @@ def test_the_top_level_is_the_standard_library_and_jetlink():
   foreign = [m for m in top if m.split('.')[0] not in sys.stdlib_module_names and m.split('.')[0] != 'jetlink']
   assert foreign == [] and 'jetlink.openpilot.interface' in top
 
+
+def _upstream(name: str):
+  # scripts/upstream is not a package: the checkers run as python3 -I scripts
+  path = ROOT / 'scripts' / 'upstream' / f'{name}.py'
+  spec = importlib.util.spec_from_file_location(f'upstream_{name}', path)
+  module = importlib.util.module_from_spec(spec)
+  with mock.patch.object(sys, 'path', [str(path.parent), *sys.path]):
+    spec.loader.exec_module(module)
+  return module
+
+
+def test_the_upstream_checker_reads_stocks_literals():
+  # what check_paths holds the tree to is what Stock holds
+  values = _upstream('check_paths').stock_values()
+  for name in ('CHESTNUT_IDS', 'IN_CONTROL_SERVICES', 'WARP_DIR', 'WARP_NAME', 'CATALOG_SELECTOR'):
+    assert values[name] == getattr(Stock, name), name
+  assert values['KEYS']['offroad'] == Stock.KEYS.offroad
+
+
+def test_the_upstream_import_check_sees_every_import_the_fake_stubs():
+  found = set(_upstream('check_imports').openpilot_imports(SOURCE))
+  assert found == set(World(Path(tempfile.mkdtemp())).names)
