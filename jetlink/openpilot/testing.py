@@ -319,6 +319,21 @@ def fake_jit(fn=None, prune=False):
   return (lambda f: f) if fn is None else fn
 
 
+class FakeContext:
+  """tinygrad.helpers.Context: `active` is the settings of each with-block
+  open now, innermost last."""
+  active: list[dict] = []
+
+  def __init__(self, **settings):
+    self.settings = settings
+
+  def __enter__(self):
+    FakeContext.active.append(self.settings)
+
+  def __exit__(self, *exc):
+    FakeContext.active.pop()
+
+
 def fake_tinygrad(get_worker_pool=None) -> dict[str, ModuleType]:
   """sys.modules entries for what jetlink imports of tinygrad; patch them in
   with mock.patch.dict(sys.modules, fake_tinygrad())."""
@@ -332,6 +347,7 @@ def fake_tinygrad(get_worker_pool=None) -> dict[str, ModuleType]:
     'tinygrad': module('tinygrad', Tensor=FakeTensor, TinyJit=fake_jit, Device=FakeDevice),
     'tinygrad.tensor': module('tinygrad.tensor', Tensor=FakeTensor),
     'tinygrad.device': module('tinygrad.device', Device=FakeDevice),
+    'tinygrad.helpers': module('tinygrad.helpers', Context=FakeContext, PARALLEL=8),
     'tinygrad.engine': module('tinygrad.engine'),
     'tinygrad.engine.jit': module('tinygrad.engine.jit', TinyJit=fake_jit),
     'tinygrad.engine.worker': module('tinygrad.engine.worker',

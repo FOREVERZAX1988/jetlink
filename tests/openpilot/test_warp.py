@@ -22,6 +22,7 @@ from unittest import mock
 import numpy as np
 
 from jetlink.openpilot import warp
+from jetlink.openpilot.testing import FakeContext
 from tests.openpilot import fakes
 from tests.openpilot.fakes import OpenpilotTest
 
@@ -147,9 +148,9 @@ class TestLoadValidation(WarpTest):
 
 
 class TestInitDevice(unittest.TestCase):
-  """prepare() runs this before modeld goes realtime: tinygrad's compile pool
-  is otherwise created on the warp's first call, and its handler threads then
-  sit at FIFO 54 on the frame loop's core."""
+  """prepare() runs this before modeld goes realtime: tinygrad's device thread
+  is otherwise created on the first kernel run, at FIFO 54 on the frame
+  loop's core."""
 
   def setUp(self):
     self.pool = mock.Mock(name='get_worker_pool')
@@ -158,22 +159,17 @@ class TestInitDevice(unittest.TestCase):
     self.addCleanup(p.stop)
     self.log = fakes.RecordingLog()
 
-  def test_the_compile_pool_is_created_with_the_device(self):
-    warp.init_device(self.log)
-    self.pool.assert_called_once_with()
+  def test_the_device_comes_up_and_no_compile_pool_starts(self):
+    with mock.patch.object(fakes.FakeTensor, 'realize', autospec=True) as realize:
+      warp.init_device(self.log)
+    realize.assert_called_once()
+    self.pool.assert_not_called()
     self.assertEqual(self.log.records, [])
-
-  def test_a_pool_that_will_not_start_is_logged_not_raised(self):
-    # An older tinygrad without the module, or PARALLEL=0, must not veto the accelerator.
-    self.pool.side_effect = RuntimeError('no pool')
-    warp.init_device(self.log)
-    self.assertEqual(len(self.log.lines('exception')), 1)
 
   def test_a_device_that_will_not_come_up_is_logged_not_raised(self):
     with mock.patch.object(fakes.FakeTensor, 'realize', side_effect=RuntimeError('no gpu')):
       warp.init_device(self.log)
     self.assertTrue(self.log.has('could not bring the gpu up', 'exception'))
-    self.pool.assert_called_once_with()
 
 
 class FakeBuffer:
@@ -372,16 +368,18 @@ class TestPrepareReset(unittest.TestCase):
     calls = []
 
     def jit(fn):
-      return lambda: (calls.append(1), fn())[1]
+      # the settings each call ran under: the capture compiles, the reset replays
+      return lambda: (calls.append(list(FakeContext.active)), fn())[1]
 
     self.modules['tinygrad'].TinyJit = jit
     queue, array = fakes.queue(), np.ones(4)
     held = queue.array
     reset = warp.reset_queues([queue], [array])
-    self.assertEqual(len(calls), 3)
+    # compiled in this process: tinygrad's pool would start PARALLEL idle workers for modeld's life
+    self.assertEqual(calls, [[{'PARALLEL': 0}]] * 3)
     queue.array[...], array[...] = 1, 1
     reset()
-    self.assertEqual(len(calls), 4)
+    self.assertEqual(calls[3:], [[]])
     self.assertIs(queue.array, held)
     np.testing.assert_array_equal(held, 0)
     np.testing.assert_array_equal(array, 0)
@@ -395,6 +393,27 @@ class TestPrepareReset(unittest.TestCase):
     warp.prepare_reset(model)()
     np.testing.assert_array_equal(packed, 0)
     np.testing.assert_array_equal(model.prev_desire, 0)
+
+
+
+class TestNoCompilePool(unittest.TestCase):
+  """Over the real tinygrad: capturing a reset of more than one queue, which
+  compiles more than one kernel, starts no compile pool."""
+
+  def test_a_reset_of_several_queues_starts_no_pool(self):
+    try:
+      from tinygrad import Tensor
+      from tinygrad.engine import worker
+    except ImportError:
+      self.skipTest('no tinygrad')
+    if worker.worker_pool is not None:
+      self.skipTest('a pool from an earlier test in this process')
+    queues = [Tensor.ones(4, 4).contiguous().realize(), Tensor.ones(8).contiguous().realize()]
+    reset = warp.reset_queues(queues, [])
+    queues[0].assign(Tensor.ones(4, 4)).realize()
+    reset()
+    self.assertIsNone(worker.worker_pool)
+    np.testing.assert_array_equal(queues[0].numpy(), 0)
 
 
 if __name__ == "__main__":

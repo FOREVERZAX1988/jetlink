@@ -22,6 +22,7 @@ inside the function that needs it.
 """
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import pickle
 from pathlib import Path
@@ -48,14 +49,6 @@ def init_device(log) -> None:
     Tensor([0.0]).realize()
   except Exception:
     log.exception("jetlink: could not bring the gpu up before modeld goes realtime")
-  # the same trap for tinygrad's compile pool (engine/worker.py): created on
-  # the first compile, after modeld goes realtime, its handler threads sat at
-  # SCHED_FIFO 54 on core 7. An older tinygrad or PARALLEL=0 is not a failure
-  try:
-    from tinygrad.engine.worker import get_worker_pool
-    get_worker_pool()
-  except Exception:
-    log.exception("jetlink: could not start tinygrad's compile pool before modeld goes realtime")
 
 
 class Warps:
@@ -213,16 +206,27 @@ def reset_queues(queues, arrays, prev_desire=None):
   linked to, and the reset allocates and compiles nothing, so it may run on
   the frame thread. What an adapter's small_reset returns."""
   from tinygrad import Tensor, TinyJit
+  try:
+    from tinygrad.helpers import PARALLEL, Context  # noqa: F401  (PARALLEL: Context needs it to exist)
+    in_process = Context(PARALLEL=0)
+  except ImportError:   # a tinygrad without the pool
+    in_process = contextlib.nullcontext()
   queues, arrays = tuple(queues), tuple(arrays)
 
   @TinyJit
   def clear():
     Tensor.realize(*(q.assign(0) for q in queues))
 
-  # TinyJit captures on its second call, and one with nothing to run raises there
+  # TinyJit captures on its second call, and one with nothing to run raises
+  # there. Its few kernels compile here, in this process: more than one would
+  # start tinygrad's compile pool (engine/worker.py), PARALLEL spawned
+  # interpreters idle for modeld's life, their handler threads at SCHED_FIFO
+  # 54 on core 7 once modeld is realtime. modeld's own warmup compiles one
+  # kernel at a time and never starts it
   if queues:
-    for _ in range(3):
-      clear()
+    with in_process:
+      for _ in range(3):
+        clear()
 
   def reset():
     if queues:
