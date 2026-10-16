@@ -1,0 +1,360 @@
+# Add Jetlink to an openpilot fork
+
+This page is for whoever keeps an openpilot fork. It lists every line a fork
+adds so the comma can run the large driving model over Jetlink. The snippets
+are for stock openpilot's files (the 0.11 layout); move them to wherever your
+fork keeps the same code.
+
+Jetlink never imports openpilot. Your fork has one adapter module that does,
+and every hook line calls Jetlink through it.
+
+## Get the code
+
+Add Jetlink as a submodule at a release tag (replace `vX.Y.Z`), or vendor a
+copy. The comma needs these four paths from a release and nothing else:
+`jetlink/`, `LICENSE`, `pyproject.toml` and `README.md`. Jetlink's tests hold
+it to that list, and a release build that filters files must keep them.
+
+```bash
+git submodule add https://github.com/zoompilot/jetlink.git jetlink_repo
+git -C jetlink_repo checkout vX.Y.Z
+```
+
+Make `import jetlink` work with a link beside the tinygrad and opendbc ones in
+`launch_chffrplus.sh`, and ignore it in `.gitignore` (`/jetlink`):
+
+```bash
+ln -sfn jetlink_repo/jetlink jetlink
+```
+
+## Params
+
+Add these to `common/params_keys.h` (`IsOffroad` is already there). A fork
+that ships a prebuilt params library must rebuild it.
+
+```cpp
+    {"JetlinkLink", {PERSISTENT | BACKUP, INT, "0"}},
+    {"JetlinkProgress", {CLEAR_ON_MANAGER_START, JSON}},
+    {"JetlinkSpec", {PERSISTENT, JSON}},
+    {"JetlinkModelPointers", {PERSISTENT, JSON}},
+    {"JetlinkChargePhone", {PERSISTENT, BOOL, "0"}},
+    {"Offroad_JetlinkUnavailable", {CLEAR_ON_MANAGER_START, JSON}},
+```
+
+- `JetlinkLink` is the setting: 0 off, 1 USB (a Jetson, PC, Mac or Android
+  phone), 2 iOS (an iPhone or iPad on the cable).
+- `JetlinkSpec` says whether the model is built on the host. It must survive a
+  reboot, or every drive would rebuild it for minutes.
+- These names are `Stock.KEYS`. A fork that names them differently sets its
+  own `KEYS` in the adapter.
+
+The offroad alert also needs a line in `selfdrive/selfdrived/alerts_offroad.json`:
+
+```json
+  "Offroad_JetlinkUnavailable": {"text": "Jetlink unavailable: %1", "severity": 0},
+```
+
+## The adapter module
+
+Put this in `openpilot/jetlink_adapter.py`. manager imports it to build its
+process list and runs it as the gadget owner, so its top level imports the
+standard library only. `Stock` covers stock openpilot's paths; override only
+what your fork does differently.
+
+```python
+import functools
+import os
+import types
+
+API = 3              # the jetlink.openpilot API this adapter is written to
+OWNER = 'jetlinkd'   # manager's name for the gadget owner
+
+def _adapter_class():
+  from jetlink.openpilot.stock import Stock
+
+  class Adapter(Stock):
+    """Stock openpilot. Override KEYS, IN_CONTROL_SERVICES and engaged() here if yours differ."""
+
+  return Adapter
+
+def adapter():
+  return _adapter_class()()
+
+def owner_config():
+  return _adapter_class().owner_config()
+
+def main():
+  _adapter_class().main()
+
+def link_on() -> bool:
+  """The Jetlink setting, read as a file, so it works with no jetlink at all."""
+  prefix = os.environ.get('OPENPILOT_PREFIX', '')
+  root = os.environ.get('PARAMS_ROOT') or ('/data/params' if os.path.isfile('/AGNOS') else
+                                           os.path.expanduser(f'~/.comma{prefix}/params'))
+  try:
+    with open(os.path.join(root, os.environ.get('OPENPILOT_PREFIX', 'd'), 'JetlinkLink')) as f:
+      return f.read().strip() not in ('', '0')
+  except OSError:
+    return False
+
+def _cloudlog():
+  from openpilot.common.swaglog import cloudlog
+  return cloudlog
+
+@functools.cache
+def hooks():
+  """What every hook line calls, one per process. Never raises."""
+  try:
+    from jetlink.openpilot.hooks import Hooks
+    return Hooks(API, adapter, link_on=link_on, log=_cloudlog)
+  except Exception as e:
+    try:
+      from jetlink.openpilot.hooks import Off
+    except Exception:
+      return _NoJetlink(f"jetlink is missing: {e}")
+    return Off(str(e), link_on=link_on)
+
+def should_run(started, params, CP) -> bool:
+  return hooks().should_run(started, params, CP)
+```
+
+The guard matters. When Jetlink fails, every hook answers as if the link were
+off, so a Jetlink bug never takes manager, modeld, hardwared or the UI down.
+`Hooks` raises for an API it does not accept; `Off` then gives the reason as
+the offroad alert, only to someone who turned the link on. The snippets below
+call the result `HOOKS`: `HOOKS = jetlink_adapter.hooks()`.
+
+`Off` lives in Jetlink, so a checkout that is missing or too old needs your
+own fallback, in the same module, with every hook your lines call:
+
+```python
+_NO_FLAGS = types.SimpleNamespace(offer=False, link_lost=False, no_entry=False, chime=False, settling=False)
+
+class _NoEvents:
+  settling = False
+  def update(self, fresh, state, big, in_control): return _NO_FLAGS
+
+class _NoJetlink:
+  """The hooks with no usable jetlink checkout: the link off on every one."""
+  def __init__(self, why): self._why = why
+  def should_run(self, started, params, CP): return False
+  def status(self): return None
+  def reason(self): return self._why if link_on() else None
+  def prepare(self, chestnut): return False
+  def attach(self, model, small, cam_w, cam_h): return model
+  def handed_over(self, model): return False
+  def state(self, model): return 'none'
+  def shutdown_step(self, should_shutdown, reason=''): return should_shutdown
+  def swap_events(self, tick_s): return _NoEvents()
+```
+
+A fork with sunnypilot's model manager also sets `KEYS.big_model` and
+`KEYS.catalog` (the model library and the user's choice) and
+`CATALOG_SELECTOR`, and calls `should_extend_catalog()` and `extend_catalog()`
+where it fetches the library. Without them Jetlink runs its default big model.
+
+## manager
+
+Upstream's `PythonProcess` never starts a process again once it has died. The
+owner needs one that does. In `system/manager/process.py`:
+
+```python
+class RestartingPythonProcess(PythonProcess):
+  """Starts its process again after it dies; upstream's start() leaves a dead one dead."""
+  def start(self) -> None:
+    if self.proc is not None and self.proc.exitcode is not None:
+      self.stop()   # reaps it, so the start below runs it again
+    super().start()
+```
+
+zoompilot's also waits longer after each quick death. In
+`system/manager/process_config.py`:
+
+```python
+  RestartingPythonProcess(jetlink_adapter.OWNER, "openpilot.jetlink_adapter", jetlink_adapter.should_run),
+```
+
+A dead owner sends the drive back to the small model; it must not block
+engaging. In `selfdrive/selfdrived/selfdrived.py`, leave it out of
+`processNotRunning`:
+
+```python
+    not_running = {p.name for p in self.sm['managerState'].processes
+                   if not p.running and p.shouldBeRunning} - {jetlink_adapter.OWNER}
+```
+
+## modeld
+
+In `selfdrive/modeld/modeld.py`'s `main()`, and in every other modeld your
+fork has. First the chestnut test: a Jetson or an iPhone on the USB-C port
+looks like a chestnut to `cable_connected()`, so count the cable only while
+Jetlink is off:
+
+```python
+  HOOKS = jetlink_adapter.hooks()
+  CHESTNUT = chestnut_compiled() and (chestnut_present() or (cable_connected() and not jetlink_adapter.link_on()))
+```
+
+Then, once `small_model` is built:
+
+```python
+  # before going realtime: the GPU thread it starts would inherit SCHED_FIFO 54 on core 7
+  HOOKS.prepare(CHESTNUT)
+  # the joining model drives as small_model until the big model is ready
+  model = HOOKS.attach(model, small_model, vipc_client_main.width, vipc_client_main.height)
+  config_realtime_process(7, 54)
+```
+
+In the frame loop. Upstream never writes `frame_drop_ratio` onto the model,
+and without it a lagging big model is never handed back. A swap or a
+hand-back stalls a frame or two, so those drops restart the filter's warmup:
+
+```python
+    frame_drop_ratio = frames_dropped / (1 + frames_dropped)
+    model.frame_drop_ratio = frame_drop_ratio   # before model.run()
+
+    if HOOKS.handed_over(model):                # after model.run()
+      run_count = 0
+```
+
+`HOOKS.state(model)` says what the big model is doing: `none`, `joining`,
+`retrying`, `ready`, `running` or `unavailable`. Publish it if your fork has a
+message for it (zoompilot: `modelDataV2SP.acceleratorState`). `check_seam`
+asks for the call either way.
+
+## selfdrived
+
+The big model joins mid-drive and can leave again. The swap events tell the
+driver, and hold the errors a switch causes. Without a message of your own,
+the state comes from the status, which is files: read it a few times a second.
+
+```python
+    self.jetlink_swaps = jetlink_adapter.hooks().swap_events(DT_CTRL)   # in __init__
+    self.jetlink_status = None
+```
+
+```python
+    if self.sm.frame % 20 == 0:   # in update_events()
+      self.jetlink_status = jetlink_adapter.hooks().status()
+    running = getattr(self.jetlink_status, 'running', None)
+    model_ok = self.sm.alive['modelV2'] and self.sm.valid['modelV2']
+    flags = self.jetlink_swaps.update(model_ok and running is not None, running or 'none',
+                                      model_ok and self.sm['modelV2'].big, self.enabled)
+    if flags.no_entry:
+      self.events.add(EventName.bigModelLoading)   # no engaging for the second after a swap
+```
+
+- `offer`: the big model is ready while you are engaged; disengage to switch.
+- `link_lost`: it left while engaged; the small model drives on.
+- `chime`: the second is over and the driver can engage.
+- `settling`: a switch drops a camera frame, which would raise a comm or
+  localizer error. Hold them as for a native big model's load:
+
+```python
+    big_model_settling = self.big_model_loading or time.monotonic() < self.big_model_ready_t + warmup_sec \
+      or self.jetlink_swaps.settling
+```
+
+`offer`, `link_lost` and `chime` need events of your own. If your fork chimes
+on a rising `modelV2.big`, gate that chime on the state being `none`, or drop
+it on `no_entry`: otherwise it says engage now at the start of the no-entry
+second.
+
+## hardwared
+
+A Jetson that is always on should power off with the comma. Ask on
+DoShutdown only, never on a reboot: a Jetson powered off at a comma reboot
+does not come back. In `system/hardware/hardwared.py`, with
+`shutdown_since = None` before the loop and `JETLINK_SHUTDOWN_CAP_S = 30.` at
+the top (Jetlink's `SHUTDOWN_TIMEOUT` of 25 s plus 5 s, written out so it holds
+without Jetlink):
+
+```python
+    should_shutdown = power_monitor.should_shutdown(onroad_conditions["ignition"], in_car, off_ts, started_seen)
+    if should_shutdown and shutdown_since is None:
+      shutdown_since = time.monotonic()
+    capped = shutdown_since is not None and time.monotonic() - shutdown_since > JETLINK_SHUTDOWN_CAP_S
+    if HOOKS.shutdown_step(should_shutdown, f"offroad since {off_ts}") or capped:
+      cloudlog.warning(f"shutting device down, offroad since {off_ts}")
+      params.put_bool("DoShutdown", True, block=True)
+```
+
+`shutdown_step()` asks once, waits for the host and gives up after 25 s. It
+says yes on any failure, so a Jetlink bug never keeps a comma on to drain the
+car's battery; the cap is your own guarantee on top. Block a drive start while
+it waits: `startup_conditions["not_powering_off"] = shutdown_since is None`.
+
+The offroad alert, in the same loop:
+
+```python
+    reason = HOOKS.reason()   # why the link the user turned on cannot run; None with it off
+    set_offroad_alert_if_changed("Offroad_JetlinkUnavailable", reason is not None, extra_text=reason)
+```
+
+## The UI
+
+`HOOKS.status()` is one snapshot, or `None` when Jetlink cannot run at all.
+It is files and params, so the UI can ask five times a second.
+
+```python
+    status = HOOKS.status()
+    if status is not None and status.shown:
+      chip = status.phase                          # 'off', 'preparing', 'active', ...
+      line = (status.progress or {}).get('msg')    # the English line
+      port = status.port_state                     # 'connected', 'empty', 'device' or None
+      adb_allowed = not status.holds_port          # the link holds the USB port
+```
+
+- `phase` is one of `PHASES` in `jetlink/openpilot/status.py`. Values are
+  only ever added; map one you do not know to your default.
+- The English text stays in `msg` and `reason`. A fork with its own words
+  reads the progress record's `code` and `args` (`PROGRESS_CODES`) and
+  `status.reason_code` (`REASON_CODES`).
+- `status.icon(started, model_seen, running_big, state)` is the chestnut
+  icon's state for the link.
+
+## The fork's tests
+
+Jetlink publishes the checks it holds a fork to. `check_adapter` imports the
+module in a fresh interpreter and checks its top level, `owner_config()`,
+every interface member and `in_control()`. `check_seam` reads a modeld's
+`main()` for the order above; run it on every modeld.
+
+```python
+from jetlink.openpilot.testing import check_adapter, check_seam
+
+def test_the_adapter():
+  assert check_adapter(jetlink_adapter, heavy=('openpilot.common.params', 'openpilot.common.swaglog', 'openpilot.cereal')) == []
+
+def test_the_modeld_seam():
+  assert check_seam('openpilot/selfdrive/modeld/modeld.py') == []
+```
+
+A test run on a comma once cleared the live `JetlinkSpec`. Install the guard
+in your `conftest.py`, and run every test that touches params under its own
+`OPENPILOT_PREFIX`:
+
+```python
+from jetlink.openpilot.testing import install_guard
+
+GUARD = install_guard()
+
+@pytest.fixture(autouse=True)
+def no_machine_files():
+  GUARD.start()
+  yield
+  assert GUARD.stop() == []
+```
+
+`FakeJoinedModel` and `RecordingLog` in the same module stand in for the
+joining model and cloudlog in your modeld tests.
+
+## Versions
+
+- Pin a release tag. `API` in `jetlink/openpilot/__init__.py` is the contract
+  version, and your adapter says which one it is written to.
+- `API` changes only for a breaking change. A bump keeps the previous API
+  working for one minor release, so you can move the pin, then the adapter.
+- A release that changes what an adapter sees ends its
+  [CHANGELOG](../CHANGELOG.md) section with a **Forks** group. Read it before
+  you move the pin.

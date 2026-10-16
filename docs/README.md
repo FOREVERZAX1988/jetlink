@@ -20,4 +20,5 @@ the guides give zoompilot's steps and settings.
 - [Updates and rollback](releasing.md).
 
 [Cables and power](transport.md) · [Operating limits](status.md) ·
-[Developer and advanced reference](development.md)
+[Developer and advanced reference](development.md) ·
+[Add Jetlink to an openpilot fork](porting.md)
