@@ -38,6 +38,8 @@ MODULES = sorted({'jetlink.openpilot', *(m.name for m in pkgutil.walk_packages(j
 OWNER_PATH = ('jetlink.openpilot.owner', 'jetlink.openpilot', 'jetlink.openpilot.interface', 'jetlink.openpilot.settings',
               'jetlink.comma.owner', 'jetlink.comma.gadget', 'jetlink.comma.lending', 'jetlink.comma.port',
               'jetlink.comma.root', 'jetlink.transport.ffs')
+# a fork's hook module imports the hooks, and the owner imports that module
+HOOKS = ('jetlink.openpilot.hooks',)
 
 BLOCKER = '''
 import importlib, json, sys
@@ -82,8 +84,9 @@ def test_a_module_imports_without_openpilot(module):
   assert json.loads(run.stdout) == [], f"{module} loaded {run.stdout}"
 
 
-def test_the_owner_path_is_the_standard_library_and_jetlink():
-  run = fresh(LOADS, *OWNER_PATH)
+@pytest.mark.parametrize('path', [OWNER_PATH, HOOKS], ids=['owner', 'hooks'])
+def test_the_owner_path_is_the_standard_library_and_jetlink(path):
+  run = fresh(LOADS, *path)
   assert run.returncode == 0, run.stderr
   loaded = json.loads(run.stdout)
   foreign = sorted({m.split('.')[0] for m in loaded} - set(sys.stdlib_module_names) - {'jetlink'})

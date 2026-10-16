@@ -11,10 +11,13 @@ The fork implements Openpilot (interface.py) once, in an adapter module that
 holds every openpilot import, binds it here (bind) and calls the methods of
 the Jetlink that comes back. That is the whole contract between the two repos:
 the names in __all__, the Jetlink methods and Status, which
-tests/openpilot/test_api.py and test_interface.py pin. API names its version:
-the adapter checks it exactly and treats any other value as jetlink being
-absent, an offroad alert and no link rather than a crash. Everything else in
-this package is jetlink's own and changes without notice.
+tests/openpilot/test_api.py and test_interface.py pin, and the facade the
+fork's hook lines call them through (hooks.py) and the kit its CI runs
+(testing.py). API names its version: an adapter declares the one it was
+written to, hooks.Hooks refuses one it does not accept, and the fork treats
+that as jetlink being absent, an offroad alert and no link rather than a
+crash. Everything else in this package is jetlink's own and changes without
+notice.
 
 API changes only for a breaking change to the contract: removing or renaming
 anything in it, changing what one of its members means, or making an optional
