@@ -8,20 +8,25 @@ docs/porting.md, the lines a fork copies, against the code they call. Each
 python snippet parses, and every name it takes from jetlink is there: the
 hooks it calls, what it overrides on Stock, what it reads off the status and
 the swap flags, what it imports, and the keywords it passes. The fork's own
-fallback answers every hook the page calls, with the same parameters.
+fallback answers every hook a link that never runs reaches, as Off does.
 """
 from __future__ import annotations
 
 import ast
 import importlib
 import inspect
+import os
 import re
+import tempfile
 import textwrap
 from pathlib import Path
+from unittest import mock
 
 from jetlink.openpilot import SHUTDOWN_TIMEOUT, Flags, Status
 from jetlink.openpilot.hooks import Hooks, Off, SwapTracker
+from jetlink.openpilot.status import Runtime
 from jetlink.openpilot.stock import Stock
+from jetlink.openpilot.testing import check_fallback
 from tests.test_comma_payload import PAYLOAD
 
 DOC = Path(__file__).resolve().parents[2] / 'docs' / 'porting.md'
@@ -84,10 +89,30 @@ def parameters(cls, name: str) -> list[str]:
   return list(inspect.signature(getattr(cls, name)).parameters)[1:]
 
 
+# the hooks a link that never runs does not reach: each only inside an `if`
+# whose test has this in it
+GATED = {'attach': 'HOOKS.prepare(', 'swap_events': 'self.jetlink_runtime is not None',
+         'in_control': 'self.jetlink_swaps is not None'}
+
+
+def gates(name: str) -> list[list[str]]:
+  """For each HOOKS.<name> on the page, the tests of the ifs around it."""
+  found = []
+  for tree in TREES:
+    def walk(node, tests):
+      if isinstance(node, ast.Attribute) and ast.unparse(node.value) == 'HOOKS' and node.attr == name:
+        found.append(tests)
+      inner = tests + [ast.unparse(node.test)] if isinstance(node, ast.If) else tests
+      for child in ast.iter_child_nodes(node):
+        walk(child, inner if child is not getattr(node, 'test', None) else tests)
+    walk(tree, [])
+  return found
+
+
 def test_the_page_has_its_snippets():
   assert len(TREES) >= 10
   assert {'prepare', 'attach', 'handed_over', 'state', 'shutdown_step', 'reason', 'status', 'swap_events',
-          'should_run'} <= hooks_used() | set(re.findall(r'HOOKS\.(\w+)\(', TEXT))
+          'should_run', 'runtime', 'in_control'} <= hooks_used() | set(re.findall(r'HOOKS\.(\w+)\(', TEXT))
 
 
 def test_every_hook_it_calls_is_a_hook():
@@ -96,23 +121,25 @@ def test_every_hook_it_calls_is_a_hook():
   assert used - public(Hooks) == set()
 
 
-def test_the_fallback_answers_every_hook_it_calls_as_the_hooks_do():
+def test_the_hooks_past_a_link_that_runs_are_gated():
+  for name, gate in GATED.items():
+    assert gates(name), name
+    assert all(any(gate in test for test in tests) for tests in gates(name)), name
+
+
+def test_the_fallback_answers_every_hook_a_link_that_never_runs_reaches_as_off_does():
   [fallback] = classes('_NoJetlink')
   methods = {k: v for k, v in defined(fallback).items() if k != '__init__'}
-  assert hooks_used() - methods.keys() == set()
+  reached = hooks_used() - GATED.keys()
+  assert reached == methods.keys()
   for name, params in methods.items():
-    assert name in public(Hooks), name
     assert params == parameters(Hooks, name), name
-  [events] = classes('_NoEvents')
-  for name, params in defined(events).items():
-    assert hasattr(SwapTracker, name), name
-    if params is not None:
-      assert params == parameters(SwapTracker, name), name
-
-
-def test_the_fallback_flags_are_the_flags():
-  call = next(n for n in NODES if isinstance(n, ast.Call) and ast.unparse(n.func) == 'types.SimpleNamespace')
-  assert [k.arg for k in call.keywords] == list(Flags._fields)
+  # run: the adapter module's top level and the fallback, over a params store of its own
+  module = next(t for t in TREES if any(isinstance(n, ast.FunctionDef) and n.name == 'hooks' for n in t.body))
+  space: dict = {}
+  exec(compile(ast.Module(body=module.body + [fallback], type_ignores=[]), str(DOC), 'exec'), space)
+  with tempfile.TemporaryDirectory() as root, mock.patch.dict(os.environ, {'PARAMS_ROOT': root}):
+    assert check_fallback(space['_NoJetlink']('jetlink is missing'), reached) == []
 
 
 def test_an_adapter_overrides_only_what_stock_has():
@@ -131,6 +158,7 @@ def test_the_hook_lines_call_what_the_adapter_module_defines():
   module = next(t for t in TREES if any(isinstance(n, ast.FunctionDef) and n.name == 'hooks' for n in t.body))
   names = {n.name for n in module.body if isinstance(n, ast.FunctionDef)} | \
           {t.id for n in module.body if isinstance(n, ast.Assign) for t in n.targets if isinstance(t, ast.Name)}
+  names |= {n.name for n in NODES if isinstance(n, ast.ClassDef)}
   assert read_off('jetlink_adapter') - names == set()
 
 
@@ -138,6 +166,8 @@ def test_what_it_reads_is_there():
   assert read_off('status') - public(Status) == set()
   assert read_off('flags') - set(Flags._fields) == set()
   assert read_off('self.jetlink_swaps') - public(SwapTracker) == set()
+  assert {ast.literal_eval(n.args[1]) for n in NODES if isinstance(n, ast.Call) and ast.unparse(n.func) == 'getattr'
+          and ast.unparse(n.args[0]) == 'self.jetlink_runtime'} <= set(Runtime._fields)
   for attr in re.findall(r'`status\.(\w+)', TEXT):
     assert hasattr(Status, attr), attr
 

@@ -61,7 +61,6 @@ what your fork does differently.
 ```python
 import functools
 import os
-import types
 
 API = 3              # the jetlink.openpilot API this adapter is written to
 OWNER = 'jetlinkd'   # manager's name for the gadget owner
@@ -118,17 +117,15 @@ def should_run(started, params, CP) -> bool:
 When Jetlink fails, every hook answers as if the link were off, so a Jetlink
 bug never takes manager, modeld, hardwared or the UI down. `Hooks` raises for
 an API it does not accept, and `Off` gives the reason as the offroad alert to
-someone who turned the link on. The snippets below call the result `HOOKS`:
+someone who turned the link on. With `link_on()` saying the link is off,
+`should_run()`, `reason()`, `runtime()` and `in_control()` answer without
+loading Jetlink. The snippets below call the result `HOOKS`:
 `HOOKS = jetlink_adapter.hooks()`. A checkout that is missing or too old has
-no `Off`, so it needs your own fallback, with every hook your lines call:
+no `Off`, so it needs your own fallback. It only answers the hooks a link
+that never runs reaches; the others wait for a yes from `prepare()` or a
+`runtime()`:
 
 ```python
-_NO_FLAGS = types.SimpleNamespace(offer=False, link_lost=False, no_entry=False, chime=False, settling=False)
-
-class _NoEvents:
-  settling = False
-  def update(self, fresh, state, big, in_control): return _NO_FLAGS
-
 class _NoJetlink:
   """The hooks with no usable jetlink checkout: the link off on every one."""
   def __init__(self, why): self._why = why
@@ -136,11 +133,9 @@ class _NoJetlink:
   def status(self): return None
   def reason(self): return self._why if link_on() else None
   def prepare(self, chestnut): return False
-  def attach(self, model, small, cam_w, cam_h): return model
   def handed_over(self, model): return False
-  def state(self, model): return 'none'
   def shutdown_step(self, should_shutdown, reason=''): return should_shutdown
-  def swap_events(self, tick_s): return _NoEvents()
+  def runtime(self): return None
 ```
 
 A fork with sunnypilot's model manager also sets `KEYS.big_model` and
@@ -193,9 +188,9 @@ Then, once `small_model` is built:
 
 ```python
   # before going realtime: the GPU thread it starts would inherit SCHED_FIFO 54 on core 7
-  HOOKS.prepare(CHESTNUT)
-  # the joining model drives as small_model until the big model is ready
-  model = HOOKS.attach(model, small_model, vipc_client_main.width, vipc_client_main.height)
+  if HOOKS.prepare(CHESTNUT):
+    # the joining model drives as small_model until the big model is ready
+    model = HOOKS.attach(model, small_model, vipc_client_main.width, vipc_client_main.height)
   config_realtime_process(7, 54)
 ```
 
@@ -213,29 +208,36 @@ hand-back stalls a frame or two, so those drops restart the filter's warmup:
 
 `HOOKS.state(model)` is the big model's state, one of `STATES`. Publish it if
 your fork has a message for it (zoompilot: `modelDataV2SP.acceleratorState`);
-without one, `status.running` carries it.
+without one, `HOOKS.runtime()` carries it.
 
 ## selfdrived
 
 The big model joins mid-drive and can leave again. The swap events tell the
-driver and hold the errors a switch causes. The state comes from the status,
-which is files, so read it a few times a second:
+driver and hold the errors a switch causes. The state comes from modeld's
+runtime record, a file modeld rewrites once a second, so read it a few times
+a second. The tracker is made once, the first time the link is on this drive:
 
 ```python
-    self.jetlink_swaps = jetlink_adapter.hooks().swap_events(DT_CTRL)   # in __init__
-    self.jetlink_status = None
+    self.jetlink_swaps = None     # in __init__
+    self.jetlink_runtime = None
 ```
 
 ```python
     if self.sm.frame % 20 == 0:   # in update_events()
-      self.jetlink_status = jetlink_adapter.hooks().status()
-    running = getattr(self.jetlink_status, 'running', None)
-    model_ok = self.sm.alive['modelV2'] and self.sm.valid['modelV2']
-    flags = self.jetlink_swaps.update(model_ok and running is not None, running or 'none',
-                                      model_ok and self.sm['modelV2'].big, self.enabled)
-    if flags.no_entry:
-      self.events.add(EventName.bigModelLoading)   # no engaging for the second after a swap
+      self.jetlink_runtime = HOOKS.runtime()
+      if self.jetlink_swaps is None and self.jetlink_runtime is not None:
+        self.jetlink_swaps = HOOKS.swap_events(DT_CTRL)
+    if self.jetlink_swaps is not None:
+      running = getattr(self.jetlink_runtime, 'state', None)
+      model_ok = self.sm.alive['modelV2'] and self.sm.valid['modelV2']
+      flags = self.jetlink_swaps.update(model_ok and running is not None, running or 'none',
+                                        model_ok and self.sm['modelV2'].big, HOOKS.in_control)
+      if flags.no_entry:
+        self.events.add(EventName.bigModelLoading)   # no engaging for the second after a swap
 ```
+
+`HOOKS.in_control` goes in uncalled: it is your adapter's rule, the one the
+swap itself waits on, and the tracker asks it only on the ticks that need it.
 
 `offer`, `link_lost` and `chime` need events of your own; `jetlink/openpilot/events.py`
 says what each means. `settling` is a switch's dropped camera frame, which
@@ -244,7 +246,7 @@ load:
 
 ```python
     big_model_settling = self.big_model_loading or time.monotonic() < self.big_model_ready_t + warmup_sec \
-      or self.jetlink_swaps.settling
+      or (self.jetlink_swaps is not None and self.jetlink_swaps.settling)
 ```
 
 If your fork chimes on a rising `modelV2.big`, gate that chime on the state
@@ -303,16 +305,19 @@ map one you do not know to your default. The English is in `msg` and
 ## The fork's tests
 
 Jetlink publishes the checks it holds a fork to (`jetlink/openpilot/testing.py`).
-Run `check_seam` on every modeld.
+Run `check_seam` on every modeld, and `check_fallback` on your own fallback.
 
 ```python
-from jetlink.openpilot.testing import check_adapter, check_seam
+from jetlink.openpilot.testing import check_adapter, check_fallback, check_seam
 
 def test_the_adapter():
   assert check_adapter(jetlink_adapter, heavy=('openpilot.common.params', 'openpilot.common.swaglog', 'openpilot.cereal')) == []
 
 def test_the_modeld_seam():
   assert check_seam('openpilot/selfdrive/modeld/modeld.py') == []
+
+def test_the_fallback():
+  assert check_fallback(jetlink_adapter._NoJetlink('jetlink is missing')) == []
 ```
 
 Install the guard in your `conftest.py`, so no test reaches the device's own
@@ -331,7 +336,8 @@ def no_machine_files():
 ```
 
 `FakeJoinedModel` and `RecordingLog` in the same module stand in for the
-joining model and cloudlog in your modeld tests.
+joining model and cloudlog in your modeld tests, and `FakeSubMaster` for the
+messages your `engaged()` reads.
 
 ## Versions
 

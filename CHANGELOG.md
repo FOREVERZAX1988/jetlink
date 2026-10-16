@@ -2,6 +2,7 @@
 Unreleased
 ==========
 **Forks**
+* API stays 3. New: `Hooks.runtime()` (modeld's runtime record, for selfdrived's loop) and `Hooks.in_control()` (the adapter's rule, True without a link), `Jetlink.runtime()`, `SwapEvents.update` taking `in_control` as a function it asks only when it needs to, and `FakeSubMaster` and `check_fallback()` in `jetlink.openpilot.testing`. With `link_on()` saying off, `should_run()`, `reason()`, `runtime()` and `in_control()` load nothing of Jetlink.
 * API history: 2 (2026-10-05) had modeld write in_control onto the joining model; 3 (2026-10-10) has the joining model ask the adapter's in_control() itself. Jetlink.shutdown() and BuildSide.make_warp went at API 2 without a bump.
 
 Jetlink v0.8.7
