@@ -24,12 +24,8 @@ anything in it, changing what one of its members means, or making an optional
 member required. A new Status field, a new Jetlink method, or a new interface
 member that jetlink reads with getattr and a fallback, is additive and keeps
 it. A bump keeps the previous API working for one minor release, so a fork can
-move its pin and then its adapter. Two removals broke this rule and landed at
-API 2 without a bump: fd0af4d took Jetlink.shutdown() away, and 0f87696
-BuildSide.make_warp, changing what warp_path names; an adapter written to
-24e8917's API 2 still passed the check and then failed. Each release that
-changes the contract says how in its CHANGELOG section (Forks,
-docs/publishing.md).
+move its pin and then its adapter. Each release that changes the contract
+says how in its CHANGELOG section (Forks, docs/publishing.md).
 
 Imported by the resident gadget owner, so nothing heavy at module level: the
 parts a heavy process uses are imported when it first uses them.
@@ -44,11 +40,6 @@ from jetlink.openpilot.interface import MODES, STATES, Keys, ModelFace, Openpilo
 from jetlink.openpilot.parts import Parts, for_this_process
 from jetlink.openpilot.status import Status
 
-# 2: modeld writes in_control onto the joining model before every frame, where
-# jetlink polled the adapter's engagement() (2026-10-05). An adapter of API 1
-# never writes it, and its large model would wait for a window forever.
-# 3: the joining model asks the adapter's in_control() before every frame
-# instead (2026-10-10), so modeld keeps one write; an adapter of API 2 has none
 API = 3
 
 __all__ = ['API', 'MODES', 'STATES', 'Jetlink', 'Keys', 'ModelFace', 'Openpilot', 'OwnerConfig', 'Status', 'bind',

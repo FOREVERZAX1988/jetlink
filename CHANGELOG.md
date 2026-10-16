@@ -1,4 +1,9 @@
 <!-- Each release: a "Jetlink vX.Y.Z" heading underlined with =, newest first. A release that changes the fork contract ends with a **Forks** group (docs/publishing.md). -->
+Unreleased
+==========
+**Forks**
+* API history: 2 (2026-10-05) had modeld write in_control onto the joining model; 3 (2026-10-10) has the joining model ask the adapter's in_control() itself. Jetlink.shutdown() and BuildSide.make_warp went at API 2 without a bump.
+
 Jetlink v0.8.7
 ==============
 **Models**
