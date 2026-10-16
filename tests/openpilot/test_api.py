@@ -38,6 +38,8 @@ JETLINK = {
   'model_state': '(ref)',
   'prepare': '()',
   'attach': '(small, cam_w, cam_h)',
+  'handed_over': '(model)',
+  'state': '(model)',
   'request_shutdown': "(reason='')",
   'shutdown_pending': '()',
   'shutdown_step': "(should_shutdown, reason='')",

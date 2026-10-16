@@ -78,6 +78,8 @@ class Jetlink:
     # shutdown_step: has it run in this process, and has it said yes
     self._stepped = False
     self._may_power_off = False
+    # the joining model's handovers as handed_over() last saw them
+    self._handovers = 0
 
   def _read(self, what: str, read, fallback):
     """read(), or fallback(error) when it raises. The readers never raise:
@@ -176,6 +178,22 @@ class Jetlink:
     except Exception:
       self._log.exception("jetlink load failed")
       return small
+
+  def handed_over(self, model) -> bool:
+    """modeld, after every run(): did it change which model drives? The
+    joining model counts its swaps and hand-backs (JoinedModel.handovers),
+    and the stall of one is not lag, nor are the drops of its frame. Any
+    other model has no count and never hands over. Since the last call in
+    this process, which runs one modeld loop."""
+    handovers = getattr(model, 'handovers', 0)
+    changed, self._handovers = handovers != self._handovers, handovers
+    return changed
+
+  def state(self, model) -> str:
+    """What modeld publishes as the big model's state: the joining model's
+    big_model_state, one of STATES, else 'none'. A fork's capnp enum holds
+    exactly STATES, so a value outside it would raise on the frame thread."""
+    return getattr(model, 'big_model_state', 'none')
 
   def request_shutdown(self, reason: str = '') -> bool:
     """The device is powering off for good: ask for the Jetson to go down
