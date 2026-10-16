@@ -631,26 +631,49 @@ class Owner:
         self.close_link()
       self.stop_worker()
       self.wake()
-      if self.tuned:
-        root.run('vm', 'restore')
-        root.run('udc', 'restore')
-        self.tuned = None
-      self.steer_draw(mode)
-      self.port.off()
+      self.release_tuning()
       return
     self.link_step(mode == 'ios')
     if self.tuned != mode:
       # jetlink-root.sh vm: the recording VM tuning the gadget's reads need;
       # udc: the USB device side kept on for a host that powers the port
       # (port.py). While the link is on. After the step, so the first gadget
-      # does not wait on them. Put back only when the link is turned off,
-      # never on exit: manager stops this at ignition, just as the contention
-      # starts, and a host plugged in before it is back should still come up
+      # does not wait on them. Put back only when the link is not wanted,
+      # turned off or a chestnut on the port (release_tuning). Any other stop
+      # keeps them: a restart or an update of manager with the link on starts
+      # an owner that applies them again, and a reboot clears them
       if self.tuned is None:
         root.run('vm', 'apply')
         root.run('udc', 'apply')
       self.tuned = mode
     self.steer_draw(mode)
+
+  def link_wanted(self) -> bool:
+    """Is the link still wanted: set on, and no chestnut on the port, which
+    manager stops this for? Asked at a stop, which may come before a step has
+    seen the setting. A failure to tell is a yes, which keeps the tuning as a
+    stop always did: a wrong keep costs a little memory headroom until a
+    reboot, and a wrong restore brings back, mid-drive, the gadget stalls the
+    tuning is there to stop."""
+    try:
+      return self.settings.mode() != 'off' and not port.chestnut_attached(self.port.chestnut_ids)
+    except Exception:
+      gadget.log.exception("jetlink: could not tell whether the link is still wanted; keeping its tuning")
+      return True
+
+  def release_tuning(self) -> None:
+    """The link is not wanted: the port, its draw and the root tuning back as
+    AGNOS boots them. The draw first, while a hold still keeps the far end on
+    the port: letting go of one can drop it for a DRP toggle, and an empty port
+    read in that moment would give the draw back with a host still in. The
+    restores on the port's short timeout, since at a stop they come before
+    the FunctionFS close, inside manager's 5 s."""
+    self.steer_draw('off')
+    self.port.off()
+    if self.tuned:
+      root.run('vm', 'restore', timeout=root.PORT_TIMEOUT)
+      root.run('udc', 'restore', timeout=root.PORT_TIMEOUT)
+      self.tuned = None
 
   def steer_draw(self, mode: str) -> None:
     """jetlink-root.sh draw: no current drawn from the USB-C port while the
@@ -665,9 +688,10 @@ class Owner:
     through the port would go dark at the cut. The cut is a forced voter, so
     it holds for every plug after. Given back only on an empty port too, so
     neither a change of mode nor the link turned off with a host still in
-    lets the charger draw from it. Kept on exit, like the tuning. A start
-    assumes the draw stock, so a cut a dead owner left with the link turned
-    off lasts until the reboot that clears it."""
+    lets the charger draw from it. Kept on a stop with the link wanted, like
+    the tuning. A start assumes the draw stock, so a cut left by a stop with a
+    host still in, or by a dead owner, with the link turned off lasts until
+    the reboot that clears it."""
     if mode == self.draw_for:
       return
     want = mode != 'off'
@@ -991,9 +1015,16 @@ class Owner:
         time.sleep(max(0.0, POLL - (time.monotonic() - started)))
     finally:
       # first, inside manager's 5 s: it stops this when a chestnut turns up,
-      # and the comma has to host that. The sysctls stay: a stop here is where
-      # a drive begins
-      self.port.off()
+      # and the comma has to host that. The tuning and the draw go back with
+      # the port only when the link is not wanted: manager stops this the
+      # moment the link is turned off, often before a step has seen it. Any
+      # other stop keeps them for the owner manager starts next
+      if self.link_wanted():
+        self.port.off()
+      else:
+        self.release_tuning()
+        if self.cut:
+          gadget.log.warning("jetlink: a host is still on the USB-C port; the comma draws nothing from it until a reboot")
       self.lender.stop()
       # about this process's lender; with no owner there is nothing to borrow
       # anyway, and a chestnut may be why it stopped

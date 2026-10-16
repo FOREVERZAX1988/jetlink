@@ -71,6 +71,10 @@ class OwnerTest(unittest.TestCase):
     p = mock.patch.object(owner.port, 'power_role', mock.Mock(return_value=None))
     self.addCleanup(p.stop)
     self.power_role = p.start()
+    # no chestnut on the port; the tests that want one say so
+    p = mock.patch.object(owner.port, 'chestnut_attached', mock.Mock(return_value=False))
+    self.addCleanup(p.stop)
+    self.chestnut = p.start()
 
   def write(self, key: str, value: bytes) -> None:
     path = self.params / key
@@ -622,8 +626,9 @@ class TestVmTuning(OwnerTest):
   """When the owner applies and restores the VM tuning, against the real
   jetlink-root.sh vm on a fake /proc/sys, and the USB device side's knobs
   (udc) with it. A device with the link off runs stock values, one that turns
-  it off gets them back, and a plain exit keeps them for the drive that
-  follows. The values and the ratio-mode restore are test_comma_root.py's."""
+  it off or has a chestnut take the port gets them back, at a step or at the
+  stop manager makes of it, and any other exit keeps them for the owner that
+  comes next. The values and the ratio-mode restore are test_comma_root.py's."""
 
   def setUp(self):
     super().setUp()
@@ -643,7 +648,7 @@ class TestVmTuning(OwnerTest):
     o.step()
     o.stop = True
     o.run()
-    self.assertEqual(self.root_calls('vm'), ['apply'], "an exit is the ignition handoff; restoring there strips the drive of them")
+    self.assertEqual(self.root_calls('vm'), ['apply'], "an exit with the link on is a restart; the next owner keeps them")
     self.assertEqual(self.root_calls('udc'), ['apply'])
     self.assertTrue(self.tuned())
     self.assertTrue(comma_fakes.record(self.tmp).exists(), "the record is what a later disable restores to")
@@ -670,10 +675,56 @@ class TestVmTuning(OwnerTest):
     self.assertEqual(self.root_calls('udc'), ['apply', 'restore'])
     self.assertFalse(comma_fakes.record(self.tmp).exists(), 'the restore never ran')
 
+  def stopped(self, o) -> None:
+    """manager stops the owner before another step: it reads the same setting."""
+    o.stop = True
+    o.run()
+
+  def test_a_stop_after_turning_it_off_restores(self):
+    o = self.owner()
+    o.step()
+    self.write('JetlinkLink', b'0')
+    self.stopped(o)
+    self.assertEqual(self.root_calls('vm'), ['apply', 'restore'])
+    self.assertEqual(self.root_calls('udc'), ['apply', 'restore'])
+    self.assertFalse(self.tuned())
+    self.assertFalse(comma_fakes.record(self.tmp).exists(), 'the restore never ran')
+
+  def test_a_stop_for_a_chestnut_restores(self):
+    # the link stays on, but manager stops the owner and the comma hosts the chestnut
+    o = self.owner()
+    o.step()
+    self.chestnut.return_value = True
+    self.stopped(o)
+    self.assertEqual(self.root_calls('vm'), ['apply', 'restore'])
+    self.assertEqual(self.root_calls('udc'), ['apply', 'restore'])
+    self.assertFalse(comma_fakes.record(self.tmp).exists())
+
+  def test_a_stop_after_a_step_turned_it_off_restores_once(self):
+    o = self.owner()
+    o.step()
+    self.write('JetlinkLink', b'0')
+    o.step()
+    self.stopped(o)
+    self.assertEqual(self.root_calls('vm'), ['apply', 'restore'])
+    self.assertEqual(self.root_calls('udc'), ['apply', 'restore'])
+
+  def test_a_stop_that_cannot_tell_keeps_them(self):
+    o = self.owner()
+    o.step()
+    self.chestnut.side_effect = OSError('no /sys')
+    with mock.patch.object(gadget.log, 'exception') as log:
+      self.stopped(o)
+    log.assert_called_once()
+    self.assertEqual(self.root_calls('vm'), ['apply'])
+    self.assertTrue(self.tuned())
+
 
 class TestDraw(OwnerTest):
   """No current drawn from the port while the link is on, cut and given back
-  only on an empty port (an iPhone is cut at once), kept on exit like the tuning."""
+  only on an empty port (an iPhone is cut at once). A stop with the link
+  still wanted keeps it, like the tuning; one with the link turned off or a
+  chestnut on the port gives it back, on an empty port too."""
 
   def empty(self, empty: bool = True) -> None:
     self.power_role.return_value = 'none' if empty else 'sink'
@@ -683,6 +734,42 @@ class TestDraw(OwnerTest):
     o = self.owner()
     o.step()
     o.step()
+    o.stop = True
+    o.run()
+    self.assertEqual(self.root_calls('draw'), ['off'])
+    self.assertEqual(self.root_calls('vm') + self.root_calls('udc'), ['apply', 'apply'], 'an exit with the link on keeps the tuning')
+
+  def test_a_stop_after_turning_it_off_gives_it_back_on_an_empty_port(self):
+    self.empty()
+    o = self.owner()
+    o.step()
+    self.write('JetlinkLink', b'0')
+    o.stop = True
+    o.run()
+    self.assertEqual(self.root_calls('draw'), ['off', 'on'])
+
+  def test_a_stop_after_turning_it_off_keeps_it_with_a_host_in(self):
+    self.empty()
+    o = self.owner()
+    o.step()
+    self.empty(False)
+    self.write('JetlinkLink', b'0')
+    o.stop = True
+    with mock.patch.object(gadget.log, 'warning') as log:
+      o.run()
+    self.assertEqual(self.root_calls('draw'), ['off'])
+    said = [c for c in log.call_args_list if 'draws nothing' in c.args[0]]
+    self.assertEqual(len(said), 1, 'no later step gives it back, so it is said once')
+
+  def test_the_draw_is_judged_before_the_hold_goes(self):
+    # letting go of a hold can drop the far end for a DRP toggle; the port
+    # reading empty for that moment must not give the draw back
+    self.empty()
+    o = self.owner()
+    o.step()
+    self.empty(False)
+    o.port.off.side_effect = self.empty
+    self.write('JetlinkLink', b'0')
     o.stop = True
     o.run()
     self.assertEqual(self.root_calls('draw'), ['off'])
