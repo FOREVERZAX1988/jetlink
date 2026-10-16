@@ -119,7 +119,8 @@ bug never takes manager, modeld, hardwared or the UI down. `Hooks` raises for
 an API it does not accept, and `Off` gives the reason as the offroad alert to
 someone who turned the link on. With `link_on()` saying the link is off,
 `should_run()`, `reason()`, `runtime()` and `in_control()` answer without
-loading Jetlink. The snippets below call the result `HOOKS`:
+binding Jetlink to your adapter; `status()` and `shutdown_step()` still bind.
+The snippets below call the result `HOOKS`:
 `HOOKS = jetlink_adapter.hooks()`. A checkout that is missing or too old has
 no `Off`, so it needs your own fallback. It only answers the hooks a link
 that never runs reaches; the others wait for a yes from `prepare()` or a
@@ -134,6 +135,7 @@ class _NoJetlink:
   def reason(self): return self._why if link_on() else None
   def prepare(self, chestnut): return False
   def handed_over(self, model): return False
+  def state(self, model): return 'none'
   def shutdown_step(self, should_shutdown, reason=''): return should_shutdown
   def runtime(self): return None
 ```
@@ -237,7 +239,9 @@ a second. The tracker is made once, the first time the link is on this drive:
 ```
 
 `HOOKS.in_control` goes in uncalled: it is your adapter's rule, the one the
-swap itself waits on, and the tracker asks it only on the ticks that need it.
+swap itself waits on, and the tracker asks it once a tick while the link is
+not idle and never while it is. A rule that builds its readers lazily is
+asked from the first tick the link stirs, long before an offer or a fall.
 
 `offer`, `link_lost` and `chime` need events of your own; `jetlink/openpilot/events.py`
 says what each means. `settling` is a switch's dropped camera frame, which
@@ -305,7 +309,9 @@ map one you do not know to your default. The English is in `msg` and
 ## The fork's tests
 
 Jetlink publishes the checks it holds a fork to (`jetlink/openpilot/testing.py`).
-Run `check_seam` on every modeld, and `check_fallback` on your own fallback.
+Run `check_seam` on every modeld, and `check_fallback` on your own fallback
+with every hook your lines call, under a params store of the test's own
+(`PARAMS_ROOT` or `OPENPILOT_PREFIX`), since `link_on()` reads the setting.
 
 ```python
 from jetlink.openpilot.testing import check_adapter, check_fallback, check_seam
@@ -317,7 +323,8 @@ def test_the_modeld_seam():
   assert check_seam('openpilot/selfdrive/modeld/modeld.py') == []
 
 def test_the_fallback():
-  assert check_fallback(jetlink_adapter._NoJetlink('jetlink is missing')) == []
+  hooks = ('should_run', 'status', 'reason', 'prepare', 'handed_over', 'state', 'shutdown_step', 'runtime')
+  assert check_fallback(jetlink_adapter._NoJetlink('jetlink is missing'), hooks, link_on=jetlink_adapter.link_on) == []
 ```
 
 Install the guard in your `conftest.py`, so no test reaches the device's own
@@ -343,5 +350,7 @@ messages your `engaged()` reads.
 
 Pin a release tag. `API` in `jetlink/openpilot/__init__.py` changes only for a
 breaking change, and keeps the previous one working for one minor release, so
-you can move the pin, then the adapter. Read the **Forks** group of the
+you can move the pin, then the adapter. A hook added in a minor release is
+not in an older checkout, and calling it there raises: if your lines call
+one, pin that release or newer. Read the **Forks** group of the
 [CHANGELOG](../CHANGELOG.md) before you move the pin.

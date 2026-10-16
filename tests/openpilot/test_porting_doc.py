@@ -54,8 +54,9 @@ def public(cls) -> set[str]:
 
 
 def hooks_used() -> set[str]:
-  """Every HOOKS.<name> and hooks().<name> on the page."""
-  found = set()
+  """Every HOOKS.<name> and hooks().<name> on the page, in its prose too:
+  `HOOKS.state(model)` is a line a fork writes in its frame loop."""
+  found = set(re.findall(r'\bHOOKS\.(\w+)', TEXT))
   for node in NODES:
     if isinstance(node, ast.Attribute):
       value = node.value
@@ -139,7 +140,11 @@ def test_the_fallback_answers_every_hook_a_link_that_never_runs_reaches_as_off_d
   space: dict = {}
   exec(compile(ast.Module(body=module.body + [fallback], type_ignores=[]), str(DOC), 'exec'), space)
   with tempfile.TemporaryDirectory() as root, mock.patch.dict(os.environ, {'PARAMS_ROOT': root}):
-    assert check_fallback(space['_NoJetlink']('jetlink is missing'), reached) == []
+    assert check_fallback(space['_NoJetlink']('jetlink is missing'), reached, link_on=space['link_on']) == []
+  # and the page's own test of a fork's fallback names exactly these
+  [listed] = [ast.literal_eval(n.value) for n in NODES if isinstance(n, ast.Assign)
+              and [ast.unparse(x) for x in n.targets] == ['hooks'] and isinstance(n.value, ast.Tuple)]
+  assert set(listed) == reached
 
 
 def test_an_adapter_overrides_only_what_stock_has():
