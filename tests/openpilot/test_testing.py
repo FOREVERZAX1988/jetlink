@@ -259,6 +259,13 @@ class TestTheFakes(unittest.TestCase):
     self.assertEqual(guard.stop(), ['open /forbidden/x', 'socket.connect /forbidden/sock', 'subprocess.Popen sudo'])
     self.assertEqual(guard.stop(), [])
 
+  def test_tinygrads_cpu_quota_read_is_no_reach(self):
+    guard = Guard()
+    guard.start()
+    guard('open', ('/sys/fs/cgroup/cpu.max', 'r'))
+    guard('open', ('/sys/class/power_supply/x', 'r'))
+    self.assertEqual(guard.stop(), ['open /sys/class/power_supply/x'])
+
 
 if __name__ == '__main__':
   unittest.main()

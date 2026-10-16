@@ -180,6 +180,8 @@ def check_seam(modeld_path: str | Path) -> list[str]:
 # the machine's own params store, jetlink's records, sysfs, FunctionFS and a
 # PC's openpilot params
 FORBIDDEN = ('/data/', '/dev/shm/', '/dev/ffs', '/sys/', str(Path.home() / '.comma') + os.sep)
+# read by a library on import, never jetlink's own reach: tinygrad's CPU quota
+ALLOWED = ('/sys/fs/cgroup/cpu.max',)
 
 
 class Guard:
@@ -214,7 +216,7 @@ class Guard:
     value = args[index] if index is not None and len(args) > index else None
     if isinstance(value, (str, bytes, os.PathLike)):
       path = os.path.abspath(os.fsdecode(value))
-      if (path + os.sep).startswith(self.forbidden):
+      if (path + os.sep).startswith(self.forbidden) and path not in ALLOWED:
         touched.append(f"{event} {path}")
 
 
