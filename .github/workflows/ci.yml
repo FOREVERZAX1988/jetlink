@@ -40,7 +40,8 @@ jobs:
           # Everything rebuilds the apps and the servers except the comma's
           # side, which the comma takes as a git pin and nothing builds: the
           # comma and openpilot packages, their tests, the root script and
-          # the bench tools, the installer and the host CLI, and the docs.
+          # the bench tools, the installer and the host CLI, the upstream-paths
+          # checks (their own workflow), and the docs.
           # jetlink/transport and protocol.py are the wire and stay in.
           filters: |
             apps:
@@ -48,6 +49,8 @@ jobs:
               - '!jetlink/comma/**'
               - '!jetlink/openpilot/**'
               - '!scripts/comma/**'
+              - '!scripts/upstream/**'
+              - '!.github/workflows/upstream.yml'
               - '!scripts/deploy_to_comma.sh'
               - '!scripts/jetlink'
               - '!install.sh'

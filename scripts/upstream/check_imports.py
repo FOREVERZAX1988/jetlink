@@ -22,12 +22,12 @@ from pathlib import Path
 
 # -I leaves this directory off the path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from check_paths import STOCK, lookup
+from check_paths import STOCK, lookup, module_file, parsed
 
 
 def openpilot_imports(source: Path) -> list[tuple[str, str]]:
   found = set()
-  for node in ast.walk(ast.parse(source.read_text(), str(source))):
+  for node in ast.walk(parsed(source)):
     if isinstance(node, ast.ImportFrom) and (node.module or '').split('.')[0] == 'openpilot':
       found |= {(node.module, alias.name) for alias in node.names}
     elif isinstance(node, ast.Import):
@@ -38,22 +38,17 @@ def openpilot_imports(source: Path) -> list[tuple[str, str]]:
 def resolves(package: Path, module: str, name: str) -> str | None:
   """None when `from module import name` would find something, else why not."""
   if not name:   # `import openpilot.x.y`
-    base = package.joinpath(*module.split('.')[1:])
-    return None if base.with_suffix('.py').is_file() or (base / '__init__.py').is_file() else f"module {module} missing"
+    return None if module_file(package, module) else f"module {module} missing"
   _, err = lookup(package, module, name)
-  if err:
-    # `from openpilot.cereal import messaging` names a submodule
-    sub = package.joinpath(*module.split('.')[1:], name)
-    if sub.with_suffix('.py').is_file() or (sub / '__init__.py').is_file():
-      return None
-  return err
+  # `from openpilot.cereal import messaging` names a submodule
+  return None if err is None or module_file(package, f"{module}.{name}") else err
 
 
 def main(argv: list[str]) -> int:
   if not argv:
     print(__doc__.strip().split('\n\n')[-2])
     return 2
-  checkout, source = Path(argv[0]), Path(argv[1]) if len(argv) > 1 else STOCK
+  checkout, source = Path(argv[0]), Path(argv[1]).resolve() if len(argv) > 1 else STOCK
   found = openpilot_imports(source)
   bad = [f"{module}:{name} ({err})" for module, name in found if (err := resolves(checkout / 'openpilot', module, name))]
   print(f"{source.name} against {checkout}: {len(found)} imports, {len(bad)} missing")

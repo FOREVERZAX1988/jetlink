@@ -1,20 +1,22 @@
 # Holds jetlink/openpilot/stock.py to commaai/openpilot.
 #
 # stock.py is the one jetlink module that imports openpilot, inside its
-# methods. scripts/upstream checks by AST alone (the checkout is data, never
-# run) that every name it imports is still there with the parameters it calls
-# it with, that the literals it writes out (the chestnut ids, the warp's name,
-# the services) still match, and that the modeld seam the forks' hook lines go
-# into is still there.
+# methods. scripts/upstream checks by AST and text alone (the checkout is data,
+# never run) that every name it imports is still there with the parameters it
+# calls it with, that the literals it writes out (the chestnut ids, the warp,
+# the services, the fields engaged() reads) still match, that the upstream
+# rules it copies still read the same, and that the modeld seam the forks'
+# hook lines go into is still there.
 #
-# On a change to any of those, against the pin in scripts/upstream/UPSTREAM_SHA,
-# so the result is the change's alone. Weekly against master: red opens one
-# issue (or refreshes it), green closes it and names the SHA to pin.
+# On a pull request that changes any of those, and on a push of main, against
+# the pin in scripts/upstream/UPSTREAM_SHA, so the result is the change's
+# alone. Weekly against master: red opens one issue (or refreshes it), green
+# closes it and names the SHA to pin.
 name: Upstream paths
 
 on:
   push:
-    branches: ["**"]
+    branches: [main]
     paths:
       - jetlink/openpilot/stock.py
       - jetlink/openpilot/interface.py
@@ -51,14 +53,16 @@ jobs:
   upstream-paths:
     name: upstream-paths
     runs-on: ubuntu-24.04
-    # a fork of this repo has no business filing issues here weekly
+    # a fork of this repo has no business checking master weekly
     if: github.event_name != 'schedule' || github.repository == 'zoompilot/jetlink'
-    permissions:
-      contents: read
-      issues: write
+    outputs:
+      sha: ${{ steps.fetch.outputs.sha }}
+      report: ${{ steps.summary.outputs.report }}
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Fetch openpilot
         id: fetch
@@ -79,53 +83,64 @@ jobs:
         run: python3 -I scripts/upstream/check_paths.py "$CHECKOUT" | tee -a "$REPORT"
 
       - name: Summarize
+        id: summary
         if: ${{ !cancelled() }}
         env:
           SHA: ${{ steps.fetch.outputs.sha }}
           GREEN: ${{ job.status == 'success' }}
         run: |
+          report=$(cat "$REPORT" 2>/dev/null || echo "no report: the fetch failed")
+          {
+            echo 'report<<END_OF_REPORT'
+            echo "$report"
+            echo 'END_OF_REPORT'
+          } >> "$GITHUB_OUTPUT"
           {
             echo '```'
-            cat "$REPORT" 2>/dev/null || echo "no report: the fetch failed"
+            echo "$report"
             echo '```'
             if [ "$GREEN" = true ] && [ -n "$SHA" ] && [ "$SHA" != "$(tr -d '[:space:]' < scripts/upstream/UPSTREAM_SHA)" ]; then
               echo "Green on $SHA. To move the pin: \`echo $SHA > scripts/upstream/UPSTREAM_SHA\`"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Open or refresh the issue
-        if: ${{ failure() && github.event_name == 'schedule' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          TITLE: "upstream-paths: stock.py no longer matches openpilot master"
-          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+  # the weekly result as one issue; the only job that may write issues
+  issue:
+    name: Weekly issue
+    needs: upstream-paths
+    if: ${{ !cancelled() && github.event_name == 'schedule' && github.repository == 'zoompilot/jetlink' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TITLE: "upstream-paths: stock.py no longer matches openpilot master"
+      RESULT: ${{ needs.upstream-paths.result }}
+      SHA: ${{ needs.upstream-paths.outputs.sha }}
+      REPORT: ${{ needs.upstream-paths.outputs.report }}
+      RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Open, refresh or close it
         run: |
+          number=$(gh issue list --state open --limit 200 --json number,title --jq "map(select(.title == \"$TITLE\"))[0].number // empty")
+          if [ "$RESULT" = success ]; then
+            if [ -n "$number" ]; then
+              gh issue close "$number" --comment "Green again on commaai/openpilot $SHA."
+            fi
+            exit 0
+          fi
           {
             echo "The weekly check of jetlink/openpilot/stock.py against commaai/openpilot master failed ($RUN)."
             echo
             echo '```'
-            cat "$REPORT" 2>/dev/null || echo "no report: the fetch failed"
+            echo "${REPORT:-no report: the check did not get that far}"
             echo '```'
             echo
             echo "Fix stock.py (or the checkers in scripts/upstream), then move scripts/upstream/UPSTREAM_SHA."
           } > "$RUNNER_TEMP/issue.md"
-          number=$(gh issue list --state open --limit 200 --json number,title --jq "map(select(.title == \"$TITLE\"))[0].number // empty")
           if [ -n "$number" ]; then
             gh issue edit "$number" --body-file "$RUNNER_TEMP/issue.md"
           else
             gh issue create --title "$TITLE" --body-file "$RUNNER_TEMP/issue.md"
-          fi
-
-      - name: Close the issue
-        if: ${{ success() && github.event_name == 'schedule' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          TITLE: "upstream-paths: stock.py no longer matches openpilot master"
-          SHA: ${{ steps.fetch.outputs.sha }}
-        run: |
-          number=$(gh issue list --state open --limit 200 --json number,title --jq "map(select(.title == \"$TITLE\"))[0].number // empty")
-          if [ -n "$number" ]; then
-            gh issue close "$number" --comment "Green again on commaai/openpilot $SHA."
           fi

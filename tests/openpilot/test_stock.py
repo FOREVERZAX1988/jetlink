@@ -511,6 +511,7 @@ def test_the_upstream_checker_reads_stocks_literals():
   for name in ('CHESTNUT_IDS', 'IN_CONTROL_SERVICES', 'WARP_DIR', 'WARP_NAME', 'CATALOG_SELECTOR'):
     assert values[name] == getattr(Stock, name), name
   assert values['KEYS']['offroad'] == Stock.KEYS.offroad
+  assert values['_ENGAGED'] == stock._ENGAGED
 
 
 def test_the_fake_stubs_exactly_what_stock_imports(tmp_path):
