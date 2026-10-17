@@ -9,7 +9,7 @@
 </p>
 
 **Jetlink is experimental.** It requires zoompilot's
-[`develop` branch](https://github.com/zoompilot/zoompilot/tree/develop).
+[`main` release](https://github.com/zoompilot/zoompilot/tree/main).
 If the link drops or lags while engaged, the comma says **TAKE CONTROL** and
 stays engaged on the small model. Be ready to take over.
 
