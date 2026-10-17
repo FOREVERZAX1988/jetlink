@@ -368,8 +368,12 @@ class JetlinkModelState:
         frame.seq = self.client.infer_begin(None, self.packed, self._frame_id, reset=self._need_reset,
                                             want_state=frame.telemetry, skip_if_busy=self._can_hold,
                                             lossless=self._packer.pack(self.warp.errors))
-    except Exception:
-      self._log.warning("jetlink: frame %d send failed: %s", self._frame_id, getattr(self.client.t, 'last_send', {}))
+    except Exception as e:
+      # the exception first: a link that has no send stats of its own (TCP)
+      # logged an empty dict here, and the reason went with it
+      stats = getattr(self.client.t, 'last_send', None)
+      self._log.warning("jetlink: frame %d send failed: %s%s", self._frame_id, e,
+                        f" ({stats})" if stats else "")
       raise
     frame.sent = time.perf_counter()
     if frame.seq is not None:
