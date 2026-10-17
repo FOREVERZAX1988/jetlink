@@ -222,9 +222,10 @@ list in App Store Connect leaves out.
 
 ## Comma and server release versions
 
-The comma takes Jetlink as a git pin: zoompilot's `develop`,
-`danger-unstable` and `jetson-trt` pin a commit on `main`, driven on
-`danger-unstable` first, and it may lie between releases. A `v*` release is
+The comma takes Jetlink as a git pin: zoompilot's `develop` and
+`danger-unstable` pin a commit on `main`, driven on `danger-unstable` first,
+and the `main` release ships develop's pin. The pin may lie between
+releases. A `v*` release is
 cut when the apps, the server or the wire changed, not for the comma's side
 alone; its notes list what changed on the comma since the last release too.
 
