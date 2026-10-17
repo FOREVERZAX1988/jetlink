@@ -85,6 +85,49 @@ def connect(log, loan, deadline: float | None = None, name: str | None = None, w
 NOT_ON_WIFI = 'join hotspot'
 NO_ANSWER = 'open Jetlink app'
 
+# builds a target has already failed, by (its own device tag, the model's
+# sha256): over Wi-Fi the far end may not be the user's phone at all (a shared
+# car AP with another jetlink server on it), and a phone whose NPU takes none of
+# the model's graph fails the same way every 5 s, each attempt minutes of the
+# small model driving. What changes an answer is the app or the model, not the
+# firmware, so it is held for the drive rather than the join's backoff
+BUILD_REFUSED: dict[tuple[str, str], str] = {}
+# how long a refused build is left alone (the join's retry_after)
+BUILD_REFUSED_RETRY = 120.0
+BUILD_REFUSED_WAITING = 'phone cannot build this model'
+
+
+def target_refusal(wifi: bool, device: str, sha256: str) -> str | None:
+  """Why this target already failed to build this model, or None to ask it.
+  Wi-Fi only: the cable is the user's own phone, where a failure is worth
+  another attempt (a rebooted app, a busy NPU), and a build over Wi-Fi may be
+  a stranger's phone on the LAN."""
+  return BUILD_REFUSED.get((device, sha256)) if wifi else None
+
+
+def note_build_failure(wifi: bool, device: str, sha256: str, error: BaseException) -> str | None:
+  """Remember a build failure as this target's answer about this model, so the
+  next Wi-Fi attempt reads it instead of spending the minutes again. Returns
+  what was recorded. Not every failure is an answer: a model neither end has
+  (EngineMissing) is a provisioning run's job, and a timeout or a link error
+  (OSError, LinkError) is a slow phone or a bad connection, which another
+  attempt can still get through."""
+  from jetlink.client import EngineMissing
+  from jetlink.transport.base import LinkError
+  if not wifi or isinstance(error, (EngineMissing, OSError, LinkError)):
+    return None
+  why = ' '.join(str(error).split())[:200]
+  BUILD_REFUSED[(device, sha256)] = why
+  return why
+
+
+class TargetCannotBuild(RuntimeError):
+  """This target has already failed to build this model, and over Wi-Fi it is
+  not asked again this drive (BUILD_REFUSED). A build failure, not a link
+  failure: the link is fine and stays on `Link`."""
+  retry_after = BUILD_REFUSED_RETRY
+  waiting = BUILD_REFUSED_WAITING
+
 
 class WifiWaiting(ConnectionError):
   """The Wi-Fi dial found no device to talk to: the comma is on no Wi-Fi, or
@@ -215,6 +258,18 @@ class Link:
         client.close()
       except Exception:
         self.log.exception("jetlink: error closing the link")
+
+  def retarget(self, wifi: bool) -> bool:
+    """Point the link at another medium, or say it already is. The setting can
+    change between join attempts (joining.connect re-reads it), and the client
+    held here belongs to the medium before: a dial to a phone is not a stream on
+    the gadget. The lease is left alone, so switching back costs no borrow.
+    True when the medium changed."""
+    if wifi == self.wifi:
+      return False
+    self.close()
+    self.wifi = wifi
+    return True
 
   def _borrow(self, deadline: float | None):
     """The lease on the gadget jetlinkd owns. Raises without one: only the
@@ -424,6 +479,8 @@ def open_link(parts, link: Link, should_stop=None):
                    hello.get('device'), hello.get('trt_version'),
                    hello.get('engine_state'), str(hello.get('loaded'))[:16])
     link.note_server(hello)
+    # the target this attempt would build on, as it names itself
+    device = str(hello.get('device') or '')
     sha256, nbytes = identity(parts, selected)
     path = parts.models.shipped_model_path()
     built = parts.spec.ready_spec()
@@ -439,11 +496,28 @@ def open_link(parts, link: Link, should_stop=None):
     elif built is None or built.sha256 != sha256:
       parts.log.warning("jetlink: %s is not built yet, building it with the small model driving",
                         selected.get('name', sha256[:16]))
+    # Checked before the ask, not after it fails: over Wi-Fi this target may be
+    # a stranger on the LAN, and one that took none of the graph last time takes
+    # none of it now. On the cable it is the user's own phone, and a failure
+    # there is worth another attempt (a rebooted app, a busy NPU)
+    refused = target_refusal(link.wifi, device, sha256)
+    if refused is not None:
+      parts.log.warning("jetlink: %s cannot build %s (%s); not asking again over Wi-Fi this drive, "
+                        "the cable builds it", device or 'the target on the other end',
+                        parts.models.name_for(sha256), refused)
+      raise TargetCannotBuild(f"{device or 'the target on the other end'} cannot build "
+                              f"{parts.models.name_for(sha256)}")
     # normally one round trip, since the provisioning run left the engine loaded. A
     # server that restarted reloads from the plan cache, 13 to 25 s; one
     # that has never seen this model builds it, 102 to 294 s
-    spec = ensure(parts, client, sha256, nbytes, path, progress=parts.progress.report_with_eta,
-                  should_stop=should_stop)
+    try:
+      spec = ensure(parts, client, sha256, nbytes, path, progress=parts.progress.report_with_eta,
+                    should_stop=should_stop)
+    except BaseException as e:
+      # a build failure is this target's answer about this model, and the one
+      # thing that would make the next attempt different is the app or the model
+      note_build_failure(link.wifi, device, sha256, e)
+      raise
     client.deadline = INFERENCE_TIMEOUT
     return client, spec
   except EngineMissing as e:

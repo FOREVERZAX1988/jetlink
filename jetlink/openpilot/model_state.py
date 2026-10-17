@@ -122,6 +122,10 @@ TELEMETRY_EVERY = 2
 TELEMETRY_PERIOD = 1.0
 # frames Trips keeps the timings of: a minute at 20 Hz
 TRIPS_KEPT = 1200
+# the whole run's summary (Trips.summary) goes to the log this often. The
+# per-frame line is one sample: a drive's p99 is read off this one, not
+# inferred from a stream of them
+SUMMARY_PERIOD = 30.0
 
 
 class FrameFailed(Exception):
@@ -171,6 +175,12 @@ class Trips:
       out.update(p50_ms=round(whole[len(whole) // 2], 1), p99_ms=round(whole[int(0.99 * (len(whole) - 1))], 1),
                  max_ms=round(whole[-1], 1), server_ms=round(sum(self._server_ms) / len(self._server_ms), 1))
     return out
+
+
+def summary_text(summary: dict) -> str:
+  """Trips.summary() as one log line: frames, over, held, pipelined, span_s,
+  then p50/p99/max of the whole frame and the server's mean total."""
+  return ' '.join(f"{k} {v}" for k, v in summary.items())
 
 
 @dataclass
@@ -282,6 +292,9 @@ class JetlinkModelState:
     self._frame_id = 0
     self._last_logged = 0.0
     self._last_hold_logged = 0.0
+    # perf_counter, like the frame times it is compared with: the first line
+    # comes a period after the swap frame, not on it
+    self._last_summary_logged = time.perf_counter()
     self.trips = Trips()
     # the frame prepared and not yet ended, if any
     self._frame: Frame | None = None
@@ -452,6 +465,11 @@ class JetlinkModelState:
                         note,
                         gpu_us / 1e3, queue_us / 1e3, total_us / 1e3, receive.get('prepare', 0.0) * 1e3,
                         receive.get('read_wait', 0.0) * 1e3, receive.get('handoff', 0.0) * 1e3, cable)
+    # the run itself, on the comma's log: the line above is one frame, and what
+    # a drive's tail latency was is what this says it was
+    if t4 - self._last_summary_logged >= SUMMARY_PERIOD:
+      self._last_summary_logged = t4
+      self._log.warning("jetlink: trips %s", summary_text(self.trips.summary()))
     return outputs
 
   def run(self, bufs: dict, transforms: dict[str, np.ndarray],

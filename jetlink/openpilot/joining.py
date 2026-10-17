@@ -463,11 +463,16 @@ class JoiningModelState:
     self._say_leaving(getattr(model, 'client', None), reason, getattr(model, 'trips', None))
 
   def _say_leaving(self, client, reason: str, trips=None) -> None:
-    """JetlinkClient.leave, which says nothing over a dead link."""
+    """JetlinkClient.leave, which says nothing over a dead link. The comma's
+    own copy of what the run measured is logged first, so the reason a model
+    handed the drive back is read next to its numbers."""
+    measured = trips.summary() if trips is not None else {}
+    if measured:
+      from jetlink.openpilot.model_state import summary_text
+      self._log.warning("jetlink: leaving (%s) trips %s", reason, summary_text(measured))
     leave = getattr(client, 'leave', None)
     if leave is None:
       return
-    measured = trips.summary() if trips is not None else {}
     try:
       leave(reason, drops=self._drops, lags=self._lags, **measured)
     except Exception:
@@ -684,9 +689,16 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
   op = parts.op
   face = op.model_face()
   ready: dict = {}
-  mode = parts.settings.mode()
-  wifi = mode == 'wifi'
-  link = links.Link(parts.log, wifi=wifi)
+  # Read here for the warp, and again at every join attempt (connect, and the
+  # hold policy build() picks): the Jetlink setting is a param, and switching
+  # between the cable and Wi-Fi used to need the onroad preview toggled to
+  # restart modeld. The warp is the one thing that cannot follow it -- it is
+  # loaded on modeld's main thread before the frame loop exists -- so a start on
+  # the cable keeps the raw build and frames over Wi-Fi go raw too, which the
+  # link takes: the lossless build's half the bytes is an optimisation, not a
+  # requirement (model_state reads `warp.errors` and the client's codecs)
+  wifi_at_start = parts.settings.mode() == 'wifi'
+  link = links.Link(parts.log, wifi=wifi_at_start)
 
   def prepare():
     from jetlink.openpilot.warp import Warp, prepare_reset
@@ -704,7 +716,7 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
       ready['reset_small'] = prepare_reset(small)
       # over Wi-Fi the lossless build, which makes the frame's MED errors too
       # (jetlink.lossless), when the build made one; else frames go raw
-      lossless = wifi and parts.warps.is_cached(cam_w, cam_h, *geometry, lossless=True)
+      lossless = wifi_at_start and parts.warps.is_cached(cam_w, cam_h, *geometry, lossless=True)
       warp = Warp(parts.warps.load(cam_w, cam_h, *geometry, lossless=lossless), face.frame_size(cam_w, cam_h), parts.log)
     except Exception:
       link.close()
@@ -718,7 +730,10 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
       raise RuntimeError('no prepared warp for the server model geometry')
     # A phone behind the USB cable (usb/ios) or Wi-Fi answers near the frame
     # budget, so relax the hold/proof per link; Jetson/Mac keep strict defaults.
-    if wifi:
+    # The medium is read again here rather than taken from modeld's start, so a
+    # model that joins after the setting changed gets its own link's rules.
+    mode = parts.settings.mode()
+    if mode == 'wifi':
       hold_kw = {'hold_frame': model_state.WIFI_HOLD_FRAME,
                  'settling_frames': model_state.WIFI_SETTLING_FRAMES,
                  'holds_in_a_row': model_state.WIFI_HOLDS_IN_A_ROW,
@@ -736,6 +751,14 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
                              preview=parts.settings.preview(), **hold_kw)
 
   def connect(should_stop=None):
+    # the setting again: a link joined after the user changed it must open the
+    # other medium, and the client of the one before goes with it (the lease on
+    # the gadget stays -- jetlinkd holds it for the whole drive). 'off' is the
+    # owner's to act on, not a medium to join over
+    mode = parts.settings.mode()
+    if mode != 'off' and link.retarget(mode == 'wifi'):
+      parts.log.warning("jetlink: the Jetlink setting changed, joining over %s",
+                        'Wi-Fi' if link.wifi else 'the cable')
     return links.open_link(parts, link, should_stop)
 
   def peer_present() -> bool:

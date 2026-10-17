@@ -251,6 +251,21 @@ class TestWire(ModelStateTest):
     for key in ('span_s', 'p50_ms', 'p99_ms', 'max_ms', 'server_ms'):
       self.assertIn(key, summary)
 
+  def test_the_whole_run_reaches_the_log_every_summary_period(self):
+    # the per-frame line is one sample; p99 over the window is read off this,
+    # not inferred from a stream of samples
+    spec, state, _, _ = self.run_frames(STATEFUL)
+    assert not [line for line in self.log.lines('warning') if 'trips ' in line], 'summarised on the first frames'
+    state._last_summary_logged = -model_state.SUMMARY_PERIOD
+    self.frames(state, 1)
+    trips = [line for line in self.log.lines('warning') if 'trips ' in line]
+    self.assertEqual(len(trips), 1)
+    for key in ('frames', 'over', 'held', 'pipelined', 'span_s', 'p50_ms', 'p99_ms', 'max_ms', 'server_ms'):
+      self.assertIn(key, trips[0])
+    # a period, not a frame
+    self.frames(state, 2)
+    self.assertEqual(len([line for line in self.log.lines('warning') if 'trips ' in line]), 1)
+
   def test_trips_summarise_the_frames_kept(self):
     trips = model_state.Trips()
     for _ in range(99):

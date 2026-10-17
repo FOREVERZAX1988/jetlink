@@ -111,6 +111,69 @@ class HoldingTheLink(ClockedTest):
     assert self.link.client is None
     assert self.op.log.has('error closing the link', 'exception')
 
+  def test_the_setting_that_changed_between_attempts_opens_the_other_medium(self):
+    # the client belongs to the medium before (a dial to a phone is not a stream
+    # on the gadget); the lease on the gadget does not, so switching back costs
+    # no borrow. This is what lets the Jetlink setting be changed without
+    # toggling the onroad preview to restart modeld
+    loan = mock.Mock(closed=False)
+    self.link.loan = loan
+    assert self.link.retarget(True) is True
+    assert self.link.wifi is True
+    self.client.close.assert_called_once()
+    assert self.link.loan is loan
+    assert loan.close.call_count == 0
+
+  def test_retargeting_to_the_medium_already_open_touches_nothing(self):
+    assert self.link.retarget(False) is False
+    assert self.link.client is self.client
+    assert self.client.close.call_count == 0
+
+
+class ATargetThatCannotBuild(OpenpilotTest):
+  """Over Wi-Fi the far end may be a phone that cannot take the graph at all.
+
+  A phone whose NPU takes none of the model's nodes fails the build the same
+  way every time, each attempt minutes of the small model driving, so the first
+  answer is kept and read instead of the ask being made again (BUILD_REFUSED).
+  """
+
+  def setUp(self):
+    super().setUp()
+    link.BUILD_REFUSED.clear()
+    self.addCleanup(link.BUILD_REFUSED.clear)
+
+  def test_a_failure_over_wifi_is_that_targets_answer_about_that_model(self):
+    why = link.note_build_failure(True, 'htp-whole-SM6450', 'abc', RuntimeError("Node 'x' com.ms.internal.nhwc not selected by that EP"))
+    assert why is not None
+    assert link.target_refusal(True, 'htp-whole-SM6450', 'abc') == why
+    # another model, or another target, is another question
+    assert link.target_refusal(True, 'htp-whole-SM6450', 'def') is None
+    assert link.target_refusal(True, 'htp-whole-SM8975', 'abc') is None
+    assert self.op.log is not None
+
+  def test_the_cable_asks_again(self):
+    link.note_build_failure(True, 'htp-whole-SM6450', 'abc', RuntimeError('no EP context'))
+    assert link.target_refusal(False, 'htp-whole-SM6450', 'abc') is None
+    link.note_build_failure(False, 'htp-whole-SM8975', 'abc', RuntimeError('busy'))
+    assert link.target_refusal(True, 'htp-whole-SM8975', 'abc') is None
+
+  def test_a_model_neither_end_has_is_not_a_build_failure(self):
+    from jetlink.client import EngineMissing
+    assert link.note_build_failure(True, 'htp-whole-SM6450', 'abc', EngineMissing('nowhere')) is None
+    assert link.target_refusal(True, 'htp-whole-SM6450', 'abc') is None
+
+  def test_a_slow_phone_or_a_bad_link_is_not_an_answer_about_the_model(self):
+    # a 294 s build that timed out has an engine coming; a link error is the
+    # cable's or the radio's, and neither is the target refusing the graph
+    from jetlink.transport.base import LinkError
+    assert link.note_build_failure(True, 'htp-whole-SM6450', 'abc', TimeoutError('build timed out')) is None
+    assert link.note_build_failure(True, 'htp-whole-SM6450', 'abc', LinkError('gone')) is None
+    assert link.target_refusal(True, 'htp-whole-SM6450', 'abc') is None
+    # and a graph that will not convert is
+    assert link.note_build_failure(True, 'htp-whole-SM6450', 'abc', RuntimeError('no EP context')) is not None
+    assert link.target_refusal(True, 'htp-whole-SM6450', 'abc') is not None
+
 
 class BorrowingTheGadget(OpenpilotTest):
   """modeld does not bring the gadget up any more.

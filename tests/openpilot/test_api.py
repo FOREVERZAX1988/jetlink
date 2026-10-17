@@ -247,6 +247,33 @@ class TestTheJoinFactory(OpenpilotTest):
     self.loaded.assert_called_once_with(1928, 1208, 512, 256, lossless=True)
     self.assertTrue(made.call_args.kwargs['wifi'])
 
+  def test_the_medium_is_read_again_at_every_join_attempt(self):
+    # the Jetlink setting is a param, and switching the cable for Wi-Fi used to
+    # need the onroad preview toggled to restart modeld: the attempt after the
+    # change opens the other medium, and the model built then gets its rules
+    from jetlink.openpilot import link, model_state
+    self.parts.spec.store(spec(model_hw=(64, 128)))
+    self.parts.op.set_mode('usb')
+    self.warp.return_value.errors = None
+    made = []
+    real = link.Link
+
+    def factory(*args, **kwargs):
+      made.append(real(*args, **kwargs))
+      return made[-1]
+
+    with mock.patch.object(link, 'Link', side_effect=factory), \
+         mock.patch.object(link, 'open_link', return_value=('client', 'spec')):
+      s = self.join()
+      held = made[0]
+      self.assertFalse(held.wifi)
+      self.parts.op.set_mode('wifi')
+      self.assertEqual(s._connect(), ('client', 'spec'))
+      self.assertTrue(held.wifi, 'the attempt after the change opened the old medium')
+      self.assertTrue(self.parts.log.has('the Jetlink setting changed', 'warning'))
+      self.assertEqual(s._build(mock.Mock(dead=False), spec(model_hw=(64, 128)))._hold_frame_override,
+                       model_state.WIFI_HOLD_FRAME)
+
   def test_on_wifi_without_a_lossless_warp_the_plain_one_sends_raw(self):
     self.parts.op.set_mode('wifi')
     with mock.patch.object(self.parts.warps, 'is_cached', return_value=False):
