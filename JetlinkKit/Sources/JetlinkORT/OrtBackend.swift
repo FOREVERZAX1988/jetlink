@@ -296,6 +296,14 @@ public final class OrtBackend: EngineBackend {
     let context = staged.appending(path: "\(session)_ctx.onnx")
     report("compile", 0, "compiling \(session) for the NPU")
     let started = Date()
+    // Before the ask: a compile that runs out of memory does not come back with
+    // an error, it takes the process with it, and a killed process reports
+    // nothing to the comma. The answer under a shortage is a message instead.
+    if let shortage = HostMemory.shortage(for: Files.size(of: source)) {
+      log.warning("not compiling \(session): \(shortage)")
+      HostDiagnostics.report("the NPU build of \(session) was not started: \(shortage)")
+      throw HostError.failed(shortage)
+    }
     // A device QNN will not create, a Stub its backend will not have, a graph
     // its converter would not take: onnxruntime throws the provider's own
     // sentence, and it is half of what the report is evidence of.

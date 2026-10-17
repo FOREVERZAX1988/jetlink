@@ -19,10 +19,16 @@
     <!-- Installing an update's APK downloaded from the GitHub release. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
+    <!-- largeHeap: the heap the build's own buffers come out of. Compiling a
+         large model for the NPU is the peak, and a Java-side ceiling below it
+         kills the app mid-compile (2026-10-17). The provider's own allocations
+         are native, which this does not bound: HostMemory answers those before
+         the ask. -->
     <application
         android:name=".JetlinkApp"
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
+        android:largeHeap="true"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
