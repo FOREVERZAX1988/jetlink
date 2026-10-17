@@ -468,15 +468,23 @@ def test_telemetry_that_is_not_a_json_object_is_refused(tail):
 
 class _TimedTransport(StreamTransport):
   """Records the deadline each write ran under, as TcpTransport's sendmsg
-  loop has it."""
+  loop has it, and what the peer takes of a brief one (takes=None: all of it,
+  as a peer that is keeping up)."""
 
-  def __init__(self):
+  def __init__(self, takes: int | None = None):
     super().__init__()
     self.deadlines: list[float | None] = []
+    self.brief: list[int] = []
+    self.takes = takes
 
   def _write(self, bufs):
     self.deadlines.append(self._write_timeout())
     return sum(b.nbytes for b in bufs)
+
+  def _write_briefly(self, bufs):
+    total = sum(b.nbytes for b in bufs)
+    self.brief.append(total)
+    return total if self.takes is None else min(self.takes, total)
 
   def _read_into(self, dest, timeout):
     return 0
@@ -485,14 +493,30 @@ class _TimedTransport(StreamTransport):
     pass
 
 
-def test_a_frame_that_may_be_held_still_goes_out_under_the_clients_deadline():
-  # a transport that cannot tell whether its host is behind sends the frame,
-  # and a phone that stopped reading must not hold the frame loop past it
-  client = JetlinkClient(_TimedTransport(), want_hidden=False)
+def test_a_frame_the_peer_has_no_room_for_is_held_and_waits_for_nothing():
+  # a stream that can tell says False instead of sending: the frame loop holds
+  # the frame, publishes the answer it has, and nothing ran under a deadline
+  transport = _TimedTransport(takes=0)
+  client = JetlinkClient(transport, want_hidden=False)
   client.spec, client.deadline = _spec(), 0.2
   spec = client.spec
+  assert client.infer_begin(bytes(spec.warped_nbytes), bytes(spec.packed_nbytes), skip_if_busy=True) is None
+  assert not client.dead
+  assert transport.brief and not transport.deadlines
+
+
+def test_a_message_the_socket_half_took_is_committed_and_finished_by_the_next_send():
+  # what is on the wire cannot be taken back, so part of a message counts as
+  # sent, and the next frame's send hands over the rest before its own
+  transport = _TimedTransport(takes=P.HEADER_SIZE)
+  client = JetlinkClient(transport, want_hidden=False)
+  client.spec = _spec()
+  spec = client.spec
   assert client.infer_begin(bytes(spec.warped_nbytes), bytes(spec.packed_nbytes), skip_if_busy=True) is not None
-  assert client.t.deadlines and all(d is not None and 0 < d <= 0.2 for d in client.t.deadlines)
+  assert transport._tx
+  transport.takes = None   # the peer catches up
+  assert transport.try_send(P.Msg.PING, 7, (b'x' * 64,))
+  assert not transport._tx
 
 
 def test_a_closed_client_is_dead():

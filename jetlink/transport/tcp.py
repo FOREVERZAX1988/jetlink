@@ -155,6 +155,22 @@ class TcpTransport(StreamTransport):
     except OSError as e:
       raise LinkError(f"send failed: {e}") from e
 
+  def _write_briefly(self, bufs: list[memoryview]) -> int:
+    """What the socket takes of `bufs` right now, 0 if it takes none.
+
+    A stream needs no waiting here: what the kernel has taken it goes on
+    sending by itself (SO_SNDBUF), so 0 is the peer's window and not this
+    end's work. The mode stays non-blocking afterwards, which is what a read
+    asking for no wait wants anyway: _read_into sets its own before every
+    read."""
+    self._set_timeout(0.0)
+    try:
+      return self.sock.sendmsg(bufs)
+    except (TimeoutError, BlockingIOError):
+      return 0
+    except OSError as e:
+      raise LinkError(f"send failed: {e}") from e
+
   def _read_into(self, dest: memoryview, timeout: float | None) -> int:
     self._set_timeout(timeout)
     try:

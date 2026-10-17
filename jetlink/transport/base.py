@@ -82,8 +82,10 @@ class Transport(ABC):
   def try_send(self, msg_type: int, seq: int, parts=(), timeout: float | None = None) -> bool:
     """send(), unless the link would first make the caller wait for the peer
     to take earlier messages: then False, and nothing was sent. Only a
-    transport that queues its writes can tell (FfsTransport); the rest send,
-    within `timeout` as send() does, and say True."""
+    transport whose writes are its own to order can tell: the gadget skips the
+    message its queue has no room for (FfsTransport), and a stream keeps a
+    message the peer half took and finishes it later (StreamTransport.try_send).
+    The rest send, within `timeout` as send() does, and say True."""
     self.send(msg_type, seq, parts, timeout=timeout)
     return True
 
@@ -189,7 +191,7 @@ class StreamTransport(Transport):
   """Framing over any ordered byte stream.
 
   TCP and FunctionFS are both streams, so they both need exactly this.
-  Subclasses supply only the two primitives that differ.
+  Subclasses supply only the three primitives that differ.
   """
 
   # Pad sent messages to a multiple of this; 0 uses the one-byte PADDED rule.
@@ -201,6 +203,9 @@ class StreamTransport(Transport):
     self.rx = RxBuffer(rx_size)
     self._desynced = False
     self._send_deadline: float | None = None
+    # what is left of a message try_send committed to the wire (see try_send);
+    # empty except while a peer is not taking data
+    self._tx = b''
 
   def _write_timeout(self) -> float | None:
     if self._send_deadline is None:
@@ -217,6 +222,13 @@ class StreamTransport(Transport):
     A transport that overrides send (FfsTransport) need not provide it."""
     raise NotImplementedError
 
+  def _write_briefly(self, bufs: list[memoryview]) -> int:
+    """What the peer takes of `bufs` right now, 0 if it takes none: the
+    ``_write`` of a caller that cannot wait (try_send). Nothing is buffered by
+    this end, so 0 means the peer's window is closed and the message is still
+    whole here."""
+    raise NotImplementedError
+
   @abstractmethod
   def _read_into(self, dest: memoryview, timeout: float | None) -> int:
     """Read up to len(dest) bytes, returning how many arrived.
@@ -227,10 +239,64 @@ class StreamTransport(Transport):
 
   # -- framing -------------------------------------------------------------
 
+  def _flush_tx(self) -> int:
+    """Hand the peer what a try_send left of a committed message, and how much
+    of it went. Takes none of it while the peer's window is closed: the kernel
+    sends what it has already taken (SO_SNDBUF) with nobody here, so 0 is the
+    peer, not this end."""
+    out = 0
+    while self._tx:
+      n = self._write_briefly([memoryview(self._tx)])
+      if n <= 0:
+        break
+      self._tx = self._tx[n:]
+      out += n
+    return out
+
+  def try_send(self, msg_type: int, seq: int, parts=(), timeout: float | None = None) -> bool:
+    """send(), unless the peer is not taking data: then False, and nothing was
+    sent -- this frame is one the caller said it can do without, and the link
+    is as good as it was.
+
+    A stream cannot take a message back once its first byte is on the wire, so
+    a message the socket only half took is kept here and finished by a later
+    send, in order; True says it is the peer's to answer. `timeout` is not
+    waited on, anywhere: a frame waits for nothing here (it is the same bargain
+    FfsTransport's queue limit strikes, and a preview publishes the newest
+    answer it has meanwhile). Over a phone's Wi-Fi this is the peer going quiet
+    for a moment -- a 393 KB frame against a socket buffer the phone has
+    stopped draining -- which used to cost the link: send() killed it there
+    (2026-10-17: 40 times in 2 h 10 m of a Wi-Fi preview, every one of them
+    'send failed: timed out (tcp)').
+    """
+    if self._tx:
+      # what an earlier frame left goes first, and this one waits for it: the
+      # peer reads one stream, and half a message is not one it can skip
+      self._flush_tx()
+      if self._tx:
+        return False
+    bufs = self._frame(msg_type, seq, parts, 0)
+    total = sum(b.nbytes for b in bufs)
+    n = self._write_briefly(bufs)
+    if 0 < n < total:
+      # part of it is out, so it is no longer this end's to drop: what is left
+      # is copied out of the caller's buffers, which the next frame reuses
+      self._tx = b''.join(b.tobytes() for b in advance(bufs, n))
+    return n > 0
+
   def send(self, msg_type: int, seq: int, parts=(), flags: int = 0, timeout: float | None = None) -> None:
     bufs = self._frame(msg_type, seq, parts, flags)
     self._send_deadline = None if timeout is None else time.monotonic() + timeout
     try:
+      if self._tx:
+        # a message try_send half sent goes first: the peer reads this stream in
+        # order, and half a message is not one it can skip
+        while self._tx:
+          self._write_timeout()
+          n = self._write([memoryview(self._tx)])
+          if n <= 0:
+            raise LinkError("peer went away during send")
+          self._tx = self._tx[n:]
       while bufs:
         self._write_timeout()
         n = self._write(bufs)
