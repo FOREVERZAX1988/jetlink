@@ -281,9 +281,9 @@ public enum LFS {
     let (found, missing) = try await exportPointer(ref: ref, ids: ids, subject: subject, http: http, timeout: timeout)
     if let found { return found }
     let first: String =
-      if let missing { "its subject \(notUploaded(missing))" }
-      else if ids.isEmpty { "its subject names no export" }
-      else { "no folder in \(drivingModelsRepo) for \(ids.joined(separator: ", "))" }
+      if let missing { "its subject \(notUploaded(missing))" } else if ids.isEmpty { "its subject names no export" } else {
+        "no folder in \(drivingModelsRepo) for \(ids.joined(separator: ", "))"
+      }
     var tried = [first]
     if let pointer = diffPointer(patch) {
       log.info("\(short, privacy: .public) deletes \(bigONNX, privacy: .public) \(pointer.oid.prefix(16), privacy: .public)")
