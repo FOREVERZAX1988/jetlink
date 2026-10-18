@@ -229,7 +229,8 @@ def main() -> int:
     replay_process,
   )
   from openpilot.tools.lib.logreader import LogReader
-  from openpilot.sunnypilot.jetlink_adapter import IN_CONTROL
+  from openpilot.sunnypilot import jetlink_adapter
+  IN_CONTROL = jetlink_adapter.adapter().IN_CONTROL_SERVICES
 
   full = list(LogReader(str(rlog)))
   # process_replay's calibration and live-parameter snapshots are scattered through

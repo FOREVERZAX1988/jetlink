@@ -34,7 +34,8 @@ def main():
   from openpilot.common.hardware import HARDWARE
   from openpilot.common.params import Params
   from openpilot.common.prefix import OpenpilotPrefix
-  from openpilot.sunnypilot.jetlink_adapter import IN_CONTROL
+  from openpilot.sunnypilot import jetlink_adapter
+  IN_CONTROL = jetlink_adapter.adapter().IN_CONTROL_SERVICES
 
   parser = argparse.ArgumentParser(description=__doc__)
   parser.add_argument('--seconds', type=float, default=180)
