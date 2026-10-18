@@ -47,11 +47,11 @@
     }
 
     /// Starts `path`, looked up on PATH when it has no slash, with
-    /// `arguments` and this process's environment. The daemon blocks SIGINT
-    /// and SIGTERM on every thread and ignores SIGPIPE, and a child inherits
-    /// both through exec: the child gets an empty mask and those signals'
-    /// defaults back. With `output`, the child's stdout and stderr go there
-    /// and its stdin is /dev/null.
+    /// `arguments` and this process's environment. Whatever this process holds
+    /// or ignores is put back: the child gets an empty mask and the stop
+    /// signals' defaults, so a daemon started from a shell that left SIGINT
+    /// ignored still gives the child a SIGINT that stops it. With `output`, the
+    /// child's stdout and stderr go there and its stdin is /dev/null.
     static func spawn(_ path: String, _ arguments: [String], output: Int32? = nil) throws(KernelError) -> pid_t {
       var actions = posix_spawn_file_actions_t()
       posix_spawn_file_actions_init(&actions)

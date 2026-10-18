@@ -74,7 +74,7 @@
     }
 
     func run() throws {
-      holdStopSignals()
+      let stop = hearStopSignals()
       setUpLogging(logLevel)
       let log = ServerLog(category: "main")
       let backend = try chosen.pick(keepAlive: !noKeepAlive, keepCPUWarm: !noCPUKeepWarm)
@@ -119,7 +119,7 @@
         hardware = PageHardware(cache: root, gpu: telemetry)
       #endif
       let page = controller.flatMap { startPage($0, hardware: hardware, log: log) }
-      stopOnSignals { signal in
+      stop.install { signal in
         log.info("stopping on \(signal)")
         // The comma's server, its engine and gadget first, so a frame in
         // flight is answered or cut before anything else goes, then the
@@ -131,6 +131,8 @@
           log.info("stopped the web page")
         }
       }
+      // Never returns: the stop above, or a fatal engine error's exit, ends it.
+      dispatchMain()
     }
 
     /// The web page, on its own low-priority threads. It observes
@@ -189,41 +191,78 @@
 
   let stopSignals = [(SIGINT, "SIGINT"), (SIGTERM, "SIGTERM")]
 
-  /// Keeps SIGINT and SIGTERM pending for `stopOnSignals` rather than
-  /// delivered: on Linux the dispatch source reads them from a signalfd, which
-  /// only sees a signal no thread took, and a thread that has it unblocked
-  /// takes and drops it. Called before any thread starts, so all inherit it.
-  func holdStopSignals() {
-    #if os(Linux)
-      var held = sigset_t()
-      sigemptyset(&held)
-      for (number, _) in stopSignals {
-        sigaddset(&held, number)
-      }
-      pthread_sigmask(SIG_BLOCK, &held, nil)
-    #endif
+  /// What a stop signal runs, and what it is installed on. The stop itself is
+  /// installed once the server and its page are up; a signal that comes before
+  /// that is written down and runs when the main queue drains, which is after
+  /// it is.
+  final class StopSignals: @unchecked Sendable {
+    private let lock = NSLock()
+    private var action: (@Sendable (String) -> Void)?
+
+    func install(_ action: @escaping @Sendable (String) -> Void) {
+      lock.lock()
+      defer { lock.unlock() }
+      self.action = action
+    }
+
+    func run(_ name: String) {
+      lock.lock()
+      let action = action
+      lock.unlock()
+      action?(name)
+    }
   }
 
-  /// Runs `stop` on the main queue at SIGINT or SIGTERM, then exits 0 by
-  /// `exitNow`. Never returns.
-  func stopOnSignals(_ stop: @escaping @Sendable (String) -> Void) -> Never {
-    let sources = stopSignals.map { number, name in
-      #if os(macOS)
-        // Handled by the source alone; a shell that starts this in the
-        // background hands it SIGINT ignored, which the source still hears.
-        signal(number, SIG_IGN)
-      #endif
-      // Not on Linux, where the signals are held: ignoring one drops it if
-      // it is already pending, a SIGTERM that came during start-up.
-      let source = DispatchSource.makeSignalSource(signal: number, queue: .main)
-      source.setEventHandler {
-        stop(name)
-        exitNow(0)
-      }
-      source.resume()
-      return source
+  /// Where the handler below writes: one byte, the number of the signal.
+  nonisolated(unsafe) var stopSignalWrite: Int32 = -1
+
+  /// The read sources the stop arrives on, held for as long as the process: a
+  /// resumed source nobody holds is cancelled, and a stop nothing hears is a
+  /// process that will not.
+  nonisolated(unsafe) var stopSources: [DispatchSourceRead] = []
+
+  /// Puts the signal's number in the pipe. A handler may call almost nothing,
+  /// and `write` is one of the calls it may make.
+  func noteStopSignal(_ number: Int32) {
+    var byte = UInt8(truncatingIfNeeded: number)
+    _ = write(stopSignalWrite, &byte, 1)
+  }
+
+  /// Hears SIGINT and SIGTERM from here on: the handler writes the signal's
+  /// number into a pipe, a read source on the main queue runs the stop, and
+  /// the process exits 0 by `exitNow`. Called before anything serves, so a
+  /// SIGTERM that arrives while the server is still starting stops it rather
+  /// than being survived by the default action.
+  ///
+  /// A handler rather than a dispatch signal source, which on Linux sees only a
+  /// signal no thread took: a thread this process did not start takes the
+  /// SIGTERM instead, and the default action kills the process with no stop, so
+  /// the engine and the gadget are left as they were. That is what
+  /// ProcessTests.sigtermStopsItCleanly caught on the aarch64 runner — no
+  /// "stopping on SIGTERM" in the server's log, and a signal's exit — twice
+  /// before this. A handler belongs to the process, so the thread that takes
+  /// the signal only runs it.
+  func hearStopSignals() -> StopSignals {
+    var fds: [Int32] = [-1, -1]
+    precondition(pipe(&fds) == 0, "no pipe for the stop signals")
+    // The handler must not block: a byte that does not fit is one the next
+    // signal says again, and the first is on its way already.
+    _ = fcntl(fds[1], F_SETFL, O_NONBLOCK)
+    stopSignalWrite = fds[1]
+    let signals = StopSignals()
+    for (number, _) in stopSignals {
+      _ = signal(number, noteStopSignal)
     }
-    withExtendedLifetime(sources) { dispatchMain() }
+    let source = DispatchSource.makeReadSource(fileDescriptor: fds[0], queue: .main)
+    source.setEventHandler {
+      var byte: UInt8 = 0
+      guard read(fds[0], &byte, 1) == 1 else { return }
+      signals.run(stopSignals.first { UInt8(truncatingIfNeeded: $0.0) == byte }?.1 ?? "signal")
+      exitNow(0)
+    }
+    source.resume()
+    stopSources.append(source)
+    return signals
   }
 
   /// $JETLINK_CACHE, else Linux's rule (JetlinkLinux's Platform), else a
