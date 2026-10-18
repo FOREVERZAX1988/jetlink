@@ -249,6 +249,20 @@ def test_a_voter_is_forced_and_let_go(tmp_path, lever, force, value):
   assert (lever / 'force_val').read_text().strip() == '0'
 
 
+@pytest.mark.parametrize('setting, cut', [('1', True), ('2', True), ('0', False), ('', False), (None, False)])
+def test_boot_cuts_the_draw_while_the_link_is_on(tmp_path, setting, cut):
+  # the launch script, before manager: usb and ios are on, off and no setting are not
+  lever = usb_icl(tmp_path)
+  lever.mkdir()
+  path = tmp_path / 'JetlinkLink'
+  if setting is not None:
+    path.write_text(setting)
+  assert run_script(tmp_path, 'boot', str(path)).returncode == 0
+  assert (lever / 'force_active').is_file() == cut
+  if cut:
+    assert (lever / 'force_val').read_text().strip() == '0'
+
+
 @pytest.mark.parametrize('args, made, says', [
   (('port', 'hold'), None, 'could not force'),
   (('port', 'off'), None, 'could not release'),
@@ -356,7 +370,7 @@ def test_rps_without_the_cable_network_says_so(tmp_path):
 
 @pytest.mark.parametrize('args', [(), ('setup',), ('--ios',), ('gadget', '--net'), ('port',), ('port', 'on'), ('udc',),
                                   ('udc', 'on'), ('vm',), ('vm', 'undo'),
-                                  ('draw',), ('draw', 'cut')])
+                                  ('draw',), ('draw', 'cut'), ('boot',), ('boot', 'a', 'b')])
 def test_anything_else_is_usage(tmp_path, args):
   result = run_script(tmp_path, *args)
   assert result.returncode == 2

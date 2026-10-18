@@ -19,6 +19,7 @@
 #   sudo jetlink/comma/jetlink-root.sh udc start|stop    # its device side turned on, or off
 #   sudo jetlink/comma/jetlink-root.sh vm apply|restore  # the link's VM tuning, or the stock values
 #   sudo jetlink/comma/jetlink-root.sh draw off|on       # no current drawn from the port, or the charger's own
+#   sudo jetlink/comma/jetlink-root.sh boot SETTING      # at boot: draw off while the Jetlink setting's file is not 0
 #
 # For the comma four and the comma 3X only. Both are SDM845 on the same AGNOS
 # kernel (4.9, dwc3 at a600000.dwc3), with configfs, FunctionFS and NCM built
@@ -151,7 +152,7 @@ PROC_SYS=${JETLINK_PROC_SYS:-/proc/sys}
 SYSCTL_PREV=${JETLINK_SYSCTL_PREV:-/dev/shm/jetlink-sysctl-prev}
 
 usage() {
-  echo "usage: $0 gadget [--ios] | net | rps | check | teardown | port hold|off|device|reset|source|sink | udc apply|restore|start|stop | vm apply|restore | draw off|on" >&2
+  echo "usage: $0 gadget [--ios] | net | rps | check | teardown | port hold|off|device|reset|source|sink | udc apply|restore|start|stop | vm apply|restore | draw off|on | boot SETTING" >&2
   exit 2
 }
 
@@ -698,6 +699,18 @@ cmd_draw() {
   esac
 }
 
+# The fork's launch script, before manager: with the link on, draw nothing from
+# the port from boot rather than from the owner's first step, ~20 s later. The
+# comma runs off its own power port. SETTING is the Jetlink setting's params
+# file; anything but 0 is on, a missing file is off.
+cmd_boot() {
+  [[ $# -eq 1 ]] || usage
+  local mode
+  mode=$(cat "$1" 2>/dev/null) || return 0
+  [[ -n "$mode" && "$mode" != 0 ]] || return 0
+  cmd_draw off
+}
+
 cmd=${1:-}
 if [[ $# -gt 0 ]]; then shift; fi
 case "$cmd" in
@@ -710,5 +723,6 @@ case "$cmd" in
   udc) cmd_udc "$@" ;;
   vm) cmd_vm "$@" ;;
   draw) cmd_draw "$@" ;;
+  boot) cmd_boot "$@" ;;
   *) usage ;;
 esac

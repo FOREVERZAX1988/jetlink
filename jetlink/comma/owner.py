@@ -179,10 +179,10 @@ class Owner:
     # the tuning put back since the link was last on: None not yet asked,
     # False a restore failed (release_tuning)
     self.released: bool | None = None
-    # the draw from the USB-C port: cut by this owner, and the mode it was
-    # last settled for (steer_draw)
+    # the draw from the USB-C port: cut by this owner, and whether it was last
+    # settled for the link on (steer_draw)
     self.cut = False
-    self.draw_for: str | None = None
+    self.draw_for: bool | None = None
     # when there was last something to do. The hold runs from here, not from
     # process start: this daemon lives across ignitions, so a hold measured
     # from its birth would expire once and then release the gadget on every
@@ -635,6 +635,8 @@ class Owner:
       self.wake()
       self.release_tuning()
       return
+    # before the gadget: a host is never drawn from while the link comes up
+    self.steer_draw(True)
     self.link_step(mode == 'ios')
     self.released = None
     if self.tuned != mode:
@@ -647,7 +649,6 @@ class Owner:
         root.run('vm', 'apply')
         root.run('udc', 'apply')
       self.tuned = mode
-    self.steer_draw(mode)
 
   def link_wanted(self) -> bool:
     """Is the link still wanted at a stop: set on, and no chestnut on the
@@ -679,7 +680,7 @@ class Owner:
     it: once when the link goes, and again at the stop (final) if that
     failed. On the port's short timeout, since at a stop it comes before the
     FunctionFS close, inside manager's 5 s. True when the draw is still cut."""
-    self.steer_draw('off')
+    self.steer_draw(False)
     self.port.off()
     if self.released is None or (final and not self.released):
       vm = root.run('vm', 'restore', timeout=root.PORT_TIMEOUT)
@@ -688,38 +689,31 @@ class Owner:
         self.tuned = None
     return self.cut
 
-  def steer_draw(self, mode: str) -> None:
-    """jetlink-root.sh draw: no current drawn from the USB-C port while the
-    link is on, in every mode. The comma runs on its own supply, and drawing
-    from the host's port only costs it. A 3X browns out the instant it draws
-    from a laptop (PMIC power-off reason UVLO), whether at the plug or at a
-    draw given back with the laptop still in; an iPhone sags under the draw
-    and never sees a device.
-
-    Cut only on an empty port, or for an iPhone, which cannot power a comma:
-    a comma up with nothing on the port has another supply, and one powered
-    through the port would go dark at the cut. The cut is a forced voter, so
-    it holds for every plug after. Given back only on an empty port too, so
-    neither a change of mode nor the link turned off with a host still in
-    lets the charger draw from it. Kept on a stop with the link wanted, like
-    the tuning (release_tuning). A start assumes the draw stock, so the link
-    off gives it back on an empty port even uncut here: an owner before this
-    one may have cut it, and letting go of the voter is safe to repeat."""
-    if mode == self.draw_for:
+  def steer_draw(self, want: bool) -> None:
+    """jetlink-root.sh draw: with the link on, no current drawn from the USB-C
+    port, whatever is on it. The comma runs off its own power port, and drawing
+    from the host's only costs it: a 3X browns out the instant it draws from a
+    laptop (PMIC power-off reason UVLO), and an iPhone sags under the draw and
+    never sees a device. The launch script cuts it at boot (jetlink-root.sh
+    boot); this keeps it cut. A forced voter, so it holds for every plug after.
+    Given back only on an empty port, so the link turned off with a host still
+    in never lets the charger draw from it. Kept on a stop with the link
+    wanted, like the tuning (release_tuning). A start assumes the draw stock,
+    so the link off gives it back on an empty port even uncut here: an owner
+    before this one may have cut it, and letting go is safe to repeat."""
+    if want == self.draw_for:
       return
-    want = mode != 'off'
-    if want != self.cut or not want:
-      if mode != 'ios' and port.power_role() != 'none':
-        return   # something is on the port; looked at again next step
-      if want:
-        self.cut = root.run('draw', 'off', timeout=root.PORT_TIMEOUT)
-        if self.cut:
-          gadget.log.info("jetlink: drawing no current from the USB-C port")
-      else:
-        root.run('draw', 'on', timeout=root.PORT_TIMEOUT)
-        self.cut = False
+    if want:
+      self.cut = root.run('draw', 'off', timeout=root.PORT_TIMEOUT)
+      if self.cut:
+        gadget.log.info("jetlink: drawing no current from the USB-C port")
+    else:
+      if port.power_role() != 'none':
+        return   # a host is still in; looked at again next step
+      root.run('draw', 'on', timeout=root.PORT_TIMEOUT)
+      self.cut = False
     # settled, or failed, which is not retried every step
-    self.draw_for = mode
+    self.draw_for = want
 
   def ensure_lender(self) -> None:
     """Listen for borrowers, or say why not and try again later.

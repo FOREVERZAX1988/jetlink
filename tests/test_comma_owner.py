@@ -582,7 +582,7 @@ class TestTheToggle(OwnerTest):
     o = self.owner(presented=False)
     with mock.patch.object(gadget, 'link_configured', return_value=False):
       o.step()
-    self.assertEqual([c.args[0] for c in self.root_run.call_args_list], ['gadget', 'vm', 'udc'])
+    self.assertEqual([c.args[0] for c in self.root_run.call_args_list], ['draw', 'gadget', 'vm', 'udc'])
 
   def test_the_port_is_kept_a_device_while_the_link_is_on(self):
     o = self.owner()
@@ -744,16 +744,15 @@ class TestVmTuning(OwnerTest):
 
 
 class TestDraw(OwnerTest):
-  """No current drawn from the port while the link is on, cut and given back
-  only on an empty port (an iPhone is cut at once). A stop with the link
-  still wanted keeps it, like the tuning; one with the link turned off or a
-  chestnut on the port gives it back, on an empty port too."""
+  """No current drawn from the port while the link is on: cut at once, given
+  back only on an empty port. A stop with the link still wanted keeps it, like
+  the tuning; one with the link turned off or a chestnut on the port gives it
+  back, on an empty port."""
 
   def empty(self, empty: bool = True) -> None:
     self.power_role.return_value = 'none' if empty else 'sink'
 
-  def test_usb_cuts_it_on_an_empty_port_and_an_exit_keeps_it(self):
-    self.empty()
+  def test_an_exit_with_the_link_on_keeps_it(self):
     o = self.owner()
     o.step()
     o.step()
@@ -792,41 +791,23 @@ class TestDraw(OwnerTest):
     self.stopped(o)
     self.assertEqual(self.root_calls('draw'), ['off'])
 
-  def test_usb_waits_for_the_port_to_empty(self):
-    # a comma up on a port's power alone would go dark at the cut
-    self.empty(False)
-    o = self.owner()
-    o.step()
-    o.step()
-    self.assertEqual(self.root_calls('draw'), [])
-    self.empty()
-    o.step()
-    self.assertEqual(self.root_calls('draw'), ['off'])
+  def test_usb_and_ios_cut_it_at_once_with_a_host_in(self):
+    # the comma runs off its own power port, never this one
+    for link in (b'1', b'2'):
+      with self.subTest(link):
+        self.root_run.reset_mock()
+        self.empty(False)
+        self.write('JetlinkLink', link)
+        o = self.owner()
+        o.step()
+        o.step()
+        self.assertEqual(self.root_calls('draw'), ['off'])
 
-  def test_without_a_policy_engine_it_is_left_alone(self):
+  def test_without_a_policy_engine_it_is_cut_and_never_given_back(self):
     o = self.owner()
     o.step()
-    self.assertEqual(self.root_calls('draw'), [])
-
-  def test_ios_cuts_it_at_once(self):
-    self.empty(False)
-    self.write('JetlinkLink', b'2')
-    o = self.owner()
-    o.step()
-    o.step()
-    self.assertEqual(self.root_calls('draw'), ['off'])
-
-  def test_a_change_of_mode_keeps_it(self):
-    # leaving iOS with a host still in must not give the draw back: a 3X on
-    # the port browns out
-    self.empty(False)
-    self.write('JetlinkLink', b'2')
-    o = self.owner()
-    o.step()
-    self.write('JetlinkLink', b'1')
-    o.step()
-    self.empty()
-    o.step()
+    self.write('JetlinkLink', b'0')
+    self.stopped(o)
     self.assertEqual(self.root_calls('draw'), ['off'])
 
   def test_turning_the_link_off_gives_it_back_once_the_port_is_empty(self):
@@ -864,21 +845,6 @@ class TestDraw(OwnerTest):
     o.step()
     o.step()
     self.assertEqual(self.root_calls('draw'), ['on'])
-
-  def test_a_stop_gives_back_a_cut_an_owner_before_made(self):
-    # cut on an empty port and restarted with the link on; the next owner
-    # starts with a host in, so it never cut it itself
-    self.empty()
-    first = self.owner()
-    first.step()
-    self.stopped(first)
-    self.empty(False)
-    second = self.owner()
-    second.step()
-    self.empty()
-    self.write('JetlinkLink', b'0')
-    self.stopped(second)
-    self.assertEqual(self.root_calls('draw'), ['off', 'on'])
 
   def test_a_stop_for_a_chestnut_keeps_it(self):
     # the comma powers the chestnut, so the cut does nothing; giving it back

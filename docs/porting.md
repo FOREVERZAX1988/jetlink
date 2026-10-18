@@ -26,6 +26,15 @@ Make `import jetlink` work with a link beside the tinygrad and opendbc ones in
 ln -sfn jetlink_repo/jetlink jetlink
 ```
 
+Right after it, cut the comma's draw from the USB-C port while the link is on,
+so the comma never runs off the host's port from boot (the owner only starts
+about 20 s later). With the link on, the comma must be powered from its own
+power port (the car harness, or the comma four's power port), never this one:
+
+```bash
+sudo -n bash jetlink/comma/jetlink-root.sh boot /data/params/d/JetlinkLink &   # on AGNOS only
+```
+
 ## Params
 
 Add these to `common/params_keys.h` (`IsOffroad` is already there). A fork
