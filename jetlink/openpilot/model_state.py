@@ -85,10 +85,6 @@ HOLD_WINDOW = 10.0
 # wheel, where an iPhone's every return was a soft disable within a second
 # (2026-10-04)
 PROVING_FRAMES = 20
-# Wi-Fi adds scheduling and radio jitter to every reply. A few late
-# frames during warm-up are not a host that cannot keep up, unlike the
-# low-latency USB link this proving rule was written for.
-WIFI_PROVING_HOLDS = 3
 # the first of them never hand back, held or not: the first after a join
 # carries the history reset, and a Mac's is ~100 ms of CoreML warm-up. A
 # single slow frame later is the comma's own stall, a warp or a send, which
@@ -110,11 +106,20 @@ CABLE_SETTLING_FRAMES = 5
 CABLE_HOLDS_IN_A_ROW = 10
 CABLE_HOLDS_ALLOWED = 80
 # Over Wi-Fi: a 55 ms wait window covers the measured ~45 ms reply; more
-# settling frames and a wider steady-state tolerance for marginal holds.
+# settling frames and a wider steady-state tolerance for marginal holds. The
+# counts below are pinned by joining and kept for the tests, but over Wi-Fi they
+# no longer hand back at all (see _note_hold): a phone that tails the frame
+# budget keeps the link, and only the client's own deadline ends it.
 WIFI_HOLD_FRAME = 0.055
 WIFI_SETTLING_FRAMES = 8
 WIFI_HOLDS_IN_A_ROW = 15
 WIFI_HOLDS_ALLOWED = 150
+# How long a Wi-Fi link may go with no answer at all and still be tailing rather
+# than behind. prepare() stamps _last_answer whenever a reply has landed, so on a
+# phone that answers late but answers, this stays fresh every frame and the
+# counts above never fill. A host that answers slower than this publishes a plan
+# more than four frames old, and that is where the counts take the link back.
+WIFI_TAILING_ANSWER = 0.2
 # frames between asks for the server's telemetry, which rides on the response:
 # every second one, as modeld sent a chestnut's state (20 Hz over 10 Hz)
 TELEMETRY_EVERY = 2
@@ -580,12 +585,29 @@ class JetlinkModelState:
     HOLD_WINDOW. None while it is keeping up.
 
     A preview is held to PREVIEW_SILENCE instead, and to nothing else: it never
-    takes control, so a host that is slow but answering is the feature."""
+    takes control, so a host that is slow but answering is the feature.
+
+    Over Wi-Fi none of those counts hand back: see the note in the body. What a
+    Wi-Fi host is doing that cannot keep up looks like a link that has stopped
+    answering, and that is a lost link, not a held frame."""
     if not held:
       self._holds_in_a_row = 0
       self._last_answer = time.monotonic()
       return None
     self.trips.held += 1
+    if self._wifi and (time.monotonic() - self._last_answer) <= WIFI_TAILING_ANSWER:
+      # A phone's reply lands at the frame budget, and the wait a held frame can
+      # report is capped by that frame's own hold budget: on this link every held
+      # frame waits the same ~42 ms whether the host is 10 ms behind or 200. So
+      # the counts above are not evidence of a slow host; what is, is whether an
+      # answer is still arriving (prepare() stamps _last_answer when one lands).
+      # Measured 2026-10-18, SM8975 phone over a 5 GHz hotspot: ~55 ms every
+      # reply, so every frame after the first published the previous output, and
+      # the counts tore the link down about a second into every join -- nine
+      # joins in one drive, "held 15 frames in a row", 0 lost and not one net
+      # drop on the wire. Below this the phone is tailing, and the plan it
+      # publishes is one frame old.
+      return None
     now = time.monotonic()
     self._holds.append(now)
     while now - self._holds[0] > HOLD_WINDOW:
@@ -596,8 +618,6 @@ class JetlinkModelState:
     if self._frame_id <= self._settling_frames:
       return None
     if self._proving_holds_fatal and self._frame_id <= PROVING_FRAMES:
-      if self._wifi and len(self._holds) <= WIFI_PROVING_HOLDS:
-        return None
       return f'held frame {self._frame_id} of the first {PROVING_FRAMES}'
     if self._holds_in_a_row >= self._holds_in_a_row_limit:
       return f'held {self._holds_in_a_row} frames in a row'

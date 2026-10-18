@@ -510,6 +510,44 @@ class TestWifiHold(ModelStateTest):
       self.assertGreater(hold, 0.0)
       self.assertLessEqual(hold, model_state.WIFI_HOLD_FRAME)
 
+  def test_a_wifi_phone_one_answer_behind_keeps_the_link(self):
+    """Measured 2026-10-18, SM8975 phone over a 5 GHz hotspot: ~55 ms a reply,
+    so every frame after the first published the previous output, and the link
+    was torn down about a second into every join ("held 15 frames in a row",
+    "held 15 frames in a row of the first 20") with 0 lost on the wire. One
+    answer behind is a one-frame-old plan: tailing, and over Wi-Fi not behind.
+    `drain()` stamping _last_answer is what a phone answering late but answering
+    looks like to the state, so the test stamps it as prepare() would."""
+    client = self.over_wifi(FakeClient())
+    client.late = set(range(1, 121))           # every reply past its hold
+    with mock.patch.multiple(model_state, PROVING_FRAMES=0, SETTLING_FRAMES=0):
+      state = self.make(spec_for(STATEFUL), client)
+      behind = []
+      for _ in range(120):
+        state._last_answer = time.monotonic()
+        self.frames(state, 1)
+        behind.append(state.behind)
+    self.assertEqual(behind, [None] * 120, 'a tailing phone is never behind')
+    self.assertGreaterEqual(state.trips.held, 119, 'and every frame of it is still logged as held')
+
+  def test_the_wifi_counts_hand_back_once_the_answers_stop(self):
+    """Tailing is an answer late, not silence. Past WIFI_TAILING_ANSWER no reply
+    has landed, the published plan is stale, and the counts take the link back."""
+    state = self.make(spec_for(STATEFUL), self.over_wifi(FakeClient()))
+    state._holds_in_a_row_override = model_state.WIFI_HOLDS_IN_A_ROW
+    state._frame_id = model_state.PROVING_FRAMES + 1
+    state._last_answer = time.monotonic() - model_state.WIFI_TAILING_ANSWER - 1.0
+    for _ in range(model_state.WIFI_HOLDS_IN_A_ROW - 1):
+      self.assertIsNone(state._note_hold(True))
+    self.assertEqual(state._note_hold(True), f'held {model_state.WIFI_HOLDS_IN_A_ROW} frames in a row')
+
+  def test_a_wifi_link_that_holds_every_proving_frame_stays_up(self):
+    """The proving window is a cable rule. On Wi-Fi a phone holds most of its
+    first twenty frames by design, and the link still has to survive them."""
+    behind = self.late_at(set(range(1, model_state.PROVING_FRAMES + 1)),
+                          n=model_state.PROVING_FRAMES, wifi=True)
+    self.assertEqual(behind, [None] * len(behind), 'every proving frame may be held on Wi-Fi')
+
   def late_at(self, late: set[int], n: int, wifi: bool):
     """`n` driven frames, the replies to `late` seqs too late to wait for."""
     client = self.over_wifi(FakeClient()) if wifi else FakeClient()
@@ -521,18 +559,12 @@ class TestWifiHold(ModelStateTest):
       behind.append(state.behind)
     return behind
 
-  def test_a_few_late_frames_while_proving_are_the_radio(self):
-    k = model_state.WIFI_PROVING_HOLDS
-    first = model_state.SETTLING_FRAMES + 1      # past settling, inside proving
-    behind = self.late_at(set(range(first, first + k)), n=first + k - 1, wifi=True)
-    self.assertEqual(behind, [None] * len(behind), f'{k} late frames on Wi-Fi are forgiven')
-
-  def test_one_past_the_wifi_allowance_still_says_behind(self):
-    k = model_state.WIFI_PROVING_HOLDS
-    first = model_state.SETTLING_FRAMES + 1
-    n = first + k
-    behind = self.late_at(set(range(first, first + k + 1)), n=n, wifi=True)
-    self.assertEqual(behind[-1], f'held frame {n} of the first {model_state.PROVING_FRAMES}')
+  def test_a_wifi_link_that_holds_every_proving_frame_stays_up(self):
+    """The proving window is a cable rule. On Wi-Fi a phone holds most of its
+    first twenty frames by design, and the link still has to survive them."""
+    behind = self.late_at(set(range(1, model_state.PROVING_FRAMES + 1)),
+                          n=model_state.PROVING_FRAMES, wifi=True)
+    self.assertEqual(behind, [None] * len(behind), 'every proving frame may be held on Wi-Fi')
 
   def test_on_the_cable_one_late_frame_while_proving_is_still_behind(self):
     behind = self.late_at({7}, n=8, wifi=False)
