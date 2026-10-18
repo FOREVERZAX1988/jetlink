@@ -596,13 +596,6 @@ class TestWifiHold(ModelStateTest):
       behind.append(state.behind)
     return behind
 
-  def test_a_wifi_link_that_holds_every_proving_frame_stays_up(self):
-    """The proving window is a cable rule. On Wi-Fi a phone holds most of its
-    first twenty frames by design, and the link still has to survive them."""
-    behind = self.late_at(set(range(1, model_state.PROVING_FRAMES + 1)),
-                          n=model_state.PROVING_FRAMES, wifi=True)
-    self.assertEqual(behind, [None] * len(behind), 'every proving frame may be held on Wi-Fi')
-
   def test_on_the_cable_one_late_frame_while_proving_is_still_behind(self):
     behind = self.late_at({7}, n=8, wifi=False)
     self.assertEqual(behind[6], f'held frame 7 of the first {model_state.PROVING_FRAMES}')

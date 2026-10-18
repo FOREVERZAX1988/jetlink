@@ -109,13 +109,19 @@ class TestDial(fakes.OpenpilotTest):
     self.assertEqual(status.link_transport('wifi'), 'Wi-Fi (172.20.10.1)')
 
   def test_off_wifi_there_is_nothing_to_dial(self):
+    # no gateway and no address on wlan0: the comma is on no Wi-Fi at all, so
+    # there is nothing to search either (a comma that does have an address
+    # searches its subnet, which is another test's)
     with mock.patch.object(wifi, 'gateway', return_value=None), \
+         mock.patch.object(wifi, 'local_addr', return_value=None), \
+         mock.patch.object(wifi, 'discover') as discover, \
          mock.patch('jetlink.client.JetlinkClient.open_tcp') as open_tcp:
       with self.assertRaisesRegex(link.WifiWaiting, 'not on Wi-Fi') as caught:
         link.Link(self.parts.log, wifi=True).open()
     self.assertEqual(caught.exception.waiting, link.NOT_ON_WIFI)
     self.assertEqual(caught.exception.retry_after, wifi.DIAL_DELAY)
     open_tcp.assert_not_called()
+    discover.assert_not_called()
 
   def test_nothing_listening_is_a_link_error_the_join_retries(self):
     with mock.patch.object(wifi, 'gateway', return_value='172.20.10.1'), \
@@ -126,7 +132,9 @@ class TestDial(fakes.OpenpilotTest):
 
   def test_waiting_is_handed_to_the_join_at_once(self):
     # not retried for CONNECT_TIMEOUT here: the join reports why and asks again
-    with mock.patch.object(wifi, 'gateway', return_value=None), mock.patch('time.sleep') as slept:
+    with mock.patch.object(wifi, 'gateway', return_value=None), \
+         mock.patch.object(wifi, 'local_addr', return_value=None), \
+         mock.patch('time.sleep') as slept:
       with self.assertRaises(link.WifiWaiting):
         link.connect_patiently(link.Link(self.parts.log, wifi=True))
     slept.assert_not_called()
