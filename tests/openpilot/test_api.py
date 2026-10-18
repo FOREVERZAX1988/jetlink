@@ -482,7 +482,8 @@ class ThePowerOffStep(OpenpilotTest):
       self.assertFalse(self.jl.shutdown_step(True))
     self.assertTrue(gadget.SHUTDOWN_REQUEST.exists())
     with mock.patch.object(jo.time, 'monotonic', return_value=t0 + jo.SHUTDOWN_TIMEOUT):
-      self.assertTrue(self.jl.shutdown_step(True))
+      self.assertTrue(self.jl.shutdown_step(True), (t0, self.jl._shutdown_asked, gadget.SHUTDOWN_REQUEST.exists(),
+                                                    self.op.log.lines()))
     self.assertFalse(gadget.SHUTDOWN_REQUEST.exists())
     self.assertTrue(self.op.log.has('nobody took the shutdown request within 25 s'))
     self.assertTrue(self.jl.shutdown_step(False))
