@@ -12,6 +12,7 @@ submodule of; see jetlink_live_bench.sh.
 """
 import argparse
 import csv
+import importlib
 import json
 import os
 import shutil
@@ -34,10 +35,11 @@ def main():
   from openpilot.common.hardware import HARDWARE
   from openpilot.common.params import Params
   from openpilot.common.prefix import OpenpilotPrefix
-  from openpilot.sunnypilot import jetlink_adapter
-  IN_CONTROL = jetlink_adapter.adapter().IN_CONTROL_SERVICES
+  from openpilot.common.params import UnknownKeyName
 
   parser = argparse.ArgumentParser(description=__doc__)
+  parser.add_argument('--adapter', default='openpilot.sunnypilot.jetlink_adapter',
+                      help="the fork's jetlink adapter module; its Stock subclass names the params and services")
   parser.add_argument('--seconds', type=float, default=180)
   parser.add_argument('--output', type=Path, required=True)
   parser.add_argument('--small', action='store_true')
@@ -45,11 +47,14 @@ def main():
                       help='fake engaged controls for this many seconds, so the join has to wait for a window')
   parser.add_argument('--write-chunk', type=int, choices=[8192, 16384],
                       help='bench-only FunctionFS AIO request size; it must divide the 16 KB padding')
-  parser.add_argument('--modeld', choices=sorted(MODELD), help="which modeld runs; by default the one manager runs "
-                      "for the active driving model (tinygrad for a sunnypilot bundle, stock for openpilot's own)")
+  parser.add_argument('--modeld', help="which modeld runs: stock, tinygrad or a module; by default the one zoompilot's "
+                      "manager runs for the active driving model, else stock")
   parser.add_argument('--record', action='store_true', help='run loggerd, encoderd and driver monitoring; keep recordings under output')
   parser.add_argument('--resources', action='store_true', help='sample CPU, PSS and VM state once per second')
   args = parser.parse_args()
+  fork = importlib.import_module(args.adapter)
+  adapter = fork.adapter()
+  IN_CONTROL, KEYS = adapter.IN_CONTROL_SERVICES, adapter.KEYS
   args.output = args.output.resolve()
   if not np.isfinite(args.seconds) or args.seconds <= 0:
     parser.error('--seconds must be positive')
@@ -57,10 +62,14 @@ def main():
   if not live.get_bool('IsOffroad'):
     raise SystemExit('bench requires the real device to remain offroad')
   if args.modeld is None:
-    from openpilot.cereal import custom
-    from openpilot.sunnypilot.models.helpers import get_active_model_runner
-    tinygrad = get_active_model_runner(live, force_check=True) == custom.ModelManagerSP.Runner.tinygrad
-    args.modeld = 'tinygrad' if tinygrad else 'stock'
+    try:
+      from openpilot.cereal import custom
+      from openpilot.sunnypilot.models.helpers import get_active_model_runner
+      tinygrad = get_active_model_runner(live, force_check=True) == custom.ModelManagerSP.Runner.tinygrad
+      args.modeld = 'tinygrad' if tinygrad else 'stock'
+    except ImportError:   # not a sunnypilot fork
+      args.modeld = 'stock'
+  modeld_module = MODELD.get(args.modeld, args.modeld)
   # Cameras are a physical resource, even with isolated messaging. jetlinkd is
   # not: it owns the gadget and lends the endpoints, which is what a drive does
   # too, so leaving it up is the arrangement under test rather than a conflict.
@@ -77,9 +86,14 @@ def main():
   # the slot names a ref; without the catalog it names nothing the picker can
   # find, and the join asks for a model that has not been picked
   keys = ('CarParamsPersistent', 'CalibrationParams', 'ModelManager_ActiveBundle', 'ModelManager_ActiveBundleChestnut',
-          'ModelManager_ModelsCache_Chestnut', 'JetlinkModelPointers',
-          'JetlinkSpec', 'RecordFront', 'IsRhdDetected', 'ExperimentalMode')
-  saved = {key: live.get(key) for key in keys}
+          'ModelManager_ModelsCache_Chestnut', 'RecordFront', 'IsRhdDetected', 'ExperimentalMode',
+          KEYS.pointers, KEYS.spec, KEYS.big_model, KEYS.catalog)
+  saved = {}
+  for key in dict.fromkeys(k for k in keys if k):
+    try:
+      saved[key] = live.get(key)
+    except UnknownKeyName:   # a key this fork does not have
+      pass
   if saved['CarParamsPersistent'] is None:
     raise SystemExit('no saved CarParams; bench cannot choose a vehicle configuration')
   args.output.mkdir(parents=True, exist_ok=False)
@@ -102,9 +116,10 @@ def main():
       if value is not None:
         params.put(key, value, block=True)
     params.put('CarParams', saved['CarParamsPersistent'], block=True)
-    params.put('JetlinkLink', 0 if args.small else 1, block=True)   # Jetlink off, or USB
+    params.put(KEYS.link, 0 if args.small else 1, block=True)   # Jetlink off, or USB
     pm = messaging.PubMaster([*IN_CONTROL, 'deviceState', 'extrinsicsCalibration'])
-    sm = messaging.SubMaster(['modelV2', 'modelDataV2SP'])
+    sm = messaging.SubMaster(['modelV2'])
+    hooks = fork.hooks()
     calibration = None
     if saved['CalibrationParams'] is not None:
       calibration = messaging.log_from_bytes(saved['CalibrationParams'])
@@ -121,7 +136,7 @@ def main():
       if args.write_chunk is not None:
         setup += f'from jetlink.transport.ffs import FfsTransport; FfsTransport.write_chunk={args.write_chunk}; '
       model_command = [sys.executable, '-c', setup +
-                       f'import runpy; runpy.run_module({MODELD[args.modeld]!r}, run_name="__main__")']
+                       f'import runpy; runpy.run_module({modeld_module!r}, run_name="__main__")']
       commands = [
         ('camerad', [str(Path(BASEDIR) / 'openpilot/system/camerad/camerad')]),
         ('modeld', model_command)]
@@ -169,6 +184,8 @@ def main():
               message.carControl.enabled = engaged
             elif service == 'carControlSP':
               message.carControlSP.mads.enabled = engaged
+            elif service == 'selfdriveState':
+              message.selfdriveState.enabled = message.selfdriveState.active = engaged
             pm.send(service, message)
           # at the car's rates (services.py): modeld recomputes both warp
           # matrices on every calibration, 0.55 ms of its frame
@@ -184,12 +201,13 @@ def main():
           sm.update(0)
           if sm.updated['modelV2']:
             model = sm['modelV2']
-            status = sm['modelDataV2SP'].zoompilot
+            runtime = hooks.runtime()   # modeld's record, as selfdrived reads it
+            state = (runtime.state if runtime else None) or 'none'
             row = (time.monotonic() - start, model.frameId, int(model.big), int(sm.valid['modelV2']),
                    model.modelExecutionTime * 1000, model.frameDropPerc,
                    (sm.logMonoTime['modelV2'] - model.timestampEof) / 1e6,
                    # the available column is the state being ready, as bigModelAvailable was
-                   str(status.acceleratorState), int(str(status.acceleratorState) == 'ready'))
+                   state, int(state == 'ready'))
             rows.append(row)
             writer.writerow(row)
           if time.monotonic() - last >= 10:
