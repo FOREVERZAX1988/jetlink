@@ -184,7 +184,7 @@ def main():
           sm.update(0)
           if sm.updated['modelV2']:
             model = sm['modelV2']
-            status = sm['modelDataV2SP']
+            status = sm['modelDataV2SP'].zoompilot
             row = (time.monotonic() - start, model.frameId, int(model.big), int(sm.valid['modelV2']),
                    model.modelExecutionTime * 1000, model.frameDropPerc,
                    (sm.logMonoTime['modelV2'] - model.timestampEof) / 1e6,
