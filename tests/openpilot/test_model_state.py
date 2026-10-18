@@ -80,6 +80,11 @@ class FakeClient:
     # first-frame deadline), None when it held instead
     self.deadlines = []
     self.drains = 0
+    # a held frame's late reply taken by the *next* frame's infer_end instead of
+    # by drain(): what a phone tailing by one frame does on the wire
+    # (client._take_reply), and the shape 2026-10-18 22:02 was made of
+    self.late_read_by_next = False
+    self.last_answer_at = 0.0
     # frames (by frame_id) a drain leaves unanswered: a reply not back yet
     self.keep: set[int] = set()
     # what a reply asked for telemetry carries, when the server has any
@@ -104,6 +109,13 @@ class FakeClient:
   def infer_end(self, seq, hold=None, deadline=None):
     self.holds.append(hold)
     self.deadlines.append(deadline)
+    if self.late_read_by_next and len(self._in_flight) > 1 and self._in_flight[0] in self.late:
+      # the previous frame's answer lands while this one waits, as it does on a
+      # phone one frame behind: taken here, and the clock stamped here, not by
+      # the drain() that ran before it arrived
+      self._in_flight.pop(0)
+      self.last_output = self.output
+      self.last_answer_at = time.monotonic()
     if seq in self.failed:
       # the server answered, and its answer carried no output (NOT_FINITE)
       self._in_flight.remove(seq)
@@ -123,6 +135,8 @@ class FakeClient:
   def drain(self):
     # replies come in order: none past the first that is not back yet
     self.drains += 1
+    if self.late_read_by_next and self._in_flight and self._in_flight[0] in self.late:
+      return 0   # it has not landed yet at the top of this frame
     back = next((i for i, f in enumerate(self._in_flight) if f in self.keep), len(self._in_flight))
     taken, self._in_flight = self._in_flight[:back], self._in_flight[back:]
     if taken:
@@ -524,11 +538,34 @@ class TestWifiHold(ModelStateTest):
       state = self.make(spec_for(STATEFUL), client)
       behind = []
       for _ in range(120):
-        state._last_answer = time.monotonic()
+        client.last_answer_at = time.monotonic()   # what drain() stamps on the wire
         self.frames(state, 1)
         behind.append(state.behind)
     self.assertEqual(behind, [None] * 120, 'a tailing phone is never behind')
     self.assertGreaterEqual(state.trips.held, 119, 'and every frame of it is still logged as held')
+
+  def test_a_late_reply_read_by_the_next_frame_is_still_an_answer(self):
+    """2026-10-18 22:02, the fix before this one in place: nine joins and nine
+    leaves in two and a half minutes, every leave "span_s 1.0-1.4 ... held 15
+    pipelined 0 p50_ms 55.5", 0 lost and no net drops. The reply to frame N
+    lands after frame N+1 has drained, so N+1's infer_end took it and prepare()
+    never stamped _last_answer: the drain clock stood at the join and the guard
+    never saw an answer at all. The client's own clock is that answer."""
+    client = self.over_wifi(FakeClient())
+    client.late = set(range(1, 121))
+    client.late_read_by_next = True
+    with mock.patch.multiple(model_state, PROVING_FRAMES=0, SETTLING_FRAMES=0):
+      state = self.make(spec_for(STATEFUL), client)
+      joined_at = state._last_answer
+      behind = []
+      for _ in range(120):
+        self.frames(state, 1)
+        behind.append(state.behind)
+    self.assertGreater(client.drains, 100, 'prepare() ran every frame and found nothing')
+    self.assertLess(state._last_answer - joined_at, 0.05, 'and the drain clock never moved off the join')
+    self.assertGreater(client.last_answer_at, joined_at, 'while the answers kept landing')
+    self.assertGreaterEqual(state.trips.held, 119, 'every frame of it still a held one')
+    self.assertEqual(behind, [None] * 120, 'a phone tailing one frame is not a lost link')
 
   def test_the_wifi_counts_hand_back_once_the_answers_stop(self):
     """Tailing is an answer late, not silence. Past WIFI_TAILING_ANSWER no reply

@@ -104,6 +104,11 @@ class JetlinkClient:
     # the newest model output read off the link, whichever call read it: what
     # a frame whose own reply is late publishes again (JetlinkModelState.end)
     self.last_output: np.ndarray | None = None
+    # when the host last answered, whichever call read that answer. A held
+    # frame's late reply is read by the *next* frame's infer_end -- prepare()'s
+    # drain() runs before it and finds nothing -- so the Wi-Fi tailing rule
+    # (model_state._note_hold) cannot see it unless this is stamped here
+    self.last_answer_at: float = 0.0
     # frames sent and not yet answered, oldest first. More than one after a
     # reply a frame gave up on (infer_end with hold)
     self._in_flight: deque[Sent] = deque()
@@ -573,6 +578,10 @@ class JetlinkClient:
       self.dead = True
       raise LinkError(f'inference response seq {msg.seq} answers no frame sent')
     _, frame_id, flags, _ = self._in_flight.popleft()
+    # the host answered this frame, in time or late: either way it is alive and
+    # the silence rules have to see it. Taken before the status check, because
+    # an answer that says the frame failed is still an answer
+    self.last_answer_at = time.monotonic()
     if msg.payload.nbytes < P.INFER_RESP_SIZE:
       self.dead = True
       raise LinkError('inference response is missing its header')

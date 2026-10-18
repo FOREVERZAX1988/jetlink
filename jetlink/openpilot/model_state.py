@@ -566,7 +566,7 @@ class JetlinkModelState:
       # being the model the app is running
       self._last_answer = time.monotonic()
       return None
-    silence = time.monotonic() - self._last_answer
+    silence = time.monotonic() - self._answered_at()
     return f'no answer for {silence:.0f} s' if silence > PREVIEW_SILENCE else None
 
   @property
@@ -577,6 +577,19 @@ class JetlinkModelState:
   def _hold_left(self, frame) -> float:
     """What is left of the hold for `frame`, from its warp's start."""
     return self._hold_frame - (time.perf_counter() - frame.t0)
+
+  def _answered_at(self) -> float:
+    """When the host last answered, by either clock.
+
+    prepare()'s drain() stamps _last_answer when an answer is waiting at the
+    top of a frame, but on a phone that tails by one the answer to frame N
+    lands after frame N+1 has already drained and is taken by N+1's infer_end
+    instead (client._take_reply), which stamps client.last_answer_at. Counting
+    only the drain clock made a phone that answers every frame look silent:
+    15 held frames in a row, the link handed back ~1 s into every join, while
+    the wire lost nothing. Whichever clock is newer is the host's last word.
+    """
+    return max(self._last_answer, getattr(self.client, 'last_answer_at', 0.0))
 
   def _note_hold(self, held: bool) -> str | None:
     """Why the large model should hand back after this frame, if it should:
@@ -595,7 +608,7 @@ class JetlinkModelState:
       self._last_answer = time.monotonic()
       return None
     self.trips.held += 1
-    if self._wifi and (time.monotonic() - self._last_answer) <= WIFI_TAILING_ANSWER:
+    if self._wifi and (time.monotonic() - self._answered_at()) <= WIFI_TAILING_ANSWER:
       # A phone's reply lands at the frame budget, and the wait a held frame can
       # report is capped by that frame's own hold budget: on this link every held
       # frame waits the same ~42 ms whether the host is 10 ms behind or 200. So
