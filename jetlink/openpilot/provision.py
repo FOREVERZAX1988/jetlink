@@ -265,9 +265,11 @@ class ProvisioningRun:
 
     finished = False
     try:
-      # the bytes first, and with no Jetson: a parked car whose Jetson is
-      # switched with the ignition never has one to wait for
-      if self.needs_download() and self.fetch_model() is None:
+      # the bytes first while no host is on the cable: a parked car whose
+      # Jetson is switched with the ignition never has one to wait for. A host
+      # that is there is asked first, since one with the model built needs
+      # nothing from the comma; provision() fetches it if the host has not
+      if self.needs_download() and not gadget.host_attached() and self.fetch_model() is None:
         return False
       if not self.open_link():
         return False

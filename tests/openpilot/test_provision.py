@@ -340,8 +340,9 @@ class TestTheRun(OpenpilotTest):
     d = provision.ProvisioningRun(self.parts)
     for name, value in (('has_work', work), ('open_link', True), ('provision', True)):
       self.patch(d, name, mock.Mock(return_value=value))
+    # no host on the cable until a test puts one there
     for target, name, value in ((gadget, 'pending_shutdown', None), (gadget, 'wait_for_host', True),
-                                (self.parts.warps, 'built', True)):
+                                (gadget, 'host_attached', False), (self.parts.warps, 'built', True)):
       self.patch(target, name, mock.Mock(return_value=value))
     return d
 
@@ -385,6 +386,17 @@ class TestTheRun(OpenpilotTest):
     d.open_link.side_effect = lambda: order.append('borrow') or True
     assert d.run() is True
     self.assertEqual(order, ['fetch', 'borrow'])
+
+  def test_a_host_on_the_cable_is_asked_before_any_download(self):
+    # a Mac or a Jetson that has the model built needs nothing from the comma;
+    # provision() fetches it only if the host has not got it
+    d = self.worker()
+    self.patch(d, 'needs_download', mock.Mock(return_value=True))
+    self.patch(d, 'fetch_model', mock.Mock(return_value=Path('/m.onnx')))
+    gadget.host_attached.return_value = True
+    assert d.run() is True
+    d.fetch_model.assert_not_called()
+    d.provision.assert_called_once_with()
 
   def test_a_download_that_fails_ends_the_round_before_the_link(self):
     d = self.worker()
