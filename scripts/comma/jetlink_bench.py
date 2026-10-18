@@ -35,8 +35,6 @@ def main():
   from openpilot.common.hardware import HARDWARE
   from openpilot.common.params import Params
   from openpilot.common.prefix import OpenpilotPrefix
-  from openpilot.common.params import UnknownKeyName
-
   parser = argparse.ArgumentParser(description=__doc__)
   parser.add_argument('--adapter', default='openpilot.sunnypilot.jetlink_adapter',
                       help="the fork's jetlink adapter module; its Stock subclass names the params and services")
@@ -88,12 +86,8 @@ def main():
   keys = ('CarParamsPersistent', 'CalibrationParams', 'ModelManager_ActiveBundle', 'ModelManager_ActiveBundleChestnut',
           'ModelManager_ModelsCache_Chestnut', 'RecordFront', 'IsRhdDetected', 'ExperimentalMode',
           KEYS.pointers, KEYS.spec, KEYS.big_model, KEYS.catalog)
-  saved = {}
-  for key in dict.fromkeys(k for k in keys if k):
-    try:
-      saved[key] = live.get(key)
-    except UnknownKeyName:   # a key this fork does not have
-      pass
+  # the adapter's get is None for a key this fork does not have
+  saved = {key: adapter.get(key) for key in dict.fromkeys(k for k in keys if k)}
   if saved['CarParamsPersistent'] is None:
     raise SystemExit('no saved CarParams; bench cannot choose a vehicle configuration')
   args.output.mkdir(parents=True, exist_ok=False)
@@ -164,6 +158,7 @@ def main():
         children.append(subprocess.Popen(sampler, stdout=log, stderr=subprocess.STDOUT))
       start = last = time.monotonic()
       tick = 0
+      runtime, runtime_at = None, 0.0
       with (args.output / 'frames.csv').open('w') as stream:
         writer = csv.writer(stream)
         writer.writerow(['elapsed_s', 'frame_id', 'big', 'valid', 'exec_ms', 'drop_pct', 'age_ms', 'accel_state', 'available'])
@@ -201,8 +196,9 @@ def main():
           sm.update(0)
           if sm.updated['modelV2']:
             model = sm['modelV2']
-            runtime = hooks.runtime()   # modeld's record, as selfdrived reads it
-            state = (runtime.state if runtime else None) or 'none'
+            if time.monotonic() - runtime_at >= 1.0:   # modeld rewrites its record once a second
+              runtime, runtime_at = hooks.runtime(), time.monotonic()
+            state = getattr(runtime, 'state', None) or 'none'
             row = (time.monotonic() - start, model.frameId, int(model.big), int(sm.valid['modelV2']),
                    model.modelExecutionTime * 1000, model.frameDropPerc,
                    (sm.logMonoTime['modelV2'] - model.timestampEof) / 1e6,
