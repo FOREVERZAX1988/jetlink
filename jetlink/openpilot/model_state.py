@@ -34,6 +34,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from jetlink.openpilot import stages
+
 SEND_RAW_PRED = os.getenv('SEND_RAW_PRED')
 SLOW_FRAME = 0.05  # the full 20 Hz budget, not just the largest outliers
 # How far into a frame end() waits for the reply before publishing the
@@ -206,6 +208,9 @@ class Frame:
   seq: int | None = None
   sent: float = 0.0
   telemetry: bool = False
+  # where its six segments are filled in as it goes (openpilot.stages), and
+  # finished by whichever frame reads the reply
+  slot: stages.Slot | None = None
 
 
 class JetlinkModelState:
@@ -255,6 +260,14 @@ class JetlinkModelState:
     self.get_action_from_model = face.get_action_from_model
 
     self.client = client
+    # the six segments of every frame, filed as its reply is read: the frame
+    # line below is one sample and has no reply segment for a frame that never
+    # waited, which is the frame a demotion is made of (openpilot.stages)
+    self.stages = stages.StageTimes()
+    client.on_answer = self.stages.answer
+    # when the last frame ended: what the next frame's pickup is measured from
+    self._prev_end: float | None = None
+    self._last_stages_logged = 0.0
     self.spec = spec
     transport = getattr(self.client, 't', None)
     on_cable = getattr(transport, 'on_the_cable', None)
@@ -381,6 +394,14 @@ class JetlinkModelState:
     # cable's sendmsg have copied it by then, before the next warp writes it
     self.warp.wait()
     self._frame = Frame(t0, t1, time.perf_counter())
+    # pickup is the camera and modeld's own publish: the frame budget is spent
+    # out of it before the warp is even launched, and nothing else reports it
+    slot = self._frame.slot = self.stages.start(None if self._prev_end is None else t0 - self._prev_end)
+    slot.warp = t1 - t0
+    # everything from the launch to the warp's output being free again: the
+    # packed inputs, the drain, and the wait itself, which the six do not
+    # separate because at this size they are one number
+    slot.pair = self._frame.t2 - t1
 
   def send(self, want_telemetry: bool = False) -> None:
     """The prepared frame to the host. It asks for the server's telemetry
@@ -394,6 +415,13 @@ class JetlinkModelState:
     frame = self._frame
     self._frame_id += 1
     frame.telemetry = want_telemetry or time.monotonic() - self._last_logged >= TELEMETRY_PERIOD
+    # packing a lossless warp is CPU on the frame thread, and it is the one
+    # segment whose cost we could remove: timed apart from the send it precedes
+    lossless = None
+    if self._packer is not None:
+      encode_from = time.perf_counter()
+      lossless = self._packer.pack(self.warp.errors)
+      frame.slot.encode = time.perf_counter() - encode_from
     try:
       if self._packer is None:
         frame.seq = self.client.infer_begin(self.warp.output, self.packed, self._frame_id, reset=self._need_reset,
@@ -401,7 +429,7 @@ class JetlinkModelState:
       else:
         frame.seq = self.client.infer_begin(None, self.packed, self._frame_id, reset=self._need_reset,
                                             want_state=frame.telemetry, skip_if_busy=self._can_hold,
-                                            lossless=self._packer.pack(self.warp.errors))
+                                            lossless=lossless)
     except Exception as e:
       # the exception first: a link that has no send stats of its own (TCP)
       # logged an empty dict here, and the reason went with it
@@ -410,6 +438,10 @@ class JetlinkModelState:
                         f" ({stats})" if stats else "")
       raise
     frame.sent = time.perf_counter()
+    frame.slot.send = frame.sent - frame.t2
+    # filed under the id the reply will name; an unsent frame keeps the slot
+    # unused, and its reply never comes
+    self.stages.track(frame.slot, self._frame_id, frame.sent)
     if frame.seq is not None:
       self._need_reset = False
 
@@ -443,6 +475,9 @@ class JetlinkModelState:
       # again: this frame waits its own budget, not one 20 Hz frame
       model_output = self.client.infer_end(frame.seq, deadline=self._first_frame_budget)
     t4 = time.perf_counter()
+    # where the next frame's pickup starts from: modeld publishes this one and
+    # comes back, and none of that is inside any segment below
+    self._prev_end = t4
     # a frame that published the previous output, for one of two reasons: its
     # reply was late (a held frame, and the host is behind) or it was not
     # waited for at all (a pipelined frame, where being an answer behind is the
@@ -486,11 +521,24 @@ class JetlinkModelState:
                         note,
                         gpu_us / 1e3, queue_us / 1e3, total_us / 1e3, receive.get('prepare', 0.0) * 1e3,
                         receive.get('read_wait', 0.0) * 1e3, receive.get('handoff', 0.0) * 1e3, cable)
+    # the six segments of the newest frame that has them, at this line's
+    # cadence. The line above splits a frame at the link; this one splits it,
+    # and it is the only one that can split a frame that never waited: there
+    # the reply segment is the frames the host was behind, not a wait that
+    # ended when the hold did
+    row = self.stages.last
+    if row is not None and (self._frame_id <= 3 or t4 - frame.t0 > SLOW_FRAME
+                            or t4 - self._last_stages_logged >= TELEMETRY_PERIOD):
+      self._last_stages_logged = t4
+      self._log.warning("jetlink: stages %s", stages.text(row))
     # the run itself, on the comma's log: the line above is one frame, and what
     # a drive's tail latency was is what this says it was
     if t4 - self._last_summary_logged >= SUMMARY_PERIOD:
       self._last_summary_logged = t4
       self._log.warning("jetlink: trips %s", summary_text(self.trips.summary()))
+      # and which segment the drive's tail was in, over the frames kept: the
+      # frame lines say it for one frame, and a demotion is decided on a run
+      self._log.warning("jetlink: stages %s", stages.text(self.stages.summary()))
     return outputs
 
   def run(self, bufs: dict, transforms: dict[str, np.ndarray],

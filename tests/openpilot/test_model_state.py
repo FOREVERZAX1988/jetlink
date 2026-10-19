@@ -85,6 +85,9 @@ class FakeClient:
     # (client._take_reply), and the shape 2026-10-18 22:02 was made of
     self.late_read_by_next = False
     self.last_answer_at = 0.0
+    # client._take_reply's hook: the frame an answer belongs to, and when it was
+    # read. Called from every path that reads one, as the real client does
+    self.on_answer = None
     # frames (by frame_id) a drain leaves unanswered: a reply not back yet
     self.keep: set[int] = set()
     # what a reply asked for telemetry carries, when the server has any
@@ -113,12 +116,13 @@ class FakeClient:
       # the previous frame's answer lands while this one waits, as it does on a
       # phone one frame behind: taken here, and the clock stamped here, not by
       # the drain() that ran before it arrived
-      self._in_flight.pop(0)
+      self._answered(self._in_flight.pop(0))
       self.last_output = self.output
       self.last_answer_at = time.monotonic()
     if seq in self.failed:
       # the server answered, and its answer carried no output (NOT_FINITE)
       self._in_flight.remove(seq)
+      self._answered(seq)
       self.last_failed = True
       if not self.tolerate_failed:
         self.dead = True
@@ -128,6 +132,7 @@ class FakeClient:
     if hold is not None and (seq in self.late or seq in self.keep):
       return None
     self._in_flight.remove(seq)
+    self._answered(seq)
     self.last_output = self.output
     self._piggyback()
     return self.output
@@ -139,6 +144,8 @@ class FakeClient:
       return 0   # it has not landed yet at the top of this frame
     back = next((i for i, f in enumerate(self._in_flight) if f in self.keep), len(self._in_flight))
     taken, self._in_flight = self._in_flight[:back], self._in_flight[back:]
+    for frame_id in taken:
+      self._answered(frame_id)
     if taken:
       # a frame the server answered without an output is answered all the same
       # (client._take_reply with tolerate_failed): the link is there, and there
@@ -148,6 +155,10 @@ class FakeClient:
         self.last_output = self.output
         self._piggyback()
     return len(taken)
+
+  def _answered(self, frame_id):
+    if self.on_answer is not None:
+      self.on_answer(frame_id, time.monotonic())
 
   def _piggyback(self):
     if self.telemetry is not None and self.asked[-1]:
@@ -305,7 +316,8 @@ class TestWire(ModelStateTest):
 
   def test_the_first_frames_and_slow_ones_are_timed_in_the_log(self):
     self.run_frames(STATEFUL, n=4)
-    timed = [line for line in self.log.lines('warning') if ' warp ' in line]
+    # the frame line, not the six-segment one below it: both carry a warp
+    timed = [line for line in self.log.lines('warning') if ' warp ' in line and 'stages ' not in line]
     self.assertEqual([line.split()[2] for line in timed], ['1', '2', '3'])
 
 
@@ -324,6 +336,14 @@ class TestLossless(ModelStateTest):
                                             event=lambda name, **fields: None)
     self.frames(state, 2)
     return spec, client, warp, packer, made
+
+  def test_a_lossless_frame_times_its_packing(self):
+    # the one segment whose cost we could remove, so it is not folded into the
+    # send it precedes
+    _, _, _, _, _ = self.lossless_state(takes=True)
+    lines = [text for _, text in self.log.records if 'stages frame ' in text]
+    self.assertTrue(lines)
+    self.assertNotIn(' encode - ', lines[0])
 
   def test_the_errors_go_packed_to_a_server_that_takes_them(self):
     spec, client, warp, packer, made = self.lossless_state(takes=True)
@@ -977,6 +997,65 @@ class TestAPreviewFrameTheHostCannotAnswer(ModelStateTest):
     self.frames(state, 1)
     state.preview = False
     self.assertFalse(client.tolerate_failed)
+
+
+class TestTheSixSegments(ModelStateTest):
+  """Where one frame's time went, in six segments, finished where its reply is
+  read: on a pipelined link that is a later frame than the one that spent them,
+  which is the case the four-segment frame line cannot report at all."""
+
+  SIX = ('pickup', 'warp', 'pair', 'encode', 'send', 'reply')
+
+  def stage_lines(self, prefix: str = 'stages frame ') -> list[str]:
+    return [text for _, text in self.log.records if prefix in text]
+
+  def test_every_timed_frame_carries_the_six(self):
+    self.run_frames(STATEFUL)
+    lines = self.stage_lines()
+    self.assertTrue(lines)
+    self.assertIn('stages frame 1 ', lines[0])
+    for name in self.SIX:
+      self.assertIn(f' {name} ', lines[0])
+    # a warp with no errors has nothing to pack, and the segment says so rather
+    # than reading as a zero
+    self.assertIn(' encode - ', lines[0])
+
+  def test_a_pipelined_frames_reply_is_timed_where_a_later_frame_reads_it(self):
+    client = FakeClient()
+    client.t.on_the_cable = lambda: False   # a Wi-Fi link pipelines
+    client.late = set(range(2, 40))         # and its host answers past every hold
+    state = self.make(spec_for(STATEFUL), client)
+    self.assertTrue(state.pipeline)
+    self.frames(state, 4)
+    # frames 1 to 3 answered, each read by the drain of the frame after it; the
+    # fourth is still out
+    self.assertEqual(state.stages.frames, 3)
+    self.assertEqual(state.stages.last['frame'], 3)
+    self.assertIsNotNone(state.stages.last['reply_ms'], 'a frame that never waited still has a reply segment')
+
+  def test_a_reply_never_read_is_never_timed(self):
+    client = FakeClient()
+    client.keep = {1, 2, 3}   # the host owes every answer it was asked for
+    state = self.make(spec_for(STATEFUL), client)
+    self.frames(state, 3)
+    # only the first frame's answer is read, because only the first frame had
+    # nothing to hold and had to wait for it; the two it kept are still out
+    self.assertEqual(state.stages.frames, 1)
+    self.assertEqual(state.stages.last['frame'], 1)
+    self.assertEqual(client.unanswered, 2)
+
+  def test_the_percentiles_reach_the_log_every_summary_period(self):
+    _, state, _, _ = self.run_frames(STATEFUL)
+    self.assertFalse(self.stage_lines('stages frames '))
+    state._last_summary_logged = -model_state.SUMMARY_PERIOD
+    self.frames(state, 1)
+    lines = self.stage_lines('stages frames ')
+    self.assertEqual(len(lines), 1)
+    for name in self.SIX:
+      self.assertIn(f' {name} ', lines[0])
+    # a period, not a frame
+    self.frames(state, 1)
+    self.assertEqual(len(self.stage_lines('stages frames ')), 1)
 
 
 if __name__ == '__main__':

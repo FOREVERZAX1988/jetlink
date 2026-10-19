@@ -44,6 +44,7 @@ def _name(enum_cls, value) -> str:
 log = logging.getLogger('jetlink.client')
 
 ProgressFn = Callable[[str, float, str], None]
+ReplyFn = Callable[[int, float], None]
 
 # Not a frame budget: a long frame is a dropped camera frame, which modeld
 # tolerates as it does on a chestnut. This is chestnut's HCQDEV_WAIT_TIMEOUT_MS
@@ -109,6 +110,12 @@ class JetlinkClient:
     # drain() runs before it and finds nothing -- so the Wi-Fi tailing rule
     # (model_state._note_hold) cannot see it unless this is stamped here
     self.last_answer_at: float = 0.0
+    # (frame_id, at): called with the frame an answer taken here belongs to and
+    # when it was read, before the answer is checked. A frame's time is
+    # finished where its reply is read, and on a pipelined link that is not the
+    # frame that sent it (openpilot.stages keeps the six segments); a hook that
+    # raises must not cost a frame, so it is called inside a bare try
+    self.on_answer: ReplyFn | None = None
     # frames sent and not yet answered, oldest first. More than one after a
     # reply a frame gave up on (infer_end with hold)
     self._in_flight: deque[Sent] = deque()
@@ -587,6 +594,11 @@ class JetlinkClient:
       raise LinkError('inference response is missing its header')
     fid, status, gpu_us, queue_us, total_us = P.unpack_infer_resp(msg.payload)
     self.last_timings = (gpu_us, queue_us, total_us)
+    if self.on_answer is not None:
+      try:
+        self.on_answer(fid, self.last_answer_at)
+      except Exception:   # telemetry, never a frame: the answer stands regardless
+        log.exception('answering %d reached the timers', fid)
     if status != P.Status.OK:
       detail = f"inference failed: {_name(P.Status, status)} (frame {fid})"
       if not self.tolerate_failed:
