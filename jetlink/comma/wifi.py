@@ -384,17 +384,32 @@ def subnet_broadcast(address: str, prefix: int) -> str | None:
   return socket.inet_ntoa(struct.pack('>I', packed | host))
 
 
-def announce_targets(gateway: str, interface: str | None = INTERFACE) -> list[str]:
-  """Where one announcement goes: the gateway this comma dials, and the subnet's
-  broadcast when the interface has an address to take one from.
+def announce_targets(gateway: str, interface: str | None = INTERFACE,
+                     peer: str | None = None) -> list[str]:
+  """Where one announcement goes: the gateway this comma dials, the app's own
+  address once it has answered, and the subnet's broadcast when the interface
+  has an address to take one from.
 
   The gateway is the phone on a hotspot and the router on a LAN. The broadcast
   is what reaches a phone that is a peer client - the LAN case discovery made a
   link - and it is sent to the interface's own subnet, never to 255.255.255.255:
   one datagram that cannot leave the network this comma is on. `interface` None
   is a caller with no network of its own to announce on, and says the gateway
-  alone."""
+  alone.
+
+  `peer` is the address the app answered from, and the one the announcement is
+  unicast to. It matters because a phone is a client on a router, and a client
+  in Wi-Fi power save is handed a unicast datagram addressed to it while the
+  subnet's broadcast is dropped: measured on a router LAN (2026-10-20, OnePlus
+  16 as a peer client, the comma announcing once a second), the broadcast was
+  answered 48 times in 70 s with a 15.6 s hole in it, and unicast to the same
+  app 10 times out of 10, in 8-22 ms. The broadcast stays as the second chance,
+  for the first announcement of a link, which has no address to unicast to yet;
+  after that the unicast goes first, and naming the peer is also naming the host
+  this comma dials, which is the app the link is for."""
   targets = [gateway]
+  if peer is not None and peer != gateway:
+    targets.append(peer)
   if interface is None:
     return targets
   iface = local_addr(interface)
@@ -488,15 +503,15 @@ class Presence:
     as on its way, only when this comma dialed it.
 
     A send that cannot go at the gateway takes the socket with it, and the next
-    step opens another: the interface may come back. A broadcast that cannot go
-    is dropped and the handshake keeps its gateway: the broadcast is the second
-    chance for a phone that is not the gateway, and losing it costs that phone
+    step opens another: the interface may come back. A peer or broadcast that
+    cannot go is dropped and the handshake keeps its gateway: both are further
+    chances at a phone that is not the gateway, and losing one costs that phone
     the announcement, not the one on the hotspot."""
     fields = {'id': self.id, 'gw': gateway}
     if self.peer:
       fields['to'] = self.peer
     message = _message(**fields)
-    targets = announce_targets(gateway, self.interface)
+    targets = announce_targets(gateway, self.interface, peer=self.peer)
     try:
       self.sock.sendto(message, (targets[0], self.port))
     except OSError:

@@ -324,6 +324,20 @@ class TestPresence(unittest.TestCase):
     self.presence.handshake('127.0.0.1')
     self.assertEqual(self.announced()['to'], '127.0.0.2')
 
+  def test_a_peer_that_answered_gets_the_announcement_unicast(self):
+    # a phone that is a client of a router, in Wi-Fi power save, is handed the
+    # unicast datagram addressed to it and drops the subnet's broadcast
+    # (2026-10-20, on the bench's own LAN), so the address it answered from is
+    # a target, and the one before the broadcast
+    self.presence.handshake('127.0.0.1')
+    self.answer(self.announced())
+    self.presence.handshake('127.0.0.1')  # reads the answer, learns the peer
+    self.assertEqual(self.presence.peer, '127.0.0.1')
+    self.now[0] += wifi.PRESENCE_PERIOD
+    with mock.patch.object(wifi, 'announce_targets', return_value=['127.0.0.1']) as targets:
+      self.presence.handshake('127.0.0.1')
+    self.assertEqual(targets.call_args.kwargs.get('peer'), '127.0.0.1')
+
   def test_every_target_gets_the_same_announcement(self):
     # one datagram per target: the gateway it dials, and - on a network of its
     # own - the broadcast a peer client hears it on
@@ -362,6 +376,21 @@ class TestAnnounceTargets(unittest.TestCase):
 
   def test_a_gateway_is_always_one_target(self):
     self.assertEqual(wifi.announce_targets('192.168.43.1', interface=None), ['192.168.43.1'])
+
+  def test_a_peer_that_answered_goes_before_the_broadcast(self):
+    with mock.patch.object(wifi, 'local_addr', return_value=('192.168.10.79', 24)):
+      self.assertEqual(wifi.announce_targets('192.168.10.251', peer='192.168.10.65'),
+                       ['192.168.10.251', '192.168.10.65', '192.168.10.255'])
+
+  def test_a_peer_on_no_interface_still_gets_a_datagram_of_its_own(self):
+    self.assertEqual(wifi.announce_targets('10.0.0.1', interface=None, peer='10.0.0.2'),
+                     ['10.0.0.1', '10.0.0.2'])
+
+  def test_a_peer_that_is_the_gateway_is_sent_once(self):
+    # the phone's own hotspot: the address the app answered from and the
+    # gateway are one host, and one datagram reaches it
+    self.assertEqual(wifi.announce_targets('192.168.43.1', interface=None, peer='192.168.43.1'),
+                     ['192.168.43.1'])
 
   def test_the_subnets_broadcast_is_the_second_on_an_interface(self):
     with mock.patch.object(wifi, 'local_addr', return_value=('192.168.10.79', 24)):
