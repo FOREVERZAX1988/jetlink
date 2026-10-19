@@ -114,6 +114,21 @@ def nv12_shape(plane_shape: tuple[int, int]) -> tuple[int, int, int]:
   return (PLANES * h * w,)
 
 
+def nv12_geometry(plane_shape: tuple[int, int]) -> tuple[int, int]:
+  """The NV12 frame's own (rows, cols) for a plane geometry.
+
+  Twice the plane in each direction, because the warp's four Y phases are the
+  four parity classes of a luma plane twice as wide and twice as tall.
+
+  `nv12_shape` gives the flat length, which is what a buffer check needs, but a
+  length cannot be split back into a height and a width -- 6HW bytes is the same
+  number for a 512x256 frame and a 256x512 one. So an encoder is configured from
+  this, and a caller that had only the flat size could never open one.
+  """
+  h, w = plane_shape
+  return (2 * h, 2 * w)
+
+
 class Missing:
   """Why a frame's own context was not there for an encoder output.
 

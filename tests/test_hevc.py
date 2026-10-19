@@ -75,6 +75,13 @@ class TestPlaneRoundTrip(unittest.TestCase):
   def test_the_nv12_shape_is_the_planes_own_size(self):
     self.assertEqual(hevc.nv12_shape((128, 256)), (6 * 128 * 256,))
 
+  def test_the_nv12_geometry_is_twice_the_plane_each_way(self):
+    # the length above and this pair answer different questions: an encoder
+    # needs the second, and cannot get it from the first
+    self.assertEqual(hevc.nv12_geometry((128, 256)), (256, 512))
+    self.assertEqual(hevc.nv12_geometry((128, 256))[0] * hevc.nv12_geometry((128, 256))[1] * 3 // 2,
+                     hevc.nv12_shape((128, 256))[0])
+
   def test_the_big_models_geometry_round_trips(self):
     planes = six(128, 256, seed=7)
     self.assertEqual(hevc.to_nv12(planes).shape, (6 * 128 * 256,))

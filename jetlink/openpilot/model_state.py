@@ -299,7 +299,11 @@ class JetlinkModelState:
     self._metas = hevc.MetaCache()
     self._epoch = 0
     self._encoders: dict[str, object] = {}
+    # two different questions about the same frame: how many bytes it is, and
+    # how those bytes are arranged. An encoder is configured from the second,
+    # and a length cannot be split back into it.
     self._hevc_size = hevc.nv12_shape((h, w))
+    self._hevc_geometry = hevc.nv12_geometry((h, w))
     self._warp_shape = spec.warped_shape
     self._hevc = True
     # a connection is up and the stream starts here
@@ -359,7 +363,13 @@ class JetlinkModelState:
 
   def _encoder_for(self) -> dict | None:
     """This link's two encoders, made on first use. None where the adapter
-    supplies no builder, which keeps the link on the codec it had."""
+    supplies no builder, which keeps the link on the codec it had.
+
+    The builder is handed `(rows, cols)` and the flat byte count: the first is
+    what an encoder configures itself from, the second is what a test compares a
+    produced frame against. Handing it the byte count twice, as this did, left
+    every backend with nothing to take a width and a height out of.
+    """
     if self._encoders:
       return self._encoders
     maker = getattr(self.face, 'hevc_encoder', None)
@@ -368,7 +378,7 @@ class JetlinkModelState:
       return None
     try:
       for name in stream_mod.STREAMS:
-        self._encoders[name] = maker(tuple(self._hevc_size), self._hevc_size)
+        self._encoders[name] = maker(self._hevc_geometry, tuple(self._hevc_size))
     except Exception:
       self._log.exception("jetlink: could not build the HEVC encoder, staying on the frame carrier in use")
       self._hevc = False

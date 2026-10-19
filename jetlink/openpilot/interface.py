@@ -78,10 +78,11 @@ class ModelFace:
   lat_smooth_seconds: float                  # modeld's LAT_SMOOTH_SECONDS
   long_smooth_seconds: float                 # modeld's LONG_SMOOTH_SECONDS
   get_action_from_model: Callable[..., Any]  # modeld's action function
-  # Optional (OPTIONAL below): makes a codecs.HEVCEncoder for a camera, given
-  # the model's geometry. Only a fork with a hardware encoder supplies one
-  # (the comma's is the Venus block, reachable from the device alone), and a
-  # link whose fork has none never negotiates the HEVC frame carrier
+  # Optional (OPTIONAL below): makes a codecs.HEVCEncoder for a camera, given the
+  # model's geometry as (rows, cols) and the frame's flat byte count. Only a fork
+  # with a hardware encoder supplies one (the comma's is the Venus block,
+  # reachable from the device alone), and a link whose fork has none never
+  # negotiates the HEVC frame carrier
   hevc_encoder: Callable[..., Any] | None = None
 
 

@@ -602,6 +602,9 @@ class TestHevcCarrier(ModelStateTest):
     state._encoder_for()
     self.assertEqual(len(made), 2)
     for enc in made:
+      # (rows, cols) for the encoder to configure from, and the flat count to
+      # check a frame against: the first is not derivable from the second
+      self.assertEqual(enc.size, (256, 512))
       self.assertEqual(enc.geometry, (6 * 128 * 256,))
 
   def test_the_gate_holds_the_opening_frames_until_a_keyframe_on_both(self):
