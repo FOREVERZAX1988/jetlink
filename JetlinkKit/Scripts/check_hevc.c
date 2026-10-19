@@ -1,6 +1,17 @@
 /* A standalone check of the portable half of jl_hevc.c: the NAL scan, the
    IRAP test and the NV12 unpack, with the decoder stubbed out. Built and run
-   on the comma, which has a compiler and no ffmpeg. */
+   on the comma, which has a compiler and no ffmpeg.
+
+   Deliberately outside Sources/CHevc: SwiftPM compiles every .c file under a
+   target's directory, and this one has a main. It stayed in the library once
+   and the macOS app failed to link with "duplicate symbol '_main'" -- its own
+   main and the library's. From JetlinkKit/:
+
+     gcc -std=c11 -Wall -Wextra -Werror -O2 -I Sources/CHevc/include \
+       Scripts/check_hevc.c Sources/CHevc/jl_hevc.c -o /tmp/check_hevc
+     /tmp/check_hevc
+
+   Add -DJL_HEVC_DLOPEN to compile the dlopen decoder arm instead of the stub. */
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
