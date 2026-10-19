@@ -438,7 +438,13 @@ class PoweringOffWithoutWaiting(OpenpilotTest):
   def test_the_owner_takes_it_as_it_always_has(self):
     # a Jetson on always-on supply is armed with --poweroff: what reaches it
     # has to be the owner's shutdown run
+    from jetlink.comma import root as comma_root
     from jetlink.comma.owner import Owner
+    # this is the one test here that drives a real Owner, so it is the one that
+    # would rebuild the gadget and bring the network up: off a comma root.run
+    # answers False without doing either, and on one it is sudo. The test only
+    # checks what reaches spawn_worker, so it gets the answer off a comma.
+    self.patch(comma_root, 'run', mock.Mock(return_value=False))
     o = Owner((), settings=self.parts.settings, chestnut_ids=())
     self.addCleanup(o.cable.close)
     o.lender = mock.Mock(lent=False, listening=True)

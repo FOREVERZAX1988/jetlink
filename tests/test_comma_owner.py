@@ -55,7 +55,14 @@ class OwnerTest(unittest.TestCase):
                         ('CABLE_ADDR', ('127.0.0.1', 0)),
                         ('net_up', mock.Mock(return_value=True)),
                         ('net_status', mock.Mock(return_value='ok 192.168.60.1')),
-                        ('usb_speed', mock.Mock(return_value='super-speed'))):
+                        ('usb_speed', mock.Mock(return_value='super-speed')),
+                        # off a comma nothing else is bound to the controller,
+                        # so that is the default here; on a comma AGNOS's ADB
+                        # gadget (g1) is, which would put every build on the
+                        # held-controller backoff instead of the failed one.
+                        # test_a_controller_another_gadget_holds_is_tried_again
+                        # _in_seconds sets a holder itself.
+                        ('other_gadget', mock.Mock(return_value=None))):
       p = mock.patch.object(gadget, name, value)
       self.addCleanup(p.stop)
       p.start()
