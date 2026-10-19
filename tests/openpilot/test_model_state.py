@@ -496,10 +496,17 @@ class TestWifiHold(ModelStateTest):
     state = self.make(spec_for(STATEFUL), client)
     return state, state._hold_left(SimpleNamespace(t0=time.perf_counter()))
 
-  def test_the_wifi_budget_reaches_past_the_cable_one(self):
+  def test_the_wifi_budget_still_fits_the_camera_frame(self):
+    # it used to reach past HOLD_FRAME, "a Wi-Fi reply gets the wider budget",
+    # and that is what lost the road: a hold deadline past the camera's 50 ms
+    # drops the very frame it held for, and a drop ratio past DROP_LIMIT hands
+    # a drive's picture back. The Wi-Fi budget is upstream's HOLD_FRAME for the
+    # same reason upstream has one number: it is bounded by the camera, not by
+    # the radio. Measured 2026-10-18, ~55 ms replies: held frames, no drops.
     state, left = self.budget(self.over_wifi(FakeClient()))
     self.assertTrue(state._wifi)
-    self.assertGreater(left, model_state.HOLD_FRAME, 'a Wi-Fi reply gets the wider budget')
+    self.assertLessEqual(model_state.WIFI_HOLD_FRAME, model_state.SLOW_FRAME,
+                         'the camera frame, less modeld\'s own work')
     self.assertLessEqual(left, model_state.WIFI_HOLD_FRAME)
 
   def test_the_cable_keeps_the_tighter_budget(self):

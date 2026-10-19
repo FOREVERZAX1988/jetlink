@@ -105,12 +105,19 @@ CABLE_HOLD_FRAME = 0.05
 CABLE_SETTLING_FRAMES = 5
 CABLE_HOLDS_IN_A_ROW = 10
 CABLE_HOLDS_ALLOWED = 80
-# Over Wi-Fi: a 55 ms wait window covers the measured ~45 ms reply; more
-# settling frames and a wider steady-state tolerance for marginal holds. The
-# counts below are pinned by joining and kept for the tests, but over Wi-Fi they
-# no longer hand back at all (see _note_hold): a phone that tails the frame
-# budget keeps the link, and only the client's own deadline ends it.
-WIFI_HOLD_FRAME = 0.055
+# Over Wi-Fi the hold deadline has to fit inside the camera's 50 ms frame, or
+# the frame the wait was holding for is dropped behind the large model instead
+# of published a frame late -- and a drop ratio past DROP_LIMIT is what hands a
+# drive's picture back, which is how a ~55 ms reply kept the link in a preview
+# and lost it on the road. 0.046 is upstream's HOLD_FRAME and that bound: a wait
+# ending here still leaves modeld's own work its ~4 ms, so a measured ~55 ms
+# reply publishes the previous answer (a held frame, a plan one frame old) and
+# costs no camera frame. More settling frames and a wider steady-state
+# tolerance for marginal holds. The counts below are pinned by joining and kept
+# for the tests, but over Wi-Fi they no longer hand back at all (see _note_hold):
+# a phone that tails the frame budget keeps the link, and only the client's own
+# deadline ends it.
+WIFI_HOLD_FRAME = 0.046
 WIFI_SETTLING_FRAMES = 8
 WIFI_HOLDS_IN_A_ROW = 15
 WIFI_HOLDS_ALLOWED = 150
