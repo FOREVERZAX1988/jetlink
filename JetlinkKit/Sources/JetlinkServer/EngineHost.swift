@@ -11,6 +11,9 @@ final class Loaded {
   /// Where a lossless frame unpacks, made on the first one. Under the host's
   /// lock, as every frame is.
   lazy var lossless = LosslessFrame(shape: spec.warpedShape)
+  /// Where an HEVC frame decodes, made on the first one. Under the host's
+  /// lock, as every frame is.
+  lazy var hevc = HevcFrame(shape: spec.warpedShape)
 
   init(sha256: String, spec: ModelSpec, engine: any Engine, staging: any FrameStaging) {
     self.sha256 = sha256
@@ -359,10 +362,12 @@ public final class EngineHost: @unchecked Sendable {
       let loaded = try Ticker.during(interval: 1, Ticker.paced("warm", "warming up", took: 0, report: progressFn)) {
         try warm(warming, spec: ready)
       }
+      // Ours, not upstream's: a warm engine is a frame or two, so this long
+      // means the phone compiled the model here instead of loading the
+      // artifact it compiled before — the one thing a cold QNN cache looks
+      // like from the comma, and nowhere else in the log.
       let warmSeconds = Date().timeIntervalSince(warmStarted)
       if warmSeconds >= 20 {
-        // A warm engine is a frame or two: this long means the device compiled
-        // the model here rather than loading what it compiled before.
         log.warning("warming up took \(Int(warmSeconds.rounded())) s, which a warm engine is not")
         HostDiagnostics.report("warming up took \(Int(warmSeconds.rounded())) s")
       }
@@ -457,24 +462,30 @@ public final class EngineHost: @unchecked Sendable {
 
   /// Warm runs start this long after the comma was last seen: a joined comma
   /// that hears nothing for 0.2 s hands back, so it has left, and a run on
-  /// zeros stays out of a drive's history. A hello waits out the gap too, so
-  /// its first frame never queues behind a warm run.
-  static let warmIdleAfter: TimeInterval = 5
-  /// And stop this long after: its rejoin backs off to 60 s, and a parked
-  /// comma should not cost the battery all night.
+  /// zeros stays out of a drive's history. A hello waits out the gap too; a
+  /// first frame that does queue behind a warm run is one the comma forgives
+  /// (model_state.SETTLING_FRAMES). Equal to the frame path's own keep-warm
+  /// (CPUKeepWarm.idleSeconds), so the engine never goes cold between a
+  /// hand-back and the rejoin that follows it.
+  static let warmIdleAfter: TimeInterval = 1
+  /// And stop this long after, unless a comma is still connected: a parked
+  /// comma should not cost the battery all night, but a connected one backing
+  /// off between rejoins is mid-drive, and a cold engine's first frame is
+  /// ~100 ms on an iPad.
   static let warmFor: TimeInterval = 120
 
   /// One run on zeros between sessions, at the server's tick, so the next
-  /// join's first frame finds an accelerator that cools when idle awake: an
-  /// iPad's Neural Engine left idle for 20 to 60 s took 67 to 123 ms on that
-  /// frame against about 30 after it, and the comma holds a frame past 46 ms.
+  /// join's first frame finds an accelerator that cools when idle awake: a
+  /// Neural Engine left idle for 20 to 60 s takes 67 to 123 ms on that frame
+  /// against about 30 after it, and the comma holds a frame past 46 ms.
   /// Returns whether it ran.
   @discardableResult
   func warmIfIdle(now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
     lock.lock()
     defer { lock.unlock() }
+    let idle = now - lastSeenAt
     guard let loaded, loaded.engine.coolsWhenIdle, !benchmarking, !warmFailed,
-      (Self.warmIdleAfter...Self.warmFor).contains(now - lastSeenAt)
+      idle >= Self.warmIdleAfter, session != nil || idle <= Self.warmFor
     else { return false }
     do {
       try Self.stageZeros(loaded.staging, spec: loaded.spec)

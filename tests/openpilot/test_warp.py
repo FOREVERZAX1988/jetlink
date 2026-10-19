@@ -174,33 +174,26 @@ class TestLoadValidation(WarpTest):
 
 
 class TestInitDevice(unittest.TestCase):
-  """prepare() runs this before modeld goes realtime: tinygrad's compile pool
-  is otherwise created on the warp's first call, and its handler threads then
-  sit at FIFO 54 on the frame loop's core."""
+  """prepare() runs this before modeld goes realtime: tinygrad's device thread
+  is otherwise created on the first kernel run, at FIFO 54 on the frame
+  loop's core."""
 
   def setUp(self):
-    self.pool = mock.Mock(name='get_worker_pool')
-    p = mock.patch.dict(sys.modules, fakes.fake_tinygrad(get_worker_pool=self.pool))
+    p = mock.patch.dict(sys.modules, fakes.fake_tinygrad())
     p.start()
     self.addCleanup(p.stop)
     self.log = fakes.RecordingLog()
 
-  def test_the_compile_pool_is_created_with_the_device(self):
-    warp.init_device(self.log)
-    self.pool.assert_called_once_with()
+  def test_the_device_comes_up(self):
+    with mock.patch.object(fakes.FakeTensor, 'realize', autospec=True) as realize:
+      warp.init_device(self.log)
+    realize.assert_called_once()
     self.assertEqual(self.log.records, [])
-
-  def test_a_pool_that_will_not_start_is_logged_not_raised(self):
-    # An older tinygrad without the module, or PARALLEL=0, must not veto the accelerator.
-    self.pool.side_effect = RuntimeError('no pool')
-    warp.init_device(self.log)
-    self.assertEqual(len(self.log.lines('exception')), 1)
 
   def test_a_device_that_will_not_come_up_is_logged_not_raised(self):
     with mock.patch.object(fakes.FakeTensor, 'realize', side_effect=RuntimeError('no gpu')):
       warp.init_device(self.log)
     self.assertTrue(self.log.has('could not bring the gpu up', 'exception'))
-    self.pool.assert_called_once_with()
 
 
 class FakeBuffer:
@@ -399,49 +392,38 @@ class TestPrepareReset(unittest.TestCase):
     p.start()
     self.addCleanup(p.stop)
 
+  def test_every_small_model_shape_is_zeroed_in_place_and_nothing_else(self):
+    # stock modeld's recurrent state and packed upload, modeld_v2's two
+    # bundle kinds, and StarPilot's queues and numpy views. Not the warp's
+    # output, which is no history, nor an NPY tensor, which its numpy views zero
+    for shape in fakes.SHAPES:
+      with self.subTest(shape.__name__):
+        model, zeroed, kept = shape()
+        held = [id(b) for b in zeroed]
+        warp.prepare_reset(model)()
+        self.assertEqual([id(b) for b in zeroed], held)
+        for b in zeroed:
+          np.testing.assert_array_equal(b, 0)
+        for b in kept:
+          np.testing.assert_array_equal(b, 1)
+
   def queue(self, device='CPU'):
     return fakes.FakeTensor(np.ones((4, 8), np.float32), device=device)
 
-  def test_stock_modelds_model(self):
-    # the recurrent state is zeroed, the views of the packed upload through
-    # it, and the warp's output is not history
-    packed = np.ones(64, np.uint8)
-    model = SimpleNamespace(input_queues={'state_img_q': self.queue(), 'state_feat_q': self.queue(),
-                                          'desire': self.queue(), 'new_img': self.queue()},
-                            state_pairs={'state_img_q': 'next_state_img_q', 'state_feat_q': 'next_state_feat_q'},
-                            packed_input=packed, prev_desire=np.ones(8))
-    warp.prepare_reset(model)()
-    for name in ('state_img_q', 'state_feat_q'):
-      np.testing.assert_array_equal(model.input_queues[name].array, 0)
-    for name in ('desire', 'new_img'):
-      np.testing.assert_array_equal(model.input_queues[name].array, 1)
-    np.testing.assert_array_equal(packed, 0)
-    np.testing.assert_array_equal(model.prev_desire, 0)
-
-  def test_a_modeld_v2_native_bundle(self):
-    packed = np.ones(64, np.uint8)
-    adapter = SimpleNamespace(is_native=True, input_queues={'state_img_q': self.queue(), 'desire': self.queue()},
-                              state_pairs={'state_img_q': 'next_state_img_q'}, packed_input=packed)
-    model = SimpleNamespace(adapter=adapter, prev_desire=np.ones(8))
-    warp.prepare_reset(model)()
-    np.testing.assert_array_equal(adapter.input_queues['state_img_q'].array, 0)
-    np.testing.assert_array_equal(adapter.input_queues['desire'].array, 1)
-    np.testing.assert_array_equal(packed, 0)
-    np.testing.assert_array_equal(model.prev_desire, 0)
-
-  def test_a_modeld_v2_legacy_bundle_and_its_npy_tensor(self):
-    # numpy inputs on the adapter; the NPY tensor is not a queue, and its
-    # numpy views are what zero it
-    packed = np.ones(16, np.float32)
-    npy = self.queue(device='NPY')
-    adapter = SimpleNamespace(is_native=False, input_queues={'img_q': self.queue(), 'packed_npy_inputs': npy},
-                              numpy_inputs={'desire': packed[:8], 'rest': packed[8:]})
-    model = SimpleNamespace(adapter=adapter, prev_desire=np.ones(8))
-    with mock.patch.object(npy, 'assign', side_effect=AssertionError('an NPY tensor is not a queue')):
-      warp.prepare_reset(model)()
-    np.testing.assert_array_equal(adapter.input_queues['img_q'].array, 0)
-    np.testing.assert_array_equal(packed, 0)
-    np.testing.assert_array_equal(model.prev_desire, 0)
+  def test_the_reset_an_adapter_builds_is_captured_ahead_and_zeroes_in_place(self):
+    # TinyJit captures on its second call: three ahead, then one per reset
+    calls = []
+    self.modules['tinygrad'].TinyJit = lambda fn: lambda: (calls.append(1), fn())[1]
+    queue, array = fakes.queue(), np.ones(4)
+    held = queue.array
+    reset = warp.reset_queues([queue], [array])
+    self.assertEqual(len(calls), 3)
+    queue.array[...], array[...] = 1, 1
+    reset()
+    self.assertEqual(len(calls), 4)
+    self.assertIs(queue.array, held)
+    np.testing.assert_array_equal(held, 0)
+    np.testing.assert_array_equal(array, 0)
 
   def test_this_forks_stock_modeld_and_its_npy_views(self):
     # this fork's own stock modeld (FOREVERZAX1988/openpilot) keeps neither
@@ -470,6 +452,33 @@ class TestPrepareReset(unittest.TestCase):
     warp.prepare_reset(model)()
     np.testing.assert_array_equal(packed, 0)
     np.testing.assert_array_equal(model.prev_desire, 0)
+
+
+
+class TestNoCompilePool(unittest.TestCase):
+  """Over the real tinygrad, as prepare() and the join run them: after
+  init_device(), capturing a reset of more than one queue, which compiles
+  more than one kernel, starts no compile pool."""
+
+  def test_a_reset_of_several_queues_starts_no_pool(self):
+    try:
+      from tinygrad import Tensor
+      from tinygrad.engine import worker
+      from tinygrad.helpers import PARALLEL
+    except ImportError:
+      self.skipTest('no tinygrad')
+    if worker.worker_pool is not None:
+      self.skipTest('a pool from an earlier test in this process')
+    self.addCleanup(setattr, PARALLEL, 'value', PARALLEL.value)
+    log = fakes.RecordingLog()
+    warp.init_device(log)
+    self.assertEqual(log.records, [])
+    queues = [Tensor.ones(4, 4).contiguous().realize(), Tensor.ones(8).contiguous().realize()]
+    reset = warp.reset_queues(queues, [])
+    queues[0].assign(Tensor.ones(4, 4)).realize()
+    reset()
+    self.assertIsNone(worker.worker_pool)
+    np.testing.assert_array_equal(queues[0].numpy(), 0)
 
 
 if __name__ == "__main__":

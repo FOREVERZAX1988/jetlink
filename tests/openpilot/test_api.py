@@ -13,6 +13,7 @@ ready, and ready gets told, and that a request that hangs costs the large
 model and nothing else.
 """
 import inspect
+import json
 import sys
 import time
 import unittest
@@ -37,10 +38,14 @@ JETLINK = {
   'model_state': '(ref)',
   'prepare': '()',
   'attach': '(small, cam_w, cam_h)',
+  'handed_over': '(model)',
+  'state': '(model)',
   'request_shutdown': "(reason='')",
   'shutdown_pending': '()',
+  'shutdown_step': "(should_shutdown, reason='')",
   'should_extend_catalog': '()',
   'extend_catalog': '(catalog)',
+  'runtime': '()',
 }
 
 
@@ -52,7 +57,7 @@ def plain(fn) -> str:
 
 # what the package exports: the contract, and nothing jetlink keeps to itself
 EXPORTS = ['API', 'MODES', 'STATES', 'Jetlink', 'Keys', 'ModelFace', 'Openpilot', 'OwnerConfig', 'Status', 'bind',
-           'conformance']
+           'conformance', 'SHUTDOWN_TIMEOUT', 'Flags', 'SwapEvents']
 
 
 class TestTheSurface(OpenpilotTest):
@@ -69,6 +74,15 @@ class TestTheSurface(OpenpilotTest):
     self.assertEqual(sorted(jo.__all__), sorted(EXPORTS))
     for name in EXPORTS:
       self.assertTrue(hasattr(jo, name), name)
+
+  def test_the_swap_events_selfdrived_maps(self):
+    self.assertEqual(jo.Flags._fields, ('offer', 'link_lost', 'no_entry', 'chime', 'settling'))
+    self.assertEqual(plain(jo.SwapEvents), '(tick_s)')
+    self.assertEqual(plain(jo.SwapEvents.update), '(self, fresh, big, in_control, state)')
+    self.assertIsInstance(jo.SwapEvents.settling, property)
+    # a plain re-export: the module imports on its own too
+    from jetlink.openpilot import events
+    self.assertIs(jo.SwapEvents, events.SwapEvents)
 
   def test_what_the_ui_calls_on_a_status(self):
     self.assertEqual(plain(jo.Status.icon), '(self, started, model_seen, running_big, state)')
@@ -449,9 +463,15 @@ class PoweringOffWithoutWaiting(OpenpilotTest):
       self.assertFalse(self.jl.shutdown_pending())
 
   def test_the_owner_takes_it_as_it_always_has(self):
-    # the Jetson on the user's supply is armed with --poweroff: what reaches
-    # it has to be the owner's shutdown run, as before
+    # a Jetson on always-on supply is armed with --poweroff: what reaches it
+    # has to be the owner's shutdown run
+    from jetlink.comma import root as comma_root
     from jetlink.comma.owner import Owner
+    # this is the one test here that drives a real Owner, so it is the one that
+    # would rebuild the gadget and bring the network up: off a comma root.run
+    # answers False without doing either, and on one it is sudo. The test only
+    # checks what reaches spawn_worker, so it gets the answer off a comma.
+    self.patch(comma_root, 'run', mock.Mock(return_value=False))
     o = Owner((), settings=self.parts.settings, chestnut_ids=())
     self.addCleanup(o.cable.close)
     o.lender = mock.Mock(lent=False, listening=True)
@@ -461,6 +481,124 @@ class PoweringOffWithoutWaiting(OpenpilotTest):
     o.step()
     spawn.assert_called_once_with('the jetson has to be shut down: comma shutting down, offroad since 12.0')
     self.assertTrue(o.shutting_down)
+
+
+class ThePowerOffStep(OpenpilotTest):
+  """hardwared polls shutdown_step() every loop and puts DoShutdown once it
+  says yes. jetlink keeps the deadline, and a request no live hardwared is
+  following never outlives the boot."""
+
+  def setUp(self):
+    super().setUp()
+    self.op.set_mode('usb')
+    self.patch(gadget, 'host_attached', return_value=True)
+
+  def test_nothing_asked_is_no_and_writes_nothing(self):
+    for _ in range(3):
+      self.assertFalse(self.jl.shutdown_step(False))
+    self.assertFalse(gadget.SHUTDOWN_REQUEST.exists())
+    self.assertEqual(self.op.log.lines(), [])
+
+  def test_asked_then_taken_is_yes_and_stays_yes(self):
+    self.assertFalse(self.jl.shutdown_step(True, 'car battery'))
+    self.assertEqual(gadget.pending_shutdown(), 'car battery')
+    self.assertFalse(self.jl.shutdown_step(True, 'car battery'))
+    gadget.finish_shutdown()   # the owner's run took it
+    self.assertTrue(self.jl.shutdown_step(True))
+    self.assertTrue(self.op.log.has('the owner took the shutdown request after'))
+    # latched: nothing asked again, whatever the caller says now
+    with mock.patch.object(gadget, 'request_shutdown') as request:
+      self.assertTrue(self.jl.shutdown_step(False))
+      self.assertTrue(self.jl.shutdown_step(True))
+    request.assert_not_called()
+    self.assertFalse(gadget.SHUTDOWN_REQUEST.exists())
+
+  def test_once_asked_the_caller_changing_its_mind_is_not_read(self):
+    self.assertFalse(self.jl.shutdown_step(True, 'car battery'))
+    self.assertFalse(self.jl.shutdown_step(False))
+    self.assertTrue(gadget.SHUTDOWN_REQUEST.exists())
+
+  def test_nothing_to_ask_is_yes_at_once(self):
+    self.op.set_mode('off')
+    self.assertTrue(bind_again(self).shutdown_step(True, 'car battery'))
+    self.op.set_mode('usb')
+    with mock.patch.object(gadget, 'host_attached', return_value=False), \
+         mock.patch.object(gadget, 'dormant', return_value=False):
+      self.assertTrue(bind_again(self).shutdown_step(True, 'car battery'))
+    with mock.patch.object(gadget, 'request_shutdown', return_value=False):
+      self.assertTrue(bind_again(self).shutdown_step(True, 'car battery'))
+    self.op.chestnut = True
+    self.assertTrue(bind_again(self).shutdown_step(True, 'car battery'))
+    self.assertFalse(gadget.SHUTDOWN_REQUEST.exists())
+
+  def test_nobody_taking_it_is_yes_at_the_deadline_and_withdrawn(self):
+    t0 = time.monotonic()
+    with mock.patch.object(jo.time, 'monotonic', return_value=t0):
+      self.assertFalse(self.jl.shutdown_step(True, 'car battery'))
+    with mock.patch.object(jo.time, 'monotonic', return_value=t0 + jo.SHUTDOWN_TIMEOUT - 0.5):
+      self.assertFalse(self.jl.shutdown_step(True))
+    self.assertTrue(gadget.SHUTDOWN_REQUEST.exists())
+    with mock.patch.object(jo.time, 'monotonic', return_value=t0 + jo.SHUTDOWN_TIMEOUT):
+      self.assertTrue(self.jl.shutdown_step(True), (t0, self.jl._shutdown_asked, gadget.SHUTDOWN_REQUEST.exists(),
+                                                    self.op.log.lines()))
+    self.assertFalse(gadget.SHUTDOWN_REQUEST.exists())
+    self.assertTrue(self.op.log.has('nobody took the shutdown request within 25 s'))
+    self.assertTrue(self.jl.shutdown_step(False))
+
+  def test_a_request_this_process_did_not_write_goes_on_the_first_call(self):
+    # another hardwared's, which restarted before its deadline, and a partial
+    # one the owner can never read: either would wait forever
+    for leftover in (json.dumps({'reason': 'an earlier hardwared'}), '{"rea'):
+      with self.subTest(leftover):
+        gadget.SHUTDOWN_REQUEST.write_text(leftover)
+        jl = bind_again(self)
+        self.assertFalse(jl.shutdown_step(False))
+        self.assertFalse(gadget.SHUTDOWN_REQUEST.exists())
+        self.assertFalse(jl.shutdown_pending())
+        # and the first call already powering off does not wait on it
+        gadget.SHUTDOWN_REQUEST.write_text(leftover)
+        with mock.patch.object(gadget, 'host_attached', return_value=False), \
+             mock.patch.object(gadget, 'dormant', return_value=False):
+          self.assertTrue(bind_again(self).shutdown_step(True, 'car battery'))
+        self.assertFalse(gadget.SHUTDOWN_REQUEST.exists())
+
+  def test_its_own_request_is_not_a_leftover(self):
+    # an adapter that asked through request_shutdown() first
+    self.assertTrue(self.jl.request_shutdown('car battery'))
+    self.assertFalse(self.jl.shutdown_step(True))
+    self.assertEqual(gadget.pending_shutdown(), 'car battery')
+
+  def test_a_failure_once_asked_is_yes_said_once_and_withdrawn(self):
+    self.assertFalse(self.jl.shutdown_step(True, 'car battery'))
+    with mock.patch.object(jo.Jetlink, '_pending', side_effect=PermissionError('no')):
+      self.assertTrue(self.jl.shutdown_step(True))
+      self.assertTrue(self.jl.shutdown_step(False))
+    self.assertEqual(self.op.log.lines('exception'), ['jetlink: the shutdown step failed'])
+    # nobody follows it: an owner finding it a drive later must not act on it
+    self.assertFalse(gadget.SHUTDOWN_REQUEST.exists())
+
+  def test_a_failure_with_a_power_off_wanted_is_yes(self):
+    with mock.patch.object(gadget, 'finish_shutdown', side_effect=RuntimeError('boom')):
+      self.assertTrue(self.jl.shutdown_step(True, 'car battery'))
+    self.assertTrue(self.jl.shutdown_step(False))
+    self.assertEqual(self.op.log.lines('exception'), ['jetlink: the shutdown step failed'])
+
+  def test_a_failure_before_a_power_off_is_wanted_is_no(self):
+    # a yes here would have hardwared put DoShutdown right after every boot
+    with mock.patch.object(gadget, 'finish_shutdown', side_effect=RuntimeError('boom')):
+      self.assertFalse(self.jl.shutdown_step(False))
+      self.assertFalse(self.jl.shutdown_step(False))
+    self.assertEqual(self.op.log.lines('exception'), ['jetlink: the shutdown step failed'])
+    # and the first call is not retried: the step still works when one is wanted
+    self.assertFalse(self.jl.shutdown_step(True, 'car battery'))
+    gadget.finish_shutdown()
+    self.assertTrue(self.jl.shutdown_step(True))
+
+
+def bind_again(test: OpenpilotTest) -> jo.Jetlink:
+  """Another bind() over the test's adapter: a Jetlink, and parts, that have
+  not stepped or asked, as in a hardwared that has restarted."""
+  return jo.bind(test.op)
 
 
 class TestExtendsCatalog(OpenpilotTest):

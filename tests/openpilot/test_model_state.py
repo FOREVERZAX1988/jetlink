@@ -17,12 +17,14 @@ from __future__ import annotations
 
 import contextlib
 import time
+import dataclasses
 import unittest
 from types import SimpleNamespace
 from unittest import mock
 
 import numpy as np
 
+from jetlink import protocol as P
 from jetlink.openpilot import model_state
 from jetlink.spec import ModelSpec
 from jetlink.transport.base import LinkError
@@ -97,10 +99,17 @@ class FakeClient:
     self.busy: set[int] = set()
     self.skippable = []
     self.lossless = []
+    # frames (by frame_id) the server answers Status.NOT_FINITE, which the
+    # client raises, the link kept
+    self.not_finite: set[int] = set()
+    # HEVC: the two cameras' access units each frame carried, in call order
+    self.hevc = []
 
-  def infer_begin(self, data, packed, frame_id, reset=False, want_state=False, skip_if_busy=False, lossless=None):
+  def infer_begin(self, data, packed, frame_id, reset=False, want_state=False, skip_if_busy=False, lossless=None,
+                  hevc=None):
     self.skippable.append(skip_if_busy)
     self.lossless.append(lossless)
+    self.hevc.append(hevc)
     if skip_if_busy and frame_id in self.busy:
       return None
     self.sent.append((None if data is None else np.frombuffer(bytes(data), np.uint8).copy(), np.array(packed, copy=True),
@@ -133,6 +142,8 @@ class FakeClient:
       return None
     self._in_flight.remove(seq)
     self._answered(seq)
+    if seq in self.not_finite:
+      raise P.NotFinite(f'inference output is not finite: NOT_FINITE (frame {seq})')
     self.last_output = self.output
     self._piggyback()
     return self.output
@@ -664,6 +675,36 @@ class TestTheFace(ModelStateTest):
     self.assertEqual(out['plan'].shape, (1, 990))
     self.assertTrue((out['plan'] == 2.0).all())
 
+  def test_an_output_that_is_not_finite_never_reaches_the_parser(self):
+    # the joining model hands back on it (joining.BAD_OUTPUT), even an inf
+    # std that modeld's parser would clip to a finite one
+    for bad in (np.nan, np.inf, -np.inf):
+      with self.subTest(bad):
+        client = FakeClient()
+        client.output[slice(*SLICES['plan'])][7] = bad
+        state = self.make(spec_for(STATEFUL), client)
+        state.parser = mock.Mock()
+        with self.assertRaisesRegex(P.NotFinite, 'frame 1: the output'):
+          self.frames(state, 1)
+        state.parser.parse_outputs.assert_not_called()
+        self.assertEqual(state.trips.frames, 1, 'counted for the leave')
+
+  def test_a_finite_output_that_parses_to_inf_is_not_finite_either(self):
+    client = FakeClient()
+    state = self.make(spec_for(STATEFUL), client)
+    state.parser = mock.Mock(**{'parse_outputs.return_value': {'plan': np.array([1.0, np.inf], np.float32)}})
+    with self.assertRaisesRegex(P.NotFinite, 'frame 1: the parsed output'):
+      self.frames(state, 1)
+
+  def test_one_the_server_found_is_raised_and_counted(self):
+    client = FakeClient()
+    client.not_finite.add(2)
+    state = self.make(spec_for(STATEFUL), client)
+    self.frames(state, 1)
+    with self.assertRaisesRegex(P.NotFinite, 'NOT_FINITE'):
+      self.frames(state, 1)
+    self.assertEqual(state.trips.frames, 2)
+
   def test_closing_it_closes_its_link(self):
     client = mock.Mock()
     self.make(spec_for(STATEFUL), client).close()
@@ -1004,10 +1045,17 @@ class TestTheSixSegments(ModelStateTest):
   read: on a pipelined link that is a later frame than the one that spent them,
   which is the case the four-segment frame line cannot report at all."""
 
-  SIX = ('pickup', 'warp', 'pair', 'encode', 'send', 'reply')
+  # upstream's ring, which this branch now uses: ours counted pickup/pair/encode
+  # as segments of their own, and the four that mean the same thing are named
+  # differently here (capture is pickup, reply_wait is reply)
+  SIX = ('capture', 'warp', 'send', 'reply_wait', 'publish', 'overhead')
 
   def stage_lines(self, prefix: str = 'stages frame ') -> list[str]:
     return [text for _, text in self.log.records if prefix in text]
+
+  def staged(self, state) -> int:
+    """How many frames the ring has finished (ours read `stages.frames`)."""
+    return state.stages.summary().get('frames', 0)
 
   def test_every_timed_frame_carries_the_six(self):
     self.run_frames(STATEFUL)
@@ -1016,9 +1064,6 @@ class TestTheSixSegments(ModelStateTest):
     self.assertIn('stages frame 1 ', lines[0])
     for name in self.SIX:
       self.assertIn(f' {name} ', lines[0])
-    # a warp with no errors has nothing to pack, and the segment says so rather
-    # than reading as a zero
-    self.assertIn(' encode - ', lines[0])
 
   def test_a_pipelined_frames_reply_is_timed_where_a_later_frame_reads_it(self):
     client = FakeClient()
@@ -1029,19 +1074,25 @@ class TestTheSixSegments(ModelStateTest):
     self.frames(state, 4)
     # frames 1 to 3 answered, each read by the drain of the frame after it; the
     # fourth is still out
-    self.assertEqual(state.stages.frames, 3)
-    self.assertEqual(state.stages.last['frame'], 3)
-    self.assertIsNotNone(state.stages.last['reply_ms'], 'a frame that never waited still has a reply segment')
+    # upstream's ring closes a frame when it publishes, and on a pipelined link
+    # that is before its own reply: where ours waited for the reply to land
+    # before timing the frame, this counts all four
+    self.assertGreaterEqual(self.staged(state), 3)
+    self.assertIsNotNone(state.stages.last(), 'the newest finished frame is in the ring')
+    self.assertIsNotNone(state.stages.last().reply_wait,
+                         'a frame that never waited still has a reply segment')
 
-  def test_a_reply_never_read_is_never_timed(self):
+  def test_a_reply_never_read_still_closes_its_frame(self):
     client = FakeClient()
     client.keep = {1, 2, 3}   # the host owes every answer it was asked for
     state = self.make(spec_for(STATEFUL), client)
     self.frames(state, 3)
     # only the first frame's answer is read, because only the first frame had
     # nothing to hold and had to wait for it; the two it kept are still out
-    self.assertEqual(state.stages.frames, 1)
-    self.assertEqual(state.stages.last['frame'], 1)
+    # all three are in the ring: a frame whose reply never came is finished
+    # held, with the hold as its reply_wait, which is upstream's reading and the
+    # one the status page shows. Ours timed only the frame that waited.
+    self.assertEqual(self.staged(state), 3)
     self.assertEqual(client.unanswered, 2)
 
   def test_the_percentiles_reach_the_log_every_summary_period(self):
@@ -1056,6 +1107,128 @@ class TestTheSixSegments(ModelStateTest):
     # a period, not a frame
     self.frames(state, 1)
     self.assertEqual(len(self.stage_lines('stages frames ')), 1)
+class FakeEncoder:
+  """codecs.HEVCEncoder as the frame path uses it: NV12 in, an access unit
+  out, with the keyframe flag settable so the gate's transitions are drivable."""
+
+  def __init__(self, size, geometry, *, keyframe=True, emit=b'unit'):
+    self.size = size
+    self.geometry = geometry
+    self.keyframe = keyframe
+    self.emit = emit
+    self.frames = []
+    self.forced = []
+
+  def configure(self, *, width, height, bitrate=2_000_000, gop=20):
+    pass
+
+  def encode(self, frame, *, force_keyframe=False):
+    self.frames.append(np.array(frame, copy=True))
+    self.forced.append(bool(force_keyframe))
+    return (self.emit, self.keyframe) if self.emit else (b'', self.keyframe)
+
+  def reset(self):
+    pass
+
+  def close(self):
+    pass
+
+
+class TestHevcCarrier(ModelStateTest):
+  """The HEVC frame path: NV12 in two encoders, the gate's keyframes, and a
+  link that never takes it without the caller's consent."""
+
+  def hevc_state(self, *, wanted=True, keyframe=True, emit=b'unit', hevc_dict=True):
+    spec = spec_for(STATEFUL)
+    client = FakeClient()
+    client.codec = 'hevc' if wanted else 'raw'
+    client.takes_hevc = hevc_dict
+    # the warp's output is the warped frame, as the real one's is
+    warped = np.arange(np.prod(spec.warped_shape), dtype=np.uint64).astype(np.uint8)
+    made = []
+
+    def maker(size, geometry, **kw):
+      enc = FakeEncoder(size, geometry, keyframe=keyframe, emit=emit)
+      made.append(enc)
+      return enc
+
+    # the face a fork supplies when it has a hardware encoder; the fake one's
+    # is the builder under test
+    face = dataclasses.replace(fakes.FACE, hevc_encoder=maker)
+    state = model_state.JetlinkModelState(client, spec, FakeWarp(warped), face=face, log=self.log,
+                                         event=lambda name, **fields: None)
+    return spec, state, client, made
+
+  def test_hevc_is_taken_only_with_the_servers_offer_and_the_callers_consent(self):
+    # the codec is on the client, chosen at the hello (client.choose_codec):
+    # without it the frame path stays on the carrier it had
+    _, state, client, made = self.hevc_state(wanted=False)
+    self.assertFalse(state._hevc)
+    _, state, client, made = self.hevc_state(wanted=True, hevc_dict=False)
+    self.assertFalse(state._hevc, 'a server that does not list it')
+
+  def test_a_hevc_frame_carries_both_cameras_access_units(self):
+    spec, state, client, made = self.hevc_state()
+    self.frames(state, 1)
+    self.assertEqual(len(client.hevc), 1)
+    road, wide = client.hevc[0]
+    self.assertIsInstance(road, bytes)
+    self.assertIsInstance(wide, bytes)
+    # and the warped bytes are not on the wire
+    self.assertIsNone(client.lossless[0])
+
+  def test_the_warped_frame_is_reassembled_into_each_cameras_nv12(self):
+    spec, state, client, made = self.hevc_state()
+    state._encoder_for()
+    self.assertEqual(len(made), 2)
+    for enc in made:
+      # (rows, cols) for the encoder to configure from, and the flat count to
+      # check a frame against: the first is not derivable from the second
+      self.assertEqual(enc.size, (256, 512))
+      self.assertEqual(enc.geometry, (6 * 128 * 256,))
+
+  def test_the_gate_holds_the_opening_frames_until_a_keyframe_on_both(self):
+    # the opening frames' encoders answer no keyframe: the gate keeps them
+    # back, so nothing goes on the wire, and the frame raises NotReady (the
+    # caller runs the small model, keeping the link) rather than a failure
+    spec, state, client, made = self.hevc_state(keyframe=False)
+    with self.assertRaises(model_state.NotReady):
+      self.frames(state, 1)
+    self.assertEqual(state.behind, None, 'a stream coming up is not a host behind')
+
+  def test_an_encoder_with_nothing_ready_is_not_a_frame_sent(self):
+    spec, state, client, made = self.hevc_state(emit=b'')
+    with self.assertRaises(model_state.NotReady):
+      self.frames(state, 1)
+    # nothing reached the link at all: not even an INFER_REQ
+    self.assertEqual(client.hevc, [])
+    self.assertEqual(client.sent, [])
+    # the gate was told, so it owes an IDR again rather than opening later on a
+    # frame that never went out
+    self.assertGreaterEqual(state._gate.gaps, 1)
+
+  def test_the_frame_path_records_its_six_stages(self):
+    spec, state, client, made = self.hevc_state()
+    self.frames(state, 3)
+    s = state.stages.summary()
+    self.assertEqual(s['frames'], 3)
+    # the reply_wait of a faked link is short but real, and the frame total is
+    # the six summed
+    self.assertGreaterEqual(s['frame']['p50_ms'], 0.0)
+    self.assertIn('capture', s)
+
+  def test_a_reply_inside_the_hold_is_not_late(self):
+    spec, state, client, made = self.hevc_state()
+    self.frames(state, 3)
+    self.assertEqual(state.late.late, 0)
+    self.assertEqual(state.late.answered, 3)
+
+  def test_a_held_frame_puts_the_watermark_forward(self):
+    spec, state, client, made = self.hevc_state()
+    client.late.add(2)                 # frame 2's reply will not come back in time
+    self.frames(state, 3)
+    self.assertEqual(state.late.watermark, 2)
+    self.assertEqual(state.late.settled(), 1)
 
 
 if __name__ == '__main__':

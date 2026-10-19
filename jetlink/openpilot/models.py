@@ -128,7 +128,7 @@ class Models:
     """What runs with no pick: jetlink's default big model, else the newest the
     catalog lists. Not the chestnut's default, which is the model in the tree.
     A fork with no catalog at all (Keys.catalog None) gets jetlink's default by
-    its ref; one whose catalog has not been fetched yet waits for it, as ever."""
+    its ref; one whose catalog has not been fetched yet waits for it."""
     if self.op.keys.catalog is None:
       return self._row(DEFAULT_BIG_MODEL_NAME, DEFAULT_BIG_MODEL_REF, self._index()[1])
     models = self.model_index()

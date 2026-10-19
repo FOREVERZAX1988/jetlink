@@ -13,7 +13,7 @@ import JetlinkKit
 /// together: the Swift form of what `TcpTransport.send_datagrams` sends.
 ///
 /// The comma's kernel does its per-packet work once a datagram where TCP does
-/// it once a segment, 7.35 to 4.3 ms a frame on the bench. A frame that loses
+/// it once a segment: 7.35 to 4.3 ms a frame. A frame that loses
 /// a piece is dropped when the next one starts; the comma, which never gets
 /// its reply, publishes its last output again. Only datagrams from the comma's
 /// address with this session's token count. Not thread-safe: the session's

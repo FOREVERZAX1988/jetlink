@@ -29,7 +29,7 @@ enum OrtArtifact {
     guard models.count == manifest.count else {
       throw ArtifactInvalid("\(name): a session names no model")
     }
-    // Artifacts from before the sidecar said are version 1.
+    // An artifact whose sidecar names no version is version 1.
     let meta = try Artifact.open(artifact, version: expected, unversioned: 1, runtime: "onnxruntime", files: models)
     if let problem = manifest.lazy.compactMap(check).first {
       throw ArtifactInvalid("\(name): \(problem)")

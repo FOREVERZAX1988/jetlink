@@ -36,32 +36,26 @@ COHERENT_WRITEBACK = (1 << 31) | (3 << 26)
 
 
 def init_device(log) -> None:
-  """Bring the GPU up now, on the caller's thread.
+  """Bring the GPU up now, on the caller's thread, and turn tinygrad's
+  compile pool off for the process.
 
   tinygrad initialises the device on its first kernel run and spawns a libusb
   event thread doing it. A thread created after config_realtime_process(7, 54)
-  inherits SCHED_FIFO 54 and the core-7 pin and preempts the frame loop; that
-  cost 5% of frames once. Failure is not a reason to refuse the accelerator.
+  inherits SCHED_FIFO 54 and the core-7 pin and preempts the frame loop,
+  enough to drop ~5% of frames. Failure is not a reason to refuse the accelerator.
   """
+  try:
+    # modeld never needs the pool (engine/worker.py), and its PARALLEL idle
+    # interpreters' handler threads would inherit FIFO 54 on core 7
+    from tinygrad.helpers import PARALLEL
+    PARALLEL.value = 0
+  except Exception:
+    log.exception("jetlink: could not turn tinygrad's compile pool off")
   try:
     from tinygrad.tensor import Tensor
     Tensor([0.0]).realize()
   except Exception:
     log.exception("jetlink: could not bring the gpu up before modeld goes realtime")
-  # the same trap for tinygrad's compile pool (engine/worker.py): created on
-  # the first compile, after modeld goes realtime, its handler threads sat at
-  # SCHED_FIFO 54 on core 7. A tinygrad without one at all (this fork's pin,
-  # 66ee3cfb4) has nothing to start, and PARALLEL=0 is a build choice: neither
-  # is a failure, and neither is worth a traceback at every ignition
-  try:
-    from tinygrad.engine.worker import get_worker_pool
-  except ImportError:
-    log.warning("jetlink: this tinygrad has no compile pool to start before modeld goes realtime")
-  else:
-    try:
-      get_worker_pool()
-    except Exception:
-      log.exception("jetlink: could not start tinygrad's compile pool before modeld goes realtime")
 
 
 def lossless_path(path) -> Path:
@@ -152,11 +146,10 @@ class Warp:
 
   openpilot's warp takes both frames as one buffer, so start() copies the
   camera buffers in, as modeld does, and the transforms beside them. Two
-  things the JIT alone does not do, measured on the comma with the warp
-  jetlink once built itself (2026-10-06):
+  things the JIT alone does not do, measured on the comma:
   - Its output lives in GPU memory the CPU reads through its cache. tinygrad
     maps a QCOM buffer write-combined, which the CPU reads uncached: copying
-    the 393 KB out took 2.9 ms, the kernel's copy straight from that mapping
+    the 393 KB out takes 2.9 ms, the kernel's copy straight from that mapping
     7.3 ms. The Adreno 630 is IO-coherent, so KGSL memory flagged IOCOHERENT
     and write-back is right to read once the GPU is done: 0.22 ms for the
     kernel's copy, the GPU's own time unchanged. It moves before the first
@@ -242,50 +235,22 @@ def _make_coherent(out) -> None:
   out.allocate(opaque=mem)
 
 
-def prepare_reset(model):
-  """Capture the small model's reset before driving, keeping its JIT's buffer identities.
-
-  Its history is stale after the Jetson ran, so a fallback starts from the
-  zero history modeld's warmup leaves it at. Nothing is allocated or compiled
-  on the failure frame.
-
-  The small model is whatever bundle the user picked, on stock modeld or
-  modeld_v2, and each keeps its history its own way. Stock modeld's
-  ModelState, and a modeld_v2 native bundle's adapter: the recurrent state on
-  the GPU (state_pairs) and one packed host buffer (packed_input), as their
-  warmup zeroes them. A modeld_v2 legacy bundle's adapter: history queues on
-  the GPU, and numpy inputs. And a model with neither name -- this fork's own
-  stock modeld (FOREVERZAX1988/openpilot), whose history is its own queues and
-  whose host inputs are the views in `npy` -- is read the way a legacy bundle
-  is, off the model itself: a missing state_pairs is a model that packs
-  nothing, not a model that cannot be reset. The fork's tests pin those names.
-  """
+def reset_queues(queues, arrays, prev_desire=None):
+  """A small model's reset, captured now: `queues`, its tensors on the GPU,
+  zeroed by one TinyJit, then `prev_desire` and each numpy array in `arrays`
+  in place. Every buffer keeps its identity, which the model's own JIT is
+  linked to, and the reset allocates and compiles nothing, so it may run on
+  the frame thread. What an adapter's small_reset returns."""
   from tinygrad import Tensor, TinyJit
-
-  def queues_and_numpy_inputs(holder, numpy_inputs: str):
-    """Everything a model that packs nothing zeroes: every queue but the NPY
-    upload, and every numpy input. An NPY tensor is not a queue to assign --
-    the numpy views over it are. numpy_inputs: the attribute's name on the
-    holder, which this fork's stock modeld calls npy."""
-    queues = tuple(q for q in getattr(holder, 'input_queues', {}).values() if q.device != 'NPY')
-    arrays = tuple(getattr(holder, numpy_inputs, {}).values())
-    return queues, arrays
-
-  adapter = getattr(model, 'adapter', None)
-  if adapter is None or adapter.is_native:
-    keeper = model if adapter is None else adapter
-    if hasattr(keeper, 'state_pairs'):
-      queues = tuple(keeper.input_queues[name] for name in keeper.state_pairs)
-      arrays = (keeper.packed_input,)
-    else:
-      queues, arrays = queues_and_numpy_inputs(keeper, 'numpy_inputs' if hasattr(keeper, 'numpy_inputs') else 'npy')
-  else:
-    queues, arrays = queues_and_numpy_inputs(adapter, 'numpy_inputs')
+  queues, arrays = tuple(queues), tuple(arrays)
 
   @TinyJit
   def clear():
     Tensor.realize(*(q.assign(0) for q in queues))
 
+  # TinyJit captures on its second call, and one with nothing to run raises
+  # there. Its kernels compile here, after init_device() turned the compile
+  # pool off
   if queues:
     for _ in range(3):
       clear()
@@ -293,8 +258,46 @@ def prepare_reset(model):
   def reset():
     if queues:
       clear()
-    model.prev_desire.fill(0)
+    if prev_desire is not None:
+      prev_desire.fill(0)
     for array in arrays:
       array.fill(0)
 
   return reset
+
+
+def reset_for_stock(state, prev_desire=None):
+  """The reset of stock modeld's ModelState layout, captured now, as its warmup
+  zeroes it: the recurrent state on the GPU (input_queues named by
+  state_pairs) and the one packed host buffer (packed_input), and the desire
+  edge. `state` is the ModelState, or a modeld_v2 native bundle's adapter,
+  which keeps the same layout."""
+  return reset_queues([state.input_queues[name] for name in state.state_pairs], (state.packed_input,), prev_desire)
+
+
+def prepare_reset(model):
+  """Capture the small model's reset before driving, keeping its JIT's buffer identities.
+
+  Its history is stale after the Jetson ran, so a fallback starts from the
+  zero history modeld's warmup leaves it at. Nothing is allocated or compiled
+  on the failure frame, so never through modeld_v2's reset_warmup_buffers(),
+  which compiles on it. jetlink's own, for an adapter without small_reset
+  (interface.ModelSide).
+
+  The small model is whatever the fork's modeld runs, and each keeps its
+  history its own way. Stock modeld's ModelState, and a modeld_v2 native
+  bundle's adapter: the recurrent state on the GPU (state_pairs) and one
+  packed host buffer (packed_input), as their warmup zeroes them. A modeld_v2
+  legacy bundle's adapter: history queues on the GPU, and numpy inputs. Any
+  other ModelState with input_queues (StarPilot's): every queue on the GPU,
+  and its numpy inputs (numpy_inputs, or npy); its own _reset_state() makes
+  new tensors, which its JIT is not linked to. The fork's tests pin those names.
+  """
+  adapter = getattr(model, 'adapter', None)
+  keeper = model if adapter is None else adapter
+  prev_desire = getattr(model, 'prev_desire', None)
+  if adapter.is_native if adapter is not None else hasattr(model, 'state_pairs'):
+    return reset_for_stock(keeper, prev_desire)
+  queues = [q for q in keeper.input_queues.values() if q.device != 'NPY']
+  arrays = (keeper.numpy_inputs if hasattr(keeper, 'numpy_inputs') else keeper.npy).values()
+  return reset_queues(queues, arrays, prev_desire)

@@ -36,8 +36,7 @@ public struct StatsSample: Identifiable, Equatable, Sendable {
   }
 }
 
-/// The server as the stores see it, whichever process runs it: the Mac app's
-/// Python server behind a socket, or the iPhone app's own.
+/// The server as the stores see it, in whichever app runs it.
 @MainActor
 public protocol ServerControlling: AnyObject, Observable {
   var link: LinkEvent { get }

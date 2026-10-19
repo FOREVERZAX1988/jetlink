@@ -256,6 +256,19 @@ final class Session: @unchecked Sendable {
     log.info("hello from \(self.who) (seq \(message.seq))")
   }
 
+  /// The frame codecs this server takes, in the order a client should
+  /// prefer them: the packed one first, and the HEVC one only where a
+  /// decoder is there to take it. A host without libavcodec loaded cannot
+  /// decode, and offering the codec would have the client send frames this
+  /// side would have to throw away.
+  static func frameCodecs() -> [String] {
+    var codecs = [LosslessFrame.codec]
+    if HevcFrame.available {
+      codecs.append(HevcFrame.codec)
+    }
+    return codecs
+  }
+
   private func onHello(_ message: Message) throws {
     let (sha, skip) = wanted()
     var response: [String: Any] = [
@@ -269,7 +282,7 @@ final class Session: @unchecked Sendable {
       // for the whole park instead of letting go for a box that never sleeps.
       "sleep_after": host.hooks.sleepAfter,
       // frames this server takes packed (Wire.Flag.lossless), for slow links
-      "frame_codecs": [LosslessFrame.codec],
+      "frame_codecs": Session.frameCodecs(),
     ]
     for (key, value) in host.backend.describe() {
       response[key] = value
@@ -475,6 +488,17 @@ final class Session: @unchecked Sendable {
       }
       warped = UnsafeRawPointer(frame.pixels)
       packed = base + Wire.inferReqSize
+    } else if flags.contains(.hevc) {
+      // the packed floats at their usual size, then the two cameras' access
+      // units, each behind its u32 length
+      let planesAt = Wire.inferReqSize + layout.packedBytes
+      guard payload.count >= planesAt, let frame = loaded.hevc,
+        frame.unpack(UnsafeRawBufferPointer(rebasing: payload[planesAt...]))
+      else {
+        return InferReply(status: .badShape)
+      }
+      warped = frame.warped
+      packed = base + Wire.inferReqSize
     } else {
       guard payload.count == layout.requestBytes else { return InferReply(status: .badShape) }
       warped = base + Wire.inferReqSize
@@ -573,8 +597,9 @@ final class Session: @unchecked Sendable {
       // a frame whose reply was late published the one before it again; a
       // shadowed frame went out with the small model driving, never waited for
       if let held = number("held"), held > 0 { line += ", \(Int(held)) held" }
-      // a preview's pipelined frames published the newest answer without ever
-      // waiting for their own, which is what a frame on a phone's Wi-Fi does
+      // Ours: a preview's pipelined frames published the newest answer without
+      // ever waiting for their own, which is what a frame on a phone's Wi-Fi
+      // does. The `jetlink: trips` acceptance line reads this field.
       if let pipelined = number("pipelined"), pipelined > 0 { line += ", \(Int(pipelined)) pipelined" }
       if let shadowed = number("shadowed"), shadowed > 0 { line += "; \(Int(shadowed)) more ran with the small model driving" }
     }

@@ -5,8 +5,8 @@
   import JetlinkRegistry
   import JetlinkServer
 
-  /// `jetlink-server models`: the registry from a terminal, as the Python
-  /// jetlink-models was, with its subcommands, flags, JSON and exit codes.
+  /// `jetlink-server models`: the registry from a terminal, with
+  /// subcommands, flags, JSON and exit codes a script can rely on.
   /// Progress goes to stderr, so stdout stays a value a script can read.
   struct Models: ParsableCommand {
     static let configuration = CommandConfiguration(
@@ -27,8 +27,8 @@
   }
 
   protocol ModelsCommand: ParsableCommand, Sendable {
-    /// What goes to stderr besides the progress: warnings, as jetlink-models
-    /// showed, so the registry's own lines stay out of a script's way.
+    /// What goes to stderr besides the progress: warnings only, so the
+    /// registry's own lines stay out of a script's way.
     static var logLevel: Log.Level { get }
     var cache: CacheArguments { get }
     func run(_ registry: Registry, _ console: Console) async throws

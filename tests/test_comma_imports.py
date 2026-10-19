@@ -6,8 +6,8 @@ See the LICENSE file in the root directory for more details.
 
 What the comma imports, and that it loads nothing else.
 
-openpilot runs jetlink from a checkout on the comma (only jetlink/ and
-scripts/comma/ ship), imports the names below and patches some of them in its
+openpilot runs jetlink on the comma from a checkout or a vendored copy of
+jetlink/ (tests/test_comma_payload.py), imports the names below and patches some of them in its
 tests. Each module is imported in a fresh interpreter, so one module's imports
 cannot hide another's: none may load a package beyond numpy and the standard
 library. tests/openpilot/test_api.py pins the signatures of the API itself.
@@ -30,8 +30,8 @@ ROOT = Path(__file__).resolve().parents[1]
 # What the fork imports from each module, and the members it calls, reads or
 # patches: its adapter (openpilot/sunnypilot/jetlink_adapter), which calls
 # jetlink.openpilot's API, and its tests, which also run jetlink's comma side
-# on the fork's own tinygrad and openpilot (fork branch jetlink-host-adapter,
-# 2026-09-29). The fork runs against whatever jetlink_repo is pinned: a name
+# on the fork's own tinygrad and openpilot. The fork runs against whatever
+# jetlink_repo is pinned: a name
 # dropped here breaks that build.
 FORK_IMPORTS = {
   'jetlink.openpilot': ('API', 'MODES', 'STATES', 'Status', 'bind'),
@@ -120,6 +120,7 @@ def test_every_transport_says_what_it_is():
 
 def test_the_gadget_presents_what_a_host_looks_for():
   # The server finds the comma by these; nothing on the comma reads protocol.py's copy.
-  script = (ROOT / 'scripts' / 'comma' / 'jetlink-root.sh').read_text()
+  from jetlink.comma import root
+  script = root.SCRIPT.read_text()
   ids = {k: int(v, 16) for k, v in re.findall(r'^(VID|PID)=(0x[0-9a-fA-F]+)', script, re.M)}
   assert ids == {'VID': P.USB_VID, 'PID': P.USB_PID}

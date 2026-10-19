@@ -174,7 +174,7 @@
 
     /// A browser with the page open holds its event stream, and often a spare
     /// connection it has sent nothing on: answering that one 408 and waiting
-    /// for it to close held SIGTERM up a second on the bench Jetson.
+    /// for it to close holds SIGTERM up about a second.
     @Test("Stopping closes a connection that sent nothing, and a reply's linger, without waiting on them")
     func stopPromptly() throws {
       let page = try RunningPage()

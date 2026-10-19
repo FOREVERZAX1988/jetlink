@@ -18,12 +18,12 @@ from tests.openpilot import fakes
 
 
 def guard():
-  return next(m for name, m in sys.modules.items() if name.endswith('openpilot.conftest') and hasattr(m, '_guard'))
+  return next(m for name, m in sys.modules.items() if name.endswith('openpilot.conftest') and hasattr(m, 'GUARD')).GUARD
 
 
 class TestTheGuard(unittest.TestCase):
   def reached(self, fn) -> list[str]:
-    touched = guard()._touched
+    touched = guard().touched
     start = len(touched)
     fn()
     found = touched[start:]

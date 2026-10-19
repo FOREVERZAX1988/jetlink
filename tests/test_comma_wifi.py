@@ -88,6 +88,20 @@ class TestBand(unittest.TestCase):
 
 
 class TestDial(fakes.OpenpilotTest):
+  def setUp(self):
+    super().setUp()
+    # The mDNS browse is mocked here: a device that has avahi-browse would
+    # really run it, which costs seconds and makes every test in this class
+    # depend on what is on the network. The browse itself has its own tests.
+    patcher = mock.patch.object(wifi, 'browse', return_value=[])
+    patcher.start()
+    self.addCleanup(patcher.stop)
+    # The address on the interface, so a test does not depend on the machine
+    # it runs on having a wlan0.
+    patcher = mock.patch.object(wifi, 'local_addr', return_value=('192.168.7.100', 24))
+    patcher.start()
+    self.addCleanup(patcher.stop)
+
   def test_a_wifi_link_dials_the_gateway_and_says_so(self):
     client = mock.Mock(dead=False)
     with mock.patch.object(wifi, 'gateway', return_value='172.20.10.1'), \
@@ -115,6 +129,7 @@ class TestDial(fakes.OpenpilotTest):
     with mock.patch.object(wifi, 'gateway', return_value=None), \
          mock.patch.object(wifi, 'local_addr', return_value=None), \
          mock.patch.object(wifi, 'discover') as discover, \
+         mock.patch.object(wifi, 'browse') as browse, \
          mock.patch('jetlink.client.JetlinkClient.open_tcp') as open_tcp:
       with self.assertRaisesRegex(link.WifiWaiting, 'not on Wi-Fi') as caught:
         link.Link(self.parts.log, wifi=True).open()
@@ -122,6 +137,32 @@ class TestDial(fakes.OpenpilotTest):
     self.assertEqual(caught.exception.retry_after, wifi.DIAL_DELAY)
     open_tcp.assert_not_called()
     discover.assert_not_called()
+    browse.assert_not_called()
+
+  def test_off_wifi_nothing_is_browsed_for(self):
+    # A browse costs avahi a couple of seconds, and a comma with no wlan0 and
+    # no gateway has nothing to hear it on, so the check comes first.
+    with mock.patch.object(wifi, 'gateway', return_value=None), \
+         mock.patch.object(wifi, 'local_addr', return_value=None), \
+         mock.patch.object(wifi, 'browse') as browse:
+      with self.assertRaises(link.WifiWaiting):
+        link.Link(self.parts.log, wifi=True).open()
+    browse.assert_not_called()
+
+  def test_an_announced_server_is_dialed_before_the_gateway(self):
+    # The server that announces itself is the server: on a shared AP the
+    # gateway is a router, and dialing it only spends a timeout. The gateway
+    # is still read, because that read says whether there is Wi-Fi at all.
+    client = mock.Mock(dead=False)
+    with mock.patch.object(wifi, 'local_addr', return_value=('192.168.7.100', 24)), \
+         mock.patch.object(wifi, 'browse', return_value=[('phone', '192.168.7.233')]), \
+         mock.patch.object(wifi, 'gateway', return_value='192.168.7.1'), \
+         mock.patch('jetlink.client.JetlinkClient.open_tcp', return_value=client) as open_tcp:
+      got = link.Link(self.parts.log, wifi=True).open()
+    self.assertIs(got, client)
+    self.assertEqual(open_tcp.call_args.args, ('192.168.7.233',))
+    # the gateway was never dialed, only the server that announced itself
+    open_tcp.assert_called_once()
 
   def test_nothing_listening_is_a_link_error_the_join_retries(self):
     with mock.patch.object(wifi, 'gateway', return_value='172.20.10.1'), \
@@ -149,10 +190,6 @@ class TestDial(fakes.OpenpilotTest):
       self.assertIs(link.connect_patiently(link.Link(self.parts.log, wifi=True)), client)
     borrow.assert_not_called()
     udc.assert_not_called()
-
-
-if __name__ == '__main__':
-  unittest.main()
 
 
 class TestPresence(unittest.TestCase):
@@ -249,3 +286,6 @@ class TestPresence(unittest.TestCase):
     self.assertFalse(wifi._answered(b'{"jetlink":"presence","v":2,"ack":true,"id":"ab"}', 'ab'))
     self.assertFalse(wifi._answered(b'{"jetlink":"presence","v":1,"ack":true,"id":"ab"}', ''))
     self.assertFalse(wifi._answered(b'nonsense', 'ab'))
+
+if __name__ == '__main__':
+  unittest.main()

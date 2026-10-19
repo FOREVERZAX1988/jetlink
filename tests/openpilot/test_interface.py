@@ -45,14 +45,26 @@ MODELD = {
   'model_face': '() -> ModelFace',
   'in_control': '() -> bool',
   'event': '(name: str, **fields: Any) -> None',
+  'small_reset': '(small: Any) -> Callable[[], None] | None',
 }
 SIDES = {'StatusSide': READERS, 'WorkerSide': WORKER, 'ModelSide': MODELD, 'Openpilot': MODELD}
+# what modeld hands attach, and what it reads off and writes onto the result
+RUN = '(bufs: Any, transforms: Any, inputs: Any, after_enqueue: Callable[[], None] | None = None) -> Any'
+SMALL = {'desire_key': None, 'numpy_inputs': None, 'lat_delay': None, 'PLANPLUS_CONTROL': None, 'run': RUN}
+JOINED = {'handovers': None, 'big_model_state': None, 'chestnut': None, 'get_action_from_model': None,
+          'constants': None, 'LAT_SMOOTH_SECONDS': None, 'LONG_SMOOTH_SECONDS': None, 'frame_drop_ratio': None,
+          'lat_delay': None, 'run': RUN, 'close': '() -> None'}
+MODELS = {'SmallModel': SMALL, 'JoinedModel': JOINED}
+# the members an implementation may lack: jetlink reads them with getattr and a fallback
+OPTIONAL = {'ModelSide': {'small_reset'}, 'Openpilot': {'small_reset'},
+            'SmallModel': {'desire_key', 'numpy_inputs', 'lat_delay', 'PLANPLUS_CONTROL'},
+            'JoinedModel': {'get_action_from_model', 'constants', 'LAT_SMOOTH_SECONDS', 'LONG_SMOOTH_SECONDS', 'lat_delay'}}
 
 FIELDS = {
   'Keys': ['link', 'offroad', 'progress', 'spec', 'pointers', 'big_model', 'catalog', 'charge_phone', 'preview'],
   'OwnerConfig': ['params_dir', 'keys', 'chestnut_ids', 'adapter', 'cwd', 'env', 'log_file'],
   'ModelFace': ['parser', 'frame_size', 'desire_len', 'constants', 'lat_smooth_seconds', 'long_smooth_seconds',
-                'get_action_from_model'],
+                'get_action_from_model', 'hevc_encoder'],
 }
 
 
@@ -69,6 +81,17 @@ class TestTheContract(unittest.TestCase):
     for name, expected in SIDES.items():
       with self.subTest(name):
         self.assertEqual(described(getattr(interface, name)), expected)
+
+  def test_the_models_either_side_of_attach_are_as_pinned(self):
+    for name, expected in MODELS.items():
+      with self.subTest(name):
+        self.assertEqual(described(getattr(interface, name)), expected)
+
+  def test_the_optional_members_are_as_pinned(self):
+    # each of these is additive: an adapter or a model without it still conforms
+    for name in (*SIDES, *MODELS):
+      with self.subTest(name):
+        self.assertEqual(interface.optional(getattr(interface, name)), OPTIONAL.get(name, set()))
 
   def test_the_data_it_hands_over_is_as_pinned(self):
     for name, expected in FIELDS.items():
@@ -110,6 +133,17 @@ class TestConformance(unittest.TestCase):
 
     self.assertEqual(jo.conformance(Reader(), interface.StatusSide), [])
     self.assertIn('put: missing', jo.conformance(Reader(), interface.WorkerSide))
+
+  def test_an_adapter_without_the_optional_hook_conforms(self):
+    # zoompilot's adapter has no small_reset, and runs this against itself
+    self.assertFalse(hasattr(self.op, 'small_reset'))
+    self.assertEqual(jo.conformance(self.op, jo.Openpilot), [])
+
+  def test_an_optional_member_that_is_there_is_held_to_its_signature(self):
+    self.op.small_reset = lambda small: None
+    self.assertEqual(jo.conformance(self.op, jo.Openpilot), [])
+    self.op.small_reset = lambda: None
+    self.assertEqual(jo.conformance(self.op, jo.Openpilot), ['small_reset(): expected small_reset(small)'])
 
   def test_a_missing_member_is_named(self):
     del self.op.catalog_selector

@@ -152,7 +152,7 @@ struct LFSBatchTests {
 }
 
 // MARK: - a commit that ships a precompiled pkl
-// Cinque Terre V3, as github and huggingface served it on 2026-09-25.
+// Cinque Terre V3, as github and huggingface serve it.
 
 let v3Ref = "bf3e3631b3f91d92a1020a5e0dd4298b93ff4244"
 let v3OID = "404a18cfd86d29637d20c697dfde245bb47c666ae016730ab674c65f4d1e1aa4"
@@ -256,8 +256,8 @@ struct ExportPointerTests {
 }
 
 // MARK: - a commit that compiles the ONNX away
-// ResAction (#39037), as github served it on 2026-10-05: 2fb4ac4aa0 adds the
-// ONNX, 219f4e7ba3 ("compiled") swaps it for the pkl.
+// ResAction (#39037), as github serves it: one commit adds the ONNX, the
+// next ("compiled") swaps it for the pkl.
 
 let resCompiled = "219f4e7ba38cda8788cc31f2d0a5ca49d9566231"
 let resPointer = Pointer(oid: "1563b85f6bd00d9e2edf50bdb69646f0d95d5ac0f218d5abe3fe54a13427d71b", size: 792_485_215)
@@ -286,8 +286,8 @@ struct CompiledCommitTests {
     #expect(try await LFS.fetchPointer(ref: squash, http: HTTP(session: MockNet(routes).session)) == Pointer(oid: v3OID, size: v3Size))
   }
 
-  // Mountain Dew (#39047) and MD v3 (#39087), as github served them on
-  // 2026-10-14. The squash's subject names no export; the pull request's
+  // Mountain Dew (#39047) and MD v3 (#39087), as github serves them. The
+  // squash's subject names no export; the pull request's
   // commits name ea1600cb, 870a4823 and 8d736683 in turn, and the last shipped.
   static let mdRef = "6f4c0faf1f85132734e94aa39c67143f823b9324"
   static let mdV3Ref = "1e219d7785cfb7b7343c7f2366347fc86e7ce5f2"

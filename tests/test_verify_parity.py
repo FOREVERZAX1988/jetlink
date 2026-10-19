@@ -121,7 +121,7 @@ def test_a_tiny_slice_off_by_more_than_its_tolerance_fails():
 
 def test_why_pooling_the_per_frame_column_would_have_failed():
   # ay spreads 0.0005 across one frame against noise of 0.0002: correlation on
-  # one frame is meaningless there, and it is what the gate used to demand.
+  # one frame is meaningless there.
   refs = reference_frames()
   links = fp16_noisy(refs)
   per_frame = []

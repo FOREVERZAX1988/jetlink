@@ -75,8 +75,8 @@ struct OrtBackendTests {
   }
 
   /// An entry names its unit as the backend that wrote it did: QNN's and the
-  /// CPU's by unit, CoreML's by compute units, the CPU as null units in Apple
-  /// artifacts from before the backends were one.
+  /// CPU's by unit, CoreML's by compute units, the CPU as null units in older
+  /// Apple artifacts.
   @Test("Manifest entries, old and new, read back to their units")
   func manifestEntries() {
     for unit in [OrtUnit.coreML("CPUAndNeuralEngine"), .coreML("ALL"), .htp, .qnnGPU, .cpu] {

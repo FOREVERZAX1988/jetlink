@@ -314,7 +314,7 @@
     }
 
     /// The backend and device the config names. A config without a backend
-    /// is onnxruntime's, as every config was before LiteRT.
+    /// is onnxruntime's.
     static func backend(_ config: [String: Any]) throws -> any EngineBackend {
       let chip = config["chip"] as? String ?? ""
       let device = config["device"] as? String

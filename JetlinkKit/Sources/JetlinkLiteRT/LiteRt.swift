@@ -88,7 +88,7 @@ public struct LiteRtError: Error, CustomStringConvertible {
 
 /// LiteRT's lines in this process's log: the reason an NPU compile failed,
 /// which LiteRT's Google Tensor plugin and the phone's compiler say only
-/// there. The app's log, which a tester shares, gets a copy.
+/// there. The app's log gets a copy.
 enum LiteRtLog {
   /// The lines of `logcat -v epoch` text logged at `since` or after, but for
   /// jetlink's own, as "W litert: message": the last `limit` of them.
@@ -108,7 +108,7 @@ enum LiteRtLog {
   /// What `lines` say kept the NPU from the model, in words for the log,
   /// when it is a reason jetlink knows: a Pixel's EdgeTPU service serves only
   /// the apps on Google's allowlist, by package and signing key ("error code
-  /// 16", seen on a Pixel 10 Pro Fold, 2026-10-03).
+  /// 16").
   static func refusal(_ lines: [String]) -> String? {
     guard lines.contains(where: { $0.contains("not be allowed to access EdgeTPU") || $0.contains("not in the EdgeTPU allowed list") }) else {
       return nil

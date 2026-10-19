@@ -55,7 +55,14 @@ class OwnerTest(unittest.TestCase):
                         ('CABLE_ADDR', ('127.0.0.1', 0)),
                         ('net_up', mock.Mock(return_value=True)),
                         ('net_status', mock.Mock(return_value='ok 192.168.60.1')),
-                        ('usb_speed', mock.Mock(return_value='super-speed'))):
+                        ('usb_speed', mock.Mock(return_value='super-speed')),
+                        # off a comma nothing else is bound to the controller,
+                        # so that is the default here; on a comma AGNOS's ADB
+                        # gadget (g1) is, which would put every build on the
+                        # held-controller backoff instead of the failed one.
+                        # test_a_controller_another_gadget_holds_is_tried_again
+                        # _in_seconds sets a holder itself.
+                        ('other_gadget', mock.Mock(return_value=None))):
       p = mock.patch.object(gadget, name, value)
       self.addCleanup(p.stop)
       p.start()
@@ -67,6 +74,14 @@ class OwnerTest(unittest.TestCase):
     p = mock.patch.object(owner.port, 'Port', mock.Mock())
     self.addCleanup(p.stop)
     p.start()
+    # no policy engine, as off a comma; TestDraw sets what is on the port
+    p = mock.patch.object(owner.port, 'power_role', mock.Mock(return_value=None))
+    self.addCleanup(p.stop)
+    self.power_role = p.start()
+    # no chestnut on the port; the tests that want one say so
+    p = mock.patch.object(owner.port, 'chestnut_attached', mock.Mock(return_value=False))
+    self.addCleanup(p.stop)
+    self.chestnut = p.start()
 
   def write(self, key: str, value: bytes) -> None:
     path = self.params / key
@@ -82,6 +97,12 @@ class OwnerTest(unittest.TestCase):
     kwargs.setdefault('settings', Settings(FileParams(self.params), KEYS))
     kwargs.setdefault('chestnut_ids', CHESTNUT_IDS)
     return owner.Owner(*(args or ((),)), **kwargs)
+
+  def stopped(self, o) -> None:
+    """manager stops the owner, without another step: it reads the same
+    setting, and finds a chestnut on its own."""
+    o.stop = True
+    o.run()
 
   def root_calls(self, command: str) -> list[str]:
     """What the owner asked jetlink-root.sh `command` to do, in order."""
@@ -250,10 +271,8 @@ class TestParked(OwnerTest):
     o.open_link.assert_not_called()
 
   def test_a_run_that_wakes_the_jetson_gets_the_hold_before_letting_go(self):
-    # bench 2026-09-10: a run finished 2.5 s after the wake, the owner released
-    # the gadget 1 ms later, and the jetson was still enumerating. The hold used
-    # to run from process start, which expires once and never applies again now
-    # that this is not restarted at ignition
+    # a run can finish seconds after the wake, with the Jetson still
+    # enumerating; the hold runs from the wake, not from process start
     o = self.owner()
     o.idle_since = time.monotonic() - owner.DORMANT_HOLD
     o.worker = mock.Mock(**{'poll.return_value': 0, 'returncode': 0})
@@ -377,9 +396,8 @@ class TestWhatItIsTold(OwnerTest):
   which is the run's exit status."""
 
   def test_every_hello_passed_on_refreshes_the_far_end(self):
-    # memory reinstalled-jetson-not-reprovisioned: the record was refreshed
-    # only by a run that had work, so a Jetson moved to always-on power was
-    # still let go, drive after drive
+    # a run with no work never refreshes the record, so without this a Jetson
+    # moved to always-on power would still be let go every drive
     o = self.owner()
     self.heard(o, sleep_after=0.0)
     o.idle_since = time.monotonic() - owner.DORMANT_HOLD
@@ -414,8 +432,7 @@ class TestWhatItIsTold(OwnerTest):
       first = self.owner()
       self.heard(first, sleep_after=0.0)
       if clean:
-        first.stop = True
-        first.run()
+        self.stopped(first)
         self.assertFalse(gadget.STATUS.exists())
       second = self.make()   # not self.owner(), which passes on a hello of its own
       self.addCleanup(second.cable.close)
@@ -496,8 +513,8 @@ class TestShutdown(OwnerTest):
     assert 'shut down' in o.spawn_worker.call_args.args[0]
 
   def test_the_run_it_starts_is_left_to_ask(self):
-    # the run asking the jetson was stopped and started again every step, half
-    # a second, less than it takes to start: on the bench nothing ever asked
+    # a step is half a second, less than a run takes to start: restarting it
+    # every step would mean nothing ever asks
     o = self.owner()
     self.request()
     o.step()
@@ -583,8 +600,7 @@ class TestNobodyCanBorrow(OwnerTest):
     # a chestnut turning up stops the owner with the link still on
     o = self.owner()
     o.step()
-    o.stop = True
-    o.run()
+    self.stopped(o)
     self.assertIsNone(gadget.gadget_error())
 
   def test_parked_it_still_provisions(self):
@@ -615,7 +631,7 @@ class TestTheToggle(OwnerTest):
     o = self.owner(presented=False)
     with mock.patch.object(gadget, 'link_configured', return_value=False):
       o.step()
-    self.assertEqual([c.args[0] for c in self.root_run.call_args_list], ['gadget', 'vm', 'udc'])
+    self.assertEqual([c.args[0] for c in self.root_run.call_args_list], ['draw', 'gadget', 'vm', 'udc'])
 
   def test_the_port_is_kept_a_device_while_the_link_is_on(self):
     o = self.owner()
@@ -651,8 +667,7 @@ class TestTheToggle(OwnerTest):
   def test_stopping_gives_the_port_back(self):
     o = self.owner()
     o.lender.start.return_value = True
-    o.stop = True
-    o.run()
+    self.stopped(o)
     o.port.off.assert_called_once()
 
 
@@ -660,6 +675,8 @@ class TestWifi(OwnerTest):
   """Over Wi-Fi modeld dials the hotspot: no gadget, the port left alone,
   offroad a provisioning run that dials it too, and every step the presence
   handshake, which is how the app on that hotspot knows a comma is here."""
+  """Over Wi-Fi modeld dials the hotspot: no gadget, the port left alone, and
+  offroad a provisioning run that dials it too."""
 
   def setUp(self):
     super().setUp()
@@ -809,12 +826,16 @@ class TestVmTuning(OwnerTest):
   """When the owner applies and restores the VM tuning, against the real
   jetlink-root.sh vm on a fake /proc/sys, and the USB device side's knobs
   (udc) with it. A device with the link off runs stock values, one that turns
-  it off gets them back, and a plain exit keeps them for the drive that
-  follows. The values and the ratio-mode restore are test_comma_root.py's."""
+  it off or has a chestnut take the port gets them back, at a step or at the
+  stop manager makes of it, and any other exit keeps them for the owner that
+  comes next. The values and the ratio-mode restore are test_comma_root.py's."""
 
   def setUp(self):
     super().setUp()
     comma_fakes.proc_sys(self.tmp, comma_fakes.STOCK)
+    # udc's knobs, so a restore that ran reads as one that worked
+    comma_fakes.pe_params(self.tmp).mkdir()
+    comma_fakes.udc_glue(self.tmp).mkdir()
     self.root_run.side_effect = self.run_script
 
   def run_script(self, *args: str, timeout: float = root.TIMEOUT) -> bool:
@@ -824,13 +845,18 @@ class TestVmTuning(OwnerTest):
   def tuned(self) -> bool:
     return comma_fakes.read_all(self.tmp, comma_fakes.TUNED) == comma_fakes.TUNED
 
+  def assertRestored(self, vm: list[str], udc: list[str] | None = None) -> None:
+    self.assertEqual(self.root_calls('vm'), vm)
+    self.assertEqual(self.root_calls('udc'), vm if udc is None else udc)
+    self.assertFalse(self.tuned())
+    self.assertFalse(comma_fakes.record(self.tmp).exists(), 'the restore never ran')
+
   def test_applied_once_on_start_and_kept_on_exit(self):
     o = self.owner()
     o.step()
     o.step()
-    o.stop = True
-    o.run()
-    self.assertEqual(self.root_calls('vm'), ['apply'], "an exit is the ignition handoff; restoring there strips the drive of them")
+    self.stopped(o)
+    self.assertEqual(self.root_calls('vm'), ['apply'], "an exit with the link on is a restart; the next owner keeps them")
     self.assertEqual(self.root_calls('udc'), ['apply'])
     self.assertTrue(self.tuned())
     self.assertTrue(comma_fakes.record(self.tmp).exists(), "the record is what a later disable restores to")
@@ -842,53 +868,201 @@ class TestVmTuning(OwnerTest):
     self.assertEqual(self.root_calls('vm'), ['apply', 'apply'])
     self.assertEqual(comma_fakes.record(self.tmp).read_text(), stock)
 
-  def test_nothing_happens_when_disabled(self):
+  def test_disabled_nothing_is_applied_and_the_restore_runs_once(self):
+    # for a tuning an owner before this one left; without its record a no-op
     self.write('JetlinkLink', b'0')
-    self.owner().step()
-    self.assertEqual(self.root_calls('vm') + self.root_calls('udc'), [])
-    self.assertFalse(comma_fakes.record(self.tmp).exists())
+    o = self.owner()
+    o.step()
+    o.step()
+    self.assertRestored(['restore'])
 
   def test_disabling_mid_run_restores(self):
     o = self.owner()
     o.step()
     self.write('JetlinkLink', b'0')
     o.step()
-    self.assertEqual(self.root_calls('vm'), ['apply', 'restore'])
-    self.assertEqual(self.root_calls('udc'), ['apply', 'restore'])
-    self.assertFalse(comma_fakes.record(self.tmp).exists(), 'the restore never ran')
+    self.assertRestored(['apply', 'restore'])
+
+  def test_turned_off_it_is_restored_once_not_every_step(self):
+    o = self.owner()
+    o.step()
+    self.write('JetlinkLink', b'0')
+    o.step()
+    o.step()
+    self.stopped(o)
+    self.assertRestored(['apply', 'restore'])
+
+  def test_a_failed_restore_is_tried_again_at_the_stop(self):
+    o = self.owner()
+    o.step()
+    self.root_run.side_effect = lambda *a, **k: a != ('vm', 'restore') and self.run_script(*a, **k)
+    self.write('JetlinkLink', b'0')
+    o.step()
+    o.step()
+    self.assertEqual(self.root_calls('vm'), ['apply', 'restore'], 'a failure is not retried every step')
+    self.root_run.side_effect = self.run_script
+    self.stopped(o)
+    self.assertRestored(['apply', 'restore', 'restore'])
+
+  def test_a_stop_after_turning_it_off_restores(self):
+    o = self.owner()
+    o.step()
+    self.write('JetlinkLink', b'0')
+    self.stopped(o)
+    self.assertRestored(['apply', 'restore'])
+
+  def test_a_stop_restores_what_an_owner_before_applied(self):
+    # restarted with the link on, which keeps it; turned off before the next
+    # owner has stepped, so this one never applied it
+    first = self.owner()
+    first.step()
+    self.stopped(first)
+    self.assertTrue(self.tuned())
+    second = self.owner()
+    self.write('JetlinkLink', b'0')
+    self.stopped(second)
+    self.assertRestored(['apply', 'restore'])
+
+  def test_a_stop_for_a_chestnut_restores(self):
+    # the link stays on, but manager stops the owner and the comma hosts the chestnut
+    o = self.owner()
+    o.step()
+    self.chestnut.return_value = True
+    self.stopped(o)
+    self.assertRestored(['apply', 'restore'])
+    o.port.off.assert_called_once()
+
+  def test_a_stop_that_cannot_tell_keeps_them(self):
+    o = self.owner()
+    o.step()
+    self.chestnut.side_effect = Exception('a bug')
+    with mock.patch.object(gadget.log, 'exception') as log:
+      self.stopped(o)
+    log.assert_called_once()
+    self.assertEqual(self.root_calls('vm'), ['apply'])
+    self.assertTrue(self.tuned())
 
 
 class TestDraw(OwnerTest):
-  """No current drawn from the port while the link is iOS, kept on exit like the tuning."""
+  """No current drawn from the port while the link is on: cut at once, given
+  back only on an empty port. A stop with the link still wanted keeps it, like
+  the tuning; one with the link turned off or a chestnut on the port gives it
+  back, on an empty port."""
 
-  def test_usb_leaves_it_alone(self):
+  def empty(self, empty: bool = True) -> None:
+    self.power_role.return_value = 'none' if empty else 'sink'
+
+  def test_an_exit_with_the_link_on_keeps_it(self):
     o = self.owner()
     o.step()
     o.step()
-    self.assertEqual(self.root_calls('draw'), [])
-
-  def test_ios_cuts_it_once_and_an_exit_keeps_it(self):
-    self.write('JetlinkLink', b'2')
-    o = self.owner()
-    o.step()
-    o.step()
-    o.stop = True
-    o.run()
+    self.stopped(o)
     self.assertEqual(self.root_calls('draw'), ['off'])
 
-  def test_leaving_ios_gives_it_back(self):
-    for setting in (b'1', b'0'):
-      with self.subTest(setting=setting):
+  def test_a_stop_after_turning_it_off_gives_it_back_on_an_empty_port(self):
+    self.empty()
+    o = self.owner()
+    o.step()
+    self.write('JetlinkLink', b'0')
+    self.stopped(o)
+    self.assertEqual(self.root_calls('draw'), ['off', 'on'])
+
+  def test_a_stop_after_turning_it_off_keeps_it_with_a_host_in(self):
+    self.empty()
+    o = self.owner()
+    o.step()
+    self.empty(False)
+    self.write('JetlinkLink', b'0')
+    with mock.patch.object(gadget.log, 'warning') as log:
+      self.stopped(o)
+    self.assertEqual(self.root_calls('draw'), ['off'])
+    said = [c for c in log.call_args_list if 'draws nothing' in c.args[0]]
+    self.assertEqual(len(said), 1, 'no later step gives it back, so it is said once')
+
+  def test_the_draw_is_judged_before_the_hold_goes(self):
+    # letting go of a hold can drop the far end for a DRP toggle; the port
+    # reading empty for that moment must not give the draw back
+    self.empty()
+    o = self.owner()
+    o.step()
+    self.empty(False)
+    o.port.off.side_effect = self.empty
+    self.write('JetlinkLink', b'0')
+    self.stopped(o)
+    self.assertEqual(self.root_calls('draw'), ['off'])
+
+  def test_usb_and_ios_cut_it_at_once_with_a_host_in(self):
+    # the comma runs off its own power port, never this one
+    for link in (b'1', b'2'):
+      with self.subTest(link):
         self.root_run.reset_mock()
-        self.write('JetlinkLink', b'2')
+        self.empty(False)
+        self.write('JetlinkLink', link)
         o = self.owner()
         o.step()
-        self.write('JetlinkLink', setting)
         o.step()
-        self.assertEqual(self.root_calls('draw'), ['off', 'on'])
+        self.assertEqual(self.root_calls('draw'), ['off'])
+
+  def test_without_a_policy_engine_it_is_cut_and_never_given_back(self):
+    o = self.owner()
+    o.step()
+    self.write('JetlinkLink', b'0')
+    self.stopped(o)
+    self.assertEqual(self.root_calls('draw'), ['off'])
+
+  def test_turning_the_link_off_gives_it_back_once_the_port_is_empty(self):
+    self.empty()
+    o = self.owner()
+    o.step()
+    self.empty(False)
+    self.write('JetlinkLink', b'0')
+    o.step()
+    o.step()
+    self.assertEqual(self.root_calls('draw'), ['off'])
+    self.empty()
+    o.step()
+    o.step()
+    self.assertEqual(self.root_calls('draw'), ['off', 'on'])
+
+  def test_turned_back_on_before_the_port_empties_nothing_moves(self):
+    self.empty()
+    o = self.owner()
+    o.step()
+    self.empty(False)
+    self.write('JetlinkLink', b'0')
+    o.step()
+    self.write('JetlinkLink', b'1')
+    o.step()
+    self.empty()
+    o.step()
+    self.assertEqual(self.root_calls('draw'), ['off'])
+
+  def test_disabled_from_the_start_it_is_given_back_once(self):
+    # for a cut an owner before this one left; letting go of the voter is safe to repeat
+    self.empty()
+    self.write('JetlinkLink', b'0')
+    o = self.owner()
+    o.step()
+    o.step()
+    self.assertEqual(self.root_calls('draw'), ['on'])
+
+  def test_a_stop_for_a_chestnut_keeps_it(self):
+    # the comma powers the chestnut, so the cut does nothing; giving it back
+    # needs an empty port
+    self.empty()
+    o = self.owner()
+    o.step()
+    self.power_role.return_value = 'source'
+    self.chestnut.return_value = True
+    with mock.patch.object(gadget.log, 'warning') as warning, mock.patch.object(gadget.log, 'info') as info:
+      self.stopped(o)
+    self.assertEqual(self.root_calls('draw'), ['off'])
+    o.port.off.assert_called_once()
+    self.assertFalse([c for c in warning.call_args_list if 'USB-C' in c.args[0]], 'a chestnut is not a host')
+    self.assertEqual(len([c for c in info.call_args_list if 'powers what is on' in c.args[0]]), 1)
 
   def test_a_failure_is_not_retried_every_step(self):
-    self.write('JetlinkLink', b'2')
+    self.empty()
     self.root_run.return_value = False
     o = self.owner()
     o.step()
@@ -1254,8 +1428,7 @@ class TestSwitchingMode(OwnerTest):
     self.setup_gadget.assert_not_called()
 
   def test_a_switch_just_after_a_build_is_not_held_back(self):
-    # the bench: a switch a minute after the last one waited out a backoff
-    # that only a failed build should set, and logged every step meanwhile
+    # only a failed build sets the backoff
     o = self.switched()
     o.step()
     self.assertTrue(o.built_ios)
@@ -1316,9 +1489,8 @@ class TestSwitchingMode(OwnerTest):
 class TestLeavingIos(IosTest):
   """Out of iOS, parked, nothing on the comma's side holds the switch back: an
   iOS gadget lends nobody the endpoint files, so the rebuild pulls nothing out
-  from under a borrower. A borrower waiting for a phone that never dials, and
-  a run stuck with a silent one, used to keep the comma on iOS until a power
-  cycle."""
+  from under a borrower, even one waiting for a phone that never dials or a
+  run stuck with a silent one."""
 
   def setUp(self):
     super().setUp()
@@ -1342,7 +1514,7 @@ class TestLeavingIos(IosTest):
     self.assert_usb(o)
 
   def test_a_real_borrower_is_told_the_cable_at_once_and_the_usb_gadget_after_the_switch(self):
-    # nobody waits at the lender for a phone any more: a borrower in iOS is
+    # nobody waits at the lender for a phone: a borrower in iOS is
     # told the cable and listens for the dial itself, so a switch out of iOS
     # finds nothing of a borrower's under the rebuild
     o = self.make()
@@ -1622,8 +1794,7 @@ class TestTheStatusRecord(OwnerTest):
     # only an owner that died leaves a heartbeat behind to go stale
     o = self.owner()
     self.record(o)
-    o.stop = True
-    o.run()
+    self.stopped(o)
     self.assertIsNone(gadget.owner_status())
     self.assertFalse(gadget.STATUS.exists())
 
@@ -1719,10 +1890,13 @@ class TestTheStatusRecord(OwnerTest):
     gadget.STATUS.parent.mkdir(parents=True, exist_ok=True)
     (gadget.STATUS.parent / '.status.json.4242').write_text('{"half')
     (gadget.STATUS.parent / '.server.json.4242').write_text('{')
+    # a live modeld's runtime record, mid-write, is not a leftover
+    (gadget.STATUS.parent / f'.modeld.json.{os.getpid()}').write_text('{')
     o = self.make()
     self.addCleanup(o.cable.close)
-    o.adopt()
-    self.assertEqual([n for n in os.listdir(gadget.STATUS.parent) if n.startswith('.')], [])
+    with mock.patch.object(gadget, 'pid_alive', side_effect=lambda pid: pid == os.getpid()):
+      o.adopt()
+    self.assertEqual([n for n in os.listdir(gadget.STATUS.parent) if n.startswith('.')], [f'.modeld.json.{os.getpid()}'])
 
 
 class TestACrashLoop(OwnerTest):
@@ -1755,7 +1929,7 @@ class TestACrashLoop(OwnerTest):
     self.assertEqual(len(steps), 2)
 
   def test_owners_that_stop_cleanly_never_wait(self):
-    # the bench turns the link off and on again as often as it likes
+    # turning the link off and on again any number of times never counts
     for _ in range(owner.CRASH_FREE + 3):
       self.run_two_steps()
       self.assertEqual(owner._starts(), [], 'a clean stop was counted as a death')
@@ -1913,8 +2087,7 @@ class TestOneOwnerAtATime(OwnerTest):
 
   def test_the_lock_goes_with_the_owner(self):
     first = self.owner()
-    first.stop = True
-    first.run()
+    self.stopped(first)
     self.assertIsNone(first.lock_fd)
     second = self.owner()
     second.stop = True
@@ -2007,7 +2180,7 @@ class TestABusyEp0(OwnerTest):
 
 class TestSetup(OwnerTest):
   def test_the_owner_creates_the_gadget_when_there_is_none(self):
-    # nothing sets it up at boot any more
+    # nothing sets it up at boot
     o = self.owner(presented=False)
     with mock.patch.object(gadget, 'link_configured', return_value=False), \
          mock.patch.object(gadget, 'setup_gadget', return_value=True) as setup:

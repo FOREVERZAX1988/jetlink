@@ -296,7 +296,7 @@ The cache is `--cache DIR`, else `$JETLINK_CACHE`, else:
   when the setting changes with the car off (the setting is locked while
   driving).
 
-`scripts/comma/jetlink-root.sh` is every root action Jetlink takes on the comma
+`jetlink/comma/jetlink-root.sh` is every root action Jetlink takes on the comma
 (comma four and 3X); the owner runs it under `sudo -n`.
 
 | Subcommand | Does |
@@ -307,8 +307,9 @@ The cache is `--cache DIR`, else `$JETLINK_CACHE`, else:
 | `port hold`, `port off` | Keeps the USB-C port the device end of a USB link. |
 | `port device`, `port reset` | Asks the far end over USB PD to take the host role (a data role swap), or resets USB PD. |
 | `udc apply`, `udc restore` | While the link is on, keeps the USB device side on whenever a host powers the port; `restore` is stock. `udc start`, `udc stop` turn it on or off now. |
+| `draw off`, `draw on` | While the link is on, draws no current from the USB-C port: the comma runs on its own supply, and a 3X browns out drawing from a laptop. Cut and given back only with the port empty, or for an iPhone at once. |
 | `vm apply`, `vm restore` | Sets and undoes the VM tuning the link needs while the comma records. |
-| `check` | By hand, `sudo scripts/comma/jetlink-root.sh check`: what is built and the negotiated bus speed. |
+| `check` | By hand, `sudo jetlink/comma/jetlink-root.sh check`: what is built and the negotiated bus speed. |
 | `teardown` | Removes the gadget. |
 
 The owner holds the gadget while the link is on; openpilot lists it as
@@ -321,8 +322,9 @@ The owner holds the gadget while the link is on; openpilot lists it as
 | `lending.py` | the lease modeld borrows the endpoints, or a phone's dial, on |
 | `port.py` | the USB-C port |
 | `root.py` | runs `jetlink-root.sh` under `sudo -n`, on AGNOS only |
+| `jetlink-root.sh` | every root action, above |
 
-The zoompilot fork's manager runs it as its adapter module,
+A fork's manager runs it as the fork's adapter module. zoompilot's is
 `openpilot/sunnypilot/jetlink_adapter`, whose `main()` hands
 `jetlink.openpilot.owner` the params directory and keys, the chestnut's USB
 ids and the adapter's name; the owner starts `python -m
@@ -347,8 +349,8 @@ Custom distributions need their own USB product ID.
 - The installer installs the newest release; `jetlink update` moves to the
   next. `jetlink update --ref main` switches to development builds (the `edge`
   prerelease).
-- The zoompilot fork pins the Jetlink it was tested with as its `jetlink_repo`
-  submodule: `develop` and `danger-unstable` pin a commit on `main`, and
+- A fork pins the Jetlink it was tested with as its `jetlink_repo`. zoompilot's
+  is a submodule: `develop` and `danger-unstable` pin a commit on `main`, and
   the `main` release carries develop's, which may lie between releases.
 - The comma and the server have to speak the same protocol version; a release
   that changes it says so, and across it the two update together. A comma on

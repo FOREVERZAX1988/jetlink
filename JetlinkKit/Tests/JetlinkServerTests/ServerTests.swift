@@ -225,13 +225,21 @@ struct ServerTests {
       _ = try client.ensureEngine(model: golden.model, sha256: golden.sha256)
       let host = server.host
       let seen = ProcessInfo.processInfo.systemUptime
-      #expect(!host.warmIfIdle(now: seen + 1), "a comma seen a second ago may be about to send a frame")
+      #expect(!host.warmIfIdle(now: seen + EngineHost.warmIdleAfter / 2), "a comma seen just now may be about to send a frame")
       #expect(host.warmIfIdle(now: seen + EngineHost.warmIdleAfter + 1))
-      #expect(!host.warmIfIdle(now: seen + EngineHost.warmFor + 5), "long after the comma was last seen")
+      #expect(host.warmIfIdle(now: seen + EngineHost.warmFor + 5), "a comma still connected is backing off mid-drive")
       // the warm run left nothing in the history the comma's frames meet
       #expect(try client.replay(golden).frames == 8)
       #expect(host.warmIfIdle(now: ProcessInfo.processInfo.systemUptime + EngineHost.warmIdleAfter + 1))
       #expect(try client.replay(golden).frames == 8)
+      client.close()
+      let deadline = Date().addingTimeInterval(5)
+      while host.lock.withLock({ host.session != nil }) && Date() < deadline {
+        Thread.sleep(forTimeInterval: 0.01)
+      }
+      let left = ProcessInfo.processInfo.systemUptime
+      #expect(host.warmIfIdle(now: left + EngineHost.warmIdleAfter + 1))
+      #expect(!host.warmIfIdle(now: left + EngineHost.warmFor + 5), "long after a comma that left was last seen")
     }
   }
 

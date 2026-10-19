@@ -8,7 +8,7 @@ import JetlinkServer
 #endif
 
 /// A TensorRT plan, loaded: the Swift form of the Python server's
-/// trt/engine.py, the design the car was validated on.
+/// trt/engine.py.
 ///
 /// Device buffers, page-locked host buffers and the stream are made at load,
 /// so a frame never allocates: the 50 ms budget is broken by the tail, not

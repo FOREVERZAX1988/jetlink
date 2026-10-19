@@ -7,8 +7,8 @@ See the LICENSE file in the root directory for more details.
 The comma's one root script and its wrapper. The wrapper against a fake
 subprocess.run; the script's port and vm subcommands against a fake debugfs
 and /proc/sys (tests/comma_fakes.py), run without sudo through its override
-variables. gadget, net, check and teardown need a real configfs and are
-bench-only.
+variables. gadget, net, check and teardown need a real configfs and are not
+tested here.
 """
 from __future__ import annotations
 
@@ -52,9 +52,28 @@ def fake_run(monkeypatch):
 
 # -- the wrapper ------------------------------------------------------------
 
-def test_the_script_is_the_checkouts():
-  assert root.SCRIPT == REPO / 'scripts' / 'comma' / 'jetlink-root.sh'
+def test_the_script_is_the_packages():
+  assert root.SCRIPT.resolve() == REPO / 'jetlink' / 'comma' / 'jetlink-root.sh'
   assert root.SCRIPT.is_file()
+  assert os.access(root.SCRIPT, os.X_OK)
+
+
+@pytest.mark.skipif(shutil.which('git') is None or not (REPO / '.git').exists(), reason='needs a git checkout')
+def test_the_script_is_executable_in_git():
+  # so a checkout's copy, and the stub under scripts/comma, run as themselves too
+  for path in (root.SCRIPT.resolve(), REPO / 'scripts' / 'comma' / 'jetlink-root.sh'):
+    entry = subprocess.run(['git', 'ls-files', '-s', str(path.relative_to(REPO))], cwd=REPO, capture_output=True, text=True,
+                           check=True).stdout
+    assert entry.split(' ')[0] == '100755', (path, entry)
+
+
+def test_the_old_path_forwards_to_the_script(tmp_path):
+  # an owner from before the move still runs scripts/comma/jetlink-root.sh; after v0.9.x this goes
+  old = REPO / 'scripts' / 'comma' / 'jetlink-root.sh'
+  assert os.access(old, os.X_OK)
+  proc_sys(tmp_path, STOCK)
+  assert run_script(tmp_path, 'vm', 'apply', script=old).returncode == 0
+  assert read_all(tmp_path, TUNED) == TUNED
 
 
 @pytest.mark.parametrize('args, timeout', [
@@ -230,6 +249,20 @@ def test_a_voter_is_forced_and_let_go(tmp_path, lever, force, value):
   assert (lever / 'force_val').read_text().strip() == '0'
 
 
+@pytest.mark.parametrize('setting, cut', [('1', True), ('2', True), ('0', False), ('', False), (None, False)])
+def test_boot_cuts_the_draw_while_the_link_is_on(tmp_path, setting, cut):
+  # the launch script, before manager: usb and ios are on, off and no setting are not
+  lever = usb_icl(tmp_path)
+  lever.mkdir()
+  path = tmp_path / 'JetlinkLink'
+  if setting is not None:
+    path.write_text(setting)
+  assert run_script(tmp_path, 'boot', str(path)).returncode == 0
+  assert (lever / 'force_active').is_file() == cut
+  if cut:
+    assert (lever / 'force_val').read_text().strip() == '0'
+
+
 @pytest.mark.parametrize('args, made, says', [
   (('port', 'hold'), None, 'could not force'),
   (('port', 'off'), None, 'could not release'),
@@ -356,7 +389,7 @@ def test_rps_without_the_cable_network_says_so(tmp_path):
 
 @pytest.mark.parametrize('args', [(), ('setup',), ('--ios',), ('gadget', '--net'), ('port',), ('port', 'on'), ('udc',),
                                   ('udc', 'on'), ('vm',), ('vm', 'undo'),
-                                  ('draw',), ('draw', 'cut')])
+                                  ('draw',), ('draw', 'cut'), ('boot',), ('boot', 'a', 'b')])
 def test_anything_else_is_usage(tmp_path, args):
   result = run_script(tmp_path, *args)
   assert result.returncode == 2

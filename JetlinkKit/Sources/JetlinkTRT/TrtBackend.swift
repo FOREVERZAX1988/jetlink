@@ -15,8 +15,7 @@ import JetlinkServer
 /// load without a rebuild.
 ///
 /// Two TensorRT generations build from this one file, as in Python. JetPack
-/// ships 10.x, and the car was validated on its weakly typed network with the
-/// FP16 flag. PCs run 11.x, which dropped weak typing and the precision flags
+/// ships 10.x, which builds a weakly typed network with the FP16 flag. PCs run 11.x, which dropped weak typing and the precision flags
 /// with it: precision follows the ONNX, which is fp16 end to end.
 public final class TrtBackend: EngineBackend {
   public let name = "trt"

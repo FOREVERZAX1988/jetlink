@@ -7,10 +7,8 @@ import JetlinkServer
 /// The host writes a frame's inputs into `hostInput(_:)`, calls `run()`, and
 /// reads `output(_:)`. LiteRT reads and writes those host buffers in place:
 /// the CPU directly, a GPU through a copy of its own each run. Buffers of
-/// the GPU's own, made once and written and read each frame, were no faster
-/// on Metal: Cinque Terre V3 ran 39.8 and 40.3 ms a frame that way against
-/// 39.7 and 40.1 ms through the host's buffers, outputs bit for bit the
-/// same. An NPU gets buffers of its own, which the engine copies the host's
+/// the GPU's own, made once and reused each frame, measured no faster on
+/// Metal (Cinque Terre V3: 39.8 vs 39.7 ms a frame). An NPU gets buffers of its own, which the engine copies the host's
 /// into and out of each run: LiteRT's NPU path runs on AHardwareBuffers, and
 /// its own fallback for host memory is the CPU's, untried with an NPU. After
 /// `loopState`, a stateful graph's next_state_ outputs feed its state_ inputs
@@ -115,7 +113,7 @@ public final class LiteRtEngine: EngineCore, @unchecked Sendable {
   /// a buffer of the NPU's the host's is copied through.
   private func rebind(_ pairs: [(input: String, output: String)]) throws {
     guard let model else { return }
-    // The old wraps point into host memory that may be about to go.
+    // The current wraps point into host memory that may be about to go.
     sets = []
     buffers = []
     let inputOf = Dictionary(uniqueKeysWithValues: pairs.map { ($0.output, $0.input) })

@@ -49,7 +49,7 @@ extension GadgetSource {
 }
 
 /// Framing over USB bulk transfers, the host's end: the Swift form of
-/// `UsbBulkTransport` on `StreamTransport`, with the rules the bench taught.
+/// `UsbBulkTransport` on `StreamTransport`, with these rules.
 ///
 /// - The gadget pads every message to `Wire.gadgetTxAlign` (16 KB), and the
 ///   pipes keep 16 KB reads posted ahead of this end (`ReadRing` says why

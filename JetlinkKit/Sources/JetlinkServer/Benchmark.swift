@@ -34,7 +34,7 @@ public final class BenchmarkRun: @unchecked Sendable {
 
 extension BenchmarkStats {
   /// Percentiles by nearest rank over the sorted values, as the Python
-  /// bench prints them.
+  /// benchmark prints them.
   package static func of(_ ms: [Double]) -> BenchmarkStats {
     guard !ms.isEmpty else { return .empty }
     let sorted = ms.sorted()
@@ -106,7 +106,7 @@ extension EngineHost {
   /// told the engine is not ready until the run ends, rather than have its
   /// frames mixed into the benchmark's history. Blocks; call it off the
   /// main thread. The report is the caller's to show; `logsReport` is
-  /// ignored, until the command line stops passing it.
+  /// ignored.
   public func benchmark(seconds: Double, run: BenchmarkRun, logsReport: Bool = false) throws -> BenchmarkReport {
     lock.lock()
     guard let l = loaded else {

@@ -249,7 +249,7 @@ struct LiteRtProfileTests {
 
   @Test("An NPU attempt's lines come out of logcat's, newest last, jetlink's own left out")
   func logLines() {
-    // `logcat -v epoch` from the Pixel 10 Pro Fold that refused the NPU (2026-10-03)
+    // `logcat -v epoch` from a Pixel that refused the NPU
     let text = """
       1791043558.844  3544  5944 I litert  : [compiler_plugin.cc:433] Loading Google Tensor Compiler Adapter
       1791043559.501  3544  5944 E libedgetpu_client: Compile failed, error code 16, message: Current application should not be allowed to access EdgeTPU.

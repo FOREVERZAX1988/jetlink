@@ -23,7 +23,7 @@ public enum Wire {
   /// TCP keeps the rule so one client speaks to every transport the same way.
   public static let packetMultiple = Pinned.packetMultiple
   /// The gadget pads every message it sends to a whole burst, so none ends on
-  /// a short packet: dwc3 flushed its TX FIFO past one about once in 400
+  /// a short packet: dwc3 flushes its TX FIFO past one about once in 400
   /// frames. A USB host reads each message to that boundary. Host to device
   /// keeps the one-byte pad instead. `protocol.GADGET_TX_ALIGN`.
   public static let gadgetTxAlign = Pinned.gadgetTxAlign
@@ -77,6 +77,9 @@ public enum Wire {
     public static let wantHidden = Flag(rawValue: 1 << 2)
     /// On INFER_REQ: the frame is packed, as `LosslessFrame` unpacks it.
     public static let lossless = Flag(rawValue: 1 << 3)
+    /// On INFER_REQ: the frame is HEVC, as `HevcFrame` decodes it: the two
+    /// cameras' access units, each behind its u32 length.
+    public static let hevc = Flag(rawValue: 1 << 4)
     /// One pad byte follows the payload; see packetMultiple.
     public static let padded = Flag(rawValue: 1 << 7)
   }

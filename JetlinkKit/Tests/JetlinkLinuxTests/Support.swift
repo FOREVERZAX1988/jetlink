@@ -7,8 +7,8 @@
 
   @testable import JetlinkLinux
 
-  /// The Orin Nano Super's sysfs as the bench Jetson had it (JetPack 7.2,
-  /// kernel 6.8), trimmed to what the Linux host reads. The cv0-2 thermal
+  /// An Orin Nano Super's sysfs on JetPack 7.2 (kernel 6.8), trimmed
+  /// to what the Linux host reads. The cv0-2 thermal
   /// zones have no temp file: on that kernel reading it fails with ENODATA.
   /// The comma is 2-1.3, behind the carrier's Realtek hub 2-1.
   let jetson = HostRoot(SourceTree.root().appending(path: "JetlinkKit/Tests/JetlinkLinuxTests/Fixtures/jetson").path)

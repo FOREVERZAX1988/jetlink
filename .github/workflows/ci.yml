@@ -45,7 +45,8 @@ jobs:
           # Everything rebuilds the apps and the servers except the comma's
           # side, which the comma takes as a git pin and nothing builds: the
           # comma and openpilot packages, their tests, the root script and
-          # the bench tools, the installer and the host CLI, and the docs.
+          # the bench tools, the installer and the host CLI, the upstream-paths
+          # checks (their own workflow), and the docs.
           # jetlink/transport and protocol.py are the wire and stay in.
           filters: |
             apps:
@@ -53,6 +54,8 @@ jobs:
               - '!jetlink/comma/**'
               - '!jetlink/openpilot/**'
               - '!scripts/comma/**'
+              - '!scripts/upstream/**'
+              - '!.github/workflows/upstream.yml'
               - '!scripts/deploy_to_comma.sh'
               - '!scripts/jetlink'
               - '!install.sh'
@@ -96,7 +99,7 @@ jobs:
         run: |
           # what the installer runs or installs, and what the comma runs as
           # root; the bench scripts are not held to it yet
-          shellcheck install.sh scripts/jetlink scripts/comma/jetlink-root.sh tests/installer/*.sh
+          shellcheck install.sh scripts/jetlink jetlink/comma/jetlink-root.sh scripts/comma/jetlink-root.sh tests/installer/*.sh
 
       - name: Run the installer scenarios
         run: tests/installer/run.sh
@@ -206,9 +209,13 @@ jobs:
             JetlinkKit/.build
           key: swift-linux-v2-${{ matrix.arch }}-${{ hashFiles('scripts/build-linux.sh', 'JetlinkKit/Package.resolved') }}
 
-      - name: Install curl
-        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl
+      - name: Install curl and ffmpeg
+        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg
         # The swift image has no curl, which build-linux.sh fetches with.
+        # ffmpeg is libavcodec, which the HEVC frame path opens at run time
+        # (JL_HEVC_DLOPEN): without it the server reports no decoder and the
+        # hello does not offer the codec, and the HEVC tests would skip
+        # rather than run.
 
       - name: Fetch onnxruntime
         run: |

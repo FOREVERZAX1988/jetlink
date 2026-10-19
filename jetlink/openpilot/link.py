@@ -31,8 +31,8 @@ CONNECT_TIMEOUT = 45.0
 CONNECT_DELAY = 0.5
 # four frame periods, and four times the slowest frame seen. A host that goes
 # silent with no USB edge (a hung server, a phone's cable) costs one frame this
-# long plus the small model's, inside modelV2's 0.5 s alive limit; 0.5 s here
-# flashed commIssue on top of the fallback
+# long plus the small model's, inside modelV2's 0.5 s alive limit; at 0.5 s
+# here commIssue flashes on top of the fallback
 INFERENCE_TIMEOUT = 0.2
 # between joins while neither end has the picked model and nothing else is built
 MODEL_WAIT = 60.0
@@ -52,6 +52,7 @@ class ModelMissing(RuntimeError):
   (joining._join_loop)."""
   retry_after = MODEL_WAIT
   waiting = 'big model not downloaded yet'
+  code = 'model_missing'   # waiting's progress code (status.PROGRESS_CODES)
 
 
 def _left(deadline: float | None, default: float) -> float:
@@ -141,11 +142,16 @@ class WifiWaiting(ConnectionError):
 
 
 def dial(log, deadline: float | None = None, name: str | None = None):
-  """Open the link over Wi-Fi. Dials the gateway first (the phone-hotspot
-  case); if it refuses and the comma is on a normal LAN, auto-discovers a
-  jetlink server elsewhere on the subnet (a shared car AP where the phone is
-  an ordinary client). WifiWaiting when on no Wi-Fi or when nothing answers,
-  which the join retries."""
+  """Open the link over Wi-Fi.
+
+  Tries the announced servers first (mDNS, `_jetlink._tcp`), then the gateway
+  (the phone-hotspot case), then a sweep of the comma's own subnet (a shared
+  AP where the phone is an ordinary client). mDNS first because on a shared AP
+  the gateway is a router and dialing it only spends a timeout; a server that
+  announces itself is the server.
+
+  WifiWaiting when on no Wi-Fi or when nothing answers, which the join retries.
+  """
   from jetlink.client import FRAME_TIMEOUT, JetlinkClient
 
   def _open(host):
@@ -155,39 +161,51 @@ def dial(log, deadline: float | None = None, name: str | None = None):
                                   on_close=gadget.clear_link, name=name,
                                   deadline=FRAME_TIMEOUT if deadline is None else deadline)
 
-  gw = wifi.gateway()
-  if gw is not None:
+  def _try(host) -> object | None:
+    """The client on `host`, or None when nothing answered there."""
     try:
-      client = _open(gw)
-      gadget.note_link('wifi', gw)
-      log.warning("jetlink: dialed %s over Wi-Fi", gw)
-      return client
-    except OSError as gw_err:
-      # The gateway is not the server (a shared-AP router). Search the subnet;
-      # the gateway already had its chance, so discovery skips it.
-      host = wifi.discover(skip={gw})
-      if host is not None:
-        try:
-          client = _open(host)
-          gadget.note_link('wifi', host)
-          log.warning("jetlink: dialed %s over Wi-Fi", host)
-          return client
-        except OSError:
-          pass
-      # nothing else answered: keep the gateway's address/reason, as before
-      raise WifiWaiting(f"nothing answered at {gw}: {gw_err}", NO_ANSWER) from gw_err
-  # no gateway at all
-  if wifi.local_addr() is None:
+      client = _open(host)
+    except OSError:
+      return None
+    gadget.note_link('wifi', host)
+    log.warning("jetlink: dialed %s over Wi-Fi", host)
+    return client
+
+  # The gateway first: it is one read of the routing table, and a comma that
+  # has one is on Wi-Fi. A browse costs avahi a couple of seconds, so it is
+  # only worth it once the cheap answers are in.
+  gw = wifi.gateway()
+  if gw is None and wifi.local_addr() is None:
+    # not on Wi-Fi at all: nothing to dial and nothing to hear a browse on
     raise WifiWaiting("not on Wi-Fi", NOT_ON_WIFI)
-  host = wifi.discover(skip=set())
+
+  # an announced server, without a gateway or a sweep to guess at
+  announced = wifi.browse()
+  for _name, address in announced:
+    client = _try(address)
+    if client is not None:
+      return client
+
+  if gw is not None:
+    client = _try(gw)
+    if client is not None:
+      return client
+    # The gateway is not the server (a shared-AP router). Search the subnet;
+    # the gateway already had its chance, so discovery skips it.
+    host = wifi.discover(skip={gw}, mdnss=announced)
+    if host is not None:
+      client = _try(host)
+      if client is not None:
+        return client
+    # nothing else answered: the gateway's address is the one to report
+    raise WifiWaiting(f"nothing answered at {gw}", NO_ANSWER)
+  # no gateway at all
+  host = wifi.discover(skip=set(), mdnss=announced)
   if host is None:
     raise WifiWaiting("not on Wi-Fi", NOT_ON_WIFI)
-  try:
-    client = _open(host)
-  except OSError as e:
-    raise WifiWaiting(f"nothing answered at {host}: {e}", NO_ANSWER) from e
-  gadget.note_link('wifi', host)
-  log.warning("jetlink: dialed %s over Wi-Fi", host)
+  client = _try(host)
+  if client is None:
+    raise WifiWaiting(f"nothing answered at {host}", NO_ANSWER)
   return client
 
 
@@ -216,7 +234,7 @@ class Link:
   def open(self, deadline: float | None = None):
     """The client, opening one if we have not got one yet, or if the one held
     is dead: a big model retired after a link loss closes its client, and
-    reusing it failed the next attempt with EBADF, 5 s after every loss."""
+    reusing it fails the next attempt with EBADF."""
     if self.client is not None and self.client.dead:
       self.close()
     if self.client is None and self.wifi:
@@ -357,7 +375,7 @@ def identity(parts, entry: dict) -> tuple[str, int]:
   sha256, nbytes = entry.get('oid'), entry.get('size')
   if sha256 and nbytes:
     return sha256, int(nbytes)
-  parts.progress.report('connect', 0.0, 'finding model')
+  parts.progress.report('connect', 0.0, 'finding model', code='finding_model')
   return parts.models.resolve_pointer(entry['ref'])
 
 
@@ -430,10 +448,9 @@ def stand_in(parts, hello: dict, pick: str, built) -> tuple[str, int] | None:
 
   The server's hello says what it has: the model it has loaded and the ones it
   has built. The pick wins whenever the server has it. Otherwise the model it
-  has loaded drives, so the iPhone the user set to Cinque Terre V3 serves that
-  rather than whatever the comma last built on some other server (ResAction on
-  the Jetson, 2026-10-07); then the comma's own record of the last model built,
-  if this server has it too. A server that lists nothing has only the record
+  has loaded drives, so a phone set to its own model serves that rather than
+  whatever the comma last built on some other server; then the comma's own
+  record of the last model built, if this server has it too. A server that lists nothing has only the record
   to go on."""
   cached = hello.get('cached_models')
   have = None
@@ -459,7 +476,7 @@ def open_link(parts, link: Link, should_stop=None):
 
   The picked model is built here if the Jetson has not got it, minutes with
   the small model driving: a provisioning run works offroad only, so a model
-  picked in the driveway cost the whole drive otherwise. Only reached with
+  picked in the driveway would otherwise cost the whole drive. Only reached with
   the small model driving (the join loop stops asking once joined), so a build
   here never unloads an engine that is steering. Whatever this attempt cannot
   use stays on `link`, still open, for the next one.
@@ -486,7 +503,7 @@ def open_link(parts, link: Link, should_stop=None):
     built = parts.spec.ready_spec()
     standin = stand_in(parts, hello, sha256, built)
     if standin is not None:
-      # the user's choice (2026-10-06): a model already built drives until the
+      # by design, a model already built drives until the
       # pick is fetched and built, which a provisioning run does parked, rather
       # than the small model. Building here would unload it, and uploading
       # would share the link with its frames
@@ -523,9 +540,8 @@ def open_link(parts, link: Link, should_stop=None):
   except EngineMissing as e:
     # neither end has the bytes. Fetching them is a provisioning run's job;
     # clear the record if it named this model, so the next one does. The link
-    # is fine and stays on `link`: closing it left a read queued that the next
-    # attempt's open had to bounce the gadget for, every 7 s for a whole drive
-    # (2026-10-06)
+    # is fine and stays on `link`: closing it leaves a read queued that the
+    # next attempt's open has to bounce the gadget for
     parts.spec.clear_ready(sha256)
     raise ModelMissing(str(e)) from e
   except BaseException:

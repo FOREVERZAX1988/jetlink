@@ -96,8 +96,7 @@ enum OrtUnit: Equatable {
   case cpu
 
   /// A manifest entry's unit. QNN and CPU sessions name theirs; a CoreML one
-  /// names its compute units, null for the CPU in artifacts from before the
-  /// two backends were one.
+  /// names its compute units, or null for the CPU in older artifacts.
   init?(entry: [String: Any]) {
     switch entry["unit"] as? String {
     case "htp": self = .htp

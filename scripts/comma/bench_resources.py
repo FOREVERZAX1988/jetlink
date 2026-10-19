@@ -18,7 +18,7 @@ from pathlib import Path
 
 # the sysctls the link tunes, read off the root script so a run records
 # whether they were applied
-ROOT_SCRIPT = Path(__file__).with_name('jetlink-root.sh')
+ROOT_SCRIPT = Path(__file__).resolve().parents[2] / 'jetlink' / 'comma' / 'jetlink-root.sh'
 
 
 def tuned_sysctls():

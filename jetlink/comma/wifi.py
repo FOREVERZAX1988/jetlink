@@ -5,14 +5,25 @@ This file is part of jetlink and is licensed under the MIT License.
 See the LICENSE file in the root directory for more details.
 
 The link over Wi-Fi: the comma joins the device's hotspot (a phone's, a
-Jetson's) and dials its default gateway, which is that device. On a hotspot
-that is the whole search, and the password the person typed into the comma is
-what the link trusts. On a normal AP the phone is an ordinary client rather
-than the gateway, so the gateway is tried first and, when it refuses, this
-sweeps the comma's own wlan0 subnet with bare TCP connects -- no bytes sent, no
-HELLO, so a probe neither starts a session nor loads the phone's model -- and
-remembers the host that answered for the next join. No gadget is built and the
-USB-C port is left alone, so ADB keeps working.
+Jetson's) and finds the server on it.
+
+Three ways to find it, tried in this order, because they differ in what they
+assume:
+
+  - **A remembered peer.** The last address that answered, for a few minutes,
+    so a drive's joins do not sweep every time.
+  - **mDNS.** The server announces itself as `_jetlink._tcp` and avahi-browse
+    hears it. This is the only one that needs no guess: the announcement *is*
+    the server. Absent on a device without avahi, and then skipped silently.
+  - **The gateway, then the subnet.** The hotspot case is the gateway (the
+    phone), and a shared AP where the phone is an ordinary client is a sweep.
+    Both are addresses that might be a server, so both come after the one that
+    is.
+
+On a hotspot the password the person typed into the comma is what the link
+trusts, and that does not change here: the gateway and the sweep stay inside
+the interface's own subnet, and mDNS answers on this interface alone. No gadget
+is built over any of it and the USB-C port is left alone, so ADB keeps working.
 """
 from __future__ import annotations
 
@@ -51,6 +62,18 @@ DISCOVER_TIMEOUT = 0.25
 # never probe more hosts than this in one sweep
 DISCOVER_MAX_HOSTS = 254
 
+# The service a jetlink server announces itself as, and the daemon that hears
+# it. AGNOS ships both avahi tools (the reference fork's server_locator browses
+# with this same pair). A device without them gets the gateway and the sweep.
+MDNS_SERVICE = '_jetlink._tcp'
+BROWSE_BIN = 'avahi-browse'
+# how long one browse may run: avahi-browse --terminate still needs a moment to
+# hear the first answers, and a browse that outlives its usefulness holds a join
+BROWSE_TIMEOUT = 2.0
+# the most results a single browse is parsed for, so a busy network cannot make
+# the parse unbounded
+BROWSE_MAX = 32
+
 
 def local_addr(interface: str = INTERFACE) -> tuple[str, int] | None:
   """The interface's IPv4 address and prefix length, e.g. ('10.0.0.44', 24).
@@ -73,7 +96,7 @@ def local_addr(interface: str = INTERFACE) -> tuple[str, int] | None:
 def _probe(host: str, port: int, timeout: float) -> bool:
   """True when a jetlink server may be on host:port: the TCP connect succeeds.
   The real protocol check is the join's own HELLO, so a bare connect (no bytes
-  sent) never disturbs the phone or loads its model."""
+  sent) never disturbs a phone or loads its model."""
   s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
   s.settimeout(timeout)
   try:
@@ -104,22 +127,78 @@ def _saved_peer(port: int) -> str | None:
   return host if _probe(host, port, DIAL_TIMEOUT) else None
 
 
+def parse_browse(text: str, service: str = MDNS_SERVICE) -> list[tuple[str, str]]:
+  """avahi-browse's output for `service` as (instance, address) pairs.
+
+  ``avahi-browse -rtp`` prints one record a line, fields semicolon-separated:
+
+      =;wlan0;IPv4;<instance>;_jetlink._tcp;local;<hostname>;<address>;<port>;"txt"
+
+  Only a resolved IPv4 record for our own service counts: an unresolved one has
+  no address yet, and an IPv6 one the caller cannot dial. The address comes back
+  as the daemon printed it, a dotted quad for IPv4. A record whose address field
+  is empty is one avahi has not finished resolving.
+  """
+  out: list[tuple[str, str]] = []
+  for line in text.splitlines():
+    if not line.startswith('='):
+      continue
+    fields = line.split(';')
+    # '=' through at least the address field (index 7)
+    if len(fields) < 8 or fields[2] != 'IPv4' or fields[4] != service:
+      continue
+    name, address = fields[3].strip(), fields[7].strip()
+    if address:
+      out.append((name, address))
+    if len(out) >= BROWSE_MAX:
+      break
+  return out
+
+
+def browse(service: str = MDNS_SERVICE, timeout: float = BROWSE_TIMEOUT) -> list[tuple[str, str]]:
+  """The instances announcing `service` on the local link, as (instance, address).
+
+  Best effort: no avahi-browse (a dev machine, or a device without it) and no
+  answer are both an empty list, because the caller has the gateway and the
+  sweep to fall back on. `--terminate` makes the daemon exit on its own instead
+  of browsing until killed.
+  """
+  try:
+    proc = subprocess.run([BROWSE_BIN, '-rtp', '--terminate', service],
+                          capture_output=True, text=True, timeout=timeout)
+  except (FileNotFoundError, OSError, subprocess.SubprocessError):
+    return []
+  return parse_browse(proc.stdout or '', service)
+
+
 def discover(port: int = 5599, interface: str = INTERFACE,
-             timeout: float = DISCOVER_TIMEOUT, skip: frozenset[str] | set[str] = frozenset()) -> str | None:
+             timeout: float = DISCOVER_TIMEOUT, skip: frozenset[str] | set[str] = frozenset(),
+             mdnss: list[tuple[str, str]] | None = None) -> str | None:
   """Find a jetlink server on the local Wi-Fi without a fixed address.
 
-  Tries a remembered peer first, then the gateway (the phone-hotspot case),
-  then sweeps the subnet concurrently (the shared-AP case, phone is an
-  ordinary client). Hosts in `skip` (already tried and failed by the caller)
-  are not probed again. Returns the first host whose TCP connect succeeds,
-  remembered for next time. Pure connect probes; no HELLO, so a probe neither
-  starts a session nor loads the phone's model. None when nothing answers."""
+  Tries a remembered peer, then mDNS (a server announcing itself), then the
+  gateway (the hotspot case), then sweeps the subnet concurrently (a shared AP
+  where the phone is an ordinary client). Hosts in `skip` (already tried and
+  failed by the caller) are not tried again. `mdnss` is the browse result, for
+  tests and for a caller that has asked already.
+
+  Returns the first host whose TCP connect succeeds, remembered for next time.
+  Pure connect probes; no HELLO, so a probe neither starts a session nor loads
+  a server's model. None when nothing answers.
+  """
   saved = _saved_peer(port)
   if saved and saved not in skip:
     return saved
 
+  # mDNS first: an announced server is the server, where the rest are addresses
+  # that might be one. Probes are still connects only, in case the record is stale
+  for _name, address in (browse() if mdnss is None else mdnss):
+    if address and address not in skip and _probe(address, port, DIAL_TIMEOUT):
+      _save_peer(address, port)
+      return address
+
   gw = gateway(interface)
-  # gateway first (hotspot), then the other hosts on the link (shared AP)
+  # gateway next (hotspot), then the other hosts on the link (shared AP)
   candidates: list[str] = []
   if gw and gw not in skip:
     candidates.append(gw)

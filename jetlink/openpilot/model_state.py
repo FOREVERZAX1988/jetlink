@@ -35,6 +35,26 @@ from dataclasses import dataclass
 import numpy as np
 
 from jetlink.openpilot import stages
+from jetlink import codecs, hevc
+from jetlink.openpilot import stream as stream_mod
+from jetlink.openpilot.latency import LateTracker
+from jetlink.openpilot.stages import FrameStages as StageStages
+from jetlink.protocol import NotFinite
+
+
+class NotReady(RuntimeError):
+  """This frame has no output to publish, and no link failure to blame.
+
+  An HEVC stream opens with frames withheld until both cameras have produced a
+  keyframe (stream.StreamGate), and for the first of them there is no earlier
+  output to publish again either. That is a frame the small model must run, and
+  nothing more: the stream is coming up, not failing.
+
+  Distinct from a NotFinite, which is a host that answered wrongly and hands the
+  drive back; a caller that catches this runs the small model for one frame and
+  keeps the link.
+  """
+  retryable = True
 
 SEND_RAW_PRED = os.getenv('SEND_RAW_PRED')
 SLOW_FRAME = 0.05  # the full 20 Hz budget, not just the largest outliers
@@ -43,7 +63,7 @@ SLOW_FRAME = 0.05  # the full 20 Hz budget, not just the largest outliers
 # would be dropped: modeld's own work around run() takes the rest of the 50 ms.
 # A held frame is a plan one frame old, which the 10 s plan and the actuator
 # delay both dwarf, where a dropped frame is the same stale plan plus a count
-# toward selfdrived's modeldLagging. None waits the client's deadline, as before
+# toward selfdrived's modeldLagging. None waits the client's full deadline
 HOLD_FRAME = 0.046
 # What the frames before the host's first answer may wait, which the hold above
 # cannot cover: there is no output to publish again, so there is nothing to fall
@@ -84,8 +104,7 @@ HOLD_WINDOW = 10.0
 # The first frames after a swap, which the fork holds engagement off for (a
 # second at 20 Hz): a single held frame among them is behind. A host cold from
 # a reconnect proves itself here, before anyone can engage, rather than at the
-# wheel, where an iPhone's every return was a soft disable within a second
-# (2026-10-04)
+# wheel, where a slow host's return is a soft disable within a second
 PROVING_FRAMES = 20
 # the first of them never hand back, held or not: the first after a join
 # carries the history reset, and a Mac's is ~100 ms of CoreML warm-up. A
@@ -208,9 +227,10 @@ class Frame:
   seq: int | None = None
   sent: float = 0.0
   telemetry: bool = False
-  # where its six segments are filled in as it goes (openpilot.stages), and
-  # finished by whichever frame reads the reply
-  slot: stages.Slot | None = None
+  # ours: how long packing the warped frame cost, on the lossless carrier. It
+  # is CPU on the frame thread and the one segment whose cost could be removed,
+  # so it is kept apart from the send that follows it
+  encode: float = 0.0
 
 
 class JetlinkModelState:
@@ -232,7 +252,8 @@ class JetlinkModelState:
                pipeline: bool | None = None,
                hold_frame: float | None = None, settling_frames: int | None = None,
                holds_in_a_row: int | None = None, holds_allowed: int | None = None,
-               proving_holds_fatal: bool = True):
+               proving_holds_fatal: bool = True, stages: object | None = None,
+               late: object | None = None):
     self._log = log
     # Per-link overrides. None means "read the module constant each frame", so
     # the strict USB/Jetson defaults stay live constants the tests can mock and
@@ -260,11 +281,10 @@ class JetlinkModelState:
     self.get_action_from_model = face.get_action_from_model
 
     self.client = client
-    # the six segments of every frame, filed as its reply is read: the frame
-    # line below is one sample and has no reply segment for a frame that never
-    # waited, which is the frame a demotion is made of (openpilot.stages)
-    self.stages = stages.StageTimes()
-    client.on_answer = self.stages.answer
+    # the six segments of every frame are upstream's FrameStages now (below):
+    # keyed on the frame id rather than on a slot the reply caller passes in, so
+    # a frame that never waited is still split. Ours filed them through
+    # client.on_answer; that hook is kept on the client and unused here.
     # when the last frame ended: what the next frame's pickup is measured from
     self._prev_end: float | None = None
     self._last_stages_logged = 0.0
@@ -303,6 +323,17 @@ class JetlinkModelState:
       from jetlink.lossless import Packer
       self._packer = Packer(spec.warped_shape)
 
+    # an HEVC link's two encoders and its gate (jetlink.hevc, stream): the
+    # frame path encodes instead of sending the warped bytes, and the gate
+    # decides when a keyframe is owed. Built only where the server listed the
+    # codec and the caller chose it (client.codec, codecs.pick)
+    self._hevc = None
+    self._gate = None
+    self._metas = None
+    self._epoch = 0
+    if getattr(client, 'codec', None) == codecs.HEVC and getattr(client, 'takes_hevc', False):
+      self._build_hevc(spec)
+
     self.input_shapes = spec.input_shapes
     self.output_slices = spec.output_slices
     # from the spec, not ModelConstants: the server derives its history stride
@@ -327,6 +358,14 @@ class JetlinkModelState:
     # comes a period after the swap frame, not on it
     self._last_summary_logged = time.perf_counter()
     self.trips = Trips()
+    # The comma's own six stages (stages.FrameStages): where the frame's half of
+    # the budget went, which neither the server's telemetry nor the round trip
+    # can say. A caller may pass one to share (the join's, across rebuilds); one
+    # is made here otherwise, so a frame is always timed and nothing is optional
+    self.stages = stages if stages is not None else StageStages()
+    # late replies, by the watermark rule (latency.LateTracker): a reply past
+    # the hold is late, not lost, and a link that is late is one about to drop
+    self.late = late if late is not None else LateTracker()
     # the frame prepared and not yet ended, if any
     self._frame: Frame | None = None
     # the newest output parsed, with what it parsed to: a held frame
@@ -341,6 +380,129 @@ class JetlinkModelState:
     # when the host last answered, for the preview's silence rule. The state is
     # built on the swap frame, so it starts counting from there
     self._last_answer = time.monotonic()
+    # whether the last frame published the one before it: the runtime record's
+    self.held = False
+
+  def _build_hevc(self, spec) -> None:
+    """The HEVC path's state: two encoders (one camera each), the gate that
+    owes keyframes, and the cache that finds a frame's context when its encoder
+    answers.
+
+    The encoders come from the adapter a fork supplies (codecs.HEVCEncoder):
+    the comma's is the Venus block, reachable only from the device, so this
+    builds nothing itself and a link whose fork has no encoder never negotiates
+    the codec (codecs.available at the pick).
+
+    `_encoders` is empty and the path stays off where the builder refuses,
+    which is how a link falls back to the codec it was already using rather
+    than sending frames a server cannot decode.
+    """
+    h, w = spec.model_hw
+    self._gate = stream_mod.StreamGate()
+    self._metas = hevc.MetaCache()
+    self._epoch = 0
+    self._encoders: dict[str, object] = {}
+    # two different questions about the same frame: how many bytes it is, and
+    # how those bytes are arranged. An encoder is configured from the second,
+    # and a length cannot be split back into it.
+    self._hevc_size = hevc.nv12_shape((h, w))
+    self._hevc_geometry = hevc.nv12_geometry((h, w))
+    self._warp_shape = spec.warped_shape
+    self._hevc = True
+    # a connection is up and the stream starts here
+    self._open_hevc_stream()
+
+  def _open_hevc_stream(self) -> None:
+    """A connection is up, or a stream must restart: the gate owes IDRs and
+    the encoders drop their references, so the first frames out are ones a
+    receiver with nothing can decode."""
+    if not self._hevc:
+      return
+    self._epoch += 1
+    self._metas.clear()
+    self._gate.open(self._epoch)
+
+  def _encode_frame(self, frame_id: int) -> tuple | None:
+    """The two cameras' HEVC access units for this frame, or None while the
+    gate is shut or an encoder has nothing ready.
+
+    The warp's output is both cameras as one (2, 6, H, W); each is reassembled
+    into NV12 and through its own encoder. A frame that comes back short (an
+    encoder still buffering) is not a failure: it is a frame the server is not
+    sent, and the gate is told, so the next one owes an IDR if it was lossy.
+    """
+    if not self._hevc or self._gate is None:
+      return None
+    step = self._gate.begin(self._epoch, frame_id)
+    encoders = self._encoder_for()
+    if encoders is None:
+      return None
+    try:
+      planes = self._planes()
+    except Exception:
+      self._log.exception("jetlink: could not read the warped frame for HEVC")
+      return None
+    units: dict[str, bytes] = {}
+    idrs: dict[str, bool] = {}
+    for name, enc in encoders.items():
+      nv12 = hevc.to_nv12(planes[int(name == stream_mod.STREAMS[1])])
+      data, key = enc.encode(nv12, force_keyframe=(name in step.request_idr))
+      if not data:
+        # nothing ready: the gate must not open on a frame that is not sent
+        self._gate.gap(f'{name} encoder had no output')
+        return None
+      units[name], idrs[name] = bytes(data), bool(key)
+    acted = self._gate.confirm(self._epoch, frame_id, **{f'{k}_idr': v for k, v in idrs.items()})
+    if not acted.send:
+      # the gate is still waiting for a keyframe: the frame is dropped, and
+      # the caller reads this as a frame not sent (a hold, not a link failure)
+      return None
+    return units[stream_mod.STREAMS[0]], units[stream_mod.STREAMS[1]]
+
+  def _planes(self):
+    """The warp's output as (2, 6, H, W) uint8, a view and not a copy."""
+    out = self.warp.output
+    return np.frombuffer(out, np.uint8).reshape(*self._warp_shape)
+
+  def _encoder_for(self) -> dict | None:
+    """This link's two encoders, made on first use. None where the adapter
+    supplies no builder, which keeps the link on the codec it had.
+
+    The builder is handed `(rows, cols)` and the flat byte count: the first is
+    what an encoder configures itself from, the second is what a test compares a
+    produced frame against. Handing it the byte count twice, as this did, left
+    every backend with nothing to take a width and a height out of.
+    """
+    if self._encoders:
+      return self._encoders
+    maker = getattr(self.face, 'hevc_encoder', None)
+    if maker is None:
+      self._hevc = False
+      return None
+    try:
+      for name in stream_mod.STREAMS:
+        self._encoders[name] = maker(self._hevc_geometry, tuple(self._hevc_size))
+    except Exception:
+      self._log.exception("jetlink: could not build the HEVC encoder, staying on the frame carrier in use")
+      self._hevc = False
+      self._encoders = {}
+      return None
+    return self._encoders
+
+  def _frame_eof(self, inputs: dict) -> float | None:
+    """The camera's own read-out stamp for this frame, on modeld's monotonic
+    clock, when the loop supplies one: the capture stage is measured from it.
+    None when it does not, and then the stage is measured from the frame's
+    start and the sensor's own delay is not counted (see stages.FrameStages)."""
+    stamp = inputs.get('timestamp_eof') or inputs.get('timestampEof')
+    if stamp is None:
+      return None
+    try:
+      # modeld's stamp is monotonic nanoseconds, the same clock perf_counter
+      # reads: only the units differ
+      return float(stamp) / 1e9
+    except (TypeError, ValueError):
+      return None
 
   def slice_outputs(self, model_outputs: np.ndarray, output_slices: dict[str, slice]) -> dict[str, np.ndarray]:
     return {k: model_outputs[np.newaxis, v] for k, v in output_slices.items()}
@@ -370,8 +532,12 @@ class JetlinkModelState:
     # the param's answer for this frame: a preview that ended between frames
     # must not keep the link's patience one frame longer
     self._tell_the_link()
+    # the frame's own timing starts here; the sensor's stamp, when the caller
+    # passes one, is where the capture stage is measured from
+    self.stages.start(self._frame_id + 1, t0, t_eof=self._frame_eof(inputs))
     self.warp.start(_address(bufs['img']), _address(bufs['big_img']), transforms['img'], transforms['big_img'])
     t1 = time.perf_counter()
+    self.stages.captured(self._frame_id + 1, t0)
     # the GPU is warping; nothing below is an input to it
     if self.client.drain():
       # the host answered since the last frame. For a pipelined frame, which
@@ -393,15 +559,12 @@ class JetlinkModelState:
     # free again once infer_begin returns: the gadget's io_submit and the
     # cable's sendmsg have copied it by then, before the next warp writes it
     self.warp.wait()
+    self.stages.warped(self._frame_id + 1, time.perf_counter())
     self._frame = Frame(t0, t1, time.perf_counter())
-    # pickup is the camera and modeld's own publish: the frame budget is spent
-    # out of it before the warp is even launched, and nothing else reports it
-    slot = self._frame.slot = self.stages.start(None if self._prev_end is None else t0 - self._prev_end)
-    slot.warp = t1 - t0
-    # everything from the launch to the warp's output being free again: the
-    # packed inputs, the drain, and the wait itself, which the six do not
-    # separate because at this size they are one number
-    slot.pair = self._frame.t2 - t1
+    # pickup (capture) is measured where prepare() started the frame, and warp
+    # where the warp's output is free (stages.warped above). Ours had a `pair`
+    # segment between the two for the pack; upstream's six have no such stage,
+    # and that time is inside `warp` here.
 
   def send(self, want_telemetry: bool = False) -> None:
     """The prepared frame to the host. It asks for the server's telemetry
@@ -421,9 +584,19 @@ class JetlinkModelState:
     if self._packer is not None:
       encode_from = time.perf_counter()
       lossless = self._packer.pack(self.warp.errors)
-      frame.slot.encode = time.perf_counter() - encode_from
+      frame.encode = time.perf_counter() - encode_from
     try:
-      if self._packer is None:
+      if self._hevc:
+        # the two cameras' access units, or a frame the gate kept back, which
+        # is a hold and not a failure (send() returning with seq None)
+        units = self._encode_frame(self._frame_id)
+        if units is None:
+          frame.sent = time.perf_counter()
+          return
+        frame.seq = self.client.infer_begin(None, self.packed, self._frame_id, reset=self._need_reset,
+                                            want_state=frame.telemetry, skip_if_busy=self._can_hold,
+                                            hevc=units)
+      elif self._packer is None:
         frame.seq = self.client.infer_begin(self.warp.output, self.packed, self._frame_id, reset=self._need_reset,
                                             want_state=frame.telemetry, skip_if_busy=self._can_hold)
       else:
@@ -438,10 +611,10 @@ class JetlinkModelState:
                         f" ({stats})" if stats else "")
       raise
     frame.sent = time.perf_counter()
-    frame.slot.send = frame.sent - frame.t2
-    # filed under the id the reply will name; an unsent frame keeps the slot
-    # unused, and its reply never comes
-    self.stages.track(frame.slot, self._frame_id, frame.sent)
+    # ours' encode-into-the-slot bookkeeping went with the slot: upstream's
+    # stages key on the frame id, so the pack/encode time falls between warped()
+    # and sent(), and the `jetlink: stages` line still splits the frame
+    self.stages.sent(self._frame_id, frame.sent)
     if frame.seq is not None:
       self._need_reset = False
 
@@ -449,8 +622,10 @@ class JetlinkModelState:
     """The sent frame's output, as modeld blocks on a chestnut's, but not past
     the hold once there is an output to publish again: a frame that long
     is a dropped camera frame. A stall past the client's deadline raises, into
-    the joining state's demotion to the small model. In a preview a frame the
-    host answered without an output raises FrameFailed instead, which the
+    the joining state's demotion to the small model; an output that is not
+    finite raises NotFinite, and a frame with nothing to publish and nothing to
+    publish again raises NotReady, which keeps the link. In a preview a frame
+    the host answered without an output raises FrameFailed instead, which the
     joining state takes without handing the link back."""
     frame, self._frame = self._frame, None
     # publish health while the Jetson works
@@ -468,12 +643,19 @@ class JetlinkModelState:
       model_output = None
       pipelined = True
       self.trips.pipelined += 1
-    elif self._can_hold:
-      model_output = self.client.infer_end(frame.seq, hold=self._hold_left(frame))
     else:
-      # nothing has come back yet this session, so there is no output to publish
-      # again: this frame waits its own budget, not one 20 Hz frame
-      model_output = self.client.infer_end(frame.seq, deadline=self._first_frame_budget)
+      # both waits share one NotFinite: a host that answered with an output it
+      # could not compute answered, so the leave's summary counts the frame
+      try:
+        if self._can_hold:
+          model_output = self.client.infer_end(frame.seq, hold=self._hold_left(frame))
+        else:
+          # nothing has come back yet this session, so there is no output to
+          # publish again: this frame waits its own budget, not one 20 Hz frame
+          model_output = self.client.infer_end(frame.seq, deadline=self._first_frame_budget)
+      except NotFinite:
+        self.trips.record(time.perf_counter() - frame.t0, self.client.last_timings[2])
+        raise
     t4 = time.perf_counter()
     # where the next frame's pickup starts from: modeld publishes this one and
     # comes back, and none of that is inside any segment below
@@ -484,6 +666,24 @@ class JetlinkModelState:
     # shape of the loop)
     earlier = model_output is None
     held = earlier and not pipelined
+    # The first frames of an HEVC stream have nothing to publish and nothing to
+    # publish again: the gate is waiting for a keyframe on both cameras. That is
+    # a stream coming up, not a host that is behind, so it is raised before any
+    # hold is counted and never moves `behind`: the caller runs the small model
+    # for the frame and keeps the link (joining catches NotReady).
+    if (held and self.client.last_output is None and not self.client.last_failed
+        and self._hevc):
+      # upstream's NotReady, narrowed to the case it was written for: the HEVC
+      # gate withholding frames until both cameras have a keyframe. A host that
+      # answered with a failure is the next branch's frame, not a stream coming
+      # up (`last_failed` says something came back), and a link that is not
+      # HEVC has no gate to wait on: a held frame there publishes what it has,
+      # as it always did
+      self.held = False
+      self.stages.replied(self._frame_id, t4)
+      self.stages.finished(self._frame_id, time.perf_counter(), held=False)
+      raise NotReady(f"frame {self._frame_id}: nothing to publish and nothing to hold")
+    self.held = held
     self.behind = self._note_pipeline() if pipelined else self._note_hold(held)
     if earlier and self.client.last_failed and self.client.last_output is None:
       # the host answered and the answer carried no output, on a frame with
@@ -491,8 +691,17 @@ class JetlinkModelState:
       # A preview keeps the link and the joining state serves this frame from
       # the small model, rather than handing the picture back to it
       raise FrameFailed(f"inference failed on frame {self._frame_id} before any output")
-    outputs = self._outputs(self.client.last_output if earlier else model_output)
+    # recorded before the parse: a host that answered with an output _outputs
+    # refuses answered, so the leave's summary counts the frame (ours; upstream
+    # records after, and an inf in the output went uncounted)
     self.trips.record(t4 - frame.t0, self.client.last_timings[2])
+    outputs = self._outputs(self.client.last_output if earlier else model_output)
+    # the reply's own arrival, and whether the hold gave up before it: the
+    # watermark rule, which says a late reply is late and a missing one lost
+    if frame.seq is not None:
+      (self.late.gave_up if held else self.late.arrived)(self._frame_id)
+    self.stages.replied(self._frame_id, t4)
+    self.stages.finished(self._frame_id, time.perf_counter(), held=held)
     # a frame past the budget is a dropped camera frame; send against reply
     # says which end it was. Held frames are a steady few on a marginal host
     # and a pipeline's are every frame, so after the first they go to the log
@@ -526,7 +735,7 @@ class JetlinkModelState:
     # and it is the only one that can split a frame that never waited: there
     # the reply segment is the frames the host was behind, not a wait that
     # ended when the hold did
-    row = self.stages.last
+    row = self.stages.last()
     if row is not None and (self._frame_id <= 3 or t4 - frame.t0 > SLOW_FRAME
                             or t4 - self._last_stages_logged >= TELEMETRY_PERIOD):
       self._last_stages_logged = t4
@@ -745,9 +954,17 @@ class JetlinkModelState:
     gives the same dict again: the parser's softmax works in place on it."""
     if self._parsed is not None and self._parsed[0] is model_output:
       return self._parsed[1]
-    # the non-finite check runs on the server (Status.NOT_FINITE -> LinkError),
-    # so modeld's big->small failover fires as it does for a chestnut
+    # the server checks first (Status.NOT_FINITE, which the client raises as
+    # this). This is for one that did not, or bytes the link changed: a raw
+    # inf is a corrupt output even where the parser would clip it finite. A
+    # sum allocates nothing, and any NaN or inf makes it one; these outputs
+    # are far from overflow
+    if not np.isfinite(model_output.sum()):
+      raise NotFinite(f"frame {self._frame_id}: the output is not finite")
     outputs_dict = self.parser.parse_outputs(self.slice_outputs(model_output, self.output_slices))
+    # a finite output can still parse to inf, by a parser that does not clip
+    if not np.isfinite(sum(float(value.sum()) for value in outputs_dict.values())):
+      raise NotFinite(f"frame {self._frame_id}: the parsed output is not finite")
     if SEND_RAW_PRED:
       outputs_dict['raw_pred'] = model_output.copy()
     self._parsed = (model_output, outputs_dict)

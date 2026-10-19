@@ -10,7 +10,7 @@
   #endif
 
   /// `jetlink-server build ONNX`: the engine a comma would get, built ahead
-  /// of the drive (Python's --build).
+  /// of the drive.
   struct Build: ParsableCommand {
     static let configuration = CommandConfiguration(
       abstract: "Build this backend's engine for a model, or say it is built already.",
@@ -116,7 +116,7 @@
   }
 
   /// `jetlink-server spec ONNX`: the ModelSpec JSON the comma is sent for a
-  /// model (Python's --dump-spec).
+  /// model.
   struct Spec: ParsableCommand {
     static let configuration = CommandConfiguration(abstract: "Print the spec the comma is sent for a model, as JSON.")
 

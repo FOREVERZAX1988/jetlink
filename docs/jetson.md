@@ -74,6 +74,10 @@ when prompted. Port **5600** is the default; **0** disables it.
 
 ## 3. Connect the comma
 
+The comma runs an openpilot fork with Jetlink support (zoompilot, StarPilot).
+The comma's steps and its home-button icon below are zoompilot's; on another
+fork, follow its own docs.
+
 1. **Install zoompilot.** After resetting the comma, enter
    **`zoompilot/main`** as the install URL. Already on zoompilot? Select
    **main** in **Settings > Software > Target Branch**. Wait for installation
@@ -98,7 +102,7 @@ Read [daily use](using-jetlink.md) before driving.
 | Problem | Try this |
 | --- | --- |
 | Installer stopped | Run the install command again. |
-| Icon never turns green | Run `jetlink status`. Use the Jetson's USB-A port; try another USB 3 data cable. |
+| Icon never turns green (zoompilot) | Run `jetlink status`. Use the Jetson's USB-A port; try another USB 3 data cable. |
 | Jetson will not wake | After a full shutdown, press its power button or reconnect power. Otherwise check **Always on** with `jetlink setup`. |
 | Jetson sleeps while you work on it over SSH | Run `jetlink caffeinate` and keep it running. |
 | Model fails to prepare or keeps disconnecting | Run `jetlink logs`. Check storage space, power, cable, and cooling. |

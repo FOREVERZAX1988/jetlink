@@ -3,7 +3,7 @@ import Testing
 
 @testable import JetlinkServer
 
-/// Every conversion path against the element loops the server began with,
+/// Every conversion path against plain element loops,
 /// which are what the Python queues compute: numpy's casts, round to nearest
 /// even. Bit for bit, so NaN payloads, signs of zero and subnormals count.
 /// The paths only vectorize in an optimized build, so run these once with

@@ -24,6 +24,14 @@ and publishes every app, and the installer moves every Jetson and PC to it.
      what changed on the comma since the last release, and say whether the
      protocol version moved; if it did, the comma and the server update
      together.
+   - A release that changes what an openpilot fork's adapter sees
+     (`jetlink/openpilot`: `API`, `__all__`, the `Jetlink` methods, `Status`,
+     `interface.py`) ends its section with a **Forks** group: the API value,
+     then one line per addition, removal or change of meaning, for whoever
+     keeps a fork's adapter. A removal or a change of meaning bumps `API`
+     (the rule is in `jetlink/openpilot/__init__.py`). For example:
+     `**Forks**` then `* API stays 3. New: Jetlink.shutdown_step(), the
+     optional small_reset().`
 2. Tag and push (replace `0.7.0`):
 
 ```bash

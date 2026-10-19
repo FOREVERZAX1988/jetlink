@@ -11,16 +11,28 @@ is pinned: modeld gets a working model immediately, a swap never lands on an
 engaged frame, a large model that dies mid-drive falls back without losing the
 frame, and a small-model failure still belongs to modeld.
 """
+import os
+import sys
 import tempfile
 import threading
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from jetlink.openpilot import joining, model_state
+
+import numpy as np
+
+import jetlink.openpilot as jo
+from jetlink.comma import gadget
+from jetlink.openpilot import interface, joining, link, status, warp
 from jetlink.openpilot.joining import REJOIN_DELAY_QUICK, STABLE_SECONDS, JoiningModelState
-from tests.openpilot.fakes import RecordingLog, isolate
+from jetlink.openpilot.status import Status
+from tests.openpilot import fakes
+from tests.openpilot.fakes import OpenpilotTest, RecordingLog, isolate
+from tests.openpilot.test_model_state import STATEFUL, FakeClient, ModelStateTest, spec_for
 
 
 class FakeModel:
@@ -37,6 +49,8 @@ class FakeModel:
     # the large model's: why it should hand back after its last frame
     # (model_state's hold rules and the proof after a swap)
     self.behind = None
+    # extra outputs this model carries, by name: what a cross-fade mixes
+    self.extra: dict = {}
 
   def run(self, bufs, transforms, inputs, after_enqueue=None):
     self.calls += 1
@@ -44,7 +58,7 @@ class FakeModel:
       raise self.raises
     if after_enqueue is not None:
       after_enqueue()
-    return {'from': self.name}
+    return {'from': self.name, **self.extra}
 
   def warmup(self):
     self.warmed = True
@@ -154,15 +168,17 @@ class JoiningBase(unittest.TestCase):
 
 
 class JoiningTest(JoiningBase):
-  def test_only_the_join_thread_runs_and_it_leaves_modelds_realtime_core_first(self):
-    # created after config_realtime_process(7, 54), it inherits SCHED_FIFO on
-    # core 7 and drops it before anything else. Nothing polls for in_control:
+  def test_only_the_join_and_record_threads_run_and_they_leave_modelds_realtime_core_first(self):
+    # created after config_realtime_process(7, 54), they inherit SCHED_FIFO on
+    # core 7 and drop it before anything else. Nothing polls for in_control:
     # the frame asks it
     events = []
-    with mock.patch.object(joining, 'background_thread', lambda: events.append(threading.current_thread().name)):
+    with mock.patch.object(joining, 'background_thread', lambda: events.append(threading.current_thread().name)), \
+         mock.patch.object(gadget, 'write_record', lambda *a: events.append(('write', threading.current_thread().name))):
       s = self._state()
-      self.assertTrue(wait_for(lambda: events))
-    self.assertEqual(events, [s._thread.name])
+      self.assertTrue(wait_for(lambda: len(events) >= 3))
+    self.assertEqual(sorted(e for e in events if isinstance(e, str)), sorted([s._thread.name, s._writer.name]))
+    self.assertLess(events.index(s._writer.name), events.index(('write', s._writer.name)))
 
   def test_runs_the_small_model_immediately(self):
     s = self._state()
@@ -188,7 +204,7 @@ class JoiningTest(JoiningBase):
     self.addCleanup(self._close, s)
     self._wait_joined(s)
     self.assertEqual([self._run(s) for _ in range(3)], [{'from': 'small'}, {'from': 'small'}, {'from': 'big'}])
-    self.assertFalse(self.small.in_control, 'lands on the small model too')
+    self.assertFalse(hasattr(self.small, 'in_control'), 'nothing reads it there')
 
   def test_late_boot_announces_availability_without_switching(self):
     booted = threading.Event()
@@ -216,8 +232,8 @@ class JoiningTest(JoiningBase):
     self.assertEqual(s.big_model_state, 'running')
 
   def test_a_model_neither_end_has_is_asked_for_again_slowly_and_said(self):
-    # a hello and a gadget bounce every 7 s for a whole drive (2026-10-06):
-    # only a provisioning run's download changes the answer
+    # retrying would be a hello and a gadget bounce every 7 s for the whole
+    # drive: only a provisioning run's download changes the answer
     from jetlink.openpilot.link import ModelMissing
     self.connect_error = ModelMissing('server has no engine for 1563b85f6bd00d9e (have 0 of the model)')
     self.connect_error.retry_after = 0.05
@@ -227,7 +243,8 @@ class JoiningTest(JoiningBase):
       while self.connect_calls < 2 and time.monotonic() < deadline:
         time.sleep(0.01)
     self.assertGreaterEqual(self.connect_calls, 2, 'waited REJOIN_DELAY, not MODEL_WAIT')
-    self.progress.report.assert_any_call('connect', 0.0, 'big model not downloaded yet', drops=0)
+    self.progress.report.assert_any_call('connect', 0.0, 'big model not downloaded yet', drops=0, code='model_missing',
+                                         args=None)
     self.assertFalse(s.big_model_available)
 
   def test_close_with_pending_model_clears_availability(self):
@@ -244,7 +261,7 @@ class JoiningTest(JoiningBase):
     self.assertTrue(s.chestnut)
     self.assertIs(s.client, self.big.client)
     # No warmup at the swap: the warp was prepared in __init__ and a frame
-    # over the link here was two dropped camera frames on the car.
+    # over the link here costs two dropped camera frames.
     self.assertFalse(self.big.warmed)
 
   def test_large_model_failure_demotes_and_keeps_the_frame(self):
@@ -327,7 +344,52 @@ class JoiningTest(JoiningBase):
     self.big.run = inspect
     self.assertEqual(self._run(s), {'from': 'big'})
     self.assertFalse(s._loading)
+    self.assertTrue(wait_for(lambda: self.progress.clear.called))
     self.progress.clear.assert_called_once()
+
+  def test_the_frame_thread_leaves_the_progress_clear_to_the_join_thread(self):
+    # a params remove is disk IO, and modeld's frame thread is realtime
+    s = self._state()
+    self._wait_joined(s)
+    s.in_control = False
+    seen, wait = [], s._rejoin.wait
+    self.progress.clear.side_effect = lambda: seen.append(threading.current_thread())
+
+    def waiting(timeout=None):
+      seen.append(('wait', timeout))
+      return wait(timeout)
+
+    s._rejoin.wait = waiting
+    t0 = time.monotonic()
+    self.assertEqual(self._run(s), {'from': 'big'})
+    self.assertNotIn(threading.current_thread(), seen, 'cleared on the frame thread')
+    self.assertTrue(wait_for(lambda: s._thread in seen))
+    self.assertLess(time.monotonic() - t0, 0.5)
+    # woken for that alone, the join thread waits again without a timeout,
+    # which it reaches only by not reconnecting (a connect leads to the
+    # keepalive's timed wait first)
+    self.assertTrue(wait_for(lambda: ('wait', None) in seen[seen.index(s._thread):]))
+    self.assertEqual(self.connect_calls, 1)
+
+  def test_a_hand_back_on_the_heels_of_the_join_is_not_wiped_by_its_clear(self):
+    # both land before the join thread wakes: the clear goes first, and the
+    # panel is left saying the newer thing
+    s = self._state()
+    self._wait_joined(s)
+    s.in_control = False
+    said = []
+    self.progress.clear.side_effect = lambda: said.append('cleared')
+    self.progress.report.side_effect = lambda stage, frac, msg, drops=0, **codes: said.append(msg)
+    # the join thread is held at its wait until both are in
+    gate, wait = threading.Event(), s._rejoin.wait
+    s._rejoin.wait = lambda timeout=None: gate.wait() and wait(timeout)
+    self.assertEqual(self._run(s), {'from': 'big'})
+    self.big.raises = RuntimeError('link gone')
+    self.assertEqual(self._run(s), {'from': 'small'})
+    self.assertNotIn('cleared', said)
+    gate.set()
+    self.assertTrue(wait_for(lambda: 'reconnecting' in said))
+    self.assertEqual(said[said.index('cleared'):], ['cleared', 'reconnecting'])
 
   def test_prepare_failure_uses_startup_fallback_not_a_slow_swap(self):
     order = []
@@ -392,8 +454,8 @@ class JoiningTest(JoiningBase):
     self.assertEqual(s.big_model_state, 'unavailable')
 
   def test_a_lost_link_is_counted_and_repeated_drops_blame_the_cable(self):
-    # every drop on the 2026-09-07 drives was the USB port letting go, and the
-    # driver saw "Big Model Failed" six times with no hint of a cause
+    # a drop is most often the USB port letting go, and "Big Model Failed"
+    # alone gives the driver no hint of a cause
     s = self._state()
     self._wait_joined(s)
     s.in_control = False
@@ -419,9 +481,8 @@ class JoiningTest(JoiningBase):
     self._wait_reported(s, 'waiting for jetlink', drops=2)
 
   def test_a_lag_demote_says_why_over_the_live_link(self):
-    # the phone's log carried no reason and none of the comma's numbers: a
-    # session there was the big model's time plus the backoff, and nothing
-    # said which. The leave carries what the comma measured
+    # the host cannot tell the big model's time from the backoff on its own,
+    # so the leave carries what the comma measured
     s = self._driving(dead=False)
     self.big.trips = mock.Mock(summary=lambda: {'frames': 7, 'p50_ms': 41.5})
     s.frame_drop_ratio = joining.DROP_LIMIT * 2
@@ -508,9 +569,9 @@ class JoiningTest(JoiningBase):
 
   def test_failures_back_off_and_a_stable_join_starts_over(self):
     # A demote is mostly one late frame: the first few are retried in a
-    # second. A link that dies on its first frame every time used to cost a
-    # swap, a demote and a chime every REJOIN_DELAY for the drive, so a streak
-    # past QUICK_RETRIES doubles as before.
+    # second. A link that dies on its first frame every time would cost a
+    # swap, a demote and a chime each retry, so a streak past QUICK_RETRIES
+    # doubles the delay.
     s = self._state()
     s._joined_at = 0.0
     delays = []
@@ -608,9 +669,8 @@ class JoiningTest(JoiningBase):
 class WaitingTest(JoiningBase):
   """Until the window opens the comma runs its own model and nothing else: the
   large model is built on the swap frame, and a ready link only hears a
-  keepalive ping. Frames sent to the host while the small model drove (shadow
-  frames) starved the driver monitoring model on a comma whose small model took
-  most of the frame (2026-10-05)."""
+  keepalive ping. Frames sent to the host while the small model drives starve
+  the driver monitoring model when the small model takes most of the frame."""
 
   def test_nothing_reaches_the_large_model_until_the_swap(self):
     build = mock.Mock(wraps=self._build)
@@ -1190,6 +1250,387 @@ class ModeldV2FaceTest(JoiningBase):
     self.big.raises = RuntimeError('link died')
     self.assertEqual(s.run({}, {}, inputs), {'from': 'small'})
     self.assertIs(self.small.seen_inputs, inputs)
+
+
+class ProtocolTest(JoiningBase):
+  """The models either side of attach, as interface pins them."""
+
+  def test_any_forks_small_model_conforms_and_so_does_what_attach_returns(self):
+    self.assertEqual(jo.conformance(FakeModel('small'), interface.SmallModel), [])
+    self.assertEqual(jo.conformance(FakeV2Model('small'), interface.SmallModel), [])
+    self.small = FakeV2Model('small')
+    self.assertEqual(jo.conformance(self._state(), interface.JoinedModel), [])
+    # over stock modeld's, the face and lat_delay are there only while the large model drives
+    self.small = fakes.stock()[0]
+    self.assertEqual(jo.conformance(self._state(), interface.JoinedModel), [])
+
+  def test_a_read_the_small_model_lacks_is_absent_whichever_drives(self):
+    # the frame's inputs are the small bundle's; the large model's never stand in
+    self.big.desire_key, self.big.numpy_inputs = 'desire_pulse', {}
+    s = self._state()
+    self._wait_joined(s)
+    s.in_control = False
+    self.assertEqual(self._run(s), {'from': 'big'})
+    self.assertFalse(hasattr(s, 'desire_key'))
+    self.assertFalse(hasattr(s, 'numpy_inputs'))
+
+  def test_a_small_model_without_a_lateral_delay_leaves_the_large_ones(self):
+    del self.small.lat_delay
+    self.big.lat_delay = 0.2
+    s = self._state()
+    self._wait_joined(s)
+    s.in_control = False
+    self.assertEqual(self._run(s), {'from': 'big'})
+    self.assertEqual(self.big.lat_delay, 0.2)
+
+
+class NotFiniteTest(JoiningBase):
+  """A host that answers with a NaN or an inf, by the server's word or the
+  comma's own check: the frame hands back, as a lag, over a link it keeps."""
+
+  def setUp(self):
+    super().setUp()
+    self.events = []   # ModelStateTest.make's
+
+  def check(self, spoil):
+    client = FakeClient()
+    client.leave, client.close = mock.Mock(), mock.Mock()
+    self.big = ModelStateTest.make(self, spec_for(STATEFUL), client)
+    self.small.calls = 0
+    s = self._state()
+    self._wait_joined(s)
+    s.in_control = False
+    self.assertNotIn('from', ModelStateTest.frames(s, 1)[0])
+    spoil(client)
+    self.assertEqual(ModelStateTest.frames(s, 1), [{'from': 'small'}], 'the frame is re-run on the small model')
+    self.assertEqual(self.small.calls, 1)
+    self.assertEqual((s._lags, s._drops), (1, 0))
+    self.assertFalse(s.chestnut)
+    self.assertTrue(wait_for(lambda: client.leave.called))
+    self.assertEqual(client.leave.call_args.args, (joining.BAD_OUTPUT,))
+    self.assertEqual(client.leave.call_args.kwargs['frames'], 2, 'the bad frame is in the summary')
+    self._wait_reported(s, 'bad output, reconnecting')
+    self.assertFalse(client.dead)
+    client.close.assert_not_called()
+
+  def test_a_nan_or_an_inf_the_comma_finds(self):
+    for bad in (np.nan, np.inf):
+      with self.subTest(bad):
+        def spoil(client, bad=bad):
+          client.output = client.output.copy()
+          client.output[3] = bad
+        self.check(spoil)
+
+  def test_one_the_server_finds(self):
+    # Status.NOT_FINITE, which the client raises without failing the link
+    self.check(lambda client: client.not_finite.add(2))
+
+
+class RuntimeRecordTest(JoiningBase):
+  """modeld's record of what it runs (gadget.MODELD), for a reader with no
+  modelV2: a thread of its own writes it, the frame thread only assigns."""
+
+  def setUp(self):
+    super().setUp()
+    self.big.spec = SimpleNamespace(sha256='a' * 64, checkpoint='ckpt')
+    # a hand-back and a first answer wake the writer; only a test that waits
+    # for the period would see it
+    p = mock.patch.object(gadget, 'RECORD_PERIOD', 30.0)
+    p.start()
+    self.addCleanup(p.stop)
+
+  def _named(self, name=lambda sha: 'Big Model'):
+    s = self._make(self.small, self._connect, self._build, name=name)
+    self.addCleanup(self._close, s)
+    self._wait_joined(s)
+    return s
+
+  @staticmethod
+  def _record():
+    return gadget.read_record(gadget.MODELD) or {}   # {} before the first write
+
+  def test_the_big_model_driving_is_said_at_once(self):
+    s = self._named()
+    s.in_control = False
+    self.assertEqual(self._run(s), {'from': 'big'})
+    self.assertTrue(wait_for(lambda: status.runtime()[:2] == ('running', True)))
+    record = self._record()
+    self.assertEqual({k: record[k] for k in ('state', 'handovers', 'active', 'held', 'sha256', 'name', 'checkpoint',
+                                             'transport', 'drops', 'lags', 'stopping')},
+                     {'state': 'running', 'handovers': 1, 'active': True, 'held': False, 'sha256': 'a' * 64,
+                      'name': 'Big Model', 'checkpoint': 'ckpt', 'transport': 'usb', 'drops': 0, 'lags': 0,
+                      'stopping': False})
+    self.assertEqual(record['pid'], os.getpid())
+
+  def test_a_swap_reads_connecting_until_it_answers_never_reconnecting(self):
+    # a 150 ms first frame must not read waiting, reconnecting, active. The
+    # writer is woken every 10 ms here, so it writes inside the frame
+    answered = self.big.run
+
+    def slow(*a, **kw):
+      time.sleep(0.15)
+      return answered(*a, **kw)
+
+    self.big.run = slow
+    with mock.patch.object(gadget, 'RECORD_PERIOD', 0.01):
+      s = self._named()
+      s.in_control = False
+      phases, stop = [], threading.Event()
+
+      def poll():
+        while not stop.is_set():
+          running, active = status.runtime()[:2]
+          phase = Status(True, 'usb', 'USB', True, 'host', True, None, None, 'm', 'd', None, running, active).phase
+          if not phases or phases[-1] != phase:
+            phases.append(phase)
+          time.sleep(0.002)
+
+      poller = threading.Thread(target=poll)
+      poller.start()
+      self.assertTrue(wait_for(lambda: phases[-1:] == ['waiting']))   # ready, the window open
+      del phases[:-1]
+      self._run(s)
+      self.assertTrue(wait_for(lambda: phases[-1] == 'active'))
+      stop.set()
+      poller.join()
+    self.assertEqual(phases, ['waiting', 'connecting', 'active'])
+
+  def test_a_hand_back_is_said_at_once(self):
+    s = self._named()
+    s.in_control = False
+    self._run(s)
+    self.big.raises = RuntimeError('link gone')
+    self.assertEqual(self._run(s), {'from': 'small'})
+    self.assertTrue(wait_for(lambda: self._record().get('handovers') == 2))
+    record = self._record()
+    self.assertEqual((record['state'], record['active'], record['drops'], record['sha256']), ('retrying', False, 1, None))
+    self.assertEqual(status.runtime()[:2], ('retrying', False))
+
+  def test_a_held_frame_is_not_an_answer(self):
+    s = self._named()
+    s.in_control = False
+    self._run(s)
+    answered = s._output_at
+    self.assertGreater(answered, 0)
+    self.big.held = True
+    self._run(s)
+    self.assertEqual(s._output_at, answered)
+    self.big.held = False
+    self._run(s)
+    self.assertGreater(s._output_at, answered)
+
+  def test_the_frame_thread_does_no_record_io(self):
+    # SCHED_FIFO on modeld's core: the file, the link kind and the catalog's
+    # name are the writer's
+    names, kinds, writes = [], [], []
+    real_kind, real_write = gadget.link_kind, gadget.write_record
+    with mock.patch.object(gadget, 'link_kind', lambda *a: kinds.append(threading.current_thread()) or real_kind(*a)), \
+         mock.patch.object(gadget, 'write_record',
+                           lambda *a: writes.append(threading.current_thread()) or real_write(*a)):
+      s = self._named(name=lambda sha: names.append(threading.current_thread()) or 'Big Model')
+      s.in_control = False
+      for _ in range(5):
+        self._run(s)
+      self.assertTrue(wait_for(lambda: self._record().get('active')))
+      self.big.raises = RuntimeError('link gone')
+      self._run(s)
+      self.assertTrue(wait_for(lambda: self._record().get('handovers') == 2))
+      s.close()
+    for seen in (writes, kinds, names):
+      self.assertTrue(seen)
+      self.assertEqual({t.name for t in seen}, {s._writer.name})
+
+  def test_a_wake_while_a_record_is_written_is_not_lost(self):
+    # cleared before the record is built: a hand-back landing during a write
+    # is the next write's, not dropped until the period
+    s = self._named()
+    s.in_control = False
+    built, real = threading.Event(), s._runtime
+
+    def runtime(*a):
+      record = real(*a)
+      if record['active'] and not built.is_set():
+        built.set()
+        s._record.set()   # what a frame would do here
+      return record
+
+    s._runtime = runtime
+    self._run(s)
+    self.assertTrue(built.wait(2))
+    writes = self._record().get('at')
+    self.assertTrue(wait_for(lambda: self._record().get('at') != writes))
+
+  def test_close_leaves_it_stopping(self):
+    s = self._named()
+    s.in_control = False
+    self._run(s)
+    s.close()
+    self.assertFalse(s._writer.is_alive())
+    record = self._record()
+    self.assertEqual((record['stopping'], record['state']), (True, 'unavailable'))
+    self.assertEqual(status.runtime()[:2], (None, False))
+
+  def test_a_record_that_cannot_be_written_is_said_once(self):
+    with mock.patch.object(gadget, 'write_record', side_effect=OSError('no space')) as write, \
+         mock.patch.object(gadget, 'RECORD_PERIOD', 0.005):
+      s = self._named()
+      self.assertTrue(wait_for(lambda: write.call_count >= 3))
+      s.close()
+    self.assertEqual(self.log.lines('exception'), ['jetlink: could not write the runtime record'])
+
+  def test_a_name_the_catalog_has_not_resolved_is_asked_again(self):
+    # the sha's stand-in, from name_for or a lookup that failed, is not kept for the drive
+    answers = [ValueError('bad catalog'), 'a' * 16, 'Big Model']
+
+    def name(sha):
+      answer = answers.pop(0) if len(answers) > 1 else answers[0]
+      if isinstance(answer, Exception):
+        raise answer
+      return answer
+
+    names = {}
+    s = self._named(name=name)
+    clock = [1000.0]
+    with mock.patch.object(joining.time, 'monotonic', lambda: clock[0]):
+      self.assertEqual(s._name_of('a' * 64, names), 'a' * 16)
+      self.assertEqual(s._name_of('a' * 64, names), 'a' * 16)    # not asked again yet
+      clock[0] += joining.NAME_RETRY
+      self.assertEqual(s._name_of('a' * 64, names), 'a' * 16)    # asked: still not resolved
+      clock[0] += joining.NAME_RETRY
+      self.assertEqual(s._name_of('a' * 64, names), 'Big Model')
+      answers[0] = 'Renamed'
+      clock[0] += joining.NAME_RETRY * 10
+      self.assertEqual(s._name_of('a' * 64, names), 'Big Model')  # a real name is kept
+
+
+class AnyForkTest(OpenpilotTest):
+  """Every fork's small model joins through join(), swaps and hands back, and
+  its history is zeroed after, in the buffers its own JIT is linked to."""
+
+  def setUp(self):
+    super().setUp()
+    self.patch(joining, 'SMALL_WARMUP_FRAMES', 0)
+    p = mock.patch.dict(sys.modules, fakes.fake_tinygrad())
+    p.start()
+    self.addCleanup(p.stop)
+    self.patch(link, 'present_early')
+    self.patch(warp, 'Warp')
+    self.patch(self.parts.warps, 'load')
+    self.big = FakeModel('big', chestnut=True, client=mock.Mock(dead=False))
+    # the leave's summary reads trips.summary(), which a bare Mock is not
+    self.big.trips = mock.Mock(summary=lambda: {})
+    self.patch(link, 'open_link', return_value=(self.big.client, SimpleNamespace(model_hw=(128, 256))))
+    # upstream imports JetlinkModelState inside join() (a TinyJit unpickle on
+    # modeld's main thread), so the patch lands on the module it is read from
+    self.patch(model_state, 'JetlinkModelState', return_value=self.big)
+    self.op.engaged = False
+
+  def hand_back(self, small, zeroed):
+    held = [id(b) for b in zeroed]
+    s = joining.join(self.parts, 1928, 1208, small)
+    self.addCleanup(JoiningBase._close, s)
+    self.assertTrue(wait_for(lambda: s._joined is not None))
+    for b in zeroed:
+      b.fill(1)   # what the small model's frames leave behind
+    self.assertEqual(s.run({}, {}, {}), {'from': 'big'})
+    self.big.raises = RuntimeError('link gone')
+    self.assertEqual(s.run({}, {}, {}), {'from': 'small'})
+    self.assertEqual([id(b) for b in zeroed], held)
+
+  def test_every_small_model_shape_is_reset_in_place(self):
+    for shape in fakes.SHAPES:
+      with self.subTest(shape.__name__):
+        self.big.raises, self.big.lat_delay = None, 0.0
+        small, zeroed, kept = shape()
+        self.hand_back(small, zeroed)
+        for b in zeroed:
+          np.testing.assert_array_equal(b, 0)
+        for b in kept:
+          np.testing.assert_array_equal(b, 1)
+        # the large model started on the small one's lateral delay, or its own
+        self.assertEqual(self.big.lat_delay, getattr(small, 'lat_delay', 0.0))
+
+  def test_the_adapters_own_reset_is_used_and_none_falls_back(self):
+    reset = mock.Mock()
+    self.op.small_reset = mock.Mock(return_value=reset)
+    small, zeroed, _ = fakes.starpilot()
+    self.hand_back(small, zeroed)
+    self.op.small_reset.assert_called_once_with(small)
+    reset.assert_called_once_with()
+    np.testing.assert_array_equal(zeroed[0], 1)   # jetlink's guess was not made
+
+    self.big.raises = None
+    self.op.small_reset = mock.Mock(return_value=None)
+    small, zeroed, _ = fakes.starpilot()
+    self.hand_back(small, zeroed)
+    for b in zeroed:
+      np.testing.assert_array_equal(b, 0)
+
+
+class FadeTest(JoiningBase):
+  """The swap's cross-fade (blend.SourceBlender): a swap nobody steers against,
+  landing over a few frames instead of in one."""
+
+  # the output keys this fork calls decisions, so the fade takes them whole
+  DISCRETE = ('shouldStop',)
+
+  def _fading(self, fade_frames=4):
+    s = self._make(self.small, self._connect, self._build, fade_frames=fade_frames, discrete=self.DISCRETE)
+    self.addCleanup(self._close, s)
+    return s
+
+  def test_an_off_fade_is_the_identity(self):
+    s = self._fading(fade_frames=0)
+    self.assertIsNone(s._blender)
+    self._wait_joined(s)
+    s.in_control = False
+    # the swap lands in one frame and nothing is mixed
+    self.assertEqual(self._run(s), {'from': 'big'})
+
+  def test_a_swap_ramps_the_large_model_in_over_its_frames(self):
+    s = self._fading(fade_frames=4)
+    self._wait_joined(s)
+    self.small.extra = {'plan': np.array([0.0], np.float32)}
+    self.big.extra = {'plan': np.array([8.0], np.float32)}
+    self._run(s)                       # the small model runs, giving the far leg
+    s.in_control = False
+    first = s.run({}, {}, {})          # the swap lands here, the fade running
+    self.assertGreater(s._fade_left, 0, 'the fade must be running after the swap')
+    # the first mixed frame leans on the small model's held plan
+    self.assertLess(float(first['plan'][0]), 8.0)
+
+  def test_the_fade_is_over_within_its_frames(self):
+    s = self._fading(fade_frames=3)
+    self._wait_joined(s)
+    self.small.extra = {'plan': np.array([0.0], np.float32)}
+    self.big.extra = {'plan': np.array([8.0], np.float32)}
+    self._run(s)                       # the far leg
+    s.in_control = False
+    s.run({}, {}, {})                  # the swap lands here, the fade running
+    for _ in range(4):
+      last = s.run({}, {}, {})
+    self.assertEqual(float(last['plan'][0]), 8.0)
+    self.assertEqual(s._fade_left, 0)
+
+  def test_a_discrete_output_follows_the_owning_model(self):
+    s = self._fading(fade_frames=4)
+    self._wait_joined(s)
+    self.small.extra = {'shouldStop': np.array([1.0], np.float32)}
+    self.big.extra = {'shouldStop': np.array([0.0], np.float32)}
+    self._run(s)                       # the far leg
+    s.in_control = False
+    first = s.run({}, {}, {})          # the swap lands here, w = 0.25
+    self.assertEqual(float(first['shouldStop'][0]), 1.0)
+    last = None
+    for _ in range(4):
+      last = s.run({}, {}, {})
+    # past the mid-point the large model owns it
+    self.assertEqual(float(last['shouldStop'][0]), 0.0)
+
+  def test_no_fade_leaves_no_far_leg_held(self):
+    s = self._fading(fade_frames=0)
+    self._wait_joined(s)
+    self.assertIsNone(s._last_small)
 
 
 if __name__ == '__main__':

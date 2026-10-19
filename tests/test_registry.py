@@ -327,7 +327,7 @@ def test_a_stopped_download_keeps_its_part_for_the_next_one(tmp_path, small_chun
 
 
 def test_a_stalled_download_carries_on_from_its_part(tmp_path, small_chunks):
-  # 2026-10-06: a 30 s stall 85 s into 755 MB threw the whole download away
+  # a stall part way into a 755 MB download must not throw the part away
   with pytest.raises(NetworkError, match='timed out'):
     download(tmp_path, opener=RangeOpener(cut=2048))
   assert part_of(tmp_path).stat().st_size == 2048

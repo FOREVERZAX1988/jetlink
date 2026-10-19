@@ -26,6 +26,10 @@
 
 ## 2. Connect the comma
 
+The comma runs an openpilot fork with Jetlink support (zoompilot, StarPilot).
+The comma's steps and its home-button icon below are zoompilot's; on another
+fork, follow its own docs.
+
 1. **Install zoompilot.** After resetting the comma, enter
    **`zoompilot/main`** as the install URL. Already on zoompilot? Select
    **main** in **Settings > Software > Target Branch**.

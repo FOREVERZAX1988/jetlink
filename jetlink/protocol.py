@@ -43,7 +43,7 @@ GADGET_TX_ALIGN = 16 * 1024
 
 # The comma's gadget as a USB host finds it: these IDs (pid.codes' test
 # allocation; get a real PID before distributing this), which
-# scripts/comma/jetlink-root.sh presents, then the link's interface by its class
+# jetlink/comma/jetlink-root.sh presents, then the link's interface by its class
 # triple (transport/ffs.py), because the comma set to iOS presents a composite
 # gadget and a reordered config could move the number. Endpoint addresses are
 # read from the descriptors, never assumed: FunctionFS renumbers them at bind.
@@ -104,6 +104,11 @@ class Flag(IntEnum):
   LOSSLESS = 1 << 3       # on INFER_REQ: the frame is packed (LOSSLESS_CODEC),
                           # as jetlink.lossless.Packer packs it. Only to a server
                           # whose hello lists the codec in 'frame_codecs'
+  HEVC = 1 << 4           # on INFER_REQ: the frame is HEVC (HEVC_CODEC), two
+                          # cameras' Annex-B access units, 3-master-frame ids.
+                          # Only to a server whose hello lists it in
+                          # 'frame_codecs'; a lossy carrier, so never chosen
+                          # without the user's consent (jetlink.codecs.pick)
   PADDED = 1 << 7         # one pad byte follows the payload; see PACKET_MULTIPLE
 
 
@@ -123,7 +128,7 @@ _infer_resp = struct.Struct(INFER_RESP_FMT)
 # of at most DATAGRAM_PAYLOAD, each behind a DATAGRAM_HEADER. The comma's kernel
 # cuts a datagram into IP fragments after netfilter and routing, so the stack's
 # per-packet work runs once a datagram, about 7 times a frame, where TCP runs it
-# for each of ~272 segments: 7.35 to 4.3 ms a frame on the bench (2026-10-07).
+# for each of ~272 segments: measured 7.35 vs 4.3 ms a frame.
 # The server offers it in HELLO_RESP (frame_port, frame_token) on the cable only.
 # A datagram with another token is from an earlier session and is dropped.
 DATAGRAM_MAGIC = 0x4D52464A  # b'JFRM'
@@ -174,6 +179,19 @@ def _pieces(total: int, payload: int) -> tuple[tuple[int, int], ...]:
 # per plane, then the planes. A server that takes it says so in its hello
 LOSSLESS_CODEC = 'med-zstd'
 
+# An HEVC frame (jetlink.hevc), for links too slow for 393 KB a frame: the six
+# planes reassembled into NV12 and through a hardware encoder, ~4 KB a camera at
+# 2 Mb/s. Lossy and inter-frame, so a receiver takes it only where the loss is
+# the price of a working link, and a stream that loses a frame owes an IDR
+# (jetlink.openpilot.stream). The frame's id is a master-frame id, shared by
+# both cameras, and the two access units go in the same INFER_REQ:
+#
+#   INFER_REQ head, the packed floats, then
+#   u32 road_len, u32 wide_len, road Annex-B, wide Annex-B
+#
+# A server that takes it says so in its hello's 'frame_codecs'.
+HEVC_CODEC = 'hevc'
+
 
 class ProtocolError(RuntimeError):
   pass
@@ -215,3 +233,8 @@ class Status(IntEnum):
   INFER_FAILED = 3
   NOT_FINITE = 4      # model produced NaN/Inf; caller must fall back
 
+
+class NotFinite(ValueError):
+  """A frame's output with a NaN or an inf in it, by the server's word
+  (Status.NOT_FINITE) or the comma's own check: the host answered, with
+  nothing to drive on, and the link is as good as it was. Not a LinkError."""

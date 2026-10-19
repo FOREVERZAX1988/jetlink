@@ -106,7 +106,7 @@
       self.root = root
       self.node = node
       self.target = target
-      // A bench switch for A/B runs: sessions keep the kernel's default.
+      // An A/B switch: with it set, sessions keep the kernel's default.
       keepLPM = environment["JETLINK_USB_LPM"] == "1"
       self.write = write
       self.log = log
@@ -174,16 +174,16 @@
     /// USB 3 link power management (U1/U2) is off on the comma's own port
     /// while a session is served and the comma is talking, and the kernel's
     /// default otherwise. On it is the largest single cost of the link: every
-    /// idle gap between frames ends in an exit from U1 or U2, 3.9 ms of the
-    /// 7.6 ms onroad transport on the bench. Off only the comma's port: the
+    /// idle gap between frames ends in an exit from U1 or U2, 3.9 ms of a
+    /// measured 7.6 ms onroad transport. Off only the comma's port: the
     /// hub then keeps its uplink in U0 by itself. Between sessions (parked,
     /// the comma holding the gadget) the link dozes in U2 again. Suspend is
     /// U3 and is unaffected.
     ///
     /// A session outlives the comma's modeld: it ends only when the gadget
     /// leaves the bus, and the comma's owner keeps it up 60 s after a drive,
-    /// for good with sleep_after 0. Off, that idle link drew 0.18 W more on
-    /// the bench, so after `quietAfter` with no message the link goes back to
+    /// for good with sleep_after 0. Off, that idle link draws about 0.18 W
+    /// more, so after `quietAfter` with no message the link goes back to
     /// the default, and the next message turns it off again. That write is
     /// queued like the others, so the message that brings it does not wait
     /// for it in user space. The kernel does hold the comma's device lock

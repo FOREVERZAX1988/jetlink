@@ -55,7 +55,7 @@ def test_no_endpoint_is_opened_before_a_host_has_enabled_it(mount):
     assert t._reader is None, "the reader thread started before a host"
   finally:
     t.close()
-  # And that close really let go, which is the half that used to fail.
+  # And that close really let go.
   again = FfsTransport(str(mount))
   again.close()
 
@@ -208,8 +208,7 @@ def test_a_host_that_disconnects_mid_session_ends_the_link_at_once(tmp_path, mon
 
 def test_a_failure_names_the_controller_state_it_found(tmp_path, monkeypatch):
   """ENODEV reads the same for a cable falling out, a host resetting us and a
-  bus the host suspended. A drive's worth of failures (2026-09-07: fourteen,
-  every one a USB drop) said nothing about which; the UDC state does.
+  bus the host suspended; the UDC state tells them apart.
   """
   t = _bare_transport(bound_udc='udc0', _had_host=True, _closing=False, _queued=0,
                       _reader_error=None, _free=deque(),
@@ -378,7 +377,7 @@ def test_reader_widens_when_inherited_mask_is_several_cores(monkeypatch):
 
 def test_read_buffers_are_recycled_not_reallocated():
   """The hot receive path must not allocate per read: under memory pressure that
-  allocation reclaims, 24 ms on the bench. A consumed buffer returns to the pool."""
+  allocation reclaims, ~24 ms. A consumed buffer returns to the pool."""
   from collections import deque
   t = _bare_transport(ep_out=0, _queued=4,
                       _reader_error=None, _closing=False, _chunks=deque(), _free=deque(),
@@ -411,7 +410,7 @@ def test_recycle_pool_is_bounded_and_ignores_foreign_buffers():
 
 def test_configured_holds_the_state_fd_open_and_sees_live_changes(tmp_path, monkeypatch):
   """The per-read config check must not open the sysfs file each time (that
-  reclaim-stalled 24.9 ms mid-frame on the bench). It holds the fd open and
+  can stall ~25 ms on reclaim mid-frame). It holds the fd open and
   re-reads it, which still reflects a live state change."""
   monkeypatch.setattr(ffs, 'UDC_SYSFS', str(tmp_path))
   (tmp_path / 'udc0').mkdir()
@@ -470,11 +469,11 @@ def test_reader_priority_is_best_effort_without_permission(monkeypatch):
 
 
 def test_close_releases_the_endpoints_under_writes_the_host_never_took(mount, monkeypatch):
-  """The leak that outlived the link.
+  """No leak outlives the link.
 
   An endpoint file whose request is still queued stays open in the kernel and
   the next open of it answers EBUSY, and ep0 left open answers every
-  descriptor write after it with ESRCH: only a reboot brought the gadget back.
+  descriptor write after it with ESRCH: only a reboot brings the gadget back.
   close() drops the gadget under writes the host never takes, and closes every
   fd whatever happens to them.
   """
@@ -565,7 +564,7 @@ def _udc(tmp_path, monkeypatch, state='configured', name='udc0'):
 
 def test_a_borrowed_gadget_opens_no_ep0_and_binds_nothing(mount, tmp_path, monkeypatch):
   """The owner holds ep0 and the bind for its whole life, so the link changing
-  hands is no longer an unplug the host has to recover from."""
+  hands is not an unplug the host has to recover from."""
   _udc(tmp_path / 'sys', monkeypatch)
   owner = FfsTransport(str(mount))          # stands in for the comma owner
   t = FfsTransport.borrowed(str(mount), 'udc0')
@@ -608,8 +607,8 @@ def _busy_ep1_until(monkeypatch, freed):
 
 
 def test_a_borrowed_endpoint_a_stale_read_holds_asks_the_owner_to_bounce(mount, tmp_path, monkeypatch):
-  """A Jetson's server restarting mid-drive could leave the dead link's read
-  queued on ep1, and every rejoin met EBUSY until the drive ended. Only an
+  """A Jetson's server restarting mid-drive can leave the dead link's read
+  queued on ep1, and every rejoin meets EBUSY until the drive ends. Only an
   unbind completes that read, and the unbind is the owner's."""
   _udc(tmp_path / 'sys', monkeypatch)
   bounced = []
