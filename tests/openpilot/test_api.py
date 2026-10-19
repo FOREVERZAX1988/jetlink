@@ -532,7 +532,10 @@ class ThePowerOffStep(OpenpilotTest):
     self.assertFalse(gadget.SHUTDOWN_REQUEST.exists())
 
   def test_nobody_taking_it_is_yes_at_the_deadline_and_withdrawn(self):
-    t0 = time.monotonic()
+    # an integral t0: t0 + SHUTDOWN_TIMEOUT, and the subtraction back, are
+    # exact in floats, so the call at the deadline really is at it - a
+    # monotonic() read lands a ulp either side and this failed on 3.10 alone
+    t0 = 1_000_000.0
     with mock.patch.object(jo.time, 'monotonic', return_value=t0):
       self.assertFalse(self.jl.shutdown_step(True, 'car battery'))
     with mock.patch.object(jo.time, 'monotonic', return_value=t0 + jo.SHUTDOWN_TIMEOUT - 0.5):
