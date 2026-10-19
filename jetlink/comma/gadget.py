@@ -219,9 +219,29 @@ def clear_leftovers(directory: Path) -> None:
 
 
 def read_record(path: Path) -> dict | None:
-  """A JSON record write_record wrote, or None: missing, or not a record."""
+  """A JSON record write_record wrote, or None: missing, or not a record.
+
+  A read that failed outright is tried once more. write_record replaces the
+  record whole, which on POSIX leaves the name always bound to one of the two
+  files; a platform whose replace unlinks the old name first (Windows) has an
+  instant in between where a record that is there reads as absent, and a reader
+  that lands in it would say the comma has no modeld. Reading again answers the
+  question the first read could not, and a record that is really gone still
+  reads None."""
+  text = None
+  for attempt in range(3):
+    try:
+      text = path.read_text().strip()
+      break
+    except OSError:
+      if attempt < 2:
+        # a replace that unlinks the old name first leaves an instant with no
+        # name at all: give the new one time to be bound before asking again
+        time.sleep(0.002)
+  if text is None:
+    return None
   try:
-    record = json.loads(read(path))
+    record = json.loads(text)
   except ValueError:
     return None
   return record if isinstance(record, dict) else None
