@@ -128,20 +128,28 @@ def dial(log, deadline: float | None = None, name: str | None = None):
     log.warning("jetlink: dialed %s over Wi-Fi", host)
     return client
 
+  # The gateway first: it is one read of the routing table, and a comma that
+  # has one is on Wi-Fi. A browse costs avahi a couple of seconds, so it is
+  # only worth it once the cheap answers are in.
+  gw = wifi.gateway()
+  if gw is None and wifi.local_addr() is None:
+    # not on Wi-Fi at all: nothing to dial and nothing to hear a browse on
+    raise WifiWaiting("not on Wi-Fi", NOT_ON_WIFI)
+
   # an announced server, without a gateway or a sweep to guess at
-  for _name, address in wifi.browse():
+  announced = wifi.browse()
+  for _name, address in announced:
     client = _try(address)
     if client is not None:
       return client
 
-  gw = wifi.gateway()
   if gw is not None:
     client = _try(gw)
     if client is not None:
       return client
     # The gateway is not the server (a shared-AP router). Search the subnet;
     # the gateway already had its chance, so discovery skips it.
-    host = wifi.discover(skip={gw}, mdnss=[])
+    host = wifi.discover(skip={gw}, mdnss=announced)
     if host is not None:
       client = _try(host)
       if client is not None:
@@ -149,9 +157,7 @@ def dial(log, deadline: float | None = None, name: str | None = None):
     # nothing else answered: the gateway's address is the one to report
     raise WifiWaiting(f"nothing answered at {gw}", NO_ANSWER)
   # no gateway at all
-  if wifi.local_addr() is None:
-    raise WifiWaiting("not on Wi-Fi", NOT_ON_WIFI)
-  host = wifi.discover(skip=set(), mdnss=[])
+  host = wifi.discover(skip=set(), mdnss=announced)
   if host is None:
     raise WifiWaiting("not on Wi-Fi", NOT_ON_WIFI)
   client = _try(host)
