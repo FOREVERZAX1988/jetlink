@@ -197,9 +197,9 @@
     /// (a router LAN, where the gateway is the router). Everything else answered
     /// but dials another device. `sender` is the announcement's own source
     /// address, when the connection would say.
-    nonisolated public static func verdict(target: String?, gateway: String?, sender: String?,
-      addresses: Set<LocalAddress>) -> Presence
-    {
+    nonisolated public static func verdict(
+      target: String?, gateway: String?, sender: String?, addresses: Set<LocalAddress>
+    ) -> Presence {
       if let target { return addresses.contains { $0.holds(target) } ? .here : .elsewhere }
       // a comma old enough to name no host is read as before, as on this hotspot
       guard let gateway else { return .here }
@@ -251,8 +251,9 @@
     /// the interface did not give is read as a /32, which names no LAN.
     nonisolated private static func prefixLength(_ netmask: UnsafeMutablePointer<sockaddr>?) -> Int {
       guard let netmask, netmask.pointee.sa_family == UInt8(AF_INET) else { return 32 }
-      let mask = UInt32(bigEndian: UnsafeRawPointer(netmask)
-        .assumingMemoryBound(to: sockaddr_in.self).pointee.sin_addr.s_addr)
+      let mask = UInt32(
+        bigEndian: UnsafeRawPointer(netmask)
+          .assumingMemoryBound(to: sockaddr_in.self).pointee.sin_addr.s_addr)
       return mask.nonzeroBitCount
     }
 

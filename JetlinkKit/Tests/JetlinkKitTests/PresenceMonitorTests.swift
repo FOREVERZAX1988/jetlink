@@ -29,12 +29,12 @@
 
     @Test func theGatewayIsThisDeviceOnlyWhenItIsOneOfItsOwn() {
       let hotspot: Set<LocalAddress> = [LocalAddress(address: "192.168.43.1", prefix: 24)]
-      #expect(PresenceMonitor.verdict(target: nil, gateway: "192.168.43.1", sender: "192.168.43.42",
-                                     addresses: hotspot) == .here)
+      #expect(
+        PresenceMonitor.verdict(target: nil, gateway: "192.168.43.1", sender: "192.168.43.42", addresses: hotspot) == .here)
       // the comma joined another network and dials that one's device, not this:
       // the announcement comes from a subnet this device is not on
-      #expect(PresenceMonitor.verdict(target: nil, gateway: "192.168.10.1", sender: "192.168.10.77",
-                                     addresses: hotspot) == .elsewhere)
+      #expect(
+        PresenceMonitor.verdict(target: nil, gateway: "192.168.10.1", sender: "192.168.10.77", addresses: hotspot) == .elsewhere)
       // a comma that names no gateway is read as before, as on this hotspot
       #expect(PresenceMonitor.verdict(target: nil, gateway: nil, sender: nil, addresses: hotspot) == .here)
     }
@@ -43,8 +43,8 @@
       // the router is the gateway and this device is a client of it: discovery
       // finds the app and dials it, so that is this device's link too
       let lan: Set<LocalAddress> = [LocalAddress(address: "192.168.10.50", prefix: 24)]
-      #expect(PresenceMonitor.verdict(target: nil, gateway: "192.168.10.251", sender: "192.168.10.79",
-                                     addresses: lan) == .here)
+      #expect(
+        PresenceMonitor.verdict(target: nil, gateway: "192.168.10.251", sender: "192.168.10.79", addresses: lan) == .here)
     }
 
     @Test func theHostTheCommaNamesIsTheOneItIsReadAgainst() {
@@ -52,10 +52,10 @@
       // whose link it is - on one LAN a second app would otherwise read every
       // announcement as its own
       let lan: Set<LocalAddress> = [LocalAddress(address: "192.168.10.50", prefix: 24)]
-      #expect(PresenceMonitor.verdict(target: "192.168.10.50", gateway: "192.168.10.251",
-                                     sender: "192.168.10.79", addresses: lan) == .here)
-      #expect(PresenceMonitor.verdict(target: "192.168.10.65", gateway: "192.168.10.251",
-                                     sender: "192.168.10.79", addresses: lan) == .elsewhere)
+      #expect(
+        PresenceMonitor.verdict(target: "192.168.10.50", gateway: "192.168.10.251", sender: "192.168.10.79", addresses: lan) == .here)
+      #expect(
+        PresenceMonitor.verdict(target: "192.168.10.65", gateway: "192.168.10.251", sender: "192.168.10.79", addresses: lan) == .elsewhere)
     }
 
     @Test func anAnnouncementNamesTheHostItsCommaDials() {
