@@ -82,8 +82,8 @@ class PresenceMonitorTest {
         assertTrue(lan.sharesSubnet("192.168.10.251"))
         assertFalse(lan.sharesSubnet("192.168.11.50"))
         assertTrue(LocalAddress("10.0.0.44", 16).sharesSubnet("10.0.9.9"))
-        assertFalse(LocalAddress("192.168.10.50", 32).sharesSubnet("192.168.10.50"), "a /32 names no LAN")
-        assertFalse(LocalAddress("10.0.0.1", 0).sharesSubnet("8.8.8.8"), "a /0 names every host there is")
+        assertFalse("a /32 names no LAN", LocalAddress("192.168.10.50", 32).sharesSubnet("192.168.10.50"))
+        assertFalse("a /0 names every host there is", LocalAddress("10.0.0.1", 0).sharesSubnet("8.8.8.8"))
         assertFalse(lan.sharesSubnet("not an address"))
     }
 
