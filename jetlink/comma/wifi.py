@@ -5,10 +5,14 @@ This file is part of jetlink and is licensed under the MIT License.
 See the LICENSE file in the root directory for more details.
 
 The link over Wi-Fi: the comma joins the device's hotspot (a phone's, a
-Jetson's) and dials its default gateway, which is that device. Only the
-gateway: nothing else on a network is ever dialed, so the hotspot's password,
-which the person typed into the comma, is what the link trusts. No gadget is
-built and the USB-C port is left alone, so ADB keeps working.
+Jetson's) and dials its default gateway, which is that device. On a hotspot
+that is the whole search, and the password the person typed into the comma is
+what the link trusts. On a normal AP the phone is an ordinary client rather
+than the gateway, so the gateway is tried first and, when it refuses, this
+sweeps the comma's own wlan0 subnet with bare TCP connects -- no bytes sent, no
+HELLO, so a probe neither starts a session nor loads the phone's model -- and
+remembers the host that answered for the next join. No gadget is built and the
+USB-C port is left alone, so ADB keeps working.
 """
 from __future__ import annotations
 
