@@ -121,6 +121,22 @@ RECONNECTING = {LOST: ('reconnecting', 'lost'), BEHIND: ('fell behind, reconnect
 NAME_RETRY = 30.0
 
 
+def stages_of(big) -> dict:
+  """The big model's six-stage means, or {} while it has run no frame.
+
+  The record is written once a second, and the model in it may be one that was
+  just swapped in and has not answered yet: an empty dict says "nothing to
+  report" rather than six zeros, which would read as a link that is perfect.
+  """
+  stages = getattr(big, 'stages', None)
+  if stages is None:
+    return {}
+  try:
+    return stages.means()
+  except AttributeError:
+    return {}
+
+
 class JoiningModelState:
   """Duck-types openpilot's modeld ModelState, with a second one inside.
 
@@ -742,7 +758,12 @@ class JoiningModelState:
             'sha256': sha, 'name': self._name_of(sha, names) if sha else None,
             'checkpoint': getattr(spec, 'checkpoint', None),
             'transport': kinds.get(swapped_at) if big is not None else None, 'drops': self._drops,
-            'lags': self._lags}
+            'lags': self._lags,
+            # the comma's own half of the frame, in its six stages: which one a
+            # slow link spends its time in, which the server's own numbers
+            # cannot say. O(1) off the ring's running sum, and empty while the
+            # big model has not run a frame since it was swapped in
+            'stages': stages_of(big)}
 
   def _name_of(self, sha: str, names: dict) -> str:
     """The catalog's name, kept once it is one. The sha's stand-in (a row not

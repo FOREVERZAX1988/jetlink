@@ -106,6 +106,11 @@ class FrameStages:
     # rather than the id: the ring reuses ids, and a summary must never count a
     # reused id's numbers twice
     self._done: deque[tuple[StageMs, bool]] = deque(maxlen=self.ring)
+    # The running sum per stage, over the frames the ring holds, so a reader
+    # that only wants the mean does not walk the ring: the modeld record is
+    # written once a second and must not sort 1200 frames to say what it costs.
+    self._sum = [0.0] * len(STAGES)
+    self._held = 0
 
   # -- the frame loop ---------------------------------------------------------
 
@@ -138,7 +143,17 @@ class FrameStages:
     if slot.t_published is None:
       slot.t_published = now
     stages = self._stages(slot, now)
+    # the ring drops its oldest when it is full; the sum has to drop it too, or
+    # `means` counts a frame the ring no longer holds
+    if len(self._done) == self._done.maxlen:
+      old, was_held = self._done[0]
+      for i, name in enumerate(STAGES):
+        self._sum[i] -= getattr(old, name)
+      self._held -= 1 if was_held else 0
     self._done.append((stages, bool(held)))
+    for i, name in enumerate(STAGES):
+      self._sum[i] += getattr(stages, name)
+    self._held += 1 if held else 0
     self._slots[frame_id % self.ring] = None
     return stages
 
@@ -146,12 +161,27 @@ class FrameStages:
     """Forget every frame: a new connection, whose frame ids start again."""
     self._slots = [None] * self.ring
     self._done.clear()
+    self._sum = [0.0] * len(STAGES)
+    self._held = 0
 
   # -- readers -----------------------------------------------------------------
 
   def last(self) -> StageMs | None:
     """The most recent finished frame's stages, None before one has finished."""
     return self._done[-1][0] if self._done else None
+
+  def means(self) -> dict:
+    """Each stage's mean in ms over the frames the ring holds, and the frame
+    total's, in O(1): what a record written once a second can afford, where
+    `summary`'s percentiles want a sort. An empty ring is `{'frames': 0}`."""
+    count = len(self._done)
+    if count == 0:
+      return {'frames': 0}
+    out: dict = {'frames': count, 'held': self._held}
+    for i, name in enumerate(STAGES):
+      out[name] = round(self._sum[i] / count, 2)
+    out['frame'] = round(sum(self._sum) / count, 2)
+    return out
 
   def summary(self, window: int = RING) -> dict:
     """The last `window` finished frames, summarised; safe before any has.

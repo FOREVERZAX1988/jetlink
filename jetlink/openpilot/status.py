@@ -240,13 +240,23 @@ class Runtime(NamedTuple):
   active: bool = False            # the big model drives modeld's frames now
   sha256: str | None = None       # and which model it is, while it does
   checkpoint: str | None = None
+  # The comma's own six stages, mean ms, None before the big model has run a
+  # frame. None rather than {} because a NamedTuple's default is shared: an
+  # empty dict here would be the same one in every Runtime made without one.
+  stages: dict | None = None
 
 
 def runtime() -> Runtime:
   """The joining model's state, whether the big model drives now and which
   model it is, from modeld's runtime record (gadget.MODELD); Runtime() without
   a live one: no modeld with the link since boot, or one that stopped, died
-  or stopped writing (gadget.HEARTBEAT_TIMEOUT, as the owner's). Never raises."""
+  or stopped writing (gadget.HEARTBEAT_TIMEOUT, as the owner's). Never raises.
+
+  `stages` is the comma's own half of the frame, in six stages (see
+  openpilot.stages): the mean ms of each, over the frames the ring holds. The
+  server's telemetry says what the far end spent; this says what the comma
+  spent before the frame was even sent, which is the other half of a slow
+  link."""
   record = gadget.read_record(gadget.MODELD)
   try:
     if record is None or record.get('stopping') or not gadget.owner_alive(record) \
@@ -259,7 +269,11 @@ def runtime() -> Runtime:
     def text(key: str, shown: bool = True) -> str | None:
       value = record.get(key)
       return value if shown and isinstance(value, str) else None
-    return Runtime(text('state'), active, text('sha256', active), text('checkpoint', active))
+    stages = record.get('stages')
+    # only while the big model drives: a stand-in's frames are the small
+    # model's, and its numbers would say nothing about the link
+    return Runtime(text('state'), active, text('sha256', active), text('checkpoint', active),
+                   stages if active and isinstance(stages, dict) and stages else None)
   except (TypeError, KeyError):
     return Runtime()
 
@@ -289,6 +303,9 @@ class Status(NamedTuple):
   active: bool = False          # the big model drives modeld's frames now, by the same record
   running_sha256: str | None = None      # the model it drives with, while active
   running_checkpoint: str | None = None
+  # the comma's own half of the frame, in six stages (openpilot.stages): the
+  # mean ms of each, while the big model drives. None when it does not.
+  stages: dict | None = None
 
   @property
   def runnable(self) -> bool:
@@ -430,6 +447,7 @@ def read(parts, mode: str) -> Status:
     active=live_model.active,
     running_sha256=live_model.sha256,
     running_checkpoint=live_model.checkpoint,
+    stages=live_model.stages,
   )
 
 

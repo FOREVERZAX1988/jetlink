@@ -510,7 +510,7 @@ class TestTheSnapshot(OpenpilotTest):
   def test_its_fields_are_only_ever_added(self):
     self.assertEqual(Status._fields, ('enabled', 'mode', 'transport', 'present', 'port', 'ready', 'reason', 'progress',
                                       'model', 'default_model', 'standin', 'running', 'active', 'running_sha256',
-                                      'running_checkpoint'))
+                                      'running_checkpoint', 'stages'))
 
   def test_a_model_in_the_list_says_whether_it_is_built_or_downloaded(self):
     models = [{'name': 'Built', 'ref': 'r1', 'oid': 'b' * 64, 'size': 10},
@@ -812,7 +812,8 @@ class TestTheRuntimeRecord(OpenpilotTest):
           with mock.patch.object(self.op, 'get', side_effect=AssertionError('a param read')), \
                mock.patch.object(status, 'read', side_effect=AssertionError('the snapshot')):
             found = self.jl.runtime()
-          self.assertEqual(tuple(found or status.Runtime()), (s.running, s.active, s.running_sha256, s.running_checkpoint))
+          self.assertEqual(tuple(found or status.Runtime()),
+                           (s.running, s.active, s.running_sha256, s.running_checkpoint, s.stages))
           self.assertEqual(found is None, not s.enabled)
 
 

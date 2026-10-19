@@ -144,3 +144,79 @@ class TestStageTracker(unittest.TestCase):
 
 if __name__ == '__main__':
   unittest.main()
+
+
+class TestMeans(unittest.TestCase):
+  """The O(1) reader the modeld record uses: it is written once a second and
+  must not sort the ring to say what a frame costs."""
+
+  def _run(self, t, i, **kw):
+    t.start(i, kw['start'], t_eof=kw.get('eof'))
+    if 'captured' in kw:
+      t.captured(i, kw['captured'])
+    if 'warped' in kw:
+      t.warped(i, kw['warped'])
+    if 'sent' in kw:
+      t.sent(i, kw['sent'])
+    if 'replied' in kw:
+      t.replied(i, kw['replied'])
+    return t.finished(i, kw['done'], held=kw.get('held', False))
+
+  def test_empty_before_a_frame(self):
+    self.assertEqual(stages.FrameStages().means(), {'frames': 0})
+
+  def test_a_frames_stages_averaged(self):
+    t = stages.FrameStages()
+    for i in range(4):
+      base = i * 0.050
+      self._run(t, i, start=base, eof=base, captured=base + 0.001, warped=base + 0.002,
+                sent=base + 0.004, replied=base + 0.008, done=base + 0.009)
+    m = t.means()
+    self.assertEqual(m['frames'], 4)
+    # capture 1 ms, warp 1, send 2, reply_wait 4, publish 1, the rest overhead
+    self.assertEqual(m['capture'], 1.0)
+    self.assertEqual(m['warp'], 1.0)
+    self.assertEqual(m['send'], 2.0)
+    self.assertEqual(m['reply_wait'], 4.0)
+    self.assertEqual(m['publish'], 1.0)
+    self.assertEqual(m['frame'], 9.0)
+
+  def test_the_ring_dropping_a_frame_drops_it_from_the_mean(self):
+    # the sum has to follow the ring, or the mean counts frames it no longer holds
+    t = stages.FrameStages(ring=2)
+    for i in range(2):
+      base = i * 0.050
+      self._run(t, i, start=base, eof=base, captured=base + 0.001, warped=base + 0.001,
+                sent=base + 0.001, replied=base + 0.001, done=base + 0.001)
+    self.assertEqual(t.means()['capture'], 1.0)
+    # a third frame, whose capture is 5 ms: the first is dropped, so the mean
+    # is (1 + 5) / 2, not (1 + 1 + 5) / 3
+    self._run(t, 2, start=10.0, eof=10.0, captured=10.005, warped=10.005,
+              sent=10.005, replied=10.005, done=10.005)
+    self.assertEqual(t.means()['frames'], 2)
+    self.assertEqual(t.means()['capture'], 3.0)
+
+  def test_a_reset_clears_the_sum(self):
+    t = stages.FrameStages()
+    self._run(t, 0, start=0.0, eof=0.0, captured=0.001, warped=0.001, sent=0.001, replied=0.001, done=0.001)
+    self.assertEqual(t.means()['frames'], 1)
+    t.reset()
+    self.assertEqual(t.means(), {'frames': 0})
+
+  def test_held_frames_are_counted(self):
+    t = stages.FrameStages()
+    self._run(t, 0, start=0.0, eof=0.0, captured=0.001, warped=0.001, sent=0.001, replied=0.001, done=0.001, held=True)
+    self._run(t, 1, start=1.0, eof=1.0, captured=1.001, warped=1.001, sent=1.001, replied=1.001, done=1.001)
+    m = t.means()
+    self.assertEqual(m['frames'], 2)
+    self.assertEqual(m['held'], 1)
+
+  def test_the_mean_agrees_with_the_percentiles_on_one_frame(self):
+    # with one frame, p50 and the mean are the same number: a cheap cross-check
+    # that the sum is over the same stages
+    t = stages.FrameStages()
+    self._run(t, 0, start=0.0, eof=0.0, captured=0.002, warped=0.004, sent=0.006, replied=0.010, done=0.012)
+    means, summary = t.means(), t.summary()
+    for name in stages.STAGES:
+      self.assertEqual(means[name], summary[name]['p50_ms'], name)
+    self.assertEqual(means['frame'], summary['frame']['p50_ms'])
