@@ -209,9 +209,13 @@ jobs:
             JetlinkKit/.build
           key: swift-linux-v2-${{ matrix.arch }}-${{ hashFiles('scripts/build-linux.sh', 'JetlinkKit/Package.resolved') }}
 
-      - name: Install curl
-        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl
+      - name: Install curl and ffmpeg
+        run: apt-get update && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg
         # The swift image has no curl, which build-linux.sh fetches with.
+        # ffmpeg is libavcodec, which the HEVC frame path opens at run time
+        # (JL_HEVC_DLOPEN): without it the server reports no decoder and the
+        # hello does not offer the codec, and the HEVC tests would skip
+        # rather than run.
 
       - name: Fetch onnxruntime
         run: |

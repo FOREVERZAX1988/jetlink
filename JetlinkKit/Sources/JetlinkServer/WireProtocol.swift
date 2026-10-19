@@ -77,6 +77,9 @@ public enum Wire {
     public static let wantHidden = Flag(rawValue: 1 << 2)
     /// On INFER_REQ: the frame is packed, as `LosslessFrame` unpacks it.
     public static let lossless = Flag(rawValue: 1 << 3)
+    /// On INFER_REQ: the frame is HEVC, as `HevcFrame` decodes it: the two
+    /// cameras' access units, each behind its u32 length.
+    public static let hevc = Flag(rawValue: 1 << 4)
     /// One pad byte follows the payload; see packetMultiple.
     public static let padded = Flag(rawValue: 1 << 7)
   }
