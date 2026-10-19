@@ -76,6 +76,17 @@ class EngineMissing(LinkError):
   """
 
 
+class EngineBuildFailed(LinkError):
+  """The far end answered that it cannot build this model on its own NPU.
+
+  Still a LinkError (every caller already answers one, and the link is finished
+  either way), but a build answer and not a link fault: `link.note_build_failure`
+  keeps it as that target's answer about that model, so over Wi-Fi a phone whose
+  EP takes none of the graph is asked once instead of once every 5-12 s with
+  minutes of the small model driving each round (the SM6450 failure).
+  """
+
+
 def _default_name() -> str:
   """Something the Jetson's journal can tell one comma process from another by."""
   return (Path(sys.argv[0]).stem if sys.argv else '') or 'python'
@@ -426,7 +437,7 @@ class JetlinkClient:
     rate = sent / max(1e-6, time.time() - t0) / 1e6
     log.info("uploaded %d MB at %.1f MB/s -> %s", sent >> 20, rate, resp['state'])
     if resp['state'] == 'failed':
-      raise LinkError(f"upload rejected: {resp.get('detail')}")
+      raise EngineBuildFailed(f"upload rejected: {resp.get('detail')}")
 
   def _await_ready(self, timeout: float) -> None:
     end = time.monotonic() + timeout
@@ -437,7 +448,9 @@ class JetlinkClient:
           raise LinkError("server reported ready without a model spec")
         return
       if st == 'failed':
-        raise LinkError(f"engine build failed: {self._engine_state.get('detail')}")
+        # a build outcome, not a link fault: the far end tried the graph and
+        # said no, and will say no again identically (see EngineBuildFailed)
+        raise EngineBuildFailed(f"engine build failed: {self._engine_state.get('detail')}")
       if st == 'need_upload':
         # pushed when the device came free: without this the wait ran to
         # build_timeout, a whole drive for provisioning's 1800 s

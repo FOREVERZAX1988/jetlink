@@ -158,6 +158,19 @@ class ATargetThatCannotBuild(OpenpilotTest):
     link.note_build_failure(False, 'htp-whole-SM8975', 'abc', RuntimeError('busy'))
     assert link.target_refusal(True, 'htp-whole-SM8975', 'abc') is None
 
+  def test_the_far_ends_own_build_answer_counts_even_though_it_is_a_link_error(self):
+    # the SM6450 case: the phone's QNN EP took none of the graph, so every
+    # attempt ended in the server's "engine build failed: OrtError ..." LinkError
+    # and read as a bad connection — 19 rounds in 3 minutes
+    from jetlink.client import EngineBuildFailed
+    why = link.note_build_failure(True, 'htp-whole-SM6450', 'abc',
+                                  EngineBuildFailed("engine build failed: OrtError: node_conv2d_token_91 "
+                                                    "domain com.ms.internal.nhwc not claimed by QNNExecutionProvider"))
+    assert why is not None
+    assert link.target_refusal(True, 'htp-whole-SM6450', 'abc') == why
+    # and the cable still gets its own attempt at the same model
+    assert link.target_refusal(False, 'htp-whole-SM6450', 'abc') is None
+
   def test_a_model_neither_end_has_is_not_a_build_failure(self):
     from jetlink.client import EngineMissing
     assert link.note_build_failure(True, 'htp-whole-SM6450', 'abc', EngineMissing('nowhere')) is None

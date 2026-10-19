@@ -112,11 +112,20 @@ def note_build_failure(wifi: bool, device: str, sha256: str, error: BaseExceptio
   what was recorded. Not every failure is an answer: a model neither end has
   (EngineMissing) is a provisioning run's job, and a timeout or a link error
   (OSError, LinkError) is a slow phone or a bad connection, which another
-  attempt can still get through."""
-  from jetlink.client import EngineMissing
+  attempt can still get through. The far end's own build answer
+  (EngineBuildFailed) is an answer even though it travels as a LinkError."""
+  from jetlink.client import EngineBuildFailed, EngineMissing
   from jetlink.transport.base import LinkError
-  if not wifi or isinstance(error, (EngineMissing, OSError, LinkError)):
+  if not wifi:
     return None
+  # The far end's own build answer is checked first, and on its own: it arrives
+  # as a LinkError only because every caller of the client answers one, and
+  # LinkError is an OSError, so the two exclusions below would swallow it (the
+  # SM6450 build that failed identically every 5 s was this case, and read as a
+  # bad connection for 19 rounds in 3 minutes)
+  if not isinstance(error, EngineBuildFailed):
+    if isinstance(error, (EngineMissing, OSError, LinkError)):
+      return None
   why = ' '.join(str(error).split())[:200]
   BUILD_REFUSED[(device, sha256)] = why
   return why
