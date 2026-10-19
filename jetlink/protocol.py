@@ -104,6 +104,11 @@ class Flag(IntEnum):
   LOSSLESS = 1 << 3       # on INFER_REQ: the frame is packed (LOSSLESS_CODEC),
                           # as jetlink.lossless.Packer packs it. Only to a server
                           # whose hello lists the codec in 'frame_codecs'
+  HEVC = 1 << 4           # on INFER_REQ: the frame is HEVC (HEVC_CODEC), two
+                          # cameras' Annex-B access units, 3-master-frame ids.
+                          # Only to a server whose hello lists it in
+                          # 'frame_codecs'; a lossy carrier, so never chosen
+                          # without the user's consent (jetlink.codecs.pick)
   PADDED = 1 << 7         # one pad byte follows the payload; see PACKET_MULTIPLE
 
 
@@ -173,6 +178,19 @@ def _pieces(total: int, payload: int) -> tuple[tuple[int, int], ...]:
 # head, the packed floats (their size from the handshake, as ever), a u32 size
 # per plane, then the planes. A server that takes it says so in its hello
 LOSSLESS_CODEC = 'med-zstd'
+
+# An HEVC frame (jetlink.hevc), for links too slow for 393 KB a frame: the six
+# planes reassembled into NV12 and through a hardware encoder, ~4 KB a camera at
+# 2 Mb/s. Lossy and inter-frame, so a receiver takes it only where the loss is
+# the price of a working link, and a stream that loses a frame owes an IDR
+# (jetlink.openpilot.stream). The frame's id is a master-frame id, shared by
+# both cameras, and the two access units go in the same INFER_REQ:
+#
+#   INFER_REQ head, the packed floats, then
+#   u32 road_len, u32 wide_len, road Annex-B, wide Annex-B
+#
+# A server that takes it says so in its hello's 'frame_codecs'.
+HEVC_CODEC = 'hevc'
 
 
 class ProtocolError(RuntimeError):

@@ -82,13 +82,16 @@ def values() -> list[tuple[str, str, str, str]]:
      '[\n' + ''.join(f'    "{k}": "{v}",\n' for k, v in base.USB_MEDIA.items()) + '  ]', 'jetlink.transport.base.USB_MEDIA'),
     ('cableAddress', 'String', f'"{tcp.CABLE_ADDRESS}"', 'jetlink.transport.tcp.CABLE_ADDRESS'),
     ('losslessCodec', 'String', f'"{P.LOSSLESS_CODEC}"', 'jetlink.protocol.LOSSLESS_CODEC'),
+    ('hevcCodec', 'String', f'"{P.HEVC_CODEC}"', 'jetlink.protocol.HEVC_CODEC'),
     ('leaveReasons', '[String]', '[' + ', '.join(f'"{r}"' for r in P.LEAVE_REASONS) + ']', 'jetlink.protocol.LEAVE_REASONS'),
     ('modelRunFrequency', 'Int', str(MODEL_RUN_FREQ), 'jetlink.spec.MODEL_RUN_FREQ'),
     ('modelContextFrequency', 'Int', str(MODEL_CONTEXT_FREQ), 'jetlink.spec.MODEL_CONTEXT_FREQ'),
     ('defaultFrameSkip', 'Int', str(DEFAULT_FRAME_SKIP), 'jetlink.spec.DEFAULT_FRAME_SKIP'),
     ('uploadChunk', 'Int', str(CHUNK), 'jetlink.spec.CHUNK'),
+    # as_posix, not str: a Windows checkout writes backslashes into the pin's
+    # comment, so the committed file fails the check on the machine that made it
     ('onnxruntimeVersion', 'String', f'"{fixture_pins()["onnxruntime"]}"',
-     f'{FIXTURE_PINS.relative_to(ROOT)}: onnxruntime'),
+     f'{FIXTURE_PINS.relative_to(ROOT).as_posix()}: onnxruntime'),
   ]
 
 

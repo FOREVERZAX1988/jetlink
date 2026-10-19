@@ -29,6 +29,7 @@ from typing import NamedTuple
 
 import numpy as np
 
+from jetlink import codecs
 from jetlink import protocol as P
 from jetlink.spec import CHUNK, DEFAULT_FRAME_SKIP, ModelSpec
 from jetlink.transport.base import LinkError, LinkTimeout, Message, Transport
@@ -88,6 +89,12 @@ class JetlinkClient:
     self.want_hidden = bool(os.environ.get(RAW_PRED_ENV)) if want_hidden is None else want_hidden
     # the last hello's server takes lossless frames (P.LOSSLESS_CODEC)
     self.takes_lossless = False
+    # and HEVC frames (P.HEVC_CODEC), which are lossy: a lossless-or-raw link
+    # never takes them without the caller saying so (codecs.pick)
+    self.takes_hevc = False
+    # what this link's frames go as: codecs.RAW, LOSSLESS or HEVC, from the
+    # hello and the caller's consent (JetlinkClient.choose_codec)
+    self.codec = codecs.RAW
     # Who the server logs this connection as. The nonce is per client object,
     # so two processes taking turns on one gadget, or one process reopening
     # the link, are separable in a journal whose clock is wrong anyway.
@@ -250,8 +257,23 @@ class JetlinkClient:
     self.t.send_json(P.Msg.HELLO_REQ, seq, {'client': client})
     resp = json.loads(bytes(self._expect(P.Msg.HELLO_RESP, seq, timeout).payload))
     self.takes_lossless = P.LOSSLESS_CODEC in (resp.get('frame_codecs') or ())
+    self.takes_hevc = P.HEVC_CODEC in (resp.get('frame_codecs') or ())
     self._take_datagrams(resp)
     return resp
+
+  def choose_codec(self, prefer_lossy: bool = False) -> str:
+    """Settle what this link's frames go as, from the last hello.
+
+    `prefer_lossy` is the user's consent to a lossy carrier (codecs.pick), and
+    it is never assumed: a link whose server offers HEVC still sends raw or
+    lossless frames unless the caller says otherwise. Returns the choice, also
+    kept on `codec`, so the frame path reads it once per frame and the panels
+    can show it.
+    """
+    self.codec = codecs.pick({'frame_codecs': [n for n, ok in
+                                               ((P.LOSSLESS_CODEC, self.takes_lossless), (P.HEVC_CODEC, self.takes_hevc)) if ok]},
+                             prefer_lossy=prefer_lossy)
+    return self.codec
 
   def _take_datagrams(self, hello: dict) -> None:
     """Frames as datagrams when the server offers them (only a phone's server,
@@ -400,7 +422,8 @@ class JetlinkClient:
 
   def infer_begin(self, warped: np.ndarray | None, packed: np.ndarray, frame_id: int = 0,
                   reset: bool = False, want_state: bool = False, deadline: float | None = None,
-                  skip_if_busy: bool = False, lossless: tuple | None = None) -> int | None:
+                  skip_if_busy: bool = False, lossless: tuple | None = None,
+                  hevc: tuple | None = None) -> int | None:
     """Send a frame and return immediately with its sequence number.
 
     Split from infer_end so the caller can work while the Jetson is busy;
@@ -420,7 +443,9 @@ class JetlinkClient:
 
     `lossless` is the frame packed instead (jetlink.lossless.Packer.pack's
     size table and planes), for a server whose hello lists the codec
-    (takes_lossless); `warped` is not sent then.
+    (takes_lossless); `hevc` is the two cameras' Annex-B access units
+    (road, wide), for a server that lists it (takes_hevc). `warped` is sent
+    for neither.
     """
     if self.spec is None:
       raise LinkError("ensure_engine() first")
@@ -432,8 +457,14 @@ class JetlinkClient:
     packed = _as_bytes(packed, self.spec.packed_nbytes, 'packed')
     seq = self._next_seq()
     flags = ((P.Flag.RESET_QUEUES if reset else 0) | (P.Flag.WANT_STATE if want_state else 0)
-             | (P.Flag.WANT_HIDDEN if self.want_hidden else 0) | (P.Flag.LOSSLESS if lossless else 0))
-    if lossless:
+             | (P.Flag.WANT_HIDDEN if self.want_hidden else 0) | (P.Flag.LOSSLESS if lossless else 0)
+             | (P.Flag.HEVC if hevc else 0))
+    if hevc:
+      # each camera's access unit behind its own u32 length: the server reads
+      # road then wide, and a length past the message is caught there
+      parts = (P.pack_infer_req(frame_id, flags), packed,
+               *[b for unit in hevc for b in (len(unit).to_bytes(4, 'little'), unit)])
+    elif lossless:
       # the packed floats first, at their fixed size, then the planes
       parts = (P.pack_infer_req(frame_id, flags), packed, *lossless)
     else:

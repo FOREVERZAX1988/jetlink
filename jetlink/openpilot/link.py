@@ -99,11 +99,16 @@ class WifiWaiting(ConnectionError):
 
 
 def dial(log, deadline: float | None = None, name: str | None = None):
-  """Open the link over Wi-Fi. Dials the gateway first (the phone-hotspot
-  case); if it refuses and the comma is on a normal LAN, auto-discovers a
-  jetlink server elsewhere on the subnet (a shared car AP where the phone is
-  an ordinary client). WifiWaiting when on no Wi-Fi or when nothing answers,
-  which the join retries."""
+  """Open the link over Wi-Fi.
+
+  Tries the announced servers first (mDNS, `_jetlink._tcp`), then the gateway
+  (the phone-hotspot case), then a sweep of the comma's own subnet (a shared
+  AP where the phone is an ordinary client). mDNS first because on a shared AP
+  the gateway is a router and dialing it only spends a timeout; a server that
+  announces itself is the server.
+
+  WifiWaiting when on no Wi-Fi or when nothing answers, which the join retries.
+  """
   from jetlink.client import FRAME_TIMEOUT, JetlinkClient
 
   def _open(host):
@@ -113,39 +118,45 @@ def dial(log, deadline: float | None = None, name: str | None = None):
                                   on_close=gadget.clear_link, name=name,
                                   deadline=FRAME_TIMEOUT if deadline is None else deadline)
 
+  def _try(host) -> object | None:
+    """The client on `host`, or None when nothing answered there."""
+    try:
+      client = _open(host)
+    except OSError:
+      return None
+    gadget.note_link('wifi', host)
+    log.warning("jetlink: dialed %s over Wi-Fi", host)
+    return client
+
+  # an announced server, without a gateway or a sweep to guess at
+  for _name, address in wifi.browse():
+    client = _try(address)
+    if client is not None:
+      return client
+
   gw = wifi.gateway()
   if gw is not None:
-    try:
-      client = _open(gw)
-      gadget.note_link('wifi', gw)
-      log.warning("jetlink: dialed %s over Wi-Fi", gw)
+    client = _try(gw)
+    if client is not None:
       return client
-    except OSError as gw_err:
-      # The gateway is not the server (a shared-AP router). Search the subnet;
-      # the gateway already had its chance, so discovery skips it.
-      host = wifi.discover(skip={gw})
-      if host is not None:
-        try:
-          client = _open(host)
-          gadget.note_link('wifi', host)
-          log.warning("jetlink: dialed %s over Wi-Fi", host)
-          return client
-        except OSError:
-          pass
-      # nothing else answered: keep the gateway's address/reason, as before
-      raise WifiWaiting(f"nothing answered at {gw}: {gw_err}", NO_ANSWER) from gw_err
+    # The gateway is not the server (a shared-AP router). Search the subnet;
+    # the gateway already had its chance, so discovery skips it.
+    host = wifi.discover(skip={gw}, mdnss=[])
+    if host is not None:
+      client = _try(host)
+      if client is not None:
+        return client
+    # nothing else answered: the gateway's address is the one to report
+    raise WifiWaiting(f"nothing answered at {gw}", NO_ANSWER)
   # no gateway at all
   if wifi.local_addr() is None:
     raise WifiWaiting("not on Wi-Fi", NOT_ON_WIFI)
-  host = wifi.discover(skip=set())
+  host = wifi.discover(skip=set(), mdnss=[])
   if host is None:
     raise WifiWaiting("not on Wi-Fi", NOT_ON_WIFI)
-  try:
-    client = _open(host)
-  except OSError as e:
-    raise WifiWaiting(f"nothing answered at {host}: {e}", NO_ANSWER) from e
-  gadget.note_link('wifi', host)
-  log.warning("jetlink: dialed %s over Wi-Fi", host)
+  client = _try(host)
+  if client is None:
+    raise WifiWaiting(f"nothing answered at {host}", NO_ANSWER)
   return client
 
 
