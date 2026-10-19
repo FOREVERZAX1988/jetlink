@@ -146,7 +146,7 @@ let package = Package(
     // The server's tests run it on onnxruntime's CPU provider, and on LiteRT
     // where $JETLINK_LITERT_DIR has its libraries.
     .testTarget(
-      name: "JetlinkServerTests", dependencies: ["JetlinkServer", "CLossless", "JetlinkORT", "JetlinkLiteRT", "JetlinkTestSupport"], exclude: ["Fixtures"]),
+      name: "JetlinkServerTests", dependencies: ["JetlinkServer", "CLossless", "CHevc", "JetlinkORT", "JetlinkLiteRT", "JetlinkTestSupport"], exclude: ["Fixtures"]),
     // On the fake shim (JL_TRT_FAKE), which jl_trt_fake.h drives.
     .testTarget(
       name: "JetlinkTRTTests", dependencies: ["JetlinkTRT", "CTrt", "JetlinkServer", "JetlinkONNX", "JetlinkTestSupport"],

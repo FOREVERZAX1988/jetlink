@@ -92,8 +92,10 @@ final class HevcFrame: @unchecked Sendable {
   }
 
   /// One access unit into its NV12 and its six planes.
-  private func decode(_ bytes: UnsafeRawBufferPointer, into nv12: UnsafeMutableRawPointer,
-                       planes: UnsafeMutableRawPointer, decoder: OpaquePointer?) -> Bool {
+  private func decode(
+    _ bytes: UnsafeRawBufferPointer, into nv12: UnsafeMutableRawPointer, planes: UnsafeMutableRawPointer,
+    decoder: OpaquePointer?
+  ) -> Bool {
     guard let decoder, let base = bytes.baseAddress, bytes.count > 0 else { return false }
     var keyframe: Int32 = 0
     let got = nv12.withMemoryRebound(to: UInt8.self, capacity: jl_hevc_frame_bytes(Int32(width), Int32(height))) { out in
