@@ -9,6 +9,7 @@ of the subnet, and never anything off the interface's own link.
 """
 import ipaddress
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -126,6 +127,19 @@ class TestDiscoverOrder(unittest.TestCase):
     self.assertEqual(got, '10.0.0.9')
     browse.assert_not_called()
     gw.assert_not_called()
+
+  def test_a_peer_remembered_before_a_reboot_is_not_dialed(self):
+    # the stamp is a boot's monotonic clock, so one from an earlier boot reads
+    # as the future here: trusting it dials whatever answered before the reboot
+    self.peer.write_text(f'10.0.0.9:5599:{time.monotonic() + 600.0}')
+    probed = []
+    with mock.patch.object(wifi, '_probe', side_effect=lambda h, p, t: probed.append(h) or False), \
+         mock.patch.object(wifi, 'browse', return_value=[]), \
+         mock.patch.object(wifi, 'gateway', return_value=None), \
+         mock.patch.object(wifi, 'local_addr', return_value=None):
+      got = wifi.discover()
+    self.assertIsNone(got)
+    self.assertEqual(probed, [])           # the stale peer was not even probed
 
   def test_the_sweep_stays_inside_the_interfaces_own_subnet(self):
     probed = []

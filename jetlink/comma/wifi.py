@@ -117,10 +117,19 @@ def _save_peer(host: str, port: int) -> None:
 
 
 def _saved_peer(port: int) -> str | None:
-  """A still-fresh, answering remembered peer, else None."""
+  """A still-fresh, answering remembered peer, else None.
+
+  The stamp is this boot's monotonic clock, so a stamp later than the clock
+  was written before a reboot and says nothing about now: `age < 0` is stale,
+  not fresh. Without it a device that rebooted keeps dialing whatever answered
+  hours ago — on a bench LAN that was the phone used to check the APK, whose
+  engine cannot build, so every join failed on a machine beside the one the
+  user meant until the clock caught up (2026-10-19).
+  """
   try:
     host, p, ts = PEER_FILE.read_text().strip().split(':')
-    if int(p) != port or time.monotonic() - float(ts) > PEER_TTL_S:
+    age = time.monotonic() - float(ts)
+    if int(p) != port or age < 0 or age > PEER_TTL_S:
       return None
   except (OSError, ValueError):
     return None
