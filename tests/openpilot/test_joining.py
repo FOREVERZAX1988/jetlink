@@ -27,7 +27,7 @@ import numpy as np
 
 import jetlink.openpilot as jo
 from jetlink.comma import gadget
-from jetlink.openpilot import interface, joining, link, status, warp
+from jetlink.openpilot import interface, link, status, warp
 from jetlink.openpilot.joining import REJOIN_DELAY_QUICK, STABLE_SECONDS, JoiningModelState
 from jetlink.openpilot.status import Status
 from tests.openpilot import fakes
@@ -1062,8 +1062,12 @@ class PeerAnswerTest(unittest.TestCase):
   def state(self, peer):
     log = RecordingLog()
     # the join thread is started in __init__ and would call connect(): this
-    # test is about the backoff it waits out
-    with mock.patch.object(JoiningModelState, '_join_loop', lambda self: None):
+    # test is about the backoff it waits out. The record writer is started too,
+    # and it takes the machine's own record path (this test isolates nothing)
+    # and writes before its first wait: it would write /dev/shm/jetlink from a
+    # test, which conftest's guard fails the whole run for
+    with mock.patch.object(JoiningModelState, '_join_loop', lambda self: None), \
+         mock.patch.object(JoiningModelState, '_write_loop', lambda self: None):
       s = JoiningModelState(None, None, None, progress=mock.Mock(), log=log, peer=peer)
     s._rejoin_at = time.monotonic() + 30.0
     return s, log
@@ -1518,7 +1522,7 @@ class AnyForkTest(OpenpilotTest):
     self.patch(self.parts.warps, 'load')
     self.big = FakeModel('big', chestnut=True, client=mock.Mock(dead=False))
     # the leave's summary reads trips.summary(), which a bare Mock is not
-    self.big.trips = mock.Mock(summary=lambda: {})
+    self.big.trips = mock.Mock(summary=dict)
     self.patch(link, 'open_link', return_value=(self.big.client, SimpleNamespace(model_hw=(128, 256))))
     # upstream imports JetlinkModelState inside join() (a TinyJit unpickle on
     # modeld's main thread), so the patch lands on the module it is read from
