@@ -189,7 +189,7 @@
     <string name="waiting_desc_usb">正在通过 USB 连接。</string>
     <string name="waiting_desc_wifi">正在通过 Wi-Fi 连接。</string>
     <string name="waiting_desc_wifi_waiting">等待 Comma 接入本热点。</string>
-    <string name="waiting_desc_wifi_elsewhere">Comma 接的是别的 Wi-Fi，请让它接入本机热点。</string>
+    <string name="waiting_desc_wifi_elsewhere">Comma 连的是别的设备，不是本机。</string>
     <string name="waiting_desc_plug">请插入 Comma。</string>
 
     <!-- Status: cards & tiles -->

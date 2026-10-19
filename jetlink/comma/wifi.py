@@ -341,15 +341,23 @@ def link_info(interface: str = INTERFACE) -> dict:
 # is listening by that same answer: neither believes the other is there without
 # having heard it.
 #
-# The gateway alone, never a broadcast: that is the device the comma joined the
-# hotspot through, and an announcement that left the hotspot for another
-# network is not this comma's link. Nothing here carries a frame, and a comma
-# on no Wi-Fi sends nothing at all.
+# It goes to two addresses, because there are two ways a phone is the device
+# this comma dials. On the phone's own hotspot the gateway is the phone, and
+# that is where it is sent. On a router the phone is a peer client: the
+# gateway is the router, which drops it, so the same datagram also goes to the
+# subnet's directed broadcast, where the app on that phone hears it. Discovery
+# made a comma and a phone on one router a link worth announcing (wifi.discover,
+# 2026-10-20); before that the announcement only ever reached a hotspot's owner.
 #
-# The announcement names that gateway too (its `gw`), and the app reads the
-# link as on its way only when the address is one of its own: a comma that
-# joined another hotspot in the same subnet dials that one's device, not this
-# phone, and is not the comma this phone is listening for.
+# The announcement names the gateway (its `gw`) and, once an app has answered,
+# the address it answered from (its `to`): that answer is the host this comma
+# will dial, and naming it is what stops a second app on the same LAN - one
+# whose phone this comma is not going to dial - from reading the link as on its
+# way. An app reads `to` against its own addresses, and with no `to` reads `gw`
+# as before: the same address, or another device on one of its own subnets,
+# which is the router a LAN announcement comes through.
+#
+# Nothing here carries a frame, and a comma on no Wi-Fi sends nothing at all.
 PRESENCE_PORT = 5600
 PRESENCE_PERIOD = 1.0
 # how long an answer counts for. The app answers every announcement, so this
@@ -362,6 +370,42 @@ PRESENCE_KIND = 'presence'
 PRESENCE_DATAGRAM = 512
 
 
+def subnet_broadcast(address: str, prefix: int) -> str | None:
+  """The directed broadcast of `address`/`prefix`, or None for a prefix that
+  names no hosts: /31 and /32 have no broadcast address, and /0 is every host
+  there is, which is not a subnet this comma may put a datagram on."""
+  if not 0 < prefix < 31:
+    return None
+  try:
+    packed = struct.unpack('>I', socket.inet_aton(address))[0]
+  except OSError:
+    return None
+  host = 0xFFFFFFFF >> prefix
+  return socket.inet_ntoa(struct.pack('>I', packed | host))
+
+
+def announce_targets(gateway: str, interface: str | None = INTERFACE) -> list[str]:
+  """Where one announcement goes: the gateway this comma dials, and the subnet's
+  broadcast when the interface has an address to take one from.
+
+  The gateway is the phone on a hotspot and the router on a LAN. The broadcast
+  is what reaches a phone that is a peer client - the LAN case discovery made a
+  link - and it is sent to the interface's own subnet, never to 255.255.255.255:
+  one datagram that cannot leave the network this comma is on. `interface` None
+  is a caller with no network of its own to announce on, and says the gateway
+  alone."""
+  targets = [gateway]
+  if interface is None:
+    return targets
+  iface = local_addr(interface)
+  if iface is None:
+    return targets
+  broadcast = subnet_broadcast(*iface)
+  if broadcast is not None and broadcast not in targets:
+    targets.append(broadcast)
+  return targets
+
+
 class Presence:
   """The comma's end of the presence handshake (PRESENCE_PORT above).
 
@@ -372,14 +416,22 @@ class Presence:
   comma, cannot hold the handshake up.
   """
 
-  def __init__(self, port: int = PRESENCE_PORT, period: float = PRESENCE_PERIOD, clock=time.monotonic):
+  def __init__(self, port: int = PRESENCE_PORT, period: float = PRESENCE_PERIOD, clock=time.monotonic,
+               interface: str | None = INTERFACE):
     self.port = port
     self.period = period
     self.clock = clock
+    # the interface the broadcast is taken from; None for the gateway alone
+    self.interface = interface
     self.sock: socket.socket | None = None
     self.id = ''
     self.last_announce = 0.0
     self.answered_at = 0.0
+    # The address the app last answered from: the host this comma will dial, so
+    # the announcements that follow name it as `to`. Read by the owner for its
+    # log. Kept across a close - it is a fact about the app, not the socket -
+    # and replaced by any later answer, a comma that moved networks included
+    self.peer: str | None = None
 
   def handshake(self, gateway: str | None) -> bool:
     """Announce this comma to `gateway` and read back the app's answer.
@@ -421,26 +473,46 @@ class Presence:
     try:
       sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
       sock.setblocking(False)
+      # one of the two targets is a subnet broadcast, which a socket may not
+      # send to unless it says it means to
+      sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
     except OSError:
       return False
     self.sock = sock
     return True
 
   def _announce(self, gateway: str) -> None:
-    """One datagram at the gateway, naming it: the app compares `gw` with its
-    own addresses, and answers - reads the link as on its way - only when this
-    comma dialed it. A send that cannot go takes the socket with it, and the
-    next step opens another: the interface may come back."""
+    """One datagram at each of the targets (announce_targets), naming the
+    gateway and - once an app has answered - the address it answered from: the
+    app compares those with its own addresses, and answers, and reads the link
+    as on its way, only when this comma dialed it.
+
+    A send that cannot go at the gateway takes the socket with it, and the next
+    step opens another: the interface may come back. A broadcast that cannot go
+    is dropped and the handshake keeps its gateway: the broadcast is the second
+    chance for a phone that is not the gateway, and losing it costs that phone
+    the announcement, not the one on the hotspot."""
+    fields = {'id': self.id, 'gw': gateway}
+    if self.peer:
+      fields['to'] = self.peer
+    message = _message(**fields)
+    targets = announce_targets(gateway, self.interface)
     try:
-      self.sock.sendto(_message(id=self.id, gw=gateway), (gateway, self.port))
+      self.sock.sendto(message, (targets[0], self.port))
     except OSError:
       self.close()
+      return
+    for target in targets[1:]:
+      try:
+        self.sock.sendto(message, (target, self.port))
+      except OSError:
+        pass
 
   def _listen(self) -> None:
     """Every answer waiting on the socket, and nothing else."""
     while True:
       try:
-        data, _ = self.sock.recvfrom(PRESENCE_DATAGRAM)
+        data, source = self.sock.recvfrom(PRESENCE_DATAGRAM)
       except (BlockingIOError, InterruptedError):
         return
       except OSError:
@@ -448,6 +520,10 @@ class Presence:
         return
       if _answered(data, self.id):
         self.answered_at = self.clock()
+        # the app's own address, off the answer's source: the host this comma
+        # will dial, and the one the next announcement names as `to`
+        if source and source[0]:
+          self.peer = source[0]
 
 
 def _message(**fields) -> bytes:

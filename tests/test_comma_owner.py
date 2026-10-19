@@ -786,12 +786,30 @@ class TestWifi(OwnerTest):
     self.presence.handshake.return_value = True
     o = self.owner()
     o.step()
-    self.assertEqual(o.presence_gateway, '172.20.10.1')
+    self.assertEqual(o.presence_address, '172.20.10.1')
     self.gateway.return_value = '192.168.10.251'
     self.presence.handshake.return_value = False
     with mock.patch.object(gadget, 'log') as log:
       o.step()
       log.info.assert_called_once_with("jetlink: the Jetlink app stopped answering on %s", '172.20.10.1')
+
+  def test_the_apps_own_address_is_named_when_the_handshake_knows_it(self):
+    # on a router the gateway is the router, and naming it would send whoever
+    # reads the log after an app that was never there: the handshake's peer is
+    # the address the app answered from, which is the host this comma dials
+    self.presence.handshake.return_value = True
+    self.presence.peer = '192.168.10.65'
+    o = self.owner()
+    with mock.patch.object(gadget, 'log') as log:
+      o.step()
+      log.info.assert_called_once_with(
+        "jetlink: the Jetlink app answered on %s; it reads the Wi-Fi link as connecting", '192.168.10.65')
+    self.assertEqual(o.presence_address, '192.168.10.65')
+    self.gateway.return_value = '10.0.0.1'
+    self.presence.handshake.return_value = False
+    with mock.patch.object(gadget, 'log') as log:
+      o.step()
+      log.info.assert_called_once_with("jetlink: the Jetlink app stopped answering on %s", '192.168.10.65')
 
   def test_a_comma_that_turned_the_setting_off_stops_announcing(self):
     o = self.owner()

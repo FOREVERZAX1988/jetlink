@@ -103,31 +103,44 @@ settings):
 ### The presence handshake over Wi-Fi
 
 Wi-Fi is the one link the far end cannot see before it opens: the comma dials
-the hotspot's gateway, so until it does, the device running the app has nothing
-to go on but its own **Wi-Fi Link** setting, and a comma joined to some other
-network reads as on its way there and never arrives. So the comma says it is
-here. While its setting is Wi-Fi and it is on a Wi-Fi, the owner
-(`jetlink.comma.wifi.Presence`) sends one datagram a second to the gateway,
-UDP port **5600**, naming the gateway it dials, `gw`:
-`{"jetlink": "presence", "v": 1, "id": "9b3f0c1d", "gw": "172.20.10.1"}`, and
-the app answers it to the port the announcement came from:
-`{"jetlink": "presence", "v": 1, "ack": true, "id": "9b3f0c1d"}`.
+the hotspot's gateway, or a phone discovery found on the LAN, so until it does,
+the device running the app has nothing to go on but its own **Wi-Fi Link**
+setting, and a comma joined to some other network reads as on its way there and
+never arrives. So the comma says it is here. While its setting is Wi-Fi and it
+is on a Wi-Fi, the owner (`jetlink.comma.wifi.Presence`) sends one datagram a
+second, UDP port **5600**: to its gateway, and to the subnet's broadcast, since
+on a router the gateway is the router and the phone is a client the broadcast
+reaches. It names the gateway it dials, `gw`, and - once an app has answered it -
+the host it will dial, `to`:
+`{"jetlink": "presence", "v": 1, "id": "9b3f0c1d", "gw": "172.20.10.1"}` then
+`{"jetlink": "presence", "v": 1, "id": "9b3f0c1e", "gw": "172.20.10.1", "to": "172.20.10.42"}`.
+The app answers it to the port the announcement came from:
+`{"jetlink": "presence", "v": 1, "ack": true, "id": "9b3f0c1e"}`.
 
 `id` is fresh for every announcement and an answer to any other one is ignored,
-so a late answer, or one from another comma, cannot hold the reading up. `gw`
-is the address the comma dials - the device it took for the hotspot. The app
-compares it with its own addresses and answers only when it is one of them, and
-reads the link as connecting only then: a comma that answered but reports
-another gateway joined a different hotspot, and the app says so rather than
-call it connecting. An announcement that names no gateway (an older comma) is
-read as before, as one on this hotspot. The app's Status tab reads the link as
-connecting over Wi-Fi while a comma answers on its own hotspot, never on the
-setting alone: that is the state a cable already in the phone shows before the
-ignition, and a comma that is not on this hotspot is not on its way. The comma takes the answer as the app listening, and says so in its
-log once. The gateway is the only address ever sent to, nothing is carried but
-these bytes, and a comma on no Wi-Fi sends nothing: a comma and a phone joined
-to the same router are not a link, since the comma dials its own gateway and
-the phone is not it.
+so a late answer, or one from another comma, cannot hold the reading up. `to` is
+the address the app that answered announced from - the host this comma will
+dial, which discovery would have found on that network too - and `gw` is the
+gateway it joined through.
+
+The app compares `to` with its own addresses and answers, and reads the link as
+connecting, only when it is one of them. With no `to` yet (the first second of a
+link, or a comma older than the field) it reads `gw` as before: one of its own
+addresses is its hotspot, and another host on a subnet it is on is the router of
+a LAN it shares with the comma, where discovery dials the app. Anything else
+answered but dials another device - another hotspot, or another app on this
+network - and the app says so rather than call it connecting, which is what `to`
+settles on one LAN for the second app. The app's Status tab reads the link as
+connecting over Wi-Fi while a comma answers for it, never on the setting alone:
+that is the state a cable already in the phone shows before the ignition, and a
+comma that is not on this hotspot or this LAN is not on its way. The comma takes
+the answer as the app listening, and says so in its log once, naming the address
+the app answered from.
+
+One datagram a second, at the gateway and at the subnet's own broadcast (never
+255.255.255.255), nothing carried but these bytes, and a comma on no Wi-Fi sends
+nothing at all: a phone on the same router is announced to by name, not by a
+datagram that could leave the network the two are on.
 
 ### Bus speed
 

@@ -34,11 +34,13 @@ data class StatusState(
 
     /**
      * The presence handshake (presence.PresenceMonitor): what the last
-     * announcements say of a comma. [Presence.Here] is one on this phone's
-     * hotspot - answered within the last few seconds and dialing an address
-     * this phone holds. [Presence.Elsewhere] is one that answered but dials
-     * another gateway: it joined a different hotspot, and is not this phone's
-     * link. A Wi-Fi link reads as on its way on [Presence.Here] and never on
+     * announcements say of a comma. [Presence.Here] is one this phone is the
+     * link of - answered within the last few seconds and dialing an address
+     * this phone holds (its hotspot), or one on a subnet this phone is on (a
+     * router both are clients of, where discovery finds the app). [Presence.
+     * Elsewhere] is one that answered but dials another device: another
+     * hotspot, or another app on this network, and not this phone's link. A
+     * Wi-Fi link reads as on its way on [Presence.Here] and never on
      * [wifiLink], so the Status tab waits the way it does for a cable in a
      * phone with no ignition behind it, and only while there is a comma to
      * wait for.
@@ -48,7 +50,7 @@ data class StatusState(
     val engine: Engine get() = snapshot.engine
     val connected: Boolean get() = snapshot.connected
 
-    /** A cable with a comma behind it, or a comma on this phone's hotspot: something to connect to. */
+    /** A cable with a comma behind it, or a comma reaching this phone over Wi-Fi: something to connect to. */
     val connecting: Boolean get() = usb is UsbState.Attached || presence == Presence.Here
 
     /** The engine's model by name. */

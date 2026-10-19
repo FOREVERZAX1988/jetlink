@@ -205,7 +205,10 @@ class TestPresence(unittest.TestCase):
     self.addCleanup(self.phone.close)
     # the clock the owner's step would move: nothing here waits on a real one
     self.now = [1000.0]
-    self.presence = wifi.Presence(port=self.phone.getsockname()[1], clock=lambda: self.now[0])
+    # the loopback socket is the phone and its gateway at once: no interface of
+    # this machine's is the network the handshake would broadcast on, so these
+    # tests send to one target and nothing leaves the box
+    self.presence = wifi.Presence(port=self.phone.getsockname()[1], clock=lambda: self.now[0], interface=None)
     self.addCleanup(self.presence.close)
 
   def announced(self) -> dict:
@@ -278,6 +281,71 @@ class TestPresence(unittest.TestCase):
     with self.assertRaises(socket.timeout):
       self.phone.recvfrom(wifi.PRESENCE_DATAGRAM)
 
+  def test_the_answer_names_the_address_the_app_answered_from(self):
+    # the source of the answer is the app's own address: the host this comma
+    # will dial, and what a second app on the same LAN is read against
+    self.presence.handshake('127.0.0.1')
+    self.answer(self.announced())
+    self.presence.handshake('127.0.0.1')
+    self.assertEqual(self.presence.peer, '127.0.0.1')
+
+  def test_a_peer_that_answered_is_named_in_the_announcements_that_follow(self):
+    self.presence.handshake('127.0.0.1')
+    first = self.announced()
+    self.assertNotIn('to', first, 'nothing answered yet: the gateway is all it has')
+    self.answer(first)
+    # the answer is read inside the period it was announced in - the step runs
+    # more often than the announcement - and that is where the peer comes from
+    self.presence.handshake('127.0.0.1')
+    self.assertEqual(self.presence.peer, '127.0.0.1')
+    self.now[0] += wifi.PRESENCE_PERIOD
+    self.presence.handshake('127.0.0.1')
+    self.assertEqual(self.announced()['to'], '127.0.0.1')
+
+  def test_a_comma_that_moved_networks_names_the_new_answer(self):
+    # the peer is replaced by any later answer, never kept beside it
+    self.presence.handshake('127.0.0.1')
+    self.answer(self.announced())
+    self.presence.handshake('127.0.0.1')
+    self.now[0] += wifi.PRESENCE_PERIOD
+    self.presence.handshake('127.0.0.1')
+    self.assertEqual(self.announced()['to'], '127.0.0.1')
+    # another app answers, from its own address
+    other = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    other.bind(('127.0.0.2', 0))
+    self.addCleanup(other.close)
+    other.sendto(json.dumps({'jetlink': 'presence', 'v': 1, 'ack': True, 'id': self.presence.id}).encode(),
+                 self.caller)
+    # the gateway is still the phone this comma dials: it is the app's own
+    # address in the answer that moved
+    self.presence.handshake('127.0.0.1')
+    self.assertEqual(self.presence.peer, '127.0.0.2')
+    self.now[0] += wifi.PRESENCE_PERIOD
+    self.presence.handshake('127.0.0.1')
+    self.assertEqual(self.announced()['to'], '127.0.0.2')
+
+  def test_every_target_gets_the_same_announcement(self):
+    # one datagram per target: the gateway it dials, and - on a network of its
+    # own - the broadcast a peer client hears it on
+    second = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    # the announcement's port is the app's, so a second target is another
+    # address on that port: the phone, and a broadcast it would hear
+    second.bind(('127.0.0.2', self.phone.getsockname()[1]))
+    second.settimeout(2.0)
+    self.addCleanup(second.close)
+    with mock.patch.object(wifi, 'announce_targets', return_value=['127.0.0.1', '127.0.0.2']):
+      self.presence.handshake('127.0.0.1')
+    first_id = json.loads(self.phone.recvfrom(wifi.PRESENCE_DATAGRAM)[0])['id']
+    self.assertEqual(json.loads(second.recvfrom(wifi.PRESENCE_DATAGRAM)[0])['id'], first_id)
+
+  def test_a_broadcast_that_cannot_go_keeps_the_announcement_at_the_gateway(self):
+    # the second target is the second chance, never the handshake's only leg
+    with mock.patch.object(wifi, 'announce_targets', return_value=['127.0.0.1', '255.255.255.255']), \
+         mock.patch.object(wifi.socket.socket, 'sendto', side_effect=[len(b''), OSError('EACCES')]):
+      self.presence.handshake('127.0.0.1')
+    self.assertIsNotNone(self.presence.sock, 'the gateway send went: the socket stays')
+    self.assertFalse(self.presence.handshake('127.0.0.1'), 'and the next step announces again')
+
   def test_only_an_ack_of_the_same_id_is_an_answer(self):
     good = b'{"jetlink":"presence","v":1,"ack":true,"id":"ab"}'
     self.assertTrue(wifi._answered(good, 'ab'))
@@ -286,6 +354,38 @@ class TestPresence(unittest.TestCase):
     self.assertFalse(wifi._answered(b'{"jetlink":"presence","v":2,"ack":true,"id":"ab"}', 'ab'))
     self.assertFalse(wifi._answered(b'{"jetlink":"presence","v":1,"ack":true,"id":"ab"}', ''))
     self.assertFalse(wifi._answered(b'nonsense', 'ab'))
+
+class TestAnnounceTargets(unittest.TestCase):
+  """Where an announcement goes: the phone's hotspot is the gateway, a phone on
+  a router is a peer client the subnet's broadcast reaches. Which of the two
+  this comma is on, it cannot know - the addresses say it, not the setting."""
+
+  def test_a_gateway_is_always_one_target(self):
+    self.assertEqual(wifi.announce_targets('192.168.43.1', interface=None), ['192.168.43.1'])
+
+  def test_the_subnets_broadcast_is_the_second_on_an_interface(self):
+    with mock.patch.object(wifi, 'local_addr', return_value=('192.168.10.79', 24)):
+      self.assertEqual(wifi.announce_targets('192.168.10.251'), ['192.168.10.251', '192.168.10.255'])
+
+  def test_an_interface_with_no_address_is_the_gateway_alone(self):
+    with mock.patch.object(wifi, 'local_addr', return_value=None):
+      self.assertEqual(wifi.announce_targets('10.0.0.1'), ['10.0.0.1'])
+
+  def test_a_gateway_that_is_the_broadcast_is_sent_once(self):
+    with mock.patch.object(wifi, 'local_addr', return_value=('192.168.10.255', 24)):
+      self.assertEqual(wifi.announce_targets('192.168.10.255'), ['192.168.10.255'])
+
+  def test_a_prefix_with_no_hosts_has_no_broadcast(self):
+    self.assertEqual(wifi.subnet_broadcast('10.0.0.1', 32), None)
+    self.assertEqual(wifi.subnet_broadcast('10.0.0.1', 31), None)
+    self.assertEqual(wifi.subnet_broadcast('10.0.0.1', 0), None)
+
+  def test_the_broadcast_sets_the_host_bits_of_the_subnet(self):
+    self.assertEqual(wifi.subnet_broadcast('192.168.10.79', 24), '192.168.10.255')
+    self.assertEqual(wifi.subnet_broadcast('10.0.0.44', 16), '10.0.255.255')
+    self.assertEqual(wifi.subnet_broadcast('172.20.10.5', 28), '172.20.10.15')
+    self.assertEqual(wifi.subnet_broadcast('not an address', 24), None)
+
 
 if __name__ == '__main__':
   unittest.main()

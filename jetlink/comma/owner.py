@@ -194,7 +194,7 @@ class Owner:
     # this comma joined is answering it; None until it has been asked
     self.presence = wifi.Presence()
     self.presence_up: bool | None = None
-    self.presence_gateway: str | None = None  # the gateway the app last answered on
+    self.presence_address: str | None = None  # the address the app last answered on
     self.next_gadget_attempt = 0.0
     self.failed_ios: bool | None = None  # the mode whose last build failed, until one works
     self.next_worker = 0.0
@@ -901,19 +901,29 @@ class Owner:
     """Say the presence handshake's edges once. The app on the device this
     comma joined answers the announcement while it has its Wi-Fi link on, and
     that is what it reads the link as connecting on (jetlink.comma.wifi): a
-    comma that is not on that hotspot is not on its way, whatever the setting
-    says. The edge that falls names the gateway the app answered on, not the
-    one this step is on: a comma that moved to another network left that app
-    behind, which is not an app that stopped answering."""
+    comma that is not on that hotspot, or on that LAN, is not on its way,
+    whatever the setting says. The edge that falls names the address the app
+    answered on, not the gateway this step is on: a comma that moved to another
+    network left that app behind, which is not an app that stopped answering.
+    Off a hotspot those differ - the gateway is the router, the app is the phone
+    it dials - and the app's own address is the one worth naming."""
     if up == self.presence_up:
       return
     was, self.presence_up = self.presence_up, up
     if up:
-      self.presence_gateway = self.gateway
-      gadget.log.info("jetlink: the Jetlink app answered on %s; it reads the Wi-Fi link as connecting", self.gateway)
-    elif was and self.presence_gateway is not None:
-      gadget.log.info("jetlink: the Jetlink app stopped answering on %s", self.presence_gateway)
-      self.presence_gateway = None
+      self.presence_address = self.answered_address()
+      gadget.log.info("jetlink: the Jetlink app answered on %s; it reads the Wi-Fi link as connecting",
+                      self.presence_address)
+    elif was and self.presence_address is not None:
+      gadget.log.info("jetlink: the Jetlink app stopped answering on %s", self.presence_address)
+      self.presence_address = None
+
+  def answered_address(self) -> str | None:
+    """The address the app answered from, when the handshake knows one, and the
+    gateway this step is on when it does not: a handshake that was stubbed, or
+    one that has not been answered yet."""
+    peer = getattr(self.presence, 'peer', None)
+    return peer if isinstance(peer, str) and peer else self.gateway
 
   def watch_the_port(self) -> None:
     """The edges of the USB link, and for iOS the phone's dial.

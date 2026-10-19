@@ -28,13 +28,51 @@
     }
 
     @Test func theGatewayIsThisDeviceOnlyWhenItIsOneOfItsOwn() {
-      let ours: Set<String> = ["192.168.43.1"]
-      #expect(PresenceMonitor.verdict(gateway: "192.168.43.1", addresses: ours) == .here)
-      // the comma joined another hotspot in the same subnet and dials that one's
-      // device, not this: not the link this device is listening for
-      #expect(PresenceMonitor.verdict(gateway: "192.168.10.1", addresses: ours) == .elsewhere)
+      let hotspot: Set<LocalAddress> = [LocalAddress(address: "192.168.43.1", prefix: 24)]
+      #expect(PresenceMonitor.verdict(target: nil, gateway: "192.168.43.1", sender: "192.168.43.42",
+                                     addresses: hotspot) == .here)
+      // the comma joined another network and dials that one's device, not this:
+      // the announcement comes from a subnet this device is not on
+      #expect(PresenceMonitor.verdict(target: nil, gateway: "192.168.10.1", sender: "192.168.10.77",
+                                     addresses: hotspot) == .elsewhere)
       // a comma that names no gateway is read as before, as on this hotspot
-      #expect(PresenceMonitor.verdict(gateway: nil, addresses: ours) == .here)
+      #expect(PresenceMonitor.verdict(target: nil, gateway: nil, sender: nil, addresses: hotspot) == .here)
+    }
+
+    @Test func aCommaOnThisDevicesOwnLanIsOnItsWay() {
+      // the router is the gateway and this device is a client of it: discovery
+      // finds the app and dials it, so that is this device's link too
+      let lan: Set<LocalAddress> = [LocalAddress(address: "192.168.10.50", prefix: 24)]
+      #expect(PresenceMonitor.verdict(target: nil, gateway: "192.168.10.251", sender: "192.168.10.79",
+                                     addresses: lan) == .here)
+    }
+
+    @Test func theHostTheCommaNamesIsTheOneItIsReadAgainst() {
+      // once an app answers, the comma names the host it dials, and that settles
+      // whose link it is - on one LAN a second app would otherwise read every
+      // announcement as its own
+      let lan: Set<LocalAddress> = [LocalAddress(address: "192.168.10.50", prefix: 24)]
+      #expect(PresenceMonitor.verdict(target: "192.168.10.50", gateway: "192.168.10.251",
+                                     sender: "192.168.10.79", addresses: lan) == .here)
+      #expect(PresenceMonitor.verdict(target: "192.168.10.65", gateway: "192.168.10.251",
+                                     sender: "192.168.10.79", addresses: lan) == .elsewhere)
+    }
+
+    @Test func anAnnouncementNamesTheHostItsCommaDials() {
+      let announcement = #"{"jetlink":"presence","v":1,"id":"9b3f0c1d","to":"192.168.10.50"}"#
+      #expect(PresenceMonitor.announceTarget(announcement) == "192.168.10.50")
+      #expect(PresenceMonitor.announceTarget(#"{"jetlink":"presence","v":1,"id":"9b3f0c1d"}"#) == nil)
+      #expect(PresenceMonitor.announceTarget(#"{"jetlink":"snapshot","v":1,"to":"192.168.10.50"}"#) == nil)
+    }
+
+    @Test func aSubnetIsReadOfThisDevicesOwnPrefix() {
+      let lan = LocalAddress(address: "192.168.10.50", prefix: 24)
+      #expect(lan.sharesSubnet("192.168.10.251"))
+      #expect(!lan.sharesSubnet("192.168.11.50"))
+      #expect(LocalAddress(address: "10.0.0.44", prefix: 16).sharesSubnet("10.0.9.9"))
+      #expect(!LocalAddress(address: "192.168.10.50", prefix: 32).sharesSubnet("192.168.10.50"))
+      #expect(!LocalAddress(address: "10.0.0.1", prefix: 0).sharesSubnet("8.8.8.8"))
+      #expect(!lan.sharesSubnet("not an address"))
     }
 
     @Test func theAnswerCarriesThatIdAndTheAck() throws {

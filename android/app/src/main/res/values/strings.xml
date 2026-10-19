@@ -189,7 +189,7 @@
     <string name="waiting_desc_usb">Connecting over USB.</string>
     <string name="waiting_desc_wifi">Connecting over Wi-Fi.</string>
     <string name="waiting_desc_wifi_waiting">Waiting for the comma to join this hotspot.</string>
-    <string name="waiting_desc_wifi_elsewhere">The comma is on another Wi-Fi. Join it to this hotspot.</string>
+    <string name="waiting_desc_wifi_elsewhere">The comma is dialing another device, not this phone.</string>
     <string name="waiting_desc_plug">Plug in the comma.</string>
 
     <!-- Status: cards & tiles -->
