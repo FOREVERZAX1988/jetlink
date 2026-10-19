@@ -268,6 +268,8 @@ final class Session: @unchecked Sendable {
       // 0 unless the host really suspends: the comma then holds the gadget
       // for the whole park instead of letting go for a box that never sleeps.
       "sleep_after": host.hooks.sleepAfter,
+      // frames this server takes packed (Wire.Flag.lossless), for slow links
+      "frame_codecs": [LosslessFrame.codec],
     ]
     for (key, value) in host.backend.describe() {
       response[key] = value
@@ -453,18 +455,34 @@ final class Session: @unchecked Sendable {
     let started = DispatchTime.now().uptimeNanoseconds
     host.lastSeenAt = ProcessInfo.processInfo.systemUptime
     let layout = loaded.staging.layout
-    guard message.payload.count == layout.requestBytes else {
-      // The offsets below come from the spec, not the wire: a client on
-      // another model would have its scalars read out of the image.
+    let payload = message.payload
+    guard payload.count >= Wire.inferReqSize, let base = payload.baseAddress else {
       return InferReply(status: .badShape)
     }
-    let base = message.payload.baseAddress!
     let frameID = UInt32(littleEndian: base.loadUnaligned(as: UInt32.self))
     let flags = Wire.Flag(rawValue: UInt32(littleEndian: base.loadUnaligned(fromByteOffset: 4, as: UInt32.self)))
+    // The offsets below come from the spec, not the wire: a client on
+    // another model would have its scalars read out of the image.
+    let warped: UnsafeRawPointer
+    let packed: UnsafeRawPointer
+    if flags.contains(.lossless) {
+      // the packed floats at their usual size, then the frame's planes
+      let planesAt = Wire.inferReqSize + layout.packedBytes
+      guard payload.count >= planesAt, let frame = loaded.lossless,
+        frame.unpack(UnsafeRawBufferPointer(rebasing: payload[planesAt...]))
+      else {
+        return InferReply(status: .badShape)
+      }
+      warped = UnsafeRawPointer(frame.pixels)
+      packed = base + Wire.inferReqSize
+    } else {
+      guard payload.count == layout.requestBytes else { return InferReply(status: .badShape) }
+      warped = base + Wire.inferReqSize
+      packed = warped + layout.warpedBytes
+    }
     if flags.contains(.resetQueues) {
       loaded.staging.reset()
     }
-    let warped = base + Wire.inferReqSize
 
     var status = Wire.Status.ok
     var queueUs: UInt32 = 0
@@ -472,7 +490,7 @@ final class Session: @unchecked Sendable {
     do {
       // The packed floats stay where they arrived: every cast and copy of
       // them reads unaligned, so they need no aligned copy first.
-      try loaded.staging.stage(warped: warped, packed: warped + layout.warpedBytes)
+      try loaded.staging.stage(warped: warped, packed: packed)
       queueUs = microseconds(since: started)
       try loaded.engine.run()
     } catch {

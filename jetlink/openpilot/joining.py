@@ -739,10 +739,16 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
   what the link will hand back; another geometry is rejected.
   """
   from jetlink.openpilot import link as links
+  # here rather than in build(): the import then costs modeld's main thread
+  # before the frame loop, not the frame the swap lands on
+  # (JetlinkModelState itself is already imported at module scope)
+  from jetlink.openpilot import model_state
   op = parts.op
   face = op.model_face()
   ready: dict = {}
-  link = links.Link(parts.log)
+  mode = parts.settings.mode()
+  wifi = mode == 'wifi'
+  link = links.Link(parts.log, wifi=wifi)
 
   def prepare():
     from jetlink.openpilot.warp import Warp, prepare_reset
@@ -759,7 +765,10 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
     try:
       # the fork's own reset of its small model, else jetlink's from its shape
       ready['reset_small'] = getattr(op, 'small_reset', lambda small: None)(small) or prepare_reset(small)
-      warp = Warp(parts.warps.load(cam_w, cam_h, *geometry), face.frame_size(cam_w, cam_h))
+      # over Wi-Fi the lossless build, which makes the frame's MED errors too
+      # (jetlink.lossless), when the build made one; else frames go raw
+      lossless = wifi and parts.warps.is_cached(cam_w, cam_h, *geometry, lossless=True)
+      warp = Warp(parts.warps.load(cam_w, cam_h, *geometry, lossless=lossless), face.frame_size(cam_w, cam_h), parts.log)
     except Exception:
       link.close()
       raise
@@ -770,7 +779,23 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
     warp = ready.get('warp') if ready.get('geometry') == (img_w * 2, img_h * 2) else None
     if warp is None:
       raise RuntimeError('no prepared warp for the server model geometry')
-    return JetlinkModelState(client, spec, warp, face=face, log=parts.log, event=op.event)
+    # A phone behind the USB cable (usb/ios) or Wi-Fi answers near the frame
+    # budget, so relax the hold/proof per link; Jetson/Mac keep strict defaults.
+    if wifi:
+      hold_kw = {'hold_frame': model_state.WIFI_HOLD_FRAME,
+                 'settling_frames': model_state.WIFI_SETTLING_FRAMES,
+                 'holds_in_a_row': model_state.WIFI_HOLDS_IN_A_ROW,
+                 'holds_allowed': model_state.WIFI_HOLDS_ALLOWED,
+                 'proving_holds_fatal': False}
+    elif mode in ('usb', 'ios'):
+      hold_kw = {'hold_frame': model_state.CABLE_HOLD_FRAME,
+                 'settling_frames': model_state.CABLE_SETTLING_FRAMES,
+                 'holds_in_a_row': model_state.CABLE_HOLDS_IN_A_ROW,
+                 'holds_allowed': model_state.CABLE_HOLDS_ALLOWED,
+                 'proving_holds_fatal': False}
+    else:
+      hold_kw = {}
+    return JetlinkModelState(client, spec, warp, face=face, log=parts.log, event=op.event, **hold_kw)
 
   def connect(should_stop=None):
     return links.open_link(parts, link, should_stop)

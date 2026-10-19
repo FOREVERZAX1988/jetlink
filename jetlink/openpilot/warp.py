@@ -58,6 +58,13 @@ def init_device(log) -> None:
     log.exception("jetlink: could not bring the gpu up before modeld goes realtime")
 
 
+def lossless_path(path) -> Path:
+  """Where the lossless build (with_errors) of a warp sits: beside the plain
+  one, so the build, load() and model_state agree on one name."""
+  path = Path(path)
+  return path.with_name(path.name.replace('_tinygrad.pkl', '_lossless_tinygrad.pkl'))
+
+
 class Warps:
   """The warps this device's checkout has, where the fork's adapter says."""
 
@@ -74,13 +81,15 @@ class Warps:
     small-model."""
     return tuple(self.op.camera())
 
-  def path(self, cam_w: int, cam_h: int, model_w: int, model_h: int) -> Path:
-    return Path(self.op.warp_path(cam_w, cam_h, model_w, model_h))
+  def path(self, cam_w: int, cam_h: int, model_w: int, model_h: int, lossless: bool = False) -> Path:
+    path = Path(self.op.warp_path(cam_w, cam_h, model_w, model_h))
+    # the Wi-Fi lossless build sits beside the plain one, under jetlink's name
+    return lossless_path(path) if lossless else path
 
-  def is_cached(self, cam_w: int, cam_h: int, model_w: int, model_h: int) -> bool:
-    """Is there a warp for this geometry? Presence only: a pickle from an
-    incompatible tinygrad raises in load()."""
-    return self.path(cam_w, cam_h, model_w, model_h).is_file()
+  def is_cached(self, cam_w: int, cam_h: int, model_w: int, model_h: int, lossless: bool = False) -> bool:
+    """Is there a warp for this geometry (its lossless build, with lossless)?
+    Presence only: a pickle from an incompatible tinygrad raises in load()."""
+    return self.path(cam_w, cam_h, model_w, model_h, lossless).is_file()
 
   def built(self) -> bool:
     """Is there a warp for this device's camera? Without one the link cannot
@@ -89,17 +98,19 @@ class Warps:
       self._built = self.is_cached(*self.geometry())
     return self._built
 
-  def load(self, cam_w: int, cam_h: int, model_w: int, model_h: int) -> dict:
+  def load(self, cam_w: int, cam_h: int, model_w: int, model_h: int, lossless: bool = False) -> dict:
     """The warp as openpilot pickles it: {'run': its TinyJit, 'input_specs':
-    {name: (shape, dtype, device)}}. Raises if it is not there or is not one
-    the frame loop can run.
+    {name: (shape, dtype, device)}}; its lossless build (with_errors) when
+    lossless=True. Raises if it is not there or is not one the frame loop can
+    run.
 
     modeld's big-model load is wrapped in the fallback to the small model, and a
     warp that cannot be trusted must not reach the car.
     """
-    path = self.path(cam_w, cam_h, model_w, model_h)
+    path = self.path(cam_w, cam_h, model_w, model_h, lossless)
     if not path.is_file():
-      raise RuntimeError(f"no warp for {cam_w}x{cam_h} -> {model_w}x{model_h} at {path}")
+      kind = 'lossless ' if lossless else ''
+      raise RuntimeError(f"no {kind}warp for {cam_w}x{cam_h} -> {model_w}x{model_h} at {path}")
     with open(path, 'rb') as f:
       warp = pickle.load(f)
     if not isinstance(warp, dict) or not {'run', 'input_specs'} <= warp.keys():
@@ -145,9 +156,14 @@ class Warp:
 
   The warm-up, the link of the JIT and its first runs, is paid here rather
   than on modeld's frame loop.
+
+  A lossless build (with_errors) makes the warped frame and its MED errors
+  (jetlink.lossless) in one graph: the capture's return is then a tuple, and
+  `errors` exposes the second output's memory view. A normal build returns a
+  single tensor and `errors` is None.
   """
 
-  def __init__(self, warp: dict, frame_size: int):
+  def __init__(self, warp: dict, frame_size: int, log=None):
     import numpy as np
     from tinygrad.device import Device
     from tinygrad.tensor import Tensor
@@ -156,12 +172,18 @@ class Warp:
     # what it reads of each camera buffer: modeld's frame_copy_size, short of
     # the buffer's end
     self._frame_size = frames_shape[1]
+    self._log = log
     if self._frame_size > frame_size:
       raise RuntimeError(f"the warp reads {self._frame_size} bytes a frame, past a {frame_size} byte camera buffer")
-    out = jit.captured.ret.uop.base.buffer
+    # a normal build returns the warped frame; a lossless build returns
+    # (frame, med_errors). Both share the same 2-input (M_inv, input_frame) graph.
+    ret = jit.captured.ret
+    outs = [t.uop.base.buffer for t in (ret if isinstance(ret, (tuple, list)) else (ret,))]
+    out = outs[0]
     self._device = out.device
     if self._device.startswith('QCOM'):
-      _make_coherent(out)
+      for buf in outs:
+        _make_coherent(buf)
     # the two buffers every frame passes, written in place by start()
     self._tensors = {name: Tensor(np.zeros(shape, dtype=dtype), device=device).realize()
                      for name, (shape, dtype, device) in specs.items()}
@@ -170,6 +192,9 @@ class Warp:
     self.wait = Device[self._device].synchronize
     self.wait()
     self.output = out.as_memoryview(allow_zero_copy=True)
+    # the lossless build's MED errors; None for a normal warp (model_state
+    # reads this with getattr(warp, 'errors', None), so a normal warp is safe)
+    self.errors = outs[1].as_memoryview(allow_zero_copy=True) if len(outs) > 1 else None
     self._frames = np.frombuffer(self._view('input_frame'), dtype=np.uint8).reshape(frames_shape)
     self._at = [self._frames[i].ctypes.data for i in range(2)]
     self._tfm = np.frombuffer(self._view('M_inv'), dtype=np.float32).reshape(tfm_shape)

@@ -57,6 +57,7 @@ public enum Pinned {
     ("RESET_QUEUES", 1),
     ("WANT_STATE", 2),
     ("WANT_HIDDEN", 4),
+    ("LOSSLESS", 8),
     ("PADDED", 128),
   ]
   /// jetlink.protocol.Status
@@ -85,6 +86,8 @@ public enum Pinned {
   ]
   /// jetlink.transport.tcp.CABLE_ADDRESS
   public static let cableAddress: String = "192.168.60.1"
+  /// jetlink.protocol.LOSSLESS_CODEC
+  public static let losslessCodec: String = "med-zstd"
   /// jetlink.protocol.LEAVE_REASONS
   public static let leaveReasons: [String] = ["behind", "lost", "stopped", "provisioned"]
   /// jetlink.spec.MODEL_RUN_FREQ

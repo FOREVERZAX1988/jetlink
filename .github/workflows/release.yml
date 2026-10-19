@@ -250,7 +250,7 @@ jobs:
       HAVE_SIGNING: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
       # The release key's certificate (docs/publishing.md): Android installs
       # an update only over an app signed with the same key.
-      RELEASE_CERT_SHA256: ab49203553fbfdc9b296ea19bc39a2b8e8a6543037e4e77c7023c69926cd2a8f
+      RELEASE_CERT_SHA256: 5fd3469036561daa03836943e41408dc31f3c502e21c16df87fac1165d182370
     outputs:
       # for the release notes, which warn about a debug key
       release-key: ${{ env.HAVE_SIGNING }}

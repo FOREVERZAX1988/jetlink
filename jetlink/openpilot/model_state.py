@@ -66,6 +66,27 @@ PROVING_FRAMES = 20
 # single slow frame later is the comma's own stall, a warp or a send, which
 # handing back would not fix; only held frames say the host is behind
 SETTLING_FRAMES = 3
+# A phone's NPU runs the inference at ~33-43 ms; with the Wi-Fi round trip
+# and the comma's own warp/send (~5 ms) a frame's wait is ~45 ms, right at the
+# 20 Hz budget. The USB-tuned 46 ms hold leaves only ~41 ms after that work, so
+# a phone behind either link holds most frames. These link-specific budgets let
+# the large model stay swapped on a phone without weakening the strict defaults
+# a fast Jetson/Mac keeps. A held frame still publishes the previous output
+# (a plan one frame old), not a dropped camera frame; the 0.2 s client deadline
+# and modeld's camera-drop filter hand back on a real stall.
+#
+# Over the USB cable (usb/ios): the CDC-NCM link adds almost no network time,
+# but the same phone NPU does, so a modestly wider hold and a tolerant proof.
+CABLE_HOLD_FRAME = 0.05
+CABLE_SETTLING_FRAMES = 5
+CABLE_HOLDS_IN_A_ROW = 10
+CABLE_HOLDS_ALLOWED = 80
+# Over Wi-Fi: a 55 ms wait window covers the measured ~45 ms reply; more
+# settling frames and a wider steady-state tolerance for marginal holds.
+WIFI_HOLD_FRAME = 0.055
+WIFI_SETTLING_FRAMES = 8
+WIFI_HOLDS_IN_A_ROW = 15
+WIFI_HOLDS_ALLOWED = 150
 # frames between asks for the server's telemetry, which rides on the response:
 # every second one, as modeld sent a chestnut's state (20 Hz over 10 Hz)
 TELEMETRY_EVERY = 2
@@ -137,8 +158,24 @@ class JetlinkModelState:
 
   prev_desire: np.ndarray  # for tracking the rising edge of the pulse
 
-  def __init__(self, client, spec, warp, *, face, log, event):
+  def __init__(self, client, spec, warp, *, face, log, event,
+               hold_frame: float | None = None, settling_frames: int | None = None,
+               holds_in_a_row: int | None = None, holds_allowed: int | None = None,
+               proving_holds_fatal: bool = True):
     self._log = log
+    # Per-link overrides. None means "read the module constant each frame", so
+    # the strict USB/Jetson defaults stay live constants the tests can mock and
+    # a Wi-Fi/USB phone build pins a wider value at construction (see joining).
+    self._hold_frame_override = hold_frame
+    self._settling_frames_override = settling_frames
+    self._holds_in_a_row_override = holds_in_a_row
+    self._holds_allowed_override = holds_allowed
+    # USB: any held frame in the proof window proves the host too slow. Over
+    # Wi-Fi a phone NPU sits right at the frame budget and holds most frames by
+    # a millisecond or two (still a fresh-enough, one-frame-old plan), so the
+    # proof uses the steady-state rules (a run of holds / too many holds); only
+    # a genuinely stalling host hands back.
+    self._proving_holds_fatal = bool(proving_holds_fatal)
     # (name, **fields): a structured log line, cloudlog.event on a comma
     self._event = event
     self.face = face
@@ -161,6 +198,13 @@ class JetlinkModelState:
     # this runs on modeld's frame thread. Frames go out of its output as they
     # are, over either transport
     self.warp = warp
+
+    # a lossless warp's errors go packed to a server that takes them
+    # (jetlink.lossless): half the bytes of the frame, for Wi-Fi
+    self._packer = None
+    if getattr(warp, 'errors', None) is not None and getattr(client, 'takes_lossless', False):
+      from jetlink.lossless import Packer
+      self._packer = Packer(spec.warped_shape)
 
     self.input_shapes = spec.input_shapes
     self.output_slices = spec.output_slices
@@ -255,8 +299,13 @@ class JetlinkModelState:
     self._frame_id += 1
     frame.telemetry = want_telemetry or time.monotonic() - self._last_logged >= TELEMETRY_PERIOD
     try:
-      frame.seq = self.client.infer_begin(self.warp.output, self.packed, self._frame_id, reset=self._need_reset,
-                                          want_state=frame.telemetry, skip_if_busy=self._can_hold)
+      if self._packer is None:
+        frame.seq = self.client.infer_begin(self.warp.output, self.packed, self._frame_id, reset=self._need_reset,
+                                            want_state=frame.telemetry, skip_if_busy=self._can_hold)
+      else:
+        frame.seq = self.client.infer_begin(None, self.packed, self._frame_id, reset=self._need_reset,
+                                            want_state=frame.telemetry, skip_if_busy=self._can_hold,
+                                            lossless=self._packer.pack(self.warp.errors))
     except Exception:
       self._log.warning("jetlink: frame %d send failed: %s", self._frame_id, getattr(self.client.t, 'last_send', {}))
       raise
@@ -323,14 +372,29 @@ class JetlinkModelState:
     return self.end(after_enqueue)
 
   @property
+  def _hold_frame(self) -> float | None:
+    return HOLD_FRAME if self._hold_frame_override is None else self._hold_frame_override
+
+  @property
+  def _settling_frames(self) -> int:
+    return SETTLING_FRAMES if self._settling_frames_override is None else self._settling_frames_override
+
+  @property
+  def _holds_in_a_row_limit(self) -> int:
+    return HOLDS_IN_A_ROW if self._holds_in_a_row_override is None else self._holds_in_a_row_override
+
+  @property
+  def _holds_allowed(self) -> int:
+    return HOLDS_ALLOWED if self._holds_allowed_override is None else self._holds_allowed_override
+
+  @property
   def _can_hold(self) -> bool:
     """Is there an output to publish again instead of waiting (HOLD_FRAME)?"""
-    return bool(HOLD_FRAME) and self.client.last_output is not None
+    return bool(self._hold_frame) and self.client.last_output is not None
 
-  @staticmethod
-  def _hold_left(frame) -> float:
+  def _hold_left(self, frame) -> float:
     """What is left of the hold for `frame`, from its warp's start."""
-    return HOLD_FRAME - (time.perf_counter() - frame.t0)
+    return self._hold_frame - (time.perf_counter() - frame.t0)
 
   def _note_hold(self, held: bool) -> str | None:
     """Why the large model should hand back after this frame, if it should:
@@ -346,13 +410,13 @@ class JetlinkModelState:
     while now - self._holds[0] > HOLD_WINDOW:
       self._holds.popleft()
     self._holds_in_a_row += 1
-    if self._frame_id <= SETTLING_FRAMES:
+    if self._frame_id <= self._settling_frames:
       return None
-    if self._frame_id <= PROVING_FRAMES:
+    if self._proving_holds_fatal and self._frame_id <= PROVING_FRAMES:
       return f'held frame {self._frame_id} of the first {PROVING_FRAMES}'
-    if self._holds_in_a_row >= HOLDS_IN_A_ROW:
+    if self._holds_in_a_row >= self._holds_in_a_row_limit:
       return f'held {self._holds_in_a_row} frames in a row'
-    if len(self._holds) > HOLDS_ALLOWED:
+    if len(self._holds) > self._holds_allowed:
       return f'held {len(self._holds)} frames in {HOLD_WINDOW:.0f} s'
     return None
 
