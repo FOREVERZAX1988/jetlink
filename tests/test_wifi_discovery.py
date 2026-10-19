@@ -86,6 +86,9 @@ class TestDiscoverOrder(unittest.TestCase):
     patcher = mock.patch.object(wifi, 'PEER_FILE', self.peer)
     patcher.start()
     self.addCleanup(patcher.stop)
+    # and no host on record as unusable unless a test wants one
+    wifi.forget_unusable()
+    self.addCleanup(wifi.forget_unusable)
 
   def routes(self, text: str) -> Path:
     tmp = tempfile.TemporaryDirectory()
@@ -171,14 +174,54 @@ class TestDiscoverOrder(unittest.TestCase):
       self.assertIsNone(wifi.discover(mdnss=[]))
     probe.assert_not_called()
 
-  def test_a_found_host_is_remembered_for_the_next_join(self):
+  def test_a_found_host_is_not_remembered_by_the_probe_alone(self):
+    # a connect proves a listener, not a server: the join remembers the host
+    # once the engine is loaded, so a phone that cannot build is not the one
+    # dialed first next time (2026-10-19)
     with mock.patch.object(wifi, '_probe', side_effect=lambda h, p, t: h == '192.168.1.254'), \
          mock.patch.object(wifi, 'gateway', return_value='192.168.1.254'), \
          mock.patch.object(wifi, 'local_addr', return_value=('192.168.1.44', 24)):
-      wifi.discover(mdnss=[])
+      self.assertEqual(wifi.discover(mdnss=[]), '192.168.1.254')
+    self.assertFalse(self.peer.exists())
+
+  def test_the_join_that_loaded_the_engine_remembers_the_host(self):
+    wifi.remember_peer('192.168.1.254')
     # the write is the point; _saved_peer would probe again, so read it here
     host, port, _ts = self.peer.read_text().strip().split(':')
     self.assertEqual((host, int(port)), ('192.168.1.254', 5599))
+
+  def test_a_host_that_could_not_serve_is_never_remembered(self):
+    # the SM6450 on the bench LAN: answers every connect, builds nothing
+    wifi.note_unusable('192.168.10.36')
+    wifi.remember_peer('192.168.10.36')
+    self.assertFalse(self.peer.exists())
+
+  def test_an_unusable_host_falls_through_to_the_next_candidate(self):
+    probed = []
+
+    def probe(host, port, timeout):
+      probed.append(host)
+      return host in ('192.168.10.36', '192.168.10.65')
+
+    wifi.note_unusable('192.168.10.36')
+    with mock.patch.object(wifi, '_probe', side_effect=probe), \
+         mock.patch.object(wifi, 'gateway', return_value=None), \
+         mock.patch.object(wifi, 'local_addr', return_value=('192.168.10.44', 24)):
+      got = wifi.discover(mdnss=[('comma-jetlink', '192.168.10.36')])
+    self.assertEqual(got, '192.168.10.65')
+    self.assertNotIn('192.168.10.36', probed)     # not even probed again
+
+  def test_a_remembered_peer_that_could_not_serve_is_not_dialed(self):
+    # remembered while it worked, unusable for the model picked this drive
+    wifi._save_peer('10.0.0.9', 5599)
+    wifi.note_unusable('10.0.0.9')
+    probed = []
+    with mock.patch.object(wifi, '_probe', side_effect=lambda h, p, t: probed.append(h) or False), \
+         mock.patch.object(wifi, 'browse', return_value=[]), \
+         mock.patch.object(wifi, 'gateway', return_value=None), \
+         mock.patch.object(wifi, 'local_addr', return_value=None):
+      self.assertIsNone(wifi.discover())
+    self.assertNotIn('10.0.0.9', probed)
 
 
 if __name__ == '__main__':

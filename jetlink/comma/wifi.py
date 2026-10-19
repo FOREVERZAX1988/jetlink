@@ -56,6 +56,14 @@ _RTF_GATEWAY = 0x2
 PEER_FILE = Path('/data/.jetlink_wifi_peer')
 # how long a remembered peer may be reused before it must answer again
 PEER_TTL_S = 300.0
+# Hosts that answered a probe and then could not serve this drive: a phone
+# whose NPU takes none of the model's graph fails the build identically every
+# attempt, so dialing it again before the phone beside it that can build costs
+# an attempt per join. A connect only proves a listener, so this is two-sided:
+# a discovered host is not remembered until a join got the engine loaded
+# (remember_peer), and one that answered that it cannot build is skipped for
+# the rest of the drive (note_unusable).
+UNUSABLE: set[str] = set()
 # bound the sweep: a phone on the same Wi-Fi answers a TCP connect at once; this
 # caps how long a host that drops the SYN may stall a probe
 DISCOVER_TIMEOUT = 0.25
@@ -125,15 +133,49 @@ def _saved_peer(port: int) -> str | None:
   hours ago — on a bench LAN that was the phone used to check the APK, whose
   engine cannot build, so every join failed on a machine beside the one the
   user meant until the clock caught up (2026-10-19).
+
+  A host this drive has since found unusable is not one of these either: it
+  may have been remembered while it worked, and a model it cannot build on
+  now says nothing about the address, only about this drive.
   """
   try:
     host, p, ts = PEER_FILE.read_text().strip().split(':')
     age = time.monotonic() - float(ts)
-    if int(p) != port or age < 0 or age > PEER_TTL_S:
+    if int(p) != port or age < 0 or age > PEER_TTL_S or host in UNUSABLE:
       return None
   except (OSError, ValueError):
     return None
   return host if _probe(host, port, DIAL_TIMEOUT) else None
+
+
+def remember_peer(host: str, port: int = 5599) -> None:
+  """Remember `host` as the server to dial first on the next join.
+
+  Called once a join has got the engine loaded, not when a probe answered: a
+  connect says a listener is there, and the listener may be a phone that cannot
+  build the model asked for. Remembering that one is what kept the comma
+  dialing the SM6450 on the bench LAN while the SM8975 that can build sat
+  beside it (2026-10-19).
+  """
+  if host and host not in UNUSABLE:
+    _save_peer(host, port)
+
+
+def note_unusable(host: str) -> None:
+  """Record a host that answered and then could not serve, for this drive.
+  Dropped when modeld restarts, which is also when the drive's record does."""
+  if host:
+    UNUSABLE.add(host)
+
+
+def unusable() -> frozenset[str]:
+  """The hosts noted unusable, for a caller building its own `skip` set."""
+  return frozenset(UNUSABLE)
+
+
+def forget_unusable() -> None:
+  """Forget them, for a caller that wants the LAN looked at from scratch."""
+  UNUSABLE.clear()
 
 
 def parse_browse(text: str, service: str = MDNS_SERVICE) -> list[tuple[str, str]]:
@@ -191,25 +233,28 @@ def discover(port: int = 5599, interface: str = INTERFACE,
   failed by the caller) are not tried again. `mdnss` is the browse result, for
   tests and for a caller that has asked already.
 
-  Returns the first host whose TCP connect succeeds, remembered for next time.
-  Pure connect probes; no HELLO, so a probe neither starts a session nor loads
-  a server's model. None when nothing answers.
+  Returns the first host whose TCP connect succeeds, and remembers nothing:
+  pure connect probes, no HELLO, so a probe neither starts a session nor loads
+  a server's model — which also means it proves only that a listener is there.
+  The caller remembers the host once the join got the engine loaded
+  (remember_peer), and hosts noted unusable this drive are skipped here like
+  the caller's own `skip`. None when nothing answers.
   """
+  blocked = set(skip) | UNUSABLE
   saved = _saved_peer(port)
-  if saved and saved not in skip:
+  if saved and saved not in blocked:
     return saved
 
   # mDNS first: an announced server is the server, where the rest are addresses
   # that might be one. Probes are still connects only, in case the record is stale
   for _name, address in (browse() if mdnss is None else mdnss):
-    if address and address not in skip and _probe(address, port, DIAL_TIMEOUT):
-      _save_peer(address, port)
+    if address and address not in blocked and _probe(address, port, DIAL_TIMEOUT):
       return address
 
   gw = gateway(interface)
   # gateway next (hotspot), then the other hosts on the link (shared AP)
   candidates: list[str] = []
-  if gw and gw not in skip:
+  if gw and gw not in blocked:
     candidates.append(gw)
   addr = local_addr(interface)
   if addr is not None:
@@ -217,7 +262,7 @@ def discover(port: int = 5599, interface: str = INTERFACE,
     net = ipaddress.ip_network(f"{ip}/{prefix}", strict=False)
     for h in net.hosts():
       hs = str(h)
-      if hs != ip and hs != gw and hs not in skip:
+      if hs != ip and hs != gw and hs not in blocked:
         candidates.append(hs)
       if len(candidates) > DISCOVER_MAX_HOSTS:
         break
@@ -236,12 +281,10 @@ def discover(port: int = 5599, interface: str = INTERFACE,
   head, rest = ordered[:1], ordered[1:]
   for host in head:
     if _probe(host, port, DIAL_TIMEOUT):
-      _save_peer(host, port)
       return host
   with ThreadPoolExecutor(max_workers=32) as pool:
     for host in pool.map(lambda h: h if _probe(h, port, timeout) else None, rest):
       if host:
-        _save_peer(host, port)
         return host
   return None
 

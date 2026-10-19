@@ -499,6 +499,30 @@ class BuildingOnroad(OpenpilotTest):
     self.assertIs(self.link.client, self.client)
 
 
+  def test_the_host_is_remembered_once_the_engine_is_loaded(self):
+    self.client.peer_host = '192.168.10.65'
+    with mock.patch.object(link.wifi, 'remember_peer') as remember:
+      link.open_link(self.parts, self.link)
+    remember.assert_called_once_with('192.168.10.65')
+
+  def test_a_host_that_cannot_build_is_not_the_one_dialed_next(self):
+    # the bench LAN: .36 answers every connect and refuses the graph, so the
+    # dial has to fall through to .65 instead of asking .36 again every join
+    self.client.peer_host = '192.168.10.36'
+    # over Wi-Fi only: the cable is the user's own phone, worth another try
+    self.link.wifi = True
+    self.ensure.side_effect = RuntimeError('no EP context')
+    link.BUILD_REFUSED.clear()
+    self.addCleanup(link.BUILD_REFUSED.clear)
+    link.wifi.forget_unusable()
+    self.addCleanup(link.wifi.forget_unusable)
+    with mock.patch.object(link.wifi, 'remember_peer') as remember:
+      with self.assertRaises(RuntimeError):
+        link.open_link(self.parts, self.link)
+    remember.assert_not_called()
+    self.assertIn('192.168.10.36', link.wifi.unusable())
+
+
 class FrameDeadline(unittest.TestCase):
   def test_a_silent_host_costs_one_short_frame(self):
     # a hung server or a phone's cable leaves no USB edge, so only the deadline

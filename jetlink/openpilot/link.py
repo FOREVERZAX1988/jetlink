@@ -177,6 +177,9 @@ def dial(log, deadline: float | None = None, name: str | None = None):
     except OSError:
       return None
     gadget.note_link('wifi', host)
+    # the host this client was dialed at, so open_link can remember it once the
+    # engine is loaded: a connect proves a listener, not a server
+    client.peer_host = host
     log.warning("jetlink: dialed %s over Wi-Fi", host)
     return client
 
@@ -499,6 +502,9 @@ def open_link(parts, link: Link, should_stop=None):
   # the endpoints may still be held by a provisioning run, and the Jetson may still be
   # booting; both resolve on their own
   client = connect_patiently(link)
+  # the Wi-Fi dial names the host it opened; a join remembers it only once the
+  # engine is loaded (see wifi.remember_peer), never on the connect alone
+  host = getattr(client, 'peer_host', None)
   try:
     hello = client.hello(timeout=10.0)
     parts.log.warning("jetlink: %s trt %s, engine %s, loaded %s",
@@ -531,6 +537,8 @@ def open_link(parts, link: Link, should_stop=None):
       parts.log.warning("jetlink: %s cannot build %s (%s); not asking again over Wi-Fi this drive, "
                         "the cable builds it", device or 'the target on the other end',
                         parts.models.name_for(sha256), refused)
+      if host:
+        wifi.note_unusable(host)
       raise TargetCannotBuild(f"{device or 'the target on the other end'} cannot build "
                               f"{parts.models.name_for(sha256)}")
     # normally one round trip, since the provisioning run left the engine loaded. A
@@ -542,9 +550,15 @@ def open_link(parts, link: Link, should_stop=None):
     except BaseException as e:
       # a build failure is this target's answer about this model, and the one
       # thing that would make the next attempt different is the app or the model
-      note_build_failure(link.wifi, device, sha256, e)
+      if note_build_failure(link.wifi, device, sha256, e) is not None and host:
+        # keep the dial off this host for the rest of the drive, so the sweep
+        # reaches a phone on the same LAN that can build (2026-10-19)
+        wifi.note_unusable(host)
       raise
     client.deadline = INFERENCE_TIMEOUT
+    if host:
+      # the engine is loaded on this host: this is the server to dial first
+      wifi.remember_peer(host)
     return client, spec
   except EngineMissing as e:
     # neither end has the bytes. Fetching them is a provisioning run's job;
