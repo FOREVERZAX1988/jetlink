@@ -344,9 +344,16 @@ class JoiningModelState:
       # keeps what it was built with. From the frame anything can be in
       # control, the rules written for the wheel are the ones that count
       self._active.preview = False
-      # (the pipeline a preview's frames ran under is `preview` too:
-      # model_state.pipeline, so the frame loop waits for its own reply again)
-      self._log.warning("jetlink: in control, a preview's silence rule and its frame pipeline no longer apply")
+      # (the frame pipeline is not one of them: that is the medium's, and a
+      # Wi-Fi link keeps it whether anything can be in control or not --
+      # model_state.pipeline. What ends here is the link patience and the
+      # silence rule, which are a preview's alone)
+      self._log.warning("jetlink: in control, a preview's silence rule and its link patience no longer apply")
+    # What the state may block a frame on: with anything in control the frames
+    # before the host's first answer wait the client's deadline, as upstream's
+    # do; parked they wait the join budget, which is what keeps a cold host from
+    # costing the join. Written every frame, as the small model's is
+    self._active.in_control = self._in_control
     return self._run_big(bufs, transforms, inputs, after_enqueue)
 
   def _run_big(self, bufs, transforms, inputs, after_enqueue):
@@ -747,8 +754,13 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
                  'proving_holds_fatal': False}
     else:
       hold_kw = {}
+    # The preview param itself, not its answer now: it is the fork's own fact
+    # and it changes with the UI, so the state reads it every frame (see
+    # model_state.preview). Upstream has no preview state at all -- a link's
+    # rules come from its medium -- and a snapshot taken here is a state
+    # upstream cannot have: rules written for a parked car outliving the preview
     return JetlinkModelState(client, spec, warp, face=face, log=parts.log, event=op.event,
-                             preview=parts.settings.preview(), **hold_kw)
+                             preview=parts.settings.preview, **hold_kw)
 
   def connect(should_stop=None):
     # the setting again: a link joined after the user changed it must open the

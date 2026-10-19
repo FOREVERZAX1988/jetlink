@@ -538,11 +538,15 @@ class TestWifiHold(ModelStateTest):
     "held 15 frames in a row of the first 20") with 0 lost on the wire. One
     answer behind is a one-frame-old plan: tailing, and over Wi-Fi not behind.
     `drain()` stamping _last_answer is what a phone answering late but answering
-    looks like to the state, so the test stamps it as prepare() would."""
+    looks like to the state, so the test stamps it as prepare() would.
+
+    A Wi-Fi link now pipelines, so this path is the one left for a frame loop
+    that still waits (pipeline=False, or a build that pins it). The road's own
+    case, where nothing waits at all, is TestAWifiDrivePipelines below."""
     client = self.over_wifi(FakeClient())
     client.late = set(range(1, 121))           # every reply past its hold
     with mock.patch.multiple(model_state, PROVING_FRAMES=0, SETTLING_FRAMES=0):
-      state = self.make(spec_for(STATEFUL), client)
+      state = self.make(spec_for(STATEFUL), client, pipeline=False)
       behind = []
       for _ in range(120):
         client.last_answer_at = time.monotonic()   # what drain() stamps on the wire
@@ -562,7 +566,9 @@ class TestWifiHold(ModelStateTest):
     client.late = set(range(1, 121))
     client.late_read_by_next = True
     with mock.patch.multiple(model_state, PROVING_FRAMES=0, SETTLING_FRAMES=0):
-      state = self.make(spec_for(STATEFUL), client)
+      # the waiting loop again: a pipelined frame never reaches infer_end, so
+      # the clock it would stamp is a clock only this loop has
+      state = self.make(spec_for(STATEFUL), client, pipeline=False)
       joined_at = state._last_answer
       behind = []
       for _ in range(120):
@@ -723,6 +729,75 @@ class TestTheHostsFirstAnswer(ModelStateTest):
     self.frames(state, 1)
     self.assertEqual(client.deadlines, [None])
     self.assertIsNotNone(client.holds[0])
+
+
+class TestAWifiDrivePipelines(ModelStateTest):
+  """The medium is what decides, as upstream's rules do: a Wi-Fi link's frame
+  loop never waits for its own reply, whether anything can be in control or
+  not. Preview-only was the fork's one divergence from upstream's medium-keyed
+  rules, and it is what lost the road -- measured 2026-10-18, the same phone and
+  link, 7.7 ms a frame pipelined and 50 to 56 ms waiting against a 50 ms camera,
+  so the drive dropped camera frames past DROP_LIMIT and handed the picture
+  back seconds into every join. The cable keeps the loop it always had."""
+
+  def over_wifi(self, client):
+    client.t.on_the_cable = lambda: False
+    return client
+
+  def late(self, client):
+    client.late = set(range(2, 40))   # a phone that answers past every hold
+    return client
+
+  def test_a_drive_over_wifi_never_waits_for_its_own_reply(self):
+    state = self.make(spec_for(STATEFUL), self.late(self.over_wifi(FakeClient())), preview=False)
+    self.assertTrue(state._wifi)
+    self.assertFalse(state.preview)
+    self.assertTrue(state.pipeline, 'the medium decides, not the preview')
+    self.frames(state, 8)
+    self.assertEqual((state.trips.held, state.trips.pipelined), (0, 7))
+    self.assertFalse([text for level, text in self.log.records if 'held (' in text], 'no frame of it is late')
+    self.assertIsNone(state.behind)
+
+  def test_a_drive_over_wifi_keeps_the_wheels_link_rules(self):
+    # what stays the wheel's: a host that stops answering past the client's
+    # deadline, or answers with a failure, still costs the link -- the pipeline
+    # is the wait it skips, not the patience a preview is given
+    client = self.over_wifi(FakeClient())
+    self.make(spec_for(STATEFUL), client, preview=False)
+    self.assertFalse(client.patient, 'no preview patience on a drive')
+    self.assertFalse(client.tolerate_failed)
+
+  def test_the_cable_still_waits(self):
+    state = self.make(spec_for(STATEFUL), self.late(FakeClient()), preview=False)
+    self.assertFalse(state._wifi)
+    self.assertFalse(state.pipeline)
+    self.frames(state, 8)
+    self.assertEqual(state.trips.pipelined, 0)
+    self.assertTrue((state.behind or '').startswith('held frame'), state.behind)
+
+  def test_a_preview_param_is_read_every_frame(self):
+    # a state built in the preview cannot keep the preview's link patience once
+    # the param says otherwise: upstream has no such state to keep
+    param = {'on': True}
+    client = self.over_wifi(FakeClient())
+    state = self.make(spec_for(STATEFUL), client, preview=lambda: param['on'])
+    self.assertTrue(state.preview)
+    self.assertTrue(client.patient)
+    param['on'] = False
+    self.frames(state, 1)
+    self.assertFalse(state.preview)
+    self.assertFalse(client.patient, 'the link is told every frame')
+    self.assertFalse(client.tolerate_failed)
+
+  def test_the_first_frame_budget_is_the_deadlines_once_in_control(self):
+    # end() blocking the frame thread is modelV2 stopping, and a drive cannot be
+    # parked on a host that may be gone: upstream waits its client deadline
+    client = self.over_wifi(FakeClient())
+    client.deadline = 0.2
+    state = self.make(spec_for(STATEFUL), client)
+    self.assertEqual(state._first_frame_budget, model_state.WIFI_FIRST_FRAME_TIMEOUT)
+    state.in_control = True
+    self.assertEqual(state._first_frame_budget, 0.2)
 
 
 class TestAPreview(ModelStateTest):

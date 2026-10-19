@@ -259,14 +259,20 @@ class JetlinkModelState:
     transport = getattr(self.client, 't', None)
     on_cable = getattr(transport, 'on_the_cable', None)
     self._wifi = callable(on_cable) and not on_cable()
+    # Whether anything can be in control, written by the joining state before
+    # every frame it runs on this state (upstream asks the same question of its
+    # adapter). It bounds the frames before the host's first answer: a join
+    # budget written for a parked comma is not one a drive can be blocked on
+    self.in_control = False
     # the fork's onroad preview (its IsOnroadPreview, declared through
-    # interface.Keys.preview); see the property. Set here, and it tells the link
-    # as well: a preview keeps a host whose frame carried no output
-    self.preview = preview
-    # Whether a frame's own reply is waited for at all; a preview's is not (see
-    # the property). Read together with `preview`, so a state the fork stops
-    # calling a preview gets the wheel's frame loop back -- not a flag anyone
-    # has to remember to clear
+    # interface.Keys.preview); see the property. A callable is the param itself,
+    # read every frame; a bool is that frame's answer, kept. Either way it tells
+    # the link, since a preview keeps a host whose frame carried no output
+    self._preview_source = preview if callable(preview) else None
+    self._preview = bool(preview()) if callable(preview) else bool(preview)
+    self._tell_the_link()
+    # Whether a frame's own reply is waited for at all; a Wi-Fi link's is not
+    # (see the property), and a preview's is not either
     self._pipeline = True if pipeline is None else bool(pipeline)
     # not chestnut hardware, but the same role: modelV2.big, the UI and the
     # model manager key off this flag
@@ -348,6 +354,9 @@ class JetlinkModelState:
     the rest of the inputs. send() puts it on the link and end() waits for
     its answer."""
     t0 = time.perf_counter()
+    # the param's answer for this frame: a preview that ended between frames
+    # must not keep the link's patience one frame longer
+    self._tell_the_link()
     self.warp.start(_address(bufs['img']), _address(bufs['big_img']), transforms['img'], transforms['big_img'])
     t1 = time.perf_counter()
     # the GPU is warping; nothing below is an input to it
@@ -520,47 +529,74 @@ class JetlinkModelState:
     """Is the comma drawing the onroad UI while parked (the fork's
     IsOnroadPreview)? Nothing in a preview can take control, so the large model
     is held to PREVIEW_SILENCE and a frame the host cannot answer is that
-    frame's failure, not the link's. The joining state clears it the moment
-    anything can be in control: the fork clears its param when the real onroad
-    UI takes over, but a state built in the preview keeps what it was built
-    with (joining.PreviewEndsTest)."""
-    return self._preview
+    frame's failure, not the link's.
+
+    Read from the param every frame, not taken at construction. Upstream has no
+    preview state at all -- what a link may do there is decided by its medium --
+    and a snapshot taken at construction is a state upstream cannot have: a
+    large model built while the preview was on kept the preview's rules after
+    the fork cleared its param, which is a drive running under rules written for
+    a parked car (joining clears it too, on the first frame anything can be in
+    control, but the param is the fact and the clear is the fallback)."""
+    return bool(self._preview_source()) if self._preview_source is not None else self._preview
 
   @preview.setter
   def preview(self, value: bool) -> None:
+    # an explicit write wins over the param for the rest of the session: the
+    # joining state's clear has to outrank a param that still reads true
+    self._preview_source = None
     self._preview = bool(value)
-    # the link reads it too, so a host that is there but cannot answer a frame
-    # keeps its link where the wheel would hand one back (client.tolerate_failed)
-    self.client.tolerate_failed = self._preview
-    # and so a host that is behind, rather than gone, holds the frames it owes
-    # instead of costing the link (client.patient): a stall a preview can wait
-    # out is not the small model's cue, and the silence rule above is what hands
-    # the picture back in the end
-    self.client.patient = self._preview
+    self._tell_the_link()
+
+  def _tell_the_link(self) -> None:
+    """Hand the preview's two relaxations to the link, or take them back.
+
+    Both are the link's own rules: a host that is there but cannot answer a
+    frame keeps its link where the wheel would hand one back
+    (client.tolerate_failed), and a host that is behind rather than gone holds
+    the frames it owes instead of costing the link (client.patient). A stall a
+    preview can wait out is not the small model's cue, and the silence rule is
+    what hands the picture back in the end."""
+    preview = self.preview
+    self.client.tolerate_failed = preview
+    self.client.patient = preview
 
   @property
   def pipeline(self) -> bool:
     """Is this frame loop pipelined: never waiting for the frame's own reply,
     publishing the newest answer the host has sent instead?
 
-    A preview's, and only a preview's. Nothing in a preview can take control,
-    so what a pipelined frame publishes is what a held frame publishes -- the
-    answer before this one -- while the wait it skips is not free: end() blocks
-    modeld's frame thread, and a wait that runs into the camera's 50 ms is
-    camera frames dropped behind the large model. With the wait gone the host's
-    work overlaps the camera's own frame: each frame goes out as its warp
-    finishes, prepare()'s drain() reads whatever the host has answered since,
-    and the loop's own cost falls to the warp and the pack. The host's own
-    queue stops being empty, which is the point -- it was the accelerator that
-    sat idle, not the link that was slow.
+    The wait it skips is not free: end() blocks modeld's frame thread, and a
+    wait that runs into the camera's 50 ms is camera frames dropped behind the
+    large model -- and a drop ratio past DROP_LIMIT is the joining state's
+    hand-back. With the wait gone the host's work overlaps the camera's own
+    frame: each frame goes out as its warp finishes, prepare()'s drain() reads
+    whatever the host has answered since, and the loop's own cost falls to the
+    warp and the pack. The host's own queue stops being empty, which is the
+    point -- it was the accelerator that sat idle, not the link that was slow.
 
-    `preview` is what this reads, so a state the fork stops calling a preview
-    (joining, the moment anything can be in control) waits for its own reply
-    again, wheels first. A host that stops answering entirely is the joining
-    state's silence rule as before: PREVIEW_SILENCE, which here reads the last
-    answer drain() took rather than any one frame's own reply.
+    What a pipelined frame publishes is what a held one publishes: the answer
+    before this one. That is upstream's own output on a Wi-Fi link, where the
+    wait window (WIFI_HOLD_FRAME) expires before a phone answers and the frame
+    publishes the previous answer anyway; the pipeline is that same plan
+    without the block that costs the camera frame.
+
+    Which links get it is upstream's rule, the medium, not the fork's preview:
+    upstream keys every Wi-Fi relaxation -- the hold window, the settling
+    frames, the hold counts, pinned by joining from `mode == 'wifi'` -- on the
+    medium, so its preview and its drive run on the same rules. A preview-only
+    pipeline was the fork's one divergence from that, and it is what left the
+    road with a frame loop that had no margin: measured 2026-10-18, the same
+    phone and link, 7.7 ms pipelined and 50 to 56 ms waiting for its own reply
+    against a 50 ms camera. So a Wi-Fi link pipelines whether anything can be
+    in control or not, and the cable keeps the frame loop it always had.
+
+    What stays preview's, and only preview's, is the link-keeping
+    (client.patient, client.tolerate_failed) and the silence rule: those are
+    the wheel's to refuse, and PREVIEW_SILENCE here reads the last answer
+    drain() took rather than any one frame's own reply.
     """
-    return self._pipeline and self.preview
+    return self._pipeline and (self.preview or self._wifi)
 
   def _note_pipeline(self) -> str | None:
     """Why a frame should hand the picture back: silence, and only silence,
@@ -578,7 +614,18 @@ class JetlinkModelState:
 
   @property
   def _first_frame_budget(self) -> float:
-    """What the frames before the host's first answer of this session may wait."""
+    """What the frames before the host's first answer of this session may wait.
+
+    Parked, the wider one: the frame carries the history reset and the host's
+    cold start, and there is no output to publish again, so nothing is lost by
+    waiting (end() blocks modeld's frame thread, and a parked comma has no
+    picture to keep moving). With anything in control, the client's own
+    deadline, as upstream's first frame waits: end() blocking the frame thread
+    is modelV2 stopping, and a drive cannot be parked on a host that may be
+    gone. A join that fails there is retried, and the retry finds the host warm.
+    """
+    if self.in_control:
+      return getattr(self.client, 'deadline', FIRST_FRAME_TIMEOUT)
     return WIFI_FIRST_FRAME_TIMEOUT if self._wifi else FIRST_FRAME_TIMEOUT
 
   def _hold_left(self, frame) -> float:

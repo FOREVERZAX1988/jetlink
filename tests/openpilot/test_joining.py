@@ -963,7 +963,22 @@ class PreviewEndsTest(JoiningBase):
     s.in_control = True
     self._run(s)
     self.assertFalse(self.big.preview)
-    self.assertTrue(self.log.has("in control, a preview's silence rule and its frame pipeline no longer apply"))
+    self.assertTrue(self.log.has("in control, a preview's silence rule and its link patience no longer apply"))
+
+  def test_what_may_be_blocked_on_a_frame_is_written_every_frame(self):
+    # the state's frame budget: parked it waits the join budget, in control the
+    # client's deadline. Written every frame, like the small model's, so the
+    # state cannot be left believing the car is parked (model_state._first_frame_budget)
+    s = self._state()
+    self._wait_joined(s)
+    s.in_control = False
+    self._run(s)                       # the swap frame: from here the large model runs
+    s.in_control = True
+    self._run(s)
+    self.assertTrue(self.big.in_control)
+    s.in_control = False
+    self._run(s)
+    self.assertFalse(self.big.in_control)
 
   def test_a_frame_the_host_answered_without_an_output_keeps_the_join(self):
     # the host is there and its answer carried nothing the link can publish:
