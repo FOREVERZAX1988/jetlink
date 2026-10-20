@@ -257,6 +257,8 @@ class JetlinkModelState:
     self._frame_id = 0
     self._last_logged = 0.0
     self._last_hold_logged = 0.0
+    # when the comma last told the host its own six stages (report_stages)
+    self._stages_reported = 0.0
     self.trips = Trips()
     # The comma's own six stages (stages.FrameStages): where the frame's half of
     # the budget went, which neither the server's telemetry nor the round trip
@@ -556,7 +558,23 @@ class JetlinkModelState:
                         note,
                         gpu_us / 1e3, queue_us / 1e3, total_us / 1e3, receive.get('prepare', 0.0) * 1e3,
                         receive.get('read_wait', 0.0) * 1e3, receive.get('handoff', 0.0) * 1e3, cable)
+    self._report_stages(t4)
     return outputs
+
+  def _report_stages(self, now: float) -> None:
+    """The comma's six stage means to the host, once a second of frames.
+
+    Sent off the ring's running sum, so it costs a divide and not a sort, and
+    from the frame path because that is the only thread holding the link: a
+    second thread would race the frame's seq and could have its own message
+    taken for a replay. A second that has run no frame says nothing rather than
+    six zeros, which would read as a link with no cost at all."""
+    if now - self._stages_reported < TELEMETRY_PERIOD:
+      return
+    self._stages_reported = now
+    means = self.stages.means()
+    if means.get('frames'):
+      self.client.report_stages(means)
 
   def run(self, bufs: dict, transforms: dict[str, np.ndarray],
           inputs: dict[str, np.ndarray], after_enqueue: Callable[[], None] | None = None) -> dict[str, np.ndarray]:

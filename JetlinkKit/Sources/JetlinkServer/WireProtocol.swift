@@ -63,6 +63,10 @@ public enum Wire {
     /// The client stops using the link and says why, with what it measured;
     /// no reply. The connection may stay for a later hello.
     case leave = 19
+    /// The comma's own six stage means, unsolicited and about once a second
+    /// while the big model drives; no reply. Where the frame's time went
+    /// before the host saw it, which the host cannot measure itself.
+    case clientState = 20
   }
 
   public struct Flag: OptionSet, Sendable {

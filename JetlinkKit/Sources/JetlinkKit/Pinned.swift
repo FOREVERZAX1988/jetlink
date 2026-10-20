@@ -51,6 +51,7 @@ public enum Pinned {
     ("SHUTDOWN_REQ", 17),
     ("SHUTDOWN_RESP", 18),
     ("LEAVE", 19),
+    ("CLIENT_STATE", 20),
   ]
   /// jetlink.protocol.Flag
   public static let flags: [(name: String, value: UInt32)] = [
