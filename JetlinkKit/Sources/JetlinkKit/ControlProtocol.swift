@@ -298,6 +298,7 @@ public struct CommaStages: Codable, Sendable, Equatable {
     case frames, capture, warp, send, publish, overhead, frame
     case replyWait = "reply_wait"
   }
+}
 
 public struct InventoryModel: Codable, Sendable, Equatable, Identifiable {
   public var id: String { sha256 }

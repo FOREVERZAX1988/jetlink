@@ -614,7 +614,7 @@ final class Session: @unchecked Sendable {
   private func onClientState(_ message: Message) {
     guard let d = JSONLine.decode(message.payload) else { return }
     func number(_ key: String) -> Double? { (d[key] as? NSNumber)?.doubleValue }
-    guard let capture = number("capture"), let warp = number("warp"), let send = number("send"),
+    guard let capture = number("capture"), let warp = number("warp"), let sent = number("send"),
       let replyWait = number("reply_wait"), let publish = number("publish"), let overhead = number("overhead"),
       let frame = number("frame")
     else {
@@ -623,7 +623,7 @@ final class Session: @unchecked Sendable {
     }
     host.frameStats.comma(
       CommaStages(
-        frames: (d["frames"] as? NSNumber)?.intValue ?? 0, capture: capture, warp: warp, send: send,
+        frames: (d["frames"] as? NSNumber)?.intValue ?? 0, capture: capture, warp: warp, send: sent,
         replyWait: replyWait, publish: publish, overhead: overhead, frame: frame))
   }
 
