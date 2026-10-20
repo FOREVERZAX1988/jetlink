@@ -198,6 +198,7 @@ final class Session: @unchecked Sendable {
     case .stateReq: try onState(message)
     case .shutdownReq: try onShutdown(message)
     case .leave: onLeave(message)
+    case .clientState: onClientState(message)
     default: try error(message.seq, "unknown_message", "type \(message.msgType)")
     }
   }
@@ -608,6 +609,26 @@ final class Session: @unchecked Sendable {
     }
     log.warning(line)
     if let summary { log.info("this session served \(summary)") }
+  }
+
+  /// The comma's own stage means. Nothing is read back: at a second a message
+  /// the answer would be stale before the comma asked again, and the report
+  /// is a note on the stats rather than a question. A payload this server
+  /// cannot read is dropped, since a frame is what the link is for.
+  private func onClientState(_ message: Message) {
+    guard let d = JSONLine.decode(message.payload) else { return }
+    func number(_ key: String) -> Double? { (d[key] as? NSNumber)?.doubleValue }
+    guard let capture = number("capture"), let warp = number("warp"), let sent = number("send"),
+      let replyWait = number("reply_wait"), let publish = number("publish"), let overhead = number("overhead"),
+      let frame = number("frame")
+    else {
+      log.warning("dropping a stage report without its six stages")
+      return
+    }
+    host.frameStats.comma(
+      CommaStages(
+        frames: (d["frames"] as? NSNumber)?.intValue ?? 0, capture: capture, warp: warp, send: sent,
+        replyWait: replyWait, publish: publish, overhead: overhead, frame: frame))
   }
 
   private func onState(_ message: Message) throws {

@@ -249,6 +249,15 @@ class JetlinkClient:
         return
       raise LinkError(f"server error: {e.get('error')}: {e.get('detail')}")
 
+  def _forgive(self, seq: int) -> None:
+    """Mark a seq whose reply is never read, so a server's ERROR for it is news
+    rather than a failure: an older server says unknown_message to a message it
+    does not have. Bounded, because `report_stages` forgives one a second and a
+    long drive would otherwise keep a seq for every second of it."""
+    self._no_reply_wanted.add(seq)
+    if len(self._no_reply_wanted) > 64:
+      self._no_reply_wanted = {s for s in self._no_reply_wanted if s > seq - 64}
+
   def _expect(self, msg_type: int, seq: int, timeout: float | None) -> Message:
     """Wait for one specific reply, servicing anything unsolicited on the way.
     A timeout of 0 still takes a reply that has already arrived: one read
@@ -333,6 +342,30 @@ class JetlinkClient:
     self.t.send_json(P.Msg.STATE_REQ, seq, {})
     return json.loads(bytes(self._expect(P.Msg.STATE_RESP, seq, timeout).payload))
 
+  def report_stages(self, means: dict) -> None:
+    """Tell the host where the comma's own half of the frame went: the six
+    stage means of openpilot.stages, sent while the big model drives.
+
+    The host measures what it spent and what the link cost it; it cannot see
+    the warp, the send or the wait on its side of the cable, and on a marginal
+    link that is the half in question. No reply is read, so this is cheap
+    enough to send from the frame path once a second; an older server answers
+    unknown_message, which `_forgive` keeps from reading as a failure. It is a
+    try_send, not a send: on a queued link a write queue the host has not
+    drained refuses the report instead of making the frame path wait for it,
+    and the next second tells the story instead. Never raises: a stage report
+    must not cost a frame, and a link that has really gone is found by the
+    frames rather than here."""
+    if self.dead or not means:
+      return
+    seq = self._next_seq()
+    self._forgive(seq)
+    try:
+      if not self.t.try_send(P.Msg.CLIENT_STATE, seq, (json.dumps(means).encode(),)):
+        log.debug("the stage report did not fit; the link's writes are backed up")
+    except LinkError as e:
+      log.debug("the stage report did not go (%s)", e)
+
   def ping(self, timeout: float = 1.0) -> float:
     seq = self._next_seq()
     t0 = time.perf_counter()
@@ -359,7 +392,7 @@ class JetlinkClient:
     if self.dead:
       return
     seq = self._next_seq()
-    self._no_reply_wanted.add(seq)
+    self._forgive(seq)
     try:
       self.t.send_json(P.Msg.LEAVE, seq, {'reason': reason, **measured}, timeout=timeout)
     except LinkError as e:

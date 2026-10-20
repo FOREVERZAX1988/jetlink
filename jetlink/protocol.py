@@ -82,6 +82,11 @@ class Msg(IntEnum):
                        # The client stops using the link: it handed the model back or is exiting.
                        # The connection may stay for a later HELLO_REQ. An older server answers
                        # ERROR unknown_message, which the client discards (JetlinkClient.leave)
+  CLIENT_STATE = 20    # json: the comma's own six stage means; client -> server, no reply.
+                       # Where the frame's 50 ms went before the host saw any of it
+                       # (openpilot.stages), which the host's own numbers cannot say. Sent
+                       # about once a second of frames, and a server that does not know the
+                       # message answers nothing a client reads (JetlinkClient.report_stages)
 
 
 # Why a client stops using the link, LEAVE's json 'reason' (JetlinkClient.leave);

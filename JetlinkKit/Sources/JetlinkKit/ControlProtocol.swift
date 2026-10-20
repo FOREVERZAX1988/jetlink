@@ -233,9 +233,15 @@ public struct StatsEvent: Codable, Sendable, Equatable {
   public let totalMs: Total?
   /// The model run, as the backend times it.
   public let gpuMs: Mean?
+  /// The comma's own half of the frame, in its six stages, as its CLIENT_STATE
+  /// said. Nil unless a big model is driving there and has said recently: the
+  /// host cannot measure where a frame's time went before it arrived, and a
+  /// stand-in's frames are the small model's, whose numbers would say nothing.
+  public let commaStages: CommaStages?
 
   public init(
-    frames: Int, fps: Double, servedMs: Total, stagesMs: Stages, slow: Int, windowS: Double, totalMs: Total? = nil, gpuMs: Mean? = nil
+    frames: Int, fps: Double, servedMs: Total, stagesMs: Stages, slow: Int, windowS: Double, totalMs: Total? = nil, gpuMs: Mean? = nil,
+    commaStages: CommaStages? = nil
   ) {
     self.frames = frames
     self.fps = fps
@@ -245,6 +251,52 @@ public struct StatsEvent: Codable, Sendable, Equatable {
     self.windowS = windowS
     self.totalMs = totalMs
     self.gpuMs = gpuMs
+    self.commaStages = commaStages
+  }
+}
+
+/// The comma's own six stages of a frame's half, in mean ms over the frames its
+/// ring holds (openpilot/stages.py). Each begins where the last ended:
+///
+///     capture     the sensor's read-out -> the frame's turn on the frame thread
+///     warp        -> the warped frame is ready
+///     send        -> the request is on the link
+///     replyWait   -> the reply is in hand
+///     publish     -> the outputs are handed to modeld
+///     overhead    -> the rest of the frame, to the next frame's start
+///
+/// The six sum to the frame period, so the comma's half and the host's numbers
+/// are two views of one 50 ms budget rather than two totals. What the host
+/// cannot see is everything before the frame reached it.
+public struct CommaStages: Codable, Sendable, Equatable {
+  public let frames: Int
+  public let capture: Double
+  public let warp: Double
+  public let send: Double
+  public let replyWait: Double
+  public let publish: Double
+  public let overhead: Double
+  /// The six summed: the frame period they were measured over.
+  public let frame: Double
+
+  public init(
+    frames: Int, capture: Double, warp: Double, send: Double, replyWait: Double, publish: Double, overhead: Double, frame: Double
+  ) {
+    self.frames = frames
+    self.capture = capture
+    self.warp = warp
+    self.send = send
+    self.replyWait = replyWait
+    self.publish = publish
+    self.overhead = overhead
+    self.frame = frame
+  }
+
+  /// Spelled out rather than left to the encoder's snake_case strategy, so a
+  /// reader with a plain decoder gets the same keys the comma sends.
+  enum CodingKeys: String, CodingKey {
+    case frames, capture, warp, send, publish, overhead, frame
+    case replyWait = "reply_wait"
   }
 }
 

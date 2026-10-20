@@ -104,6 +104,11 @@ class FakeClient:
     self.not_finite: set[int] = set()
     # HEVC: the two cameras' access units each frame carried, in call order
     self.hevc = []
+    # the comma's own six stage means as the host was told them, in call order
+    self.stage_reports = []
+
+  def report_stages(self, means, timeout=0.1):
+    self.stage_reports.append(dict(means))
 
   def infer_begin(self, data, packed, frame_id, reset=False, want_state=False, skip_if_busy=False, lossless=None,
                   hevc=None):
@@ -724,6 +729,35 @@ class TestTelemetry(ModelStateTest):
     _, _, client, _ = self.run_frames(STATEFUL, n=6, client=client)
     self.assertEqual(client.asked, [True, False, False, False, False, False])
     self.assertEqual(len(self.events), 1)
+
+  def test_the_comma_tells_the_host_its_own_six_stages_once_a_second(self):
+    # the host measures its half and the link's; the warp, the send and the
+    # wait on the comma's side are only knowable here, so they go over the
+    # link. Once a second rather than a frame: the record is read by an eye.
+    client = FakeClient()
+    self.run_frames(STATEFUL, n=6, client=client)
+    self.assertEqual(len(client.stage_reports), 1)
+    report = client.stage_reports[0]
+    self.assertEqual(set(report) - {'frames', 'held', 'frame'},
+                     {'capture', 'warp', 'send', 'reply_wait', 'publish', 'overhead'})
+    # each stage is rounded for the wire, so the total matches to the rounding
+    self.assertAlmostEqual(report['frame'], report['capture'] + report['warp'] + report['send']
+                           + report['reply_wait'] + report['publish'] + report['overhead'], delta=0.03)
+
+  def test_the_stage_report_is_sent_once_a_second_not_once_a_frame(self):
+    client = FakeClient()
+    state = self.make(spec_for(STATEFUL), client)
+    for frame_id in (1, 2):
+      state.stages.start(frame_id, 0.0)
+      state.stages.finished(frame_id, 0.01)
+    state._report_stages(5.0)
+    # inside the second: one more frame's worth of the same would be noise
+    state._report_stages(5.5)
+    self.assertEqual([r['frames'] for r in client.stage_reports], [2])
+    state.stages.start(3, 0.0)
+    state.stages.finished(3, 0.01)
+    state._report_stages(6.2)
+    self.assertEqual([r['frames'] for r in client.stage_reports], [2, 3])
 
   def test_what_came_back_is_logged_at_one_hertz(self):
     client = FakeClient()

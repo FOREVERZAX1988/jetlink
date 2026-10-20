@@ -2,6 +2,7 @@
 Unreleased
 ==========
 **Forks**
+* The wire gains `CLIENT_STATE` (20), which the comma sends about once a second while a big model drives: the six stage means of `openpilot/stages.py`, so the host's status page and the apps can show the half of the frame the host cannot measure. Additive and answered with nothing; a server that does not know the number says `unknown_message`, which the client drops. Protocol stays 3, and a fork porting a server may ignore it and lose only that number.
 * API stays 3. New: `Hooks.runtime()` (modeld's runtime record) and `Hooks.swap_events()` (selfdrived's swap events, built once and given an in-control bool each tick; they read the runtime record themselves unless given the fork's own state), `Jetlink.runtime()`, and `FakeSubMaster` and `check_fallback()` in `jetlink.openpilot.testing`. With `link_on()` saying off, only the hooks in `BINDS_WITH_LINK_OFF` bind (status, shutdown and catalog); the rest, `prepare()` included, answer as the link off. A fork that calls these must pin this release or newer: an older checkout has no such hooks.
 * API history: 2 (2026-10-05) had modeld write in_control onto the joining model; 3 (2026-10-10) has the joining model ask the adapter's in_control() itself. Jetlink.shutdown() and BuildSide.make_warp went at API 2 without a bump.
 
