@@ -71,6 +71,7 @@ struct StatusContent: View {
         HeroCard(state: state, actions: actions)
         if let recent = state.servedStats {
           latency(recent)
+          stages(recent)
           if state.history.count > 1 {
             history
           }
@@ -87,6 +88,7 @@ struct StatusContent: View {
         VStack(spacing: StatusContent.spacing) {
           if let recent = state.servedStats {
             latency(recent, compact: true)
+            stages(recent)
             link(recent)
           } else {
             device
@@ -101,6 +103,7 @@ struct StatusContent: View {
           HeroCard(state: state, actions: actions)
           if let recent = state.servedStats {
             latency(recent)
+            stages(recent)
           }
         }
         VStack(spacing: StatusContent.spacing) {
@@ -141,6 +144,15 @@ struct StatusContent: View {
   private func latency(_ recent: StatsEvent, compact: Bool = false) -> some View {
     SummaryCard(title: "Latency", systemImage: "timer", tint: .blue, trailing: "Last 10 s") {
       LatencyBreakdown(stats: recent, compact: compact)
+    }
+  }
+
+  /// Where a frame's 50 ms goes: the host's four stages, and the comma's six
+  /// while a big model drives there and reports them. The comma's part is
+  /// left out rather than shown as zeros when it has said nothing recently.
+  private func stages(_ recent: StatsEvent) -> some View {
+    SummaryCard(title: "Frame Stages", systemImage: "square.split.2x2", tint: .indigo, trailing: "Last 10 s") {
+      FrameStageTable(stages: recent.stagesMs, comma: recent.commaStages)
     }
   }
 

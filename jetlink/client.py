@@ -298,7 +298,7 @@ class JetlinkClient:
     self.t.send_json(P.Msg.STATE_REQ, seq, {})
     return json.loads(bytes(self._expect(P.Msg.STATE_RESP, seq, timeout).payload))
 
-  def report_stages(self, means: dict, timeout: float = 0.1) -> None:
+  def report_stages(self, means: dict) -> None:
     """Tell the host where the comma's own half of the frame went: the six
     stage means of openpilot.stages, sent while the big model drives.
 
@@ -306,15 +306,19 @@ class JetlinkClient:
     the warp, the send or the wait on its side of the cable, and on a marginal
     link that is the half in question. No reply is read, so this is cheap
     enough to send from the frame path once a second; an older server answers
-    unknown_message, which `_forgive` keeps from reading as a failure. Never
-    raises: a stage report must not cost a frame, and a link that has really
-    gone is found by the frames rather than here."""
+    unknown_message, which `_forgive` keeps from reading as a failure. It is a
+    try_send, not a send: on a queued link a write queue the host has not
+    drained refuses the report instead of making the frame path wait for it,
+    and the next second tells the story instead. Never raises: a stage report
+    must not cost a frame, and a link that has really gone is found by the
+    frames rather than here."""
     if self.dead or not means:
       return
     seq = self._next_seq()
     self._forgive(seq)
     try:
-      self.t.send_json(P.Msg.CLIENT_STATE, seq, means, timeout=timeout)
+      if not self.t.try_send(P.Msg.CLIENT_STATE, seq, (json.dumps(means).encode(),)):
+        log.debug("the stage report did not fit; the link's writes are backed up")
     except LinkError as e:
       log.debug("the stage report did not go (%s)", e)
 

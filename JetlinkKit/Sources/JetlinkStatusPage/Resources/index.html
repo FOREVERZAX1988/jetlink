@@ -178,6 +178,10 @@ h2 small { min-width: 0; font-size: 13px; font-weight: 400; color: var(--dim); o
 .stagebar .lbl { top: -1px; color: var(--dim); }
 .stagebar .tick { top: 36px; color: var(--faint); }
 .stagebar .tick.budget { color: var(--text); font-weight: 600; }
+/* the comma's bar has no marks and no ticks: its legend line already says
+   what period the track stands for, and six numbers sit right below it */
+.stagebar.slim { height: 24px; }
+.stagebar.slim .track, .stagebar.slim .seg { top: 4px; }
 .legend, .facts { display: flex; flex-wrap: wrap; font-size: 13px; color: var(--dim); }
 .legend { gap: 6px 16px; margin: 4px 0 14px; }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
@@ -346,6 +350,7 @@ dialog[open] { position: fixed; inset: auto 0 0 0; }
         </div>
         <div class="stagebar" id="stagebar"></div>
         <div class="legend" id="legend"></div>
+        <div class="stagebar slim" id="commabar" hidden></div>
         <div class="legend" id="commalegend"></div>
         <canvas id="chart" aria-label="Frame time over the last two minutes"></canvas>
         <div class="facts">
@@ -687,26 +692,45 @@ function drawStages(s) {
   const top = Math.max(BUDGET * 1.1, s.served_ms.p99 * 1.08, s.served_ms.mean * 1.08);
   const x = v => (v / top * 100).toFixed(2) + '%';
   const parts = [`<div class="track" style="width:${x(BUDGET)}"></div>`];
-  let at = 0;
-  for (const [k] of STAGES) {
-    const v = s.stages_ms[k] || 0;
-    if (v <= 0) continue;
-    parts.push(`<div class="seg" style="left:${x(at)};width:calc(${x(v)} - 2px);min-width:2px;background:var(--s-${k})"></div>`);
-    at += v;
-  }
+  parts.push(...segments(s.stages_ms, STAGES, 's', top));
   const p99 = x(s.served_ms.p99);
   parts.push(`<div class="mark" style="left:${x(BUDGET)}"></div><div class="mark p99" style="left:${p99}"></div><div class="lbl" style="left:${p99}">P99</div>`);
   for (let v = 0; v <= top; v += 10) parts.push(`<div class="tick${v === BUDGET ? ' budget' : ''}" style="left:${x(v)}">${v === BUDGET ? v + ' ms' : v}</div>`);
   $('stagebar').innerHTML = parts.join('');
   $('legend').innerHTML = STAGES.map(([k, name]) => `<span><i style="background:var(--s-${k})"></i>${name} <b>${ms(s.stages_ms[k] || 0)}</b></span>`).join('');
   // The comma's half, while a big model is driving there and saying so. Its
-  // six sum to the frame's period rather than to served_ms, so it is a legend
-  // and not a second bar on the same track.
+  // six sum to the frame's period rather than to served_ms, so it gets a
+  // track of its own: what fills a comma frame, not what fills this Mac's.
   const comma = s.comma_stages;
+  $('commabar').hidden = !comma;
+  $('commabar').innerHTML = comma ? commaBar(comma) : '';
   $('commalegend').innerHTML = comma
     ? `<span>On the comma, of a ${ms(comma.frame)} frame:</span>`
       + COMMA_STAGES.map(([k, name]) => `<span><i style="background:var(--c-${k})"></i>${name} <b>${ms(comma[k] || 0)}</b></span>`).join('')
     : '';
+}
+
+// One bar's segments, left to right, skipping the zeros. Shared by the two
+// bars so a segment can never be drawn one way on one and another way on
+// the other; `defs` is the stage order, `colorVar` the CSS variable prefix.
+function segments(values, defs, colorVar, top) {
+  const x = v => (v / top * 100).toFixed(2) + '%';
+  const parts = [];
+  let at = 0;
+  for (const [k] of defs) {
+    const v = values[k] || 0;
+    if (v <= 0) continue;
+    parts.push(`<div class="seg" style="left:${x(at)};width:calc(${x(v)} - 2px);min-width:2px;background:var(--${colorVar}-${k})"></div>`);
+    at += v;
+  }
+  return parts;
+}
+
+function commaBar(comma) {
+  const sum = COMMA_STAGES.reduce((a, [k]) => a + (comma[k] || 0), 0);
+  const top = Math.max(comma.frame, sum, 1);
+  const track = `<div class="track" style="width:${(comma.frame / top * 100).toFixed(2)}%"></div>`;
+  return track + segments(comma, COMMA_STAGES, 'c', top).join('');
 }
 
 function drawChart() {

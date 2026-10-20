@@ -104,6 +104,16 @@ class TheStageReport(SocketPairTest):
     t.join(2.0)
     self.assertFalse(self.client.dead)
 
+  def test_a_backed_up_queue_skips_the_report(self):
+    # the report rides the frame thread, so it waits for nothing: on a queued
+    # link whose writes the host has not taken, try_send refuses and the next
+    # second tells the story - the report must not cost the path a frame
+    self.client.t.try_send = lambda *a, **kw: False
+    self.client.report_stages({'frames': 1, 'frame': 50.0})
+    with self.assertRaises(LinkError):
+      self.peer.recv(timeout=0.2)
+    self.assertFalse(self.client.dead)
+
   def test_the_forgiven_seqs_stay_bounded(self):
     # one a second for a long drive: a seq each would be a set that grows all
     # day for a message no server ever answers

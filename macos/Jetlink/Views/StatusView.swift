@@ -149,6 +149,10 @@ struct StatusView: View {
     if server.link.state == .connected, let stats = server.state.stats {
       Section {
         FrameBudgetView(stats: stats, history: server.state.statsHistory)
+        // The comma's six stages when it reports them: its half of the same
+        // 50 ms, which this Mac can only see as waiting. Left out while a
+        // small model drives, so the section stays about what is running.
+        FrameStageTable(stages: stats.stagesMs, comma: stats.commaStages)
       } header: {
         Text("Frame Budget")
       } footer: {
