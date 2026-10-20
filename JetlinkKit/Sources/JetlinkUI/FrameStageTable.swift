@@ -34,15 +34,19 @@
     }
 
     private static func host(_ stages: StatsEvent.Stages) -> Section {
-      Section(name: "Host", lines: FrameStage.allCases.map { stage in
-        Line(title: stage.title, color: stage.color, ms: stage.value(stages), detail: stage.detail)
-      })
+      Section(
+        name: "Host",
+        lines: FrameStage.allCases.map { stage in
+          Line(title: stage.title, color: stage.color, ms: stage.value(stages), detail: stage.detail)
+        })
     }
 
     private static func comma(_ stages: CommaStages) -> Section {
-      Section(name: "Comma", lines: CommaStage.allCases.map { stage in
-        Line(title: stage.title, color: stage.color, ms: stage.value(stages), detail: stage.detail)
-      })
+      Section(
+        name: "Comma",
+        lines: CommaStage.allCases.map { stage in
+          Line(title: stage.title, color: stage.color, ms: stage.value(stages), detail: stage.detail)
+        })
     }
 
     public var body: some View {
