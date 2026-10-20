@@ -16,9 +16,7 @@
     /// The host's half: staging the inputs, the model, the rest of the run,
     /// and sending the reply.
     public init(stages: StatsEvent.Stages) {
-      sections = [Section(name: "Host", lines: FrameStage.allCases.map { stage in
-        Line(title: stage.title, color: stage.color, ms: stage.value(stages), detail: stage.detail)
-      })]
+      sections = [FrameStageTable.host(stages)]
     }
 
     /// The comma's half, when a big model is driving there.
@@ -28,12 +26,17 @@
 
     /// Both, the comma's left out while it has said nothing recent.
     public init(stages: StatsEvent.Stages, comma: CommaStages?) {
-      sections = [Section(name: "Host", lines: FrameStage.allCases.map { stage in
-        Line(title: stage.title, color: stage.color, ms: stage.value(stages), detail: stage.detail)
-      })]
+      var built = [FrameStageTable.host(stages)]
       if let comma {
-        sections.append(FrameStageTable.comma(comma))
+        built.append(FrameStageTable.comma(comma))
       }
+      sections = built
+    }
+
+    private static func host(_ stages: StatsEvent.Stages) -> Section {
+      Section(name: "Host", lines: FrameStage.allCases.map { stage in
+        Line(title: stage.title, color: stage.color, ms: stage.value(stages), detail: stage.detail)
+      })
     }
 
     private static func comma(_ stages: CommaStages) -> Section {
