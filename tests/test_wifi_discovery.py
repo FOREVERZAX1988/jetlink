@@ -89,6 +89,11 @@ class TestDiscoverOrder(unittest.TestCase):
     # and no host on record as unusable unless a test wants one
     wifi.forget_unusable()
     self.addCleanup(wifi.forget_unusable)
+    # no persistent blocklist either, unless a test writes one
+    self.block = Path(tmp.name) / 'blocked'
+    patcher = mock.patch.object(wifi, 'BLOCK_FILE', self.block)
+    patcher.start()
+    self.addCleanup(patcher.stop)
 
   def routes(self, text: str) -> Path:
     tmp = tempfile.TemporaryDirectory()
@@ -210,6 +215,47 @@ class TestDiscoverOrder(unittest.TestCase):
       got = wifi.discover(mdnss=[('comma-jetlink', '192.168.10.36')])
     self.assertEqual(got, '192.168.10.65')
     self.assertNotIn('192.168.10.36', probed)     # not even probed again
+
+  def test_a_blocked_host_is_never_dialed_or_probed(self):
+    # the Beam Pro: answers every connect on :5599, builds nothing, and sorts
+    # before the phone in address order, so it wins every stale-peer sweep
+    wifi.block_host('192.168.10.36')
+    probed = []
+
+    def probe(host, port, timeout):
+      probed.append(host)
+      return host in ('192.168.10.36', '192.168.10.65')
+
+    with mock.patch.object(wifi, '_probe', side_effect=probe), \
+         mock.patch.object(wifi, 'gateway', return_value=None), \
+         mock.patch.object(wifi, 'local_addr', return_value=('192.168.10.44', 24)):
+      got = wifi.discover(mdnss=[('comma-jetlink', '192.168.10.36')])
+    self.assertEqual(got, '192.168.10.65')
+    self.assertNotIn('192.168.10.36', probed)
+
+  def test_a_blocked_host_is_not_used_as_the_remembered_peer(self):
+    wifi._save_peer('192.168.10.36', 5599)
+    wifi.block_host('192.168.10.36')
+    probed = []
+    with mock.patch.object(wifi, '_probe', side_effect=lambda h, p, t: probed.append(h) or False), \
+         mock.patch.object(wifi, 'browse', return_value=[]), \
+         mock.patch.object(wifi, 'gateway', return_value=None), \
+         mock.patch.object(wifi, 'local_addr', return_value=None):
+      self.assertIsNone(wifi.discover())
+    self.assertNotIn('192.168.10.36', probed)
+
+  def test_the_blocklist_keeps_addresses_only(self):
+    self.block.write_text('# the bench Beam Pro\n192.168.10.36\n\n192.168.10.65:5599\nnot an address\n')
+    self.assertEqual(wifi.blocked_hosts(), frozenset({'192.168.10.36'}))
+
+  def test_blocking_the_same_host_twice_writes_it_once(self):
+    wifi.block_host('192.168.10.36')
+    wifi.block_host('192.168.10.36')
+    self.assertEqual(self.block.read_text().split().count('192.168.10.36'), 1)
+
+  def test_an_unwritable_blocklist_does_not_raise(self):
+    wifi.block_host('192.168.10.36', path=Path('/proc/definitely/not/writable'))
+    self.assertEqual(wifi.blocked_hosts(path=Path('/proc/definitely/not/writable')), frozenset())
 
   def test_a_remembered_peer_that_could_not_serve_is_not_dialed(self):
     # remembered while it worked, unusable for the model picked this drive

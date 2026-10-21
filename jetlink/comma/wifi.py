@@ -54,6 +54,15 @@ _RTF_GATEWAY = 0x2
 # without another sweep. One line: "host:port:monotonic". Kept out of the
 # params key-value dir, which must not hold extra files.
 PEER_FILE = Path('/data/.jetlink_wifi_peer')
+# Hosts never to dial, one address per line ("#" starts a comment). Not the same
+# list as UNUSABLE: that one is this drive's opinion, held in memory and dropped
+# on the next modeld start, while a machine on the LAN that answers on :5599 and
+# can never build the model (the SM6450 Beam Pro at 192.168.10.36) is wrong to
+# dial on *every* drive. The sweep returns the first answering host in address
+# order, so a lower-numbered bench machine wins over the phone the driver meant
+# whenever the remembered peer is stale - which is exactly the 2026-10-19 case
+# this file closes for good, instead of once per drive.
+BLOCK_FILE = Path('/data/.jetlink_wifi_blocked')
 # how long a remembered peer may be reused before it must answer again
 PEER_TTL_S = 300.0
 # Hosts that answered a probe and then could not serve this drive: a phone
@@ -116,6 +125,38 @@ def _probe(host: str, port: int, timeout: float) -> bool:
     s.close()
 
 
+def blocked_hosts(path: Path | None = None) -> frozenset[str]:
+  """Hosts the person has ruled out, read from BLOCK_FILE. Never raises."""
+  target = BLOCK_FILE if path is None else path
+  try:
+    text = target.read_text()
+  except OSError:
+    return frozenset()
+  hosts = set()
+  for line in text.splitlines():
+    line = line.split('#', 1)[0].strip()
+    # a port or any other decoration is not an address, and an address is all
+    # this list can hold: "" and junk lines are simply not hosts to skip
+    if line and ':' not in line and ' ' not in line:
+      hosts.add(line)
+  return frozenset(hosts)
+
+
+def block_host(host: str, path: Path | None = None) -> None:
+  """Add `host` to BLOCK_FILE so no later drive dials it. Idempotent, never raises."""
+  if not host:
+    return
+  target = BLOCK_FILE if path is None else path
+  if host in blocked_hosts(target):
+    return
+  try:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open('a') as f:
+      f.write(f"{host}\n")
+  except OSError:
+    pass
+
+
 def _save_peer(host: str, port: int) -> None:
   try:
     PEER_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -141,7 +182,7 @@ def _saved_peer(port: int) -> str | None:
   try:
     host, p, ts = PEER_FILE.read_text().strip().split(':')
     age = time.monotonic() - float(ts)
-    if int(p) != port or age < 0 or age > PEER_TTL_S or host in UNUSABLE:
+    if int(p) != port or age < 0 or age > PEER_TTL_S or host in UNUSABLE or host in blocked_hosts():
       return None
   except (OSError, ValueError):
     return None
@@ -240,7 +281,7 @@ def discover(port: int = 5599, interface: str = INTERFACE,
   (remember_peer), and hosts noted unusable this drive are skipped here like
   the caller's own `skip`. None when nothing answers.
   """
-  blocked = set(skip) | UNUSABLE
+  blocked = set(skip) | UNUSABLE | blocked_hosts()
   saved = _saved_peer(port)
   if saved and saved not in blocked:
     return saved
