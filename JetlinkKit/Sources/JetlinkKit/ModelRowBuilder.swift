@@ -12,7 +12,9 @@ public enum ModelStatus: Equatable, Sendable {
 }
 
 public struct ModelRow: Identifiable, Equatable, Sendable {
-  /// The sha256 when it is known, else "ref:<ref>".
+  /// "ref:<ref>" for a catalog row, the sha256 for one only on disk. Two
+  /// catalog models can name the same export (Flip Flop and Mountain Dew v3
+  /// do), so a catalog row is never keyed by its sha256.
   public var id: String
   public var name: String
   public var ref: String?
@@ -93,10 +95,12 @@ public enum ModelRowBuilder {
 
     var rows: [ModelRow] = []
     var seen: Set<String> = []
+    var refs: Set<String> = []
 
     for entry in catalog?.models ?? [] {
+      guard refs.insert(entry.ref).inserted else { continue }
       var row = ModelRow(
-        id: entry.sha256 ?? "ref:\(entry.ref)",
+        id: "ref:\(entry.ref)",
         name: entry.name,
         ref: entry.ref,
         sha256: entry.sha256,
