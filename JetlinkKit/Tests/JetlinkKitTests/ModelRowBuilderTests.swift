@@ -91,11 +91,16 @@ struct ModelRowBuilderTests {
         CatalogModel(name: "Mountain Dew Model v3", shortName: "MDV3", ref: "a1", buildTime: "", index: 1, sha256: sha, bytes: 1),
         CatalogModel(name: "Flip Flop Model", shortName: "FFM", ref: "b2", buildTime: "", index: 2, sha256: sha, bytes: 1),
       ])
-    let rows = ModelRowBuilder.build(
-      catalog: catalog, inventory: nil, downloads: [sha: download(sha: sha, state: "progress")], engine: .none, link: .waiting)
+    let downloads = [sha: download(sha: sha, state: "progress")]
+    let downloading = ModelStatus.downloading(frac: 0.42, rateBps: 41_000_000)
+    let rows = ModelRowBuilder.build(catalog: catalog, inventory: nil, downloads: downloads, engine: .none, link: .waiting)
     #expect(rows.map(\.name) == ["Mountain Dew Model v3", "Flip Flop Model"])
     #expect(Set(rows.map(\.id)).count == 2)
-    #expect(rows.allSatisfy { $0.sha256 == sha && $0.status == .downloading(frac: 0.42, rateBps: 41_000_000) })
+    #expect(rows.map(\.status) == [downloading, .notDownloaded])
+
+    let picked = ModelRowBuilder.build(
+      catalog: catalog, inventory: nil, downloads: downloads, engine: .none, link: .waiting, picks: [sha: "b2"])
+    #expect(picked.map(\.status) == [.notDownloaded, downloading])
   }
 
   @Test func everyStatusIsReachable() throws {

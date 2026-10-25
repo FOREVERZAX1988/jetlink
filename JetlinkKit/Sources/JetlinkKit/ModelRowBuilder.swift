@@ -84,7 +84,8 @@ public enum ModelRowBuilder {
     inventory: InventoryEvent?,
     downloads: [String: DownloadEvent],
     engine: EngineEvent,
-    link: LinkEvent
+    link: LinkEvent,
+    picks: [String: String] = [:]
   ) -> [ModelRow] {
     let models = inventory?.models ?? []
     let artifacts = inventory?.artifacts ?? []
@@ -123,6 +124,8 @@ public enum ModelRowBuilder {
       }
       rows.append(row)
     }
+
+    quietSharedRows(&rows, picks: picks, artifactsBySha: artifactsBySha, modelsBySha: modelsBySha)
 
     var extraShas: [String] = []
     for model in models where !seen.contains(model.sha256) {
@@ -168,6 +171,29 @@ public enum ModelRowBuilder {
     rows.append(contentsOf: localRows)
     rows.append(contentsOf: orphanRows)
     return rows
+  }
+
+  /// Catalog models that name one export share its download, engine and
+  /// load. Only one of them shows that: the one picked last (`picks`, sha256
+  /// to ref), else the first. The others show what is on disk.
+  private static func quietSharedRows(
+    _ rows: inout [ModelRow],
+    picks: [String: String],
+    artifactsBySha: [String: [InventoryArtifact]],
+    modelsBySha: [String: InventoryModel]
+  ) {
+    var owners: [String: Int] = [:]
+    for (index, row) in rows.enumerated() {
+      guard let sha = row.sha256 else { continue }
+      if owners[sha] == nil || (picks[sha] == row.ref && picks[sha] != rows[owners[sha]!].ref) { owners[sha] = index }
+    }
+    for index in rows.indices {
+      guard let sha = rows[index].sha256, owners[sha] != index else { continue }
+      rows[index].isLoaded = false
+      rows[index].isRequestedByComma = false
+      rows[index].status = status(
+        sha: sha, download: nil, engine: .none, artifacts: artifactsBySha[sha] ?? [], hasModelFile: modelsBySha[sha] != nil)
+    }
   }
 
   private static func status(

@@ -16,6 +16,9 @@ public final class ModelStore {
   public private(set) var downloads: [String: DownloadEvent] = [:]
   public private(set) var imports: [ImportEvent] = []
   public private(set) var rows: [ModelRow] = []
+  /// sha256 to the ref of the catalog model last used for it, so of several
+  /// models on one export the one picked shows its progress.
+  public private(set) var picks: [String: String] = [:]
   /// The last action that failed, for the view to show and clear.
   public var lastError: String?
 
@@ -46,9 +49,11 @@ public final class ModelStore {
 
   // MARK: events
 
-  /// The row for a model, by its sha256.
+  /// The row for a model, by its sha256: of several on one export, the one
+  /// picked last.
   public func row(for sha256: String?) -> ModelRow? {
     guard let sha256 else { return nil }
+    if let ref = picks[sha256], let picked = rows.first(where: { $0.sha256 == sha256 && $0.ref == ref }) { return picked }
     return rows.first { $0.sha256 == sha256 }
   }
 
@@ -84,7 +89,8 @@ public final class ModelStore {
       inventory: inventory,
       downloads: downloads,
       engine: server.engine,
-      link: server.link)
+      link: server.link,
+      picks: picks)
   }
 
   private func observeServerState() {
@@ -156,6 +162,10 @@ public final class ModelStore {
     if useNeedsConfirmation(row) && !confirmedInterruption {
       log.debug("using another model needs confirmation while the comma is connected")
       return
+    }
+    if let ref = row.ref, picks[sha] != ref {
+      picks[sha] = ref
+      rebuild()
     }
     perform("use that model") { try await $0.send(.prepare(sha256: sha, frameSkip: ModelStore.defaultFrameSkip)) }
   }
