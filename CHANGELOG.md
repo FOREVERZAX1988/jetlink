@@ -2,8 +2,7 @@
 Jetlink v0.8.9
 ==============
 **Models**
-* Mountain Dew Model v3 and Flip Flop Model no longer show each other's download or In Use. Only the one you picked does.
-* **Update the app.** The comma needs no update.
+* Fixed Mountain Dew Model v3 and Flip Flop Model showing as one.
 
 Jetlink v0.8.8
 ==============
