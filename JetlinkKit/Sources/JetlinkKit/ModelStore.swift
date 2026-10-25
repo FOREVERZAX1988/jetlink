@@ -18,7 +18,7 @@ public final class ModelStore {
   public private(set) var rows: [ModelRow] = []
   /// sha256 to the ref of the catalog model last used for it, so of several
   /// models on one export the one picked shows its progress.
-  public private(set) var picks: [String: String] = [:]
+  private var picks: [String: String] = [:]
   /// The last action that failed, for the view to show and clear.
   public var lastError: String?
 
@@ -50,11 +50,11 @@ public final class ModelStore {
   // MARK: events
 
   /// The row for a model, by its sha256: of several on one export, the one
-  /// picked last.
+  /// that shows it (`ModelRowBuilder.owners`).
   public func row(for sha256: String?) -> ModelRow? {
     guard let sha256 else { return nil }
-    if let ref = picks[sha256], let picked = rows.first(where: { $0.sha256 == sha256 && $0.ref == ref }) { return picked }
-    return rows.first { $0.sha256 == sha256 }
+    let owner = ModelRowBuilder.owners(of: catalog?.models ?? [], picks: picks)[sha256]
+    return rows.first { $0.sha256 == sha256 && (owner == nil || $0.ref == owner) }
   }
 
   public func apply(_ event: ControlEvent) {

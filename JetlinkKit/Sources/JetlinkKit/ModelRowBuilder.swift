@@ -97,6 +97,7 @@ public enum ModelRowBuilder {
     var rows: [ModelRow] = []
     var seen: Set<String> = []
     var refs: Set<String> = []
+    let owners = owners(of: catalog?.models ?? [], picks: picks)
 
     for entry in catalog?.models ?? [] {
       guard refs.insert(entry.ref).inserted else { continue }
@@ -111,10 +112,13 @@ public enum ModelRowBuilder {
         isDefault: entry.ref == catalog?.defaultRef)
       if let sha = entry.sha256 {
         seen.insert(sha)
+        // only the owner of a shared export shows its download, engine and load
+        let owns = owners[sha] == entry.ref
+        let engine = owns ? engine : .none
         row.preparedFor = artifactsBySha[sha] ?? []
         row.status = status(
           sha: sha,
-          download: downloads[sha],
+          download: owns ? downloads[sha] : nil,
           engine: engine,
           artifacts: row.preparedFor,
           hasModelFile: modelsBySha[sha] != nil)
@@ -124,8 +128,6 @@ public enum ModelRowBuilder {
       }
       rows.append(row)
     }
-
-    quietSharedRows(&rows, picks: picks, artifactsBySha: artifactsBySha, modelsBySha: modelsBySha)
 
     var extraShas: [String] = []
     for model in models where !seen.contains(model.sha256) {
@@ -173,27 +175,16 @@ public enum ModelRowBuilder {
     return rows
   }
 
-  /// Catalog models that name one export share its download, engine and
-  /// load. Only one of them shows that: the one picked last (`picks`, sha256
-  /// to ref), else the first. The others show what is on disk.
-  private static func quietSharedRows(
-    _ rows: inout [ModelRow],
-    picks: [String: String],
-    artifactsBySha: [String: [InventoryArtifact]],
-    modelsBySha: [String: InventoryModel]
-  ) {
-    var owners: [String: Int] = [:]
-    for (index, row) in rows.enumerated() {
-      guard let sha = row.sha256 else { continue }
-      if owners[sha] == nil || (picks[sha] == row.ref && picks[sha] != rows[owners[sha]!].ref) { owners[sha] = index }
+  /// sha256 to the ref of the catalog model that shows that export's download,
+  /// engine and load: several can name one export, and only one shows them,
+  /// the one picked last (`picks`, sha256 to ref), else the first.
+  public static func owners(of models: [CatalogModel], picks: [String: String]) -> [String: String] {
+    var owners: [String: String] = [:]
+    for model in models {
+      guard let sha = model.sha256 else { continue }
+      if owners[sha] == nil || model.ref == picks[sha] { owners[sha] = model.ref }
     }
-    for index in rows.indices {
-      guard let sha = rows[index].sha256, owners[sha] != index else { continue }
-      rows[index].isLoaded = false
-      rows[index].isRequestedByComma = false
-      rows[index].status = status(
-        sha: sha, download: nil, engine: .none, artifacts: artifactsBySha[sha] ?? [], hasModelFile: modelsBySha[sha] != nil)
-    }
+    return owners
   }
 
   private static func status(
