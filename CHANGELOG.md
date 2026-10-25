@@ -1,4 +1,10 @@
 <!-- Each release: a "Jetlink vX.Y.Z" heading underlined with =, newest first. A release that changes the fork contract ends with a **Forks** group (docs/publishing.md). -->
+Jetlink v0.8.9
+==============
+**Models**
+* Mountain Dew Model v3 and Flip Flop Model no longer show each other's download or In Use. Only the one you picked does.
+* **Update the app.** The comma needs no update.
+
 Jetlink v0.8.8
 ==============
 **Models**
