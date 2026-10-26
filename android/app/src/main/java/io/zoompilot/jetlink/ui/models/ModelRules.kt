@@ -1,5 +1,8 @@
 package io.zoompilot.jetlink.ui.models
 
+import androidx.compose.runtime.Composable
+import io.zoompilot.jetlink.R
+import io.zoompilot.jetlink.l10n
 import io.zoompilot.jetlink.server.ImportState
 import io.zoompilot.jetlink.server.ModelRow
 import io.zoompilot.jetlink.server.Snapshot
@@ -24,8 +27,13 @@ enum class RowAction {
     InUse,
 }
 
-/** How a model row reads and what it offers, the same as the iPhone's list. */
+/** How a model row reads and what it offers, the same as the iPhone's list. The subtitle keeps its English for the tests; the UI pair is [subtitleL10n]. */
 object ModelRules {
+    /** A row's name in the app's language: an unnamed upload reads as "Uploaded Model". */
+    @Composable
+    fun titleL10n(row: ModelRow): String =
+        if (row.isOrphan) l10n(R.string.model_uploaded_title) else row.displayName
+
     /** One line of facts or progress under the name. */
     fun subtitle(row: ModelRow): String {
         val status = row.status
@@ -34,7 +42,7 @@ object ModelRules {
                 val percent = Format.percent(status.frac)
                 if (status.rateBps > 0) "Downloading · $percent · ${Format.rate(status.rateBps)}" else "Downloading · $percent"
             }
-            "preparing" -> Format.progressText(status.stage, status.frac, status.msg)
+            "preparing" -> Format.progressTextPlain(status.stage, status.frac, status.msg)
             "loaded" -> if (row.isOrphan) "In Use · ${row.sha256.orEmpty().take(12)}" else "In Use"
             "failed" -> "Failed"
             "unresolved" -> "Checking…"
@@ -43,6 +51,36 @@ object ModelRules {
                 row.bytes?.let { add(Format.bytes(it)) }
                 Format.buildDate(row.buildTime).takeIf { it.isNotEmpty() }?.let(::add)
                 if (status.kind == "prepared" || row.isPrepared) add("Ready")
+            }.joinToString(" · ")
+        }
+    }
+
+    /** [subtitle] in the app's language. */
+    @Composable
+    fun subtitleL10n(row: ModelRow): String {
+        val status = row.status
+        return when (status.kind) {
+            "downloading" -> {
+                val percent = Format.percent(status.frac)
+                l10n(
+                    if (status.rateBps > 0) R.string.model_downloading_rate else R.string.model_downloading_line,
+                    percent,
+                    Format.rate(status.rateBps),
+                )
+            }
+            "preparing" -> Format.progressText(status.stage, status.frac, status.msg)
+            "loaded" -> if (row.isOrphan) {
+                l10n(R.string.model_in_use_named, row.sha256.orEmpty().take(12))
+            } else {
+                l10n(R.string.model_in_use)
+            }
+            "failed" -> l10n(R.string.model_failed)
+            "unresolved" -> l10n(R.string.model_checking)
+            else -> buildList {
+                if (row.isOrphan) row.sha256?.let { add(it.take(12)) }
+                row.bytes?.let { add(Format.bytes(it)) }
+                Format.buildDate(row.buildTime).takeIf { it.isNotEmpty() }?.let(::add)
+                if (status.kind == "prepared" || row.isPrepared) add(l10n(R.string.model_ready))
             }.joinToString(" · ")
         }
     }
@@ -97,6 +135,17 @@ object ModelRules {
         ).joinToString(" · ")
     }
 
+    /** [diskLine] in the app's language. */
+    @Composable
+    fun diskLineL10n(snapshot: Snapshot): String? {
+        val disk = snapshot.disk ?: return null
+        return listOfNotNull(
+            l10n(R.string.disk_downloaded, Format.bytes(disk.modelsBytes)),
+            l10n(R.string.disk_prepared, Format.bytes(disk.enginesBytes)),
+            disk.freeBytes?.let { l10n(R.string.disk_free, Format.bytes(it)) },
+        ).joinToString(" · ")
+    }
+
     /** Imports still running, or failed, for the Adding section. */
     fun activeImports(imports: List<ImportState>): List<ImportState> = imports.filter { it.state != "done" }
 
@@ -106,5 +155,14 @@ object ModelRules {
         "copying" -> "Copying · ${Format.percent(import.frac)}"
         "failed" -> "Failed"
         else -> "Adding"
+    }
+
+    /** [importLine] in the app's language. */
+    @Composable
+    fun importLineL10n(import: ImportState): String = when (import.state) {
+        "hashing" -> l10n(R.string.import_checking, Format.percent(import.frac))
+        "copying" -> l10n(R.string.import_copying, Format.percent(import.frac))
+        "failed" -> l10n(R.string.model_failed)
+        else -> l10n(R.string.import_adding)
     }
 }

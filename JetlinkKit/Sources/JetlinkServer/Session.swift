@@ -198,6 +198,7 @@ final class Session: @unchecked Sendable {
     case .stateReq: try onState(message)
     case .shutdownReq: try onShutdown(message)
     case .leave: onLeave(message)
+    case .clientState: onClientState(message)
     default: try error(message.seq, "unknown_message", "type \(message.msgType)")
     }
   }
@@ -256,6 +257,19 @@ final class Session: @unchecked Sendable {
     log.info("hello from \(self.who) (seq \(message.seq))")
   }
 
+  /// The frame codecs this server takes, in the order a client should
+  /// prefer them: the packed one first, and the HEVC one only where a
+  /// decoder is there to take it. A host without libavcodec loaded cannot
+  /// decode, and offering the codec would have the client send frames this
+  /// side would have to throw away.
+  static func frameCodecs() -> [String] {
+    var codecs = [LosslessFrame.codec]
+    if HevcFrame.available {
+      codecs.append(HevcFrame.codec)
+    }
+    return codecs
+  }
+
   private func onHello(_ message: Message) throws {
     let (sha, skip) = wanted()
     var response: [String: Any] = [
@@ -268,6 +282,8 @@ final class Session: @unchecked Sendable {
       // 0 unless the host really suspends: the comma then holds the gadget
       // for the whole park instead of letting go for a box that never sleeps.
       "sleep_after": host.hooks.sleepAfter,
+      // frames this server takes packed (Wire.Flag.lossless), for slow links
+      "frame_codecs": Session.frameCodecs(),
     ]
     for (key, value) in host.backend.describe() {
       response[key] = value
@@ -453,18 +469,45 @@ final class Session: @unchecked Sendable {
     let started = DispatchTime.now().uptimeNanoseconds
     host.lastSeenAt = ProcessInfo.processInfo.systemUptime
     let layout = loaded.staging.layout
-    guard message.payload.count == layout.requestBytes else {
-      // The offsets below come from the spec, not the wire: a client on
-      // another model would have its scalars read out of the image.
+    let payload = message.payload
+    guard payload.count >= Wire.inferReqSize, let base = payload.baseAddress else {
       return InferReply(status: .badShape)
     }
-    let base = message.payload.baseAddress!
     let frameID = UInt32(littleEndian: base.loadUnaligned(as: UInt32.self))
     let flags = Wire.Flag(rawValue: UInt32(littleEndian: base.loadUnaligned(fromByteOffset: 4, as: UInt32.self)))
+    // The offsets below come from the spec, not the wire: a client on
+    // another model would have its scalars read out of the image.
+    let warped: UnsafeRawPointer
+    let packed: UnsafeRawPointer
+    if flags.contains(.lossless) {
+      // the packed floats at their usual size, then the frame's planes
+      let planesAt = Wire.inferReqSize + layout.packedBytes
+      guard payload.count >= planesAt, let frame = loaded.lossless,
+        frame.unpack(UnsafeRawBufferPointer(rebasing: payload[planesAt...]))
+      else {
+        return InferReply(status: .badShape)
+      }
+      warped = UnsafeRawPointer(frame.pixels)
+      packed = base + Wire.inferReqSize
+    } else if flags.contains(.hevc) {
+      // the packed floats at their usual size, then the two cameras' access
+      // units, each behind its u32 length
+      let planesAt = Wire.inferReqSize + layout.packedBytes
+      guard payload.count >= planesAt, let frame = loaded.hevc,
+        frame.unpack(UnsafeRawBufferPointer(rebasing: payload[planesAt...]))
+      else {
+        return InferReply(status: .badShape)
+      }
+      warped = frame.warped
+      packed = base + Wire.inferReqSize
+    } else {
+      guard payload.count == layout.requestBytes else { return InferReply(status: .badShape) }
+      warped = base + Wire.inferReqSize
+      packed = warped + layout.warpedBytes
+    }
     if flags.contains(.resetQueues) {
       loaded.staging.reset()
     }
-    let warped = base + Wire.inferReqSize
 
     var status = Wire.Status.ok
     var queueUs: UInt32 = 0
@@ -472,7 +515,7 @@ final class Session: @unchecked Sendable {
     do {
       // The packed floats stay where they arrived: every cast and copy of
       // them reads unaligned, so they need no aligned copy first.
-      try loaded.staging.stage(warped: warped, packed: warped + layout.warpedBytes)
+      try loaded.staging.stage(warped: warped, packed: packed)
       queueUs = microseconds(since: started)
       try loaded.engine.run()
     } catch {
@@ -562,6 +605,26 @@ final class Session: @unchecked Sendable {
     }
     log.warning(line)
     if let summary { log.info("this session served \(summary)") }
+  }
+
+  /// The comma's own stage means. Nothing is read back: at a second a message
+  /// the answer would be stale before the comma asked again, and the report
+  /// is a note on the stats rather than a question. A payload this server
+  /// cannot read is dropped, since a frame is what the link is for.
+  private func onClientState(_ message: Message) {
+    guard let d = JSONLine.decode(message.payload) else { return }
+    func number(_ key: String) -> Double? { (d[key] as? NSNumber)?.doubleValue }
+    guard let capture = number("capture"), let warp = number("warp"), let sent = number("send"),
+      let replyWait = number("reply_wait"), let publish = number("publish"), let overhead = number("overhead"),
+      let frame = number("frame")
+    else {
+      log.warning("dropping a stage report without its six stages")
+      return
+    }
+    host.frameStats.comma(
+      CommaStages(
+        frames: (d["frames"] as? NSNumber)?.intValue ?? 0, capture: capture, warp: warp, send: sent,
+        replyWait: replyWait, publish: publish, overhead: overhead, frame: frame))
   }
 
   private func onState(_ message: Message) throws {

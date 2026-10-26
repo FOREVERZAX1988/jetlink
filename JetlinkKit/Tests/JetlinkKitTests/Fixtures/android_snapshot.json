@@ -132,6 +132,7 @@
     "state" : "connected"
   },
   "medium" : {
+    "fix" : null,
     "name" : "usb3",
     "slow" : false,
     "title" : "USB 3"

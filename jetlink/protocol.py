@@ -82,6 +82,11 @@ class Msg(IntEnum):
                        # The client stops using the link: it handed the model back or is exiting.
                        # The connection may stay for a later HELLO_REQ. An older server answers
                        # ERROR unknown_message, which the client discards (JetlinkClient.leave)
+  CLIENT_STATE = 20    # json: the comma's own six stage means; client -> server, no reply.
+                       # Where the frame's 50 ms went before the host saw any of it
+                       # (openpilot.stages), which the host's own numbers cannot say. Sent
+                       # about once a second of frames, and a server that does not know the
+                       # message answers nothing a client reads (JetlinkClient.report_stages)
 
 
 # Why a client stops using the link, LEAVE's json 'reason' (JetlinkClient.leave);
@@ -101,6 +106,14 @@ class Flag(IntEnum):
   WANT_HIDDEN = 1 << 2    # on INFER_REQ: keep hidden_state in the response, for
                           # a caller logging the whole output vector. 64 KB more
                           # on the big models; nothing else needs it.
+  LOSSLESS = 1 << 3       # on INFER_REQ: the frame is packed (LOSSLESS_CODEC),
+                          # as jetlink.lossless.Packer packs it. Only to a server
+                          # whose hello lists the codec in 'frame_codecs'
+  HEVC = 1 << 4           # on INFER_REQ: the frame is HEVC (HEVC_CODEC), two
+                          # cameras' Annex-B access units, 3-master-frame ids.
+                          # Only to a server whose hello lists it in
+                          # 'frame_codecs'; a lossy carrier, so never chosen
+                          # without the user's consent (jetlink.codecs.pick)
   PADDED = 1 << 7         # one pad byte follows the payload; see PACKET_MULTIPLE
 
 
@@ -161,6 +174,28 @@ def _pieces(total: int, payload: int) -> tuple[tuple[int, int], ...]:
   base, extra = divmod(total, n)
   sizes = [base + (1 if i < extra else 0) for i in range(n)]
   return tuple((sum(sizes[:i]), size) for i, size in enumerate(sizes))
+
+
+# A lossless frame (jetlink.lossless), for links slower than USB: each plane of
+# the warped frame (warped_shape (2, 6, H, W): 12 planes of H x W) packed alone,
+# its MED errors through zstd with Huffman on the literals, so a server can
+# unpack planes in parallel. INFER_REQ with Flag.LOSSLESS carries the request
+# head, the packed floats (their size from the handshake, as ever), a u32 size
+# per plane, then the planes. A server that takes it says so in its hello
+LOSSLESS_CODEC = 'med-zstd'
+
+# An HEVC frame (jetlink.hevc), for links too slow for 393 KB a frame: the six
+# planes reassembled into NV12 and through a hardware encoder, ~4 KB a camera at
+# 2 Mb/s. Lossy and inter-frame, so a receiver takes it only where the loss is
+# the price of a working link, and a stream that loses a frame owes an IDR
+# (jetlink.openpilot.stream). The frame's id is a master-frame id, shared by
+# both cameras, and the two access units go in the same INFER_REQ:
+#
+#   INFER_REQ head, the packed floats, then
+#   u32 road_len, u32 wide_len, road Annex-B, wide Annex-B
+#
+# A server that takes it says so in its hello's 'frame_codecs'.
+HEVC_CODEC = 'hevc'
 
 
 class ProtocolError(RuntimeError):

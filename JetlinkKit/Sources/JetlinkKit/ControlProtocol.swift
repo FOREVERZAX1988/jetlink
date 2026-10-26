@@ -80,11 +80,12 @@ public struct LinkEvent: Codable, Sendable, Equatable {
 }
 
 /// How the comma's link is carried: the USB generation its controller
-/// negotiated, USB of unknown speed, or TCP. The comma's hello says which
+/// negotiated, USB of unknown speed, TCP, or Wi-Fi from the hotspot the comma
+/// joined (2.4 GHz apart, which is too slow). The comma's hello says which
 /// (`Transport.link_info` in Python), since only its end always knows: a
 /// phone's cable is TCP over USB. Names and mapping are `Pinned`.
 public enum LinkMedium: String, Codable, Sendable, CaseIterable {
-  case usb3, usb2, usb1, usb, tcp
+  case usb3, usb2, usb1, usb, tcp, wifi, wifi24
 
   /// The comma's cable network, "192.168.60.", from its end's address.
   public static let cableNetwork = String(Pinned.cableAddress[...Pinned.cableAddress.lastIndex(of: ".")!])
@@ -106,6 +107,7 @@ public enum LinkMedium: String, Codable, Sendable, CaseIterable {
     switch link?["kind"] as? String {
     case "usb", "cable": self.init(usbSpeed: link?["usb_speed"] as? String)
     case "tcp": self = .tcp
+    case "wifi": self = (link?["band"] as? String) == "2.4" ? .wifi24 : .wifi
     default: return nil
     }
   }
@@ -117,13 +119,24 @@ public enum LinkMedium: String, Codable, Sendable, CaseIterable {
     case .usb1: "USB 1"
     case .usb: "USB"
     case .tcp: "TCP"
+    case .wifi: "Wi-Fi"
+    case .wifi24: "Wi-Fi 2.4 GHz"
     }
   }
+
+  /// Over the hotspot the comma joined, rather than a cable.
+  public var isWifi: Bool { self == .wifi || self == .wifi24 }
 
   /// A big model's request is 409,600 bytes on the wire: around 1 ms on USB
   /// 3, around 10 ms on USB 2, enough to cost frames and bring the comma near
   /// its soft disable.
-  public var isSlow: Bool { self == .usb2 || self == .usb1 }
+  public var isSlow: Bool { self == .usb2 || self == .usb1 || self == .wifi24 }
+
+  /// What fixes a slow link, in a few words; nil when it is fast enough.
+  public var fix: String? {
+    guard isSlow else { return nil }
+    return isWifi ? "Slow, use 5 GHz" : "Slow, use USB 3"
+  }
 
   /// What to do about a slow link, in a sentence; nil when it is fast enough.
   /// A phone's cable carries the frame as TCP over USB networking, whose USB 2
@@ -131,6 +144,9 @@ public enum LinkMedium: String, Codable, Sendable, CaseIterable {
   /// a host on the vendor interface pays about 10.
   public func advice(cable: Bool) -> String? {
     guard isSlow else { return nil }
+    if isWifi {
+      return "2.4 GHz is too slow for a big model. Put the hotspot on 5 GHz (on iPhone, turn off Maximize Compatibility)."
+    }
     let cost = cable ? "about 5 ms" : "about 10 ms"
     return "\(title) costs \(cost) a frame more than USB 3. Use a USB 3 cable and port."
   }
@@ -217,9 +233,15 @@ public struct StatsEvent: Codable, Sendable, Equatable {
   public let totalMs: Total?
   /// The model run, as the backend times it.
   public let gpuMs: Mean?
+  /// The comma's own half of the frame, in its six stages, as its CLIENT_STATE
+  /// said. Nil unless a big model is driving there and has said recently: the
+  /// host cannot measure where a frame's time went before it arrived, and a
+  /// stand-in's frames are the small model's, whose numbers would say nothing.
+  public let commaStages: CommaStages?
 
   public init(
-    frames: Int, fps: Double, servedMs: Total, stagesMs: Stages, slow: Int, windowS: Double, totalMs: Total? = nil, gpuMs: Mean? = nil
+    frames: Int, fps: Double, servedMs: Total, stagesMs: Stages, slow: Int, windowS: Double, totalMs: Total? = nil, gpuMs: Mean? = nil,
+    commaStages: CommaStages? = nil
   ) {
     self.frames = frames
     self.fps = fps
@@ -229,6 +251,52 @@ public struct StatsEvent: Codable, Sendable, Equatable {
     self.windowS = windowS
     self.totalMs = totalMs
     self.gpuMs = gpuMs
+    self.commaStages = commaStages
+  }
+}
+
+/// The comma's own six stages of a frame's half, in mean ms over the frames its
+/// ring holds (openpilot/stages.py). Each begins where the last ended:
+///
+///     capture     the sensor's read-out -> the frame's turn on the frame thread
+///     warp        -> the warped frame is ready
+///     send        -> the request is on the link
+///     replyWait   -> the reply is in hand
+///     publish     -> the outputs are handed to modeld
+///     overhead    -> the rest of the frame, to the next frame's start
+///
+/// The six sum to the frame period, so the comma's half and the host's numbers
+/// are two views of one 50 ms budget rather than two totals. What the host
+/// cannot see is everything before the frame reached it.
+public struct CommaStages: Codable, Sendable, Equatable {
+  public let frames: Int
+  public let capture: Double
+  public let warp: Double
+  public let send: Double
+  public let replyWait: Double
+  public let publish: Double
+  public let overhead: Double
+  /// The six summed: the frame period they were measured over.
+  public let frame: Double
+
+  public init(
+    frames: Int, capture: Double, warp: Double, send: Double, replyWait: Double, publish: Double, overhead: Double, frame: Double
+  ) {
+    self.frames = frames
+    self.capture = capture
+    self.warp = warp
+    self.send = send
+    self.replyWait = replyWait
+    self.publish = publish
+    self.overhead = overhead
+    self.frame = frame
+  }
+
+  /// Spelled out rather than left to the encoder's snake_case strategy, so a
+  /// reader with a plain decoder gets the same keys the comma sends.
+  enum CodingKeys: String, CodingKey {
+    case frames, capture, warp, send, publish, overhead, frame
+    case replyWait = "reply_wait"
   }
 }
 

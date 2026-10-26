@@ -36,6 +36,15 @@ android {
         targetSdk = 36
         versionCode = jetlinkVersionCode
         versionName = jetlinkVersion
+        // The release tag this build came from, for the updater to order with
+        // the newest GitHub release. The workflow names it (JETLINK_BUILD_TAG):
+        // "v0.8.7" on a tagged release, "0.8.7-1015-1" on a cn-branch build
+        // (version-MMDD-that-day's build number), whose push publishes the
+        // matching prerelease. GITHUB_REF_NAME is the tap, and "local" a dev build.
+        val buildTag = providers.environmentVariable("JETLINK_BUILD_TAG").orNull?.takeIf(String::isNotEmpty)
+            ?: providers.environmentVariable("GITHUB_REF_NAME").orNull?.takeIf(String::isNotEmpty)
+            ?: "local"
+        buildConfigField("String", "BUILD_TAG", "\"$buildTag\"")
         // The QNN runtime is arm64 only, and so is every Snapdragon with an NPU
         // worth driving on. The emulator on an Apple silicon Mac is arm64 too.
         ndk { abiFilters += "arm64-v8a" }

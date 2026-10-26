@@ -278,6 +278,15 @@
       "name": "LEAVE",
       "reserved": 99,
       "seq": 16007
+    },
+    {
+      "flags": 2,
+      "hex": "4a4c4e4b030014006f42000002000000ff030000000000000000008000000000",
+      "length": 1023,
+      "msg_type": 20,
+      "name": "CLIENT_STATE",
+      "reserved": 9223372036854775808,
+      "seq": 17007
     }
   ],
   "infer_req": [

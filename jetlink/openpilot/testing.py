@@ -243,9 +243,19 @@ def check_fallback(fallback, hooks: Iterable[str] | None = None, *, link_on=None
 
 # the machine's own params store, jetlink's records, sysfs, FunctionFS and a
 # PC's openpilot params
-FORBIDDEN = ('/data/', '/dev/shm/', '/dev/ffs', '/sys/', str(Path.home() / '.comma') + os.sep)
-# read by a library on import, never jetlink's own reach: tinygrad's CPU quota
-ALLOWED = ('/sys/fs/cgroup/cpu.max',)
+#
+# `/data/` is deliberately not here. A comma keeps openpilot itself in
+# /data/openpilot, so forbidding the prefix forbade the checkout every test
+# imports from: on a device run the guard failed tests for opening their own
+# modules' __pycache__, and every test that probes the root looked like it had
+# reached the live store. The state worth protecting is below it, and each of
+# those is named instead.
+FORBIDDEN = ('/data/params/', '/data/media/', '/data/continuous/', '/data/log/',
+             '/dev/shm/', '/dev/ffs', '/sys/', str(Path.home() / '.comma') + os.sep)
+# read by a library on import, never jetlink's own reach: tinygrad's CPU quota,
+# and the PCI topology a GPU runtime enumerates to find an accelerator. Both are
+# read-only answers about the machine, not state a test could disturb.
+ALLOWED = ('/sys/fs/cgroup/cpu.max', '/sys/bus/pci/devices')
 # the audit events Guard reads a path from, and the argument it is
 _PATH_ARG = {'open': 0, 'os.listdir': 0, 'os.scandir': 0, 'socket.connect': 1}
 

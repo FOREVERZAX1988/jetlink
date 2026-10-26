@@ -63,6 +63,10 @@ public enum Wire {
     /// The client stops using the link and says why, with what it measured;
     /// no reply. The connection may stay for a later hello.
     case leave = 19
+    /// The comma's own six stage means, unsolicited and about once a second
+    /// while the big model drives; no reply. Where the frame's time went
+    /// before the host saw it, which the host cannot measure itself.
+    case clientState = 20
   }
 
   public struct Flag: OptionSet, Sendable {
@@ -75,6 +79,11 @@ public enum Wire {
     /// On INFER_REQ: keep hidden_state in the response, for a comma logging
     /// the whole output vector.
     public static let wantHidden = Flag(rawValue: 1 << 2)
+    /// On INFER_REQ: the frame is packed, as `LosslessFrame` unpacks it.
+    public static let lossless = Flag(rawValue: 1 << 3)
+    /// On INFER_REQ: the frame is HEVC, as `HevcFrame` decodes it: the two
+    /// cameras' access units, each behind its u32 length.
+    public static let hevc = Flag(rawValue: 1 << 4)
     /// One pad byte follows the payload; see packetMultiple.
     public static let padded = Flag(rawValue: 1 << 7)
   }

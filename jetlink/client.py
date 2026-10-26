@@ -29,6 +29,7 @@ from typing import NamedTuple
 
 import numpy as np
 
+from jetlink import codecs
 from jetlink import protocol as P
 from jetlink.spec import CHUNK, DEFAULT_FRAME_SKIP, ModelSpec
 from jetlink.transport.base import LinkError, LinkTimeout, Message, Transport
@@ -86,6 +87,14 @@ class JetlinkClient:
     self.deadline = deadline
     # Flag.WANT_HIDDEN on every frame; see RAW_PRED_ENV
     self.want_hidden = bool(os.environ.get(RAW_PRED_ENV)) if want_hidden is None else want_hidden
+    # the last hello's server takes lossless frames (P.LOSSLESS_CODEC)
+    self.takes_lossless = False
+    # and HEVC frames (P.HEVC_CODEC), which are lossy: a lossless-or-raw link
+    # never takes them without the caller saying so (codecs.pick)
+    self.takes_hevc = False
+    # what this link's frames go as: codecs.RAW, LOSSLESS or HEVC, from the
+    # hello and the caller's consent (JetlinkClient.choose_codec)
+    self.codec = codecs.RAW
     # Who the server logs this connection as. The nonce is per client object,
     # so two processes taking turns on one gadget, or one process reopening
     # the link, are separable in a journal whose clock is wrong anyway.
@@ -139,9 +148,11 @@ class JetlinkClient:
     return cls(FfsTransport.borrowed(mount, udc, bounce=bounce, owner_gadget=owner_gadget), **kw)
 
   @classmethod
-  def open_tcp(cls, host: str, port: int = 5599, **kw) -> JetlinkClient:
+  def open_tcp(cls, host: str, port: int = 5599, timeout: float = 5.0, link: dict | None = None,
+               on_close=None, **kw) -> JetlinkClient:
+    """`link` and `on_close` are the transport's (TcpTransport)."""
     from jetlink.transport.tcp import TcpTransport
-    return cls(TcpTransport.connect(host, port), **kw)
+    return cls(TcpTransport.connect(host, port, timeout=timeout, link=link, on_close=on_close), **kw)
 
   @classmethod
   def open_listen(cls, address: str, timeout: float | None = None, **kw) -> JetlinkClient:
@@ -195,6 +206,15 @@ class JetlinkClient:
         return
       raise LinkError(f"server error: {e.get('error')}: {e.get('detail')}")
 
+  def _forgive(self, seq: int) -> None:
+    """Mark a seq whose reply is never read, so a server's ERROR for it is news
+    rather than a failure: an older server says unknown_message to a message it
+    does not have. Bounded, because `report_stages` forgives one a second and a
+    long drive would otherwise keep a seq for every second of it."""
+    self._no_reply_wanted.add(seq)
+    if len(self._no_reply_wanted) > 64:
+      self._no_reply_wanted = {s for s in self._no_reply_wanted if s > seq - 64}
+
   def _expect(self, msg_type: int, seq: int, timeout: float | None) -> Message:
     """Wait for one specific reply, servicing anything unsolicited on the way.
     A timeout of 0 still takes a reply that has already arrived: one read
@@ -245,8 +265,24 @@ class JetlinkClient:
     self.frames_lost = 0
     self.t.send_json(P.Msg.HELLO_REQ, seq, {'client': client})
     resp = json.loads(bytes(self._expect(P.Msg.HELLO_RESP, seq, timeout).payload))
+    self.takes_lossless = P.LOSSLESS_CODEC in (resp.get('frame_codecs') or ())
+    self.takes_hevc = P.HEVC_CODEC in (resp.get('frame_codecs') or ())
     self._take_datagrams(resp)
     return resp
+
+  def choose_codec(self, prefer_lossy: bool = False) -> str:
+    """Settle what this link's frames go as, from the last hello.
+
+    `prefer_lossy` is the user's consent to a lossy carrier (codecs.pick), and
+    it is never assumed: a link whose server offers HEVC still sends raw or
+    lossless frames unless the caller says otherwise. Returns the choice, also
+    kept on `codec`, so the frame path reads it once per frame and the panels
+    can show it.
+    """
+    self.codec = codecs.pick({'frame_codecs': [n for n, ok in
+                                               ((P.LOSSLESS_CODEC, self.takes_lossless), (P.HEVC_CODEC, self.takes_hevc)) if ok]},
+                             prefer_lossy=prefer_lossy)
+    return self.codec
 
   def _take_datagrams(self, hello: dict) -> None:
     """Frames as datagrams when the server offers them (only a phone's server,
@@ -261,6 +297,30 @@ class JetlinkClient:
     seq = self._next_seq()
     self.t.send_json(P.Msg.STATE_REQ, seq, {})
     return json.loads(bytes(self._expect(P.Msg.STATE_RESP, seq, timeout).payload))
+
+  def report_stages(self, means: dict) -> None:
+    """Tell the host where the comma's own half of the frame went: the six
+    stage means of openpilot.stages, sent while the big model drives.
+
+    The host measures what it spent and what the link cost it; it cannot see
+    the warp, the send or the wait on its side of the cable, and on a marginal
+    link that is the half in question. No reply is read, so this is cheap
+    enough to send from the frame path once a second; an older server answers
+    unknown_message, which `_forgive` keeps from reading as a failure. It is a
+    try_send, not a send: on a queued link a write queue the host has not
+    drained refuses the report instead of making the frame path wait for it,
+    and the next second tells the story instead. Never raises: a stage report
+    must not cost a frame, and a link that has really gone is found by the
+    frames rather than here."""
+    if self.dead or not means:
+      return
+    seq = self._next_seq()
+    self._forgive(seq)
+    try:
+      if not self.t.try_send(P.Msg.CLIENT_STATE, seq, (json.dumps(means).encode(),)):
+        log.debug("the stage report did not fit; the link's writes are backed up")
+    except LinkError as e:
+      log.debug("the stage report did not go (%s)", e)
 
   def ping(self, timeout: float = 1.0) -> float:
     seq = self._next_seq()
@@ -288,7 +348,7 @@ class JetlinkClient:
     if self.dead:
       return
     seq = self._next_seq()
-    self._no_reply_wanted.add(seq)
+    self._forgive(seq)
     try:
       self.t.send_json(P.Msg.LEAVE, seq, {'reason': reason, **measured}, timeout=timeout)
     except LinkError as e:
@@ -393,9 +453,10 @@ class JetlinkClient:
 
   # -- inference ------------------------------------------------------------
 
-  def infer_begin(self, warped: np.ndarray, packed: np.ndarray, frame_id: int = 0,
+  def infer_begin(self, warped: np.ndarray | None, packed: np.ndarray, frame_id: int = 0,
                   reset: bool = False, want_state: bool = False, deadline: float | None = None,
-                  skip_if_busy: bool = False) -> int | None:
+                  skip_if_busy: bool = False, lossless: tuple | None = None,
+                  hevc: tuple | None = None) -> int | None:
     """Send a frame and return immediately with its sequence number.
 
     Split from infer_end so the caller can work while the Jetson is busy;
@@ -412,6 +473,12 @@ class JetlinkClient:
     (Transport.try_send). Over a phone's cable it goes as datagrams instead,
     where a lost one is a frame the server never answers, and the next reply
     takes it out of flight (_take_reply).
+
+    `lossless` is the frame packed instead (jetlink.lossless.Packer.pack's
+    size table and planes), for a server whose hello lists the codec
+    (takes_lossless); `hevc` is the two cameras' Annex-B access units
+    (road, wide), for a server that lists it (takes_hevc). `warped` is sent
+    for neither.
     """
     if self.spec is None:
       raise LinkError("ensure_engine() first")
@@ -420,12 +487,21 @@ class JetlinkClient:
     if self.waiting_for() > self.deadline:
       self.dead = True
       raise LinkError(f"no answer to {len(self._in_flight)} frames in {self.deadline:.1f}s; link abandoned")
-    warped = _as_bytes(warped, self.spec.warped_nbytes, 'warped')
     packed = _as_bytes(packed, self.spec.packed_nbytes, 'packed')
     seq = self._next_seq()
     flags = ((P.Flag.RESET_QUEUES if reset else 0) | (P.Flag.WANT_STATE if want_state else 0)
-             | (P.Flag.WANT_HIDDEN if self.want_hidden else 0))
-    parts = (P.pack_infer_req(frame_id, flags), warped, packed)
+             | (P.Flag.WANT_HIDDEN if self.want_hidden else 0) | (P.Flag.LOSSLESS if lossless else 0)
+             | (P.Flag.HEVC if hevc else 0))
+    if hevc:
+      # each camera's access unit behind its own u32 length: the server reads
+      # road then wide, and a length past the message is caught there
+      parts = (P.pack_infer_req(frame_id, flags), packed,
+               *[b for unit in hevc for b in (len(unit).to_bytes(4, 'little'), unit)])
+    elif lossless:
+      # the packed floats first, at their fixed size, then the planes
+      parts = (P.pack_infer_req(frame_id, flags), packed, *lossless)
+    else:
+      parts = (P.pack_infer_req(frame_id, flags), _as_bytes(warped, self.spec.warped_nbytes, 'warped'), packed)
     sent = Sent(seq, frame_id, flags, time.monotonic())
     timeout = self.deadline if deadline is None else deadline
     try:
@@ -560,18 +636,20 @@ class JetlinkClient:
     self.last_output = _whole_output(self.spec, np.frombuffer(msg.payload, np.float32, n, P.INFER_RESP_SIZE), whole)
     return self.last_output
 
-  def infer(self, warped: np.ndarray, packed: np.ndarray, frame_id: int = 0,
+  def infer(self, warped: np.ndarray | None, packed: np.ndarray, frame_id: int = 0,
             reset: bool = False, deadline: float | None = None,
-            want_state: bool = False) -> np.ndarray:
+            want_state: bool = False, lossless: tuple | None = None) -> np.ndarray:
     """One frame. Returns the model output as float32, shaped (n,), laid out
     as the spec's output_slices say; hidden_state reads as zeros unless
     `want_hidden`, since it stays on the server.
 
     `warped` is (2, 6, H, W) uint8 off openpilot's warp, `packed` the float32
     packed_npy_inputs. Either may be any buffer, so a tinygrad Tensor.data()
-    memoryview reaches the wire with no numpy round trip.
+    memoryview reaches the wire with no numpy round trip. `lossless` sends
+    the frame packed instead (infer_begin).
     """
-    return self.infer_end(self.infer_begin(warped, packed, frame_id, reset, want_state, deadline), deadline)
+    return self.infer_end(self.infer_begin(warped, packed, frame_id, reset, want_state, deadline,
+                                           lossless=lossless), deadline)
 
   @property
   def lendable(self) -> bool:

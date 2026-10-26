@@ -22,7 +22,7 @@ import threading
 import time
 from pathlib import Path
 
-from jetlink.comma import gadget
+from jetlink.comma import gadget, wifi
 
 # how long one attempt holds the gadget open waiting for a host. Not a deadline
 # on the large model: JoiningModelState retries for the drive, since the Jetson
@@ -82,6 +82,90 @@ def connect(log, loan, deadline: float | None = None, name: str | None = None, w
   return JetlinkClient.open_borrowed_ffs(loan.mount, loan.udc, bounce=loan.bounce, deadline=deadline, name=name)
 
 
+# what the panels say while a Wi-Fi link waits, by why (WifiWaiting)
+NOT_ON_WIFI = 'join hotspot'
+NO_ANSWER = 'open Jetlink app'
+
+
+class WifiWaiting(ConnectionError):
+  """The Wi-Fi dial found no device to talk to: the comma is on no Wi-Fi, or
+  nothing answers at its gateway. The join asks again in a few seconds, and
+  the panel says what is missing (joining._join_loop reads `waiting`)."""
+  retry_after = wifi.DIAL_DELAY
+
+  def __init__(self, message: str, waiting: str):
+    super().__init__(message)
+    self.waiting = waiting
+
+
+def dial(log, deadline: float | None = None, name: str | None = None):
+  """Open the link over Wi-Fi.
+
+  Tries the announced servers first (mDNS, `_jetlink._tcp`), then the gateway
+  (the phone-hotspot case), then a sweep of the comma's own subnet (a shared
+  AP where the phone is an ordinary client). mDNS first because on a shared AP
+  the gateway is a router and dialing it only spends a timeout; a server that
+  announces itself is the server.
+
+  WifiWaiting when on no Wi-Fi or when nothing answers, which the join retries.
+  """
+  from jetlink.client import FRAME_TIMEOUT, JetlinkClient
+
+  def _open(host):
+    # the hello says Wi-Fi and the band, so the far end can warn about 2.4 GHz;
+    # the panels' record of the dial goes when the link closes
+    return JetlinkClient.open_tcp(host, timeout=wifi.DIAL_TIMEOUT, link=wifi.link_info(),
+                                  on_close=gadget.clear_link, name=name,
+                                  deadline=FRAME_TIMEOUT if deadline is None else deadline)
+
+  def _try(host) -> object | None:
+    """The client on `host`, or None when nothing answered there."""
+    try:
+      client = _open(host)
+    except OSError:
+      return None
+    gadget.note_link('wifi', host)
+    log.warning("jetlink: dialed %s over Wi-Fi", host)
+    return client
+
+  # The gateway first: it is one read of the routing table, and a comma that
+  # has one is on Wi-Fi. A browse costs avahi a couple of seconds, so it is
+  # only worth it once the cheap answers are in.
+  gw = wifi.gateway()
+  if gw is None and wifi.local_addr() is None:
+    # not on Wi-Fi at all: nothing to dial and nothing to hear a browse on
+    raise WifiWaiting("not on Wi-Fi", NOT_ON_WIFI)
+
+  # an announced server, without a gateway or a sweep to guess at
+  announced = wifi.browse()
+  for _name, address in announced:
+    client = _try(address)
+    if client is not None:
+      return client
+
+  if gw is not None:
+    client = _try(gw)
+    if client is not None:
+      return client
+    # The gateway is not the server (a shared-AP router). Search the subnet;
+    # the gateway already had its chance, so discovery skips it.
+    host = wifi.discover(skip={gw}, mdnss=announced)
+    if host is not None:
+      client = _try(host)
+      if client is not None:
+        return client
+    # nothing else answered: the gateway's address is the one to report
+    raise WifiWaiting(f"nothing answered at {gw}", NO_ANSWER)
+  # no gateway at all
+  host = wifi.discover(skip=set(), mdnss=announced)
+  if host is None:
+    raise WifiWaiting("not on Wi-Fi", NOT_ON_WIFI)
+  client = _try(host)
+  if client is None:
+    raise WifiWaiting(f"nothing answered at {host}", NO_ANSWER)
+  return client
+
+
 class Link:
   """modeld's end of the gadget: the lease, and the client that rides on it.
 
@@ -91,12 +175,14 @@ class Link:
   cycle. So an attempt that cannot use the link leaves it here rather than
   closing it, and only a deliberate close() lets go. On the cable the lease
   is the listener, and a client that died is replaced by the phone's next
-  dial on it.
+  dial on it. Over Wi-Fi there is no lease: the client is a dial to the
+  gateway (dial), and a dead one is replaced by the next.
   """
 
-  def __init__(self, log, name: str = 'modeld'):
+  def __init__(self, log, name: str = 'modeld', wifi: bool = False):
     self.log = log
     self.name = name
+    self.wifi = wifi
     self.client = None
     self.loan = None
     self._lock = threading.Lock()
@@ -108,6 +194,8 @@ class Link:
     reusing it fails the next attempt with EBADF."""
     if self.client is not None and self.client.dead:
       self.close()
+    if self.client is None and self.wifi:
+      self.client = dial(self.log, name=self.name)
     if self.client is None:
       from jetlink.comma import lending
       self.client = connect(self.log, name=self.name, loan=self._borrow(deadline),
@@ -202,6 +290,8 @@ def connect_patiently(link: Link):
   while True:
     try:
       client = link.open()
+    except WifiWaiting:
+      raise   # the join asks again soon and says why meanwhile; nothing here would change it
     except Exception as e:
       client, last = None, e
     if client is not None:

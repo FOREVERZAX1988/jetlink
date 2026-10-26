@@ -510,7 +510,7 @@ class TestTheSnapshot(OpenpilotTest):
   def test_its_fields_are_only_ever_added(self):
     self.assertEqual(Status._fields, ('enabled', 'mode', 'transport', 'present', 'port', 'ready', 'reason', 'progress',
                                       'model', 'default_model', 'standin', 'running', 'active', 'running_sha256',
-                                      'running_checkpoint'))
+                                      'running_checkpoint', 'stages'))
 
   def test_a_model_in_the_list_says_whether_it_is_built_or_downloaded(self):
     models = [{'name': 'Built', 'ref': 'r1', 'oid': 'b' * 64, 'size': 10},
@@ -529,12 +529,13 @@ class TestTheSnapshot(OpenpilotTest):
     with mock.patch.object(self.parts.warps, 'built', return_value=True), \
          mock.patch.object(settings, 'mode', wraps=settings.mode) as mode, \
          mock.patch.object(gadget, 'link_kind', wraps=gadget.link_kind) as kind, \
+         mock.patch.object(gadget, 'link_state', wraps=gadget.link_state) as link, \
          mock.patch.object(gadget, 'gadget_error', return_value=None) as error, \
          mock.patch.object(self.parts.spec, '_raw', wraps=self.parts.spec._raw) as spec:
       self.jl.status()
-    self.assertEqual((mode.call_count, error.call_count, spec.call_count), (1, 1, 1))
-    # the transport's fallback is the setting already read, not a second read
-    kind.assert_called_once_with('usb')
+    self.assertEqual((mode.call_count, error.call_count, spec.call_count, link.call_count), (1, 1, 1, 1))
+    # the transport's fallback is the setting and the link record already read
+    kind.assert_called_once_with('usb', (None, None))
 
   def test_a_failure_with_the_link_on_says_so(self):
     self.op.set_mode('usb')
@@ -811,7 +812,8 @@ class TestTheRuntimeRecord(OpenpilotTest):
           with mock.patch.object(self.op, 'get', side_effect=AssertionError('a param read')), \
                mock.patch.object(status, 'read', side_effect=AssertionError('the snapshot')):
             found = self.jl.runtime()
-          self.assertEqual(tuple(found or status.Runtime()), (s.running, s.active, s.running_sha256, s.running_checkpoint))
+          self.assertEqual(tuple(found or status.Runtime()),
+                           (s.running, s.active, s.running_sha256, s.running_checkpoint, s.stages))
           self.assertEqual(found is None, not s.enabled)
 
 
