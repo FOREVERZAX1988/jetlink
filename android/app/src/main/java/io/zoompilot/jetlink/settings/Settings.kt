@@ -153,13 +153,15 @@ data class SettingsValues(
     /**
      * The phone's own QNN for the NPU, instead of the one this build carries:
      * its HTP backend, its Stub and the Skel its DSP was signed for. The
-     * `npu:` lines in the log say which pair was in force. On by default on a
-     * V85 Hexagon, whose pair this build does not carry ([Chip.needsPhoneQnn]);
-     * off elsewhere, and only in the developer section: a phone whose DSP takes
-     * this build's pair has no use for it, and a phone whose DSP takes neither
-     * is a report.
+     * `npu:` lines in the log say which pair was in force. Off here, and on
+     * where it is read on a V85 Hexagon, whose pair this build does not carry
+     * ([Chip.needsPhoneQnn]): `read` and `migrate` are where that default
+     * belongs, because this constructor is also built in a JVM unit test,
+     * where `Build` is not there to ask. Only in the developer section: a
+     * phone whose DSP takes this build's pair has no use for it, and a phone
+     * whose DSP takes neither is a report.
      */
-    val phoneQnn: Boolean = Chip.needsPhoneQnn,
+    val phoneQnn: Boolean = false,
     /** The UI language; System follows the phone (the default). */
     val language: AppLocale = AppLocale.System,
     /** The colour scheme; System follows the phone (the default). */
@@ -217,7 +219,10 @@ class Settings(context: Context) {
             keepScreenOn = prefs.getBoolean(KEEP_SCREEN_ON, defaults.keepScreenOn),
             developer = prefs.getBoolean(DEVELOPER, Chip.isEmulator),
             wifiLink = prefs.getBoolean(WIFI_LINK, defaults.wifiLink),
-            phoneQnn = prefs.getBoolean(PHONE_QNN, defaults.phoneQnn),
+            // The build's QNN stops at V81, so a V85 Hexagon has no pair in it:
+            // where the setting was never stored, the phone's own set is the
+            // answer, and a stored answer stands.
+            phoneQnn = prefs.getBoolean(PHONE_QNN, Chip.needsPhoneQnn),
             language = AppLocale.of(prefs.getString(LANGUAGE, null)) ?: defaults.language,
             theme = AppTheme.of(prefs.getString(THEME, null)) ?: defaults.theme,
             mirrors = readMirrors(),
