@@ -745,6 +745,7 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
   link = links.Link(parts.log)
 
   def prepare():
+    from jetlink.openpilot.interface import FrameWarp, conformance
     from jetlink.openpilot.warp import Warp, prepare_reset
     # the gadget first, so the Jetson enumerates while the warp loads. Left to
     # the join thread the bind lands ~3 s later, behind the small model's
@@ -759,7 +760,12 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
     try:
       # the fork's own reset of its small model, else jetlink's from its shape
       ready['reset_small'] = getattr(op, 'small_reset', lambda small: None)(small) or prepare_reset(small)
-      warp = Warp(parts.warps.load(cam_w, cam_h, *geometry), face.frame_size(cam_w, cam_h))
+      # the fork's own warp, else openpilot's driving warp pickle
+      warp = getattr(op, 'model_warp', lambda *args: None)(small, cam_w, cam_h, *geometry)
+      if warp is None:
+        warp = Warp(parts.warps.load(cam_w, cam_h, *geometry), face.frame_size(cam_w, cam_h))
+      elif problems := conformance(warp, FrameWarp):
+        raise RuntimeError(f"the adapter's model_warp is not a warp: {', '.join(problems)}")
     except Exception:
       link.close()
       raise

@@ -152,6 +152,16 @@ class ModelSide(WorkerSide, Protocol):
     frame thread at a hand-back, so it zeroes the history in place and
     allocates and compiles nothing; warp.reset_queues makes one."""
 
+  def model_warp(self, small: Any, cam_w: int, cam_h: int, model_w: int, model_h: int) -> FrameWarp | None:
+    """Optional (OPTIONAL): the warp the link sends frames through, warmed,
+    or None for openpilot's driving warp pickle at warp_path (warp.Warp). For
+    a fork whose runtime cannot load that pickle, typically with its small
+    model's own warp. Asked once on modeld's main thread before the frame
+    loop, after the small model's warmup; raising keeps the drive on the
+    small model, as a pickle that does not load does. The offroad checks
+    still look for the pickle (Warps.built): only modeld has a small model
+    to ask, so warp_path must name a file either way."""
+
 
 class Openpilot(ModelSide, Protocol):
   """The whole adapter: one object implements every side."""
@@ -198,13 +208,26 @@ class JoinedModel(Protocol):
     """Let go of the link at modeld's exit."""
 
 
+class FrameWarp(Protocol):
+  """What an adapter's model_warp returns, warp.Warp's shape, run on modeld's
+  frame thread. Only one of the small and the large model runs a frame, so a
+  warp that shares the small model's JIT and buffers is never in use by both."""
+  output: Any   # the warped frame, (2, 6, model_h/2, model_w/2) uint8 as bytes: read after wait(), until the next start()
+
+  def start(self, frame: int, big_frame: int, tfm: Any, big_tfm: Any) -> None:
+    """Warp the camera buffers at these addresses under their 3x3 transforms."""
+
+  def wait(self) -> None:
+    """Return once `output` holds what start() warped."""
+
+
 # The members of each protocol an implementation may lack: jetlink reads them
 # with getattr and a fallback. conformance() passes an object without one and
 # holds one with it to its signature, and adding one keeps API. Kept out of
 # the protocols, where a name would be a member itself; a type checker still
 # asks for these, as typing has no optional member
 OPTIONAL: dict[type, tuple[str, ...]] = {
-  ModelSide: ('small_reset',),
+  ModelSide: ('small_reset', 'model_warp'),
   SmallModel: ('desire_key', 'numpy_inputs', 'lat_delay', 'PLANPLUS_CONTROL'),
   JoinedModel: ('get_action_from_model', 'constants', 'LAT_SMOOTH_SECONDS', 'LONG_SMOOTH_SECONDS', 'lat_delay'),
 }

@@ -1459,5 +1459,34 @@ class AnyForkTest(OpenpilotTest):
     for b in zeroed:
       np.testing.assert_array_equal(b, 0)
 
+  def test_the_adapters_own_warp_is_sent_and_none_loads_the_pickle(self):
+    class OwnWarp:
+      output = b''
+      def start(self, frame, big_frame, tfm, big_tfm): ...
+      def wait(self): ...
+
+    own = OwnWarp()
+    self.op.model_warp = mock.Mock(return_value=own)
+    small, _, _ = fakes.starpilot()
+    self.hand_back(small, [])
+    # the warp device's geometry: (cam_w, cam_h, model_w, model_h)
+    geometry = self.parts.warps.geometry()
+    self.op.model_warp.assert_called_once_with(small, 1928, 1208, *geometry[2:])
+    self.parts.warps.load.assert_not_called()
+    warp.Warp.assert_not_called()
+    self.assertIs(joining.JetlinkModelState.call_args.args[2], own)
+
+    self.op.model_warp = mock.Mock(return_value=None)
+    self.big.raises = None
+    self.hand_back(fakes.starpilot()[0], [])
+    self.parts.warps.load.assert_called_once_with(1928, 1208, *geometry[2:])
+    self.assertIs(joining.JetlinkModelState.call_args.args[2], warp.Warp.return_value)
+
+  def test_a_warp_that_is_not_one_keeps_the_small_model(self):
+    self.op.model_warp = mock.Mock(return_value=SimpleNamespace(start=lambda frame: None))
+    with self.assertRaisesRegex(RuntimeError, r"model_warp is not a warp: output: missing, start\(frame\)"):
+      joining.join(self.parts, 1928, 1208, fakes.starpilot()[0])
+    self.parts.warps.load.assert_not_called()
+
 if __name__ == '__main__':
   unittest.main()

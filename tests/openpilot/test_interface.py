@@ -46,6 +46,7 @@ MODELD = {
   'in_control': '() -> bool',
   'event': '(name: str, **fields: Any) -> None',
   'small_reset': '(small: Any) -> Callable[[], None] | None',
+  'model_warp': '(small: Any, cam_w: int, cam_h: int, model_w: int, model_h: int) -> FrameWarp | None',
 }
 SIDES = {'StatusSide': READERS, 'WorkerSide': WORKER, 'ModelSide': MODELD, 'Openpilot': MODELD}
 # what modeld hands attach, and what it reads off and writes onto the result
@@ -54,9 +55,11 @@ SMALL = {'desire_key': None, 'numpy_inputs': None, 'lat_delay': None, 'PLANPLUS_
 JOINED = {'handovers': None, 'big_model_state': None, 'chestnut': None, 'get_action_from_model': None,
           'constants': None, 'LAT_SMOOTH_SECONDS': None, 'LONG_SMOOTH_SECONDS': None, 'frame_drop_ratio': None,
           'lat_delay': None, 'run': RUN, 'close': '() -> None'}
-MODELS = {'SmallModel': SMALL, 'JoinedModel': JOINED}
+# what an adapter's model_warp returns
+WARP = {'output': None, 'start': '(frame: int, big_frame: int, tfm: Any, big_tfm: Any) -> None', 'wait': '() -> None'}
+MODELS = {'SmallModel': SMALL, 'JoinedModel': JOINED, 'FrameWarp': WARP}
 # the members an implementation may lack: jetlink reads them with getattr and a fallback
-OPTIONAL = {'ModelSide': {'small_reset'}, 'Openpilot': {'small_reset'},
+OPTIONAL = {'ModelSide': {'small_reset', 'model_warp'}, 'Openpilot': {'small_reset', 'model_warp'},
             'SmallModel': {'desire_key', 'numpy_inputs', 'lat_delay', 'PLANPLUS_CONTROL'},
             'JoinedModel': {'get_action_from_model', 'constants', 'LAT_SMOOTH_SECONDS', 'LONG_SMOOTH_SECONDS', 'lat_delay'}}
 
@@ -134,16 +137,21 @@ class TestConformance(unittest.TestCase):
     self.assertEqual(jo.conformance(Reader(), interface.StatusSide), [])
     self.assertIn('put: missing', jo.conformance(Reader(), interface.WorkerSide))
 
-  def test_an_adapter_without_the_optional_hook_conforms(self):
-    # zoompilot's adapter has no small_reset, and runs this against itself
+  def test_an_adapter_without_the_optional_hooks_conforms(self):
+    # zoompilot's adapter has neither, and runs this against itself
     self.assertFalse(hasattr(self.op, 'small_reset'))
+    self.assertFalse(hasattr(self.op, 'model_warp'))
     self.assertEqual(jo.conformance(self.op, jo.Openpilot), [])
 
   def test_an_optional_member_that_is_there_is_held_to_its_signature(self):
     self.op.small_reset = lambda small: None
+    self.op.model_warp = lambda small, cam_w, cam_h, model_w, model_h: None
     self.assertEqual(jo.conformance(self.op, jo.Openpilot), [])
     self.op.small_reset = lambda: None
-    self.assertEqual(jo.conformance(self.op, jo.Openpilot), ['small_reset(): expected small_reset(small)'])
+    self.op.model_warp = lambda small, cam_w, cam_h, geometry: None
+    self.assertEqual(jo.conformance(self.op, jo.Openpilot), [
+      'small_reset(): expected small_reset(small)',
+      'model_warp(small, cam_w, cam_h, geometry): expected model_warp(small, cam_w, cam_h, model_w, model_h)'])
 
   def test_a_missing_member_is_named(self):
     del self.op.catalog_selector
