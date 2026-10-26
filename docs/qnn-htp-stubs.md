@@ -356,3 +356,60 @@ no setting in the app can supply it.
 
 The first section is the answer to *can this app reach the phone's own build at
 all*; the second is why, and neither is visible in a crash log.
+
+## One APK for a V85 phone and every Hexagon before it (2026-10-27)
+
+The checkout that carried the phone's own 2.48.5 five beside the AAR's 2.42.0
+pairs carried **two builds in one APK**, and that is the mismatch this page
+warns about at the top: a V81 phone (an 8 Elite Gen 5) loaded the 2.48.5
+backend the APK held, opened the 2.42.0 V81 Stub beside it, and took no node of
+the model. Every phone up to V81 that installed that APK lost its NPU.
+
+No single build serves both, and the reason is on Qualcomm's side. The
+Software Center's public downloads, read from their zip directories on
+2026-10-27 (the version list is pinned by URL, so a version that is not there
+answers 404):
+
+| QAIRT | package | HTP architectures |
+| --- | --- | --- |
+| `2.48.40.260702` | 2.39 GB | V68 V69 V73 V75 V79 V81 -- no V85 |
+| `2.49.40.260810` | 2.42 GB | V68 V69 V73 V75 V79 V81 -- no V85 |
+| `2.51.40.260930` | 2.97 GB | V68 V69 V73 V75 V79 V81 **V85** |
+
+```
+https://apigwx-aws.qualcomm.com/qsc/public/v1/api/download/software/sdks/Qualcomm_AI_Runtime_Community/All/<version>/v<version>.zip
+```
+
+So the first build whose pairs reach V85 is `2.51.40.260930` -- and that is the
+one an SM8975's firmware refuses (`RPC NPU scheduler enforcement ... domain 3`
+in the section above). The build that Hexagon opens is the vendor's own
+`2.48.5.260901221701`, a ColorOS build no public download carries, and it holds
+a V85 pair alone.
+
+The arrangement the APK carries now, one APK for both:
+
+- **The AAR's whole set, and nothing of the build's own.**
+  `src/main/jniLibs/arm64-v8a` holds no QNN file, so the APK's backend, its
+  context preparer, its System library and every Stub and Skel up to V81 are
+  `qnn-runtime` 2.42.0's -- one build, which a Hexagon up to V81 opens.
+  `build.gradle.kts` fails the build if a set appears there again.
+- **A V85 Hexagon runs the phone's own set.** `Chip.needsPhoneQnn` is
+  `hexagon >= 85`, and `phoneQnn` defaults to it (and is migrated on for a
+  phone that stored `false` before there was a reason to want `true`), which is
+  the *Phone's Own QNN* setting already in the developer section: the vendor's
+  backend by path, the vendor's Stub, Prepare and System opened by path so the
+  names resolve to that build, and the vendor's Skel first along
+  `ADSP_LIBRARY_PATH`.
+- **A phone that keeps no set of its own** falls back to the GPU profile: a V85
+  Hexagon served by a build without its pair is the silence this page opens
+  with, so it is not attempted.
+
+Which of the two ran is in the `npu:` report: `phone_qnn` with the vendor's
+paths, or the app's own directory alone. The report no longer names a V85 Stub
+a build without one carries (`HostDiagnostics.ownQnnNames`, `qnnFiles`), which
+had made a missing file read as a missing half of a declaration.
+
+If the firmware one day opens a public build's V85 pair -- or a later QAIRT
+ships a set that opens the scheduler -- the single-build arrangement returns:
+that build's own five go back into `jniLibs`, the V68 to V81 pairs leave the
+AAR, and `needsPhoneQnn` is no longer the only answer for V85.

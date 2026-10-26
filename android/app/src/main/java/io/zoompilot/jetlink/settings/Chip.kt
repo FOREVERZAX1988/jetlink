@@ -46,6 +46,10 @@ object Chip {
         "SM8635" to ("Snapdragon 8s Gen 3" to 73),
         "SM8750" to ("Snapdragon 8 Elite" to 79),
         "SM8850" to ("Snapdragon 8 Elite Gen 5" to 81),
+        // The HTP this fork's QNN build carries a Stub and a Skel for: without
+        // the row the phone reads as its SoC number alone, and every NPU
+        // choice it could run reads as "possible" rather than "recommended".
+        "SM8975" to ("Snapdragon 8 Elite Gen 6" to 85),
     )
 
     /** "Snapdragon 8 Gen 3", or the SoC model when this list does not know it. */
@@ -53,6 +57,17 @@ object Chip {
 
     /** The Hexagon NPU's generation, when known. */
     val hexagon: Int? get() = known[model]?.second
+
+    /**
+     * Whether this NPU needs the phone's own QNN rather than the one the build
+     * carries. The APK's QNN is `qnn-runtime` 2.42.0, whose Stubs and Skels
+     * stop at V81: a V85 Hexagon has no pair in the build at all, and the set
+     * its own firmware signed, under /vendor, /system or /odm, is the one that
+     * opens its DSP. A build that carries a V85 pair again would answer this
+     * for the phone, so the answer is per Hexagon and not per build
+     * [docs/qnn-htp-stubs.md].
+     */
+    val needsPhoneQnn: Boolean get() = (hexagon ?: 0) >= 85
 
     /** How well this phone should do, before a benchmark says for sure. */
     enum class Expectation { Recommended, Possible, TooOld, Unmeasured }

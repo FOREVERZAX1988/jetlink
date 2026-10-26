@@ -170,16 +170,23 @@ carries `libQnnHtpV*Stub.so` and its Skel for V68 to V81, where the Snapdragon
 8 Elite Gen 5's V81 is the last: an APK assembled from Maven alone serves no
 newer Hexagon. The first Snapdragon tried (an SM8975, 2026-10-14) is a
 Snapdragon 8 Elite Gen 6, `htp_version: 85` in Qualcomm AI Hub's chipset table,
-past it, so this fork carries its own QNN set: `app/src/main/jniLibs/arm64-v8a/`
-holds the five files of one build -- the backend, its context preparer, its
-System library, and the V85 Stub and its Skel -- as the phone of 2026-10-16
-holds them under `/odm`, where the same five of a newer build are refused by
-the firmware's FastRPC (`v2.48.5` against `v2.51.40`; docs/qnn-htp-stubs.md has
-both sets and their hashes). Qualcomm's license allows these libraries inside an
-app only, so they are this fork's and not upstream's, and a checkout without
-them still serves every Hexagon up to V81 through the AAR's own libraries.
-[QNN HTP stubs](../docs/qnn-htp-stubs.md) records the mapping, what each source
-carries, both sets' hashes, and the keywords to search with.
+past it. The public QAIRT SDKs do carry a V85 pair from `2.51.40.260930` on
+(`2.48.40` and `2.49.40` stop at V81), but that is the build an SM8975's
+firmware refuses, while the build it opens is the vendor's own
+`v2.48.5.260901221701` under `/odm`, which carries a V85 pair alone.
+
+So the APK carries one build for the Hexagons up to V81 and no set of its own:
+`app/src/main/jniLibs/arm64-v8a/` holds no QNN file, and the backend, its
+context preparer, its System library and every Stub and Skel up to V81 are the
+AAR's `qnn-runtime` 2.42.0. A V85 Hexagon runs the phone's own set instead --
+`Chip.needsPhoneQnn` turns the developer setting *Phone's Own QNN* on by
+default there -- and a V85 phone that keeps none of its own falls back to the
+GPU profile. One APK, every Hexagon: no two builds in one process, which is the
+mismatch QNN swallows in silence. Qualcomm's license allows these libraries
+inside an app only, so a set this fork carries stays its own and not
+upstream's. [QNN HTP stubs](../docs/qnn-htp-stubs.md) records the mapping, what
+each source carries, the hashes of both sets, the SDK versions and their
+architectures, and the keywords to search with.
 
 The NPU path follows LiteRT 2.2.0's source. LiteRT's Google Tensor plugin
 (`libLiteRtCompilerPlugin_google_tensor.so`, which the APK carries) hands the

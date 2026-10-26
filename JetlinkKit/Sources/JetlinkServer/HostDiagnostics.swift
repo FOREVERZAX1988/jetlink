@@ -55,6 +55,19 @@ package enum HostDiagnostics {
   /// whether a name reaches `/odm/lib64` or this app's own directory.
   package static let qnnNames = ["libQnnHtp.so", "libQnnHtpV85Stub.so", "libQnnHtpPrepare.so", "libQnnSystem.so"]
 
+  /// The QNN names this build's own directory answers, the backend first: the
+  /// Stub or Stubs the APK actually carries, read off the directory rather
+  /// than assumed. `qnn-runtime` 2.42.0's pairs stop at V81, so a build with
+  /// nothing of its own has V68 to V81 and no V85 -- and a run that probes for
+  /// a name the APK does not carry would report a missing file as a missing
+  /// half of a declaration [docs/qnn-htp-stubs.md].
+  package static var ownQnnNames: [String] {
+    guard let directory = nativeDirectory, !directory.isEmpty else { return ["libQnnHtp.so"] }
+    let held = (try? FileManager.default.contentsOfDirectory(atPath: directory)) ?? []
+    let stubs = held.filter { $0.hasPrefix("libQnnHtpV") && $0.hasSuffix("Stub.so") }.sorted()
+    return ["libQnnHtp.so"] + stubs
+  }
+
   /// What each of those names answered this run, in order, set by the Android
   /// app before the session is made (`Host.phoneByName`).
   nonisolated(unsafe) package static var nameResolution: [String] = []
@@ -126,7 +139,18 @@ package enum HostDiagnostics {
     private static let deviceCommand = "ls -l /dev/adsprpc-smd /dev/cdsprpc-smd /dev/fastrpc-adsp /dev/fastrpc-cdsp /dev/fastrpc-cdsp-secure"
     /// The libraries a QNN build has to agree on with itself: the backend, the
     /// system library and the pair for this phone's Hexagon.
-    private static let qnnFiles = ["libQnnHtp.so", "libQnnSystem.so", "libQnnHtpV85Stub.so", "libQnnHtpV85Skel.so"]
+    /// The files of the set this build carries that are worth hashing: the
+    /// backend and the System library, and whichever Stub and Skel the APK
+    /// holds -- the AAR's pairs up to V81, or a set a checkout put in its own
+    /// `jniLibs`. Read off the directory, so a build without a V85 pair does
+    /// not report two files it never carried.
+    private static var qnnFiles: [String] {
+      let base = ["libQnnHtp.so", "libQnnSystem.so"]
+      guard let directory = nativeDirectory, !directory.isEmpty else { return base }
+      let held = (try? FileManager.default.contentsOfDirectory(atPath: directory)) ?? []
+      let pairs = held.filter { $0.hasPrefix("libQnnHtpV") && ($0.hasSuffix("Stub.so") || $0.hasSuffix("Skel.so")) }
+      return base + pairs.sorted()
+    }
     private static let qnnWords = ["qnn", "onnxruntime", "cdsprpc", "adsprpc", "htp", "skel", "snpe", "hexagon"]
     private static let dspWords = ["skel", "qnn", "dsp", "rfsa", "fastrpc"]
     private static let logWords = [
