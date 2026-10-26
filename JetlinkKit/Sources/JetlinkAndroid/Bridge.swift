@@ -278,7 +278,11 @@
       // The two that decide a pair are opened whatever the setting says, and
       // the other two only when the phone's own stack is asked for: Prepare is
       // 88 MB, and a run that wants the app's own QNN has no reason to map it.
-      let names = ((config["phone_qnn"] as? Bool) ?? false) ? HostDiagnostics.qnnNames : ["libQnnHtp.so", "libQnnHtpV85Stub.so"]
+      // The app's own names are the Stubs the APK carries, read off its
+      // directory: this build's set is `qnn-runtime` 2.42.0's, which stops at
+      // V81, so naming a V85 Stub here would report a file that was never in
+      // the APK as a name nothing answers.
+      let names = ((config["phone_qnn"] as? Bool) ?? false) ? HostDiagnostics.qnnNames : HostDiagnostics.ownQnnNames
       return names.map { name in
         guard dlopen(name, RTLD_NOW | RTLD_GLOBAL) != nil else {
           return "\(name): nothing answers this name -- neither the manifest half nor the phone's table half"

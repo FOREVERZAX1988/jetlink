@@ -154,11 +154,13 @@ data class SettingsValues(
     /**
      * The phone's own QNN for the NPU, instead of the one this build carries:
      * its HTP backend, its Stub and the Skel its DSP was signed for. The
-     * `npu:` lines in the log say which pair was in force. Off by default, and
-     * only in the developer section: a phone whose DSP takes this build's pair
-     * has no use for it, and a phone whose DSP takes neither is a report.
+     * `npu:` lines in the log say which pair was in force. On by default on a
+     * V85 Hexagon, whose pair this build does not carry ([Chip.needsPhoneQnn]);
+     * off elsewhere, and only in the developer section: a phone whose DSP takes
+     * this build's pair has no use for it, and a phone whose DSP takes neither
+     * is a report.
      */
-    val phoneQnn: Boolean = false,
+    val phoneQnn: Boolean = Chip.needsPhoneQnn,
     /** The UI language; System follows the phone (the default). */
     val language: AppLocale = AppLocale.System,
     /** The colour scheme; System follows the phone (the default). */
@@ -239,14 +241,18 @@ class Settings(context: Context) {
         private const val MIRRORS = "mirrors"
         private const val AUTO_UPDATE = "autoUpdate"
 
-        /** Settings from before Automatic are version 1. */
-        private const val CURRENT = 2
+        /** Settings from before Automatic are version 1; 3 is a V85 phone's own QNN. */
+        private const val CURRENT = 3
 
         /** Brings settings stored by an older app up to [CURRENT], once. */
         private fun migrate(prefs: SharedPreferences) {
             if (prefs.getInt(VERSION, 1) >= CURRENT) return
             val edit = prefs.edit().putInt(VERSION, CURRENT)
             migratedProcessor(prefs.getString(PROCESSOR, null))?.let { edit.putString(PROCESSOR, it) }
+            // A phone that stored `false` before there was a reason to want
+            // `true`: the build's own QNN stops at V81, so a V85 Hexagon had
+            // no pair at all and only the vendor's set serves it.
+            if (Chip.needsPhoneQnn) edit.putBoolean(PHONE_QNN, true)
             edit.apply()
         }
 
