@@ -62,10 +62,16 @@ package enum HostDiagnostics {
   /// a name the APK does not carry would report a missing file as a missing
   /// half of a declaration [docs/qnn-htp-stubs.md].
   package static var ownQnnNames: [String] {
-    guard let directory = nativeDirectory, !directory.isEmpty else { return ["libQnnHtp.so"] }
-    let held = (try? FileManager.default.contentsOfDirectory(atPath: directory)) ?? []
-    let stubs = held.filter { $0.hasPrefix("libQnnHtpV") && $0.hasSuffix("Stub.so") }.sorted()
-    return ["libQnnHtp.so"] + stubs
+    // The directory is the Android app's (`start`), so outside it there is
+    // nothing to read: the backend is the only name there is to answer.
+    #if os(Android)
+      guard let directory = nativeDirectory, !directory.isEmpty else { return ["libQnnHtp.so"] }
+      let held = (try? FileManager.default.contentsOfDirectory(atPath: directory)) ?? []
+      let stubs = held.filter { $0.hasPrefix("libQnnHtpV") && $0.hasSuffix("Stub.so") }.sorted()
+      return ["libQnnHtp.so"] + stubs
+    #else
+      return ["libQnnHtp.so"]
+    #endif
   }
 
   /// What each of those names answered this run, in order, set by the Android
