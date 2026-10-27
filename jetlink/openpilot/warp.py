@@ -197,8 +197,9 @@ def make_coherent(out) -> None:
   if the kernel keeps either flag back (the allocation's record holds its
   answer): write-back memory that is not coherent reads stale frames.
 
-  For an adapter's model_warp too. A JIT links its buffers' addresses on its
-  first call, so move one before that, or have the JIT link again after."""
+  For an adapter's model_warp too. Move a buffer before the first call of
+  the JIT that writes it: that call links its address into the JIT, which
+  would keep writing the memory this frees."""
   from tinygrad.device import Device
   dev = Device[out.device]
   mem = dev._gpu_alloc(out.nbytes, flags=COHERENT_WRITEBACK)

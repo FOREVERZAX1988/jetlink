@@ -212,8 +212,8 @@ class FrameWarp(Protocol):
   """What an adapter's model_warp returns, warp.Warp's shape, run on modeld's
   frame thread. Only one of the small and the large model runs a frame, so a
   warp that shares the small model's JIT and buffers is never in use by both.
-  On a comma, warp.make_coherent lets the CPU read a GPU output cached: 0.22
-  ms for the frame where tinygrad's own mapping takes 2.9."""
+  On a comma, a warp that reads its GPU output back moves it first with
+  warp.make_coherent, before the warp's JIT first runs."""
   output: Any   # the warped frame, (2, 6, model_h/2, model_w/2) uint8 as bytes: read after wait(), until the next start()
 
   def start(self, frame: int, big_frame: int, tfm: Any, big_tfm: Any) -> None:
