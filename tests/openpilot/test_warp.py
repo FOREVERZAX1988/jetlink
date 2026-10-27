@@ -286,6 +286,12 @@ class TestWarp(unittest.TestCase):
         self.make()
       self.assertIs(self.devices['QCOM'].freed[-1], self.devices['QCOM'].allocs[-1])
 
+  def test_an_adapters_buffer_is_moved_the_same_way(self):
+    # what a fork's model_warp calls on its own warp's output
+    out = FakeOutput('QCOM')
+    warp.make_coherent(out)
+    self.assertIs(out._storage, self.devices['QCOM'].allocs[0])
+
   def test_a_cpu_warp_keeps_its_output(self):
     # the fork's frame-path test runs the real warp on tinygrad's CPU device
     self.make('CPU')
