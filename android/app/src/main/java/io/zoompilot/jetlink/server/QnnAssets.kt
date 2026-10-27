@@ -1,6 +1,7 @@
 package io.zoompilot.jetlink.server
 
 import android.content.Context
+import android.util.Log
 import java.io.File
 
 /**
@@ -12,18 +13,27 @@ import java.io.File
  * -- two `libQnnHtp.so` of two builds under one name is the mix QNN swallows in
  * silence -- and the phone's own copy in `/odm/lib64` is a directory this app's
  * linker namespace does not answer for. So they travel as assets and are
- * unpacked to the app's own storage, which the namespace always reaches, and
- * the session is handed that directory as `qnn_library_dir`
- * [docs/qnn-htp-stubs.md].
+ * unpacked to the app's own storage, and the session is handed that directory
+ * as `qnn_library_dir` [docs/qnn-htp-stubs.md].
  *
  * The Hexagon generation alone picks the set: every Hexagon up to V81 runs the
  * AAR's 2.42.0 from `jniLibs`, and only a V85 phone unpacks these.
+ *
+ * **They are made read-only once copied, and that is not tidiness.** From
+ * Android 10 the linker refuses to open a library out of a directory the app
+ * can still write to, and a file this app wrote is 0600 until told otherwise:
+ * unpacked as-is, `dlopen` answers "is not accessible for the namespace" and
+ * the session falls back to the AAR's build, which is the very silence this
+ * whole arrangement exists to end. The stamp is written after that, so a
+ * directory from a build that did not chmod is unpacked again rather than
+ * trusted.
  */
 object QnnAssets {
     /** The build `/odm/lib64` carries on an SM8975, kept verbatim. */
     const val BUILD = "v2.48.5.260901221701"
 
     private const val DIRECTORY = "qnn-v85"
+    private const val TAG = "jetlink"
 
     /** Every name the set needs; a directory missing one is unpacked again. */
     private val FILES =
@@ -34,6 +44,8 @@ object QnnAssets {
             "libQnnHtpV85Stub.so",
             "libQnnHtpV85Skel.so",
         )
+
+    private const val STAMP = ".unpacked"
 
     /** Where the unpacked set lives: app storage, never backed up. */
     fun directory(context: Context): File = File(context.filesDir, "jetlink/qnn/$BUILD")
@@ -49,31 +61,41 @@ object QnnAssets {
         val directory = directory(context)
         if (complete(directory)) return directory.absolutePath
         val names = runCatching { context.assets.list(DIRECTORY)?.toList() }.getOrNull().orEmpty()
-        if (FILES.any { it !in names }) return null
+        if (FILES.any { it !in names }) {
+            Log.e(TAG, "the APK carries no $DIRECTORY assets: a V85 Hexagon has no set of its own to open")
+            return null
+        }
         directory.deleteRecursively()
         if (!directory.mkdirs() && !directory.isDirectory) return null
         for (name in FILES) {
             val target = File(directory, name)
             val copied =
                 runCatching {
-                        context.assets.open("$DIRECTORY/$name").use { input ->
-                            target.outputStream().use { output -> input.copyTo(output) }
-                        }
+                    context.assets.open("$DIRECTORY/$name").use { input ->
+                        target.outputStream().use { output -> input.copyTo(output) }
                     }
+                    // The linker's rule, not the filesystem's: a library out of
+                    // a writable file is a library it will not open.
+                    target.setReadable(true, false)
+                    target.setExecutable(true, false)
+                    target.setWritable(false, false)
+                }
                     .isSuccess
             if (!copied) {
+                Log.e(TAG, "could not unpack $name for the V85 Hexagon's QNN set")
                 directory.deleteRecursively()
                 return null
             }
         }
-        // The stamp last: a directory is complete only once every file is.
+        // The stamp last: a directory is complete only once every file is, and
+        // every file was made one the linker will open.
         File(directory, STAMP).writeText(BUILD)
+        Log.i(TAG, "unpacked the V85 Hexagon's QNN $BUILD to $directory")
         return directory.absolutePath
     }
 
+    /** Complete means every file is there, non-empty, and none still writable. */
     private fun complete(directory: File): Boolean =
         File(directory, STAMP).let { it.isFile && it.readText().trim() == BUILD } &&
-            FILES.all { File(directory, it).length() > 0 }
-
-    private const val STAMP = ".unpacked"
+            FILES.all { File(directory, it).let { file -> file.length() > 0 && !file.canWrite() } }
 }
