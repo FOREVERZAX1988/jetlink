@@ -252,11 +252,44 @@
     /// is what the report prints (`HostDiagnostics.nameResolution`).
     static func qnnBackend(_ config: [String: Any]) -> String? {
       guard (config["phone_qnn"] as? Bool) ?? false else { return nil }
+      // The vendor's own five, unpacked from this build's assets into the app's
+      // own storage. That directory the linker namespace always reaches, which
+      // `/odm/lib64` -- where an SM8975 keeps the same build -- is not: the
+      // five there are a file this process may stat and no library this
+      // process may open, which is why the setting found no backend and the
+      // session fell back to the AAR's 2.42.0 beside a V85 Stub nothing had.
+      if let directory = config["qnn_library_dir"] as? String, !directory.isEmpty {
+        let backend = "\(directory)/libQnnHtp.so"
+        if FileManager.default.fileExists(atPath: backend) {
+          // The Skel is unpacked beside the backend, not in a system
+          // `rfsa/adsp`: the DSP is told before the backend that asks is open.
+          adspLibraryPath(prepending: directory)
+          if dlopen(backend, RTLD_NOW | RTLD_GLOBAL) != nil { return backend }
+        }
+      }
       let paths = ["/vendor/lib64/libQnnHtp.so", "/system/lib64/libQnnHtp.so", "/odm/lib64/libQnnHtp.so"]
       if let opened = paths.first(where: { FileManager.default.fileExists(atPath: $0) && dlopen($0, RTLD_NOW | RTLD_GLOBAL) != nil }) {
         return opened
       }
       return phoneBackendByName()
+    }
+
+    /// `ADSP_LIBRARY_PATH` with one directory first, and the system's own after
+    /// it: QNN looks for a Skel down this list, so the pair the session was
+    /// handed is found before any Skel of another build, while a phone whose
+    /// vendor keeps Skels of its own still finds those.
+    static func adspLibraryPath(prepending directory: String) {
+      let inherited = getenv("ADSP_LIBRARY_PATH").map { String(cString: $0) } ?? ""
+      var paths =
+        inherited.split(whereSeparator: { $0 == ";" || $0 == ":" }).map(String.init)
+        .filter { !$0.isEmpty && $0 != directory }
+      paths.insert(directory, at: 0)
+      for system in ["/odm/lib/rfsa/adsp", "/vendor/lib/rfsa/adsp", "/system/lib/rfsa/adsp"] where !paths.contains(system) {
+        paths.append(system)
+      }
+      // QNN and the ADSP read this list with semicolons, as Qualcomm's own
+      // examples set it; the DSP's search order is the order here.
+      setenv("ADSP_LIBRARY_PATH", paths.joined(separator: ";"), 1)
     }
 
     /// The phone's own backend by its bare name, when no path would open: nil
