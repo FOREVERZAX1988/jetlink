@@ -35,14 +35,14 @@ object QnnAssets {
     private const val DIRECTORY = "qnn-v85"
     private const val TAG = "jetlink"
 
-    /** Every name the set needs; a directory missing one is unpacked again. */
+    /** Every name the set needs and the size it must land at, from `/odm/lib64`. */
     private val FILES =
-        listOf(
-            "libQnnHtp.so",
-            "libQnnHtpPrepare.so",
-            "libQnnSystem.so",
-            "libQnnHtpV85Stub.so",
-            "libQnnHtpV85Skel.so",
+        linkedMapOf(
+            "libQnnHtp.so" to 3778744L,
+            "libQnnHtpPrepare.so" to 88128192L,
+            "libQnnSystem.so" to 4052904L,
+            "libQnnHtpV85Stub.so" to 779448L,
+            "libQnnHtpV85Skel.so" to 12582764L,
         )
 
     private const val STAMP = ".unpacked"
@@ -61,13 +61,13 @@ object QnnAssets {
         val directory = directory(context)
         if (complete(directory)) return directory.absolutePath
         val names = runCatching { context.assets.list(DIRECTORY)?.toList() }.getOrNull().orEmpty()
-        if (FILES.any { it !in names }) {
+        if (FILES.keys.any { it !in names }) {
             Log.e(TAG, "the APK carries no $DIRECTORY assets: a V85 Hexagon has no set of its own to open")
             return null
         }
         directory.deleteRecursively()
         if (!directory.mkdirs() && !directory.isDirectory) return null
-        for (name in FILES) {
+        for ((name, size) in FILES) {
             val target = File(directory, name)
             val copied =
                 runCatching {
@@ -81,8 +81,8 @@ object QnnAssets {
                     target.setWritable(false, false)
                 }
                     .isSuccess
-            if (!copied) {
-                Log.e(TAG, "could not unpack $name for the V85 Hexagon's QNN set")
+            if (!copied || target.length() != size) {
+                Log.e(TAG, "could not unpack $name for the V85 Hexagon's QNN set (${target.length()} of $size bytes)")
                 directory.deleteRecursively()
                 return null
             }
@@ -94,8 +94,15 @@ object QnnAssets {
         return directory.absolutePath
     }
 
-    /** Complete means every file is there, non-empty, and none still writable. */
+    /**
+     * Complete means the stamp names this build, every file is the size the
+     * vendor's is, and none is still writable. A copy killed halfway leaves
+     * one the right length by chance and none that the loader would open, and
+     * an 88 MB preparer that is short by a page fails at the graph, not here.
+     */
     private fun complete(directory: File): Boolean =
         File(directory, STAMP).let { it.isFile && it.readText().trim() == BUILD } &&
-            FILES.all { File(directory, it).let { file -> file.length() > 0 && !file.canWrite() } }
+            FILES.all { (name, size) ->
+                File(directory, name).let { file -> file.length() == size && !file.canWrite() }
+            }
 }
