@@ -393,23 +393,71 @@ The arrangement the APK carries now, one APK for both:
   context preparer, its System library and every Stub and Skel up to V81 are
   `qnn-runtime` 2.42.0's -- one build, which a Hexagon up to V81 opens.
   `build.gradle.kts` fails the build if a set appears there again.
-- **A V85 Hexagon runs the phone's own set.** `Chip.needsPhoneQnn` is
-  `hexagon >= 85`, and `phoneQnn` defaults to it (and is migrated on for a
-  phone that stored `false` before there was a reason to want `true`), which is
-  the *Phone's Own QNN* setting already in the developer section: the vendor's
-  backend by path, the vendor's Stub, Prepare and System opened by path so the
-  names resolve to that build, and the vendor's Skel first along
-  `ADSP_LIBRARY_PATH`.
+- **A V85 Hexagon runs the vendor's set, carried as assets.**
+  `Chip.needsPhoneQnn` is `hexagon >= 85`, and `phoneQnn` defaults to it (and is
+  migrated on for a phone that stored `false` before there was a reason to want
+  `true`). The five travel in `src/main/assets/qnn-v85/` and
+  `QnnAssets.install` unpacks them to `filesDir/jetlink/qnn/<build>/` on the
+  first run that asks, handing the directory down as `qnn_library_dir`.
 - **A phone that keeps no set of its own** falls back to the GPU profile: a V85
   Hexagon served by a build without its pair is the silence this page opens
   with, so it is not attempted.
 
-Which of the two ran is in the `npu:` report: `phone_qnn` with the vendor's
-paths, or the app's own directory alone. The report no longer names a V85 Stub
-a build without one carries (`HostDiagnostics.ownQnnNames`, `qnnFiles`), which
-had made a missing file read as a missing half of a declaration.
+### Why assets, and not `jniLibs`
+
+Two `libQnnHtp.so` of two builds cannot share `lib/arm64-v8a`: the AAR's copy
+is excluded by name when `jniLibs` holds one, so the directory can carry either
+build's backend and not both. A subdirectory does not help -- `NativeLibraryHelper`
+skips any zip entry under `lib/<abi>/` whose name still contains a `/`, so a
+nested set is never extracted, and `android:extractNativeLibs` has nothing to
+do with assets either way.
+
+Which leaves the first arrangement, tried and measured on an SM8975 on
+2026-10-27: let the phone's own `/odm/lib64` supply the set, since it holds
+exactly this build. **It does not work, and the report says so plainly:**
+
+```
+npu: libQnnHtpV85Stub.so: nothing answers this name
+       -- neither the manifest half nor the phone's table half
+```
+
+The directory is readable -- the same report lists
+`/odm/lib/rfsa/adsp/libQnnHtpV85Skel.so 12582764` -- but a library is not a
+file: `dlopen` reaches a path only through the app's linker namespace, and
+`/odm/lib64` is not one of its permitted paths, declaration or no declaration.
+No `opened by path before the session` line appeared, which is `qnnBackend`
+having returned nil: the session fell back to the AAR's backend and a V85 Stub
+that nothing supplied.
+
+### Two rules the unpacked set has to obey
+
+**It is read-only before it is opened.** Android 10 maps a library `PROT_EXEC`
+only through a read-only descriptor ("a library cannot be mapped `PROT_EXEC`
+through a writable file descriptor", *Behavior changes: apps targeting API 29*).
+A file this app wrote is `0600` until told otherwise, so a set unpacked and left
+writable fails at `dlopen` and leaves no trace in the `npu:` lines. `QnnAssets`
+drops write permission as each file lands, and `complete` refuses a directory
+whose files are still writable, so the next run unpacks instead of trusting it.
+
+**Its names are opened before the backend.** `backend_path` names one file, but
+that file opens its Stub -- and QNN its Prepare and System libraries -- *by
+name*, and a name resolves to whatever the app already carries under it: the
+AAR's 2.42.0, in the app's own directory, which is the first search path. So
+`openLibraries(in:)` opens the Stub, the preparer and the System library of
+that directory with `RTLD_GLOBAL` **first**, and only then `libQnnHtp.so`; a
+later open by name finds the vendor's build. The same call prepends the
+directory to `ADSP_LIBRARY_PATH` (semicolon-separated, as Qualcomm's own
+examples set it) so the DSP finds the Skel unpacked beside them, and keeps the
+system's `rfsa/adsp` directories after it.
+
+Which of the two ran is in the `npu:` report: `the QNN backend this run loads`
+names the unpacked path on a V85 phone and the app's own directory alone
+everywhere else, `opened by path before the session` lists the set, and
+`the phone's own set did not open: <dlerror>` is the one line that separates a
+set the loader refused from a file that was never there.
 
 If the firmware one day opens a public build's V85 pair -- or a later QAIRT
-ships a set that opens the scheduler -- the single-build arrangement returns:
-that build's own five go back into `jniLibs`, the V68 to V81 pairs leave the
-AAR, and `needsPhoneQnn` is no longer the only answer for V85.
+ships a set that opens the scheduler -- one build serves both Hexagons again:
+that build's five go back into `jniLibs`, the V68 to V81 pairs leave the AAR,
+the assets directory and `QnnAssets` go away, and `needsPhoneQnn` is no longer
+the only answer for V85.
