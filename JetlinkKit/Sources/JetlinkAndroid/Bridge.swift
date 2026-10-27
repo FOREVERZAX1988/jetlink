@@ -264,14 +264,33 @@
           // The Skel is unpacked beside the backend, not in a system
           // `rfsa/adsp`: the DSP is told before the backend that asks is open.
           adspLibraryPath(prepending: directory)
+          // And the names it opens once it is -- its Stub, QNN's Prepare and
+          // its System library -- have to answer with this build rather than
+          // with the app's 2.42.0 of the same names. Opened here, before the
+          // backend, they are what a later open by name resolves to.
+          HostDiagnostics.phoneLibraries = openLibraries(in: directory)
           if dlopen(backend, RTLD_NOW | RTLD_GLOBAL) != nil { return backend }
+          // Android maps a library `PROT_EXEC` only through a read-only
+          // descriptor, so a set unpacked and left writable fails right here
+          // and nowhere in the `npu:` lines.
+          HostDiagnostics.phoneFailure = "\(backend) would not open: \(dlerrorText())"
+        } else {
+          HostDiagnostics.phoneFailure = "\(backend) is not there: the unpacked set is missing"
         }
       }
       let paths = ["/vendor/lib64/libQnnHtp.so", "/system/lib64/libQnnHtp.so", "/odm/lib64/libQnnHtp.so"]
       if let opened = paths.first(where: { FileManager.default.fileExists(atPath: $0) && dlopen($0, RTLD_NOW | RTLD_GLOBAL) != nil }) {
+        HostDiagnostics.phoneLibraries = openLibraries(in: (opened as NSString).deletingLastPathComponent)
         return opened
       }
       return phoneBackendByName()
+    }
+
+    /// What `dlerror` says, cleared first: it answers the last failure, and a
+    /// report that prints an older one reads as evidence of a newer fault.
+    static func dlerrorText() -> String {
+      guard let message = dlerror() else { return "the loader gave no reason" }
+      return String(cString: message)
     }
 
     /// `ADSP_LIBRARY_PATH` with one directory first, and the system's own after
@@ -335,19 +354,27 @@
     /// any model. Opening the phone's own copies here makes every name find the
     /// phone's own, so the pair is one vendor build.
     static func phoneLibraries(_ config: [String: Any]) -> [String] {
+      // `qnnBackend` opens these before it opens the backend, because the
+      // backend opens them by name: a second pass here would only re-open what
+      // is already mapped.
+      guard HostDiagnostics.phoneLibraries.isEmpty else { return HostDiagnostics.phoneLibraries }
       guard let backend = qnnBackend(config) else { return [] }
-      let held = (backend as NSString).deletingLastPathComponent
-      let names = (try? FileManager.default.contentsOfDirectory(atPath: held)) ?? []
+      return openLibraries(in: (backend as NSString).deletingLastPathComponent)
+    }
+
+    /// Every QNN file in one directory that a backend opens by name, opened
+    /// here by path with `RTLD_GLOBAL`: the Stubs, QNN's context preparer and
+    /// its System library. A name opened later finds these, whatever the app
+    /// carries under the same names.
+    static func openLibraries(in directory: String) -> [String] {
+      let names = (try? FileManager.default.contentsOfDirectory(atPath: directory)) ?? []
       let wanted =
         names.filter { $0.hasPrefix("libQnnHtp") && ($0.hasSuffix("Stub.so") || $0.hasSuffix("Prepare.so")) }
         + names.filter { $0 == "libQnnSystem.so" }
-      var opened: [String] = []
-      for name in wanted {
-        let path = "\(held)/\(name)"
-        // RTLD_GLOBAL: a library opened later, by name, is to find this one.
-        opened.append(dlopen(path, RTLD_NOW | RTLD_GLOBAL) == nil ? "\(path) (would not open)" : path)
+      return wanted.sorted().map { name in
+        let path = "\(directory)/\(name)"
+        return dlopen(path, RTLD_NOW | RTLD_GLOBAL) == nil ? "\(path) (would not open: \(dlerrorText()))" : path
       }
-      return opened
     }
 
     /// The backend and device the config names. A config without a backend
@@ -372,6 +399,10 @@
         guard let profile = OrtProfile(rawValue: device ?? OrtProfile.htp.rawValue), OrtProfile.available.contains(profile) else {
           throw HostFailure("onnxruntime has no device \(device ?? "")")
         }
+        // A server restarted with another setting must not read the last run's
+        // pair as this run's: both are what `qnnBackend` fills in.
+        HostDiagnostics.phoneLibraries = []
+        HostDiagnostics.phoneFailure = nil
         let phone = qnnBackend(config)
         // What the phone's own pair is -- the setting, and every library of it
         // that was opened by path -- goes into the `npu:` report before the

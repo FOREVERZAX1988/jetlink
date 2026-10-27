@@ -47,6 +47,14 @@ package enum HostDiagnostics {
   /// app's Stub of the same name (`Host.phoneLibraries`).
   nonisolated(unsafe) package static var phoneLibraries: [String] = []
 
+  /// Why the phone's own set did not open, when a file was there and the
+  /// loader refused it: Android 10 maps a library `PROT_EXEC` only through a
+  /// read-only descriptor, so a set unpacked for this run and left writable
+  /// fails with `dlerror` and nothing else. The report prints this beside the
+  /// pair, because it is the one reason the `npu:` lines cannot tell from a
+  /// missing file.
+  nonisolated(unsafe) package static var phoneFailure: String?
+
   /// The QNN library names the Android manifest declares
   /// (`uses-native-library`): the names an app's linker namespace is allowed to
   /// look for outside the app's own directory. The report prints what each one
@@ -358,6 +366,9 @@ package enum HostDiagnostics {
       lines.append("the Phone's Own QNN setting this run: \(phoneOwnQnn ? "on" : "off")")
       if !phoneLibraries.isEmpty {
         lines.append("opened by path before the session, so every name finds these: \(phoneLibraries.joined(separator: " "))")
+      }
+      if let failure = phoneFailure {
+        lines.append("the phone's own set did not open: \(failure)")
       }
       let held = search.first { $0.files.contains { $0.lowercased().contains("skel.so") } }
       if let held, let file = held.files.first(where: { $0.lowercased().contains("skel.so") }) {
