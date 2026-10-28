@@ -12,7 +12,9 @@ public enum ModelStatus: Equatable, Sendable {
 }
 
 public struct ModelRow: Identifiable, Equatable, Sendable {
-  /// The sha256 when it is known, else "ref:<ref>".
+  /// "ref:<ref>" for a catalog row, the sha256 for one only on disk. Two
+  /// catalog models can name the same export (Flip Flop and Mountain Dew v3
+  /// do), so a catalog row is never keyed by its sha256.
   public var id: String
   public var name: String
   public var ref: String?
@@ -82,7 +84,8 @@ public enum ModelRowBuilder {
     inventory: InventoryEvent?,
     downloads: [String: DownloadEvent],
     engine: EngineEvent,
-    link: LinkEvent
+    link: LinkEvent,
+    picks: [String: String] = [:]
   ) -> [ModelRow] {
     let models = inventory?.models ?? []
     let artifacts = inventory?.artifacts ?? []
@@ -93,10 +96,13 @@ public enum ModelRowBuilder {
 
     var rows: [ModelRow] = []
     var seen: Set<String> = []
+    var refs: Set<String> = []
+    let owners = owners(of: catalog?.models ?? [], picks: picks)
 
     for entry in catalog?.models ?? [] {
+      guard refs.insert(entry.ref).inserted else { continue }
       var row = ModelRow(
-        id: entry.sha256 ?? "ref:\(entry.ref)",
+        id: "ref:\(entry.ref)",
         name: entry.name,
         ref: entry.ref,
         sha256: entry.sha256,
@@ -106,10 +112,13 @@ public enum ModelRowBuilder {
         isDefault: entry.ref == catalog?.defaultRef)
       if let sha = entry.sha256 {
         seen.insert(sha)
+        // only the owner of a shared export shows its download, engine and load
+        let owns = owners[sha] == entry.ref
+        let engine = owns ? engine : .none
         row.preparedFor = artifactsBySha[sha] ?? []
         row.status = status(
           sha: sha,
-          download: downloads[sha],
+          download: owns ? downloads[sha] : nil,
           engine: engine,
           artifacts: row.preparedFor,
           hasModelFile: modelsBySha[sha] != nil)
@@ -164,6 +173,18 @@ public enum ModelRowBuilder {
     rows.append(contentsOf: localRows)
     rows.append(contentsOf: orphanRows)
     return rows
+  }
+
+  /// sha256 to the ref of the catalog model that shows that export's download,
+  /// engine and load: several can name one export, and only one shows them,
+  /// the one picked last (`picks`, sha256 to ref), else the first.
+  public static func owners(of models: [CatalogModel], picks: [String: String]) -> [String: String] {
+    var owners: [String: String] = [:]
+    for model in models {
+      guard let sha = model.sha256 else { continue }
+      if owners[sha] == nil || model.ref == picks[sha] { owners[sha] = model.ref }
+    }
+    return owners
   }
 
   private static func status(

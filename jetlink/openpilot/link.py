@@ -138,7 +138,6 @@ class TargetCannotBuild(RuntimeError):
   retry_after = BUILD_REFUSED_RETRY
   waiting = BUILD_REFUSED_WAITING
 
-
 class WifiWaiting(ConnectionError):
   """The Wi-Fi dial found no device to talk to: the comma is on no Wi-Fi, or
   nothing answers at its gateway. The join asks again in a few seconds, and

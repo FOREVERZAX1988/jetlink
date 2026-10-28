@@ -1524,9 +1524,10 @@ class AnyForkTest(OpenpilotTest):
     # the leave's summary reads trips.summary(), which a bare Mock is not
     self.big.trips = mock.Mock(summary=dict)
     self.patch(link, 'open_link', return_value=(self.big.client, SimpleNamespace(model_hw=(128, 256))))
-    # upstream imports JetlinkModelState inside join() (a TinyJit unpickle on
-    # modeld's main thread), so the patch lands on the module it is read from
-    self.patch(model_state, 'JetlinkModelState', return_value=self.big)
+    # the class is bound at module scope (a TinyJit unpickle on modeld's main
+    # thread, before the frame loop), and build() resolves it from joining's
+    # own namespace, so the patch lands there
+    self.patch(joining, 'JetlinkModelState', return_value=self.big)
     self.op.engaged = False
 
   def hand_back(self, small, zeroed):
@@ -1570,6 +1571,34 @@ class AnyForkTest(OpenpilotTest):
     for b in zeroed:
       np.testing.assert_array_equal(b, 0)
 
+  def test_the_adapters_own_warp_is_sent_and_none_loads_the_pickle(self):
+    class OwnWarp:
+      output = b''
+      def start(self, frame, big_frame, tfm, big_tfm): ...
+      def wait(self): ...
+
+    own = OwnWarp()
+    self.op.model_warp = mock.Mock(return_value=own)
+    small, _, _ = fakes.starpilot()
+    self.hand_back(small, [])
+    # the warp device's geometry: (cam_w, cam_h, model_w, model_h)
+    geometry = self.parts.warps.geometry()
+    self.op.model_warp.assert_called_once_with(small, 1928, 1208, *geometry[2:])
+    self.parts.warps.load.assert_not_called()
+    warp.Warp.assert_not_called()
+    self.assertIs(joining.JetlinkModelState.call_args.args[2], own)
+
+    self.op.model_warp = mock.Mock(return_value=None)
+    self.big.raises = None
+    self.hand_back(fakes.starpilot()[0], [])
+    self.parts.warps.load.assert_called_once_with(1928, 1208, *geometry[2:], lossless=False)
+    self.assertIs(joining.JetlinkModelState.call_args.args[2], warp.Warp.return_value)
+
+  def test_a_warp_that_is_not_one_keeps_the_small_model(self):
+    self.op.model_warp = mock.Mock(return_value=SimpleNamespace(start=lambda frame: None))
+    with self.assertRaisesRegex(RuntimeError, r"model_warp is not a warp: output: missing, start\(frame\)"):
+      joining.join(self.parts, 1928, 1208, fakes.starpilot()[0])
+    self.parts.warps.load.assert_not_called()
 
 class FadeTest(JoiningBase):
   """The swap's cross-fade (blend.SourceBlender): a swap nobody steers against,
@@ -1635,7 +1664,6 @@ class FadeTest(JoiningBase):
     s = self._fading(fade_frames=0)
     self._wait_joined(s)
     self.assertIsNone(s._last_small)
-
 
 if __name__ == '__main__':
   unittest.main()

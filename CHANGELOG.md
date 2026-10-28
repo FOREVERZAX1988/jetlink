@@ -1,6 +1,23 @@
 <!-- Each release: a "Jetlink vX.Y.Z" heading underlined with =, newest first. A release that changes the fork contract ends with a **Forks** group (docs/publishing.md). -->
-Unreleased
-==========
+Jetlink v0.8.9
+==============
+**Models**
+* Fixed Mountain Dew Model v3 and Flip Flop Model showing as one.
+
+Jetlink v0.8.8
+==============
+**Models**
+* **Flip Flop Model** and **Mountain Dew Model v3** are listed separately. Picking one no longer picks the other.
+
+**Comma**
+* A comma 3X no longer powers off when a laptop is plugged into its port.
+* Skips downloading a model the Mac or Jetson on the cable already has.
+
+**General Updates & Fixes**
+* A big model that returns NaN hands back to the small model, keeping the link.
+* Stays ready while the comma is connected, so rejoining mid-drive is fast. Thanks Danny (@dirwin31).
+* **Update the app.** The comma gets v0.8.8 with zoompilot's next `main` release.
+
 **Forks**
 * The wire gains `CLIENT_STATE` (20), which the comma sends about once a second while a big model drives: the six stage means of `openpilot/stages.py`, so the host's status page and the apps can show the half of the frame the host cannot measure. Additive and answered with nothing; a server that does not know the number says `unknown_message`, which the client drops. Protocol stays 3, and a fork porting a server may ignore it and lose only that number.
 * API stays 3. New: `Hooks.runtime()` (modeld's runtime record) and `Hooks.swap_events()` (selfdrived's swap events, built once and given an in-control bool each tick; they read the runtime record themselves unless given the fork's own state), `Jetlink.runtime()`, and `FakeSubMaster` and `check_fallback()` in `jetlink.openpilot.testing`. With `link_on()` saying off, only the hooks in `BINDS_WITH_LINK_OFF` bind (status, shutdown and catalog); the rest, `prepare()` included, answer as the link off. A fork that calls these must pin this release or newer: an older checkout has no such hooks.

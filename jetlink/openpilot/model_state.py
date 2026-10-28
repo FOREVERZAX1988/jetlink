@@ -311,9 +311,9 @@ class JetlinkModelState:
     # model manager key off this flag
     self.chestnut = True
 
-    # a warp.Warp, loaded and warmed ahead: its first call links the JIT, and
-    # this runs on modeld's frame thread. Frames go out of its output as they
-    # are, over either transport
+    # a warp.Warp or the adapter's model_warp, loaded and warmed ahead: its
+    # first call links the JIT, and this runs on modeld's frame thread. Frames
+    # go out of its output as they are, over either transport
     self.warp = warp
 
     # a lossless warp's errors go packed to a server that takes them

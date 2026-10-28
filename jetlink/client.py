@@ -322,10 +322,9 @@ class JetlinkClient:
     kept on `codec`, so the frame path reads it once per frame and the panels
     can show it.
     """
-    self.codec = codecs.pick(
-      {'frame_codecs': [n for n, ok in
-                        ((P.LOSSLESS_CODEC, self.takes_lossless), (P.HEVC_CODEC, self.takes_hevc)) if ok]},
-      prefer_lossy=prefer_lossy)
+    self.codec = codecs.pick({'frame_codecs': [n for n, ok in
+                                               ((P.LOSSLESS_CODEC, self.takes_lossless), (P.HEVC_CODEC, self.takes_hevc)) if ok]},
+                             prefer_lossy=prefer_lossy)
     return self.codec
 
   def _take_datagrams(self, hello: dict) -> None:
@@ -524,11 +523,9 @@ class JetlinkClient:
 
     `lossless` is the frame packed instead (jetlink.lossless.Packer.pack's
     size table and planes), for a server whose hello lists the codec
-    (takes_lossless); `warped` is not sent then.
-
-    `hevc` is the frame encoded instead (jetlink.hevc), for a server whose hello
-    lists the codec (takes_hevc) and a caller that took the loss: the road and
-    the wide camera's access units, each behind its own u32 length.
+    (takes_lossless); `hevc` is the two cameras' Annex-B access units
+    (road, wide), for a server that lists it (takes_hevc). `warped` is sent
+    for neither.
     """
     if self.spec is None:
       raise LinkError("ensure_engine() first")

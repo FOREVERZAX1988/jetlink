@@ -50,7 +50,7 @@ import time
 from jetlink import protocol as P
 from jetlink.comma import gadget
 from jetlink.openpilot import blend
-from jetlink.openpilot.model_state import FrameFailed, NotReady
+from jetlink.openpilot.model_state import FrameFailed, JetlinkModelState, NotReady
 from jetlink.transport.priority import background_thread
 
 # after a join fails or the large model dies mid-drive. Long enough not to
@@ -877,7 +877,7 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
   # here rather than in build(): the import then costs modeld's main thread
   # before the frame loop, not the frame the swap lands on
   from jetlink.openpilot import model_state
-  from jetlink.openpilot.model_state import JetlinkModelState
+  # (JetlinkModelState itself is already imported at module scope)
   op = parts.op
   face = op.model_face()
   ready: dict = {}
@@ -895,6 +895,7 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
   link = links.Link(parts.log, wifi=wifi_at_start)
 
   def prepare():
+    from jetlink.openpilot.interface import FrameWarp, conformance
     from jetlink.openpilot.warp import Warp, prepare_reset
     # the gadget first, so the Jetson enumerates while the warp loads. Left to
     # the join thread the bind lands ~3 s later, behind the small model's
@@ -909,10 +910,15 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
     try:
       # the fork's own reset of its small model, else jetlink's from its shape
       ready['reset_small'] = getattr(op, 'small_reset', lambda small: None)(small) or prepare_reset(small)
-      # over Wi-Fi the lossless build, which makes the frame's MED errors too
+      # the fork's own warp, else openpilot's driving warp pickle: over Wi-Fi
+      # the lossless build, which makes the frame's MED errors too
       # (jetlink.lossless), when the build made one; else frames go raw
-      lossless = wifi and parts.warps.is_cached(cam_w, cam_h, *geometry, lossless=True)
-      warp = Warp(parts.warps.load(cam_w, cam_h, *geometry, lossless=lossless), face.frame_size(cam_w, cam_h), parts.log)
+      warp = getattr(op, 'model_warp', lambda *args: None)(small, cam_w, cam_h, *geometry)
+      if warp is None:
+        lossless = wifi and parts.warps.is_cached(cam_w, cam_h, *geometry, lossless=True)
+        warp = Warp(parts.warps.load(cam_w, cam_h, *geometry, lossless=lossless), face.frame_size(cam_w, cam_h), parts.log)
+      elif problems := conformance(warp, FrameWarp):
+        raise RuntimeError(f"the adapter's model_warp is not a warp: {', '.join(problems)}")
     except Exception:
       link.close()
       raise

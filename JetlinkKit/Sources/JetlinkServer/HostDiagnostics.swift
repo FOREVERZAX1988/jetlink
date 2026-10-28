@@ -47,6 +47,14 @@ package enum HostDiagnostics {
   /// app's Stub of the same name (`Host.phoneLibraries`).
   nonisolated(unsafe) package static var phoneLibraries: [String] = []
 
+  /// Why the phone's own set did not open, when a file was there and the
+  /// loader refused it: Android 10 maps a library `PROT_EXEC` only through a
+  /// read-only descriptor, so a set unpacked for this run and left writable
+  /// fails with `dlerror` and nothing else. The report prints this beside the
+  /// pair, because it is the one reason the `npu:` lines cannot tell from a
+  /// missing file.
+  nonisolated(unsafe) package static var phoneFailure: String?
+
   /// The QNN library names the Android manifest declares
   /// (`uses-native-library`): the names an app's linker namespace is allowed to
   /// look for outside the app's own directory. The report prints what each one
@@ -54,6 +62,25 @@ package enum HostDiagnostics {
   /// `public.libraries.txt` is the other half, and it is the phone that decides
   /// whether a name reaches `/odm/lib64` or this app's own directory.
   package static let qnnNames = ["libQnnHtp.so", "libQnnHtpV85Stub.so", "libQnnHtpPrepare.so", "libQnnSystem.so"]
+
+  /// The QNN names this build's own directory answers, the backend first: the
+  /// Stub or Stubs the APK actually carries, read off the directory rather
+  /// than assumed. `qnn-runtime` 2.42.0's pairs stop at V81, so a build with
+  /// nothing of its own has V68 to V81 and no V85 -- and a run that probes for
+  /// a name the APK does not carry would report a missing file as a missing
+  /// half of a declaration [docs/qnn-htp-stubs.md].
+  package static var ownQnnNames: [String] {
+    // The directory is the Android app's (`start`), so outside it there is
+    // nothing to read: the backend is the only name there is to answer.
+    #if os(Android)
+      guard let directory = nativeDirectory, !directory.isEmpty else { return ["libQnnHtp.so"] }
+      let held = (try? FileManager.default.contentsOfDirectory(atPath: directory)) ?? []
+      let stubs = held.filter { $0.hasPrefix("libQnnHtpV") && $0.hasSuffix("Stub.so") }.sorted()
+      return ["libQnnHtp.so"] + stubs
+    #else
+      return ["libQnnHtp.so"]
+    #endif
+  }
 
   /// What each of those names answered this run, in order, set by the Android
   /// app before the session is made (`Host.phoneByName`).
@@ -124,9 +151,18 @@ package enum HostDiagnostics {
       "p=$(cat /proc/\(pid)/cmdline | tr -c '[:print:]' '\\n' | head -1); pm path \"$p\""
     }
     private static let deviceCommand = "ls -l /dev/adsprpc-smd /dev/cdsprpc-smd /dev/fastrpc-adsp /dev/fastrpc-cdsp /dev/fastrpc-cdsp-secure"
-    /// The libraries a QNN build has to agree on with itself: the backend, the
-    /// system library and the pair for this phone's Hexagon.
-    private static let qnnFiles = ["libQnnHtp.so", "libQnnSystem.so", "libQnnHtpV85Stub.so", "libQnnHtpV85Skel.so"]
+    /// The libraries a QNN build has to agree on with itself, and that are
+    /// worth hashing: the backend and the System library, and whichever Stub
+    /// and Skel the APK holds -- the AAR's pairs up to V81, or a set a
+    /// checkout put in its own `jniLibs`. Read off the directory, so a build
+    /// without a V85 pair does not report two files it never carried.
+    private static var qnnFiles: [String] {
+      let base = ["libQnnHtp.so", "libQnnSystem.so"]
+      guard let directory = nativeDirectory, !directory.isEmpty else { return base }
+      let held = (try? FileManager.default.contentsOfDirectory(atPath: directory)) ?? []
+      let pairs = held.filter { $0.hasPrefix("libQnnHtpV") && ($0.hasSuffix("Stub.so") || $0.hasSuffix("Skel.so")) }
+      return base + pairs.sorted()
+    }
     private static let qnnWords = ["qnn", "onnxruntime", "cdsprpc", "adsprpc", "htp", "skel", "snpe", "hexagon"]
     private static let dspWords = ["skel", "qnn", "dsp", "rfsa", "fastrpc"]
     private static let logWords = [
@@ -328,6 +364,9 @@ package enum HostDiagnostics {
       lines.append("the Phone's Own QNN setting this run: \(phoneOwnQnn ? "on" : "off")")
       if !phoneLibraries.isEmpty {
         lines.append("opened by path before the session, so every name finds these: \(phoneLibraries.joined(separator: " "))")
+      }
+      if let failure = phoneFailure {
+        lines.append("the phone's own set did not open: \(failure)")
       }
       let held = search.first { $0.files.contains { $0.lowercased().contains("skel.so") } }
       if let held, let file = held.files.first(where: { $0.lowercased().contains("skel.so") }) {

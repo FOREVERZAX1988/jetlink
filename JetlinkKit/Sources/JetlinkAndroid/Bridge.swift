@@ -252,11 +252,63 @@
     /// is what the report prints (`HostDiagnostics.nameResolution`).
     static func qnnBackend(_ config: [String: Any]) -> String? {
       guard (config["phone_qnn"] as? Bool) ?? false else { return nil }
+      // The vendor's own five, unpacked from this build's assets into the app's
+      // own storage. That directory the linker namespace always reaches, which
+      // `/odm/lib64` -- where an SM8975 keeps the same build -- is not: the
+      // five there are a file this process may stat and no library this
+      // process may open, which is why the setting found no backend and the
+      // session fell back to the AAR's 2.42.0 beside a V85 Stub nothing had.
+      if let directory = config["qnn_library_dir"] as? String, !directory.isEmpty {
+        let backend = "\(directory)/libQnnHtp.so"
+        if FileManager.default.fileExists(atPath: backend) {
+          // The Skel is unpacked beside the backend, not in a system
+          // `rfsa/adsp`: the DSP is told before the backend that asks is open.
+          adspLibraryPath(prepending: directory)
+          // And the names it opens once it is -- its Stub, QNN's Prepare and
+          // its System library -- have to answer with this build rather than
+          // with the app's 2.42.0 of the same names. Opened here, before the
+          // backend, they are what a later open by name resolves to.
+          HostDiagnostics.phoneLibraries = openLibraries(in: directory)
+          if dlopen(backend, RTLD_NOW | RTLD_GLOBAL) != nil { return backend }
+          // Android maps a library `PROT_EXEC` only through a read-only
+          // descriptor, so a set unpacked and left writable fails right here
+          // and nowhere in the `npu:` lines.
+          HostDiagnostics.phoneFailure = "\(backend) would not open: \(dlerrorText())"
+        } else {
+          HostDiagnostics.phoneFailure = "\(backend) is not there: the unpacked set is missing"
+        }
+      }
       let paths = ["/vendor/lib64/libQnnHtp.so", "/system/lib64/libQnnHtp.so", "/odm/lib64/libQnnHtp.so"]
       if let opened = paths.first(where: { FileManager.default.fileExists(atPath: $0) && dlopen($0, RTLD_NOW | RTLD_GLOBAL) != nil }) {
+        HostDiagnostics.phoneLibraries = openLibraries(in: (opened as NSString).deletingLastPathComponent)
         return opened
       }
       return phoneBackendByName()
+    }
+
+    /// What `dlerror` says, cleared first: it answers the last failure, and a
+    /// report that prints an older one reads as evidence of a newer fault.
+    static func dlerrorText() -> String {
+      guard let message = dlerror() else { return "the loader gave no reason" }
+      return String(cString: message)
+    }
+
+    /// `ADSP_LIBRARY_PATH` with one directory first, and the system's own after
+    /// it: QNN looks for a Skel down this list, so the pair the session was
+    /// handed is found before any Skel of another build, while a phone whose
+    /// vendor keeps Skels of its own still finds those.
+    static func adspLibraryPath(prepending directory: String) {
+      let inherited = getenv("ADSP_LIBRARY_PATH").map { String(cString: $0) } ?? ""
+      var paths =
+        inherited.split(whereSeparator: { $0 == ";" || $0 == ":" }).map(String.init)
+        .filter { !$0.isEmpty && $0 != directory }
+      paths.insert(directory, at: 0)
+      for system in ["/odm/lib/rfsa/adsp", "/vendor/lib/rfsa/adsp", "/system/lib/rfsa/adsp"] where !paths.contains(system) {
+        paths.append(system)
+      }
+      // QNN and the ADSP read this list with semicolons, as Qualcomm's own
+      // examples set it; the DSP's search order is the order here.
+      setenv("ADSP_LIBRARY_PATH", paths.joined(separator: ";"), 1)
     }
 
     /// The phone's own backend by its bare name, when no path would open: nil
@@ -278,7 +330,11 @@
       // The two that decide a pair are opened whatever the setting says, and
       // the other two only when the phone's own stack is asked for: Prepare is
       // 88 MB, and a run that wants the app's own QNN has no reason to map it.
-      let names = ((config["phone_qnn"] as? Bool) ?? false) ? HostDiagnostics.qnnNames : ["libQnnHtp.so", "libQnnHtpV85Stub.so"]
+      // The app's own names are the Stubs the APK carries, read off its
+      // directory: this build's set is `qnn-runtime` 2.42.0's, which stops at
+      // V81, so naming a V85 Stub here would report a file that was never in
+      // the APK as a name nothing answers.
+      let names = ((config["phone_qnn"] as? Bool) ?? false) ? HostDiagnostics.qnnNames : HostDiagnostics.ownQnnNames
       return names.map { name in
         guard dlopen(name, RTLD_NOW | RTLD_GLOBAL) != nil else {
           return "\(name): nothing answers this name -- neither the manifest half nor the phone's table half"
@@ -298,19 +354,27 @@
     /// any model. Opening the phone's own copies here makes every name find the
     /// phone's own, so the pair is one vendor build.
     static func phoneLibraries(_ config: [String: Any]) -> [String] {
+      // `qnnBackend` opens these before it opens the backend, because the
+      // backend opens them by name: a second pass here would only re-open what
+      // is already mapped.
+      guard HostDiagnostics.phoneLibraries.isEmpty else { return HostDiagnostics.phoneLibraries }
       guard let backend = qnnBackend(config) else { return [] }
-      let held = (backend as NSString).deletingLastPathComponent
-      let names = (try? FileManager.default.contentsOfDirectory(atPath: held)) ?? []
+      return openLibraries(in: (backend as NSString).deletingLastPathComponent)
+    }
+
+    /// Every QNN file in one directory that a backend opens by name, opened
+    /// here by path with `RTLD_GLOBAL`: the Stubs, QNN's context preparer and
+    /// its System library. A name opened later finds these, whatever the app
+    /// carries under the same names.
+    static func openLibraries(in directory: String) -> [String] {
+      let names = (try? FileManager.default.contentsOfDirectory(atPath: directory)) ?? []
       let wanted =
         names.filter { $0.hasPrefix("libQnnHtp") && ($0.hasSuffix("Stub.so") || $0.hasSuffix("Prepare.so")) }
         + names.filter { $0 == "libQnnSystem.so" }
-      var opened: [String] = []
-      for name in wanted {
-        let path = "\(held)/\(name)"
-        // RTLD_GLOBAL: a library opened later, by name, is to find this one.
-        opened.append(dlopen(path, RTLD_NOW | RTLD_GLOBAL) == nil ? "\(path) (would not open)" : path)
+      return wanted.sorted().map { name in
+        let path = "\(directory)/\(name)"
+        return dlopen(path, RTLD_NOW | RTLD_GLOBAL) == nil ? "\(path) (would not open: \(dlerrorText()))" : path
       }
-      return opened
     }
 
     /// The backend and device the config names. A config without a backend
@@ -335,6 +399,10 @@
         guard let profile = OrtProfile(rawValue: device ?? OrtProfile.htp.rawValue), OrtProfile.available.contains(profile) else {
           throw HostFailure("onnxruntime has no device \(device ?? "")")
         }
+        // A server restarted with another setting must not read the last run's
+        // pair as this run's: both are what `qnnBackend` fills in.
+        HostDiagnostics.phoneLibraries = []
+        HostDiagnostics.phoneFailure = nil
         let phone = qnnBackend(config)
         // What the phone's own pair is -- the setting, and every library of it
         // that was opened by path -- goes into the `npu:` report before the

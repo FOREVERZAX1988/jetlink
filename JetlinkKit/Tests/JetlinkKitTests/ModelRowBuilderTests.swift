@@ -82,6 +82,27 @@ struct ModelRowBuilderTests {
     #expect(row.id == "ref:9d683c06518c0358fb402f38468a7030700c38ac")
   }
 
+  @Test func twoCatalogModelsOnOneExportAreTwoRows() {
+    // Flip Flop (#39156) and Mountain Dew v3 (#39087) name the same export.
+    let sha = ModelRowBuilderTests.bmv3
+    let catalog = CatalogEvent(
+      fetchedAt: nil, url: "", defaultRef: "", error: nil,
+      models: [
+        CatalogModel(name: "Mountain Dew Model v3", shortName: "MDV3", ref: "a1", buildTime: "", index: 1, sha256: sha, bytes: 1),
+        CatalogModel(name: "Flip Flop Model", shortName: "FFM", ref: "b2", buildTime: "", index: 2, sha256: sha, bytes: 1),
+      ])
+    let downloads = [sha: download(sha: sha, state: "progress")]
+    let downloading = ModelStatus.downloading(frac: 0.42, rateBps: 41_000_000)
+    let rows = ModelRowBuilder.build(catalog: catalog, inventory: nil, downloads: downloads, engine: .none, link: .waiting)
+    #expect(rows.map(\.name) == ["Mountain Dew Model v3", "Flip Flop Model"])
+    #expect(Set(rows.map(\.id)).count == 2)
+    #expect(rows.map(\.status) == [downloading, .notDownloaded])
+
+    let picked = ModelRowBuilder.build(
+      catalog: catalog, inventory: nil, downloads: downloads, engine: .none, link: .waiting, picks: [sha: "b2"])
+    #expect(picked.map(\.status) == [.notDownloaded, downloading])
+  }
+
   @Test func everyStatusIsReachable() throws {
     let catalog = try catalogEvent()
     let engine = EngineEvent(

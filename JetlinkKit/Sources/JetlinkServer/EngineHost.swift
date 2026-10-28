@@ -362,12 +362,10 @@ public final class EngineHost: @unchecked Sendable {
       let loaded = try Ticker.during(interval: 1, Ticker.paced("warm", "warming up", took: 0, report: progressFn)) {
         try warm(warming, spec: ready)
       }
-      // Ours, not upstream's: a warm engine is a frame or two, so this long
-      // means the phone compiled the model here instead of loading the
-      // artifact it compiled before — the one thing a cold QNN cache looks
-      // like from the comma, and nowhere else in the log.
       let warmSeconds = Date().timeIntervalSince(warmStarted)
       if warmSeconds >= 20 {
+        // A warm engine is a frame or two: this long means the device compiled
+        // the model here rather than loading what it compiled before.
         log.warning("warming up took \(Int(warmSeconds.rounded())) s, which a warm engine is not")
         HostDiagnostics.report("warming up took \(Int(warmSeconds.rounded())) s")
       }

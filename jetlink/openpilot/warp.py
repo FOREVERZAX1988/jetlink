@@ -188,7 +188,7 @@ class Warp:
     self._device = out.device
     if self._device.startswith('QCOM'):
       for buf in outs:
-        _make_coherent(buf)
+        make_coherent(buf)
     # the two buffers every frame passes, written in place by start()
     self._tensors = {name: Tensor(np.zeros(shape, dtype=dtype), device=device).realize()
                      for name, (shape, dtype, device) in specs.items()}
@@ -221,10 +221,15 @@ class Warp:
     self._replay(self._inputs, {})
 
 
-def _make_coherent(out) -> None:
-  """Move a QCOM buffer to KGSL memory flagged IOCOHERENT and write-back.
-  Raises if the kernel keeps either flag back (the allocation's record holds
-  its answer): write-back memory that is not coherent reads stale frames."""
+def make_coherent(out) -> None:
+  """Move a QCOM buffer to KGSL memory flagged IOCOHERENT and write-back, so
+  the CPU reads it through its cache once the GPU is done (see Warp). Raises
+  if the kernel keeps either flag back (the allocation's record holds its
+  answer): write-back memory that is not coherent reads stale frames.
+
+  For an adapter's model_warp too. Move a buffer before the first call of
+  the JIT that writes it: that call links its address into the JIT, which
+  would keep writing the memory this frees."""
   from tinygrad.device import Device
   dev = Device[out.device]
   mem = dev._gpu_alloc(out.nbytes, flags=COHERENT_WRITEBACK)
