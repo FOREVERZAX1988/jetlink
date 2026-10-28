@@ -32,7 +32,7 @@ from typing import Any, Protocol
 
 # the Jetlink setting: off; a Jetson, a Linux PC or a Mac on USB; an
 # iPhone on the cable. The INT param holds the index
-MODES = ('off', 'usb', 'ios')
+MODES = ('off', 'usb', 'ios', 'wifi')
 # what a joining model reports as big_model_state, by the names of the fork's
 # modelDataV2SP.acceleratorState enum
 STATES = ('none', 'joining', 'retrying', 'ready', 'running', 'unavailable')
@@ -78,6 +78,12 @@ class ModelFace:
   lat_smooth_seconds: float                  # modeld's LAT_SMOOTH_SECONDS
   long_smooth_seconds: float                 # modeld's LONG_SMOOTH_SECONDS
   get_action_from_model: Callable[..., Any]  # modeld's action function
+  # Optional (OPTIONAL below): makes a codecs.HEVCEncoder for a camera, given the
+  # model's geometry as (rows, cols) and the frame's flat byte count. Only a fork
+  # with a hardware encoder supplies one (the comma's is the Venus block,
+  # reachable from the device alone), and a link whose fork has none never
+  # negotiates the HEVC frame carrier
+  hevc_encoder: Callable[..., Any] | None = None
 
 
 # The sides are typing Protocols so a type checker can hold the adapter to

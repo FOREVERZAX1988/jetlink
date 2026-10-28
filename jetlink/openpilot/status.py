@@ -156,22 +156,26 @@ class Presence:
     return now - self._last_configured < gadget.PRESENCE_HOLD
 
 
-def link_transport(mode: str | None = None, live: dict | None = None) -> str:
+def link_transport(mode: str | None = None, live: dict | None = None, record: tuple | None = None) -> str:
   """What carries the link, for the panels: a host on the vendor interface,
-  or an iPhone dialed in over the network one. `live` is the owner's record;
-  without it, `mode` stands in until the owner has said. Never raises."""
+  an iPhone dialed in over the network one, or the hotspot modeld dialed.
+  `live` is the owner's record; without it, `mode` stands in until the owner
+  has said. `record` is gadget.link_state(), when the caller read it. Never
+  raises."""
   try:
-    if live is not None and live.get('link') in ('usb', 'cable'):
+    record = gadget.link_state() if record is None else record
+    if mode != 'wifi' and live is not None and live.get('link') in ('usb', 'cable'):
       kind, peer = live['link'], live.get('peer')
     else:
-      kind, peer = gadget.link_state()
-      kind = kind or gadget.link_kind(mode)
+      kind, peer = gadget.link_kind(mode, record), record[1]
     if kind == 'cable' and not peer:
       # the owner records the phone while it holds the dial; a borrower that
       # took the dial itself noted it in the link record
-      peer = gadget.link_state()[1]
+      peer = record[1]
     if kind == 'cable':
       return f"iOS over USB ({peer})" if peer else "iOS over USB"
+    if kind == 'wifi':
+      return f"Wi-Fi ({peer})" if peer else "Wi-Fi"
   except Exception:
     pass
   return "USB"
@@ -236,13 +240,23 @@ class Runtime(NamedTuple):
   active: bool = False            # the big model drives modeld's frames now
   sha256: str | None = None       # and which model it is, while it does
   checkpoint: str | None = None
+  # The comma's own six stages, mean ms, None before the big model has run a
+  # frame. None rather than {} because a NamedTuple's default is shared: an
+  # empty dict here would be the same one in every Runtime made without one.
+  stages: dict | None = None
 
 
 def runtime() -> Runtime:
   """The joining model's state, whether the big model drives now and which
   model it is, from modeld's runtime record (gadget.MODELD); Runtime() without
   a live one: no modeld with the link since boot, or one that stopped, died
-  or stopped writing (gadget.HEARTBEAT_TIMEOUT, as the owner's). Never raises."""
+  or stopped writing (gadget.HEARTBEAT_TIMEOUT, as the owner's). Never raises.
+
+  `stages` is the comma's own half of the frame, in six stages (see
+  openpilot.stages): the mean ms of each, over the frames the ring holds. The
+  server's telemetry says what the far end spent; this says what the comma
+  spent before the frame was even sent, which is the other half of a slow
+  link."""
   record = gadget.read_record(gadget.MODELD)
   try:
     if record is None or record.get('stopping') or not gadget.owner_alive(record) \
@@ -255,7 +269,11 @@ def runtime() -> Runtime:
     def text(key: str, shown: bool = True) -> str | None:
       value = record.get(key)
       return value if shown and isinstance(value, str) else None
-    return Runtime(text('state'), active, text('sha256', active), text('checkpoint', active))
+    stages = record.get('stages')
+    # only while the big model drives: a stand-in's frames are the small
+    # model's, and its numbers would say nothing about the link
+    return Runtime(text('state'), active, text('sha256', active), text('checkpoint', active),
+                   stages if active and isinstance(stages, dict) and stages else None)
   except (TypeError, KeyError):
     return Runtime()
 
@@ -285,6 +303,9 @@ class Status(NamedTuple):
   active: bool = False          # the big model drives modeld's frames now, by the same record
   running_sha256: str | None = None      # the model it drives with, while active
   running_checkpoint: str | None = None
+  # the comma's own half of the frame, in six stages (openpilot.stages): the
+  # mean ms of each, while the big model drives. None when it does not.
+  stages: dict | None = None
 
   @property
   def runnable(self) -> bool:
@@ -399,6 +420,7 @@ class Status(NamedTuple):
 def read(parts, mode: str) -> Status:
   """Everything at once, over the link setting the caller read: each file once."""
   record, live = owner_record()
+  link = gadget.link_state()
   enabled = parts.enabled(mode)
   live_model = runtime() if enabled else Runtime()
   reason = unavailable(parts, record) if enabled else None
@@ -410,8 +432,10 @@ def read(parts, mode: str) -> Status:
   return Status(
     enabled=enabled,
     mode=mode,
-    transport=link_transport(mode, live),
-    present=bool(live.get('present')) if live is not None else parts.presence.present(),
+    transport=link_transport(mode, live, link),
+    # over Wi-Fi the owner holds nothing: modeld's dial is the link (link.dial)
+    present=(link[0] == 'wifi' if mode == 'wifi'
+             else bool(live.get('present')) if live is not None else parts.presence.present()),
     port=usb_port(),
     ready=ready,
     reason=reason,
@@ -423,6 +447,7 @@ def read(parts, mode: str) -> Status:
     active=live_model.active,
     running_sha256=live_model.sha256,
     running_checkpoint=live_model.checkpoint,
+    stages=live_model.stages,
   )
 
 

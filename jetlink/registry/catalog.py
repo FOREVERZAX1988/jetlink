@@ -48,6 +48,7 @@ DEFAULT_BIG_MODEL_REF = 'bf3e3631b3f91d92a1020a5e0dd4298b93ff4244'
 # comma with no catalog to name it from shows (jetlink.openpilot, on a fork
 # without sunnypilot's model manager)
 DEFAULT_BIG_MODEL_NAME = 'Cinque Terre V3 Model'
+JSDELIVR_HOST = 'https://cdn.jsdelivr.net'
 CATALOG_TIMEOUT = 10.0
 
 _REF = re.compile(r'[0-9a-f]{40}')
@@ -135,9 +136,57 @@ def http_json(url: str, timeout: float, opener=None, kind: type = dict):
   return data
 
 
+def jsdelivr_fallback(url: str) -> str | None:
+  """The jsDelivr CDN URL for a raw.githubusercontent.com URL, or None.
+
+  raw is unreachable from many networks in China; jsDelivr serves the same
+  file from its CDN. Supports both the current /<owner>/<repo>/refs/heads/
+  <branch>/<path> form and the legacy /<owner>/<repo>/<branch>/<path> form.
+  """
+  for host in ('https://raw.githubusercontent.com/', 'http://raw.githubusercontent.com/'):
+    if not url.startswith(host):
+      continue
+    parts = url[len(host):].split('/', 3)
+    if len(parts) != 4 or not all(parts[:2]) or not parts[3]:
+      return None
+    owner, repo, ref, path = parts
+    if ref == 'refs':
+      if not path.startswith('heads/'):
+        return None
+      branch_rest = path[len('heads/'):]
+      slash = branch_rest.find('/')
+      if slash <= 0:
+        return None
+      return f'{JSDELIVR_HOST}/gh/{owner}/{repo}@{branch_rest[:slash]}/{branch_rest[slash + 1:]}'
+    return f'{JSDELIVR_HOST}/gh/{owner}/{repo}@{ref}/{path}'
+  return None
+
+
 def fetch_catalog(url: str = CATALOG_URL, timeout: float = CATALOG_TIMEOUT, opener=None) -> dict:
-  """The catalog JSON. Every failure, transport or content, is a NetworkError."""
-  return http_json(url, timeout, opener)
+  """The catalog JSON, direct first and then its jsDelivr mirror: raw
+  githubusercontent is unreachable from many networks in China, and the
+  model manager's own catalog fetch has the same fallback. A 404 is a
+  NotFound without trying the mirror - a file the server says is not there
+  is not there, and the version probe relies on that; every other failure
+  tries the mirror before giving up, as a NetworkError. Each candidate is
+  tried twice: CDNs and middleboxes occasionally serve a mangled body, and
+  one retry has been enough to get clean bytes."""
+  candidates = [url]
+  fallback = jsdelivr_fallback(url)
+  if fallback:
+    candidates.append(fallback)
+  last: Exception | None = None
+  for i, candidate in enumerate(candidates):
+    for attempt in range(2):
+      try:
+        return http_json(candidate, timeout, opener)
+      except NotFound:
+        if i == 0 and attempt == 0:
+          raise
+        raise NotFound(str(last)) from last
+      except NetworkError as e:
+        last = e
+  raise last
 
 
 def fetch_catalogs(opener=None) -> dict:

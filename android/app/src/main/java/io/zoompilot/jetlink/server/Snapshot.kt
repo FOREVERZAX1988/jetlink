@@ -71,12 +71,14 @@ data class Link(
     val medium: String? = null,
 )
 
-/** What the comma's link is carried over: "USB 3", and whether that is too slow. */
+/** What the comma's link is carried over: "USB 3", whether that is too slow, and what fixes it. */
 @Serializable
 data class Medium(
     val name: String = "usb",
     val title: String = "USB",
     val slow: Boolean = false,
+    /** "Slow, use USB 3", or "Slow, use 5 GHz" over 2.4 GHz Wi-Fi; null when fast enough. */
+    val fix: String? = null,
 )
 
 @Serializable

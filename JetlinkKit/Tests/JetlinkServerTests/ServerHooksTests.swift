@@ -79,11 +79,13 @@ struct ServerHooksTests {
   func hello() throws {
     let python: Set = [
       "protocol", "backend", "runtime_version", "device", "engine_state", "loaded", "frames_served", "cached_models", "telemetry", "sleep_after",
+      "frame_codecs",
     ]
     try serve(hooks: ServerHooks()) { _, client in
       let hello = try client.hello()
       #expect(Set(hello.keys) == python)
       #expect(hello["sleep_after"] as? Double == 0)
+      #expect(hello["frame_codecs"] as? [String] == [Pinned.losslessCodec])
     }
     let trt = FlakyBackend(describing: ["trt_version": "10.3.0"])
     try serve(hooks: ServerHooks(sleepAfter: 900), backend: trt) { _, client in

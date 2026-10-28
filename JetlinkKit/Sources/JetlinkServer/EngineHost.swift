@@ -8,6 +8,12 @@ final class Loaded {
   let spec: ModelSpec
   let engine: any Engine
   let staging: any FrameStaging
+  /// Where a lossless frame unpacks, made on the first one. Under the host's
+  /// lock, as every frame is.
+  lazy var lossless = LosslessFrame(shape: spec.warpedShape)
+  /// Where an HEVC frame decodes, made on the first one. Under the host's
+  /// lock, as every frame is.
+  lazy var hevc = HevcFrame(shape: spec.warpedShape)
 
   init(sha256: String, spec: ModelSpec, engine: any Engine, staging: any FrameStaging) {
     self.sha256 = sha256
@@ -352,8 +358,16 @@ public final class EngineHost: @unchecked Sendable {
       }
       // A frame or two on zeros: minutes on a phone's CPU, so it ticks.
       let warming = engine!
+      let warmStarted = Date()
       let loaded = try Ticker.during(interval: 1, Ticker.paced("warm", "warming up", took: 0, report: progressFn)) {
         try warm(warming, spec: ready)
+      }
+      let warmSeconds = Date().timeIntervalSince(warmStarted)
+      if warmSeconds >= 20 {
+        // A warm engine is a frame or two: this long means the device compiled
+        // the model here rather than loading what it compiled before.
+        log.warning("warming up took \(Int(warmSeconds.rounded())) s, which a warm engine is not")
+        HostDiagnostics.report("warming up took \(Int(warmSeconds.rounded())) s")
       }
       engine = nil
       lock.lock()

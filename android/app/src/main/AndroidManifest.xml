@@ -16,11 +16,19 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Installing an update's APK downloaded from the GitHub release. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
+    <!-- largeHeap: the heap the build's own buffers come out of. Compiling a
+         large model for the NPU is the peak, and a Java-side ceiling below it
+         kills the app mid-compile (2026-10-17). The provider's own allocations
+         are native, which this does not bound: HostMemory answers those before
+         the ask. -->
     <application
         android:name=".JetlinkApp"
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
+        android:largeHeap="true"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
@@ -41,6 +49,17 @@
              library runs the compiled model through both. -->
         <uses-native-library android:name="libedgetpu_litert.so" android:required="false" />
         <uses-native-library android:name="libedgetpu_util.so" android:required="false" />
+        <!-- The phone's own QNN stack, which some phones keep under /odm: a
+             declaration is how an app's linker namespace is allowed to look
+             outside its own directory at all, and QNN's backend, its Stub, its
+             Prepare and its System library are the four names that have to
+             arrive from one build. The declaration is half of it, and the
+             phone's own public library table is the other half: the `npu:`
+             report prints both (HostDiagnostics.qnnNames). -->
+        <uses-native-library android:name="libQnnHtp.so" android:required="false" />
+        <uses-native-library android:name="libQnnHtpV85Stub.so" android:required="false" />
+        <uses-native-library android:name="libQnnHtpPrepare.so" android:required="false" />
+        <uses-native-library android:name="libQnnSystem.so" android:required="false" />
 
         <activity
             android:name=".MainActivity"

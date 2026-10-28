@@ -1,5 +1,6 @@
 #include "jl_ort.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -80,8 +81,83 @@ static char *take(OrtStatus *status) {
     }                                \
   } while (0)
 
+
+// The runtime's own words, kept where a report can read them back. QNN's reason
+// for taking no node of a graph is a line under onnxruntime's logger -- a device
+// it could not create, a Stub the backend will not have, a graph its converter
+// would not take, a Skel the DSP would not load -- and an Android app's stderr
+// has no reader, so a line said there is a line lost. The ring holds the last of
+// them, oldest first, and jl_log_lines hands them over.
+#define JL_LOG_LINES 64
+#define JL_LOG_CHARS 480
+
+static char jl_log_ring[JL_LOG_LINES][JL_LOG_CHARS];
+static size_t jl_log_next;
+static size_t jl_log_held;
+static char jl_log_joined[JL_LOG_LINES * JL_LOG_CHARS];
+
+static const char *jl_log_severity(OrtLoggingLevel severity) {
+  switch (severity) {
+    case ORT_LOGGING_LEVEL_VERBOSE:
+      return "verbose";
+    case ORT_LOGGING_LEVEL_INFO:
+      return "info";
+    case ORT_LOGGING_LEVEL_WARNING:
+      return "warning";
+    case ORT_LOGGING_LEVEL_ERROR:
+      return "error";
+    case ORT_LOGGING_LEVEL_FATAL:
+      return "fatal";
+    default:
+      return "log";
+  }
+}
+
+// onnxruntime's logger, which carries the execution provider's own lines and
+// QNN's beneath them: this is the one place both write to.
+static void ORT_API_CALL jl_log_callback(void *param, OrtLoggingLevel severity, const char *category, const char *logid,
+                                         const char *code_location, const char *message) {
+  (void)param;
+  // The same file, and the same logid, on every line of a session: the message
+  // is the part to keep.
+  (void)code_location;
+  (void)logid;
+  char line[JL_LOG_CHARS];
+  snprintf(line, sizeof(line), "%s %s: %s", jl_log_severity(severity), category != NULL ? category : "",
+           message != NULL ? message : "");
+  snprintf(jl_log_ring[jl_log_next], JL_LOG_CHARS, "%s", line);
+  jl_log_next = (jl_log_next + 1) % JL_LOG_LINES;
+  if (jl_log_held < JL_LOG_LINES) {
+    jl_log_held++;
+  }
+#ifndef __ANDROID__
+  // Where a terminal reads it, the line goes on as it did before the ring.
+  fprintf(stderr, "%s\n", line);
+#endif
+}
+
 const char *jl_version(void) {
   return base() != NULL ? base()->GetVersionString() : "";
+}
+
+// The lines above, oldest first, newline-separated, "" when the runtime has said
+// nothing yet. Overwritten by the next call; the caller does not free it.
+const char *jl_log_lines(void) {
+  jl_log_joined[0] = '\0';
+  size_t start = (jl_log_next + JL_LOG_LINES - jl_log_held) % JL_LOG_LINES;
+  size_t offset = 0;
+  for (size_t i = 0; i < jl_log_held; i++) {
+    const char *line = jl_log_ring[(start + i) % JL_LOG_LINES];
+    size_t length = strlen(line);
+    if (offset + length + 2 >= sizeof(jl_log_joined)) {
+      break;
+    }
+    memcpy(jl_log_joined + offset, line, length);
+    offset += length;
+    jl_log_joined[offset++] = '\n';
+  }
+  jl_log_joined[offset] = '\0';
+  return jl_log_joined;
 }
 
 void jl_free(void *p) {
@@ -109,7 +185,9 @@ char *jl_env_create(int log_severity, jl_env **out) {
   // DisableTelemetryEvents can be called, and events logged in between were
   // still uploaded. A car has no business sending any.
   setenv("ORT_DISABLE_TELEMETRY", "1", 1);
-  char *error = take(api()->CreateEnv((OrtLoggingLevel)log_severity, "jetlink", &env->env));
+  // The ring above is the environment's logger: everything onnxruntime, the
+  // execution provider and QNN say reaches it, and the `npu:` report reads it.
+  char *error = take(api()->CreateEnvWithCustomLogger(jl_log_callback, NULL, (OrtLoggingLevel)log_severity, "jetlink", &env->env));
   if (error != NULL) {
     free(env);
     return error;
@@ -136,8 +214,13 @@ char *jl_session_create(jl_env *env, const char *model_path, const char *provide
   TRY(api()->CreateSessionOptions(&so));
   char *error = take(api()->SetSessionGraphOptimizationLevel(so, ORT_ENABLE_ALL));
   if (error == NULL) {
-    // errors only: the CoreML partitioner is chatty
-    error = take(api()->SetSessionLogSeverityLevel(so, 3));
+    // A QNN session keeps onnxruntime's own words: QNN's reason for taking no
+    // node of a graph is one it says below an error -- a Stub it cannot open,
+    // a Skel the DSP will not take, a backend that is not its Stub's build --
+    // and the `npu:` report reads them out of the phone's log. The CoreML
+    // partitioner is chatty, so an Apple session keeps errors alone.
+    int severity = provider != NULL && strcmp(provider, "QNN") == 0 ? 1 : 3;
+    error = take(api()->SetSessionLogSeverityLevel(so, severity));
   }
   // One thread each way, and none that spin between frames: the CPU's share
   // of an accelerator's session is a couple of nodes, and a pool spinning for

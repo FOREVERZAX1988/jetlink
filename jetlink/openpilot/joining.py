@@ -49,7 +49,8 @@ import time
 
 from jetlink import protocol as P
 from jetlink.comma import gadget
-from jetlink.openpilot.model_state import JetlinkModelState
+from jetlink.openpilot import blend
+from jetlink.openpilot.model_state import JetlinkModelState, NotReady
 from jetlink.transport.priority import background_thread
 
 # after a join fails or the large model dies mid-drive. Long enough not to
@@ -120,6 +121,22 @@ RECONNECTING = {LOST: ('reconnecting', 'lost'), BEHIND: ('fell behind, reconnect
 NAME_RETRY = 30.0
 
 
+def stages_of(big) -> dict:
+  """The big model's six-stage means, or {} while it has run no frame.
+
+  The record is written once a second, and the model in it may be one that was
+  just swapped in and has not answered yet: an empty dict says "nothing to
+  report" rather than six zeros, which would read as a link that is perfect.
+  """
+  stages = getattr(big, 'stages', None)
+  if stages is None:
+    return {}
+  try:
+    return stages.means()
+  except AttributeError:
+    return {}
+
+
 class JoiningModelState:
   """Duck-types openpilot's modeld ModelState, with a second one inside.
 
@@ -130,7 +147,7 @@ class JoiningModelState:
   """
 
   def __init__(self, small, connect, build, prepare=None, reset_small=None, *, progress, log, in_control=None,
-               name=None):
+               name=None, fade_frames: int = 0, discrete: tuple[str, ...] = ()):
     self._small = small
     self._active = small
     self._connect = connect
@@ -138,6 +155,18 @@ class JoiningModelState:
     self._reset_small = reset_small
     self._progress = progress
     self._log = log
+    # The cross-fade a swap lands through (blend.SourceBlender): the small
+    # model's last output held as the far leg while the large one ramps in.
+    # Off by default (fade_frames 0): a swap is a safety-adjacent moment, and a
+    # fade is an addition to it, to be enabled with the drive data to show it
+    # helps. Zero extra work when off, and no small-model run when on: the far
+    # leg is the output the small model already gave, held
+    self._fade_frames = max(0, int(fade_frames))
+    self._blender = blend.SourceBlender(self._fade_frames, discrete=discrete) if self._fade_frames else None
+    self._fade_left = 0
+    # the small model's newest output, for a fade's far leg: kept only while a
+    # fade is possible, so an off fade allocates nothing per frame
+    self._last_small: dict | None = None
 
     # whatever the swap would otherwise do on the frame loop, done now on
     # modeld's main thread before the frame loop exists; at the swap it costs
@@ -340,14 +369,39 @@ class JoiningModelState:
     self._maybe_swap()
     if self._active is self._small:
       self._small_frames += 1
-      return self._small.run(bufs, transforms, inputs, after_enqueue)
-    return self._run_big(bufs, transforms, inputs, after_enqueue)
+      result = self._small.run(bufs, transforms, inputs, after_enqueue)
+      if self._blender is not None:
+        # the far leg of a fade that starts on the next swap: the small model's
+        # own newest output, held. Kept only when a fade is built
+        self._last_small = result
+      return result
+    result = self._run_big(bufs, transforms, inputs, after_enqueue)
+    return self._fade(result)
+
+  def _fade(self, big_output):
+    """The large model's output, mixed with the small model's held one while a
+    swap's cross-fade runs (blend.SourceBlender). A fade starts on the frame
+    the swap lands and lasts its frames; with no fade built this is identity,
+    so the steady state pays one comparison and the blend of a disabled fade
+    never allocates."""
+    if self._blender is None or self._fade_left <= 0:
+      return big_output
+    self._fade_left -= 1
+    if big_output is None:
+      return big_output
+    return self._blender.step(big_output, self._last_small, fading=True)
 
   def _run_big(self, bufs, transforms, inputs, after_enqueue):
     big = self._big
     started = time.monotonic()
     try:
       result = big.run(bufs, transforms, inputs, after_enqueue)
+    except NotReady:
+      # the first frames of a stream that is still coming up (an HEVC gate
+      # waiting for a keyframe): no output and nothing to hold, so the small
+      # model runs this frame. The link is not demoted: a stream starting is
+      # not a stream failing
+      return self._small.run(bufs, transforms, inputs, after_enqueue)
     except Exception as e:
       failed = time.monotonic()
       self._log.exception("jetlink: large model failed mid-drive, back to the small model")
@@ -413,6 +467,19 @@ class JoiningModelState:
     # no wake: the record says the swap with the first answer, which wakes it
     self._handovers += 1
     self._active = big
+    if self._blender is not None and self._last_small is not None:
+      # the swap's step is spread over the fade's frames: the large model ramps
+      # in from the small one's held output rather than replacing it outright.
+      # Nothing is in control here (that is why the swap happens), so the mixed
+      # frames are a continuity of a plan nobody is steering against.
+      #
+      # A swap with no held output (the very first frame, before the small
+      # model has run) does not fade: there is no other leg to mix with, and
+      # inventing one would be outputs that never existed. It lands as it
+      # always did, which is also what a warm start wants
+      self._blender.reset(0.0)
+      self._fade_left = self._fade_frames
+      self._log.warning("jetlink: large model swapped in, fading over %d frames", self._fade_frames)
 
   def _demote(self, why: str) -> None:
     """Back to the small model, from a reset history. On the frame thread, so
@@ -691,7 +758,12 @@ class JoiningModelState:
             'sha256': sha, 'name': self._name_of(sha, names) if sha else None,
             'checkpoint': getattr(spec, 'checkpoint', None),
             'transport': kinds.get(swapped_at) if big is not None else None, 'drops': self._drops,
-            'lags': self._lags}
+            'lags': self._lags,
+            # the comma's own half of the frame, in its six stages: which one a
+            # slow link spends its time in, which the server's own numbers
+            # cannot say. O(1) off the ring's running sum, and empty while the
+            # big model has not run a frame since it was swapped in
+            'stages': stages_of(big)}
 
   def _name_of(self, sha: str, names: dict) -> str:
     """The catalog's name, kept once it is one. The sha's stand-in (a row not
@@ -739,10 +811,16 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
   what the link will hand back; another geometry is rejected.
   """
   from jetlink.openpilot import link as links
+  # here rather than in build(): the import then costs modeld's main thread
+  # before the frame loop, not the frame the swap lands on
+  # (JetlinkModelState itself is already imported at module scope)
+  from jetlink.openpilot import model_state
   op = parts.op
   face = op.model_face()
   ready: dict = {}
-  link = links.Link(parts.log)
+  mode = parts.settings.mode()
+  wifi = mode == 'wifi'
+  link = links.Link(parts.log, wifi=wifi)
 
   def prepare():
     from jetlink.openpilot.interface import FrameWarp, conformance
@@ -760,10 +838,13 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
     try:
       # the fork's own reset of its small model, else jetlink's from its shape
       ready['reset_small'] = getattr(op, 'small_reset', lambda small: None)(small) or prepare_reset(small)
-      # the fork's own warp, else openpilot's driving warp pickle
+      # the fork's own warp, else openpilot's driving warp pickle: over Wi-Fi
+      # the lossless build, which makes the frame's MED errors too
+      # (jetlink.lossless), when the build made one; else frames go raw
       warp = getattr(op, 'model_warp', lambda *args: None)(small, cam_w, cam_h, *geometry)
       if warp is None:
-        warp = Warp(parts.warps.load(cam_w, cam_h, *geometry), face.frame_size(cam_w, cam_h))
+        lossless = wifi and parts.warps.is_cached(cam_w, cam_h, *geometry, lossless=True)
+        warp = Warp(parts.warps.load(cam_w, cam_h, *geometry, lossless=lossless), face.frame_size(cam_w, cam_h), parts.log)
       elif problems := conformance(warp, FrameWarp):
         raise RuntimeError(f"the adapter's model_warp is not a warp: {', '.join(problems)}")
     except Exception:
@@ -776,7 +857,23 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
     warp = ready.get('warp') if ready.get('geometry') == (img_w * 2, img_h * 2) else None
     if warp is None:
       raise RuntimeError('no prepared warp for the server model geometry')
-    return JetlinkModelState(client, spec, warp, face=face, log=parts.log, event=op.event)
+    # A phone behind the USB cable (usb/ios) or Wi-Fi answers near the frame
+    # budget, so relax the hold/proof per link; Jetson/Mac keep strict defaults.
+    if wifi:
+      hold_kw = {'hold_frame': model_state.WIFI_HOLD_FRAME,
+                 'settling_frames': model_state.WIFI_SETTLING_FRAMES,
+                 'holds_in_a_row': model_state.WIFI_HOLDS_IN_A_ROW,
+                 'holds_allowed': model_state.WIFI_HOLDS_ALLOWED,
+                 'proving_holds_fatal': False}
+    elif mode in ('usb', 'ios'):
+      hold_kw = {'hold_frame': model_state.CABLE_HOLD_FRAME,
+                 'settling_frames': model_state.CABLE_SETTLING_FRAMES,
+                 'holds_in_a_row': model_state.CABLE_HOLDS_IN_A_ROW,
+                 'holds_allowed': model_state.CABLE_HOLDS_ALLOWED,
+                 'proving_holds_fatal': False}
+    else:
+      hold_kw = {}
+    return JetlinkModelState(client, spec, warp, face=face, log=parts.log, event=op.event, **hold_kw)
 
   def connect(should_stop=None):
     return links.open_link(parts, link, should_stop)
