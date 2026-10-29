@@ -387,6 +387,54 @@ def test_rps_without_the_cable_network_says_so(tmp_path):
   assert 'no cable network interface' in result.stderr
 
 
+class TestTheNetworksClaimOnTheKernel:
+  """This kernel names any gadget's NCM function kobject f_ncm, so one machine may
+  hold one NCM function. A second draws -EEXIST, leaves configfs wedged and later
+  takes the rmdir down (Oops: 96000005 in rmdir), after which every mkdir under the
+  gadget blocks uninterruptibly. gadget itself needs a real configfs, so what runs
+  here is the script's own code for spotting another gadget's claim, taken out of
+  the script rather than copied: what can be broken is what is tested."""
+
+  @staticmethod
+  def _extract() -> str:
+    src = REPO.joinpath('jetlink', 'comma', 'jetlink-root.sh').read_text()
+    start = src.index('other_ncm_function() {')
+    return src[start:src.index('\n}\n', start) + 3]
+
+  def others(self, tmp_path, tree):
+    """Run the script's own other_ncm_function over a stand-in configfs."""
+    script = (f'set -uo pipefail\nCONFIGFS={tmp_path / "config"}\n'
+              f'GADGET={tmp_path / "config" / "usb_gadget" / "jetlink"}\n'
+              f'NET_FN=ncm.usb0\n{self._extract()}\nother_ncm_function\n')
+    result = subprocess.run(['bash', '-c', script], capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    return result.stdout.split()
+
+  def test_anothers_ncm_stops_the_iphone_gadget(self, tmp_path):
+    # AGNOS's own gadget keeps exactly this: its USB network function
+    (tmp_path / 'config' / 'usb_gadget' / 'g1' / 'functions' / 'ncm.0').mkdir(parents=True)
+    (tmp_path / 'config' / 'usb_gadget' / 'jetlink' / 'functions').mkdir(parents=True)
+    # mine is whatever is left of the machine's own claim, not someone else's
+    other = self.others(tmp_path, 'g1')
+    assert other == [str(tmp_path / 'config' / 'usb_gadget' / 'g1' / 'functions' / 'ncm.0')], other
+
+  def test_the_iphone_gadgets_own_ncm_does_not_stop_it(self, tmp_path):
+    (tmp_path / 'config' / 'usb_gadget' / 'jetlink' / 'functions' / 'ncm.usb0').mkdir(parents=True)
+    assert self.others(tmp_path, 'jetlink') == []
+
+  def test_no_ncm_anywhere_leaves_the_iphone_gadget_alone(self, tmp_path):
+    (tmp_path / 'config' / 'usb_gadget' / 'g1' / 'functions' / 'mass_storage.0').mkdir(parents=True)
+    (tmp_path / 'config' / 'usb_gadget' / 'jetlink' / 'functions').mkdir(parents=True)
+    assert self.others(tmp_path, 'g1') == []
+
+  def test_the_gadget_looks_before_it_makes_the_network(self):
+    # a check nothing calls protects nothing
+    src = REPO.joinpath('jetlink', 'comma', 'jetlink-root.sh').read_text()
+    looked = src.index('if other=$(other_ncm_function)')
+    made = src.index('mkdir -p "functions/$NET_FN"')
+    assert looked < made, "the network function is made before another gadget's claim is checked"
+
+
 @pytest.mark.parametrize('args', [(), ('setup',), ('--ios',), ('gadget', '--net'), ('port',), ('port', 'on'), ('udc',),
                                   ('udc', 'on'), ('vm',), ('vm', 'undo'),
                                   ('draw',), ('draw', 'cut'), ('boot',), ('boot', 'a', 'b')])

@@ -396,13 +396,34 @@ cmd_gadget() {
     ln -s "$GADGET/functions/ffs.$FFS_NAME" "configs/c.1/ffs.$FFS_NAME" ||
     fail "could not link ffs.$FFS_NAME into configs/c.1"
 
-  # The network interface, for an iPhone only. A USB gadget left with one from an
+  # another gadget's NCM function, named on stdout, or nothing: this kernel
+# registers any gadget's NCM function under the fixed kobject name f_ncm,
+# whatever its directory is called, so exactly one may exist machine-wide. AGNOS's
+# own gadget (g1) carries one for tethering, and adding a second draws
+# "kobject_add_internal failed for f_ncm with -EEXIST": the half-made function
+# wedges configfs, the rmdir that later takes it down dereferences freed memory
+# (Internal error: Oops: 96000005 in rmdir), and from then every mkdir under the
+# gadget blocks uninterruptibly, so the owner's retries pile up and nothing clears
+# them short of a reboot. Look before leaping: refusing costs nothing yet.
+other_ncm_function() {
+  local other
+  for other in "$CONFIGFS"/usb_gadget/*/functions/"${NET_FN%%.*}".*; do
+    [[ -e "$other" ]] || continue
+    [[ "$other" == "$GADGET/functions/"* ]] && continue
+    echo "$other"
+  done
+}
+
+# The network interface, for an iPhone only. A USB gadget left with one from an
   # iOS boot loses it here: unlinking it force-unbinds the UDC, which is why the
   # owner switches only while parked. The 4.9 kernel picks the interface's MAC
   # addresses itself and refuses them from configfs; DHCP makes that harmless.
   if [[ $ios -eq 0 ]]; then
     if net_present; then net_remove; fi
   else
+    if other=$(other_ncm_function); then
+      fail "another NCM function exists already ($other); this kernel allows one across all gadgets, so the iPhone's network interface cannot be added"
+    fi
     mkdir -p "functions/$NET_FN" || fail "could not create the $NET_FN gadget function"
     # after ffs, so it takes the next interface numbers
     [[ -L "configs/c.1/$NET_FN" ]] ||
