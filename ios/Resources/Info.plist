@@ -35,7 +35,7 @@
 	<key>NSHumanReadableCopyright</key>
 	<string>MIT License. Copyright 2026 Zeph Leggett.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Jetlink connects to your comma over the USB cable.</string>
+	<string>Jetlink connects to your comma over the USB cable or your hotspot.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

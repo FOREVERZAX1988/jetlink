@@ -140,17 +140,32 @@ public final class OrtBackend: EngineBackend {
   public let keepCPUWarm: Bool
   private let preparer: any ModelPreparer
   private let chip: String
+  /// The QNN backend library to load, when the app asks for the phone's own
+  /// instead of the one this build carries (`backend_path` in the provider's
+  /// options): the Android app's *Phone's Own QNN*, which the app sets from its
+  /// settings. Nil, on every other platform and phone, is the app's own copy.
+  private let qnnBackend: String?
   private let log = ServerLog(category: "ort")
 
   /// `chip` names what the artifacts are valid for: on Android the SoC's
   /// model, "SM8650" (Build.SOC_MODEL), which a QNN context is compiled for.
-  /// Nil is the Apple chip on Apple platforms and "cpu" elsewhere.
-  public init(profile: OrtProfile, preparer: any ModelPreparer, keepAlive: Bool = true, keepCPUWarm: Bool = true, chip: String? = nil) {
+  /// Nil is the Apple chip on Apple platforms and "cpu" elsewhere. `qnnBackend`
+  /// is the phone's own QNN backend to load, or nil for the app's own copy.
+  public init(
+    profile: OrtProfile, preparer: any ModelPreparer, keepAlive: Bool = true, keepCPUWarm: Bool = true, chip: String? = nil,
+    qnnBackend: String? = nil
+  ) {
     self.profile = profile
     self.preparer = preparer
     self.keepAlive = keepAlive
     self.keepCPUWarm = keepCPUWarm
     self.chip = HostChip.resolve(chip)
+    self.qnnBackend = qnnBackend
+    // What onnxruntime, its execution provider and QNN beneath it say is kept
+    // in COrt's ring from here on, which is what the `npu:` report prints
+    // first: this module's shim is the only place those lines exist.
+    OrtRuntimeLog.install()
+    HostDiagnostics.qnnBackend = qnnBackend
   }
 
   public var runtimeVersion: String { OrtRuntime.version }
@@ -167,8 +182,7 @@ public final class OrtBackend: EngineBackend {
   func providerOptions(_ unit: OrtUnit) -> [String: String] {
     switch unit {
     case .htp:
-      [
-        "backend_type": "htp",
+      var options = [
         // burst holds the clocks up between frames, the counterpart of the
         // Mac's GPU keep-alive; sustained trades speed for less heat.
         "htp_performance_mode": keepAlive ? "burst" : "sustained_high_performance",
@@ -177,8 +191,23 @@ public final class OrtBackend: EngineBackend {
         "enable_htp_fp16_precision": "1",
         "qnn_context_priority": "high",
       ]
-    case .qnnGPU: ["backend_type": "gpu"]
-    case .coreML, .cpu: [:]
+      // The phone's own backend, when the app asked for it: the HTP backend,
+      // this phone's Stub and the Skel its DSP was signed for are then one
+      // vendor build. Without the option onnxruntime loads `libQnnHtp.so` by
+      // name, which is the copy beside the app.
+      //
+      // onnxruntime takes the QNN backend one of two ways and refuses both at
+      // once -- "Only one of 'backend_type' and 'backend_path' should be set",
+      // thrown from the provider's own constructor, before it reads the model
+      // -- so a path replaces the type here instead of joining it.
+      if let path = qnnBackend, !path.isEmpty {
+        options["backend_path"] = path
+      } else {
+        options["backend_type"] = "htp"
+      }
+      return options
+    case .qnnGPU: return ["backend_type": "gpu"]
+    case .coreML, .cpu: return [:]
     }
   }
 
@@ -266,19 +295,58 @@ public final class OrtBackend: EngineBackend {
     let source = staged.appending(path: file)
     let context = staged.appending(path: "\(session)_ctx.onnx")
     report("compile", 0, "compiling \(session) for the NPU")
-    try Ticker.during(interval: 2, Ticker.paced("compile", "compiling \(session) for the NPU", took: took, report: report)) {
-      let config = [
-        "ep.context_enable": "1",
-        "ep.context_file_path": context.path,
-        // the context binary in a file of its own beside the model, not base64 inside it
-        "ep.context_embed_mode": "0",
-      ]
-      _ = try OrtSession(model: source, provider: "QNN", options: providerOptions(.htp), config: config)
+    let started = Date()
+    // Before the ask: a compile that runs out of memory does not come back with
+    // an error, it takes the process with it, and a killed process reports
+    // nothing to the comma. The answer under a shortage is a message instead.
+    if let shortage = HostMemory.shortage(for: Files.size(of: source)) {
+      log.warning("not compiling \(session): \(shortage)")
+      HostDiagnostics.report("the NPU build of \(session) was not started: \(shortage)")
+      throw HostError.failed(shortage)
     }
-    guard FileManager.default.fileExists(atPath: context.path) else {
-      log.warning("onnxruntime wrote no EP context for \(session); each load will compile it again")
-      return file
+    // A device QNN will not create, a Stub its backend will not have, a graph
+    // its converter would not take: onnxruntime throws the provider's own
+    // sentence, and it is half of what the report is evidence of.
+    var thrown: String?
+    do {
+      try Ticker.during(interval: 2, Ticker.paced("compile", "compiling \(session) for the NPU", took: took, report: report)) {
+        let config = [
+          "ep.context_enable": "1",
+          "ep.context_file_path": context.path,
+          // the context binary in a file of its own beside the model, not base64 inside it
+          "ep.context_embed_mode": "0",
+        ]
+        _ = try OrtSession(model: source, provider: "QNN", options: providerOptions(.htp), config: config)
+      }
+    } catch {
+      thrown = String(describing: error)
     }
+    let seconds = Date().timeIntervalSince(started)
+    let said = thrown.map { "the runtime's own words: \($0). " } ?? ""
+    guard thrown == nil, FileManager.default.fileExists(atPath: context.path) else {
+      log.warning("onnxruntime wrote no EP context for \(session) in \(String(format: "%.1f", seconds)) s; each load will compile it again")
+      // A compile that came back this fast compiled nothing: the QNN provider
+      // took no node of the graph, so onnxruntime left the model to the CPU,
+      // which is minutes a frame rather than a frame. The artifact would then
+      // be a promise of an NPU it does not keep: the load runs the whole model
+      // on the CPU under a warm-up that never ends. The build fails here
+      // instead, as the LiteRT path fails when a phone's GPU cannot take the
+      // model, so the app says which phone could not rather than spinning.
+      if seconds < 30 {
+        log.warning("the QNN provider took no node of \(session) (it returned in \(String(format: "%.1f", seconds)) s): the model is on the phone's CPU")
+      }
+      HostDiagnostics.report(
+        "the NPU build of \(session) wrote no EP context in \(String(format: "%.1f", seconds)) s\(thrown.map { ", and onnxruntime threw: \($0)" } ?? "")")
+      throw HostError.failed(
+        said
+          + "the phone's NPU took no node of \(session): QNN wrote no compiled context for it, so onnxruntime would run the "
+          + "whole model on the phone's CPU, minutes a frame. Which reason it is -- a Stub for another Hexagon, a Skel "
+          + "the DSP will not take, a QNN backend that is not its Stub's build -- the npu: lines above are the evidence: "
+          + "what the app carries, hashed, what this process has open, where the Skel is looked for, and what QNN itself "
+          + "said. Run this model on the GPU until they name the pair this phone needs."
+      )
+    }
+    log.info("the NPU context for \(session) is \(formatBytes(Files.size(of: context)))")
     try? FileManager.default.removeItem(at: source)
     return context.lastPathComponent
   }
@@ -335,6 +403,10 @@ public final class OrtBackend: EngineBackend {
       guard case .coreML = unit, let cache = entry["cache"] as? String else { return nil }
       let contents = (try? FileManager.default.contentsOfDirectory(atPath: artifact.appending(path: cache, directoryHint: .isDirectory).path)) ?? []
       return contents.isEmpty ? "the CoreML cache for \(entry["model"] as? String ?? cache) is empty" : nil
+    }
+    let npuFile = manifest.first { OrtUnit(entry: $0) == .htp }.flatMap { $0["model"] as? String }
+    if let npuFile, !npuFile.contains("_ctx") {
+      log.warning("the artifact's NPU session holds the model, not a compiled context: this load compiles it for the phone again")
     }
     let what = profile.usesCoreML ? "the CoreML model" : "the model"
     let (engine, seconds) = try Artifact.load(artifact, meta: meta, what: what, report: report) {

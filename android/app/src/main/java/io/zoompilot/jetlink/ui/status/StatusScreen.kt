@@ -31,6 +31,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.zoompilot.jetlink.AppGraph
+import io.zoompilot.jetlink.R
+import io.zoompilot.jetlink.l10n
 import io.zoompilot.jetlink.server.RunState
 import io.zoompilot.jetlink.server.ServerService
 import io.zoompilot.jetlink.ui.JetlinkTheme
@@ -106,7 +108,7 @@ fun StatusScaffold(state: StatusState, actions: StatusActions, openLogs: () -> U
                     Column {
                         Text("Jetlink", fontWeight = FontWeight.Bold, maxLines = 1)
                         Text(
-                            state.subtitle,
+                            StatusL10n.subtitle(state),
                             style = MaterialTheme.typography.bodyMedium,
                             color = if (summary.tone == Tone.Warning || summary.tone == Tone.Bad) colors.tone(summary.tone) else colors.secondaryText,
                             maxLines = 1,
@@ -115,7 +117,7 @@ fun StatusScaffold(state: StatusState, actions: StatusActions, openLogs: () -> U
                     }
                 },
                 actions = {
-                    IconButton(onClick = openLogs) { Icon(Icons.Filled.Description, contentDescription = "Logs") }
+                    IconButton(onClick = openLogs) { Icon(Icons.Filled.Description, contentDescription = l10n(R.string.content_desc_logs)) }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = colors.grouped, scrolledContainerColor = colors.grouped),
             )

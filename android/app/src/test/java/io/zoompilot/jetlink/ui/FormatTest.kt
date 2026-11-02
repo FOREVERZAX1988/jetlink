@@ -68,19 +68,19 @@ class FormatTest {
 
     @Test
     fun stageNames() {
-        assertEquals("Compiling", Format.stageName("compile"))
-        assertEquals("Loading", Format.stageName("load"))
-        assertEquals("Working", Format.stageName(null))
-        assertEquals("Working", Format.stageName("something new"))
-        assertEquals("Warming Up", Format.stageName("warm"))
+        assertEquals("Compiling", Format.stageNamePlain("compile"))
+        assertEquals("Loading", Format.stageNamePlain("load"))
+        assertEquals("Working", Format.stageNamePlain(null))
+        assertEquals("Working", Format.stageNamePlain("something new"))
+        assertEquals("Warming Up", Format.stageNamePlain("warm"))
     }
 
     @Test
     fun progressWithAndWithoutAnEstimate() {
-        assertEquals("Loading · 42%", Format.progressText("load", 0.42, "loading the model, 5 s of about 12 s"))
+        assertEquals("Loading · 42%", Format.progressTextPlain("load", 0.42, "loading the model, 5 s of about 12 s"))
         // nothing to go by: the seconds so far, never a 0% that never moves
-        assertEquals("Loading · 12 s", Format.progressText("load", 0.0, "loading the model to check it runs, 12 s elapsed"))
-        assertEquals("Loading", Format.progressText("load", 0.0, "loading the model"))
+        assertEquals("Loading · 12 s", Format.progressTextPlain("load", 0.0, "loading the model to check it runs, 12 s elapsed"))
+        assertEquals("Loading", Format.progressTextPlain("load", 0.0, "loading the model"))
         assertEquals(null, Format.progressAmount(0.0, null))
     }
 
@@ -119,6 +119,9 @@ class FormatTest {
         assertEquals("Another app holds the comma's interface.", Format.sentence("another app holds the comma's interface"))
         assertEquals("Done!", Format.sentence("Done!"))
         assertEquals("", Format.sentence("  "))
+        // a Chinese line takes the full-width stop, not a "." glued to it
+        assertEquals("另一个应用占用了 Comma 的接口。", Format.sentence("另一个应用占用了 Comma 的接口"))
+        assertEquals("无法打开。", Format.sentence("无法打开。"))
     }
 
     @Test

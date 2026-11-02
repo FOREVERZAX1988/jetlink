@@ -54,6 +54,12 @@ typedef struct {
 // The runtime's version string, "1.29.0", or "" when it cannot be opened.
 const char *jl_version(void);
 
+// The runtime's own lines, oldest first, newline-separated: what onnxruntime,
+// its execution provider and QNN beneath it said themselves, which is where a
+// provider that took no node of a model left its reason. "" when they have said
+// nothing. Overwritten by the next call; the caller does not free it.
+const char *jl_log_lines(void);
+
 char *jl_env_create(int log_severity, jl_env **out);
 void jl_env_release(jl_env *env);
 

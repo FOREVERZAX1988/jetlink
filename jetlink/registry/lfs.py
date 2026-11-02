@@ -43,6 +43,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from jetlink.registry.catalog import NetworkError, NotFound, RegistryError, VerifyError, http_get, http_json, is_sha256
+from jetlink.registry.sources import hf_mirror_candidates, jsdelivr_candidates, probe_sorted, proxy_candidates
 
 log = logging.getLogger('jetlink.registry')
 
@@ -112,15 +113,53 @@ def parse_pointer_text(text: str) -> Pointer | None:
 
 def fetch_pointer(ref: str, timeout: float = POINTER_TIMEOUT, opener=None) -> Pointer:
   """The oid and size of the ONNX at a comma commit: in its tree, or for a
-  commit that ships a precompiled pkl instead, the ONNX it was built from."""
-  try:
-    text = http_get(POINTER_URL.format(ref=ref), timeout, opener, POINTER_MAX).decode('utf-8', 'replace')
-  except NotFound:
-    return fetch_export_pointer(ref, timeout=timeout, opener=opener)
-  pointer = parse_pointer_text(text)
-  if pointer is None:
-    raise RegistryError(f"{ref[:10]} did not serve an lfs pointer")
-  return pointer
+  commit that ships a precompiled pkl instead, the ONNX it was built from.
+
+  The pointer is a small file on raw.githubusercontent.com, which is
+  unreachable from many networks in China, so the CDN family and the
+  read-through proxies are asked as well and the ones that answer fastest
+  are tried first. A source that does not answer moves on to the next; a 404
+  from the official one means the commit has no pointer there, which is the
+  case the precompiled-pkl export lookup answers.
+  """
+  candidates = probe_sorted(pointer_candidates(ref), keep_first=True)
+  last: Exception | None = None
+  for i, candidate in enumerate(candidates):
+    try:
+      text = http_get(candidate, timeout, opener, POINTER_MAX).decode('utf-8', 'replace')
+    except NotFound:
+      if i == 0:
+        return fetch_export_pointer(ref, timeout=timeout, opener=opener)
+      last = NotFound(candidate)
+      continue
+    except NetworkError as e:
+      last = e
+      continue
+    pointer = parse_pointer_text(text)
+    if pointer is None:
+      raise RegistryError(f"{ref[:10]} did not serve an lfs pointer")
+    return pointer
+  if last is not None:
+    raise last
+  return fetch_export_pointer(ref, timeout=timeout, opener=opener)
+
+
+def pointer_candidates(ref: str) -> list[str]:
+  """Every source one commit's pointer is fetched from, the official one first.
+
+  The pointer is a raw.githubusercontent.com URL, so the CDN family serves it
+  too, in the path form it takes, and the proxies serve it in the prefix
+  form.
+  """
+  url = POINTER_URL.format(ref=ref)
+  candidates = [url]
+  candidates.extend(jsdelivr_candidates(url))
+  candidates.extend(proxy_candidates(url))
+  seen: list[str] = []
+  for candidate in candidates:
+    if candidate and candidate not in seen:
+      seen.append(candidate)
+  return seen
 
 
 def patch_subjects(text: str) -> list[str]:
@@ -167,16 +206,69 @@ def diff_pointer(text: str) -> Pointer | None:
 
 def commit_subject(ref: str, timeout: float = POINTER_TIMEOUT, opener=None) -> str:
   """A comma commit's subject line, from the head of its patch."""
-  url = COMMIT_PATCH_URL.format(ref=ref)
-  subjects = patch_subjects(http_get(url, timeout, opener, POINTER_MAX).decode('utf-8', 'replace'))
-  if not subjects:
-    raise RegistryError(f"{url} has no subject line")
+  subjects = patch_subjects(http_get_text(patch_candidates(COMMIT_PATCH_URL.format(ref=ref)), timeout, opener,
+                                           PATCH_MAX, 'no subject line'))
   return subjects[0]
 
 
+def patch_candidates(url: str) -> list[str]:
+  """Every source one patch is fetched from, the official one first.
+
+  A patch lives on github.com, which is unreachable from many networks in
+  China; the read-through proxies forward it. The official source stays
+  first: a patch that is not there is not there, and a proxy that serves an
+  older copy of it would be a different patch.
+  """
+  candidates = [url]
+  candidates.extend(proxy_candidates(url))
+  seen: list[str] = []
+  for candidate in candidates:
+    if candidate and candidate not in seen:
+      seen.append(candidate)
+  return seen
+
+
+def http_get_text(candidates: list[str], timeout: float, opener, limit: int, complaint: str) -> str:
+  """The body at the first source that answers, as text.
+
+  The candidates are latency-probed first, so the fastest source that
+  answers is tried first; a source that does not answer moves on to the
+  next, and a 404 on one of them does not stop the search.
+  """
+  ordered = probe_sorted(candidates, keep_first=True)
+  last: Exception | None = None
+  for candidate in ordered:
+    try:
+      return http_get(candidate, timeout, opener, limit).decode('utf-8', 'replace')
+    except NotFound as e:
+      last = e
+      continue
+    except NetworkError as e:
+      last = e
+      continue
+  raise last if last is not None else RegistryError(complaint)
+
+
 def _tree(path: str, timeout: float, opener) -> list[dict]:
+  """The model repo's tree at a path, from the fastest source that answers.
+
+  The tree comes from huggingface.co's API, which is unreachable or slow
+  from networks in China; the mirrors serve the same API, so they are asked
+  as well and the ones that answer fastest are tried first.
+  """
   url = DRIVING_MODELS_TREE_URL + (f"/{urllib.parse.quote(path)}?recursive=true" if path else '')
-  return [e for e in http_json(url, timeout, opener, list) if isinstance(e, dict) and isinstance(e.get('path'), str)]
+  candidates = probe_sorted([url, *hf_mirror_candidates(url)])
+  last: Exception | None = None
+  for candidate in candidates:
+    try:
+      return [e for e in http_json(candidate, timeout, opener, list) if isinstance(e, dict) and isinstance(e.get('path'), str)]
+    except NotFound:
+      last = NotFound(candidate)
+      continue
+    except NetworkError as e:
+      last = e
+      continue
+  raise last if last is not None else RegistryError(f"no source served {url}")
 
 
 def fetch_export_pointer(ref: str, timeout: float = POINTER_TIMEOUT, opener=None) -> Pointer:
@@ -190,7 +282,7 @@ def fetch_export_pointer(ref: str, timeout: float = POINTER_TIMEOUT, opener=None
   not in the model repo yet stops the search rather than falling back to an
   older one, a different model."""
   url = COMMIT_PATCH_URL.format(ref=ref)
-  patch = http_get(url, timeout, opener, PATCH_MAX).decode('utf-8', 'replace')
+  patch = http_get_text(patch_candidates(url), timeout, opener, PATCH_MAX, f"{url} has no subject line")
   subjects = patch_subjects(patch)
   if not subjects:
     raise RegistryError(f"{url} has no subject line")
@@ -207,7 +299,8 @@ def fetch_export_pointer(ref: str, timeout: float = POINTER_TIMEOUT, opener=None
   tried.append(f"its diff has no {BIG_ONNX}")
   if (pull := _PULL.search(subject)) is not None:
     number = pull.group(1)
-    pull_patch = http_get(PULL_PATCH_URL.format(number=number), timeout, opener, PATCH_MAX).decode('utf-8', 'replace')
+    pull_patch = http_get_text(patch_candidates(PULL_PATCH_URL.format(number=number)), timeout, opener,
+                                PATCH_MAX, f"pull request #{number} has no patch")
     if (pointer := diff_pointer(pull_patch)) is not None:
       log.info("%s merged #%s, whose last %s is %s", ref[:10], number, BIG_ONNX, pointer.oid[:16])
       return pointer

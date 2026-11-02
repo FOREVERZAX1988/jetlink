@@ -404,6 +404,20 @@ case "$name" in
 
   gpg) cat >/dev/null ;;
 
+  nmcli)
+    # NetworkManager: a Wi-Fi device unless FAKE_NO_WIFI, and the hotspot a
+    # connection while $state/hotspot is there
+    case "$*" in
+      "-t -f DEVICE,TYPE device") [ -n "${FAKE_NO_WIFI:-}" ] || echo "wlP1p1s0:wifi"; echo "eno1:ethernet" ;;
+      "-t -f NAME connection show") [ -f "$state/hotspot" ] && echo jetlink-hotspot; echo "Wired connection 1" ;;
+      "connection add "*) echo "$*" >"$state/hotspot" ;;
+      "connection delete "*) rm -f "$state/hotspot" ;;
+      "connection up "*) [ -f "$state/hotspot" ] ;;
+      "-s -g 802-11-wireless.ssid connection show "*) echo jetlink-fake ;;
+      "-s -g 802-11-wireless-security.psk connection show "*) echo 0123456789abcdef ;;
+      *) echo "fake nmcli: $*" >&2; exit 2 ;;
+    esac ;;
+
   *) echo "fake.sh: no stand-in for $name" >&2; exit 127 ;;
 esac
 exit 0

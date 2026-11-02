@@ -46,6 +46,7 @@ final class AppSettings {
     static let startServerOnLaunch = "startServerOnLaunch"
     static let keepAwakeWhileServing = "keepAwakeWhileServing"
     static let keepAwakeLidClosed = "keepAwakeLidClosed"
+    static let wifiLink = "wifiLink"
   }
 
   @ObservationIgnored private let defaults: UserDefaults
@@ -76,6 +77,13 @@ final class AppSettings {
     didSet { defaults.set(keepAwakeLidClosed, forKey: Key.keepAwakeLidClosed) }
   }
 
+  /// Listen for a comma that joined this Mac's hotspot and dials it (the
+  /// comma's Jetlink setting on Wi-Fi). Off unless chosen; takes effect when
+  /// the server restarts.
+  var wifiLink: Bool {
+    didSet { defaults.set(wifiLink, forKey: Key.wifiLink) }
+  }
+
   init(defaults: UserDefaults = .standard) {
     self.defaults = defaults
     // A stored "tinygrad" (the removed Python backend) or "ane" (an older name
@@ -96,6 +104,7 @@ final class AppSettings {
     startServerOnLaunch = defaults.object(forKey: Key.startServerOnLaunch) == nil ? true : defaults.bool(forKey: Key.startServerOnLaunch)
     keepAwakeWhileServing = defaults.object(forKey: Key.keepAwakeWhileServing) == nil ? true : defaults.bool(forKey: Key.keepAwakeWhileServing)
     keepAwakeLidClosed = defaults.bool(forKey: Key.keepAwakeLidClosed)
+    wifiLink = defaults.bool(forKey: Key.wifiLink)
   }
 
   nonisolated static let defaultTCPPort = 5599

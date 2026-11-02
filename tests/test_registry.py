@@ -582,4 +582,9 @@ def test_only_a_missing_file_falls_back_and_an_outage_does_not():
   opener = FakeOpener(routes)
   with pytest.raises(NetworkError):
     fetch_pointer(V3_REF, opener=opener)
-  assert opener.calls == [url]
+  # the official source is asked first, and the outage does not stop the
+  # search: the CDN family and the proxies are asked as well, since a
+  # 503 from one host says nothing about the others
+  assert opener.calls[0] == url
+  assert len(opener.calls) > 1
+  assert all(call != url for call in opener.calls[1:])

@@ -22,6 +22,8 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 
+from jetlink.registry.sources import jsdelivr_candidates, probe_sorted, proxy_candidates
+
 
 CATALOG_URL_TEMPLATE = 'https://raw.githubusercontent.com/sunnypilot/sunnypilot-models/refs/heads/gh-pages/docs/driving_models_chestnut_v{version}.json'
 # v26 is v25 plus Cinque Terre V3, at the same selector version. v27 onwards
@@ -48,6 +50,7 @@ DEFAULT_BIG_MODEL_REF = 'bf3e3631b3f91d92a1020a5e0dd4298b93ff4244'
 # comma with no catalog to name it from shows (jetlink.openpilot, on a fork
 # without sunnypilot's model manager)
 DEFAULT_BIG_MODEL_NAME = 'Cinque Terre V3 Model'
+JSDELIVR_HOST = 'https://cdn.jsdelivr.net'
 CATALOG_TIMEOUT = 10.0
 
 _REF = re.compile(r'[0-9a-f]{40}')
@@ -135,9 +138,64 @@ def http_json(url: str, timeout: float, opener=None, kind: type = dict):
   return data
 
 
+def jsdelivr_fallback(url: str) -> str | None:
+  """The jsDelivr CDN URL for a raw.githubusercontent.com URL, or None.
+
+  raw is unreachable from many networks in China; jsDelivr serves the same
+  file from its CDN. Supports both the current /<owner>/<repo>/refs/heads/
+  <branch>/<path> form and the legacy /<owner>/<repo>/<branch>/<path> form.
+  """
+  from jetlink.registry.sources import raw_to_jsdelivr
+  return raw_to_jsdelivr(url)
+
+
+def catalog_candidates(url: str) -> list[str]:
+  """Every source one catalog file is fetched from, the official one first.
+
+  The official source stays first so it wins a tie: when github answers in
+  the same time as a CDN or a proxy, the origin is the one that keeps
+  working when the third party is taken down. The CDN family comes next (one
+  service, a stable path form, a track record), and the read-through proxies
+  last (third-party services that come and go).
+
+  The order here is only the starting point: the caller latency-probes the
+  candidates and reorders them by measurement.
+  """
+  candidates = [url]
+  candidates.extend(jsdelivr_candidates(url))
+  candidates.extend(proxy_candidates(url))
+  seen: list[str] = []
+  for candidate in candidates:
+    if candidate and candidate not in seen:
+      seen.append(candidate)
+  return seen
+
+
 def fetch_catalog(url: str = CATALOG_URL, timeout: float = CATALOG_TIMEOUT, opener=None) -> dict:
-  """The catalog JSON. Every failure, transport or content, is a NetworkError."""
-  return http_json(url, timeout, opener)
+  """The catalog JSON, from the fastest source that answers.
+
+  raw githubusercontent is unreachable from many networks in China, so the
+  CDN family and the read-through proxies are asked as well, and the ones
+  that answer fastest are tried first (catalog_candidates and the probe in
+  jetlink.registry.sources). A 404 is a NotFound without trying the others -
+  a file the server says is not there is not there, and the version probe
+  relies on that; every other failure moves to the next source before
+  giving up, as a NetworkError. Each candidate is tried twice: CDNs and
+  middleboxes occasionally serve a mangled body, and one retry has been
+  enough to get clean bytes."""
+  candidates = probe_sorted(catalog_candidates(url), keep_first=True)
+  last: Exception | None = None
+  for i, candidate in enumerate(candidates):
+    for attempt in range(2):
+      try:
+        return http_json(candidate, timeout, opener)
+      except NotFound:
+        if i == 0 and attempt == 0:
+          raise
+        raise NotFound(str(last)) from last
+      except NetworkError as e:
+        last = e
+  raise last
 
 
 def fetch_catalogs(opener=None) -> dict:

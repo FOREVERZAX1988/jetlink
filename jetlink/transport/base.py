@@ -70,9 +70,9 @@ class Transport(ABC):
   """
 
   def link_info(self) -> dict:
-    """What the comma's hello says about this link: its kind (usb, cable or
-    tcp) and, over USB, the speed the controller negotiated. Empty when there
-    is nothing to say."""
+    """What the comma's hello says about this link: its kind (usb, cable, tcp
+    or wifi) and, over USB, the speed the controller negotiated, over Wi-Fi
+    the band. Empty when there is nothing to say."""
     return {}
 
   @abstractmethod

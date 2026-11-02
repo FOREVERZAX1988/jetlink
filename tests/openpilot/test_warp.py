@@ -97,6 +97,33 @@ class TestValidity(WarpTest):
     self.assertEqual(self.warps.geometry(), fakes.MICI)
 
 
+class TestLossless(WarpTest):
+  def test_the_lossless_warp_lives_beside_the_plain_one(self):
+    plain = self.warps.path(*GEOM)
+    lossless = self.warps.path(*GEOM, lossless=True)
+    self.assertEqual(lossless.parent, plain.parent)
+    self.assertEqual(lossless, warp.lossless_path(plain))
+    self.assertTrue(lossless.name.endswith('_lossless_tinygrad.pkl'))
+
+  def test_neither_answers_for_the_other(self):
+    # only the plain warp is present
+    self.write()
+    self.assertTrue(self.warps.is_cached(*GEOM))
+    self.assertFalse(self.warps.is_cached(*GEOM, lossless=True))
+    with self.assertRaisesRegex(RuntimeError, 'no lossless warp for'):
+      self.warps.load(*GEOM, lossless=True)
+
+  def test_the_lossless_warp_answers_for_itself(self):
+    # only the lossless warp is present
+    pkl = self.warps.path(*GEOM, lossless=True)
+    pkl.parent.mkdir(parents=True, exist_ok=True)
+    pkl.write_bytes(b'pickle')
+    self.assertTrue(self.warps.is_cached(*GEOM, lossless=True))
+    self.assertFalse(self.warps.is_cached(*GEOM))
+    with self.assertRaisesRegex(RuntimeError, 'no warp for'):
+      self.warps.load(*GEOM)
+
+
 class TestLoad(WarpTest):
   def test_a_miss_raises_rather_than_returning_none(self):
     """modeld's big-model load is wrapped in the fallback to the small model.
@@ -261,12 +288,32 @@ class TestWarp(unittest.TestCase):
     p.start()
     self.addCleanup(p.stop)
 
-  def make(self, device='QCOM', buffer=FRAME):
+  def make(self, device='QCOM', buffer=FRAME, errors=False):
     capture = FakeCapture(FakeOutput(device))
+    if errors:
+      # a lossless build (with_errors): the capture returns (frame, med_errors)
+      err = FakeOutput(device)
+      capture.errors = err
+      capture.ret = (capture.ret, SimpleNamespace(uop=SimpleNamespace(base=SimpleNamespace(buffer=err))))
     jit = mock.Mock(side_effect=capture.jit)
     jit.captured = capture
     specs = {name: (shape, dtype, device) for name, (shape, dtype, _) in SPECS.items()}
     return warp.Warp({'run': jit, 'input_specs': specs}, buffer), capture
+
+  def test_a_plain_warp_has_no_errors(self):
+    w, _ = self.make()
+    self.assertIsNone(w.errors)
+
+  def test_a_lossless_warp_makes_both_outputs_coherent_before_the_first_call(self):
+    w, capture = self.make(errors=True)
+    qcom = self.devices['QCOM']
+    # frame and MED errors each move to IO-coherent write-back memory
+    self.assertEqual(len(qcom.allocs), 2)
+    self.assertTrue(all(found is qcom.allocs[0] for _, found in capture.calls))
+    for mem in qcom.allocs:
+      self.assertEqual(mem.meta[0].flags & warp.COHERENT_WRITEBACK, warp.COHERENT_WRITEBACK)
+    self.assertEqual(w.output.nbytes, 64)
+    self.assertEqual(w.errors.nbytes, 64)
 
   def test_the_output_is_coherent_before_the_first_call(self):
     # the first call links the JIT to its buffers' addresses
