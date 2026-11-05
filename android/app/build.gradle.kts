@@ -22,6 +22,47 @@ val jetlinkVersionCode: Int =
     jetlinkVersion.split(".").map { it.takeWhile(Char::isDigit).toIntOrNull() ?: 0 }
         .let { (it.getOrElse(0) { 0 } * 10000) + (it.getOrElse(1) { 0 } * 100) + it.getOrElse(2) { 0 } }
 
+// All options are build-time opt-ins; ordinary releases retain the Maven runtime.
+fun qnnFlag(name: String): Boolean = providers.gradleProperty(name).orNull?.let {
+    it.toBooleanStrictOrNull() ?: error("$name must be true or false")
+} ?: false
+val qnnSharedIO = qnnFlag("jetlink.qnnSharedIO")
+val qnnStrict = qnnFlag("jetlink.qnnStrict")
+val qnnNoActivationFusion = qnnFlag("jetlink.qnnNoActivationFusion")
+val qnnJniDir = providers.gradleProperty("jetlink.qnnJniDir").orNull
+val qnnJniRoot = qnnJniDir?.let { file(it) }
+val qnnRuntimeIdentity = if (qnnNoActivationFusion) {
+    check(qnnJniDir != null) { "no-fusion requires one matching SDK; see docs/android-qnn-npu.md" }
+    val directory = File(qnnJniRoot!!, "arm64-v8a")
+    val libraries = directory.listFiles()?.filter { it.isFile && it.extension == "so" }?.sortedBy { it.name }.orEmpty()
+    val names = libraries.map { it.name }.toSet()
+    check(names.containsAll(listOf("libJetlinkQnnHtpNoFusion.so", "libQnnHtp.so", "libQnnGpu.so", "libQnnSystem.so",
+        "libQnnHtpPrepare.so", "libQnnIr.so", "libQnnSaver.so"))) { "incomplete SDK jniLibs directory: $directory" }
+    val stub = names.filter { it.matches(Regex("libQnnHtpV\\d+Stub\\.so")) }.map { it.removeSuffix("Stub.so") }.toSet()
+    val skel = names.filter { it.matches(Regex("libQnnHtpV\\d+Skel\\.so")) }.map { it.removeSuffix("Skel.so") }.toSet()
+    check(stub.isNotEmpty() && stub == skel) { "matching HTP stub/skel pairs are required" }
+    // Actual runtime bytes form a cache namespace, not a preselected SDK/SoC pin.
+    val identity = MessageDigest.getInstance("SHA-256")
+    for (library in libraries) {
+        val digest = MessageDigest.getInstance("SHA-256")
+        library.inputStream().use { stream ->
+            val buffer = ByteArray(1024 * 1024)
+            while (true) {
+                val count = stream.read(buffer)
+                if (count < 0) break
+                digest.update(buffer, 0, count)
+            }
+        }
+        identity.update(library.name.toByteArray(Charsets.UTF_8))
+        identity.update(0.toByte())
+        identity.update(digest.digest())
+    }
+    identity.digest().joinToString("") { "%02x".format(it) }
+} else {
+    check(qnnJniDir == null) { "jetlink.qnnJniDir requires jetlink.qnnNoActivationFusion=true" }
+    ""
+}
+
 android {
     namespace = "io.zoompilot.jetlink"
     compileSdk = 37
@@ -36,6 +77,7 @@ android {
         targetSdk = 36
         versionCode = jetlinkVersionCode
         versionName = jetlinkVersion
+
         // The release tag this build came from, for the updater to order with
         // the newest GitHub release. The workflow names it (JETLINK_BUILD_TAG):
         // "v0.8.7" on a tagged release, "0.8.7-1015-1" on a cn-branch build
@@ -45,6 +87,12 @@ android {
             ?: providers.environmentVariable("GITHUB_REF_NAME").orNull?.takeIf(String::isNotEmpty)
             ?: "local"
         buildConfigField("String", "BUILD_TAG", "\"$buildTag\"")
+
+        buildConfigField("boolean", "QNN_SHARED_IO", qnnSharedIO.toString())
+        buildConfigField("boolean", "QNN_STRICT", qnnStrict.toString())
+        buildConfigField("boolean", "QNN_NO_ACTIVATION_FUSION", qnnNoActivationFusion.toString())
+        buildConfigField("String", "QNN_RUNTIME_IDENTITY", "\"$qnnRuntimeIdentity\"")
+
         // The QNN runtime is arm64 only, and so is every Snapdragon with an NPU
         // worth driving on. The emulator on an Apple silicon Mac is arm64 too.
         ndk { abiFilters += "arm64-v8a" }
@@ -90,6 +138,8 @@ android {
             useLegacyPackaging = true
         }
     }
+
+    if (qnnNoActivationFusion) sourceSets.getByName("main").jniLibs.srcDir(qnnJniRoot!!)
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -150,12 +200,14 @@ dependencies {
     implementation(libs.compose.material.icons)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
+
     // onnxruntime's native libraries arrive through `onnxRuntimeLibraries`
     // below, which leaves the AAR's own copies of the libraries
     // `src/main/jniLibs` holds out of the APK. The AAR is not an
     // `implementation` dependency for the same reason: the server calls
     // onnxruntime's C API, its Java binding is not wanted, and its telemetry
     // provider is removed from the merge (AndroidManifest.xml).
+
     debugImplementation(libs.compose.ui.tooling)
 
     onnxruntimeAar(variantOf(libs.onnxruntime.qnn) { artifactType("aar") })

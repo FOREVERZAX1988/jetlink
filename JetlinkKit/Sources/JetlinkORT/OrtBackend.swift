@@ -138,6 +138,7 @@ public final class OrtBackend: EngineBackend {
   public let keepAlive: Bool
   /// Keep a CPU core warm while the Neural Engine or the NPU runs a frame.
   public let keepCPUWarm: Bool
+  public let qnn: QnnPolicy
   private let preparer: any ModelPreparer
   private let chip: String
   /// The QNN backend library to load, when the app asks for the phone's own
@@ -153,7 +154,8 @@ public final class OrtBackend: EngineBackend {
   /// is the phone's own QNN backend to load, or nil for the app's own copy.
   public init(
     profile: OrtProfile, preparer: any ModelPreparer, keepAlive: Bool = true, keepCPUWarm: Bool = true, chip: String? = nil,
-    qnnBackend: String? = nil
+    qnnBackend: String? = nil, qnn: QnnPolicy = .init()
+
   ) {
     self.profile = profile
     self.preparer = preparer
@@ -161,17 +163,19 @@ public final class OrtBackend: EngineBackend {
     self.keepCPUWarm = keepCPUWarm
     self.chip = HostChip.resolve(chip)
     self.qnnBackend = qnnBackend
+    self.qnn = qnn
     // What onnxruntime, its execution provider and QNN beneath it say is kept
     // in COrt's ring from here on, which is what the `npu:` report prints
     // first: this module's shim is the only place those lines exist.
     OrtRuntimeLog.install()
     HostDiagnostics.qnnBackend = qnnBackend
+
   }
 
   public var runtimeVersion: String { OrtRuntime.version }
 
   public func deviceTag() -> String {
-    sanitize("\(profile.rawValue)-\(chip)")
+    sanitize("\(profile.rawValue)-\(chip)\(profile.sessions.contains(where: { $0.unit == .htp }) ? qnn.cacheSuffix : "")")
   }
 
   public func deriveSpec(model: URL, sha256: String, nbytes: Int64, frameSkip: Int) throws -> ModelSpec {
@@ -182,7 +186,8 @@ public final class OrtBackend: EngineBackend {
   func providerOptions(_ unit: OrtUnit) -> [String: String] {
     switch unit {
     case .htp:
-      var options = [
+      var options = qnn.htpBackend.merging([
+
         // burst holds the clocks up between frames, the counterpart of the
         // Mac's GPU keep-alive; sustained trades speed for less heat.
         "htp_performance_mode": keepAlive ? "burst" : "sustained_high_performance",
@@ -190,7 +195,8 @@ public final class OrtBackend: EngineBackend {
         "htp_graph_finalization_optimization_mode": "3",
         "enable_htp_fp16_precision": "1",
         "qnn_context_priority": "high",
-      ]
+      ]) { _, value in value }
+      if qnn.sharedIO { options["enable_htp_shared_memory_allocator"] = "1" }
       // The phone's own backend, when the app asked for it: the HTP backend,
       // this phone's Stub and the Skel its DSP was signed for are then one
       // vendor build. Without the option onnxruntime loads `libQnnHtp.so` by
@@ -199,12 +205,13 @@ public final class OrtBackend: EngineBackend {
       // onnxruntime takes the QNN backend one of two ways and refuses both at
       // once -- "Only one of 'backend_type' and 'backend_path' should be set",
       // thrown from the provider's own constructor, before it reads the model
-      // -- so a path replaces the type here instead of joining it.
+      // -- so a path replaces the type here instead of joining it. The policy
+      // already sets backend_type (or the no-fusion adapter's backend_path);
+      // the phone's own backend overrides whichever of the two it was.
       if let path = qnnBackend, !path.isEmpty {
         options["backend_path"] = path
-      } else {
-        options["backend_type"] = "htp"
       }
+
       return options
     case .qnnGPU: return ["backend_type": "gpu"]
     case .coreML, .cpu: return [:]
@@ -216,7 +223,9 @@ public final class OrtBackend: EngineBackend {
   func plan(_ unit: OrtUnit, model: URL, cache: URL?) -> SessionPlan {
     switch unit {
     case .coreML(let units): SessionPlan(model: model, computeUnits: units, cacheDirectory: cache)
-    case .htp: SessionPlan(model: model, provider: "QNN", options: providerOptions(unit), label: "QNN(htp)", usesNeuralEngine: true)
+    case .htp: SessionPlan(
+      model: model, provider: "QNN", options: providerOptions(unit), config: qnn.sessionConfig,
+      label: "QNN(htp)", usesNeuralEngine: true)
     case .qnnGPU: SessionPlan(model: model, provider: "QNN", options: providerOptions(unit), label: "QNN(gpu)", usesGPU: true)
     case .cpu: SessionPlan(model: model, provider: nil, threads: HostChip.cpuThreads, label: "CPU")
     }
@@ -233,6 +242,7 @@ public final class OrtBackend: EngineBackend {
   // MARK: build
 
   public func build(model: URL, artifact: URL, report: @escaping ProgressFn, metaExtra: [String: Any]) throws {
+    try qnn.validate()
     let started = Date()
     let expect = Artifact.sidecar(artifact)
     try Artifact.build(artifact, metaExtra: metaExtra, report: report) { staged in
@@ -303,6 +313,7 @@ public final class OrtBackend: EngineBackend {
       log.warning("not compiling \(session): \(shortage)")
       HostDiagnostics.report("the NPU build of \(session) was not started: \(shortage)")
       throw HostError.failed(shortage)
+
     }
     // A device QNN will not create, a Stub its backend will not have, a graph
     // its converter would not take: onnxruntime throws the provider's own
@@ -310,12 +321,9 @@ public final class OrtBackend: EngineBackend {
     var thrown: String?
     do {
       try Ticker.during(interval: 2, Ticker.paced("compile", "compiling \(session) for the NPU", took: took, report: report)) {
-        let config = [
-          "ep.context_enable": "1",
-          "ep.context_file_path": context.path,
-          // the context binary in a file of its own beside the model, not base64 inside it
-          "ep.context_embed_mode": "0",
-        ]
+        // the policy's session config rides along: the same strict provider
+        // contract applies during compilation and reload (no CPU fallback)
+        let config = contextConfiguration(context: context)
         _ = try OrtSession(model: source, provider: "QNN", options: providerOptions(.htp), config: config)
       }
     } catch {
@@ -349,6 +357,16 @@ public final class OrtBackend: EngineBackend {
     log.info("the NPU context for \(session) is \(formatBytes(Files.size(of: context)))")
     try? FileManager.default.removeItem(at: source)
     return context.lastPathComponent
+  }
+
+  /// The same strict provider contract applies during compilation and reload.
+  func contextConfiguration(context: URL) -> [String: String] {
+    qnn.sessionConfig.merging([
+        "ep.context_enable": "1",
+        "ep.context_file_path": context.path,
+        // the context binary in a file of its own beside the model, not base64 inside it
+        "ep.context_embed_mode": "0",
+    ]) { _, value in value }
   }
 
   /// A CoreML build's first session creation is the conversion and CoreML's
@@ -394,6 +412,7 @@ public final class OrtBackend: EngineBackend {
   // MARK: load
 
   public func load(artifact: URL, report: @escaping ProgressFn) throws -> any Engine {
+    try qnn.validate()
     let (manifest, meta) = try OrtArtifact.open(artifact, version: profile.prepareVersion) { entry in
       guard let unit = OrtUnit(entry: entry) else { return "a session names no unit" }
       // Without its compile, onnxruntime would recompile under a "loading"

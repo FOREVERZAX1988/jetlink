@@ -417,7 +417,9 @@
         HostDiagnostics.nameResolution = phoneByName(config)
         return OrtBackend(
           profile: profile, preparer: ONNXPreparer(), keepAlive: (config["keep_alive"] as? Bool) ?? true,
-          keepCPUWarm: (config["keep_cpu_warm"] as? Bool) ?? false, chip: chip, qnnBackend: phone)
+          keepCPUWarm: (config["keep_cpu_warm"] as? Bool) ?? false, chip: chip, qnnBackend: phone,
+          qnn: try QnnPolicy(configuration: config))
+
       case let other:
         throw HostFailure("unknown backend \(other)")
       }
