@@ -859,18 +859,20 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
       raise RuntimeError('no prepared warp for the server model geometry')
     # A phone behind the USB cable (usb/ios) or Wi-Fi answers near the frame
     # budget, so relax the hold/proof per link; Jetson/Mac keep strict defaults.
+    # Both phone links also pace (pace.py): the phone's NPU at full duty cycle
+    # heats and throttles, and a host that falls behind is sent fewer frames.
     if wifi:
       hold_kw = {'hold_frame': model_state.WIFI_HOLD_FRAME,
                  'settling_frames': model_state.WIFI_SETTLING_FRAMES,
                  'holds_in_a_row': model_state.WIFI_HOLDS_IN_A_ROW,
                  'holds_allowed': model_state.WIFI_HOLDS_ALLOWED,
-                 'proving_holds_fatal': False}
+                 'proving_holds_fatal': False, 'pace': True}
     elif mode in ('usb', 'ios'):
       hold_kw = {'hold_frame': model_state.CABLE_HOLD_FRAME,
                  'settling_frames': model_state.CABLE_SETTLING_FRAMES,
                  'holds_in_a_row': model_state.CABLE_HOLDS_IN_A_ROW,
                  'holds_allowed': model_state.CABLE_HOLDS_ALLOWED,
-                 'proving_holds_fatal': False}
+                 'proving_holds_fatal': False, 'pace': True}
     else:
       hold_kw = {}
     return JetlinkModelState(client, spec, warp, face=face, log=parts.log, event=op.event, **hold_kw)

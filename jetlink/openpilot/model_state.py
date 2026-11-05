@@ -37,6 +37,7 @@ import numpy as np
 from jetlink import codecs, hevc
 from jetlink.openpilot import stream as stream_mod
 from jetlink.openpilot.latency import LateTracker
+from jetlink.openpilot.pace import Governor
 from jetlink.openpilot.stages import FrameStages as StageStages
 from jetlink.protocol import NotFinite
 
@@ -181,7 +182,7 @@ class JetlinkModelState:
                hold_frame: float | None = None, settling_frames: int | None = None,
                holds_in_a_row: int | None = None, holds_allowed: int | None = None,
                proving_holds_fatal: bool = True, stages: object | None = None,
-               late: object | None = None):
+               late: object | None = None, pace: bool = False):
     self._log = log
     # Per-link overrides. None means "read the module constant each frame", so
     # the strict USB/Jetson defaults stay live constants the tests can mock and
@@ -236,6 +237,12 @@ class JetlinkModelState:
     self._epoch = 0
     if getattr(client, 'codec', None) == codecs.HEVC and getattr(client, 'takes_hevc', False):
       self._build_hevc(spec)
+
+    # the frame rate's governor, on phone hosts only (joining passes pace for
+    # wifi and cable-to-phone links): a host that falls behind (its holds) is
+    # sent fewer frames instead of work it answers late, and paced frames are
+    # never counted toward the hold limits that hand the drive back (pace.py)
+    self._pace = Governor(log=self._log) if pace else None
 
     self.input_shapes = spec.input_shapes
     self.output_slices = spec.output_slices
@@ -578,6 +585,16 @@ class JetlinkModelState:
 
   def run(self, bufs: dict, transforms: dict[str, np.ndarray],
           inputs: dict[str, np.ndarray], after_enqueue: Callable[[], None] | None = None) -> dict[str, np.ndarray]:
+    # a paced frame is not prepared, sent or run on the host: the last plan
+    # publishes again, the held frame's semantics without a frame the host
+    # queues. Never counted as a hold -- the governor asked for it (pace.py)
+    if self._pace is not None and self.client.last_output is not None \
+            and self._pace.skip(time.monotonic()):
+      self.held = True
+      self.behind = None
+      if after_enqueue is not None:
+        after_enqueue()
+      return self._outputs(self.client.last_output)
     self.prepare(bufs, transforms, inputs)
     self.send(after_enqueue is not None)
     return self.end(after_enqueue)
@@ -612,6 +629,10 @@ class JetlinkModelState:
     any held frame among its first PROVING_FRAMES past SETTLING_FRAMES,
     HOLDS_IN_A_ROW held frames running, or more than HOLDS_ALLOWED in
     HOLD_WINDOW. None while it is keeping up."""
+    # the governor watches the same rhythm and steps the frame rate; its own
+    # paced frames never come through here (run() answers them itself)
+    if self._pace is not None:
+      self._pace.note(held)
     if not held:
       self._holds_in_a_row = 0
       return None

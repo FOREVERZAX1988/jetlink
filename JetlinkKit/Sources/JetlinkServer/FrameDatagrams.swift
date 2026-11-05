@@ -32,7 +32,8 @@ final class FrameDatagrams {
   private var current: (seq: UInt32, total: Int)?
   private var got = 0
   private var offsets: [UInt32] = []
-  /// The last seq completed: anything at or below it is late or repeated.
+  /// The last seq completed or abandoned: anything at or below it is late,
+  /// repeated, or a piece of a message whose start is already gone.
   private var done: UInt32 = 0
   /// One datagram, header and piece, before it is copied into place.
   private let scratch: UnsafeMutableRawPointer
@@ -147,6 +148,11 @@ final class FrameDatagrams {
     if let current, current.seq != header.seq {
       if header.seq < current.seq { return nil }  // an older message's straggler
       dropped += 1  // a newer frame started: this one lost a piece
+      // The abandoned message can never complete: some of its pieces went
+      // with the buffer reset. Without this, each of its remaining pieces
+      // would restart a reassembly that waits for pieces already gone, and
+      // every newer frame's first piece would count the same loss again.
+      done = current.seq
       self.current = nil
     }
     if current == nil {
