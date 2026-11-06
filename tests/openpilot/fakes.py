@@ -33,7 +33,7 @@ from jetlink.openpilot.testing import FakeDevice, FakeTensor, RecordingLog, fake
 
 # the fork's names, so a log line or an assertion reads as it would on a comma
 KEYS = Keys(link='JetlinkLink', offroad='IsOffroad', progress='AcceleratorProgress', spec='JetlinkSpec',
-            pointers='JetlinkModelPointers', big_model='ModelManager_ActiveBundleChestnut',
+            big_model='ModelManager_ActiveBundleChestnut',
             catalog='ModelManager_ModelsCache_Chestnut', charge_phone='JetlinkChargePhone')
 CHESTNUT_IDS = frozenset({(0xADD1, 0x0001), (0x3801, 0x0001), (0x174C, 0x2464), (0x174C, 0x2463)})
 # (cam_w, cam_h, model_w, model_h): a comma 3X, and a comma four
@@ -65,12 +65,11 @@ FACE = ModelFace(parser=FakeParser, frame_size=frame_size, desire_len=8,
 class FakeOpenpilot:
   """Every side of the interface, over a temporary directory."""
 
-  def __init__(self, root: Path | None = None, *, camera=TICI, chestnut: bool = False, catalog_selector: int = 19,
+  def __init__(self, root: Path | None = None, *, camera=TICI, chestnut: bool = False,
                keys: Keys = KEYS):
     self.root = Path(root if root is not None else tempfile.mkdtemp())
     self.keys = keys
     self.log = RecordingLog()
-    self.catalog_selector = catalog_selector
     self.basedir = self.root / 'openpilot'
     self.basedir.mkdir(parents=True, exist_ok=True)
     # the params store, laid out as openpilot's under <root>/params

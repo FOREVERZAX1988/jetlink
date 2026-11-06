@@ -4,35 +4,30 @@ import Foundation
   import FoundationNetworking
 #endif
 
-/// The registry's small requests: a catalog, a pointer, a patch head, a tree
-/// listing. Each failure is a RegistryError, and a 404 is `notFound` so a
-/// caller can tell a missing file from an outage.
+/// The registry's small requests: the model index, and the first byte of an
+/// object in a bucket. Each failure is a network error, a 404 included, as
+/// Python's `fetch_index` raises NetworkError for any of them.
 struct HTTP: Sendable {
   let session: URLSession
 
-  enum Shape: Sendable {
-    case object, array
-
-    var pythonName: String { self == .object ? "dict" : "list" }
-  }
-
   /// The body at `url`, at most `limit` bytes. Past the limit the request is
-  /// cancelled rather than read: a pointer is 134 bytes, and a host that
-  /// resolved the LFS filter for us would otherwise send the whole model.
+  /// The body at `url`, at most `limit` bytes. Past the limit the request is
+  /// cancelled rather than read: the bucket's first byte is asked for with a
+  /// Range, and a host that ignored it would otherwise send the whole model.
   ///
   /// The mirrors the app configured are tried first, in their order, then the
   /// original host: a network failure moves to the next candidate, while a
   /// 404 is an answer about the resource and ends the attempt at once, so
   /// `notFound` reaches the caller with the original URL's meaning intact.
-  func get(_ url: String, timeout: TimeInterval, limit: Int? = nil) async throws(RegistryError) -> Data {
+  func get(_ url: String, timeout: TimeInterval, limit: Int? = nil, headers: [String: String] = [:]) async throws(RegistryError) -> Data {
     let candidates = Mirrors.candidates(for: url)
     guard candidates.count > 1 else {
-      return try await getOnce(url, timeout: timeout, limit: limit)
+      return try await getOnce(url, timeout: timeout, limit: limit, headers: headers)
     }
     var last: RegistryError = .network("no mirror answered for \(url)")
     for candidate in candidates {
       do {
-        return try await getOnce(candidate, timeout: timeout, limit: limit)
+        return try await getOnce(candidate, timeout: timeout, limit: limit, headers: headers)
       } catch let error as RegistryError {
         if error.kind == .notFound { throw error }
         last = error
@@ -42,11 +37,14 @@ struct HTTP: Sendable {
   }
 
   /// One host's answer, without the mirrors.
-  private func getOnce(_ url: String, timeout: TimeInterval, limit: Int? = nil) async throws(RegistryError) -> Data {
+  private func getOnce(_ url: String, timeout: TimeInterval, limit: Int? = nil, headers: [String: String] = [:]) async throws(RegistryError) -> Data {
     guard let target = URL(string: url), target.scheme != nil else {
       throw .network("could not fetch \(url): unknown url type")
     }
     var request = URLRequest(url: target)
+    for (field, value) in headers {
+      request.setValue(value, forHTTPHeaderField: field)
+    }
     // URLSession's request timeout is an idle timeout, as a socket timeout is
     // for urllib: a slow body that keeps arriving is not cut off.
     request.timeoutInterval = timeout
@@ -58,8 +56,9 @@ struct HTTP: Sendable {
       }
       #if canImport(FoundationNetworking)
         // swift-corelibs-foundation has no bytes(for:), so it reads the whole
-        // body and keeps the first `limit` bytes. Only small reads pass a
-        // limit; a model downloads through Transfer, not here.
+        // body and keeps the first `limit` bytes. Only the bucket's
+        // one-byte Range read passes a limit; a model downloads through
+        // Transfer, not here.
         let (whole, response) = try await session.data(for: request)
         try HTTP.check(response, url: url)
         return Data(whole.prefix(max(0, limit)))
@@ -84,28 +83,11 @@ struct HTTP: Sendable {
     }
   }
 
-  /// `get`, parsed, and of the shape asked for. A body that is not JSON is a
-  /// network error: the server did not answer sensibly.
-  func getJSON(_ url: String, timeout: TimeInterval, shape: Shape = .object) async throws(RegistryError) -> JSON {
-    let body = try await get(url, timeout: timeout)
-    let value: JSON
-    do {
-      value = try JSON.parse(body)
-    } catch {
-      throw .network("\(url) did not serve JSON: \(error)")
-    }
-    switch (shape, value) {
-    case (.object, .object), (.array, .array): return value
-    default: throw .network("\(url) did not serve a JSON \(shape.pythonName)")
-    }
-  }
-
   /// urllib raises for anything but a 2xx once redirects are followed, which
   /// URLSession has also done by now.
   static func check(_ response: URLResponse, url: String) throws(RegistryError) {
     guard let failure = statusFailure(response) else { return }
-    let message = "could not fetch \(url): \(failure.text)"
-    throw failure.status == 404 ? .notFound(message) : .network(message)
+    throw .network("could not fetch \(url): \(failure.text)")
   }
 
   /// A status urllib would raise HTTPError for, as its text reads:

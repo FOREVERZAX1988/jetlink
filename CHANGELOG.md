@@ -1,4 +1,14 @@
 <!-- Each release: a "Jetlink vX.Y.Z" heading underlined with =, newest first. A release that changes the fork contract ends with a **Forks** group (docs/publishing.md). -->
+Jetlink v0.9.0
+==============
+**Models**
+* Jetlink now has its own model index, checked every hour for new comma models.
+* comma keeps changing how it ships models, so some new models needed a Jetlink update. They no longer do.
+* Update the Jetlink app and the comma, in any order.
+
+**Forks**
+* API 4, with API 3 still accepted for one more minor release. See [porting](https://github.com/zoompilot/jetlink/blob/main/docs/porting.md#the-adapter-module) for the new model-list hooks.
+
 Jetlink v0.8.13
 ===============
 **Models**
