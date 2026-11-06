@@ -1,0 +1,7 @@
+zstd 1.5.7, decompression only.
+https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz
+sha256 eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3 (as the release's .sha256 says)
+
+zstddeclib.c: build/single_file_libs, `sh combine.sh -r ../../lib -x legacy/zstd_legacy.h -o zstddeclib.c zstddeclib-in.c`
+zstd.h, zstd_errors.h: lib/
+LICENSE: the release's BSD license (zstd is dual BSD/GPLv2; used under BSD)

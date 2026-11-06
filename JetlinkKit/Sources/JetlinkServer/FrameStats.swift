@@ -17,12 +17,29 @@ final class FrameStats: @unchecked Sendable {
   private let lock = NSLock()
   private var samples: [Sample] = []
   private let capacity = 2000
+  /// The comma's most recent stage report, and when it landed: its own half of
+  /// the frame, which no sample here can hold because sampling starts at the
+  /// frame's arrival.
+  private var commaReport: CommaStages?
+  private var commaAt: TimeInterval = 0
+  /// A report older than this is not the link's now. The comma sends one a
+  /// second while a big model drives and stops when it hands back, so a stalled
+  /// comma must stop reporting rather than keep showing its last second.
+  static let commaFresh: TimeInterval = 5
   /// The clock samples are stamped and windowed by; a test replays the
   /// Python's sample times on one of its own.
   private let now: @Sendable () -> TimeInterval
 
   init(now: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
     self.now = now
+  }
+
+  /// Takes the comma's word on where its half of the frame went (CLIENT_STATE).
+  func comma(_ stages: CommaStages) {
+    lock.lock()
+    commaReport = stages
+    commaAt = now()
+    lock.unlock()
   }
 
   func record(totalUs: UInt32, gpuUs: UInt32, queueUs: UInt32, sendUs: UInt32) {
@@ -41,8 +58,12 @@ final class FrameStats: @unchecked Sendable {
     let cutoff = now() - seconds
     lock.lock()
     let rows = samples.filter { $0.at >= cutoff }
+    let stamp = commaAt
+    let comma = commaReport
     lock.unlock()
     guard !rows.isEmpty else { return nil }
+    // the comma's own half, while it is still saying so
+    let commaStages = comma.flatMap { now() - stamp <= FrameStats.commaFresh ? $0 : nil }
     let n = Double(rows.count)
     func mean(_ value: (Sample) -> UInt32) -> Double {
       rows.reduce(0.0) { $0 + Double(value($1)) } / n / 1000
@@ -64,7 +85,8 @@ final class FrameStats: @unchecked Sendable {
       slow: rows.filter { $0.totalUs > FrameStats.slowUs }.count,
       windowS: pythonRound(seconds, 1),
       totalMs: spread(rows.map(\.totalUs)),
-      gpuMs: StatsEvent.Mean(mean: round2(gpu)))
+      gpuMs: StatsEvent.Mean(mean: round2(gpu)),
+      commaStages: commaStages)
   }
 }
 

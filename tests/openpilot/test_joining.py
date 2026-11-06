@@ -47,6 +47,8 @@ class FakeModel:
     # the large model's: why it should hand back after its last frame
     # (model_state's hold rules and the proof after a swap)
     self.behind = None
+    # extra outputs this model carries, by name: what a cross-fade mixes
+    self.extra: dict = {}
 
   def run(self, bufs, transforms, inputs, after_enqueue=None):
     self.calls += 1
@@ -54,7 +56,7 @@ class FakeModel:
       raise self.raises
     if after_enqueue is not None:
       after_enqueue()
-    return {'from': self.name}
+    return {'from': self.name, **self.extra}
 
   def warmup(self):
     self.warmed = True
@@ -1479,7 +1481,7 @@ class AnyForkTest(OpenpilotTest):
     self.op.model_warp = mock.Mock(return_value=None)
     self.big.raises = None
     self.hand_back(fakes.starpilot()[0], [])
-    self.parts.warps.load.assert_called_once_with(1928, 1208, *geometry[2:])
+    self.parts.warps.load.assert_called_once_with(1928, 1208, *geometry[2:], lossless=False)
     self.assertIs(joining.JetlinkModelState.call_args.args[2], warp.Warp.return_value)
 
   def test_a_warp_that_is_not_one_keeps_the_small_model(self):
@@ -1487,6 +1489,72 @@ class AnyForkTest(OpenpilotTest):
     with self.assertRaisesRegex(RuntimeError, r"model_warp is not a warp: output: missing, start\(frame\)"):
       joining.join(self.parts, 1928, 1208, fakes.starpilot()[0])
     self.parts.warps.load.assert_not_called()
+
+
+class FadeTest(JoiningBase):
+  """The swap's cross-fade (blend.SourceBlender): a swap nobody steers against,
+  landing over a few frames instead of in one."""
+
+  # the output keys this fork calls decisions, so the fade takes them whole
+  DISCRETE = ('shouldStop',)
+
+  def _fading(self, fade_frames=4):
+    s = self._make(self.small, self._connect, self._build, fade_frames=fade_frames, discrete=self.DISCRETE)
+    self.addCleanup(self._close, s)
+    return s
+
+  def test_an_off_fade_is_the_identity(self):
+    s = self._fading(fade_frames=0)
+    self.assertIsNone(s._blender)
+    self._wait_joined(s)
+    s.in_control = False
+    # the swap lands in one frame and nothing is mixed
+    self.assertEqual(self._run(s), {'from': 'big'})
+
+  def test_a_swap_ramps_the_large_model_in_over_its_frames(self):
+    s = self._fading(fade_frames=4)
+    self._wait_joined(s)
+    self.small.extra = {'plan': np.array([0.0], np.float32)}
+    self.big.extra = {'plan': np.array([8.0], np.float32)}
+    self._run(s)                       # the small model runs, giving the far leg
+    s.in_control = False
+    first = s.run({}, {}, {})          # the swap lands here, the fade running
+    self.assertGreater(s._fade_left, 0, 'the fade must be running after the swap')
+    # the first mixed frame leans on the small model's held plan
+    self.assertLess(float(first['plan'][0]), 8.0)
+
+  def test_the_fade_is_over_within_its_frames(self):
+    s = self._fading(fade_frames=3)
+    self._wait_joined(s)
+    self.small.extra = {'plan': np.array([0.0], np.float32)}
+    self.big.extra = {'plan': np.array([8.0], np.float32)}
+    self._run(s)                       # the far leg
+    s.in_control = False
+    s.run({}, {}, {})                  # the swap lands here, the fade running
+    for _ in range(4):
+      last = s.run({}, {}, {})
+    self.assertEqual(float(last['plan'][0]), 8.0)
+    self.assertEqual(s._fade_left, 0)
+
+  def test_a_discrete_output_follows_the_owning_model(self):
+    s = self._fading(fade_frames=4)
+    self._wait_joined(s)
+    self.small.extra = {'shouldStop': np.array([1.0], np.float32)}
+    self.big.extra = {'shouldStop': np.array([0.0], np.float32)}
+    self._run(s)                       # the far leg
+    s.in_control = False
+    first = s.run({}, {}, {})          # the swap lands here, w = 0.25
+    self.assertEqual(float(first['shouldStop'][0]), 1.0)
+    last = None
+    for _ in range(4):
+      last = s.run({}, {}, {})
+    # past the mid-point the large model owns it
+    self.assertEqual(float(last['shouldStop'][0]), 0.0)
+
+  def test_no_fade_leaves_no_far_leg_held(self):
+    s = self._fading(fade_frames=0)
+    self._wait_joined(s)
+    self.assertIsNone(s._last_small)
 
 if __name__ == '__main__':
   unittest.main()

@@ -10,6 +10,7 @@ import io.zoompilot.jetlink.server.Snapshot
 import io.zoompilot.jetlink.server.SnapshotTest
 import io.zoompilot.jetlink.ui.PreviewData
 import io.zoompilot.jetlink.ui.Tone
+import io.zoompilot.jetlink.R
 import io.zoompilot.jetlink.usb.UsbState
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -67,10 +68,10 @@ class StatusStateTest {
         assertEquals("Waiting for Comma · BMRLNAP Model v4", state.subtitle)
         assertEquals("BMRLNAP Model v4", state.accessoryDetail)
         assertEquals("Waiting", state.linkNote)
-        assertEquals("Plug in the comma.", state.waitingDescription)
+        assertEquals(R.string.waiting_desc_plug, state.waitingDescriptionRes)
         val plugged = state.copy(usb = UsbState.Attached)
         assertEquals("Connecting", plugged.linkNote)
-        assertEquals("Connecting over USB.", plugged.waitingDescription)
+        assertEquals(R.string.waiting_desc_usb, plugged.waitingDescriptionRes)
     }
 
     @Test
@@ -125,23 +126,16 @@ class StatusStateTest {
     @Test
     fun phoneTiles() {
         val health = DeviceHealth(thermal = "serious", batteryTemp = 41.6f, batteryLevel = 15, charging = false, availableMemory = 800_000_000)
+        // The worded notes (power, memory, temperature) compose, so they show in the UI, not here.
         assertEquals("Hot", DeviceText.thermal(health).title)
-        assertEquals("Throttling", DeviceText.temperatureNote(health))
-        assertEquals("Battery 34 °C", DeviceText.temperatureNote(DeviceHealth(batteryTemp = 34.2f)))
         assertEquals("15", DeviceText.batteryValue(health))
-        assertEquals("Not Charging", DeviceText.powerText(health))
         assertEquals(Tone.Bad, DeviceText.batteryTone(health))
         assertEquals("0.8", DeviceText.memoryValue(health))
-        assertEquals("Low", DeviceText.memoryNote(health))
         assertEquals(Tone.Warning, DeviceText.memoryTone(health))
         val plugged = DeviceHealth(batteryLevel = 100, charging = true, availableMemory = 2_400_000_000)
-        assertEquals("Charged", DeviceText.powerText(plugged))
         assertEquals(Tone.Neutral, DeviceText.batteryTone(plugged))
-        assertEquals("Free", DeviceText.memoryNote(plugged))
         val unknown = DeviceHealth()
         assertEquals("--", DeviceText.batteryValue(unknown))
-        assertEquals("Unknown", DeviceText.powerText(unknown))
         assertEquals("--", DeviceText.memoryValue(unknown))
-        assertNull(DeviceText.memoryNote(unknown))
     }
 }

@@ -52,6 +52,14 @@ struct OrtBackendTests {
     let sustained = OrtBackend(profile: .htp, preparer: ONNXPreparer(), keepAlive: false)
     #expect(sustained.providerOptions(.htp)["htp_performance_mode"] == "sustained_high_performance")
 
+    // The phone's own backend is named by path, and onnxruntime's QNN provider
+    // refuses a path and a type at once: the path replaces the type.
+    let own = OrtBackend(profile: .htp, preparer: ONNXPreparer(), qnnBackend: "/odm/lib64/libQnnHtp.so")
+    #expect(own.providerOptions(.htp)["backend_path"] == "/odm/lib64/libQnnHtp.so")
+    #expect(own.providerOptions(.htp)["backend_type"] == nil)
+    #expect(own.providerOptions(.htp)["htp_performance_mode"] == "burst")
+    #expect(own.providerOptions(.qnnGPU)["backend_type"] == "gpu")
+
     let model = URL(fileURLWithPath: "/tmp/model.onnx")
     let npu = backend.plan(.htp, model: model, cache: nil)
     #expect(npu.provider == "QNN" && npu.label == "QNN(htp)" && npu.usesNeuralEngine && !npu.usesGPU)

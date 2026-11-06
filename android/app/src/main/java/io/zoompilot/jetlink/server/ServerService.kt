@@ -22,6 +22,7 @@ import io.zoompilot.jetlink.R
 import io.zoompilot.jetlink.graph
 import io.zoompilot.jetlink.settings.SettingsValues
 import io.zoompilot.jetlink.ui.status.StatusState
+import io.zoompilot.jetlink.ui.status.StatusText
 import io.zoompilot.jetlink.usb.CommaUsb
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
@@ -63,7 +64,7 @@ class ServerService : LifecycleService() {
     override fun onCreate() {
         super.onCreate()
         createChannel()
-        startForeground(NOTIFICATION_ID, notification("Starting"), ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+        startForeground(NOTIFICATION_ID, notification(getString(R.string.summary_starting)), ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
         val filter = IntentFilter().apply {
             addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
             addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
@@ -81,7 +82,7 @@ class ServerService : LifecycleService() {
         lifecycleScope.launch {
             // the line under the Status title
             combine(graph.server.runState, graph.server.snapshot, graph.usb.usb) { run, snapshot, usb ->
-                StatusState(run, snapshot, usb = usb).subtitle to snapshot.connected
+                StatusText.subtitle(this@ServerService, StatusState(run, snapshot, usb = usb)) to snapshot.connected
             }.distinctUntilChanged().collectLatest { (text, connected) ->
                 getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(text))
                 holdWakeLock(connected)
@@ -125,8 +126,8 @@ class ServerService : LifecycleService() {
     }
 
     private fun createChannel() {
-        val channel = NotificationChannel(CHANNEL, "Server", NotificationManager.IMPORTANCE_LOW).apply {
-            description = "Shows while Jetlink serves the comma"
+        val channel = NotificationChannel(CHANNEL, getString(R.string.notif_channel_name), NotificationManager.IMPORTANCE_LOW).apply {
+            description = getString(R.string.notif_channel_desc)
             setShowBadge(false)
         }
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
@@ -147,7 +148,7 @@ class ServerService : LifecycleService() {
             .setOngoing(true)
             .setSilent(true)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
-            .addAction(0, "Stop", stop)
+            .addAction(0, getString(R.string.notif_action_stop), stop)
             .build()
     }
 

@@ -158,6 +158,36 @@ Jetlink logs "is not in the EdgeTPU allowed list" and "error code 16", and runs
 on the GPU. Google adds an app; the release key's certificate is the one to
 give them (docs/publishing.md#android-release-key).
 
+An NPU build on a Snapdragon whose Hexagon is past the last architecture its
+QNN runtime carries cannot run at all: QNN creates no device
+(`QNN_DEVICE_ERROR_INVALID_CONFIG`), its provider takes no node of the graph,
+and onnxruntime leaves the whole model on the CPU under a warm-up that never
+ends. The build fails there now, naming the GPU profile as the one that serves
+the model, and the `npu:` lines name both sides: the HTP architectures the
+APK's QNN carries, and the phone's own QNN and DSP libraries.
+`com.qualcomm.qti:qnn-runtime` 2.51.0, the newest on Maven (2026-10-06),
+carries `libQnnHtpV*Stub.so` and its Skel for V68 to V81, where the Snapdragon
+8 Elite Gen 5's V81 is the last: an APK assembled from Maven alone serves no
+newer Hexagon. The first Snapdragon tried (an SM8975, 2026-10-14) is a
+Snapdragon 8 Elite Gen 6, `htp_version: 85` in Qualcomm AI Hub's chipset table,
+past it. The public QAIRT SDKs do carry a V85 pair from `2.51.40.260930` on
+(`2.48.40` and `2.49.40` stop at V81), but that is the build an SM8975's
+firmware refuses, while the build it opens is the vendor's own
+`v2.48.5.260901221701` under `/odm`, which carries a V85 pair alone.
+
+So the APK carries one build for the Hexagons up to V81 and no set of its own:
+`app/src/main/jniLibs/arm64-v8a/` holds no QNN file, and the backend, its
+context preparer, its System library and every Stub and Skel up to V81 are the
+AAR's `qnn-runtime` 2.42.0. A V85 Hexagon runs the phone's own set instead --
+`Chip.needsPhoneQnn` turns the developer setting *Phone's Own QNN* on by
+default there -- and a V85 phone that keeps none of its own falls back to the
+GPU profile. One APK, every Hexagon: no two builds in one process, which is the
+mismatch QNN swallows in silence. Qualcomm's license allows these libraries
+inside an app only, so a set this fork carries stays its own and not
+upstream's. [QNN HTP stubs](../docs/qnn-htp-stubs.md) records the mapping, what
+each source carries, the hashes of both sets, the SDK versions and their
+architectures, and the keywords to search with.
+
 The NPU path follows LiteRT 2.2.0's source. LiteRT's Google Tensor plugin
 (`libLiteRtCompilerPlugin_google_tensor.so`, which the APK carries) hands the
 converted model to `EdgeTpuCompilerCompileFlatbuffer` in the Pixel's

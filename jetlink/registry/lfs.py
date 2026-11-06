@@ -27,6 +27,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from jetlink.registry.index import NetworkError, Pointer, RegistryError, VerifyError
+from jetlink.registry.sources import hf_mirror_candidates
 
 __all__ = ['BUCKET', 'LFS_ENDPOINTS', 'Pointer', 'lfs_download', 'lfs_hrefs', 'lfs_resolve']
 
@@ -102,11 +103,18 @@ def lfs_resolve(endpoint: str, pointer: Pointer, timeout: float = CONNECT_TIMEOU
 
 
 def lfs_hrefs(endpoints, pointer: Pointer, timeout: float = CONNECT_TIMEOUT, opener=None):
-  """Each of `endpoints` that has the object, in order, with its download href."""
+  """Each of `endpoints` that has the object, in order, with its download href.
+
+  A HuggingFace bucket is followed by its mirrors (they serve the same
+  resolve paths), the official one first, so a bucket a network cannot
+  reach does not end the search."""
   for endpoint in endpoints:
-    href = lfs_resolve(endpoint, pointer, timeout=timeout, opener=opener)
-    if href is not None:
-      yield endpoint, href
+    candidates = [endpoint, *hf_mirror_candidates(endpoint)] if endpoint.startswith('https://huggingface.co/') else [endpoint]
+    for candidate in candidates:
+      href = lfs_resolve(candidate, pointer, timeout=timeout, opener=opener)
+      if href is not None:
+        yield candidate, href
+        break
 
 
 def lfs_download(href: str, pointer: Pointer, dest: Path, progress: ProgressFn | None = None,

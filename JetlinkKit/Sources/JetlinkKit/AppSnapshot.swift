@@ -141,7 +141,9 @@ public final class AppSnapshot: @unchecked Sendable {
       "server": state.server.map { ControlEvent.object($0) } ?? NSNull(),
       "link": ControlEvent.object(link),
       // what the connected comma's link is carried over, as the apps name it
-      "medium": link.connectedMedium.map { ["name": $0.rawValue, "title": $0.title, "slow": $0.isSlow] as [String: Any] } ?? NSNull(),
+      "medium": link.connectedMedium.map {
+        ["name": $0.rawValue, "title": $0.title, "slow": $0.isSlow, "fix": $0.fix ?? NSNull()] as [String: Any]
+      } ?? NSNull(),
       "engine": ControlEvent.object(state.engine),
       "recent": recentStats.map { ControlEvent.object($0) } ?? NSNull(),
       "history": state.statsHistory.map { ["at": $0.at.timeIntervalSince1970, "stats": encodedStats[$0.at] ?? NSNull()] as [String: Any] },

@@ -176,18 +176,41 @@ def _items(value) -> list[tuple]:
   return list(value.items()) if isinstance(value, dict) else []
 
 
+def index_candidates(url: str = INDEX_URL) -> list[str]:
+  """Every source the index is fetched from, the official one first.
+
+  The index lives on raw.githubusercontent.com, which is unreachable from
+  many networks in China; the jsDelivr CDN family serves the same file, and
+  the read-through proxies forward it. The official source stays first so
+  it wins a tie: when two hosts answer, the fastest one that is not the
+  official would otherwise hand over a stale index.
+  """
+  from jetlink.registry.sources import jsdelivr_candidates, proxy_candidates
+  candidates = [url, *jsdelivr_candidates(url), *proxy_candidates(url)]
+  seen: list[str] = []
+  for candidate in candidates:
+    if candidate and candidate not in seen:
+      seen.append(candidate)
+  return seen
+
+
 def fetch_index(url: str = INDEX_URL, timeout: float = INDEX_TIMEOUT, opener=None) -> tuple[dict, ModelIndex]:
   """The index as served, and parsed: the raw JSON is what a caller keeps.
   A transport failure is a NetworkError, an index that cannot be used
-  IndexInvalid; both are RegistryErrors, and either way nothing is kept."""
+  IndexInvalid; both are RegistryErrors, and either way nothing is kept.
+
+  The candidates the official source leads are tried in order; a source
+  that does not answer, or answers with anything that is not the index,
+  moves the attempt to the next one."""
   opener = opener or urllib.request.urlopen
-  try:
-    with opener(url, timeout=timeout) as response:
-      body = response.read()
-  except (OSError, ValueError) as e:   # HTTPError is an OSError
-    raise NetworkError(f"could not fetch {url}: {e}") from e
-  try:
-    data = json.loads(body.decode())
-  except ValueError as e:
-    raise NetworkError(f"{url} did not serve JSON: {e}") from e
-  return data, parse_index(data)
+  last: Exception | None = None
+  for candidate in index_candidates(url):
+    try:
+      with opener(candidate, timeout=timeout) as response:
+        body = response.read()
+      data = json.loads(body.decode())
+    except (OSError, ValueError) as e:   # HTTPError is an OSError
+      last = NetworkError(f"could not fetch {candidate}: {e}")
+      continue
+    return data, parse_index(data)
+  raise last if last is not None else NetworkError(f"no source served {url}")

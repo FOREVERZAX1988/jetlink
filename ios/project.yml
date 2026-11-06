@@ -68,7 +68,7 @@ targets:
         # A trackpad or mouse on an iPad drives the app as a pointer.
         UIApplicationSupportsIndirectInputEvents: true
         UIRequiredDeviceCapabilities: [arm64, metal]
-        NSLocalNetworkUsageDescription: Jetlink connects to your comma over the USB cable.
+        NSLocalNetworkUsageDescription: Jetlink connects to your comma over the USB cable or your hotspot.
         # The browse that asks for Local Network access at launch.
         NSBonjourServices: [_jetlink._tcp]
         # A model can be copied in from the Finder or the Files app, as well

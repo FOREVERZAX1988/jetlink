@@ -1,7 +1,9 @@
 #include "jl_ort.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 #include <onnxruntime/onnxruntime_c_api.h>
 
@@ -22,6 +24,13 @@ struct jl_binding {
   OrtIoBinding *binding;
   OrtValue **values;
   size_t n_values;
+};
+
+struct jl_shared_allocator {
+  OrtSession *session;
+  OrtAllocator *allocator;
+  OrtMemoryInfo *memory;
+  size_t total_bytes;
 };
 
 #ifdef JL_ORT_DLOPEN
@@ -80,8 +89,83 @@ static char *take(OrtStatus *status) {
     }                                \
   } while (0)
 
+
+// The runtime's own words, kept where a report can read them back. QNN's reason
+// for taking no node of a graph is a line under onnxruntime's logger -- a device
+// it could not create, a Stub the backend will not have, a graph its converter
+// would not take, a Skel the DSP would not load -- and an Android app's stderr
+// has no reader, so a line said there is a line lost. The ring holds the last of
+// them, oldest first, and jl_log_lines hands them over.
+#define JL_LOG_LINES 64
+#define JL_LOG_CHARS 480
+
+static char jl_log_ring[JL_LOG_LINES][JL_LOG_CHARS];
+static size_t jl_log_next;
+static size_t jl_log_held;
+static char jl_log_joined[JL_LOG_LINES * JL_LOG_CHARS];
+
+static const char *jl_log_severity(OrtLoggingLevel severity) {
+  switch (severity) {
+    case ORT_LOGGING_LEVEL_VERBOSE:
+      return "verbose";
+    case ORT_LOGGING_LEVEL_INFO:
+      return "info";
+    case ORT_LOGGING_LEVEL_WARNING:
+      return "warning";
+    case ORT_LOGGING_LEVEL_ERROR:
+      return "error";
+    case ORT_LOGGING_LEVEL_FATAL:
+      return "fatal";
+    default:
+      return "log";
+  }
+}
+
+// onnxruntime's logger, which carries the execution provider's own lines and
+// QNN's beneath them: this is the one place both write to.
+static void ORT_API_CALL jl_log_callback(void *param, OrtLoggingLevel severity, const char *category, const char *logid,
+                                         const char *code_location, const char *message) {
+  (void)param;
+  // The same file, and the same logid, on every line of a session: the message
+  // is the part to keep.
+  (void)code_location;
+  (void)logid;
+  char line[JL_LOG_CHARS];
+  snprintf(line, sizeof(line), "%s %s: %s", jl_log_severity(severity), category != NULL ? category : "",
+           message != NULL ? message : "");
+  snprintf(jl_log_ring[jl_log_next], JL_LOG_CHARS, "%s", line);
+  jl_log_next = (jl_log_next + 1) % JL_LOG_LINES;
+  if (jl_log_held < JL_LOG_LINES) {
+    jl_log_held++;
+  }
+#ifndef __ANDROID__
+  // Where a terminal reads it, the line goes on as it did before the ring.
+  fprintf(stderr, "%s\n", line);
+#endif
+}
+
 const char *jl_version(void) {
   return base() != NULL ? base()->GetVersionString() : "";
+}
+
+// The lines above, oldest first, newline-separated, "" when the runtime has said
+// nothing yet. Overwritten by the next call; the caller does not free it.
+const char *jl_log_lines(void) {
+  jl_log_joined[0] = '\0';
+  size_t start = (jl_log_next + JL_LOG_LINES - jl_log_held) % JL_LOG_LINES;
+  size_t offset = 0;
+  for (size_t i = 0; i < jl_log_held; i++) {
+    const char *line = jl_log_ring[(start + i) % JL_LOG_LINES];
+    size_t length = strlen(line);
+    if (offset + length + 2 >= sizeof(jl_log_joined)) {
+      break;
+    }
+    memcpy(jl_log_joined + offset, line, length);
+    offset += length;
+    jl_log_joined[offset++] = '\n';
+  }
+  jl_log_joined[offset] = '\0';
+  return jl_log_joined;
 }
 
 void jl_free(void *p) {
@@ -109,7 +193,9 @@ char *jl_env_create(int log_severity, jl_env **out) {
   // DisableTelemetryEvents can be called, and events logged in between were
   // still uploaded. A car has no business sending any.
   setenv("ORT_DISABLE_TELEMETRY", "1", 1);
-  char *error = take(api()->CreateEnv((OrtLoggingLevel)log_severity, "jetlink", &env->env));
+  // The ring above is the environment's logger: everything onnxruntime, the
+  // execution provider and QNN say reaches it, and the `npu:` report reads it.
+  char *error = take(api()->CreateEnvWithCustomLogger(jl_log_callback, NULL, (OrtLoggingLevel)log_severity, "jetlink", &env->env));
   if (error != NULL) {
     free(env);
     return error;
@@ -136,8 +222,13 @@ char *jl_session_create(jl_env *env, const char *model_path, const char *provide
   TRY(api()->CreateSessionOptions(&so));
   char *error = take(api()->SetSessionGraphOptimizationLevel(so, ORT_ENABLE_ALL));
   if (error == NULL) {
-    // errors only: the CoreML partitioner is chatty
-    error = take(api()->SetSessionLogSeverityLevel(so, 3));
+    // A QNN session keeps onnxruntime's own words: QNN's reason for taking no
+    // node of a graph is one it says below an error -- a Stub it cannot open,
+    // a Skel the DSP will not take, a backend that is not its Stub's build --
+    // and the `npu:` report reads them out of the phone's log. The CoreML
+    // partitioner is chatty, so an Apple session keeps errors alone.
+    int severity = provider != NULL && strcmp(provider, "QNN") == 0 ? 1 : 3;
+    error = take(api()->SetSessionLogSeverityLevel(so, severity));
   }
   // One thread each way, and none that spin between frames: the CPU's share
   // of an accelerator's session is a couple of nodes, and a pool spinning for
@@ -274,14 +365,76 @@ void jl_binding_release(jl_binding *binding) {
   free(binding);
 }
 
+void jl_shared_allocator_release(jl_shared_allocator *allocator) {
+  if (allocator == NULL) return;
+  if (allocator->allocator != NULL) api()->ReleaseAllocator(allocator->allocator);
+  if (allocator->memory != NULL) api()->ReleaseMemoryInfo(allocator->memory);
+  free(allocator);
+}
+
+char *jl_shared_allocator_create(jl_session *session, jl_shared_allocator **out) {
+  if (session == NULL || out == NULL) return copy("shared allocator needs a session and output");
+  *out = NULL;
+  jl_shared_allocator *allocator = calloc(1, sizeof(*allocator));
+  if (allocator == NULL) return copy("out of memory");
+  allocator->session = session->session;
+  char *error = take(api()->CreateMemoryInfo("QnnHtpShared", OrtDeviceAllocator, 0,
+                                             OrtMemTypeDefault, &allocator->memory));
+  if (error == NULL) error = take(api()->CreateAllocator(session->session, allocator->memory, &allocator->allocator));
+  const OrtMemoryInfo *actual = NULL;
+  if (error == NULL) error = take(api()->AllocatorGetInfo(allocator->allocator, &actual));
+  int different = 1;
+  if (error == NULL) error = take(api()->CompareMemoryInfo(allocator->memory, actual, &different));
+  if (error == NULL && different != 0) error = copy("session did not return QNN shared memory");
+  if (error != NULL) {
+    jl_shared_allocator_release(allocator);
+    return error;
+  }
+  *out = allocator;
+  return NULL;
+}
+
+char *jl_shared_allocator_alloc(jl_shared_allocator *allocator, size_t bytes, void **out) {
+  if (allocator == NULL || out == NULL) return copy("invalid shared allocation");
+  *out = NULL;
+  if (bytes > SIZE_MAX - allocator->total_bytes) return copy("shared allocation byte count overflow");
+  char *error = take(api()->AllocatorAlloc(allocator->allocator, bytes, out));
+  if (error == NULL && *out == NULL) error = copy("QNN shared allocator returned no memory");
+  if (error == NULL) allocator->total_bytes += bytes;
+  return error;
+}
+
+void jl_shared_allocator_free(jl_shared_allocator *allocator, void *data) {
+  if (allocator == NULL || data == NULL) return;
+  char *error = take(api()->AllocatorFree(allocator->allocator, data));
+  if (error != NULL) {
+    fprintf(stderr, "Jetlink QNN shared memory free: %s\n", error);
+    free(error);
+  }
+}
+
+size_t jl_shared_allocator_total_bytes(const jl_shared_allocator *allocator) {
+  return allocator == NULL ? 0 : allocator->total_bytes;
+}
+
 static char *wrap(const OrtMemoryInfo *memory, const jl_tensor *t, OrtValue **out) {
   return take(api()->CreateTensorWithDataAsOrtValue(memory, t->data, t->nbytes, t->dims, t->rank,
                                                     (ONNXTensorElementDataType)t->elem_type, out));
 }
 
 char *jl_binding_create(jl_session *session, const jl_tensor *inputs, size_t n_inputs,
-                        const jl_tensor *outputs, size_t n_outputs, jl_binding **out) {
+                        const jl_tensor *outputs, size_t n_outputs,
+                        const jl_shared_allocator *shared, jl_binding **out) {
   *out = NULL;
+  if (shared != NULL && shared->session != session->session) {
+    // ORT's QNN allocator tracks RPC allocations globally. A second HTP
+    // context can register the same host-accessible allocation. Verify that
+    // this target session really exposes QnnHtpShared; CPU/GPU may not claim it.
+    jl_shared_allocator *compatible = NULL;
+    char *error = jl_shared_allocator_create(session, &compatible);
+    if (error != NULL) return error;
+    jl_shared_allocator_release(compatible);
+  }
   jl_binding *binding = calloc(1, sizeof(jl_binding));
   if (binding == NULL) {
     return copy("out of memory");
@@ -292,8 +445,13 @@ char *jl_binding_create(jl_session *session, const jl_tensor *inputs, size_t n_i
     free(binding);
     return copy("out of memory");
   }
-  OrtMemoryInfo *memory = NULL;
-  char *error = take(api()->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &memory));
+  OrtMemoryInfo *cpu_memory = NULL;
+  const OrtMemoryInfo *memory = shared != NULL ? shared->memory : NULL;
+  char *error = NULL;
+  if (memory == NULL) {
+    error = take(api()->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &cpu_memory));
+    memory = cpu_memory;
+  }
   if (error == NULL) {
     error = take(api()->CreateIoBinding(session->session, &binding->binding));
   }
@@ -311,8 +469,8 @@ char *jl_binding_create(jl_session *session, const jl_tensor *inputs, size_t n_i
       error = take(api()->BindOutput(binding->binding, outputs[i].name, *value));
     }
   }
-  if (memory != NULL) {
-    api()->ReleaseMemoryInfo(memory);
+  if (cpu_memory != NULL) {
+    api()->ReleaseMemoryInfo(cpu_memory);
   }
   if (error != NULL) {
     jl_binding_release(binding);

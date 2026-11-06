@@ -73,6 +73,55 @@ class TheLeave(SocketPairTest):
       self.client.ping(timeout=1.0)
 
 
+class TheStageReport(SocketPairTest):
+  def test_it_carries_the_six_means_and_wants_no_answer(self):
+    # the host can see its own half of the frame and the link's; this is the
+    # comma's, which it cannot
+    self.client.report_stages({'frames': 20, 'capture': 1.5, 'warp': 2.0, 'send': 0.4,
+                               'reply_wait': 18.0, 'publish': 0.3, 'overhead': 27.8, 'frame': 50.0})
+    msg = self.peer.recv(timeout=1.0)
+    self.assertEqual(msg.msg_type, P.Msg.CLIENT_STATE)
+    self.assertEqual(json.loads(bytes(msg.payload))['reply_wait'], 18.0)
+    self.assertFalse(self.client.dead)
+
+  def test_nothing_to_report_says_nothing(self):
+    self.client.report_stages({})
+    with self.assertRaises(LinkError):
+      self.peer.recv(timeout=0.2)
+
+  def test_a_dead_link_carries_no_report(self):
+    self.client.dead = True
+    self.client.report_stages({'frames': 1, 'frame': 50.0})
+    with self.assertRaises(LinkError):
+      self.peer.recv(timeout=0.2)
+
+  def test_an_older_servers_error_to_it_is_not_this_links_failure(self):
+    self.client.report_stages({'frames': 1, 'frame': 50.0})
+    msg = self.peer.recv(timeout=1.0)
+    self.peer.send_json(P.Msg.ERROR, msg.seq, {'error': 'unknown_message', 'detail': 'type 20'})
+    t = self.pong_once()
+    self.client.ping(timeout=2.0)
+    t.join(2.0)
+    self.assertFalse(self.client.dead)
+
+  def test_a_backed_up_queue_skips_the_report(self):
+    # the report rides the frame thread, so it waits for nothing: on a queued
+    # link whose writes the host has not taken, try_send refuses and the next
+    # second tells the story - the report must not cost the path a frame
+    self.client.t.try_send = lambda *a, **kw: False
+    self.client.report_stages({'frames': 1, 'frame': 50.0})
+    with self.assertRaises(LinkError):
+      self.peer.recv(timeout=0.2)
+    self.assertFalse(self.client.dead)
+
+  def test_the_forgiven_seqs_stay_bounded(self):
+    # one a second for a long drive: a seq each would be a set that grows all
+    # day for a message no server ever answers
+    for _ in range(200):
+      self.client.report_stages({'frames': 1, 'frame': 50.0})
+    self.assertEqual(len(self.client._no_reply_wanted), 64)
+
+
 class ClosingTheSocket(SocketPairTest):
   def test_the_peer_hears_a_close_though_another_process_holds_a_copy(self):
     # the comma's owner keeps a copy of the phone's dial for the drive; a

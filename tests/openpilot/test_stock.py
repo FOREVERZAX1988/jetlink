@@ -181,7 +181,13 @@ class StockTest(unittest.TestCase):
     self.world = World(self.tmp, model_root=self.model_root)
     for p in (mock.patch.dict(sys.modules, self.world.modules()),
               mock.patch.dict(os.environ, {'HOME': str(self.tmp / 'home')}),
-              mock.patch.object(FakeParams, 'made', 0)):
+              mock.patch.object(FakeParams, 'made', 0),
+              # AGNOS is /AGNOS's existence, which is true on the machine these
+              # run on and false on a PC. Half of this file asks where a path
+              # *would* be when openpilot is not there, so the machine's own
+              # answer has to be out of the way; the tests that want the comma's
+              # answer patch it back on.
+              mock.patch.object(root, 'AGNOS', False)):
       p.start()
       self.addCleanup(p.stop)
     os.environ.pop('PARAMS_ROOT', None)

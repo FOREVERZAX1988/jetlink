@@ -103,7 +103,8 @@ final class ServerStore: ServerControlling {
         await file?.append(line)
       }
     }
-    let configuration = ServerStore.configuration(transport: settings.transport, tcpPort: settings.tcpPort, cacheDirectory: settings.cacheDirectory)
+    let configuration = ServerStore.configuration(
+      transport: settings.transport, tcpPort: settings.tcpPort, cacheDirectory: settings.cacheDirectory, wifiLink: settings.wifiLink)
     let choice = settings.backend
     // The controller's first .server event fills in the backend fields.
     let seed = ServerInfo(
@@ -229,9 +230,10 @@ final class ServerStore: ServerControlling {
   // MARK: configuration
 
   /// What the server is asked to be, from the settings.
-  nonisolated static func configuration(transport: TransportChoice, tcpPort: Int, cacheDirectory: URL) -> Server.Configuration {
+  /// USB unless TCP was chosen for bench tools; the Wi-Fi link listens beside USB.
+  nonisolated static func configuration(transport: TransportChoice, tcpPort: Int, cacheDirectory: URL, wifiLink: Bool) -> Server.Configuration {
     let port = UInt16(clamping: tcpPort > 0 ? tcpPort : AppSettings.defaultTCPPort)
-    return Server.Configuration(port: port, cacheRoot: cacheDirectory, preload: true, listen: transport == .tcp, usb: transport == .usb)
+    return Server.Configuration(port: port, cacheRoot: cacheDirectory, preload: true, listen: transport == .tcp || wifiLink, usb: transport == .usb)
   }
 
   /// What runs the model: CoreML on the device the setting names, with the

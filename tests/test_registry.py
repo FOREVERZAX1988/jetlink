@@ -172,6 +172,26 @@ def test_fetch_index_fails_as_a_registry_error(body, error):
   assert issubclass(error, RegistryError)
 
 
+def test_fetch_index_falls_back_to_the_cdn_family():
+  # the official raw host is down; the first jsDelivr mirror serves the index
+  from jetlink.registry.index import index_candidates
+  mirror = index_candidates()[1]
+  assert mirror.startswith('https://cdn.jsdelivr.net/gh/zoompilot/jetlink-model-index@main/')
+  opener = FakeOpener({INDEX_URL: urllib.error.URLError('offline'), mirror: published()})
+  data, index = fetch_index(opener=opener)
+  assert data == published() and index.models
+  assert opener.calls == [INDEX_URL, mirror]
+
+
+def test_fetch_index_official_wins_a_tie():
+  from jetlink.registry.index import index_candidates
+  mirror = index_candidates()[1]
+  opener = FakeOpener({INDEX_URL: published(), mirror: published()})
+  data, _ = fetch_index(opener=opener)
+  assert data == published()
+  assert opener.calls[0] == INDEX_URL
+
+
 # --- lfs ---------------------------------------------------------------------
 
 def test_comma_s_bucket_is_asked_first():
@@ -201,6 +221,23 @@ def test_lfs_hrefs_skips_a_server_without_it():
   found = list(lfs_hrefs(LFS_ENDPOINTS, Pointer(OID, SIZE), opener=opener))
   assert [endpoint for endpoint, _ in found] == [GITLAB]
   assert opener.calls[0] == f"{BUCKET}/resolve/sha256/{OID}"
+
+
+def test_lfs_hrefs_falls_back_to_a_bucket_mirror():
+  # the official bucket is unreachable; the first HF mirror serves the object
+  mirror = 'https://hf-mirror.com/buckets/commaai/openpilot-lfs'
+  opener = FakeOpener({f"{BUCKET}/resolve/sha256/{OID}": urllib.error.URLError('offline'),
+                       f"{mirror}/resolve/sha256/{OID}": b'o'})
+  found = list(lfs_hrefs([BUCKET], Pointer(OID, SIZE), opener=opener))
+  assert [endpoint for endpoint, _ in found] == [mirror]
+  assert opener.calls[0] == f"{BUCKET}/resolve/sha256/{OID}"
+
+
+def test_lfs_hrefs_official_bucket_wins_a_tie():
+  opener = FakeOpener({f"{BUCKET}/resolve/sha256/{OID}": b'o'})
+  found = list(lfs_hrefs([BUCKET], Pointer(OID, SIZE), opener=opener))
+  assert [endpoint for endpoint, _ in found] == [BUCKET]
+  assert len(opener.calls) == 1
 
 
 def download(tmp_path, blob: bytes = BLOB, oid: str = BLOB_SHA, size: int = len(BLOB), opener=None, **kw) -> Path:

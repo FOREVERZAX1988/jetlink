@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Build
 import android.util.Log
+import io.zoompilot.jetlink.BuildConfig
 import io.zoompilot.jetlink.settings.Chip
 import io.zoompilot.jetlink.settings.SettingsValues
 import kotlinx.coroutines.CoroutineScope
@@ -22,6 +23,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
@@ -63,6 +65,11 @@ class ServerController(private val context: Context, private val scope: Coroutin
 
     /** Starts the server with [settings], restarting one that runs. */
     suspend fun start(settings: SettingsValues) = lifecycle.withLock {
+        if (!Native.loaded) {
+            // a build without the Swift server: refuse in the UI, never crash
+            run.value = RunState.Failed("libjetlink.so is missing from this build; rebuild it with the Swift server.")
+            return@withLock
+        }
         run.value = RunState.Starting
         // the server stops one that runs first
         val error = withContext(Dispatchers.IO) { Native.start(config(settings).toString()) }
@@ -78,7 +85,9 @@ class ServerController(private val context: Context, private val scope: Coroutin
     }
 
     suspend fun stop() = lifecycle.withLock {
-        withContext(Dispatchers.IO) { Native.stop() }
+        if (Native.loaded) {
+            withContext(Dispatchers.IO) { Native.stop() }
+        }
         run.value = RunState.Stopped
     }
 
@@ -89,16 +98,38 @@ class ServerController(private val context: Context, private val scope: Coroutin
         put("device", processor.device)
         put("keep_alive", settings.keepNpuAwake)
         put("keep_cpu_warm", settings.keepCpuAwake)
+        // The NPU on the phone's own QNN, in the developer section: the backend,
+        // the Stub and the Skel the vendor shipped for this Hexagon, instead of
+        // the pair this build carries.
+        put("phone_qnn", settings.phoneQnn)
+        // The vendor's own five, unpacked from this build's assets on the first
+        // run: a V85 Hexagon opens that build alone, and `/odm/lib64`, where
+        // the phone keeps its copy, is a directory this app's linker namespace
+        // does not answer for. A Hexagon up to V81 leaves the key out and runs
+        // the AAR's 2.42.0 set from `jniLibs`.
+        if (settings.phoneQnn) {
+            QnnAssets.install(context)?.let { put("qnn_library_dir", it) }
+        }
         put("port", settings.port)
-        // Bench tools reach the server over Wi-Fi or `adb forward`; the comma
+        // Bench tools reach the server over Wi-Fi or `adb forward`, and a comma
+        // on the phone's hotspot dials it (Wi-Fi link); otherwise the comma
         // comes over USB.
-        put("listen", settings.developer)
+        put("listen", settings.developer || settings.wifiLink)
         put("usb", true)
         put("preload", true)
         put("chip", Chip.model)
         // a model compiled for the NPU is good for this system build alone
         put("firmware", Build.FINGERPRINT)
         put("native_library_dir", context.applicationInfo.nativeLibraryDir)
+
+        // The mirror bases the model catalog and the LFS requests try first.
+        put("mirrors", buildJsonArray { settings.mirrors.forEach { add(JsonPrimitive(it)) } })
+
+        put("qnn_shared_io", BuildConfig.QNN_SHARED_IO)
+        put("qnn_strict", BuildConfig.QNN_STRICT)
+        put("qnn_no_activation_fusion", BuildConfig.QNN_NO_ACTIVATION_FUSION)
+        put("qnn_runtime_identity", BuildConfig.QNN_RUNTIME_IDENTITY)
+
     }
 
     /** Follows the snapshot and the log for as long as the app runs. */

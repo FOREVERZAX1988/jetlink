@@ -101,7 +101,10 @@ struct PinnedConstantTests {
       #expect(message.map { String(describing: $0) } == camel(name), "message \(name) = \(value)")
     }
     #expect((0...UInt16(255)).compactMap(Wire.Msg.init(rawValue:)).count == Pinned.messageTypes.count)
-    let flags: [String: Wire.Flag] = ["RESET_QUEUES": .resetQueues, "WANT_STATE": .wantState, "WANT_HIDDEN": .wantHidden, "PADDED": .padded]
+    let flags: [String: Wire.Flag] = [
+      "RESET_QUEUES": .resetQueues, "WANT_STATE": .wantState, "WANT_HIDDEN": .wantHidden, "LOSSLESS": .lossless,
+      "HEVC": .hevc, "PADDED": .padded,
+    ]
     #expect(Set(flags.keys) == Set(Pinned.flags.map(\.name)))
     for (name, value) in Pinned.flags {
       #expect(flags[name]?.rawValue == value, "flag \(name)")
@@ -439,6 +442,37 @@ struct StatsConformanceTests {
       #expect(got.totalMs == StatsEvent.Total(mean: double(total["mean"]), p99: double(total["p99"]), max: double(total["max"])), "\(name) total")
       #expect(got.gpuMs == StatsEvent.Mean(mean: double((expected["gpu_ms"] as! [String: Any])["mean"])), "\(name) gpu")
     }
+  }
+
+  @Test("A comma's stage report rides on the stats event while it is fresh, and not after")
+  func commaStages() throws {
+    // The host's samples start when a frame arrives, so everything the comma
+    // spent before that is only ever its own word. A comma that has stopped
+    // saying it must stop being shown: its last second is not the link's now.
+    let clock = Clock()
+    let stats = FrameStats(now: clock.read)
+    clock.value = 100
+    stats.record(totalUs: 40_000, gpuUs: 30_000, queueUs: 5_000, sendUs: 1_000)
+    #expect(stats.summary(window: 10, framesTotal: 1)?.commaStages == nil)
+
+    let report = CommaStages(frames: 20, capture: 1.5, warp: 2, send: 0.4, replyWait: 18, publish: 0.3, overhead: 27.8, frame: 50)
+    stats.comma(report)
+    #expect(stats.summary(window: 10, framesTotal: 1)?.commaStages == report)
+
+    clock.value = 100 + FrameStats.commaFresh + 1
+    #expect(stats.summary(window: 10, framesTotal: 1)?.commaStages == nil)
+  }
+
+  @Test("The comma's stages decode off the wire's own keys, not Swift's")
+  func commaStagesWireKeys() throws {
+    // what jetlink.openpilot.stages.StageMs.means() publishes, snake_case and
+    // with keys this server does not read
+    let json = #"{"frames":20,"held":0,"capture":1.5,"warp":2.0,"send":0.4,"reply_wait":18.0,"publish":0.3,"overhead":27.8,"frame":50.0}"#
+    let stages = try JSONDecoder().decode(CommaStages.self, from: Data(json.utf8))
+    #expect(stages.frames == 20)
+    #expect(stages.replyWait == 18)
+    #expect(stages.frame == 50)
+    #expect(stages.overhead == 27.8)
   }
 
   final class Clock: @unchecked Sendable {

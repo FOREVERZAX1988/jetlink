@@ -155,6 +155,15 @@
       #expect(FrameBudgetView.Room(headroomMs: -0.1) == .over)
     }
 
+    @Test("The comma's six stages each read their own field, and add up to its frame")
+    func commaStages() {
+      let stages = CommaStages(frames: 20, capture: 1.5, warp: 2, send: 0.4, replyWait: 18, publish: 0.3, overhead: 27.8, frame: 50)
+      #expect(CommaStage.allCases.map { $0.value(stages) } == [1.5, 2, 0.4, 18, 0.3, 27.8])
+      #expect(CommaStage.allCases.map(\.title) == ["Read", "Warp", "Send", "Wait", "Publish", "Other"])
+      // the six are one frame's period, not six separate costs
+      #expect(abs(CommaStage.allCases.reduce(0) { $0 + $1.value(stages) } - stages.frame) < 1e-9)
+    }
+
     @Test("The bar always shows the whole budget, and stretches for frames past it")
     func budgetBarScale() {
       #expect(abs(FrameStageBar.domainMax(PreviewData.stats) - 55) < 1e-9)
