@@ -38,6 +38,13 @@ STEP_DOWN_HELD = 8
 STEP_WINDOW = 5.0
 # seconds without a held frame before one level comes back
 STEP_UP_QUIET = 10.0
+# Isolated late frames the climb back may absorb. The old rule reset the quiet
+# clock on *any* hold; a phone link has a stray hold every few seconds even
+# when it is healthy, so a governor that ever stepped down never climbed back
+# even after the link recovered (measured 2026-11-07: 224 step-downs, zero
+# step-ups in a day). A run of holds still restarts the wait, and an answered
+# frame pays one stray back, so only genuine sustained trouble blocks a rise.
+STEP_UP_STRAY_HOLDS = 2
 
 
 class Governor:
@@ -56,6 +63,8 @@ class Governor:
     self._in_a_row = 0
     self._held: deque[float] = deque()
     self._quiet_since: float | None = None
+    # isolated holds absorbed since the quiet window opened
+    self._stray = 0
     # frames paced out, for the log line that says the governor is acting
     self.paced = 0
 
@@ -85,6 +94,9 @@ class Governor:
     now = time.monotonic() if now is None else now
     if not held:
       self._in_a_row = 0
+      # an answered frame pays back one isolated hold, so a single stray late
+      # frame cannot permanently poison the climb back
+      self._stray = max(0, self._stray - 1)
       if self._level == 0:
         return
       if self._quiet_since is None:
@@ -92,10 +104,21 @@ class Governor:
       elif now - self._quiet_since >= STEP_UP_QUIET:
         self._level -= 1
         self._quiet_since = now
+        self._stray = 0
         self._say(f"host keeping up, large model back to {self.cap:.0f} Hz")
       return
-    self._quiet_since = None
+    # A hold that follows an answered frame is jitter, not a host that fell
+    # behind. Absorb a few of those without restarting the quiet clock; a run
+    # of holds (or more than the allowance) means the host really is behind.
+    stray = (self._quiet_since is not None
+             and self._in_a_row == 0
+             and self._stray < STEP_UP_STRAY_HOLDS)
     self._in_a_row += 1
+    if stray:
+      self._stray += 1
+    else:
+      self._quiet_since = None
+      self._stray = 0
     self._held.append(now)
     while self._held and now - self._held[0] > STEP_WINDOW:
       self._held.popleft()

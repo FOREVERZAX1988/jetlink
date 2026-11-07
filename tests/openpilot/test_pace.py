@@ -77,6 +77,39 @@ def test_an_answered_frame_opens_the_quiet_window_again():
   assert g.cap == CAPS[0]
 
 
+def test_isolated_holds_no_longer_trap_the_cap_at_the_floor():
+  """Regression: a phone that stepped down while the link was bad must climb
+  back once it recovers. A stray hold every couple of seconds is normal on a
+  Wi-Fi link; the old rule restarted a 10 s quiet clock on every one of them,
+  so the governor never stepped up (2026-11-07: 224 downs, zero ups)."""
+  g = Governor()
+  t = 6000.0
+  for _ in range(6):
+    g.note(True, now=t)
+  assert g.cap == CAPS[-1]
+  # 30 s of healthy 20 Hz frames, with one isolated late frame every 2 s
+  now = t
+  for i in range(600):
+    now += 0.05
+    g.note(i % 40 == 0, now=now)
+  assert g.cap == CAPS[0]
+
+
+def test_a_run_of_holds_still_restarts_the_quiet_wait():
+  """Sustained trouble must not be papered over by the stray allowance."""
+  g = Governor()
+  t = 7000.0
+  for _ in range(6):
+    g.note(True, now=t)
+  assert g.cap == CAPS[-1]
+  g.note(False, now=t + 1.0)       # open the quiet window
+  g.note(True, now=t + 2.0)
+  g.note(True, now=t + 2.1)        # a run, not jitter: clock restarted
+  for i in range(1, 240):
+    g.note(False, now=t + 2.1 + i * 0.05)
+  assert g.cap == CAPS[1]          # at most one level, not back to 20 Hz
+
+
 def test_the_env_switch_turns_the_governor_off(monkeypatch):
   monkeypatch.setenv('JETLINK_NO_ADAPTIVE_PACE', '1')
   import importlib

@@ -523,7 +523,13 @@ class JetlinkModelState:
     else:
       try:
         if self._can_hold:
-          model_output = self.client.infer_end(frame.seq, hold=self._hold_left(frame))
+          # The link budget is measured from the reply, not from the warp's
+          # start: WIFI_HOLD_FRAME (55 ms) is documented as covering the
+          # ~45 ms phone reply. Discounting the whole prepare/send/
+          # after_enqueue span left as little as 27 ms, so a healthy link
+          # held almost every frame and the pace governor could never see
+          # that the host had recovered.
+          model_output = self.client.infer_end(frame.seq, hold=self._hold_frame)
         else:
           # no answer yet this session: no output to publish again, so no hold.
           # infer_end() with hold=None judges the link by client.deadline; give
