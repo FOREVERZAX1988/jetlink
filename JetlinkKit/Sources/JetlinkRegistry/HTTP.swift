@@ -87,7 +87,11 @@ struct HTTP: Sendable {
   /// URLSession has also done by now.
   static func check(_ response: URLResponse, url: String) throws(RegistryError) {
     guard let failure = statusFailure(response) else { return }
-    throw .network("could not fetch \(url): \(failure.text)")
+    let message = "could not fetch \(url): \(failure.text)"
+    // 404 is an answer about this URL, not a sick mirror: get() stops the whole
+    // candidate walk on it, so a model a mirror happens not to carry is not
+    // retried against every other host.
+    throw failure.status == 404 ? .notFound(message) : .network(message)
   }
 
   /// A status urllib would raise HTTPError for, as its text reads:
