@@ -210,6 +210,7 @@ public final class OrtBackend: EngineBackend {
       // the phone's own backend overrides whichever of the two it was.
       if let path = qnnBackend, !path.isEmpty {
         options["backend_path"] = path
+        options.removeValue(forKey: "backend_type")
       }
 
       return options
