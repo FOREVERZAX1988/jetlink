@@ -514,7 +514,10 @@ class ThePowerOffStep(OpenpilotTest):
     with mock.patch.object(jo.time, 'monotonic', return_value=t0 + jo.SHUTDOWN_TIMEOUT - 0.5):
       self.assertFalse(self.jl.shutdown_step(True))
     self.assertTrue(gadget.SHUTDOWN_REQUEST.exists())
-    with mock.patch.object(jo.time, 'monotonic', return_value=t0 + jo.SHUTDOWN_TIMEOUT):
+    # Just past the deadline, not exactly on it: (t0 + TIMEOUT) - t0 can land
+    # a few ULPs short of TIMEOUT in floating point, which made this fail on
+    # some runners even though the >= check in _pending() is correct.
+    with mock.patch.object(jo.time, 'monotonic', return_value=t0 + jo.SHUTDOWN_TIMEOUT + 0.01):
       self.assertTrue(self.jl.shutdown_step(True), (t0, self.jl._shutdown_asked, gadget.SHUTDOWN_REQUEST.exists(),
                                                     self.op.log.lines()))
     self.assertFalse(gadget.SHUTDOWN_REQUEST.exists())
