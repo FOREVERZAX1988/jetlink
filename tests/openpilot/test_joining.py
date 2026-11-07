@@ -112,8 +112,8 @@ class JoiningBase(unittest.TestCase):
   def _make(self, *args, **kwargs):
     return JoiningModelState(*args, progress=self.progress, log=self.log, **kwargs)
 
-  def _state(self):
-    s = self._make(self.small, self._connect, self._build)
+  def _state(self, preview=False):
+    s = self._make(self.small, self._connect, self._build, preview=preview)
     self.addCleanup(self._close, s)
     return s
 
@@ -134,9 +134,9 @@ class JoiningBase(unittest.TestCase):
   def _run(self, s):
     return s.run({}, {}, {})
 
-  def _driving(self, dead: bool):
+  def _driving(self, dead: bool, preview=False):
     """A state with the large model driving, over a client that is dead or live."""
-    s = self._state()
+    s = self._state(preview=preview)
     self._wait_joined(s)
     s.in_control = False
     self.assertEqual(self._run(s), {'from': 'big'})
@@ -500,6 +500,44 @@ class JoiningTest(JoiningBase):
     self.assertFalse(self.big.closed, 'a live link was closed')
     self.big.client.leave.assert_called_once()
     self.big.client.close.assert_not_called()
+
+  def test_a_preview_keeps_the_host_the_drop_ratio_would_hand_back(self):
+    # Nothing in a preview can take control, so a host that is slow but
+    # answering is the feature there: the drop rule is a road rule. Held to it,
+    # a healthy 20 fps Wi-Fi preview handed the large model back on a 2 %
+    # smoothed burst every ~10 min (2026-11-07) and waited out the backoff
+    s = self._driving(dead=False, preview=True)
+    s.frame_drop_ratio = joining.DROP_LIMIT * 2
+    self.assertEqual(self._run(s), {'from': 'big'})
+    self.assertEqual(s._lags, 0)
+    self.assertEqual(s._drops, 0)
+    self.big.client.leave.assert_not_called()
+
+  def test_in_control_ends_the_preview_exemption(self):
+    # The fork clears IsOnroadPreview when the real onroad UI takes over. A
+    # params file that lags it must not leave a drive running under a parked
+    # car's rule: the first frame anything is in control takes the exemption
+    # away, and it stays away whatever the param says after
+    s = self._driving(dead=False, preview=True)
+    s.in_control = True
+    self._run(s)
+    self.assertFalse(s.preview)
+    s.in_control = False
+    s.frame_drop_ratio = joining.DROP_LIMIT * 2
+    self.assertEqual(self._run(s), {'from': 'small'})
+
+  def test_the_preview_is_read_from_the_param_every_frame(self):
+    # The param is the fact, not a snapshot taken when the large model was
+    # built: a preview that ends mid-drive hands back on the next frame
+    answers = [True, True, False]
+    s = self._make(self.small, self._connect, self._build, preview=lambda: answers.pop(0))
+    self.addCleanup(self._close, s)
+    self._wait_joined(s)
+    s.in_control = False
+    self.assertEqual(self._run(s), {'from': 'big'})
+    s.frame_drop_ratio = joining.DROP_LIMIT * 2
+    self.assertEqual(self._run(s), {'from': 'big'})
+    self.assertEqual(self._run(s), {'from': 'small'})
 
   def test_a_dead_link_is_closed_and_a_live_one_kept_whatever_went_wrong(self):
     # the client knows whether it is dead; the joining state only asks. A

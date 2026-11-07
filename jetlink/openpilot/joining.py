@@ -142,12 +142,14 @@ class JoiningModelState:
 
   `progress` is where the join says what it is waiting on (status.Progress),
   `log` is cloudlog on a comma, and `in_control` the adapter's, asked before
-  every frame; without one, the in_control last written stands. `name` is
-  the catalog's name for a model's sha256, for the runtime record.
+  every frame; without one, the in_control last written stands. `preview` is
+  the fork's onroad preview, a callable of the param or the answer at
+  construction (see the property). `name` is the catalog's name for a model's
+  sha256, for the runtime record.
   """
 
   def __init__(self, small, connect, build, prepare=None, reset_small=None, *, progress, log, in_control=None,
-               name=None, fade_frames: int = 0, discrete: tuple[str, ...] = ()):
+               preview=False, name=None, fade_frames: int = 0, discrete: tuple[str, ...] = ()):
     self._small = small
     self._active = small
     self._connect = connect
@@ -227,6 +229,12 @@ class JoiningModelState:
     # on no information
     self._in_control = True
     self._ask_in_control = in_control
+    # the fork's onroad preview (its IsOnroadPreview). A callable is the param
+    # itself, read per frame, and a bool a state built with the answer; see the
+    # property. Nothing in a preview can take control, so a host that is slow
+    # but answering is the feature there
+    self._preview_source = preview if callable(preview) else None
+    self._preview = bool(preview()) if callable(preview) else bool(preview)
     self._stop = threading.Event()
 
     # whether the large model has produced a frame; a first inference that
@@ -341,6 +349,27 @@ class JoiningModelState:
     # that wakes ~300 times a second and takes 6 to 11 % of a core inside modeld
     self._in_control = value
 
+  @property
+  def preview(self) -> bool:
+    """Is the comma drawing the onroad UI while parked (the fork's
+    IsOnroadPreview)? Nothing in a preview can take control, so a host that is
+    slow but answering is the feature there: the drop ratio hands the large
+    model back on the road, not in a preview (run).
+
+    Read from the param every frame, not taken at construction. A snapshot is a
+    state the feature cannot have: a large model that outlived the preview
+    would keep rules written for a parked car, and on the road those are the
+    wheel's (run clears it on the first frame anything is in control, and the
+    param is the fact)."""
+    return bool(self._preview_source()) if self._preview_source is not None else self._preview
+
+  @preview.setter
+  def preview(self, value: bool) -> None:
+    # an explicit write wins over the param for the rest of the session: the
+    # clear in run() has to outrank a params file that still reads true
+    self._preview_source = None
+    self._preview = bool(value)
+
   def __getattr__(self, name):
     # Only for names this class does not define, so a read that a comma or
     # sunnypilot sync adds is not an AttributeError on the frame thread (modeld
@@ -357,12 +386,25 @@ class JoiningModelState:
   def run(self, bufs, transforms, inputs, after_enqueue=None):
     if self._ask_in_control is not None:
       self.in_control = self._ask_in_control()
+    if self._in_control and self.preview:
+      # the preview is over: the fork clears IsOnroadPreview when the real
+      # onroad UI takes over, but a params file can lag it. From the frame
+      # anything can be in control, the rules written for the wheel are the
+      # ones that count, and the param stops being asked
+      self.preview = False
+      self._log.warning("jetlink: in control, a preview's drop exemption no longer applies")
     if self._lagging:
       # the last frame was the large model's last, published as it came
       self._lagging = False
       self._demote(BEHIND)
-    elif self._active is not self._small and self._frame_drop_ratio > DROP_LIMIT:
-      # modeld is behind the large model; this frame is the small model's
+    elif (self._active is not self._small and self._frame_drop_ratio > DROP_LIMIT
+          and not self.preview):
+      # modeld is behind the large model; this frame is the small model's.
+      # Not in a preview: it never takes control, so a host that is slow but
+      # answering is the feature there. Held to this rule a preview handed the
+      # large model back minutes after every join and then waited out the
+      # backoff, which is the picture the app is drawing (measured 2026-11-07:
+      # one 2 % smoothed burst every ~10 min, on a link at 20.0 fps)
       self._log.warning("jetlink: modeld dropped %.2f %% of camera frames behind the large model, "
                         "the small model drives from this one", self._frame_drop_ratio * 100)
       self._demote(BEHIND)
@@ -883,4 +925,4 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
 
   return JoiningModelState(small, connect, build, prepare, reset_small=lambda: ready['reset_small'](),
                            progress=parts.progress, log=parts.log, in_control=op.in_control,
-                           name=parts.models.name_for)
+                           preview=parts.settings.preview, name=parts.models.name_for)

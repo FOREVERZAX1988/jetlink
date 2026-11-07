@@ -168,6 +168,11 @@ that param, with the model's `sha256` and `ref` where it has them, so the
 fork's list can show what drives. The param's write time is when the choice
 was made: write it only when the user chooses.
 
+A fork that draws the onroad UI while parked (an onroad preview) sets
+`KEYS.preview` to that param, read every frame. Nothing in a preview can take
+control, so a host that is slow but answering is the feature there: jetlink
+keeps the large model and the drop rule waits for the road.
+
 ## manager
 
 Upstream's `PythonProcess` never starts a process again once it has died. The

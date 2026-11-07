@@ -56,6 +56,11 @@ class Keys:
   # BOOL: an iPhone on a direct cable is asked to charge from the comma
   # (comma.port). Off when unset, and without the key
   charge_phone: str | None = None
+  # BOOL: the fork is drawing the onroad UI while parked (its IsOnroadPreview).
+  # Nothing in a preview can take control, so a host that is slow but answering
+  # is the feature there, and the drop ratio hands back on the road alone
+  # (joining.run). Off when unset, and without the key
+  preview: str | None = None
   # STRING: where the model manager takes a pick by its ref and stores it in
   # big_model (sunnypilot's ModelManager_DownloadRef). A newer pick made on
   # the server is written there, so the comma's own list shows it; without

@@ -63,7 +63,8 @@ OPTIONAL = {'ModelSide': {'small_reset', 'model_warp'}, 'Openpilot': {'small_res
             'JoinedModel': {'get_action_from_model', 'constants', 'LAT_SMOOTH_SECONDS', 'LONG_SMOOTH_SECONDS', 'lat_delay'}}
 
 FIELDS = {
-  'Keys': ['link', 'offroad', 'progress', 'spec', 'big_model', 'catalog', 'charge_phone', 'select', 'pointers'],
+  'Keys': ['link', 'offroad', 'progress', 'spec', 'big_model', 'catalog', 'charge_phone', 'preview', 'select',
+           'pointers'],
   'OwnerConfig': ['params_dir', 'keys', 'chestnut_ids', 'adapter', 'cwd', 'env', 'log_file'],
   'ModelFace': ['parser', 'frame_size', 'desire_len', 'constants', 'lat_smooth_seconds', 'long_smooth_seconds',
                 'get_action_from_model', 'hevc_encoder'],
@@ -221,6 +222,22 @@ class TestFileParams(unittest.TestCase):
     settings = Settings(FileParams(self.dir / 'nowhere'), fakes.KEYS)
     self.assertEqual((settings.mode(), settings.offroad()), ('off', True))
     self.assertEqual(settings.marks(), {'ModelManager_ActiveBundleChestnut': 0, 'JetlinkSpec': 0})
+
+  def test_the_preview_is_read_every_time(self):
+    # The fork clears IsOnroadPreview when the real onroad UI takes over, and
+    # joining's drop rule turns on the answer: it has to follow the file
+    keys = dataclasses.replace(fakes.KEYS, preview='IsOnroadPreview')
+    settings = Settings(self.params, keys)
+    self.assertFalse(settings.preview())
+    self.write('IsOnroadPreview', b'1')
+    self.assertTrue(settings.preview())
+    self.write('IsOnroadPreview', b'0')
+    self.assertFalse(settings.preview())
+
+  def test_an_adapter_without_a_preview_key_reads_as_no_preview(self):
+    # fakes.KEYS declares none: a fork that has no preview says so by silence,
+    # and the answer is asked on the frame thread
+    self.assertFalse(self.settings.preview())
 
   def test_marks_follow_the_pick_and_the_spec(self):
     self.assertEqual(self.settings.marks(), {'ModelManager_ActiveBundleChestnut': 0, 'JetlinkSpec': 0})
