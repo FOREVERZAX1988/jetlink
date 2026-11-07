@@ -2,6 +2,7 @@ package io.zoompilot.jetlink.server
 
 import android.content.Context
 import android.net.wifi.WifiManager
+import android.util.Log
 
 /**
  * The Wi-Fi lock held while a comma is served over a link that is not the
@@ -28,28 +29,40 @@ class WifiLink(context: Context) {
     fun hold(keep: Boolean, medium: String?) {
         val wanted = keep && wanted(medium)
         val held = lock
-        if (wanted && held == null) {
-            lock = create().apply { setReferenceCounted(false); acquire() }
-        } else if (!wanted && held != null) {
-            held.release()
+        try {
+            if (wanted && held == null) {
+                lock = create().apply { setReferenceCounted(false); acquire() }
+            } else if (!wanted && held != null) {
+                held.release()
+                lock = null
+            }
+        } catch (e: Exception) {
+            // A stack that refuses the lock is a phone whose radio sleeps, not
+            // a service that stops serving: this is called from the collector
+            // that also drives the notification, where a throw would end the
+            // collector for the life of the service.
             lock = null
+            Log.w(TAG, "the Wi-Fi lock was refused: ${e.message}")
         }
     }
 
+    @Suppress("DEPRECATION")  // the fallback below, deprecated in favour of the mode above it
     private fun create(): WifiManager.WifiLock = try {
         // The mode that asks the stack for low latency and no power save, which
         // is what the reply needs (API 29; the phone here reports
         // WIFI_FEATURE_LOW_LATENCY). The older high-performance mode is the
         // fallback for a stack that will not take it: createWifiLock is the
-        // call that refuses a mode it does not know.
-        wifi.createWifiLock(WifiManager.WIFI_MODE_FULL_LOW_LATENCY, TAG)
+        // call that refuses a mode it does not know, and a phone old enough to
+        // refuse knows only the one it deprecates.
+        wifi.createWifiLock(WifiManager.WIFI_MODE_FULL_LOW_LATENCY, LOCK_TAG)
     } catch (e: IllegalArgumentException) {
-        wifi.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, TAG)
+        wifi.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, LOCK_TAG)
     }
 
     companion object {
+        private const val TAG = "jetlink"
         /** What the radio's lock log calls it, and the only thing it is held for. */
-        private const val TAG = "jetlink:serving"
+        private const val LOCK_TAG = "jetlink:serving"
 
         /**
          * Is this a medium the lock is worth holding for? Anything but the
@@ -58,7 +71,10 @@ class WifiLink(context: Context) {
          * a server too old to name one is not a reason to hold one, and neither
          * is a link that is not connected yet -- `medium` is only sent while
          * one is.
+         *
+         * An empty name is not a medium either: a lock held on a guess is
+         * battery spent on a guess.
          */
-        fun wanted(medium: String?): Boolean = medium != null && !medium.startsWith("usb")
+        fun wanted(medium: String?): Boolean = !medium.isNullOrEmpty() && !medium.startsWith("usb")
     }
 }
