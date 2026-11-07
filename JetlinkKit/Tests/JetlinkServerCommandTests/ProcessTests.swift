@@ -106,9 +106,13 @@
       try process.run()
       defer { if process.isRunning { process.terminate() } }
 
-      // Said once the server listens and the page is up.
+      // Wait for both the page and the readiness line to reach the log: the
+      // SIGTERM handler is installed with the server, and on Linux a signal
+      // sent before it is up kills the process outright instead of letting it
+      // exit cleanly -- and the readiness line would not be on disk yet.
       let serving = eventually(timeout: 30) {
-        !process.isRunning || String(decoding: (try? Data(contentsOf: log)) ?? Data(), as: UTF8.self).contains("web page on port")
+        let text = String(decoding: (try? Data(contentsOf: log)) ?? Data(), as: UTF8.self)
+        return !process.isRunning || (text.contains("web page on port") && text.contains("jetlink-server is serving"))
       }
       guard serving, process.isRunning else {
         Issue.record("never listened: \(String(decoding: (try? Data(contentsOf: log)) ?? Data(), as: UTF8.self))")
