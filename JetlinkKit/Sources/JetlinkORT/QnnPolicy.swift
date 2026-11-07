@@ -52,7 +52,8 @@ public struct QnnPolicy: Sendable, Equatable {
     guard disableAdvancedActivationFusion else { return }
     guard let libraryDirectory, libraryDirectory.hasPrefix("/"), !libraryDirectory.contains("\0"),
       let runtimeIdentity, runtimeIdentity.count == 64,
-      runtimeIdentity.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
+      runtimeIdentity.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) })
+    else {
       throw HostError.invalid("the no-fusion adapter requires a matching SDK directory and runtime identity")
     }
   }

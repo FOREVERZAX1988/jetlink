@@ -70,7 +70,8 @@ struct QnnPolicyTests {
     for shared in [false, true] {
       for strict in [false, true] {
         for fusion in [false, true] {
-          let policy = QnnPolicy(sharedIO: shared, strict: strict, disableAdvancedActivationFusion: fusion,
+          let policy = QnnPolicy(
+            sharedIO: shared, strict: strict, disableAdvancedActivationFusion: fusion,
             libraryDirectory: "/native", runtimeIdentity: runtime)
           let backend = OrtBackend(profile: .htpWhole, preparer: ONNXPreparer(), chip: "example", qnn: policy)
           tags.insert(backend.deviceTag())

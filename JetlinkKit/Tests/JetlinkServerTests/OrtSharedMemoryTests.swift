@@ -13,7 +13,8 @@ struct OrtSharedMemoryTests {
 
   @Test("CPU plans cannot request HTP shared bindings")
   func wrongProvider() throws {
-    let plan = SessionPlan(model: try Golden("tiny_stateful").model, provider: nil,
+    let plan = SessionPlan(
+      model: try Golden("tiny_stateful").model, provider: nil,
       options: ["enable_htp_shared_memory_allocator": "1"], label: "CPU")
     #expect(throws: OrtError.self) {
       _ = try OrtEngine(plans: [plan], device: "cpu", keepAlive: false, keepCPUWarm: false)

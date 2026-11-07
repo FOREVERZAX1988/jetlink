@@ -170,9 +170,10 @@ public final class OrtEngine: EngineCore, @unchecked Sendable {
         }
         // These allocations remain host-accessible. Only HTP sessions label
         // their bindings QnnHtpShared; CPU/GPU sessions use CPU memory metadata.
-        set.append(try OrtBinding(
-          session: session, inputs: ins, outputs: outs,
-          sharedAllocator: sharedSessions[index] ? sharedAllocator : nil))
+        set.append(
+          try OrtBinding(
+            session: session, inputs: ins, outputs: outs,
+            sharedAllocator: sharedSessions[index] ? sharedAllocator : nil))
       }
       sets.append(set)
     }

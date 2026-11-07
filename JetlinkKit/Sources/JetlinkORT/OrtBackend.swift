@@ -223,9 +223,10 @@ public final class OrtBackend: EngineBackend {
   func plan(_ unit: OrtUnit, model: URL, cache: URL?) -> SessionPlan {
     switch unit {
     case .coreML(let units): SessionPlan(model: model, computeUnits: units, cacheDirectory: cache)
-    case .htp: SessionPlan(
-      model: model, provider: "QNN", options: providerOptions(unit), config: qnn.sessionConfig,
-      label: "QNN(htp)", usesNeuralEngine: true)
+    case .htp:
+      SessionPlan(
+        model: model, provider: "QNN", options: providerOptions(unit), config: qnn.sessionConfig,
+        label: "QNN(htp)", usesNeuralEngine: true)
     case .qnnGPU: SessionPlan(model: model, provider: "QNN", options: providerOptions(unit), label: "QNN(gpu)", usesGPU: true)
     case .cpu: SessionPlan(model: model, provider: nil, threads: HostChip.cpuThreads, label: "CPU")
     }
@@ -362,10 +363,10 @@ public final class OrtBackend: EngineBackend {
   /// The same strict provider contract applies during compilation and reload.
   func contextConfiguration(context: URL) -> [String: String] {
     qnn.sessionConfig.merging([
-        "ep.context_enable": "1",
-        "ep.context_file_path": context.path,
-        // the context binary in a file of its own beside the model, not base64 inside it
-        "ep.context_embed_mode": "0",
+      "ep.context_enable": "1",
+      "ep.context_file_path": context.path,
+      // the context binary in a file of its own beside the model, not base64 inside it
+      "ep.context_embed_mode": "0",
     ]) { _, value in value }
   }
 

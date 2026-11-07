@@ -150,7 +150,10 @@ final class OrtBinding {
   private let pointer: OpaquePointer
   private let sharedAllocator: OrtSharedAllocator?
 
-  init(session: OrtSession, inputs: [(TensorSpec, UnsafeMutableRawPointer)], outputs: [(TensorSpec, UnsafeMutableRawPointer)], sharedAllocator: OrtSharedAllocator? = nil) throws {
+  init(
+    session: OrtSession, inputs: [(TensorSpec, UnsafeMutableRawPointer)], outputs: [(TensorSpec, UnsafeMutableRawPointer)],
+    sharedAllocator: OrtSharedAllocator? = nil
+  ) throws {
     self.sharedAllocator = sharedAllocator
     var names: [UnsafeMutablePointer<CChar>?] = []
     var dims: [UnsafeMutablePointer<Int64>] = []
