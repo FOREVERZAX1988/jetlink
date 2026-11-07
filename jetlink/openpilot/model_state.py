@@ -65,6 +65,15 @@ SLOW_FRAME = 0.05  # the full 20 Hz budget, not just the largest outliers
 # delay both dwarf, where a dropped frame is the same stale plan plus a count
 # toward selfdrived's modeldLagging. None waits the client's full deadline
 HOLD_FRAME = 0.046
+# The first frame of a session waits its own, wider budget. Nothing has come
+# back yet, so there is no earlier output to publish again and a hold is not
+# available; on a cold phone that frame also carries the engine's preload (a
+# 100-140 ms inference) and the radio waking from power save. Charging that
+# one frame against the 0.2 s link deadline abandons the link before the host
+# has answered, and every retry starts cold again -- a phone that was freshly
+# installed can never join. Kept under modelV2's 0.5 s alive limit; later
+# frames still use client.deadline so a host that has gone silent fails fast.
+FIRST_FRAME_BUDGET = 0.45
 # Held frames the large model may make before it is behind rather than
 # tailing: this many in a row, or more than HOLDS_ALLOWED within HOLD_WINDOW.
 # A host at 40 ms a frame with a tail past 46 (an iPhone) holds a few frames
@@ -513,7 +522,19 @@ class JetlinkModelState:
       model_output = None   # not sent (see send): held
     else:
       try:
-        model_output = self.client.infer_end(frame.seq, hold=self._hold_left(frame) if self._can_hold else None)
+        if self._can_hold:
+          model_output = self.client.infer_end(frame.seq, hold=self._hold_left(frame))
+        else:
+          # no answer yet this session: no output to publish again, so no hold.
+          # infer_end() with hold=None judges the link by client.deadline; give
+          # this one frame the wider budget and put the normal one straight
+          # back. Passing deadline= instead would change the client interface.
+          saved = getattr(self.client, 'deadline', FIRST_FRAME_BUDGET)
+          self.client.deadline = FIRST_FRAME_BUDGET
+          try:
+            model_output = self.client.infer_end(frame.seq, hold=None)
+          finally:
+            self.client.deadline = saved
       except NotFinite:
         # answered, so the leave's summary counts it
         self.trips.record(time.perf_counter() - frame.t0, self.client.last_timings[2])

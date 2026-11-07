@@ -184,6 +184,25 @@ class ModelStateTest(unittest.TestCase):
 
 
 class TestWire(ModelStateTest):
+  def test_the_first_frame_waits_a_wider_budget_and_puts_it_back(self):
+    # a freshly installed phone cold-starts its engine on the first frame;
+    # judging that frame by the 0.2 s link deadline abandons the link, and
+    # every retry starts cold again (regression, 2026-11-07)
+    client = FakeClient()
+    client.deadline = 0.2
+    seen = []
+    original = client.infer_end
+
+    def spy(seq, hold=None):
+      seen.append((hold, client.deadline))
+      return original(seq, hold=hold)
+
+    client.infer_end = spy
+    self.run_frames(STATEFUL, n=1, client=client)
+    self.assertEqual(seen[0], (None, model_state.FIRST_FRAME_BUDGET))
+    self.assertGreater(model_state.FIRST_FRAME_BUDGET, 0.2)
+    self.assertEqual(client.deadline, 0.2)  # every later frame keeps the strict one
+
   def test_a_stateful_model_gets_the_frame_and_twelve_floats(self):
     spec, state, client, warped = self.run_frames(STATEFUL)
     self.assertEqual(state.vision_input_names, ['img', 'big_img'])
