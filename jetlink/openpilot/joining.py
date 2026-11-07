@@ -867,7 +867,7 @@ def join(parts, cam_w: int, cam_h: int, small) -> JoiningModelState:
                  'settling_frames': model_state.WIFI_SETTLING_FRAMES,
                  'holds_in_a_row': model_state.WIFI_HOLDS_IN_A_ROW,
                  'holds_allowed': model_state.WIFI_HOLDS_ALLOWED,
-                 'proving_holds_fatal': False, 'pace': True}
+                 'proving_holds_fatal': False, 'pace': True, 'pipeline': True}
     elif mode in ('usb', 'ios'):
       hold_kw = {'hold_frame': model_state.CABLE_HOLD_FRAME,
                  'settling_frames': model_state.CABLE_SETTLING_FRAMES,

@@ -154,10 +154,10 @@ class ModelStateTest(unittest.TestCase):
     self.log = fakes.RecordingLog()
     self.events = []
 
-  def make(self, spec, client, face=fakes.FACE, warped=None):
+  def make(self, spec, client, face=fakes.FACE, warped=None, **kwargs):
     warped = np.zeros(np.prod(spec.warped_shape), np.uint8) if warped is None else warped
     return model_state.JetlinkModelState(client, spec, FakeWarp(warped), face=face, log=self.log,
-                                         event=lambda name, **fields: self.events.append((name, fields)))
+                                         event=lambda name, **fields: self.events.append((name, fields)), **kwargs)
 
   def run_frames(self, inputs: dict, n: int = 3, client=None, after_enqueue=None):
     """`n` frames driven. Returns the spec, the state, the client and the
@@ -181,6 +181,66 @@ class ModelStateTest(unittest.TestCase):
                'action_t': np.array([0.1, 0.2], np.float32)})
       outs.append(state.run(*args, after_enqueue))
     return outs
+
+
+class TestPipeline(ModelStateTest):
+  """A Wi-Fi link publishes the newest answer without waiting for the frame's
+  own reply. Waiting 30-50 ms on modeld's frame thread against a 50 ms camera
+  drops camera frames past joining.DROP_LIMIT and hands the drive back; the
+  pipeline is how a parked preview used to hold a steady 20 Hz for minutes
+  (regression: v0.9.0 dropped the pipeline for adaptive pacing)."""
+
+  def _wifi(self, **kwargs):
+    client = FakeClient()
+    spec = spec_for(STATEFUL)
+    state = self.make(spec, client, pipeline=True, **kwargs)
+    return client, state
+
+  def test_a_wifi_frame_never_waits_and_publishes_the_newest_answer(self):
+    client, state = self._wifi()
+    client.output[slice(*SLICES['plan'])] = 1.0
+    first, = self.frames(state, 1)
+    # the host answers the in-flight frame with a new plan while the comma
+    # brings up the next camera frame: prepare()'s drain() reads it
+    client.output = client.output.copy()
+    client.output[slice(*SLICES['plan'])] = 2.0
+    rest = self.frames(state, 3)
+    self.assertTrue((first['plan'] == 1.0).all(), 'the first frame still waits: nothing to publish')
+    self.assertTrue((rest[0]['plan'] == 1.0).all(), 'the newest answer so far')
+    self.assertTrue((rest[-1]['plan'] == 2.0).all(), 'a later drain publishes the new answer')
+    self.assertEqual(len(client.holds), 1, 'only the first frame waited; the rest were pipelined')
+    self.assertEqual(state.trips.held, 0, 'a pipelined frame is not a host that fell behind')
+    self.assertIsNone(state.behind)
+    self.assertEqual(state.late.answered, 1, 'the watermark is not moved by a frame that never waited')
+
+  def test_pipelined_frames_never_pace_the_host_down(self):
+    _, state = self._wifi(pace=True)
+    self.frames(state, 12)
+    self.assertEqual(state._pace.cap, 20.0, 'no held frames, so the governor stays at the full cap')
+    self.assertEqual(state._pace.paced, 0)
+    self.assertEqual(state.trips.held, 0)
+
+  def test_a_busy_host_holds_frames_instead_of_piling_them_up(self):
+    # A phone that stops answering used to accumulate pipelined frames until
+    # the oldest crossed the 0.2 s link deadline (or the TCP write timed out)
+    # and the drive was handed back every 10-30 s (regression, 2026-11-07).
+    client, state = self._wifi()
+    self.frames(state, 1)   # first frame answers, so there is a plan to publish
+    client.keep = set(range(2, 20))
+    self.frames(state, 6)
+    self.assertLessEqual(client.unanswered, model_state.PIPELINE_IN_FLIGHT)
+    self.assertEqual(len(client.sent), 4, 'the first frame plus three in flight; the rest held back')
+    self.assertEqual(state.trips.held, 0, 'a bound, not a host that fell behind')
+    client.keep.clear()
+    self.frames(state, 2)
+    self.assertGreater(len(client.sent), 4, 'sending resumes once the replies are read')
+
+  def test_the_cable_keeps_waiting_for_its_own_reply(self):
+    # pipeline defaults off: USB/Jetson links keep the strict frame loop
+    client = FakeClient()
+    state = self.make(spec_for(STATEFUL), client)
+    self.frames(state, 4)
+    self.assertEqual(len(client.holds), 4, 'every frame waited on its own answer')
 
 
 class TestWire(ModelStateTest):

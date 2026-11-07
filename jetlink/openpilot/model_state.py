@@ -116,6 +116,12 @@ WIFI_HOLD_FRAME = 0.055
 WIFI_SETTLING_FRAMES = 8
 WIFI_HOLDS_IN_A_ROW = 15
 WIFI_HOLDS_ALLOWED = 150
+# How many frames a pipelined Wi-Fi link may leave unanswered. Without a bound
+# a cold or busy phone piles frames up until the oldest crosses the client's
+# 0.2 s deadline (link abandoned) or the TCP send buffer backs up (write
+# timeout). Three at 20 Hz is 150 ms, inside the deadline, and a phone that
+# answers in ~22 ms keeps only one or two out at a time.
+PIPELINE_IN_FLIGHT = 3
 # frames between asks for the server's telemetry, which rides on the response:
 # every second one, as modeld sent a chestnut's state (20 Hz over 10 Hz)
 TELEMETRY_EVERY = 2
@@ -170,6 +176,9 @@ class Frame:
   seq: int | None = None
   sent: float = 0.0
   telemetry: bool = False
+  # held back because the pipeline's in-flight bound was reached (not a slow
+  # host): end() publishes the previous plan as a pipelined frame does
+  skipped: bool = False
 
 
 class JetlinkModelState:
@@ -191,8 +200,15 @@ class JetlinkModelState:
                hold_frame: float | None = None, settling_frames: int | None = None,
                holds_in_a_row: int | None = None, holds_allowed: int | None = None,
                proving_holds_fatal: bool = True, stages: object | None = None,
-               late: object | None = None, pace: bool = False):
+               late: object | None = None, pace: bool = False,
+               pipeline: bool = False):
     self._log = log
+    # A Wi-Fi link pipelines: end() publishes the newest answer drain() read
+    # and never blocks on the frame's own reply (see end). Waiting for a phone
+    # costs 30-50 ms of modeld's frame thread against a 50 ms camera, and the
+    # dropped-frame ratio past DROP_LIMIT hands the drive back to the small
+    # model. The cable keeps the strict frame loop it always had.
+    self._pipeline = bool(pipeline)
     # Per-link overrides. None means "read the module constant each frame", so
     # the strict USB/Jetson defaults stay live constants the tests can mock and
     # a Wi-Fi/USB phone build pins a wider value at construction (see joining).
@@ -481,6 +497,17 @@ class JetlinkModelState:
     frame = self._frame
     self._frame_id += 1
     frame.telemetry = want_telemetry or time.monotonic() - self._last_logged >= TELEMETRY_PERIOD
+    if self._pipeline and self.client.unanswered >= PIPELINE_IN_FLIGHT:
+      # Read what has arrived before deciding: a reply that just landed makes
+      # room without dropping a camera frame. If the host really is that far
+      # behind, hold this one (publish the previous plan) rather than push it
+      # out and let the oldest reply cross the link's deadline.
+      self.client.drain()
+      if self.client.unanswered >= PIPELINE_IN_FLIGHT:
+        frame.skipped = True
+        frame.sent = time.perf_counter()
+        self.stages.sent(self._frame_id, frame.sent)
+        return
     try:
       if self._hevc:
         # the two cameras' access units, or a frame the gate kept back, which
@@ -499,8 +526,13 @@ class JetlinkModelState:
         frame.seq = self.client.infer_begin(None, self.packed, self._frame_id, reset=self._need_reset,
                                             want_state=frame.telemetry, skip_if_busy=self._can_hold,
                                             lossless=self._packer.pack(self.warp.errors))
-    except Exception:
-      self._log.warning("jetlink: frame %d send failed: %s", self._frame_id, getattr(self.client.t, 'last_send', {}))
+    except Exception as e:
+      # the exception first: a link with no send stats of its own (TCP) logged
+      # an empty dict here, and the reason -- a write timeout or a piled-up
+      # pipeline -- went with it
+      stats = getattr(self.client.t, 'last_send', None)
+      self._log.warning("jetlink: frame %d send failed: %s%s", self._frame_id, e,
+                        f" ({stats})" if stats else "")
       raise
     frame.sent = time.perf_counter()
     self.stages.sent(self._frame_id, frame.sent)
@@ -518,8 +550,22 @@ class JetlinkModelState:
     if after_enqueue is not None:
       after_enqueue()
     waiting_from = time.perf_counter()
+    pipelined = False
     if frame.seq is None:
-      model_output = None   # not sent (see send): held
+      # Not sent: either the link refused it (a hold), or the pipeline's
+      # in-flight bound held it back. The latter publishes the previous plan
+      # just as a pipelined frame does, and must not count as a host behind.
+      model_output = None
+      pipelined = frame.skipped
+    elif self._pipeline and self.client.last_output is not None:
+      # A pipelined frame does not wait for its own reply: publish the newest
+      # answer prepare()'s drain() already read, and leave this frame's reply
+      # for a later drain. Nothing waited, so the camera's 50 ms is intact --
+      # the host works on this frame while the camera brings up the next one.
+      # This publishes the same one-frame-old plan a held frame does, without
+      # the block that drops camera frames behind the large model.
+      model_output = None
+      pipelined = True
     else:
       try:
         if self._can_hold:
@@ -546,7 +592,11 @@ class JetlinkModelState:
         self.trips.record(time.perf_counter() - frame.t0, self.client.last_timings[2])
         raise
     t4 = time.perf_counter()
-    held = model_output is None
+    # Both a held frame and a pipelined frame publish the previous plan; only
+    # the held one means the host fell behind. A pipelined frame is an answer
+    # in flight by design, so it must never feed the hold limits or the pace
+    # governor's "host behind" count.
+    held = model_output is None and not pipelined
     # The first frames of an HEVC stream have nothing to publish and nothing to
     # publish again: the gate is waiting for a keyframe on both cameras. That is
     # a stream coming up, not a host that is behind, so it is raised before any
@@ -562,10 +612,13 @@ class JetlinkModelState:
     self.trips.record(t4 - frame.t0, self.client.last_timings[2])
     # the reply's own arrival, and whether the hold gave up before it: the
     # watermark rule, which says a late reply is late and a missing one lost
-    if frame.seq is not None:
+    # The watermark classifies replies the frame path waited on. A pipelined
+    # frame neither waited nor gave up, so it must not move the watermark (or
+    # every later reply would read as late) nor claim its reply arrived.
+    if frame.seq is not None and not pipelined:
       (self.late.gave_up if held else self.late.arrived)(self._frame_id)
     self.stages.replied(self._frame_id, t4)
-    outputs = self._outputs(self.client.last_output if held else model_output)
+    outputs = self._outputs(self.client.last_output if (held or pipelined) else model_output)
     self.stages.finished(self._frame_id, time.perf_counter(), held=held)
     # a frame past the budget is a dropped camera frame; send against reply
     # says which end it was. Held frames are a steady few on a marginal host,
@@ -576,6 +629,8 @@ class JetlinkModelState:
       if held:
         self._last_hold_logged = t4
         note = f', held ({self.trips.held} so far{", not sent" if frame.seq is None else ""})'
+      elif pipelined:
+        note = ', pipelined'
       # persisted on the comma so a drive can separate server execution from
       # receive stalls once the Jetson is offline; server total excludes USB
       gpu_us, queue_us, total_us = self.client.last_timings
