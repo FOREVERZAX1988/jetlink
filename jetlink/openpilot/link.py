@@ -113,21 +113,23 @@ def dial(log, deadline: float | None = None, name: str | None = None):
   """
   from jetlink.client import FRAME_TIMEOUT, JetlinkClient
 
-  def _open(host):
-    # the hello says Wi-Fi and the band, so the far end can warn about 2.4 GHz;
-    # the panels' record of the dial goes when the link closes
-    return JetlinkClient.open_tcp(host, timeout=wifi.DIAL_TIMEOUT, link=wifi.link_info(),
-                                  on_close=gadget.clear_link, name=name,
-                                  deadline=FRAME_TIMEOUT if deadline is None else deadline)
-
   def _try(host) -> object | None:
     """The client on `host`, or None when nothing answered there."""
+    # the hello says Wi-Fi and the band, so the far end can warn about 2.4 GHz;
+    # the panels' record of the dial goes when the link closes
+    info = wifi.link_info()
     try:
-      client = _open(host)
+      client = JetlinkClient.open_tcp(host, timeout=wifi.DIAL_TIMEOUT, link=info,
+                                      on_close=gadget.clear_link, name=name,
+                                      deadline=FRAME_TIMEOUT if deadline is None else deadline)
     except OSError:
       return None
     gadget.note_link('wifi', host)
-    log.warning("jetlink: dialed %s over Wi-Fi", host)
+    # the band, not just "Wi-Fi": 20 Hz of lossless frames needs ~30 Mbps, and
+    # the 2.4 GHz one cannot carry it -- the drive that demoted every few
+    # seconds (2026-11-08) left nothing in the log to tell the two apart
+    band = info.get('band')
+    log.warning("jetlink: dialed %s over Wi-Fi%s", host, f" ({band} GHz)" if band else "")
     return client
 
   # The gateway first: it is one read of the routing table, and a comma that

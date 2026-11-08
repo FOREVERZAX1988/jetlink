@@ -122,6 +122,17 @@ WIFI_HOLDS_ALLOWED = 150
 # timeout). Three at 20 Hz is 150 ms, inside the deadline, and a phone that
 # answers in ~22 ms keeps only one or two out at a time.
 PIPELINE_IN_FLIGHT = 3
+# How long the frame thread may spend handing a frame to a pipelined link
+# before that is the link and not the host. A frame costs the camera 50 ms:
+# warp ~3 ms, the host's answer read later, the rest is modeld's own work. When
+# send() blocks past this, the socket buffer is full because the link cannot
+# carry the frames the cap asks for -- a phone hotspot at 20 Hz needs ~30 Mbps
+# for a ~187 kB lossless frame, and the drive of 2026-11-08 measured 20 to 57 ms
+# sends there, a 2.38 % camera-drop burst and a hand-back every few seconds.
+# The governor steps the rate down on this, so the link carries fewer frames
+# instead of modeld dropping camera frames behind it (pace.py). Pipelined
+# frames never hold, so without this the governor has no signal at all on Wi-Fi.
+SEND_BUDGET = 0.012
 # frames between asks for the server's telemetry, which rides on the response:
 # every second one, as modeld sent a chestnut's state (20 Hz over 10 Hz)
 TELEMETRY_EVERY = 2
@@ -179,6 +190,9 @@ class Frame:
   # held back because the pipeline's in-flight bound was reached (not a slow
   # host): end() publishes the previous plan as a pipelined frame does
   skipped: bool = False
+  # the link, not the host: send() blocked past SEND_BUDGET on a pipelined
+  # frame, so the governor steps the rate down (see SEND_BUDGET)
+  slow_send: bool = False
 
 
 class JetlinkModelState:
@@ -535,6 +549,8 @@ class JetlinkModelState:
                         f" ({stats})" if stats else "")
       raise
     frame.sent = time.perf_counter()
+    # a send that took this long was the link's queue, not the host's work
+    frame.slow_send = self._pipeline and frame.sent - frame.t2 > SEND_BUDGET
     self.stages.sent(self._frame_id, frame.sent)
     if frame.seq is not None:
       self._need_reset = False
@@ -594,8 +610,9 @@ class JetlinkModelState:
     t4 = time.perf_counter()
     # Both a held frame and a pipelined frame publish the previous plan; only
     # the held one means the host fell behind. A pipelined frame is an answer
-    # in flight by design, so it must never feed the hold limits or the pace
-    # governor's "host behind" count.
+    # in flight by design, so it must never feed the hold limits. It does feed
+    # the governor when the send itself was blocked (SEND_BUDGET below), which
+    # is the link asking for fewer frames rather than the host answering late.
     held = model_output is None and not pipelined
     # The first frames of an HEVC stream have nothing to publish and nothing to
     # publish again: the gate is waiting for a keyframe on both cameras. That is
@@ -608,7 +625,15 @@ class JetlinkModelState:
       self.stages.finished(self._frame_id, time.perf_counter(), held=False)
       raise NotReady(f"frame {self._frame_id}: nothing to publish and nothing to hold")
     self.held = held
-    self.behind = self._note_hold(held)
+    # A pipelined frame never waits for its own reply, so `held` is always
+    # false there and the governor would only ever climb back. What says the
+    # link cannot use another frame is its own queue: send() blocked past
+    # SEND_BUDGET, or the in-flight bound held the frame. Feed that to the
+    # governor, which lowers the rate, and never to the demote rule -- a slow
+    # link is not a host that fell behind, and handing the drive back to the
+    # small model is the one outcome a slow link should not cause.
+    pressured = pipelined and (frame.skipped or frame.slow_send)
+    self.behind = self._note_hold(held, pressured)
     self.trips.record(t4 - frame.t0, self.client.last_timings[2])
     # the reply's own arrival, and whether the hold gave up before it: the
     # watermark rule, which says a late reply is late and a missing one lost
@@ -630,7 +655,7 @@ class JetlinkModelState:
         self._last_hold_logged = t4
         note = f', held ({self.trips.held} so far{", not sent" if frame.seq is None else ""})'
       elif pipelined:
-        note = ', pipelined'
+        note = ', pipelined, send past budget' if frame.slow_send else ', pipelined'
       # persisted on the comma so a drive can separate server execution from
       # receive stalls once the Jetson is offline; server total excludes USB
       gpu_us, queue_us, total_us = self.client.last_timings
@@ -706,15 +731,18 @@ class JetlinkModelState:
     """What is left of the hold for `frame`, from its warp's start."""
     return self._hold_frame - (time.perf_counter() - frame.t0)
 
-  def _note_hold(self, held: bool) -> str | None:
+  def _note_hold(self, held: bool, pressured: bool = False) -> str | None:
     """Why the large model should hand back after this frame, if it should:
     any held frame among its first PROVING_FRAMES past SETTLING_FRAMES,
     HOLDS_IN_A_ROW held frames running, or more than HOLDS_ALLOWED in
-    HOLD_WINDOW. None while it is keeping up."""
+    HOLD_WINDOW. None while it is keeping up.
+
+    `pressured` is the pipelined link's own backpressure (SEND_BUDGET): the
+    governor steps the rate down on it, the demote rule does not."""
     # the governor watches the same rhythm and steps the frame rate; its own
     # paced frames never come through here (run() answers them itself)
     if self._pace is not None:
-      self._pace.note(held)
+      self._pace.note(held or pressured)
     if not held:
       self._holds_in_a_row = 0
       return None

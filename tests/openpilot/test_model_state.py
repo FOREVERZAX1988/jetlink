@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import time
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -85,6 +86,8 @@ class FakeClient:
     self.hevc = []
     # the comma's own six stage means as the host was told them, in call order
     self.stage_reports = []
+    # seconds a send blocks in the socket: a link at its limit (SEND_BUDGET)
+    self.send_delay = 0.0
 
   def report_stages(self, means, timeout=0.1):
     self.stage_reports.append(dict(means))
@@ -96,6 +99,8 @@ class FakeClient:
     self.hevc.append(hevc)
     if skip_if_busy and frame_id in self.busy:
       return None
+    if self.send_delay:
+      time.sleep(self.send_delay)
     self.sent.append((None if data is None else np.frombuffer(bytes(data), np.uint8).copy(), np.array(packed, copy=True),
                       frame_id, reset))
     self.asked.append(want_state)
@@ -219,6 +224,27 @@ class TestPipeline(ModelStateTest):
     self.assertEqual(state._pace.cap, 20.0, 'no held frames, so the governor stays at the full cap')
     self.assertEqual(state._pace.paced, 0)
     self.assertEqual(state.trips.held, 0)
+
+  def test_a_link_that_blocks_the_send_steps_the_rate_down(self):
+    """The drive of 2026-11-08: 20 Hz of ~187 kB lossless frames needs ~30 Mbps,
+    the phone's hotspot could not carry it, send() blocked 20-57 ms, modeld
+    dropped 2.38 % of camera frames behind the large model and the drive went
+    back to the small model every few seconds. A pipelined frame never holds,
+    so without the send feeding the governor it had no signal at all on Wi-Fi
+    and stayed at 20 Hz into a link that could not take it."""
+    client, state = self._wifi(pace=True)
+    client.send_delay = model_state.SEND_BUDGET * 2
+    self.frames(state, 4)
+    self.assertEqual(state._pace.cap, 15.0, 'the link asked for fewer frames, so the governor stepped down')
+    self.assertIsNone(state.behind, 'a slow link is not a host that fell behind: never demote on it')
+    self.assertEqual(state.trips.held, 0)
+
+  def test_a_send_inside_the_budget_keeps_the_full_cap(self):
+    client, state = self._wifi(pace=True)
+    client.send_delay = model_state.SEND_BUDGET / 4
+    self.frames(state, 6)
+    self.assertEqual(state._pace.cap, 20.0)
+    self.assertIsNone(state.behind)
 
   def test_a_busy_host_holds_frames_instead_of_piling_them_up(self):
     # A phone that stops answering used to accumulate pipelined frames until
