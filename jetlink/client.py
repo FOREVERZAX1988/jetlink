@@ -296,13 +296,16 @@ class JetlinkClient:
       return True
     if forced in ('lossless', 'raw'):
       return False
-    # 'auto': HEVC on Wi-Fi, lossless on a cable. A dial carries its medium
-    # in the transport's link_info (wifi for dial(), cable/usb for gadget).
-    try:
-      info = self.t.link_info() or {}
-    except Exception:
-      info = {}
-    return str(info.get('kind', '')).lower() == 'wifi'
+    # 'auto' stays lossless even on Wi-Fi. Measured 2026-11-16 on a phone
+    # (SM8975) carrying the large model in the same process: with HEVC on,
+    # the decoder is the FFmpeg *software* HEVC decoder (the Android build
+    # has no hevc_mediacodec); decoding 4 Mbps of two cameras at 20 Hz pinned
+    # the app's GPU at 99%, replies slipped to 160-200 ms and the link lost
+    # its host on every join. The lossless carrier held 20 Hz with no demote.
+    # HEVC stays available behind JETLINK_CODEC=hevc until a build with a
+    # hardware decoder (MediaCodec) is shipped; a cable was and remains
+    # lossless.
+    return False
 
   def choose_codec(self, prefer_lossy: bool = False) -> str:
     """Settle what this link's frames go as, from the last hello.
