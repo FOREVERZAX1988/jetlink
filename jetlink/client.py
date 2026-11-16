@@ -580,10 +580,7 @@ class JetlinkClient:
              | (P.Flag.WANT_HIDDEN if self.want_hidden else 0) | (P.Flag.LOSSLESS if lossless else 0)
              | (P.Flag.HEVC if hevc else 0))
     if hevc:
-      # each camera's access unit behind its own u32 length: the server reads
-      # road then wide, and a length past the message is caught there
-      parts = (P.pack_infer_req(frame_id, flags), packed,
-               *[b for unit in hevc for b in (len(unit).to_bytes(4, 'little'), unit)])
+      parts = _hevc_parts(P.pack_infer_req(frame_id, flags), packed, hevc)
     elif lossless:
       # the packed floats first, at their fixed size, then the planes
       parts = (P.pack_infer_req(frame_id, flags), packed, *lossless)
@@ -790,6 +787,26 @@ def _whole_output(spec: ModelSpec, reply: np.ndarray, whole: bool) -> np.ndarray
   out[start:stop] = 0
   out[stop:] = reply[start:]
   return out
+
+
+def _hevc_parts(header: bytes, packed, hevc: tuple) -> tuple:
+  """The INFER_REQ parts for a frame sent as HEVC.
+
+  Both lengths first, then both access units -- the layout the server reads
+  (JetlinkKit/JetlinkServer/HevcFrame.swift): roadLength at the start of the
+  frame section, wideLength at +4, then the units back to back, and its check
+  is `8 + roadLength + wideLength == count`.
+
+  Writing them interleaved (length, unit, length, unit) instead puts the wide
+  length where the server reads the first four bytes of the road unit, so
+  that check can never hold. Measured 2026-11-16: every HEVC join answered
+  `inference failed: BAD_SHAPE (frame 0)` with a correct encoder and a
+  correctly sized payload, which is what made it look like a decoder problem.
+  """
+  road, wide = hevc
+  return (header, packed,
+          len(road).to_bytes(4, 'little'), len(wide).to_bytes(4, 'little'),
+          road, wide)
 
 
 def _as_bytes(buf, expect: int, name: str) -> memoryview:
