@@ -68,6 +68,12 @@ CODEC_ENV = 'JETLINK_CODEC'
 # Where the openpilot launcher points at the device's params directory for
 # the runtime codec switch. Unset everywhere else: no device access at all.
 PARAMS_ROOT_ENV = 'JETLINK_PARAMS_ROOT'
+# The runtime codec switch's durable copy, beside the params store rather than
+# in it: on a comma, <root> is /data/params/d -> d_tmp, a tmpfs that the
+# launcher clears on every start, so a switch kept there lasts exactly until
+# the next restart and then reads as "the switch does not work". /data itself
+# is the ext4 volume, so this file survives reboots and updates.
+DURABLE_SWITCH = '/data/jetlink_hevc'
 
 
 class Sent(NamedTuple):
@@ -301,17 +307,29 @@ class JetlinkClient:
       return False
     # 'auto' stays lossless. Measured 2026-11-16: with the FFmpeg *software*
     # HEVC decoder on a phone also running the large model, the app's GPU hit
-    # 99% and the link lost its host on every join; lossless held 20 Hz.
+    # 99% and the link lost its host on every join; lossless held 20 Hz. That
+    # was the software decoder, though: a hardware-decoder build decodes in
+    # the phone's VPU and leaves the GPU to the model, which is what the switch
+    # below turns on.
     #
     # A device-side switch lets a hardware-decoder build be tried without
-    # restarting manager: the openpilot launcher exports JETLINK_PARAMS_ROOT
-    # and a "1" in <root>/JetlinkForceHevc opts the next hello in. Without
-    # that env var no file is touched at all — a bare jetlink (or a test)
-    # never reaches the machine's own params store.
+    # restarting manager. Two places are read, and either one says yes:
+    #   DURABLE_SWITCH   /data/jetlink_hevc, on the real filesystem: survives
+    #                    reboots and updates, which is where a switch a person
+    #                    sets by hand belongs (2026-11-16: a switch in the
+    #                    params store vanished on the next start, because that
+    #                    store is a tmpfs the launcher clears)
+    #   <root>/JetlinkForceHevc   the params store, kept for the launcher that
+    #                    writes it; a tmpfs here, so it only holds until restart
+    # Without PARAMS_ROOT_ENV at all, only the durable path is read, so a bare
+    # jetlink on a PC never touches a device's params store.
     root = os.environ.get(PARAMS_ROOT_ENV)
+    candidates = [Path(DURABLE_SWITCH)]
     if root:
+      candidates.append(Path(root) / 'JetlinkForceHevc')
+    for switch in candidates:
       try:
-        if (Path(root) / 'JetlinkForceHevc').read_text().strip() == '1':
+        if switch.read_text().strip() == '1':
           return True
       except (OSError, ValueError):
         pass
