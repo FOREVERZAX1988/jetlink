@@ -139,7 +139,7 @@ void jl_hevc_unpack_nv12(const uint8_t *nv12, int width, int height, uint8_t *ou
 
 // -- the decoder --------------------------------------------------------------
 
-#ifdef JL_HEVC_MC
+#ifdef JL_HEVC_MEDIACODEC
 
 // Android MediaCodec: the platform's HEVC decoder, which on a Snapdragon is
 // c2.qti.hevc.decoder — hardware, off the GPU the large model is using. The
@@ -190,6 +190,21 @@ jl_hevc *jl_hevc_create(int width, int height) {
   AMediaFormat_setInt32(fmt, "operating-rate", 30);
 
   media_status_t st = AMediaCodec_configure(codec, fmt, NULL, NULL, 0);
+  if (st != AMEDIA_OK) {
+    // The two hints above are strings the NDK headers do not name, and an
+    // implementation that does not know a key may reject the whole format
+    // rather than ignore it. A decoder that queues a frame is better than no
+    // HEVC at all: rebuild the format without them and try once more.
+    AMediaFormat *plain = AMediaFormat_new();
+    if (plain != NULL) {
+      AMediaFormat_setString(plain, AMEDIAFORMAT_KEY_MIME, jl_mc_mime());
+      AMediaFormat_setInt32(plain, AMEDIAFORMAT_KEY_WIDTH, width);
+      AMediaFormat_setInt32(plain, AMEDIAFORMAT_KEY_HEIGHT, height);
+      AMediaFormat_setInt32(plain, AMEDIAFORMAT_KEY_COLOR_FORMAT, 0x7F000001);
+      st = AMediaCodec_configure(codec, plain, NULL, NULL, 0);
+      AMediaFormat_delete(plain);
+    }
+  }
   AMediaFormat_delete(fmt);
   if (st != AMEDIA_OK) { AMediaCodec_delete(codec); return NULL; }
   if (AMediaCodec_start(codec) != AMEDIA_OK) { AMediaCodec_delete(codec); return NULL; }
@@ -221,7 +236,19 @@ void jl_hevc_flush(jl_hevc *ctx) {
   AMediaCodec_flush(ctx->codec);
 }
 
-int jl_hevc_available(void) { return 1; }
+int jl_hevc_available(void) {
+  // Ask the platform, once. This used to answer 1 unconditionally, which is
+  // how a hello came to offer a codec the server could not decode: every
+  // join then ended in BAD_SHAPE (2026-11-16) because HevcFrame's decoders
+  // were nil. A device whose HEVC decoder is missing, or refuses this
+  // process, must not be offered at all.
+  static int checked = -1;
+  if (checked >= 0) return checked;
+  AMediaCodec *probe = AMediaCodec_createDecoderByType(jl_mc_mime());
+  checked = probe != NULL ? 1 : 0;
+  if (probe != NULL) AMediaCodec_delete(probe);
+  return checked;
+}
 
 const char *jl_hevc_backend(void) { return "mediacodec"; }
 
@@ -295,7 +322,7 @@ int jl_hevc_decode(jl_hevc *ctx, const void *src, size_t n, uint8_t *out, int *k
   return 0;   // no frame yet: hold the previous plan, not a failure
 }
 
-#elif defined(JL_HEVC_AV)
+#elif defined(JL_HEVC_DLOPEN)
 
 #include <dlfcn.h>
 
