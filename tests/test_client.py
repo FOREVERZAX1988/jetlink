@@ -216,6 +216,33 @@ class FramesInFlight(SocketPairTest):
     self.assertIn('no answer to 1 frames', str(quiet.exception))
     self.assertTrue(self.client.dead)
 
+  def test_a_reply_that_already_arrived_keeps_the_link_past_the_deadline(self):
+    """A reply sitting in the socket must be read before the host is called
+    gone.
+
+    Measured 2026-11-16: `frame 1371 send failed: no answer to 2 frames in
+    0.2s; link abandoned` one second after a step down, on a link whose p50
+    RTT was 17 ms -- the answer had landed, nothing had read it. send()'s
+    in-flight bound drains before skipping, but a frame sent at two in flight
+    never reaches that branch.
+    """
+    self.client.deadline = 0.05
+    self.send(1)
+    # the far end answers now; the client has not read it yet
+    request = self.peer.recv(timeout=2.0)
+    frame_id = P.unpack_infer_req(request.payload)[0]
+    self.peer.send(P.Msg.INFER_RESP, request.seq,
+                   (reply(np.ones(self.client.spec.reply_nelem), frame_id=frame_id),))
+    time.sleep(0.06)                       # past the deadline, reply unread
+    self.assertGreater(self.client.waiting_for(), 0.0)
+    seq2 = self.send(2)                    # drains the arrived reply first
+    self.assertFalse(self.client.dead, 'a reply already here was not read before the link failed')
+    self.assertIsNotNone(seq2, 'the frame after the arrived reply must go out')
+    self.answer()
+    with self.assertNoLogs('jetlink.client', level='WARNING'):
+      out = self.client.infer_end(seq2)
+    self.assertEqual(out[0], 2.0)
+
   def test_a_frame_the_server_failed_fails_the_link_when_drained(self):
     self.send(1)
     self.answer(status=P.Status.INFER_FAILED)

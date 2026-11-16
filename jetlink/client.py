@@ -543,9 +543,19 @@ class JetlinkClient:
       raise LinkError("ensure_engine() first")
     if self.dead:
       raise LinkError("link previously failed")
-    if self.waiting_for() > self.deadline:
-      self.dead = True
-      raise LinkError(f"no answer to {len(self._in_flight)} frames in {self.deadline:.1f}s; link abandoned")
+    if self._in_flight and self.waiting_for() > self.deadline:
+      # A reply may already be sitting in the socket: read what has arrived
+      # before calling the host gone. Only frames still unanswered after that
+      # are a stall. Without this a pipelined frame whose answer had just
+      # landed still crossed the deadline and abandoned a healthy link --
+      # measured 2026-11-16: `frame 1371 send failed: no answer to 2 frames in
+      # 0.2s` one second after the governor stepped down, on a link whose p50
+      # RTT was 17 ms. send()'s in-flight bound drains before skipping, but a
+      # frame sent at two in flight never reaches that branch.
+      self.drain()
+      if self._in_flight and self.waiting_for() > self.deadline:
+        self.dead = True
+        raise LinkError(f"no answer to {len(self._in_flight)} frames in {self.deadline:.1f}s; link abandoned")
     packed = _as_bytes(packed, self.spec.packed_nbytes, 'packed')
     seq = self._next_seq()
     flags = ((P.Flag.RESET_QUEUES if reset else 0) | (P.Flag.WANT_STATE if want_state else 0)
