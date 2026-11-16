@@ -65,6 +65,9 @@ RAW_PRED_ENV = 'SEND_RAW_PRED'
 # keeps it. 'lossless' / 'hevc' / 'raw' force one, for A/B runs; an unavailable
 # codec falls back through codecs.pick as usual.
 CODEC_ENV = 'JETLINK_CODEC'
+# Where the openpilot launcher points at the device's params directory for
+# the runtime codec switch. Unset everywhere else: no device access at all.
+PARAMS_ROOT_ENV = 'JETLINK_PARAMS_ROOT'
 
 
 class Sent(NamedTuple):
@@ -300,15 +303,18 @@ class JetlinkClient:
     # HEVC decoder on a phone also running the large model, the app's GPU hit
     # 99% and the link lost its host on every join; lossless held 20 Hz.
     #
-    # A device-side switch lets a build with a hardware decoder be tried
-    # without restarting manager: the openpilot adapter (or a person) writes
-    # "1" to /data/params/d/JetlinkForceHevc and the next hello opts in.
-    # Everywhere else the file simply does not exist.
-    try:
-      if Path('/data/params/d/JetlinkForceHevc').read_text().strip() == '1':
-        return True
-    except (OSError, ValueError):
-      pass
+    # A device-side switch lets a hardware-decoder build be tried without
+    # restarting manager: the openpilot launcher exports JETLINK_PARAMS_ROOT
+    # and a "1" in <root>/JetlinkForceHevc opts the next hello in. Without
+    # that env var no file is touched at all — a bare jetlink (or a test)
+    # never reaches the machine's own params store.
+    root = os.environ.get(PARAMS_ROOT_ENV)
+    if root:
+      try:
+        if (Path(root) / 'JetlinkForceHevc').read_text().strip() == '1':
+          return True
+      except (OSError, ValueError):
+        pass
     return False
 
   def choose_codec(self, prefer_lossy: bool = False) -> str:

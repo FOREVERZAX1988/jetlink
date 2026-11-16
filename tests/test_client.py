@@ -406,16 +406,32 @@ class TheFrameCodec(SocketPairTest):
       codecs = self.greet_as('wifi', frame_codecs=['med-zstd', 'hevc'])
     self.assertEqual(self.client.codec, codecs.LOSSLESS)
 
-  def test_device_param_can_opt_hevc_without_restart(self):
-    # A hardware-decoder build is tried by writing JetlinkForceHevc=1 on the
-    # device; the next hello reads it, so no manager restart is needed.
-    with mock.patch('jetlink.client.Path') as path:
-      path.return_value.read_text.return_value = '1\n'
+  def test_no_params_root_never_touches_device(self):
+    # The guard in tests/openpilot fails any test that opens /data/...; without
+    # the env var the codec path must not even try.
+    env = os.environ.copy()
+    env.pop('JETLINK_PARAMS_ROOT', None)
+    env.pop('JETLINK_CODEC', None)
+    with mock.patch.dict(os.environ, env, clear=True):
       codecs = self.greet_as('wifi', frame_codecs=['med-zstd', 'hevc'])
+    self.assertEqual(self.client.codec, codecs.LOSSLESS)
+
+  def test_device_param_can_opt_hevc_without_restart(self):
+    # A hardware-decoder build is tried by writing JetlinkForceHevc=1 into
+    # the launcher-provided params root; the next hello reads it.
+    import tempfile
+    from pathlib import Path
+    with tempfile.TemporaryDirectory() as d:
+      (Path(d) / 'JetlinkForceHevc').write_text('1\n')
+      with mock.patch.dict(os.environ, {'JETLINK_PARAMS_ROOT': d}):
+        codecs = self.greet_as('wifi', frame_codecs=['med-zstd', 'hevc'])
     self.assertEqual(self.client.codec, codecs.HEVC)
 
   def test_device_param_off_stays_lossless(self):
-    with mock.patch('jetlink.client.Path') as path:
-      path.return_value.read_text.return_value = '0'
-      codecs = self.greet_as('wifi', frame_codecs=['med-zstd', 'hevc'])
+    import tempfile
+    from pathlib import Path
+    with tempfile.TemporaryDirectory() as d:
+      (Path(d) / 'JetlinkForceHevc').write_text('0')
+      with mock.patch.dict(os.environ, {'JETLINK_PARAMS_ROOT': d}):
+        codecs = self.greet_as('wifi', frame_codecs=['med-zstd', 'hevc'])
     self.assertEqual(self.client.codec, codecs.LOSSLESS)
