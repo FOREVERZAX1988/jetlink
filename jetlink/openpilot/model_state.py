@@ -806,8 +806,29 @@ class JetlinkModelState:
     self._parsed = (model_output, outputs_dict)
     return outputs_dict
 
+  def release_encoders(self) -> None:
+    """Close this state's HEVC encoders, keeping the link.
+
+    An encoder holds a hardware session while its fd is open, and the block
+    allows only a handful. The encoders belong to the state, not to the link:
+    the next attempt builds its own two, so a retired state that kept them
+    would strand sessions for the rest of the drive. Measured 2026-11-16: one
+    modeld accumulated 14 /dev/video33 handles over a handful of rejoins and
+    then every new attempt failed with "Instance count reached Max limit",
+    which this link reads as ENOMEM and treats as "no HEVC here".
+
+    Idempotent, and a no-op on a link that never negotiated HEVC.
+    """
+    encoders, self._encoders = getattr(self, '_encoders', {}) or {}, {}
+    for enc in encoders.values():
+      try:
+        enc.close()
+      except Exception:
+        self._log.exception("jetlink: closing an HEVC encoder")
+
   def close(self) -> None:
     """Let go of the link; the joining state calls this on a model it retires."""
+    self.release_encoders()
     self.client.close()
 
 

@@ -553,6 +553,17 @@ class JoiningModelState:
     behind, or failed on the comma's side, leaves one. `retired` is the model
     state, or the bare client of a build that failed."""
     self._leave(retired, LEAVING.get(why, why))
+    # The encoders go with the state, not with the link: the next attempt
+    # builds its own pair, and one that stays behind would hold hardware
+    # sessions for the rest of the drive (a block allows a handful, and the
+    # failure shows up later as "no HEVC" with no obvious cause). Released
+    # here even where the link is kept for the next hello.
+    release = getattr(retired, 'release_encoders', None)
+    if release is not None:
+      try:
+        release()
+      except Exception:
+        self._log.exception('jetlink: releasing the retired HEVC encoders')
     if not getattr(getattr(retired, 'client', retired), 'dead', True):
       return
     try:
