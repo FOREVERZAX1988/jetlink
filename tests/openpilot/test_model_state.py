@@ -246,6 +246,25 @@ class TestPipeline(ModelStateTest):
     self.assertEqual(state._pace.cap, 20.0)
     self.assertIsNone(state.behind)
 
+  def test_a_paced_frame_still_drains_replies_already_in_flight(self):
+    """Once the governor steps down, skipped frames must still read the
+    replies to frames already sent. On 2026-11-16 a stretch of 15 Hz frames
+    left `unanswered` with no reader (skip bypassed prepare()/drain()), so the
+    next 20 Hz frame could wait for a seq whose reply was already consumed and
+    abandon the link: 'no answer to 2 frames in 0.2s'."""
+    client, state = self._wifi(pace=True)
+    client.send_delay = model_state.SEND_BUDGET * 2   # step the governor to 15 Hz
+    self.frames(state, 4)
+    self.assertEqual(state._pace.cap, 15.0)
+    before = client.drains
+    # pace() gates on monotonic time; advance its clock so the next frames are
+    # skipped without waiting in real time, then check they still drained.
+    with unittest.mock.patch.object(state._pace, 'skip', return_value=True):
+      self.frames(state, 3)
+    self.assertGreater(client.drains, before,
+                       'a paced frame must drain in-flight replies, not just publish the last plan')
+    self.assertEqual(client.unanswered, 0, 'no reply should be left unread across a paced stretch')
+
   def test_a_busy_host_holds_frames_instead_of_piling_them_up(self):
     # A phone that stops answering used to accumulate pipelined frames until
     # the oldest crossed the 0.2 s link deadline (or the TCP write timed out)

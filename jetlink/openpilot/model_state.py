@@ -697,6 +697,16 @@ class JetlinkModelState:
     # queues. Never counted as a hold -- the governor asked for it (pace.py)
     if self._pace is not None and self.client.last_output is not None \
             and self._pace.skip(time.monotonic()):
+      # A paced frame publishes the last plan without sending, but the replies
+      # to frames already in flight still arrive. Without draining them here,
+      # a stretch of paced frames (15 Hz) lets `unanswered` pile up with no
+      # reader: send() then skips frames as "in-flight bound", and when the
+      # governor restores 20 Hz the first prepared frame's drain can land in
+      # a state where infer_end waits for a seq whose reply was already read
+      # ("no answer to 2 frames in 0.2s; link abandoned", 2026-11-16). Draining
+      # is non-blocking (recv timeout 0) and keeps last_output / the in-flight
+      # ledger current, exactly as a sent frame's prepare() would.
+      self.client.drain()
       self.held = True
       self.behind = None
       if after_enqueue is not None:
