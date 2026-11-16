@@ -110,6 +110,40 @@ def test_a_run_of_holds_still_restarts_the_quiet_wait():
   assert g.cap == CAPS[1]          # at most one level, not back to 20 Hz
 
 
+def test_a_step_down_restarts_the_climb_back_clock():
+  """A step down must not inherit the quiet stamp from before it.
+
+  At the full cap an answered frame returns early without touching
+  `_quiet_since`, so that stamp can be many seconds old when a later step
+  down happens. If the step down kept it, the very next answered frame would
+  read as "quiet for 10 s" and step straight back up -- measured 2026-11-16:
+  `paced to 15 Hz` then `back to 20 Hz` 102 ms later, leaving the host pushed
+  at 20 Hz until two replies crossed the 0.2 s deadline and the link was
+  abandoned.
+  """
+  g = Governor()
+  t = 1000.0
+  # reach the cap, step down, and climb back so _quiet_since is a stale stamp
+  for i in range(3):
+    g.note(True, now=t + i * 0.05)
+  g.note(False, now=t + 5)
+  g.note(False, now=t + 16)
+  assert g.cap == CAPS[0]
+  assert g._quiet_since == t + 16        # the stale stamp the bug would inherit
+  g.note(False, now=t + 41)              # sit at the cap: answered does not move it
+  # step down again; the climb-back clock must start over here
+  for i in range(3):
+    g.note(True, now=t + 41.1 + i * 0.05)
+  assert g.cap == CAPS[1]
+  # answered frames just after the step down must not lift the cap
+  for dt in (0.1, 0.2, 0.5, 2.0, 5.0, 9.5):
+    g.note(False, now=t + 41.3 + dt)
+    assert g.cap == CAPS[1], f'a step down climbed back after only {dt}s'
+  # and genuine quiet still climbs back
+  g.note(False, now=t + 41.3 + 10.5)
+  assert g.cap == CAPS[0]
+
+
 def test_the_env_switch_turns_the_governor_off(monkeypatch):
   monkeypatch.setenv('JETLINK_NO_ADAPTIVE_PACE', '1')
   import importlib

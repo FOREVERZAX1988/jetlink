@@ -127,6 +127,16 @@ class Governor:
       self._level += 1
       self._held.clear()
       self._in_a_row = 0
+      # The climb-back clock restarts here. Without this a step down inherits
+      # whatever `_quiet_since` held from before it -- and at the full cap an
+      # answered frame returns early without touching it, so that stamp can be
+      # many seconds old. The first answered frame after the step down then
+      # reads as "quiet for 10 s" and steps straight back up (measured
+      # 2026-11-16: paced to 15 Hz and back to 20 Hz 102 ms later), which left
+      # the governor with no effect and the host pushed at 20 Hz until two
+      # replies crossed the 0.2 s deadline and the link abandoned.
+      self._quiet_since = None
+      self._stray = 0
       # the next frame is already paced: the host just said three times over
       # that it is behind, so it does not get one more it answers late
       self._next = now + 1.0 / self.cap
