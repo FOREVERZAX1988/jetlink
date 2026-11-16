@@ -405,3 +405,17 @@ class TheFrameCodec(SocketPairTest):
     with mock.patch.dict(os.environ, {'JETLINK_CODEC': 'lossless'}):
       codecs = self.greet_as('wifi', frame_codecs=['med-zstd', 'hevc'])
     self.assertEqual(self.client.codec, codecs.LOSSLESS)
+
+  def test_device_param_can_opt_hevc_without_restart(self):
+    # A hardware-decoder build is tried by writing JetlinkForceHevc=1 on the
+    # device; the next hello reads it, so no manager restart is needed.
+    with mock.patch('jetlink.client.Path') as path:
+      path.return_value.read_text.return_value = '1\n'
+      codecs = self.greet_as('wifi', frame_codecs=['med-zstd', 'hevc'])
+    self.assertEqual(self.client.codec, codecs.HEVC)
+
+  def test_device_param_off_stays_lossless(self):
+    with mock.patch('jetlink.client.Path') as path:
+      path.return_value.read_text.return_value = '0'
+      codecs = self.greet_as('wifi', frame_codecs=['med-zstd', 'hevc'])
+    self.assertEqual(self.client.codec, codecs.LOSSLESS)

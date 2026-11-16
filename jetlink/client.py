@@ -296,15 +296,19 @@ class JetlinkClient:
       return True
     if forced in ('lossless', 'raw'):
       return False
-    # 'auto' stays lossless even on Wi-Fi. Measured 2026-11-16 on a phone
-    # (SM8975) carrying the large model in the same process: with HEVC on,
-    # the decoder is the FFmpeg *software* HEVC decoder (the Android build
-    # has no hevc_mediacodec); decoding 4 Mbps of two cameras at 20 Hz pinned
-    # the app's GPU at 99%, replies slipped to 160-200 ms and the link lost
-    # its host on every join. The lossless carrier held 20 Hz with no demote.
-    # HEVC stays available behind JETLINK_CODEC=hevc until a build with a
-    # hardware decoder (MediaCodec) is shipped; a cable was and remains
-    # lossless.
+    # 'auto' stays lossless. Measured 2026-11-16: with the FFmpeg *software*
+    # HEVC decoder on a phone also running the large model, the app's GPU hit
+    # 99% and the link lost its host on every join; lossless held 20 Hz.
+    #
+    # A device-side switch lets a build with a hardware decoder be tried
+    # without restarting manager: the openpilot adapter (or a person) writes
+    # "1" to /data/params/d/JetlinkForceHevc and the next hello opts in.
+    # Everywhere else the file simply does not exist.
+    try:
+      if Path('/data/params/d/JetlinkForceHevc').read_text().strip() == '1':
+        return True
+    except (OSError, ValueError):
+      pass
     return False
 
   def choose_codec(self, prefer_lossy: bool = False) -> str:

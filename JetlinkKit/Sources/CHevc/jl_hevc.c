@@ -24,8 +24,20 @@
 #include <stdlib.h>
 #include <string.h>
 
+// Three decoder backends, in preference order:
+//   JL_HEVC_MEDIACODEC  Android's own MediaCodec — the platform's HEVC
+//                       hardware decoder (c2.qti.hevc.decoder on a Snapdragon).
+//                       Needed on a phone that also runs the large model:
+//                       FFmpeg's software decoder pinned the app's GPU at 99%.
+//   JL_HEVC_DLOPEN      libavcodec opened at run time (Linux/Jetson, where
+//                       ffmpeg is installed and no GPU shares the frame loop).
+//   neither             no decoder: the hello omits hevc and frames stay
+//                       on the lossless carrier.
 #if defined(JL_HEVC_DLOPEN)
 #define JL_HEVC_AV 1
+#endif
+#if defined(JL_HEVC_MEDIACODEC)
+#define JL_HEVC_MC 1
 #endif
 
 // -- the bitstream ------------------------------------------------------------
@@ -127,7 +139,147 @@ void jl_hevc_unpack_nv12(const uint8_t *nv12, int width, int height, uint8_t *ou
 
 // -- the decoder --------------------------------------------------------------
 
-#ifdef JL_HEVC_AV
+#ifdef JL_HEVC_MC
+
+// Android MediaCodec: the platform's HEVC decoder, which on a Snapdragon is
+// c2.qti.hevc.decoder — hardware, off the GPU the large model is using. The
+// comma's encoder prepends VPS/SPS/PPS to every IDR (hevc_venus.py), so the
+// decoder needs no out-of-band CSD: each access unit is fed as-is, and a
+// flush drops its references so a later P frame is refused until an IDR.
+//
+// Output is COLOR_FormatYUV420SemiPlanar (NV12): a luma plane followed by
+// interleaved chroma, exactly what jl_copy_nv12 below reads.
+#include <media/NdkMediaCodec.h>
+#include <media/NdkMediaFormat.h>
+
+struct jl_hevc {
+  int width;
+  int height;
+  size_t frame_bytes;
+  int broken;
+  AMediaCodec *codec;
+  uint8_t *nv12;
+  int64_t pts;              // microseconds, monotonically increasing per AU
+};
+
+static const char *jl_mc_mime(void) { return "video/hevc"; }
+
+jl_hevc *jl_hevc_create(int width, int height) {
+  size_t bytes = jl_hevc_frame_bytes(width, height);
+  if (bytes == 0) return NULL;
+
+  AMediaCodec *codec = AMediaCodec_createDecoderByType(jl_mc_mime());
+  if (codec == NULL) return NULL;
+
+  AMediaFormat *fmt = AMediaFormat_new();
+  if (fmt == NULL) { AMediaCodec_delete(codec); return NULL; }
+  AMediaFormat_setString(fmt, AMEDIAFORMAT_KEY_MIME, jl_mc_mime());
+  AMediaFormat_setInt32(fmt, AMEDIAFORMAT_KEY_WIDTH, width);
+  AMediaFormat_setInt32(fmt, AMEDIAFORMAT_KEY_HEIGHT, height);
+  // 0x7F000001 = COLOR_FormatYUV420SemiPlanar (NV12), the format openpilot's
+  // Venus encoder produces. Named here rather than via a header because the
+  // constant lives in MediaFormat.h (Java-facing), not in the NDK C headers.
+  AMediaFormat_setInt32(fmt, AMEDIAFORMAT_KEY_COLOR_FORMAT, 0x7F000001);
+
+  media_status_t st = AMediaCodec_configure(codec, fmt, NULL, NULL, 0);
+  AMediaFormat_delete(fmt);
+  if (st != AMEDIA_OK) { AMediaCodec_delete(codec); return NULL; }
+  if (AMediaCodec_start(codec) != AMEDIA_OK) { AMediaCodec_delete(codec); return NULL; }
+
+  struct jl_hevc *ctx = (struct jl_hevc *)calloc(1, sizeof(*ctx));
+  if (ctx == NULL) { AMediaCodec_delete(codec); return NULL; }
+  ctx->codec = codec;
+  ctx->width = width;
+  ctx->height = height;
+  ctx->frame_bytes = bytes;
+  ctx->nv12 = (uint8_t *)calloc(1, bytes);
+  if (ctx->nv12 == NULL) { AMediaCodec_delete(codec); free(ctx); return NULL; }
+  return ctx;
+}
+
+void jl_hevc_free(jl_hevc *ctx) {
+  if (ctx == NULL) return;
+  if (ctx->codec != NULL) {
+    AMediaCodec_stop(ctx->codec);
+    AMediaCodec_delete(ctx->codec);
+  }
+  free(ctx->nv12);
+  free(ctx);
+}
+
+void jl_hevc_flush(jl_hevc *ctx) {
+  if (ctx == NULL || ctx->codec == NULL) return;
+  ctx->broken = 1;
+  AMediaCodec_flush(ctx->codec);
+}
+
+int jl_hevc_available(void) { return 1; }
+
+const char *jl_hevc_backend(void) { return "mediacodec"; }
+
+// The decoder's NV12 out (luma + interleaved chroma, with strides) into one
+// tight NV12 buffer. Anonymous namespace so it cannot clash with the
+// libavcodec backend's helper of the same name.
+static int jl_mc_copy_nv12(struct jl_hevc *ctx, uint8_t *data, size_t n,
+                           int32_t offset, int32_t size) {
+  if (data == NULL || size <= 0 || (size_t)offset + (size_t)size > n) return -1;
+  const uint8_t *frame = data + offset;
+  // The codec's stride can exceed width (alignment); the encoder made a
+  // tight 512x256 NV12, but read the stride the codec reports by deriving it
+  // from the buffer size: luma is width*height, chroma width*height/2.
+  size_t luma = (size_t)ctx->width * (size_t)ctx->height;
+  if ((size_t)size < luma) return -1;
+  memcpy(ctx->nv12, frame, luma);
+  memcpy(ctx->nv12 + luma, frame + luma, (size_t)size - luma);
+  return 0;
+}
+
+int jl_hevc_decode(jl_hevc *ctx, const void *src, size_t n, uint8_t *out, int *keyframe) {
+  if (ctx == NULL || src == NULL || out == NULL || n == 0 || ctx->codec == NULL) return -3;
+  int irap = jl_hevc_is_keyframe(src, n);
+  if (keyframe != NULL) *keyframe = irap;
+  if (irap) {
+    ctx->broken = 0;
+  } else if (ctx->broken) {
+    return -2;   // no IDR yet: the codec has no reference picture for this AU
+  }
+
+  // Feed the access unit. A positive index is an input buffer slot; the
+  // negatives are INFO_TRY_AGAIN_LATER (-1) and a codec that went away.
+  ssize_t in = AMediaCodec_dequeueInputBuffer(ctx->codec, 20000);  // 20 ms
+  if (in < 0) return 0;   // no input slot yet: publish the previous plan
+  size_t cap = 0;
+  uint8_t *buf = AMediaCodec_getInputBuffer(ctx->codec, (size_t)in, &cap);
+  if (buf == NULL || n > cap) return -3;
+  memcpy(buf, src, n);
+  uint32_t flags = irap ? AMEDIACODEC_BUFFER_FLAG_KEY_FRAME : 0;
+  if (AMediaCodec_queueInputBuffer(ctx->codec, (size_t)in, 0, n,
+                                   (uint64_t)ctx->pts++, flags) != AMEDIA_OK) return -3;
+
+  // Drain one decoded frame. The encoder is low-latency (no B frames), so an
+  // AU normally produces its frame within a frame period; loop over a few
+  // buffer periods for the codec's own scheduling jitter.
+  for (int tries = 0; tries < 4; tries++) {
+    AMediaCodecBufferInfo info;
+    memset(&info, 0, sizeof(info));
+    ssize_t ix = AMediaCodec_dequeueOutputBuffer(ctx->codec, &info, 20000);
+    if (ix == AMEDIACODEC_INFO_TRY_AGAIN_LATER) continue;
+    if (ix == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED ||
+        ix == AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED) continue;
+    if (ix < 0) return -3;
+    size_t out_cap = 0;
+    uint8_t *out_buf = AMediaCodec_getOutputBuffer(ctx->codec, (size_t)ix, &out_cap);
+    if (out_buf == NULL) { AMediaCodec_releaseOutputBuffer(ctx->codec, (size_t)ix, 0); return -3; }
+    int rc = jl_mc_copy_nv12(ctx, out_buf, out_cap, info.offset, info.size);
+    AMediaCodec_releaseOutputBuffer(ctx->codec, (size_t)ix, 0);
+    if (rc != 0) return -3;
+    memcpy(out, ctx->nv12, ctx->frame_bytes);
+    return 1;
+  }
+  return 0;   // no frame yet: hold the previous plan, not a failure
+}
+
+#elif defined(JL_HEVC_AV)
 
 #include <dlfcn.h>
 

@@ -91,12 +91,21 @@ let package = Package(
     // a lossless frame's planes back to pixels: zstd's decoder (vendor/) and the MED inverse
     .target(name: "CLossless", exclude: ["vendor/LICENSE", "vendor/SOURCE.txt"]),
     // an HEVC access unit back to the six warped planes: the bitstream in
-    // plain C, the decoder behind libavcodec opened at run time, so a build
-    // needs no ffmpeg headers
+    // plain C, and one decoder per platform. Android uses MediaCodec (the
+    // platform's HEVC hardware decoder) because a phone also runs the large
+    // model — FFmpeg's software decoder pinned its GPU at 99% and lost the
+    // link. Linux/Jetson opens libavcodec at run time instead, where ffmpeg
+    // is installed and no model shares the frame loop.
     .target(
       name: "CHevc",
-      cSettings: [.define("JL_HEVC_DLOPEN", .when(platforms: [.linux, .android]))],
-      linkerSettings: [.linkedLibrary("dl", .when(platforms: [.linux, .android]))]),
+      cSettings: [
+        .define("JL_HEVC_MEDIACODEC", .when(platforms: [.android])),
+        .define("JL_HEVC_DLOPEN", .when(platforms: [.linux])),
+      ],
+      linkerSettings: [
+        .linkedLibrary("mediandk", .when(platforms: [.android])),
+        .linkedLibrary("dl", .when(platforms: [.linux])),
+      ]),
     .target(
       name: "JetlinkServer",
       dependencies: [
