@@ -180,6 +180,14 @@ jl_hevc *jl_hevc_create(int width, int height) {
   // Venus encoder produces. Named here rather than via a header because the
   // constant lives in MediaFormat.h (Java-facing), not in the NDK C headers.
   AMediaFormat_setInt32(fmt, AMEDIAFORMAT_KEY_COLOR_FORMAT, 0x7F000001);
+  // Ask the codec not to queue frames ahead. Measured 2026-11-16: a frame's
+  // round trip through the phone ran 156-167 ms while the phone's own
+  // inference was 27 ms and ping was 17 ms -- the rest was the decoder sitting
+  // on two or three frames of its own internal pipeline. Both keys are hints a
+  // codec may ignore (the C headers name neither; the platform accepts the
+  // strings), so an implementation without them behaves exactly as before.
+  AMediaFormat_setInt32(fmt, "low-latency", 1);
+  AMediaFormat_setInt32(fmt, "operating-rate", 30);
 
   media_status_t st = AMediaCodec_configure(codec, fmt, NULL, NULL, 0);
   AMediaFormat_delete(fmt);
