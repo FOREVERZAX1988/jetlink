@@ -393,8 +393,15 @@ class JetlinkModelState:
       nv12 = hevc.to_nv12(planes[int(name == stream_mod.STREAMS[1])])
       data, key = enc.encode(nv12, force_keyframe=(name in step.request_idr))
       if not data:
-        # nothing ready: the gate must not open on a frame that is not sent
-        self._gate.gap(f'{name} encoder had no output')
+        # Nothing out of this encoder yet, which the opening frames of a
+        # hardware stream always are: the block holds several frames before
+        # its first output (codecs.HEVCEncoder.encode says so, and waiting
+        # there would deadlock). This is not a gap, and reporting it as one
+        # livelocks the gate: gap() shuts it and demands a fresh IDR, the
+        # next frame's output is still a buffered earlier picture rather than
+        # that IDR, so the gate never opens and no frame is ever sent. Leave
+        # the gate as it stands and let the next frame try; a link that
+        # genuinely never produces output is caught by the hold limits.
         return None
       units[name], idrs[name] = bytes(data), bool(key)
     acted = self._gate.confirm(self._epoch, frame_id, **{f'{k}_idr': v for k, v in idrs.items()})

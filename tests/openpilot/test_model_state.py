@@ -781,9 +781,15 @@ class TestHevcCarrier(ModelStateTest):
     # nothing reached the link at all: not even an INFER_REQ
     self.assertEqual(client.hevc, [])
     self.assertEqual(client.sent, [])
-    # the gate was told, so it owes an IDR again rather than opening later on a
-    # frame that never went out
-    self.assertGreaterEqual(state._gate.gaps, 1)
+    # Nor is it a gap in the stream. A hardware encoder buffers a few frames
+    # before its first output, so the opening frames answer empty by design
+    # (codecs.HEVCEncoder.encode); calling that a gap shuts the gate and asks
+    # for an IDR, whose answer is another buffered earlier picture, so the
+    # gate never opens and the link never sends a frame. Measured on the
+    # device 2026-11-16: every HEVC join logged two encoders at 4 Mbps and
+    # then "large model failed mid-drive" with no frame sent at all.
+    self.assertEqual(state._gate.gaps, 0)
+    self.assertFalse(state._gate.is_open)
 
   def test_the_frame_path_records_its_six_stages(self):
     spec, state, client, made = self.hevc_state()
