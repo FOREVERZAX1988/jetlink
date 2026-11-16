@@ -29,11 +29,21 @@ from jetlink.comma import gadget, wifi
 # boots after the comma is already onroad
 CONNECT_TIMEOUT = 45.0
 CONNECT_DELAY = 0.5
-# four frame periods, and four times the slowest frame seen. A host that goes
-# silent with no USB edge (a hung server, a phone's cable) costs one frame this
-# long plus the small model's, inside modelV2's 0.5 s alive limit; at 0.5 s
-# here commIssue flashes on top of the fallback
-INFERENCE_TIMEOUT = 0.2
+# Four frame periods at 20 Hz, and four times the slowest frame a healthy host
+# returns. A host that goes silent with no USB edge (a hung server, a phone's
+# cable) costs one frame this long plus the small model's, inside modelV2's
+# 0.5 s alive limit; at 0.5 s here commIssue flashes on top of the fallback.
+#
+# 0.2 s assumed a host whose reply crosses in ~50 ms. Measured 2026-11-16 on
+# the 8EE6 phone over Wi-Fi with HEVC on (R3G CPE, 2.4 GHz off, ch149, ping
+# p50 17 ms): a frame's `link` leg -- the round trip through the phone's
+# decode and inference -- ran 158-167 ms, and `fallback frame 198 ms` sat
+# right on the old 0.2 s line, so a healthy-but-slow host kept being called
+# dead and demoted (failure 4-7, backoff to 40 s). 0.35 s covers that with
+# margin and still leaves room for the small model inside the 0.5 s alive
+# limit (test_link asserts timeout + 0.1 < 0.5); a host that is truly gone is
+# still caught by the next frame's check.
+INFERENCE_TIMEOUT = 0.35
 # between joins while neither end has the picked model and nothing else is built
 MODEL_WAIT = 60.0
 # how long the load may wait for the early gadget bind; a provisioning run may
