@@ -429,6 +429,19 @@ class JetlinkModelState:
         self._encoders[name] = maker(self._hevc_geometry, tuple(self._hevc_size))
     except Exception:
       self._log.exception("jetlink: could not build the HEVC encoder, staying on the frame carrier in use")
+      # Close whatever did come up before giving the link back its old carrier.
+      # An encoder holds a hardware session for as long as its fd is open, and
+      # the block allows very few of them. Left open, one failed attempt costs
+      # a session for good: the next attempt -- this trip's, or the next
+      # connection's -- finds the block full and fails too, so the link never
+      # gets HEVC again without a restart. Measured 2026-11-16: one modeld held
+      # 16 /dev/video33 handles, all from failed attempts, and every retry was
+      # rejected with "Instance count reached Max limit".
+      for enc in self._encoders.values():
+        try:
+          enc.close()
+        except Exception:
+          self._log.exception("jetlink: could not close a half-built HEVC encoder")
       self._hevc = False
       self._encoders = {}
       return None
