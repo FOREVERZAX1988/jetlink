@@ -37,7 +37,7 @@ class AppVersionTest {
         assertEquals("0.8.3", AppVersion(0, 8, 3).toString())
     }
 
-    // -- BuildTag: "<version>-<MMDD>-<n>", the cn prerelease ordering -----
+    // -- BuildTag: "<version>-<MMDD>-<n>", the cn release ordering -----
 
     @Test
     fun parsesDatedBuildTags() {

@@ -115,7 +115,7 @@ class SettingsActions(
     val stopServer: () -> Unit = {},
     val startServer: () -> Unit = {},
     val restartServer: () -> Unit = {},
-    /** Checks the GitHub release for a newer app. */
+    /** Checks the CNB release feed for a newer app. */
     val checkUpdates: () -> Unit = {},
     /** Installs the downloaded update's APK. */
     val installUpdate: () -> Unit = {},

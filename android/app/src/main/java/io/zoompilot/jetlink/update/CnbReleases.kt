@@ -6,30 +6,32 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * Talks to the GitHub Releases API for [repo] ("owner/name"). The GitHub
- * release a [v* tag] publishes is the feed: [list] fetches the newest
- * releases (prereleases included), and [download] streams an asset to a
- * file.
+ * Talks to the CNB releases feed for [repo] ("owner/name" slug). CI uploads
+ * every cn-branch APK as a CNB release asset (scripts/cnb-publish-release.sh,
+ * called from .github/workflows/ci.yml); this class is the phone-side half.
+ * [list] fetches the newest releases (prereleases included) from the public
+ * web endpoint, which answers JSON without a token; its fields keep the
+ * GitHub Releases API names (tag_name, prerelease, assets[].browser_download_url).
  *
- * The API is public and the fork's releases are public, so no token is
- * sent; a rate-limited answer reads as a failed check.
+ * A rate limit or an unreachable feed reads as a failed check, never a
+ * downgrade.
  */
-class GithubReleases(
-    val repo: String = "mouxangithub/jetlink",
+class CnbReleases(
+    val repo: String = "mouxancnb/jetlink",
     private val json: Json = Json { ignoreUnknownKeys = true },
     private val connect: (URL) -> HttpURLConnection = { it.openConnection() as HttpURLConnection },
 ) {
     /**
-     * The newest [perPage] releases, newest first, drafts and prereleases
-     * included. Unlike the "latest" endpoint this sees the cn-branch
-     * prereleases, which is what the updater compares its build tag with.
+     * The newest [perPage] releases. Unlike the "latest" endpoint the list
+     * sees the cn-branch builds, which is what the updater compares its
+     * build tag with.
      */
     fun list(perPage: Int = 5): List<GithubRelease> {
-        val url = URL("https://api.github.com/repos/$repo/releases?per_page=$perPage")
+        val url = URL("https://cnb.cool/$repo/-/releases?per_page=$perPage")
         val conn = connect(url)
         return try {
             conn.requestMethod = "GET"
-            conn.setRequestProperty("Accept", "application/vnd.github+json")
+            conn.setRequestProperty("Accept", "application/json")
             conn.setRequestProperty("User-Agent", "jetlink-android")
             conn.connectTimeout = 15_000
             conn.readTimeout = 15_000
@@ -42,16 +44,28 @@ class GithubReleases(
         }
     }
 
-    /** The Android APK asset of [release], the one the updater installs. */
-    fun apk(release: GithubRelease): GithubAsset? =
-        release.assets.firstOrNull { it.name.endsWith(".apk") && it.name.contains("Android", ignoreCase = true) }
-            ?: release.assets.firstOrNull { it.name.endsWith(".apk") }
+    /**
+     * The Android APK asset of [release], the one the updater installs.
+     * CNB serves release assets at a fixed download path; when the feed
+     * omits the URL the asset's is rebuilt from that rule.
+     */
+    fun apk(release: GithubRelease): GithubAsset? {
+        val asset = release.assets.firstOrNull { it.name.endsWith(".apk") && it.name.contains("Android", ignoreCase = true) }
+            ?: release.assets.firstOrNull { it.name.endsWith(".apk") } ?: return null
+        if (asset.browser_download_url.isBlank() && release.tag_name.isNotBlank() && asset.name.isNotBlank()) {
+            return asset.copy(
+                browser_download_url =
+                "https://cnb.cool/$repo/-/releases/download/${release.tag_name}/${asset.name}",
+            )
+        }
+        return asset
+    }
 }
 
 /**
  * Streams [url] to [outFile] with a progress callback, in the caller's
  * thread. Returns the number of bytes written, or throws on failure. A
- * redirect is followed once; GitHub's asset URLs redirect to objects.
+ * redirect is followed once; CNB's asset URLs redirect to the object store.
  */
 fun downloadToFile(
     url: String,

@@ -209,8 +209,10 @@ public final class OrtBackend: EngineBackend {
       // already sets backend_type (or the no-fusion adapter's backend_path);
       // the phone's own backend overrides whichever of the two it was.
       if let path = qnnBackend, !path.isEmpty {
-        options["backend_path"] = path
+        // the path wins over whichever of the two the policy set; the
+        // provider refuses a path and a type at once
         options.removeValue(forKey: "backend_type")
+        options["backend_path"] = path
       }
 
       return options

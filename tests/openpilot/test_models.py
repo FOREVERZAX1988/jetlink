@@ -665,15 +665,15 @@ class TestFetchShippedModel(ModelsTest):
 
   def test_nowhere_to_get_it_raises_once_the_attempts_are_spent(self):
     from jetlink.registry.index import NetworkError
-    # HuggingFace endpoints expand into mirrors these days; that is lfs_hrefs'
-    # own business (tested separately). Pin one candidate per endpoint here so
-    # this test measures only how many attempts the retry loop makes.
-    with mock.patch('jetlink.registry.lfs.lfs_resolve', return_value=None) as resolve, \
-         mock.patch('jetlink.registry.lfs.hf_mirror_candidates', return_value=[]), \
-         self.no_waits(), self.assertRaises(NetworkError):
+    from jetlink.registry.sources import hf_mirror_candidates
+    # every endpoint the search unfolds to: an HF one asks its mirrors too
+    asked = sum(len([e, *hf_mirror_candidates(e)]) if e.startswith('https://huggingface.co/') else 1
+                for e in self.models.lfs_endpoints())
+    with mock.patch('jetlink.registry.lfs.lfs_resolve', return_value=None) as resolve, self.no_waits(), \
+         self.assertRaises(NetworkError):
       self.models.fetch_shipped_model()
     # the one wait (no_waits) between two attempts
-    self.assertEqual(resolve.call_count, 2 * len(self.models.lfs_endpoints()))
+    self.assertEqual(resolve.call_count, 2 * asked)
 
   def test_a_failed_transfer_is_tried_again_and_told_of(self):
     # a car's connection stalls; each attempt asks the LFS server for a fresh

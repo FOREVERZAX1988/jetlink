@@ -4,8 +4,9 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 /**
- * What the GitHub Releases API says about a release, the fields the
- * updater reads. Field names are the API's snake_case.
+ * What the CNB releases feed says about a release, the fields the updater
+ * reads. Field names follow the GitHub Releases API shape the feed keeps
+ * (snake_case); CNB adds fields the parser ignores.
  */
 @Serializable
 data class GithubRelease(

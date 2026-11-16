@@ -309,7 +309,8 @@ jobs:
           # A tag build is its tag. A cn-branch build is
           # "<appVersion>-<MMDD>-<n>" (0.8.7-1015-1, the 4th build that day is
           # ...-4; another day is -1016-1), n one past the newest same-day
-          # release so parallel/rerun jobs agree. cn-prerelease reads this tag.
+          # release so parallel/rerun jobs agree. the cn release job reads
+          # this tag.
           if [ "$GITHUB_REF_TYPE" = tag ]; then
             tag="$GITHUB_REF_NAME"
           elif [ "$GITHUB_REF_NAME" = cn ]; then
@@ -405,7 +406,7 @@ jobs:
     name: Linux server (${{ matrix.flavor }})
     # The release tarballs a Jetson or Linux PC installs, built the one way
     # scripts/build-linux.sh builds them (same as release.yml), so a cn push
-    # publishes a server for every app prerelease.
+    # publishes a server for every app release.
     needs: changes
     if: needs.changes.outputs.apps == 'true'
     strategy:
@@ -452,12 +453,12 @@ jobs:
           path: dist/jetlink-server-*-${{ matrix.flavor }}.tar.gz*
           retention-days: 14
 
-  cn-prerelease:
-    name: cn prerelease
+  cn-release:
+    name: cn release
     # Every push to the cn branch publishes its Android and macOS builds as a
-    # prerelease, so a phone's updater can take the newest without waiting for
-    # a v* tag (the GitHub releases list, not the "latest" endpoint, which
-    # skips prereleases).
+    # release, so a phone's updater can take the newest without waiting for a
+    # v* tag. The updater lists the releases feed, so ordering by tag is what
+    # matters, not GitHub's "latest" endpoint.
     if: github.ref == 'refs/heads/cn'
     needs: [android, app, linux-server]
     runs-on: ubuntu-24.04
@@ -486,7 +487,7 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Publish the cn prerelease
+      - name: Publish the cn release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.android.outputs.tag }}
@@ -494,7 +495,7 @@ jobs:
           set -euo pipefail
           # The tag is "<appVersion>-<MMDD>-<n>", the same one the APK was
           # built with. Same-day reruns replace the files; a new push gets the
-          # next n. One prerelease carries the APK, the macOS app and both
+          # next n. One release carries the APK, the macOS app and both
           # Linux server tarballs, as a v* release does.
           NOTES="Builds of the cn branch at ${GITHUB_SHA::7} (tag $TAG), for testing. The Android APK is signed with the release key, so it installs over an earlier build; the app's updater compares this tag. Jetson/Linux servers are the jetlink-server-* tarballs."
           APK="$(find dist -maxdepth 2 -name '*.apk' -print -quit)"
@@ -507,7 +508,25 @@ jobs:
             # a rerun of the same build: replace the files, keep the release
             gh release upload "$TAG" --clobber "$APK" "$APP" "${SERVERS[@]}"
           else
-            gh release create "$TAG" --prerelease --title "Jetlink cn $TAG" \
+            gh release create "$TAG" --title "Jetlink cn $TAG" \
               --notes "$NOTES" --target "$GITHUB_SHA" "$APK" "$APP" "${SERVERS[@]}"
           fi
+
+      - name: Publish the CNB release
+        env:
+          # a CNB access token with repo-contents read/write (repo settings
+          # -> Secrets and variables -> Actions); without it the step skips,
+          # so a fork without a CNB mirror stays green
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+          CNB_REPO: mouxancnb/jetlink
+          TARGET_SHA: ${{ github.sha }}
+          TAG: ${{ needs.android.outputs.tag }}
+        run: |
+          # The Android app's update feed lives on CNB: the updater lists
+          # this repo's releases there and installs the APK asset with this
+          # build's tag (android/.../update/CnbReleases.kt).
+          [ -n "$CNB_TOKEN" ] || { echo "skip: CNB_TOKEN not configured"; exit 0; }
+          APK="$(find dist -maxdepth 2 -name '*.apk' -print -quit)"
+          [ -n "$APK" ] || { echo "error: no APK in dist" >&2; exit 1; }
+          bash scripts/cnb-publish-release.sh "$TAG" "$APK"
 

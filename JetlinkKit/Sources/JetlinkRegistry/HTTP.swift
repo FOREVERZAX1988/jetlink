@@ -16,9 +16,9 @@ struct HTTP: Sendable {
   /// Range, and a host that ignored it would otherwise send the whole model.
   ///
   /// The mirrors the app configured are tried first, in their order, then the
-  /// original host: a network failure moves to the next candidate, while a
-  /// 404 is an answer about the resource and ends the attempt at once, so
-  /// `notFound` reaches the caller with the original URL's meaning intact.
+  /// The mirrors the app configured are tried first, in their order, then the
+  /// original host: any failure, a 404 included, moves to the next candidate,
+  /// as Python's fetch_index raises NetworkError for all of them.
   func get(_ url: String, timeout: TimeInterval, limit: Int? = nil, headers: [String: String] = [:]) async throws(RegistryError) -> Data {
     let candidates = Mirrors.candidates(for: url)
     guard candidates.count > 1 else {
@@ -29,7 +29,6 @@ struct HTTP: Sendable {
       do {
         return try await getOnce(candidate, timeout: timeout, limit: limit, headers: headers)
       } catch let error as RegistryError {
-        if error.kind == .notFound { throw error }
         last = error
       }
     }

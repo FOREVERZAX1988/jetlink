@@ -168,7 +168,7 @@ data class SettingsValues(
     val theme: AppTheme = AppTheme.System,
     /** Mirror bases the model catalog and downloads try first; the original hosts come last. */
     val mirrors: List<String> = listOf(DEFAULT_MIRROR),
-    /** Whether the app checks the GitHub release for a newer one at launch. */
+    /** Whether the app checks the CNB release feed for a newer one at launch. */
     val autoUpdate: Boolean = true,
 )
 

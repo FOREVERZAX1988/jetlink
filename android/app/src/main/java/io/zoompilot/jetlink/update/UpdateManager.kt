@@ -13,7 +13,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
- * The app's self-update through the GitHub release: [check] asks the API
+ * The app's self-update through the CNB release feed: [check] asks the feed
  * for the newest release, [download] fetches its APK into the cache and
  * [install] hands it to the system installer.
  *
@@ -23,7 +23,7 @@ import java.io.File
  */
 class UpdateManager(
     private val context: Context,
-    private val github: GithubReleases = GithubReleases(),
+    private val feed: CnbReleases = CnbReleases(),
     /** The release tag this build came from; a newer one than it is an update. */
     private val currentTag: String = BuildConfig.BUILD_TAG,
 ) {
@@ -37,7 +37,7 @@ class UpdateManager(
     val cacheDir: File = File(context.cacheDir, "downloads").apply { mkdirs() }
 
     /**
-     * Asks GitHub for the newest release with an Android APK and compares its
+     * Asks CNB for the newest release with an Android APK and compares its
      * tag with the installed one. Tags are ordered as app version, then
      * MMDD, then that day's build number ("0.8.7-1015-4"), so only a genuinely
      * newer build - not a different old cn tag - shows as an update.
@@ -46,7 +46,7 @@ class UpdateManager(
         _state.value = UpdateState.Checking
         val releases = withContext(Dispatchers.IO) {
             try {
-                github.list(perPage = 10)
+                feed.list(perPage = 10)
             } catch (e: Exception) {
                 emptyList()
             }
@@ -56,7 +56,7 @@ class UpdateManager(
         var best: Pair<GithubRelease, GithubAsset>? = null
         var bestTag: BuildTag? = null
         for (release in releases) {
-            val asset = github.apk(release) ?: continue
+            val asset = feed.apk(release) ?: continue
             val candidate = BuildTag.parse(release.tag_name) ?: continue
             if (bestTag == null || candidate > bestTag) {
                 bestTag = candidate
