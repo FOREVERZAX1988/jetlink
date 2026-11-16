@@ -103,7 +103,13 @@ struct PageFeedTests {
     feed.close(stream)
     clock.value = 69
     let before = hardware.samples
-    #expect(eventually { hardware.samples > before + 2 })
+    // The sampler waits on a real-time condition (period 0.01), while this
+    // test moves a fake clock. On a loaded CI runner the sampler thread can
+    // be descheduled well past eventually's default 2 s, which made this
+    // assertion flaky (2026-11-16: 1 failure in 486 Swift tests). The grace
+    // window is 60 fake seconds and no product timing changes here; just
+    // give the thread enough room to make three samples.
+    #expect(eventually(timeout: 10) { hardware.samples > before + 2 })
 
     clock.value = 71
     #expect(eventually { !feed.isSampling })
