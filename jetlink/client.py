@@ -58,6 +58,14 @@ StopFn = Callable[[], bool]
 # it on those runs, or the log would carry zeros where it goes.
 RAW_PRED_ENV = 'SEND_RAW_PRED'
 
+# Which frame carrier to use. 'auto' (default) lets WiFi choose HEVC when the
+# server offers it — a 20 Hz stream of lossless warped frames is ~390 KB each
+# (~63 Mbps), past what most phone links carry, so the pacer demotes and the
+# large model gets handed back. A cable has the bandwidth for lossless and
+# keeps it. 'lossless' / 'hevc' / 'raw' force one, for A/B runs; an unavailable
+# codec falls back through codecs.pick as usual.
+CODEC_ENV = 'JETLINK_CODEC'
+
 
 class Sent(NamedTuple):
   """A frame sent and not yet answered."""
@@ -273,7 +281,28 @@ class JetlinkClient:
     self.takes_lossless = P.LOSSLESS_CODEC in (resp.get('frame_codecs') or ())
     self.takes_hevc = P.HEVC_CODEC in (resp.get('frame_codecs') or ())
     self._take_datagrams(resp)
+    # Settle the frame carrier now, from this hello. Without this the codec
+    # stays RAW forever (choose_codec was never called) and, more importantly,
+    # a server that offers HEVC would never be sent one. Auto picks HEVC only
+    # on Wi-Fi: a cable has the bandwidth for a lossless frame and keeps it.
+    # An explicit env value overrides for A/B; an offered-but-unavailable
+    # codec still falls back through codecs.pick.
+    self.choose_codec(prefer_lossy=self._prefer_lossy())
     return resp
+
+  def _prefer_lossy(self) -> bool:
+    forced = (os.environ.get(CODEC_ENV) or 'auto').strip().lower()
+    if forced == 'hevc':
+      return True
+    if forced in ('lossless', 'raw'):
+      return False
+    # 'auto': HEVC on Wi-Fi, lossless on a cable. A dial carries its medium
+    # in the transport's link_info (wifi for dial(), cable/usb for gadget).
+    try:
+      info = self.t.link_info() or {}
+    except Exception:
+      info = {}
+    return str(info.get('kind', '')).lower() == 'wifi'
 
   def choose_codec(self, prefer_lossy: bool = False) -> str:
     """Settle what this link's frames go as, from the last hello.
@@ -287,6 +316,8 @@ class JetlinkClient:
     self.codec = codecs.pick({'frame_codecs': [n for n, ok in
                                                ((P.LOSSLESS_CODEC, self.takes_lossless), (P.HEVC_CODEC, self.takes_hevc)) if ok]},
                              prefer_lossy=prefer_lossy)
+    log.warning("jetlink: frame codec %s (offers lossless=%s hevc=%s, prefer_lossy=%s)",
+                self.codec, self.takes_lossless, self.takes_hevc, prefer_lossy)
     return self.codec
 
   def _take_datagrams(self, hello: dict) -> None:

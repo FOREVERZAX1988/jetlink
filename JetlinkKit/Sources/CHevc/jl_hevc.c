@@ -135,16 +135,29 @@ void jl_hevc_unpack_nv12(const uint8_t *nv12, int width, int height, uint8_t *ou
 // is opened at run time, so the build needs none of libavcodec's own
 // headers and a host without it simply has no decoder.
 //
-// The types below are libavcodec's, laid out as its headers lay them out:
-// the packet and the frame are plain structs whose fields this code reads
-// and writes. Only the fields used here are named.
+// The types below mirror libavcodec's public structs field-for-field, in
+// declaration order, up to the last field this code reads. Only that prefix
+// is named; the real structs continue past it, which is fine because the API
+// takes pointers and only touches the fields we lay out here.
+//
+// This prefix used to be wrong: the packet was `data,size,stream_index,flags,
+// pts,dts` and the frame omitted `nb_samples`. That is not any FFmpeg
+// release's ABI — AVPacket starts with `buf,pts,dts`, and AVFrame has
+// `nb_samples` between `height` and `format`. The wrong layout went unnoticed
+// on Apple (VideoToolbox, never libavcodec) and on hosts with no decoder at
+// all (the hello simply omitted hevc). It would have fed send_packet a bogus
+// pointer/size and read a bogus format on any real libavcodec. Fixed here so
+// the Android APK, which now carries libavcodec, can decode HEVC.
+//
+// FFmpeg 5.1 through 7.x keep this prefix stable (AV_NUM_DATA_POINTERS = 8).
 typedef struct jl_av_packet {
+  void *buf;          // AVBufferRef *
+  int64_t pts;
+  int64_t dts;
   uint8_t *data;
   int size;
   int stream_index;
   int flags;
-  int64_t pts;
-  int64_t dts;
 } jl_av_packet;
 
 typedef struct jl_av_frame {
@@ -153,6 +166,7 @@ typedef struct jl_av_frame {
   uint8_t **extended_data;
   int width;
   int height;
+  int nb_samples;
   int format;
   int key_frame;
 } jl_av_frame;

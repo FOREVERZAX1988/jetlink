@@ -357,3 +357,44 @@ class FramesAsDatagrams(FramesInFlight):
       for frame_id in range(1, 4):
         self.lose(frame_id)
     self.assertTrue(self.client.dead)
+
+
+class TheFrameCodec(SocketPairTest):
+  """hello settles the frame carrier, from the medium and the server's offer.
+
+  A Wi-Fi link opts into HEVC when offered (a lossless warp frame is ~390 KB,
+  past what most phone links carry); a cable keeps its lossless frame. Without
+  this the codec stayed RAW forever — choose_codec was never called — and a
+  server offering HEVC would never be sent one.
+  """
+
+  def greet_as(self, medium: str, **offer):
+    from jetlink import codecs
+    info = {'kind': medium}
+    with mock.patch.object(TcpTransport, 'link_info', return_value=info):
+      def serve():
+        msg = self.peer.recv(timeout=2.0)
+        self.peer.send_json(P.Msg.HELLO_RESP, msg.seq, {'device': 'test', **offer})
+      t = threading.Thread(target=serve, daemon=True)
+      t.start()
+      self.client.hello(timeout=2.0)
+      t.join(2.0)
+    return codecs
+
+  def test_wifi_picks_hevc_when_offered(self):
+    codecs = self.greet_as('wifi', frame_codecs=['med-zstd', 'hevc'])
+    self.assertEqual(self.client.codec, codecs.HEVC)
+
+  def test_cable_keeps_lossless_even_when_hevc_offered(self):
+    codecs = self.greet_as('usb', frame_codecs=['med-zstd', 'hevc'])
+    self.assertEqual(self.client.codec, codecs.LOSSLESS)
+
+  def test_no_hevc_offer_stays_lossless(self):
+    # today's 8EE6 APK reports only med-zstd — behavior must be unchanged
+    codecs = self.greet_as('wifi', frame_codecs=['med-zstd'])
+    self.assertEqual(self.client.codec, codecs.LOSSLESS)
+
+  def test_env_can_force_lossless_over_wifi(self):
+    with mock.patch.dict(os.environ, {'JETLINK_CODEC': 'lossless'}):
+      codecs = self.greet_as('wifi', frame_codecs=['med-zstd', 'hevc'])
+    self.assertEqual(self.client.codec, codecs.LOSSLESS)

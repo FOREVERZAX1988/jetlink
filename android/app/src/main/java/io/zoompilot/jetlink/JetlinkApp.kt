@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import io.zoompilot.jetlink.device.DeviceMonitor
+import io.zoompilot.jetlink.server.AvAssets
 import io.zoompilot.jetlink.server.RunState
 import io.zoompilot.jetlink.server.ServerController
 import io.zoompilot.jetlink.server.ServerService
@@ -26,6 +27,10 @@ class JetlinkApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // Load the HEVC decoder libraries before anything touches Native
+        // (which loads libjetlink, whose dlopen("libavcodec.so") resolves to
+        // these). Best effort: without them the server stays on lossless.
+        AvAssets.install(this)
         graph = AppGraph(this)
         graph.checkForUpdatesAtLaunch()
     }

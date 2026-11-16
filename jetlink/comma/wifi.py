@@ -253,20 +253,47 @@ def gateway(interface: str = INTERFACE, routes: Path = ROUTES) -> str | None:
   return None
 
 
+def _band_from_ghz(ghz: float) -> str:
+  return '2.4' if ghz < 3.0 else '5' if ghz < 5.925 else '6'
+
+
 def band(interface: str = INTERFACE) -> str | None:
-  """The band the comma is on, '2.4', '5' or '6' (GHz), from the frequency
-  iwconfig reports; None when it cannot say. Read once a dial: 2.4 GHz is
-  too slow for a big model's frames, and the apps say so."""
+  """The band the comma is on, '2.4', '5' or '6' (GHz); None when it cannot
+  say. Read once a dial: 2.4 GHz is too slow for a big model's frames, and the
+  apps say so.
+
+  iwconfig is the original source, but AGNOS 20.3 ships without it
+  (wireless-tools was dropped). NetworkManager's nmcli is always there and
+  reports the in-use access point's frequency in MHz, so fall back to it.
+  Without this the HEVC bitrate picker only ever sees None and pins a 5 GHz
+  link at the 2 Mbps default instead of the 4 Mbps good-band rate."""
   tool = shutil.which('iwconfig') or '/usr/sbin/iwconfig'
   try:
     out = subprocess.run([tool, interface], capture_output=True, text=True, timeout=1.0).stdout
+    m = re.search(r'Frequency[:=]\s*([\d.]+)\s*GHz', out)
+    if m is not None:
+      return _band_from_ghz(float(m.group(1)))
+  except (OSError, subprocess.SubprocessError):
+    pass
+
+  # nmcli: "IN-USE:SSID:SIGNAL:FREQ:RATE:SECURITY" — FREQ is in MHz, e.g.
+  # "*:R3G-5G:90:5180 MHz:270 Mbit/s:WPA2". Only the in-use row counts: a
+  # scan lists every neighbour, and picking the wrong one would mis-set the
+  # codec's bitrate for the link actually carrying frames.
+  nmcli = shutil.which('nmcli') or '/usr/bin/nmcli'
+  try:
+    out = subprocess.run([nmcli, '-t', '-f', 'IN-USE,FREQ', 'dev', 'wifi'],
+                         capture_output=True, text=True, timeout=2.0).stdout
   except (OSError, subprocess.SubprocessError):
     return None
-  m = re.search(r'Frequency[:=]\s*([\d.]+)\s*GHz', out)
-  if m is None:
-    return None
-  ghz = float(m.group(1))
-  return '2.4' if ghz < 3.0 else '5' if ghz < 5.925 else '6'
+  for line in out.splitlines():
+    fields = line.split(':')
+    if not fields or not fields[0].strip().startswith('*') or len(fields) < 2:
+      continue
+    m = re.search(r'([\d.]+)\s*MHz', fields[1])
+    if m is not None:
+      return _band_from_ghz(float(m.group(1)) / 1000.0)
+  return None
 
 
 def link_info(interface: str = INTERFACE) -> dict:

@@ -65,6 +65,33 @@ class TestBand(unittest.TestCase):
     with mock.patch('subprocess.run', side_effect=FileNotFoundError):
       self.assertIsNone(wifi.band())
 
+  def test_nmcli_is_the_fallback_when_iwconfig_is_absent(self):
+    """AGNOS 20.3 has no iwconfig. nmcli's in-use row carries the frequency
+    in MHz; without this the HEVC bitrate picker is stuck at 2 Mbps on a 5
+    GHz link, which is exactly the R3G bench (192.168.7.196)."""
+    # -f IN-USE,FREQ prints two fields, e.g. "*:5180 MHz"
+    nmcli_out = '*:5180 MHz\n :2412 MHz\n'
+    # iwconfig missing (FileNotFoundError), then nmcli answers
+    with mock.patch('subprocess.run', side_effect=[FileNotFoundError(),
+                                                   mock.Mock(stdout=nmcli_out)]):
+      self.assertEqual(wifi.band(), '5')
+    # 2.4 GHz in-use row maps to 2.4
+    with mock.patch('subprocess.run', side_effect=[FileNotFoundError(),
+                                                   mock.Mock(stdout='*:2437 MHz\n')]):
+      self.assertEqual(wifi.band(), '2.4')
+    # no in-use row is no band
+    with mock.patch('subprocess.run', side_effect=[FileNotFoundError(),
+                                                   mock.Mock(stdout=' :5180 MHz\n')]):
+      self.assertIsNone(wifi.band())
+
+  def test_iwconfig_still_wins_when_present(self):
+    """The original source is preferred; nmcli is only the fallback."""
+    nmcli_wrong = mock.Mock(stdout='*:2412 MHz\n')
+    iwconfig = mock.Mock(stdout='Frequency:5.24 GHz\n')
+    with mock.patch('subprocess.run', side_effect=[iwconfig, nmcli_wrong]) as run:
+      self.assertEqual(wifi.band(), '5')
+      self.assertEqual(run.call_count, 1)   # nmcli never consulted
+
   def test_the_hello_says_wifi_and_the_band_it_knows(self):
     with mock.patch.object(wifi, 'band', return_value='2.4'):
       self.assertEqual(wifi.link_info(), {'kind': 'wifi', 'band': '2.4'})
