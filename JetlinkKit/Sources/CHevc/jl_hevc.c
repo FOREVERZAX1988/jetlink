@@ -246,7 +246,14 @@ int jl_hevc_decode(jl_hevc *ctx, const void *src, size_t n, uint8_t *out, int *k
 
   // Feed the access unit. A positive index is an input buffer slot; the
   // negatives are INFO_TRY_AGAIN_LATER (-1) and a codec that went away.
-  ssize_t in = AMediaCodec_dequeueInputBuffer(ctx->codec, 20000);  // 20 ms
+  //
+  // Both waits are short on purpose. This call runs on modeld's frame thread,
+  // inside a 50 ms camera period: waiting 20 ms for an input slot and then up
+  // to 4 x 20 ms for its frame spent 100 ms here and pushed the reply past the
+  // link's 0.2 s deadline (measured 2026-11-16: `link 158 ms`, failure 7).
+  // Jetlink is pipelined, so a frame whose picture is not out yet is a frame
+  // to publish the previous plan for -- the next call drains it.
+  ssize_t in = AMediaCodec_dequeueInputBuffer(ctx->codec, 2000);  // 2 ms
   if (in < 0) return 0;   // no input slot yet: publish the previous plan
   size_t cap = 0;
   uint8_t *buf = AMediaCodec_getInputBuffer(ctx->codec, (size_t)in, &cap);
@@ -256,14 +263,15 @@ int jl_hevc_decode(jl_hevc *ctx, const void *src, size_t n, uint8_t *out, int *k
   if (AMediaCodec_queueInputBuffer(ctx->codec, (size_t)in, 0, n,
                                    (uint64_t)ctx->pts++, flags) != AMEDIA_OK) return -3;
 
-  // Drain one decoded frame. The encoder is low-latency (no B frames), so an
-  // AU normally produces its frame within a frame period; loop over a few
-  // buffer periods for the codec's own scheduling jitter.
-  for (int tries = 0; tries < 4; tries++) {
+  // Drain at most one decoded frame, without waiting past a few milliseconds.
+  // The codec decodes on its own time; what is not out yet is drained by the
+  // next access unit, which is exactly the one-frame-old plan a pipelined
+  // frame publishes anyway.
+  for (int tries = 0; tries < 2; tries++) {
     AMediaCodecBufferInfo info;
     memset(&info, 0, sizeof(info));
-    ssize_t ix = AMediaCodec_dequeueOutputBuffer(ctx->codec, &info, 20000);
-    if (ix == AMEDIACODEC_INFO_TRY_AGAIN_LATER) continue;
+    ssize_t ix = AMediaCodec_dequeueOutputBuffer(ctx->codec, &info, 3000);  // 3 ms
+    if (ix == AMEDIACODEC_INFO_TRY_AGAIN_LATER) break;
     if (ix == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED ||
         ix == AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED) continue;
     if (ix < 0) return -3;
