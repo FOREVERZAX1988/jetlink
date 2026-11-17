@@ -65,6 +65,10 @@ class TestHevcBuildFlags(unittest.TestCase):
     used = set(IF_DEFINED.findall(self.source)) | set(IFDEF.findall(self.source))
     return used - aliases
 
+  def c_reads(self) -> set:
+    """Every JL_HEVC_* the C reads at all, alias guards included."""
+    return set(IF_DEFINED.findall(self.source)) | set(IFDEF.findall(self.source))
+
   def test_swiftpm_defines_a_decoder_for_android_and_linux(self):
     defines = self.swiftpm_defines()
     self.assertTrue(defines, 'Package.swift defines no JL_HEVC_* for the CHevc target')
@@ -72,23 +76,27 @@ class TestHevcBuildFlags(unittest.TestCase):
     self.assertIn('android', joined, 'no decoder is defined for android')
     self.assertIn('linux', joined, 'no decoder is defined for linux')
 
-  def test_every_branch_macro_is_one_swiftpm_defines(self):
-    defines = set(self.swiftpm_defines())
+  def test_every_branch_macro_is_a_define_or_an_alias(self):
+    # Upstream's own style: the branch reads an alias (JL_HEVC_AV) that the
+    # file defines from the SwiftPM name. Ours does the same for MediaCodec
+    # (JL_HEVC_MC). A branch on a name that is neither is a branch nothing
+    # compiles -- the #else branch ships instead, with no compile or runtime
+    # signal at all.
+    known = set(self.swiftpm_defines()) | set(SELF_DEFINE.findall(self.source))
     branches = self.c_branch_macros()
     self.assertTrue(branches, 'jl_hevc.c chooses no implementation at all')
-    unknown = branches - defines
+    unknown = branches - known
     self.assertFalse(
       unknown,
       'jl_hevc.c branches on ' + ', '.join(sorted(unknown)) +
-      ' but Package.swift defines only ' + ', '.join(sorted(defines)) +
-      '. The branch would never be compiled: no decoder, every HEVC frame '
-      'answered BAD_SHAPE.')
+      ' which is neither a SwiftPM define (' + ', '.join(sorted(self.swiftpm_defines())) +
+      ') nor an alias the file defines. The branch would never be compiled: '
+      'no decoder, every HEVC frame answered BAD_SHAPE.')
 
-  def test_every_swiftpm_define_has_a_branch(self):
+  def test_every_swiftpm_define_is_read_by_the_c(self):
     # a define nothing reads is dead weight and, worse, hides a rename: the
     # platform it was for silently gets the #else branch
-    branches = self.c_branch_macros() | set(SELF_DEFINE.findall(self.source))
-    unused = set(self.swiftpm_defines()) - branches
+    unused = set(self.swiftpm_defines()) - self.c_reads()
     self.assertFalse(
       unused,
       'Package.swift defines ' + ', '.join(sorted(unused)) +

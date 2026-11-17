@@ -139,7 +139,7 @@ void jl_hevc_unpack_nv12(const uint8_t *nv12, int width, int height, uint8_t *ou
 
 // -- the decoder --------------------------------------------------------------
 
-#ifdef JL_HEVC_MEDIACODEC
+#ifdef JL_HEVC_MC
 
 // Android MediaCodec: the platform's HEVC decoder, which on a Snapdragon is
 // c2.qti.hevc.decoder — hardware, off the GPU the large model is using. The
@@ -322,7 +322,7 @@ int jl_hevc_decode(jl_hevc *ctx, const void *src, size_t n, uint8_t *out, int *k
   return 0;   // no frame yet: hold the previous plan, not a failure
 }
 
-#elif defined(JL_HEVC_DLOPEN)
+#elif defined(JL_HEVC_AV)
 
 #include <dlfcn.h>
 
