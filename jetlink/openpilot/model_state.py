@@ -126,13 +126,21 @@ PIPELINE_IN_FLIGHT = 3
 # before that is the link and not the host. A frame costs the camera 50 ms:
 # warp ~3 ms, the host's answer read later, the rest is modeld's own work. When
 # send() blocks past this, the socket buffer is full because the link cannot
-# carry the frames the cap asks for -- a phone hotspot at 20 Hz needs ~30 Mbps
-# for a ~187 kB lossless frame, and the drive of 2026-11-08 measured 20 to 57 ms
-# sends there, a 2.38 % camera-drop burst and a hand-back every few seconds.
+# carry the frames the cap asks for.
 # The governor steps the rate down on this, so the link carries fewer frames
 # instead of modeld dropping camera frames behind it (pace.py). Pipelined
 # frames never hold, so without this the governor has no signal at all on Wi-Fi.
-SEND_BUDGET = 0.012
+#
+# 12 ms was measured with LOSSLESS frames (~187-393 kB each: a phone hotspot
+# needed ~30 Mbps at 20 Hz and the 2026-11-08 drive saw 20-57 ms sends). HEVC
+# made a frame ~25 kB, so a healthy Wi-Fi send now lands at 12-16 ms and used
+# to sit exactly on the old line: every pipelined frame was called backpressure,
+# the governor stepped down to 10 Hz within a second, and it could not climb
+# back because that needs 10 quiet seconds. Measured 2026-11-17 on a phone
+# hotspot: send 12.3-15.8 ms while the server answered in 42.8 ms -- the link
+# was fine, the budget was stale. A 25 kB frame sent in 30 ms is still under
+# 7 Mbps, far below what either link carries, so a real queue still overruns it.
+SEND_BUDGET = 0.030
 # frames between asks for the server's telemetry, which rides on the response:
 # every second one, as modeld sent a chestnut's state (20 Hz over 10 Hz)
 TELEMETRY_EVERY = 2
