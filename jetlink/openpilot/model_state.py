@@ -127,14 +127,13 @@ WIFI_HOLDS_ALLOWED = 150
 # 0.2 s deadline (link abandoned) or the TCP send buffer backs up (write
 # timeout). Three at 20 Hz is 150 ms, inside the deadline, and a phone that
 # answers in ~22 ms keeps only one or two out at a time.
-# A model that does not produce pose publishes zeros with a confidence no camera
-# can have. Measured 2026-11-18 on route 00000041, rotation std over 14740
-# chestnut frames: p50 0.00116, p99 0.00306, max 0.00819; the small model
-# reported 0.0275. Judged on the *rotation* half only -- the same model's
-# translation std was 0.034 (p50) / 0.18 (max), so a maximum over all six
-# components never falls under any useful line. A median over the first
-# MISSING_POSE_FRAMES answers keeps one odd frame from deciding it.
-MISSING_POSE_STD = 0.005
+# A model that cannot drive has no plan. Measured 2026-11-18: the healthy
+# chestnut model plans 21.53 m ahead while parked in the preview (pose_stds
+# 0.07344, lane_lines 4.98), and the one that failed in motion carried
+# position.x[5] under 0.05 m on 99 % of frames. Two metres separates them with
+# room to spare. The confidence on the pose cannot be the yardstick -- a parked
+# car's rotation std is 0.0011 on the comma's own model too, which is right.
+MISSING_PLAN_M = 2.0
 MISSING_POSE_FRAMES = 5
 # The heads worth reporting on the first output of a model: a missing one is a
 # model exported without it, a zero one is a model exported with it that computes
@@ -257,8 +256,8 @@ class JetlinkModelState:
     # why this model's outputs cannot be used, once enough of them are parsed
     self._bad_outputs: str | None = None
     self._outputs_checked = False
-    # the rotation std of the first answers, judged as a median (see _judge_pose)
-    self._pose_rot_stds: list[float] = []
+    # the plan magnitude of the first answers, judged by its peak (see _judge_pose)
+    self._plan_peaks: list[float] = []
     # Per-link overrides. None means "read the module constant each frame", so
     # the strict USB/Jetson defaults stay live constants the tests can mock and
     # a Wi-Fi/USB phone build pins a wider value at construction (see joining).
@@ -865,32 +864,37 @@ class JetlinkModelState:
     return outputs_dict
 
   def _judge_pose(self, outputs: dict[str, np.ndarray]) -> None:
-    """Decide whether this model produces a pose at all, over its first answers.
+    """Decide whether this model produces a usable plan, over its first answers.
 
-    A head the model does not produce still answers, as zeros -- and the tell is
-    the confidence on them, not the values, because a parked car's pose is also
-    zeros. The rotation components are the ones to read: on route 00000041 the
-    chestnut model's rotation std was 0.00116 (p50) / 0.00306 (p99) on all 14740
-    frames, against 0.0275 from the small model, while its *translation* std was
-    0.034 (p50) and 0.18 (max) -- plausible-looking numbers that made a check on
-    the maximum of all six components never fire at all.
+    The confidence on a pose cannot be the yardstick: a parked car's rotation is
+    zero and the model is *right* to be sure of it. Measured 2026-11-18 in the
+    parked preview, on the same chestnut model route 00000041 called dead:
 
-    A median over the first few answers, so one odd frame cannot decide it
-    either way. 250 ms of answers is enough to tell, and far less than a drive.
+        pose=max0.09766  pose_stds=max0.07344  plan=max21.53125
+        lane_lines=max4.97656  lane_lines_prob=max0.89479
+
+    and the comma's own model parked reports rotation std 0.0011 -- the same
+    0.0011 the chestnut model showed at 5-10 m/s, which is what made a
+    rotation-std test refuse a perfectly healthy model.
+
+    What a model that cannot drive does not have is a plan. A healthy one plans
+    ~20 m ahead even standing still (21.53 m above); the one that failed in
+    motion carried position.x[5] under 0.05 m on 99 % of frames. So: the peak
+    plan magnitude over the first few answers, and the peak rather than a median
+    because one honest answer is proof the head works.
     """
-    if self._bad_outputs is not None or len(self._pose_rot_stds) >= MISSING_POSE_FRAMES:
+    if self._bad_outputs is not None or len(self._plan_peaks) >= MISSING_POSE_FRAMES:
       return
-    stds = outputs.get('pose_stds')
-    if stds is None:
+    plan = outputs.get('plan')
+    if plan is None:
       return
-    # pose_stds is x, y, z, roll, pitch, yaw; the rotation half is the tell
-    self._pose_rot_stds.append(float(np.max(np.abs(np.asarray(stds)[..., 3:]))))
-    if len(self._pose_rot_stds) < MISSING_POSE_FRAMES:
+    self._plan_peaks.append(float(np.max(np.abs(np.asarray(plan)))))
+    if len(self._plan_peaks) < MISSING_POSE_FRAMES:
       return
-    median = float(np.median(self._pose_rot_stds))
-    if median < MISSING_POSE_STD:
-      self._bad_outputs = ('the model returns no pose (rotation std %.4f rad median over %d frames)'
-                           % (median, MISSING_POSE_FRAMES))
+    peak = float(np.max(self._plan_peaks))
+    if peak < MISSING_PLAN_M:
+      self._bad_outputs = ('the model returns no usable plan (peak %.2f m over %d frames)'
+                           % (peak, MISSING_POSE_FRAMES))
 
   def _log_output_summary(self, outputs: dict[str, np.ndarray]) -> None:
     """One line per model saying what it actually produced.

@@ -62,6 +62,10 @@ class FakeClient:
     self.t = SimpleNamespace()
     self.output = np.zeros(18452, np.float32)
     self.output[slice(*SLICES['hidden_state'])] = 0.5
+    # a plan, so the no-plan guard (model_state._judge_pose) sees a working
+    # head; an all-zero output is what that guard exists to refuse. Tests that
+    # care about plan values overwrite this slice themselves
+    self.output[slice(*SLICES['plan'])] = 21.5
     self.last_output = None
     # what the answer just read off the link took, sent to read: the wait a
     # blocking frame loop would have sat through, which the hold rules judge
@@ -328,40 +332,42 @@ class TestPipeline(ModelStateTest):
     empty, = [t for t in self.log.lines('warning') if 'model cafecafe' in t]
     self.assertIn('pose=empty', empty)
 
-  def test_a_model_without_a_pose_is_caught_before_it_drives(self):
-    """A head the model does not produce still answers, as zeros, and the tell
-    is the confidence on them. Route 00000041, 14740 chestnut frames: rotation
-    std p50 0.00116 / p99 0.00306, against 0.0275 from the small model."""
+  def test_a_model_without_a_plan_is_caught_before_it_drives(self):
+    """Route 00000041's model, driving, carried position.x[5] under 0.05 m on
+    99 % of frames -- it had no plan to give. The parked preview of the same
+    model plans 21.53 m, so 2 m separates a working head from a dead one."""
     _, state = self._wifi()
     for i in range(model_state.MISSING_POSE_FRAMES):
-      state._judge_pose({'pose_stds': np.full((1, 6), 0.0010)})
+      state._judge_pose({'plan': np.full((1, 990), 0.5)})
       if i < model_state.MISSING_POSE_FRAMES - 1:
         self.assertIsNone(state._bad_outputs, 'one frame is not a verdict')
-    self.assertIn('no pose', state._bad_outputs)
+    self.assertIn('no usable plan', state._bad_outputs)
 
-  def test_a_real_pose_is_kept(self):
+  def test_a_healthy_plan_is_kept(self):
+    # the measured parked chestnut output
     _, state = self._wifi()
     for _ in range(model_state.MISSING_POSE_FRAMES):
-      state._judge_pose({'pose_stds': np.full((1, 6), 0.0275)})
+      state._judge_pose({'plan': np.full((1, 990), 21.53125)})
     self.assertIsNone(state._bad_outputs)
 
-  def test_the_translation_std_does_not_decide_it(self):
-    """The measured model reported rotation std 0.001 while its translation std
-    was 0.034, which is a believable number. A check on the maximum of all six
-    components could never fire; only the rotation half can."""
+  def test_one_honest_answer_is_proof_enough(self):
+    # the peak, not a median: a single real plan means the head works
     _, state = self._wifi()
-    stds = np.array([[0.034, 0.034, 0.034, 0.0010, 0.0010, 0.0010]])
+    for peak in (0.4, 0.4, 21.5, 0.4, 0.4):
+      state._judge_pose({'plan': np.full((1, 990), peak)})
+    self.assertIsNone(state._bad_outputs)
+
+  def test_the_pose_confidence_never_decides_it(self):
+    """A parked car's rotation std is 0.0011 on the comma's own model too, so a
+    confidence test refused the healthy chestnut model in the preview
+    (2026-11-18 21:42). The plan decides; this must stay kept."""
+    _, state = self._wifi()
     for _ in range(model_state.MISSING_POSE_FRAMES):
-      state._judge_pose({'pose_stds': stds})
-    self.assertIn('no pose', state._bad_outputs)
+      state._judge_pose({'plan': np.full((1, 990), 21.5),
+                         'pose_stds': np.full((1, 6), 0.0010)})
+    self.assertIsNone(state._bad_outputs, 'a sure-but-correct pose is not a fault')
 
-  def test_one_odd_frame_does_not_decide_the_median(self):
-    _, state = self._wifi()
-    for std in (0.0010, 0.0010, 0.0081, 0.0010, 0.0010):   # 0.0081 is the measured max
-      state._judge_pose({'pose_stds': np.full((1, 6), std)})
-    self.assertIn('no pose', state._bad_outputs, 'the median, not the max, decides')
-
-  def test_a_model_reporting_no_pose_stds_is_not_judged(self):
+  def test_a_model_reporting_no_plan_is_not_judged(self):
     _, state = self._wifi()
     for _ in range(model_state.MISSING_POSE_FRAMES * 2):
       state._judge_pose({})
