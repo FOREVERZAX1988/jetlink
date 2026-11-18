@@ -110,6 +110,30 @@ class WifiWaiting(ConnectionError):
     self.waiting = waiting
 
 
+# Why a Wi-Fi dial is waiting belongs in the log, not only on the panel: the
+# panel says "join hotspot" or "open Jetlink app", but only a timestamped line
+# says which of the two it was when the link dropped, and for how long. The
+# join retries every couple of seconds, so record one line per reason per
+# LOG_REPEAT_S rather than one per attempt.
+LOG_REPEAT_S = 30.0
+_wait_logged: dict[str, float] = {}
+# monotonic() of the last successful dial, so a wait can say how long the link
+# has been down. 0.0 until the first one, and cleared reasons are logged again
+# at once after a link comes back.
+_last_link_ok = 0.0
+
+
+def _waiting(log, detail: str, waiting: str) -> WifiWaiting:
+  """The WifiWaiting to raise, with the reason recorded once per LOG_REPEAT_S."""
+  now = time.monotonic()
+  if now - _wait_logged.get(waiting, 0.0) >= LOG_REPEAT_S:
+    _wait_logged[waiting] = now
+    down = "never up" if not _last_link_ok else "%.0fs" % (now - _last_link_ok)
+    log.warning("jetlink: Wi-Fi waiting (%s): %s; wlan0=%s gw=%s down=%s",
+                waiting, detail, wifi.local_addr(), wifi.gateway(), down)
+  return WifiWaiting(detail, waiting)
+
+
 def dial(log, deadline: float | None = None, name: str | None = None):
   """Open the link over Wi-Fi.
 
@@ -125,6 +149,7 @@ def dial(log, deadline: float | None = None, name: str | None = None):
 
   def _try(host) -> object | None:
     """The client on `host`, or None when nothing answered there."""
+    global _last_link_ok
     # the hello says Wi-Fi and the band, so the far end can warn about 2.4 GHz;
     # the panels' record of the dial goes when the link closes
     info = wifi.link_info()
@@ -140,6 +165,8 @@ def dial(log, deadline: float | None = None, name: str | None = None):
     # seconds (2026-11-08) left nothing in the log to tell the two apart
     band = info.get('band')
     log.warning("jetlink: dialed %s over Wi-Fi%s", host, f" ({band} GHz)" if band else "")
+    _last_link_ok = time.monotonic()
+    _wait_logged.clear()
     return client
 
   # The gateway first: it is one read of the routing table, and a comma that
@@ -148,7 +175,7 @@ def dial(log, deadline: float | None = None, name: str | None = None):
   gw = wifi.gateway()
   if gw is None and wifi.local_addr() is None:
     # not on Wi-Fi at all: nothing to dial and nothing to hear a browse on
-    raise WifiWaiting("not on Wi-Fi", NOT_ON_WIFI)
+    raise _waiting(log, "not on Wi-Fi", NOT_ON_WIFI)
 
   # an announced server, without a gateway or a sweep to guess at
   announced = wifi.browse()
@@ -169,14 +196,14 @@ def dial(log, deadline: float | None = None, name: str | None = None):
       if client is not None:
         return client
     # nothing else answered: the gateway's address is the one to report
-    raise WifiWaiting(f"nothing answered at {gw}", NO_ANSWER)
+    raise _waiting(log, f"nothing answered at {gw}", NO_ANSWER)
   # no gateway at all
   host = wifi.discover(skip=set(), mdnss=announced)
   if host is None:
-    raise WifiWaiting("not on Wi-Fi", NOT_ON_WIFI)
+    raise _waiting(log, "not on Wi-Fi", NOT_ON_WIFI)
   client = _try(host)
   if client is None:
-    raise WifiWaiting(f"nothing answered at {host}", NO_ANSWER)
+    raise _waiting(log, f"nothing answered at {host}", NO_ANSWER)
   return client
 
 
