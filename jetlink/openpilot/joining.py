@@ -100,6 +100,11 @@ READY = 're-engage to switch'
 # why a demote happened, as the log says it
 LOST = 'lost jetlink'
 BEHIND = 'jetlink fell behind'
+# the host answers, but modeld could not keep its 20 Hz loop behind the large
+# model. A host that cannot keep up, not a link that went quiet -- its own
+# reason so a drive's summary says which happened (both counted, both backed
+# off the same way; without it the drop counter below never moved)
+DROPPED = 'modeld dropped camera frames behind the large model'
 # a NaN or an inf in an output: a host that answers, wrongly. A lag and not a
 # drop, the link is kept, and the next swap starts the host from a reset
 BAD_OUTPUT = 'jetlink output not finite'
@@ -109,12 +114,13 @@ SMALL_READS = ('desire_key', 'numpy_inputs')
 # why a built model was let go before it drove
 NOT_UP = 'could not bring up the large model'
 # and as the leave says it to the server (protocol.Msg.LEAVE)
-LEAVING = {LOST: P.LEAVE_LOST, BEHIND: P.LEAVE_BEHIND}
+LEAVING = {LOST: P.LEAVE_LOST, BEHIND: P.LEAVE_BEHIND, DROPPED: P.LEAVE_BEHIND}
 # the demotes that count as lag, which says nothing about the cable
 LAGS = (BEHIND, BAD_OUTPUT)
 # and as the panel's one line says it while the join tries again, with the
 # `why` of its progress code (status.PROGRESS_CODES 'reconnecting')
 RECONNECTING = {LOST: ('reconnecting', 'lost'), BEHIND: ('fell behind, reconnecting', 'behind'),
+                DROPPED: ('dropped frames, reconnecting', 'behind'),
                 NOT_UP: ('load failed, reconnecting', 'load_failed'),
                 BAD_OUTPUT: ('bad output, reconnecting', 'bad_output')}
 # how long a model name the comma's index did not have stays the sha's
@@ -208,6 +214,9 @@ class JoiningModelState:
     # says anything about the cable
     self._drops = 0
     self._lags = 0
+    # the demotes the USB-C port caused: what the cable hint counts, kept apart
+    # from the hand-backs a slow host caused -- there is no cable over Wi-Fi
+    self._link_lost = 0
     # changes of the model that drives, and decisions to change it: modeld
     # compares it across run() (handovers)
     self._handovers = 0
@@ -407,7 +416,7 @@ class JoiningModelState:
       # one 2 % smoothed burst every ~10 min, on a link at 20.0 fps)
       self._log.warning("jetlink: modeld dropped %.2f %% of camera frames behind the large model, "
                         "the small model drives from this one", self._frame_drop_ratio * 100)
-      self._demote(BEHIND)
+      self._demote(DROPPED)
     self._maybe_swap()
     if self._active is self._small:
       self._small_frames += 1
@@ -533,6 +542,8 @@ class JoiningModelState:
       self._lags += 1
     else:
       self._drops += 1
+    if why == LOST:
+      self._link_lost += 1
     with self._lock:
       self._retired = (big, why)
     self._back_off()
@@ -622,7 +633,7 @@ class JoiningModelState:
     # the count is the diagnosis. A link that runs for minutes and then goes,
     # again and again, is the cable, and the cable is the one thing the
     # driver can do something about
-    self._progress.report(stage, 0.0, msg, drops=self._drops if self._drops >= DROPS_TO_BLAME_CABLE else 0,
+    self._progress.report(stage, 0.0, msg, drops=self._link_lost if self._link_lost >= DROPS_TO_BLAME_CABLE else 0,
                           code=code, args=args)
 
   def _note_link_loss(self, why: str) -> None:

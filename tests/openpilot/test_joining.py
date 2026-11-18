@@ -478,7 +478,7 @@ class JoiningTest(JoiningBase):
     self.assertEqual(s._drops, 2)
     self._wait_reported(s, 'waiting for jetlink', drops=2)
 
-  def test_a_lag_demote_says_why_over_the_live_link(self):
+  def test_a_drop_demote_says_why_over_the_live_link(self):
     # the host cannot tell the big model's time from the backoff on its own,
     # so the leave carries what the comma measured
     s = self._driving(dead=False)
@@ -486,9 +486,9 @@ class JoiningTest(JoiningBase):
     s.frame_drop_ratio = joining.DROP_LIMIT * 2
     self.assertEqual(self._run(s), {'from': 'small'})
     self.assertTrue(wait_for(lambda: self.big.client.leave.called))
-    self.big.client.leave.assert_called_once_with('behind', drops=0, lags=1, frames=7, p50_ms=41.5)
+    self.big.client.leave.assert_called_once_with('behind', drops=1, lags=0, frames=7, p50_ms=41.5)
 
-  def test_a_lag_demote_keeps_a_live_link_for_the_next_attempt(self):
+  def test_a_drop_demote_keeps_a_live_link_for_the_next_attempt(self):
     # the next attempt is a hello and a model request over the same
     # connection: no reconnect, and on a phone's cable no redial. The link is
     # closed only when it is dead
@@ -919,7 +919,9 @@ class LagTest(JoiningBase):
     self.assertEqual(self.s.handovers, handovers + 1)
     self.reset.assert_called_once()
     self.assertFalse(self.s.chestnut)
-    self.assertEqual(self.s._lags, 1)
+    # counted as a drop: modeld's camera frames were dropped behind the host,
+    # which is not the link going quiet
+    self.assertEqual((self.s._lags, self.s._drops), (0, 1))
     self.assertEqual(self.s.big_model_state, 'retrying')
     self.assertTrue(self.log.has('of camera frames behind the large model'))
 
@@ -970,13 +972,14 @@ class LagTest(JoiningBase):
         break
     # the second dropped frame, about a second in
     self.assertEqual(handed_back_at, 20)
-    self.assertEqual(self.s._lags, 1)
+    self.assertEqual((self.s._lags, self.s._drops), (0, 1))
 
   def test_the_small_models_dropped_frames_are_its_own(self):
     self.hand_back()
     for _ in range(20):
       self.assertEqual(self.frame(skipped=3), {'from': 'small'})
-    self.assertEqual(self.s._lags, 1)
+    # hand_back() is a lag demote, and the small model's own drops add nothing
+    self.assertEqual((self.s._lags, self.s._drops), (1, 0))
 
   def test_a_modeld_that_writes_no_share_leaves_the_timing_rules(self):
     # a fork older than the write: the share stays at zero
