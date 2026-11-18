@@ -639,14 +639,15 @@ class JetlinkModelState:
         self.trips.record(time.perf_counter() - frame.t0, self.client.last_timings[2])
         raise
     t4 = time.perf_counter()
-    # Both a held frame and a pipelined frame publish an older plan; upstream's
-    # blocking loop calls that a host that fell behind, and so does this one --
-    # measured rather than suffered. A pipelined frame never waits, but the
-    # answer it publishes took client.last_reply_s to arrive, and that is the
-    # very wait WIFI_HOLD_FRAME judges. Publishing the same answer twice means
-    # no reply landed inside a whole frame period, which is worse still.
-    # A slow *link* (send() blocked past SEND_BUDGET) stays out of this: that
-    # asks the governor for fewer frames, it does not hand the drive back.
+    # Only a frame that waited and gave up is a host that fell behind. The
+    # answer a pipelined frame publishes took client.last_reply_s to arrive, and
+    # that number is kept and logged -- but it is *not* a verdict here: the hold
+    # budget (55 ms) was set for lossless frames, and HEVC puts a decode on the
+    # phone inside the same round trip, so a healthy link measures 75-111 ms.
+    # Judging it against 55 ms made every frame a hold, stepped the governor to
+    # 10 Hz and held the drive at 8-10 fps (measured 2026-11-18 16:27). What
+    # actually says the host cannot keep up is the in-flight bound and the
+    # camera frames it drops behind it, which are judged where they belong.
     held = model_output is None and not pipelined
     reply_s = getattr(self.client, 'last_reply_s', 0.0)
     late = pipelined and (self.client.last_output is self._published
@@ -662,13 +663,12 @@ class JetlinkModelState:
       self.stages.replied(self._frame_id, t4)
       self.stages.finished(self._frame_id, time.perf_counter(), held=False)
       raise NotReady(f"frame {self._frame_id}: nothing to publish and nothing to hold")
-    self.held = held or late
+    self.held = held
     # A slow *link* -- send() blocked past SEND_BUDGET, or the in-flight bound
-    # holding a frame back -- is not a host that fell behind. It asks the
-    # governor for fewer frames and never hands the drive back; the host's own
-    # lateness, judged above, is what may.
+    # holding a frame back -- is not a host that fell behind: it asks the
+    # governor for fewer frames and never hands the drive back.
     pressured = pipelined and (frame.skipped or frame.slow_send)
-    self.behind = self._note_hold(held or late, pressured)
+    self.behind = self._note_hold(held, pressured)
     self.trips.record(t4 - frame.t0, self.client.last_timings[2])
     # the reply's own arrival, and whether the hold gave up before it: the
     # watermark rule, which says a late reply is late and a missing one lost

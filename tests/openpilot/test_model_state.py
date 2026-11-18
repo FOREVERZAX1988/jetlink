@@ -230,32 +230,21 @@ class TestPipeline(ModelStateTest):
     self.assertEqual(state._pace.paced, 0)
     self.assertEqual(state.trips.held, 0)
 
-  def test_a_slow_answer_is_a_host_behind_without_anyone_waiting(self):
-    """Upstream's strict loop sits on the reply and calls a frame past
-    WIFI_HOLD_FRAME a hold. A pipeline never sits, so the same lateness has to
-    be read off the answer: otherwise a phone answering in 100 ms looks like a
-    healthy link and its stale plans keep driving."""
-    client, state = self._wifi(holds_in_a_row=3)
+  def test_a_slow_answer_is_measured_but_is_not_a_hold(self):
+    """WIFI_HOLD_FRAME dates from lossless frames. With HEVC the phone decodes
+    before it infers, inside the same round trip, so a healthy link measures
+    75-111 ms against a 55 ms line (2026-11-18 16:27: every frame read as a
+    hold, the governor went to 10 Hz and the drive sat at 8-10 fps). The reply
+    time is kept for the log and for calibrating a budget later; the verdict
+    stays with the in-flight bound and the camera frames droppped behind it."""
+    client, state = self._wifi(pace=True, holds_in_a_row=3)
     client.last_reply_s = model_state.WIFI_HOLD_FRAME * 1.5
     self.frames(state, 8)
-    self.assertGreater(state.trips.held, 0, 'a late answer is a hold even though nothing waited')
-    self.assertIsNotNone(state.behind, 'a run of late answers hands the drive back, as upstream does')
-
-  def test_the_same_answer_twice_is_a_host_behind(self):
-    """No reply landed inside a whole frame period, so the plan published twice
-    is older than any hold would allow. The blocking loop would have run into
-    its hold here; the pipeline has to notice the repeated answer instead."""
-    client, state = self._wifi(holds_in_a_row=3)
-    client.keep = set(range(1, 40))   # nothing comes back after the first answer
-    self.frames(state, 8)
-    self.assertGreater(state.trips.held, 0, 'publishing an answer twice is the host falling behind')
-    self.assertIsNotNone(state.behind)
-
-  def test_a_slow_answer_steps_the_rate_down_as_a_held_frame_would(self):
-    client, state = self._wifi(pace=True)
-    client.last_reply_s = model_state.WIFI_HOLD_FRAME * 1.5
-    self.frames(state, 4)
-    self.assertEqual(state._pace.cap, 15.0, 'a late answer is a hold, and a hold steps the rate down')
+    self.assertEqual(state.trips.held, 0, 'a slow reply is not a hold on its own')
+    self.assertIsNone(state.behind)
+    self.assertEqual(state._pace.cap, 20.0, 'and it must not step the rate down')
+    self.assertTrue(self.log.has('past the %d ms hold' % round(state._hold_frame * 1e3)),
+                    'the reply time is still in the log, for calibrating a budget')
 
   def test_a_link_that_blocks_the_send_steps_the_rate_down(self):
     """The drive of 2026-11-08: 20 Hz of ~187 kB lossless frames needs ~30 Mbps,
@@ -307,11 +296,11 @@ class TestPipeline(ModelStateTest):
     self.frames(state, 6)
     self.assertLessEqual(client.unanswered, model_state.PIPELINE_IN_FLIGHT)
     self.assertEqual(len(client.sent), 4, 'the first frame plus three in flight; the rest held back')
-    # A phone that stops answering is a host that fell behind -- the blocking
-    # loop would have called every one of these frames a hold. The bound keeps
-    # the link alive; the hold counters are what hand the drive back after a run
-    # of them, and what step the rate down before that.
-    self.assertGreater(state.trips.held, 0, 'no answers for six frames is the host falling behind')
+    # The bound is the pipeline's own backpressure: it keeps the link alive
+    # without calling these frames holds. A host that keeps missing shows up as
+    # camera frames dropped behind it (joining's drop rule) and as a link that
+    # stops answering in the client's deadline.
+    self.assertEqual(state.trips.held, 0, 'a bound, not a host that fell behind')
     client.keep.clear()
     self.frames(state, 2)
     self.assertGreater(len(client.sent), 4, 'sending resumes once the replies are read')
