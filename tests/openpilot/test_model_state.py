@@ -329,13 +329,43 @@ class TestPipeline(ModelStateTest):
     self.assertIn('pose=empty', empty)
 
   def test_a_model_without_a_pose_is_caught_before_it_drives(self):
-    """A head the model does not produce still answers, as zeros. The tell is
-    the confidence on them: 0.0010 rad measured against a real camera
-    odometry's 0.0275, on every frame of the 2026-11-18 chestnut link."""
-    missing = model_state.JetlinkModelState._missing_outputs
-    self.assertIn('no pose', missing({'pose_stds': np.full((1, 6), 0.0010)}))
-    self.assertIsNone(missing({'pose_stds': np.full((1, 6), 0.0275)}))
-    self.assertIsNone(missing({}), 'a model that reports no pose stds at all is not judged here')
+    """A head the model does not produce still answers, as zeros, and the tell
+    is the confidence on them. Route 00000041, 14740 chestnut frames: rotation
+    std p50 0.00116 / p99 0.00306, against 0.0275 from the small model."""
+    _, state = self._wifi()
+    for i in range(model_state.MISSING_POSE_FRAMES):
+      state._judge_pose({'pose_stds': np.full((1, 6), 0.0010)})
+      if i < model_state.MISSING_POSE_FRAMES - 1:
+        self.assertIsNone(state._bad_outputs, 'one frame is not a verdict')
+    self.assertIn('no pose', state._bad_outputs)
+
+  def test_a_real_pose_is_kept(self):
+    _, state = self._wifi()
+    for _ in range(model_state.MISSING_POSE_FRAMES):
+      state._judge_pose({'pose_stds': np.full((1, 6), 0.0275)})
+    self.assertIsNone(state._bad_outputs)
+
+  def test_the_translation_std_does_not_decide_it(self):
+    """The measured model reported rotation std 0.001 while its translation std
+    was 0.034, which is a believable number. A check on the maximum of all six
+    components could never fire; only the rotation half can."""
+    _, state = self._wifi()
+    stds = np.array([[0.034, 0.034, 0.034, 0.0010, 0.0010, 0.0010]])
+    for _ in range(model_state.MISSING_POSE_FRAMES):
+      state._judge_pose({'pose_stds': stds})
+    self.assertIn('no pose', state._bad_outputs)
+
+  def test_one_odd_frame_does_not_decide_the_median(self):
+    _, state = self._wifi()
+    for std in (0.0010, 0.0010, 0.0081, 0.0010, 0.0010):   # 0.0081 is the measured max
+      state._judge_pose({'pose_stds': np.full((1, 6), std)})
+    self.assertIn('no pose', state._bad_outputs, 'the median, not the max, decides')
+
+  def test_a_model_reporting_no_pose_stds_is_not_judged(self):
+    _, state = self._wifi()
+    for _ in range(model_state.MISSING_POSE_FRAMES * 2):
+      state._judge_pose({})
+    self.assertIsNone(state._bad_outputs)
 
   def test_the_cable_keeps_waiting_for_its_own_reply(self):
     # pipeline defaults off: USB/Jetson links keep the strict frame loop
