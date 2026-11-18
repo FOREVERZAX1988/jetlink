@@ -305,6 +305,23 @@ class TestPipeline(ModelStateTest):
     self.frames(state, 2)
     self.assertGreater(len(client.sent), 4, 'sending resumes once the replies are read')
 
+  def test_the_first_output_says_what_the_model_actually_produced(self):
+    """A head the model was exported without is absent from the parsed dict; a
+    head it was exported with but computes nothing for comes back as zeros. Both
+    read as "no pose" downstream, and telling them apart is the difference
+    between a broken export and a broken phone build -- route 00000041 had
+    pose_stds 0.0010 on all 14740 chestnut frames with nothing on the device to
+    say which of the two it was."""
+    _, state = self._wifi()
+    state.spec = SimpleNamespace(sha256='deadbeef' * 8)
+    state._log_output_summary({'pose': np.zeros((1, 6), np.float32),
+                               'pose_stds': np.full((1, 6), 0.0010, np.float32)})
+    line, = [t for t in self.log.lines('warning') if 'model deadbeefdead' in t]
+    self.assertIn('pose=max0.00000', line)
+    self.assertIn('pose_stds=max0.00100', line)
+    self.assertIn('plan=absent', line, 'a head the model does not have is named, not silently zero')
+    self.assertIn('slices=[', line, 'the spec slices are printed too, so an export gap is visible')
+
   def test_a_model_without_a_pose_is_caught_before_it_drives(self):
     """A head the model does not produce still answers, as zeros. The tell is
     the confidence on them: 0.0010 rad measured against a real camera

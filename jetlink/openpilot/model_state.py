@@ -133,6 +133,11 @@ WIFI_HOLDS_ALLOWED = 150
 # 99 % of frames, against 8.35 m from the small model). Checked once, on the
 # first parsed output of a swap, so a model that cannot see is never driven.
 MISSING_POSE_STD = 0.005
+# The heads worth reporting on the first output of a model: a missing one is a
+# model exported without it, a zero one is a model exported with it that computes
+# nothing. Logged once per model so the phone build can be told from the export.
+OUTPUT_SUMMARY_KEYS = ('pose', 'pose_stds', 'plan', 'plan_stds',
+                       'lane_lines', 'lane_lines_prob', 'lead', 'lead_prob')
 PIPELINE_IN_FLIGHT = 3
 # How long the frame thread may spend handing a frame to a pipelined link
 # before that is the link and not the host. A frame costs the camera 50 ms:
@@ -842,6 +847,7 @@ class JetlinkModelState:
     outputs_dict = self.parser.parse_outputs(self.slice_outputs(model_output, self.output_slices))
     if not self._outputs_checked:
       self._outputs_checked = True
+      self._log_output_summary(outputs_dict)
       self._bad_outputs = self._missing_outputs(outputs_dict)
     if self._bad_outputs is not None:
       raise NoPose(f"frame {self._frame_id}: {self._bad_outputs}")
@@ -862,6 +868,30 @@ class JetlinkModelState:
     if stds is not None and float(np.max(stds)) < MISSING_POSE_STD:
       return 'the model returns no pose (pose_stds max %.4f rad)' % float(np.max(stds))
     return None
+
+  def _log_output_summary(self, outputs: dict[str, np.ndarray]) -> None:
+    """One line per model saying what it actually produced.
+
+    A head the model was not exported with is simply absent from the parsed
+    dict; a head it was exported with, but computes nothing for, comes back as
+    zeros. Both look like "no pose" from locationd's side, and telling them
+    apart is the difference between a broken phone build and a broken export.
+    Route 00000041 had pose_stds 0.0010 on all 14740 chestnut frames and an
+    empty plan, with nothing on the device to say whether the heads existed.
+    """
+    try:
+      parts = []
+      for key in OUTPUT_SUMMARY_KEYS:
+        value = outputs.get(key)
+        parts.append('%s=absent' % key if value is None
+                     else '%s=max%.5f' % (key, float(np.max(np.abs(value)))))
+      self._log.warning(
+        'jetlink: model %s output: %d elements, slices=[%s] %s',
+        str(getattr(self.spec, 'sha256', '?'))[:12],
+        max(sl.stop for sl in self.output_slices.values()),
+        ' '.join(sorted(self.output_slices)), ' '.join(parts))
+    except Exception:
+      self._log.exception('jetlink: could not describe the model output')
 
   def release_encoders(self) -> None:
     """Close this state's HEVC encoders, keeping the link.
