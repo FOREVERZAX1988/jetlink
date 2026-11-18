@@ -84,12 +84,25 @@ DROPS_TO_BLAME_CABLE = 2
 # A host slower than the camera but never that slow (an iPhone that has warmed
 # up: 55 ms a frame drops one camera frame in ten) still has modeld skipping
 # frames, and selfdrived soft-disables on modeldLagging once modeld's filtered
-# share of them (frameDropPerc) passes 1 %: three drops close together. modeld
-# writes that share onto the model before every run(), and the large model
-# hands back past DROP_LIMIT, short of the line: one dropped frame is forgiven,
-# a second within about 6.5 s is not. modeld forgives the frame of a handover
-# too, so the drops that decided it never reach selfdrived
-DROP_LIMIT = 0.0075
+# share of them (frameDropPerc) passes 1 %. modeld writes that share onto the
+# model, and the large model hands back past DROP_LIMIT, short of the line.
+#
+# What one dropped camera frame is worth depends on the filter's time constant:
+#     x <- x + dt/(rc+dt) * (dropped - x),  dt = 1/20 s
+# This fork's modeld_v2 runs rc = 2 s, not stock modeld's 10 s, so a single
+# dropped frame reads 1 - 1/(1 + 0.0244) = 2.38 %. At 0.75 %, which was
+# calibrated against stock's 10 s, that made the first dropped camera frame a
+# hand-back every time: route 0000003b handed back eight times in eleven
+# minutes, every one logged as "dropped 2.38 %". The first frame after a join
+# blocks 1.8-2.1 s (HEVC keyframe) and drops one, so each join handed back on
+# its own -- a loop, not a slow host.
+#
+# 3 % forgives one dropped frame, and two more than ~2.7 s apart (2.4 %), while
+# drops close together still hand back: two in one frame 4.7 %, two a second
+# apart 3.8 %. That is the line the comment above was written for, against the
+# filter this fork actually runs. modeld forgives the frame of a handover too,
+# so the drops that decided it never reach selfdrived.
+DROP_LIMIT = 0.03
 # the small model drives the first frames of every modeld start, even with the
 # large model ready: its first run in a process costs ~1.3 s, which the first
 # fallback frame would pay (25 dropped frames, commIssue) if the large model

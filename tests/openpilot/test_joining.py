@@ -817,10 +817,10 @@ class LagTest(JoiningBase):
   def frame(self, skipped=0):
     """One modeld frame, after `skipped` camera frames modeld dropped. Before
     run() modeld writes its share of dropped frames onto the model, from the
-    filter both modelds run (10 s at 20 Hz), held at zero for the ten frames
-    after a handover. Kept here: jetlink cannot import it, and the fork's seam
-    test runs the real one against DROP_LIMIT."""
-    self.drops += 0.05 / (10. + 0.05) * (min(skipped, 10) - self.drops)
+    filter this fork's modeld_v2 runs: 2 s at 20 Hz, so one dropped frame reads
+    2.38 % (stock modeld runs 10 s, where it reads 0.5 %). Held at zero for the
+    ten frames after a handover. Kept here: jetlink cannot import it."""
+    self.drops += 0.05 / (2. + 0.05) * (min(skipped, 10) - self.drops)
     if self.run_count < 10:
       self.drops = 0.
     self.run_count += 1
@@ -934,8 +934,10 @@ class LagTest(JoiningBase):
     self.reset.assert_not_called()
 
   def test_a_second_dropped_frame_soon_after_hands_back(self):
+    # one drop is 2.38 % of modeld_v2's 2 s filter; 2 s later the first has
+    # decayed to 0.9 %, so the second lands at 3.2 % and over the 3 % line
     self.frame(skipped=1)
-    for _ in range(100):   # 5 s
+    for _ in range(40):   # 2 s
       self.assert_big_drives()
     handovers = self.s.handovers
     self.assertEqual(self.frame(skipped=1), {'from': 'small'})
@@ -948,10 +950,11 @@ class LagTest(JoiningBase):
     self.assert_handed_back(handovers)
 
   def test_drops_often_enough_for_selfdrived_hand_back_and_rare_ones_never(self):
-    # modeld's share passes selfdrived's 1 % at a steady drop every 136 frames
-    # (6.8 s) or closer; the large model goes at anything closer than about
-    # 11 s, and never further apart
-    for spacing, hands_back in ((1, True), (5, True), (60, True), (136, True), (200, True), (241, False), (400, False)):
+    # With the 2 s filter a single dropped frame is 2.38 %, so the line is
+    # about spacing, not the 1 % selfdrived line: a drop every ~3 s (60 frames)
+    # keeps the peak at 3.1 % and hands back, one every 4 s (80) peaks at 2.9 %
+    # and is forgiven, and anything sparser never gets close.
+    for spacing, hands_back in ((1, True), (5, True), (60, True), (80, False), (200, False), (400, False)):
       with self.subTest(spacing=spacing):
         handed_back = any(self.frame(skipped=1 if i % spacing == 0 else 0) == {'from': 'small'} for i in range(2000))
         self.assertEqual(handed_back, hands_back)
