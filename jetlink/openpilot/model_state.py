@@ -42,6 +42,12 @@ from jetlink.openpilot.stages import FrameStages as StageStages
 from jetlink.protocol import NotFinite
 
 
+class NoPose(RuntimeError):
+  """The large model answers, but without a pose: its camera odometry comes back
+  as zeros at a confidence no camera can have. Not a slow host and not a link
+  problem -- a model whose outputs cannot drive, which must not be swapped in."""
+
+
 class NotReady(RuntimeError):
   """This frame has no output to publish, and no link failure to blame.
 
@@ -121,6 +127,12 @@ WIFI_HOLDS_ALLOWED = 150
 # 0.2 s deadline (link abandoned) or the TCP send buffer backs up (write
 # timeout). Three at 20 Hz is 150 ms, inside the deadline, and a phone that
 # answers in ~22 ms keeps only one or two out at a time.
+# A model that does not produce pose publishes zeros with a confidence no camera
+# can have. Measured 2026-11-18: 0.0010 rad against a real camera odometry's
+# 0.0275, and its plan came back empty as well (position.x[5] under 0.05 m for
+# 99 % of frames, against 8.35 m from the small model). Checked once, on the
+# first parsed output of a swap, so a model that cannot see is never driven.
+MISSING_POSE_STD = 0.005
 PIPELINE_IN_FLIGHT = 3
 # How long the frame thread may spend handing a frame to a pipelined link
 # before that is the link and not the host. A frame costs the camera 50 ms:
@@ -234,6 +246,9 @@ class JetlinkModelState:
     # the answer the last pipelined frame published, so publishing it twice is
     # visible as a host that missed a whole frame period (see end)
     self._published = None
+    # why this model's outputs cannot be used, once the first one is parsed
+    self._bad_outputs: str | None = None
+    self._outputs_checked = False
     # Per-link overrides. None means "read the module constant each frame", so
     # the strict USB/Jetson defaults stay live constants the tests can mock and
     # a Wi-Fi/USB phone build pins a wider value at construction (see joining).
@@ -825,6 +840,11 @@ class JetlinkModelState:
     if not np.isfinite(model_output.sum()):
       raise NotFinite(f"frame {self._frame_id}: the output is not finite")
     outputs_dict = self.parser.parse_outputs(self.slice_outputs(model_output, self.output_slices))
+    if not self._outputs_checked:
+      self._outputs_checked = True
+      self._bad_outputs = self._missing_outputs(outputs_dict)
+    if self._bad_outputs is not None:
+      raise NoPose(f"frame {self._frame_id}: {self._bad_outputs}")
     # a finite output can still parse to inf, by a parser that does not clip
     if not np.isfinite(sum(float(value.sum()) for value in outputs_dict.values())):
       raise NotFinite(f"frame {self._frame_id}: the parsed output is not finite")
@@ -832,6 +852,16 @@ class JetlinkModelState:
       outputs_dict['raw_pred'] = model_output.copy()
     self._parsed = (model_output, outputs_dict)
     return outputs_dict
+
+  @staticmethod
+  def _missing_outputs(outputs: dict) -> str | None:
+    """Why these outputs cannot drive, or None. A model that does not produce a
+    head still answers: the head comes back as zeros, so the tell is the
+    confidence attached to them, not the values."""
+    stds = outputs.get('pose_stds')
+    if stds is not None and float(np.max(stds)) < MISSING_POSE_STD:
+      return 'the model returns no pose (pose_stds max %.4f rad)' % float(np.max(stds))
+    return None
 
   def release_encoders(self) -> None:
     """Close this state's HEVC encoders, keeping the link.

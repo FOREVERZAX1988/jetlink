@@ -305,6 +305,15 @@ class TestPipeline(ModelStateTest):
     self.frames(state, 2)
     self.assertGreater(len(client.sent), 4, 'sending resumes once the replies are read')
 
+  def test_a_model_without_a_pose_is_caught_before_it_drives(self):
+    """A head the model does not produce still answers, as zeros. The tell is
+    the confidence on them: 0.0010 rad measured against a real camera
+    odometry's 0.0275, on every frame of the 2026-11-18 chestnut link."""
+    missing = model_state.JetlinkModelState._missing_outputs
+    self.assertIn('no pose', missing({'pose_stds': np.full((1, 6), 0.0010)}))
+    self.assertIsNone(missing({'pose_stds': np.full((1, 6), 0.0275)}))
+    self.assertIsNone(missing({}), 'a model that reports no pose stds at all is not judged here')
+
   def test_the_cable_keeps_waiting_for_its_own_reply(self):
     # pipeline defaults off: USB/Jetson links keep the strict frame loop
     client = FakeClient()

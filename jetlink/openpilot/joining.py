@@ -50,7 +50,7 @@ import time
 from jetlink import protocol as P
 from jetlink.comma import gadget
 from jetlink.openpilot import blend
-from jetlink.openpilot.model_state import JetlinkModelState, NotReady
+from jetlink.openpilot.model_state import JetlinkModelState, NoPose, NotReady
 from jetlink.transport.priority import background_thread
 
 # after a join fails or the large model dies mid-drive. Long enough not to
@@ -126,14 +126,21 @@ BAD_OUTPUT = 'jetlink output not finite'
 SMALL_READS = ('desire_key', 'numpy_inputs')
 # why a built model was let go before it drove
 NOT_UP = 'could not bring up the large model'
+# the model answers, but without the heads the fork parses: its pose comes back
+# as zeros at a confidence no camera can have, and its plan is empty. Not a link
+# problem, and not something another attempt fixes -- the sha is remembered for
+# the rest of the process so a broken build is not swapped in again.
+BAD_MODEL = 'the large model returns no usable output'
 # and as the leave says it to the server (protocol.Msg.LEAVE)
-LEAVING = {LOST: P.LEAVE_LOST, BEHIND: P.LEAVE_BEHIND, DROPPED: P.LEAVE_BEHIND}
+LEAVING = {LOST: P.LEAVE_LOST, BEHIND: P.LEAVE_BEHIND, DROPPED: P.LEAVE_BEHIND,
+           BAD_MODEL: P.LEAVE_BEHIND}
 # the demotes that count as lag, which says nothing about the cable
 LAGS = (BEHIND, BAD_OUTPUT)
 # and as the panel's one line says it while the join tries again, with the
 # `why` of its progress code (status.PROGRESS_CODES 'reconnecting')
 RECONNECTING = {LOST: ('reconnecting', 'lost'), BEHIND: ('fell behind, reconnecting', 'behind'),
                 DROPPED: ('dropped frames, reconnecting', 'behind'),
+                BAD_MODEL: ('no usable output, reconnecting', 'bad_output'),
                 NOT_UP: ('load failed, reconnecting', 'load_failed'),
                 BAD_OUTPUT: ('bad output, reconnecting', 'bad_output')}
 # how long a model name the comma's index did not have stays the sha's
@@ -227,6 +234,8 @@ class JoiningModelState:
     # says anything about the cable
     self._drops = 0
     self._lags = 0
+    # model shas whose outputs cannot drive: never swapped in twice
+    self._bad_models: set[str] = set()
     # the demotes the USB-C port caused: what the cable hint counts, kept apart
     # from the hand-backs a slow host caused -- there is no cable over Wi-Fi
     self._link_lost = 0
@@ -460,6 +469,13 @@ class JoiningModelState:
     started = time.monotonic()
     try:
       result = big.run(bufs, transforms, inputs, after_enqueue)
+    except NoPose as e:
+      self._log.warning("jetlink: refusing the large model: %s", e)
+      sha = getattr(getattr(big, 'spec', None), 'sha256', None)
+      if sha is not None:
+        self._bad_models.add(sha)
+      self._demote(BAD_MODEL)
+      return self._small.run(bufs, transforms, inputs, after_enqueue)
     except NotReady:
       # the first frames of a stream that is still coming up (an HEVC gate
       # waiting for a keyframe): no output and nothing to hold, so the small
@@ -515,6 +531,13 @@ class JoiningModelState:
     if joined is None:
       return
     client, spec = joined
+    sha = getattr(spec, 'sha256', None)
+    if sha is not None and sha in self._bad_models:
+      self._log.warning("jetlink: not bringing up %s again: it returns no usable output", str(sha)[:12])
+      with self._lock:
+        self._retired = (client, BAD_MODEL)
+      self._back_off()
+      return
     try:
       t0 = time.monotonic()
       big = self._build(client, spec)

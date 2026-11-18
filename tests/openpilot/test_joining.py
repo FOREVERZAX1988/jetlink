@@ -25,7 +25,7 @@ import numpy as np
 
 import jetlink.openpilot as jo
 from jetlink.comma import gadget
-from jetlink.openpilot import interface, joining, link, status, warp
+from jetlink.openpilot import interface, joining, link, model_state, status, warp
 from jetlink.openpilot.joining import REJOIN_DELAY_QUICK, STABLE_SECONDS, JoiningModelState
 from jetlink.openpilot.status import Status
 from tests.openpilot import fakes
@@ -477,6 +477,19 @@ class JoiningTest(JoiningBase):
     self._wait_reported(s, 'reconnecting', drops=2)
     self.assertEqual(s._drops, 2)
     self._wait_reported(s, 'waiting for jetlink', drops=2)
+
+  def test_a_model_that_returns_no_pose_is_refused_and_not_retried(self):
+    """The model answers, so nothing times out and nothing looks slow; but its
+    camera odometry is zeros, which is what poisons locationd. Refuse it on its
+    first output and remember the sha, so a swap does not keep trying it."""
+    s = self._driving(dead=False)
+    self.big.spec = SimpleNamespace(sha256='deadbeef' * 8)
+    self.big.raises = model_state.NoPose('frame 1: the model returns no pose (pose_stds max 0.0010 rad)')
+    self.assertEqual(self._run(s), {'from': 'small'})
+    self.assertFalse(s.chestnut)
+    self.assertIn(self.big.spec.sha256, s._bad_models)
+    self.assertTrue(self.log.has('refusing the large model'))
+    self.assertEqual((s._lags, s._drops), (0, 1), 'refused, not lagged')
 
   def test_a_drop_demote_says_why_over_the_live_link(self):
     # the host cannot tell the big model's time from the backoff on its own,
