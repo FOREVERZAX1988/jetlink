@@ -321,6 +321,12 @@ class TestPipeline(ModelStateTest):
     self.assertIn('pose_stds=max0.00100', line)
     self.assertIn('plan=absent', line, 'a head the model does not have is named, not silently zero')
     self.assertIn('slices=[', line, 'the spec slices are printed too, so an export gap is visible')
+    # a head the spec declares but slices to nothing must still be described:
+    # raising here would cost the whole line, which is the one that matters
+    state.spec = SimpleNamespace(sha256='cafe' * 16)
+    state._log_output_summary({'pose': np.zeros((1, 0), np.float32)})
+    empty, = [t for t in self.log.lines('warning') if 'model cafecafe' in t]
+    self.assertIn('pose=empty', empty)
 
   def test_a_model_without_a_pose_is_caught_before_it_drives(self):
     """A head the model does not produce still answers, as zeros. The tell is

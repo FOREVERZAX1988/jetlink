@@ -883,12 +883,18 @@ class JetlinkModelState:
       parts = []
       for key in OUTPUT_SUMMARY_KEYS:
         value = outputs.get(key)
-        parts.append('%s=absent' % key if value is None
-                     else '%s=max%.5f' % (key, float(np.max(np.abs(value)))))
+        if value is None:
+          parts.append('%s=absent' % key)
+        elif value.size == 0:
+          # declared by the spec and sliced to nothing: an export gap that would
+          # otherwise raise here and cost the whole line
+          parts.append('%s=empty' % key)
+        else:
+          parts.append('%s=max%.5f' % (key, float(np.max(np.abs(value)))))
       self._log.warning(
         'jetlink: model %s output: %d elements, slices=[%s] %s',
         str(getattr(self.spec, 'sha256', '?'))[:12],
-        max(sl.stop for sl in self.output_slices.values()),
+        max(sl.stop or 0 for sl in self.output_slices.values()),
         ' '.join(sorted(self.output_slices)), ' '.join(parts))
     except Exception:
       self._log.exception('jetlink: could not describe the model output')
