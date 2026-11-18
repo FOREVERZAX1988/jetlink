@@ -63,6 +63,9 @@ class FakeClient:
     self.output = np.zeros(18452, np.float32)
     self.output[slice(*SLICES['hidden_state'])] = 0.5
     self.last_output = None
+    # what the answer just read off the link took, sent to read: the wait a
+    # blocking frame loop would have sat through, which the hold rules judge
+    self.last_reply_s = 0.0
     self._in_flight = []
     # frames (by seq) whose reply is not back within the hold, and the holds
     # end() asked for
@@ -124,7 +127,9 @@ class FakeClient:
     back = next((i for i, f in enumerate(self._in_flight) if f in self.keep), len(self._in_flight))
     taken, self._in_flight = self._in_flight[:back], self._in_flight[back:]
     if taken:
-      self.last_output = self.output
+      # a fresh answer, a new object: publishing the same one twice is a host
+      # that missed a whole frame period, and only a new object models an answer
+      self.last_output = self.output.copy()
       self._piggyback()
     return len(taken)
 
@@ -218,12 +223,39 @@ class TestPipeline(ModelStateTest):
     self.assertIsNone(state.behind)
     self.assertEqual(state.late.answered, 1, 'the watermark is not moved by a frame that never waited')
 
-  def test_pipelined_frames_never_pace_the_host_down(self):
+  def test_pipelined_frames_with_a_fast_answer_never_pace_the_host_down(self):
     _, state = self._wifi(pace=True)
     self.frames(state, 12)
     self.assertEqual(state._pace.cap, 20.0, 'no held frames, so the governor stays at the full cap')
     self.assertEqual(state._pace.paced, 0)
     self.assertEqual(state.trips.held, 0)
+
+  def test_a_slow_answer_is_a_host_behind_without_anyone_waiting(self):
+    """Upstream's strict loop sits on the reply and calls a frame past
+    WIFI_HOLD_FRAME a hold. A pipeline never sits, so the same lateness has to
+    be read off the answer: otherwise a phone answering in 100 ms looks like a
+    healthy link and its stale plans keep driving."""
+    client, state = self._wifi(holds_in_a_row=3)
+    client.last_reply_s = model_state.WIFI_HOLD_FRAME * 1.5
+    self.frames(state, 8)
+    self.assertGreater(state.trips.held, 0, 'a late answer is a hold even though nothing waited')
+    self.assertIsNotNone(state.behind, 'a run of late answers hands the drive back, as upstream does')
+
+  def test_the_same_answer_twice_is_a_host_behind(self):
+    """No reply landed inside a whole frame period, so the plan published twice
+    is older than any hold would allow. The blocking loop would have run into
+    its hold here; the pipeline has to notice the repeated answer instead."""
+    client, state = self._wifi(holds_in_a_row=3)
+    client.keep = set(range(1, 40))   # nothing comes back after the first answer
+    self.frames(state, 8)
+    self.assertGreater(state.trips.held, 0, 'publishing an answer twice is the host falling behind')
+    self.assertIsNotNone(state.behind)
+
+  def test_a_slow_answer_steps_the_rate_down_as_a_held_frame_would(self):
+    client, state = self._wifi(pace=True)
+    client.last_reply_s = model_state.WIFI_HOLD_FRAME * 1.5
+    self.frames(state, 4)
+    self.assertEqual(state._pace.cap, 15.0, 'a late answer is a hold, and a hold steps the rate down')
 
   def test_a_link_that_blocks_the_send_steps_the_rate_down(self):
     """The drive of 2026-11-08: 20 Hz of ~187 kB lossless frames needs ~30 Mbps,
@@ -275,7 +307,11 @@ class TestPipeline(ModelStateTest):
     self.frames(state, 6)
     self.assertLessEqual(client.unanswered, model_state.PIPELINE_IN_FLIGHT)
     self.assertEqual(len(client.sent), 4, 'the first frame plus three in flight; the rest held back')
-    self.assertEqual(state.trips.held, 0, 'a bound, not a host that fell behind')
+    # A phone that stops answering is a host that fell behind -- the blocking
+    # loop would have called every one of these frames a hold. The bound keeps
+    # the link alive; the hold counters are what hand the drive back after a run
+    # of them, and what step the rate down before that.
+    self.assertGreater(state.trips.held, 0, 'no answers for six frames is the host falling behind')
     client.keep.clear()
     self.frames(state, 2)
     self.assertGreater(len(client.sent), 4, 'sending resumes once the replies are read')

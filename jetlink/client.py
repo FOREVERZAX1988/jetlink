@@ -128,6 +128,10 @@ class JetlinkClient:
     # the newest model output read off the link, whichever call read it: what
     # a frame whose own reply is late publishes again (JetlinkModelState.end)
     self.last_output: np.ndarray | None = None
+    # how long that answer took, sent to read, in seconds. A pipelined frame
+    # never waits for its own reply, so this is the only measure of what the
+    # wait would have been -- and it is exactly what WIFI_HOLD_FRAME judges.
+    self.last_reply_s = 0.0
     # frames sent and not yet answered, oldest first. More than one after a
     # reply a frame gave up on (infer_end with hold)
     self._in_flight: deque[Sent] = deque()
@@ -679,7 +683,11 @@ class JetlinkClient:
     if not self._in_flight:
       self.dead = True
       raise LinkError(f'inference response seq {msg.seq} answers no frame sent')
-    _, frame_id, flags, _ = self._in_flight.popleft()
+    sent = self._in_flight.popleft()
+    frame_id, flags = sent.frame_id, sent.flags
+    # what a blocking frame loop would have waited: the shape of the delay the
+    # hold rules judge, measured instead of suffered
+    self.last_reply_s = time.monotonic() - sent.sent_at
     if msg.payload.nbytes < P.INFER_RESP_SIZE:
       self.dead = True
       raise LinkError('inference response is missing its header')

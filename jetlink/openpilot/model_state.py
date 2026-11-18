@@ -231,6 +231,9 @@ class JetlinkModelState:
     # dropped-frame ratio past DROP_LIMIT hands the drive back to the small
     # model. The cable keeps the strict frame loop it always had.
     self._pipeline = bool(pipeline)
+    # the answer the last pipelined frame published, so publishing it twice is
+    # visible as a host that missed a whole frame period (see end)
+    self._published = None
     # Per-link overrides. None means "read the module constant each frame", so
     # the strict USB/Jetson defaults stay live constants the tests can mock and
     # a Wi-Fi/USB phone build pins a wider value at construction (see joining).
@@ -636,12 +639,19 @@ class JetlinkModelState:
         self.trips.record(time.perf_counter() - frame.t0, self.client.last_timings[2])
         raise
     t4 = time.perf_counter()
-    # Both a held frame and a pipelined frame publish the previous plan; only
-    # the held one means the host fell behind. A pipelined frame is an answer
-    # in flight by design, so it must never feed the hold limits. It does feed
-    # the governor when the send itself was blocked (SEND_BUDGET below), which
-    # is the link asking for fewer frames rather than the host answering late.
+    # Both a held frame and a pipelined frame publish an older plan; upstream's
+    # blocking loop calls that a host that fell behind, and so does this one --
+    # measured rather than suffered. A pipelined frame never waits, but the
+    # answer it publishes took client.last_reply_s to arrive, and that is the
+    # very wait WIFI_HOLD_FRAME judges. Publishing the same answer twice means
+    # no reply landed inside a whole frame period, which is worse still.
+    # A slow *link* (send() blocked past SEND_BUDGET) stays out of this: that
+    # asks the governor for fewer frames, it does not hand the drive back.
     held = model_output is None and not pipelined
+    reply_s = getattr(self.client, 'last_reply_s', 0.0)
+    late = pipelined and (self.client.last_output is self._published
+                          or reply_s > self._hold_frame)
+    self._published = self.client.last_output if pipelined else None
     # The first frames of an HEVC stream have nothing to publish and nothing to
     # publish again: the gate is waiting for a keyframe on both cameras. That is
     # a stream coming up, not a host that is behind, so it is raised before any
@@ -652,16 +662,13 @@ class JetlinkModelState:
       self.stages.replied(self._frame_id, t4)
       self.stages.finished(self._frame_id, time.perf_counter(), held=False)
       raise NotReady(f"frame {self._frame_id}: nothing to publish and nothing to hold")
-    self.held = held
-    # A pipelined frame never waits for its own reply, so `held` is always
-    # false there and the governor would only ever climb back. What says the
-    # link cannot use another frame is its own queue: send() blocked past
-    # SEND_BUDGET, or the in-flight bound held the frame. Feed that to the
-    # governor, which lowers the rate, and never to the demote rule -- a slow
-    # link is not a host that fell behind, and handing the drive back to the
-    # small model is the one outcome a slow link should not cause.
+    self.held = held or late
+    # A slow *link* -- send() blocked past SEND_BUDGET, or the in-flight bound
+    # holding a frame back -- is not a host that fell behind. It asks the
+    # governor for fewer frames and never hands the drive back; the host's own
+    # lateness, judged above, is what may.
     pressured = pipelined and (frame.skipped or frame.slow_send)
-    self.behind = self._note_hold(held, pressured)
+    self.behind = self._note_hold(held or late, pressured)
     self.trips.record(t4 - frame.t0, self.client.last_timings[2])
     # the reply's own arrival, and whether the hold gave up before it: the
     # watermark rule, which says a late reply is late and a missing one lost
@@ -676,12 +683,17 @@ class JetlinkModelState:
     # a frame past the budget is a dropped camera frame; send against reply
     # says which end it was. Held frames are a steady few on a marginal host,
     # so after the first they go to the log at TELEMETRY_PERIOD
-    log_hold = held and (self.trips.held <= 3 or t4 - self._last_hold_logged >= TELEMETRY_PERIOD)
+    log_hold = (held or late) and (self.trips.held <= 3 or t4 - self._last_hold_logged >= TELEMETRY_PERIOD)
     if self._frame_id <= 3 or t4 - frame.t0 > SLOW_FRAME or log_hold:
       note = ''
       if held:
         self._last_hold_logged = t4
         note = f', held ({self.trips.held} so far{", not sent" if frame.seq is None else ""})'
+      elif late:
+        # the number a blocking loop would have hit the hold rule with
+        self._last_hold_logged = t4
+        note = ', pipelined, reply %.0f ms past the %.0f ms hold' % (
+          getattr(self.client, 'last_reply_s', 0.0) * 1e3, self._hold_frame * 1e3)
       elif pipelined:
         note = ', pipelined, send past budget' if frame.slow_send else ', pipelined'
       # persisted on the comma so a drive can separate server execution from
