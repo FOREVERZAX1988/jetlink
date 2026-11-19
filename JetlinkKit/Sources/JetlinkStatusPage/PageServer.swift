@@ -34,9 +34,9 @@
     static let commandTimeout: TimeInterval = 30
     /// The controller's commands a signed-in page may send. Imports name a
     /// path on this computer, and shutdown and unload are the apps'.
-    static let commands: Set<String> = ["status", "catalog", "download", "cancel_download", "prepare", "forget", "inventory", "benchmark", "cancel_benchmark"]
+    static let commands: Set<String> = ["status", "catalog", "download", "cancel_download", "prepare", "forget", "inventory", "benchmark", "cancel_benchmark", "probe_numerics"]
     /// What takes the GPU, the disk or the network from the frames.
-    static let heavy: Set<String> = ["download", "prepare", "forget", "benchmark"]
+    static let heavy: Set<String> = ["download", "prepare", "forget", "benchmark", "probe_numerics"]
     static let parkedOnly = PageResponse.error(409, "The car is driving on the big model. Try again when it is parked.")
     static let needsPassword = PageResponse.error(403, "Set a password for the web page first. On the Jetson: sudo jetlink password")
     static let signInFirst = PageResponse.error(401, "Sign in first.")

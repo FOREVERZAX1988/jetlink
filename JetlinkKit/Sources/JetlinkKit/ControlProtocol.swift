@@ -783,6 +783,10 @@ public enum ControlCommand: Sendable, Equatable {
   /// Run the loaded engine at the comma's pace for `seconds`, with no comma.
   case benchmark(seconds: Double)
   case cancelBenchmark
+  /// Feed the loaded engine moving synthetic frames and report whether its
+  /// pose/plan outputs actually move. Writes the numbers to the server log;
+  /// the app's Share Logs button carries them out. No comma required.
+  case probeNumerics(frames: Int)
 
   public var name: String {
     switch self {
@@ -798,6 +802,7 @@ public enum ControlCommand: Sendable, Equatable {
     case .shutdown: return "shutdown"
     case .benchmark: return "benchmark"
     case .cancelBenchmark: return "cancel_benchmark"
+    case .probeNumerics: return "probe_numerics"
     }
   }
 
@@ -826,6 +831,7 @@ public enum ControlCommand: Sendable, Equatable {
     case "shutdown": self = .shutdown
     case "benchmark": self = .benchmark(seconds: number("seconds")?.doubleValue ?? 60)
     case "cancel_benchmark": self = .cancelBenchmark
+    case "probe_numerics": self = .probeNumerics(frames: number("frames")?.intValue ?? 40)
     default: throw Invalid(description: "unknown command \(name)")
     }
   }

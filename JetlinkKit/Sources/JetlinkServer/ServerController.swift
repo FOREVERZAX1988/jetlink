@@ -308,6 +308,23 @@ public final class ServerController: @unchecked Sendable {
       guard let run else { throw ControlError.refused("no benchmark is running") }
       run.cancel()
       return [:]
+    case .probeNumerics(let frames):
+      // Runs synchronously for a second at most; the emitted log lines carry
+      // the numbers, and the reply echoes the same three summaries so a
+      // caller that reads replies (the status page) sees them too.
+      let summaries = try await withCheckedThrowingContinuation { continuation in
+        DispatchQueue.global(qos: .userInteractive).async {
+          do {
+            let lines = try self.server.host.probeNumericsAndSummarize(frames: frames)
+            continuation.resume(returning: lines)
+          } catch {
+            continuation.resume(throwing: error)
+          }
+        }
+      }
+      var extras: [String: JSONValue] = ["ok": .bool(true)]
+      for (i, line) in summaries.enumerated() { extras["line\(i)"] = .string(line) }
+      return extras
     }
   }
 

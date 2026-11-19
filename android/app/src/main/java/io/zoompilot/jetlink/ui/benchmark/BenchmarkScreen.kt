@@ -102,6 +102,7 @@ data class ChipInfo(val line: String, val expectationRes: Int, val tone: Tone) {
 class BenchmarkActions(
     val start: (Int) -> Unit = {},
     val cancel: () -> Unit = {},
+    val probe: () -> Unit = {},
 )
 
 /**
@@ -132,6 +133,15 @@ fun BenchmarkScreen(graph: AppGraph) {
             }
         },
         cancel = { graph.scope.launch { graph.server.cancelBenchmark() } },
+        probe = {
+            // Feeds moving synthetic frames to the engine and writes planmax /
+            // rotz / transx unique+std to the log. Share Logs carries them out.
+            graph.scope.launch {
+                refusal = null
+                val reply = graph.server.command("probe_numerics", "frames" to 40)
+                if (!reply.ok) refusal = reply.error?.let(Format::sentence)
+            }
+        },
     )
     val report = snapshot.benchmark?.report
     val reportText = snapshot.benchmark?.reportText
@@ -264,6 +274,11 @@ private fun RunCard(
                     Spacer(Modifier.width(6.dp))
                     Text(l10n(R.string.bench_10min))
                 }
+            }
+            OutlinedButton(onClick = actions.probe, enabled = enabled, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Filled.BarChart, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(l10n(R.string.bench_probe))
             }
         }
         val failure = refusal?.let { l10n(R.string.bench_refusal) + " " + it }
