@@ -35,6 +35,10 @@ extension EngineHost {
     }
     benchmarking = true
     defer { benchmarking = false }
+    // Breadcrumbs: written before each risky phase so a trap is locatable from
+    // the log alone. Plain interpolation only -- String(format:) with %@ is a
+    // known segfault on Android's corelibs Foundation.
+    Log.write(.warning, "probe_numerics", "START frames=\(frames)")
     let spec = l.spec
     guard let io = l.engine.outputs[ModelConstants.drivingOutput],
       io.type == .float || io.type == .float16
@@ -91,7 +95,9 @@ extension EngineHost {
       throw HostError.failed("the engine has no driving output buffer")
     }
     l.staging.reset()
+    Log.write(.warning, "probe_numerics", "LOADED output=\(spec.outputCount) warped=\(spec.warpedBytes)")
     for step in 0..<frames {
+      if step % 10 == 0 { Log.write(.warning, "probe_numerics", "frame \(step)/\(frames)") }
       // Only the newest plane matters for the output; fill the queue slots
       // with successive frames so a stateful graph sees motion too.
       var stack = [UInt8]()
@@ -128,25 +134,33 @@ extension EngineHost {
       if finite { l.staging.keep(outputs: out, type: io.type) }
     }
 
+    // String(format:) with %@ segfaults on Android's corelibs Foundation (the
+    // variadic object bridging has no type checking). Pure interpolation only.
+    func fixed(_ x: Double, _ digits: Int) -> String {
+      guard x.isFinite else { return String(x) }  // nan / inf, never trap
+      let scale = pow(10.0, Double(digits))
+      let r = (x * scale).rounded() / scale
+      return String(r)
+    }
     func summarize(_ name: String, _ xs: [Double]) -> String {
       guard !xs.isEmpty else { return "\(name) n=0" }
       let uniq = Set(xs.map { $0.rounded(to: 4) }).count
       let mean = xs.reduce(0, +) / Double(xs.count)
       let variance = max(0, xs.reduce(0) { $0 + ($1 - mean) * ($1 - mean) } / Double(xs.count))
-      return String(
-        format: "%@ n=%d unique=%d std=%.5f min=%+.4f max=%+.4f",
-        name, xs.count, uniq, variance.squareRoot(), xs.min()!, xs.max()!)
+      let lo = xs.min() ?? 0, hi = xs.max() ?? 0
+      return "\(name) n=\(xs.count) unique=\(uniq) std=\(fixed(variance.squareRoot(), 5)) min=\(fixed(lo, 4)) max=\(fixed(hi, 4))"
     }
     let device = backend.describe()["device"] ?? "?"
     let header = "device \(device), frames \(frames), \(EngineHost.buildLine(l.engine))"
     let lines = [
       header,
       summarize("planmax", planmax),
-      summarize("rotz   ", rotz),
-      summarize("transx ", transx),
+      summarize("rotz", rotz),
+      summarize("transx", transx),
       "HEALTHY: planmax 3-15 m with unique near frame count; FROZEN: planmax ~0.3 m with unique near 1",
     ]
     for line in lines { Log.write(.warning, "probe_numerics", line) }
+    Log.write(.warning, "probe_numerics", "DONE ok=1")
     return lines
   }
 
