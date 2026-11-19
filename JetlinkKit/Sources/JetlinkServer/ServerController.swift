@@ -313,7 +313,11 @@ public final class ServerController: @unchecked Sendable {
       return ["queued": .bool(true)]
     case .traceFrames(let frames):
       // Not a job: the frame path itself writes the lines, so a comma that is
-      // connected now is exactly what this needs.
+      // connected now is exactly what this needs -- and without one nothing
+      // would ever be traced, which would look like a clean bill of health.
+      guard currentLink.state == .connected else {
+        throw ControlError.refused("no comma is connected; a frame trace follows the frames a comma sends")
+      }
       server.host.traceFrames(frames)
       return ["queued": .bool(true)]
     }

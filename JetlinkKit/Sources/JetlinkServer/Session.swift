@@ -477,8 +477,23 @@ final class Session: @unchecked Sendable {
     host.lastSeenAt = ProcessInfo.processInfo.systemUptime
     let layout = loaded.staging.layout
     let payload = message.payload
-    guard payload.count >= Wire.inferReqSize, let base = payload.baseAddress else {
+    // A frame that will not do. Said every time, not only while tracing: a
+    // client whose frames are all rejected sees a model that never runs, and
+    // what it publishes is then its last plan -- which looks exactly like a
+    // frozen model and has been mistaken for one.
+    func reject(_ frameID: UInt32?, _ why: String) -> InferReply {
+      log.warning("frame \(frameID.map(String.init) ?? "?") rejected: \(why)")
+      if host.framesToTrace > 0 {
+        host.framesToTrace -= 1
+        host.tracedRejected += 1
+        if host.framesToTrace == 0 {
+          log.warning("frame trace done: \(host.tracedServed) served, \(host.tracedRejected) rejected")
+        }
+      }
       return InferReply(status: .badShape)
+    }
+    guard payload.count >= Wire.inferReqSize, let base = payload.baseAddress else {
+      return reject(nil, "a request shorter than its header")
     }
     let frameID = UInt32(littleEndian: base.loadUnaligned(as: UInt32.self))
     let flags = Wire.Flag(rawValue: UInt32(littleEndian: base.loadUnaligned(fromByteOffset: 4, as: UInt32.self)))
@@ -492,7 +507,7 @@ final class Session: @unchecked Sendable {
       guard payload.count >= planesAt, let frame = loaded.lossless,
         frame.unpack(UnsafeRawBufferPointer(rebasing: payload[planesAt...]))
       else {
-        return InferReply(status: .badShape)
+        return reject(frameID, "a lossless frame that does not unpack")
       }
       warped = UnsafeRawPointer(frame.pixels)
       packed = base + Wire.inferReqSize
@@ -503,12 +518,16 @@ final class Session: @unchecked Sendable {
       guard payload.count >= planesAt, let frame = loaded.hevc,
         frame.unpack(UnsafeRawBufferPointer(rebasing: payload[planesAt...]))
       else {
-        return InferReply(status: .badShape)
+        // -2 inside unpack is a stream that owes an IDR: a phone that joined
+        // mid-stream rejects until the encoder sends one.
+        return reject(frameID, "an HEVC frame that does not decode (an IDR is owed, or the lengths do not add up)")
       }
       warped = frame.warped
       packed = base + Wire.inferReqSize
     } else {
-      guard payload.count == layout.requestBytes else { return InferReply(status: .badShape) }
+      guard payload.count == layout.requestBytes else {
+        return reject(frameID, "\(payload.count) bytes where the spec wants \(layout.requestBytes)")
+      }
       warped = base + Wire.inferReqSize
       packed = warped + layout.warpedBytes
     }
@@ -520,7 +539,11 @@ final class Session: @unchecked Sendable {
     // other's frame is in the log rather than in a debugger.
     if host.framesToTrace > 0 {
       host.framesToTrace -= 1
+      host.tracedServed += 1
       trace(warped, frameID: frameID, flags: flags, warpedBytes: layout.warpedBytes)
+      if host.framesToTrace == 0 {
+        log.warning("frame trace done: \(host.tracedServed) served, \(host.tracedRejected) rejected")
+      }
     }
 
     var status = Wire.Status.ok
@@ -556,6 +579,7 @@ final class Session: @unchecked Sendable {
         status = .inferFailed
       }
       if status == .ok && !Convert.allFinite(outputBuffer, count: count) {
+        log.warning("frame \(frameID) produced a non-finite output")
         status = .notFinite
       }
       if status == .ok {

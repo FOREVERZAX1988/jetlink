@@ -123,6 +123,9 @@ public final class EngineHost: @unchecked Sendable {
   /// actually produced, one line each, for a phone whose plan stops moving
   /// while its lane lines do not. Guarded by `lock`.
   var framesToTrace = 0
+  /// What the trace has seen so far, for the line that closes it.
+  var tracedServed = 0
+  var tracedRejected = 0
   /// When the comma last did something, a frame, a hello or the load it
   /// asked for: `warmIfIdle` goes by it.
   var lastSeenAt: TimeInterval = 0
@@ -262,6 +265,8 @@ public final class EngineHost: @unchecked Sendable {
   public func traceFrames(_ count: Int) {
     lock.lock()
     framesToTrace = min(max(count, 0), 600)
+    tracedServed = 0
+    tracedRejected = 0
     lock.unlock()
   }
 
