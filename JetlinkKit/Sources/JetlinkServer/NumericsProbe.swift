@@ -153,11 +153,17 @@ extension EngineHost {
       let pose = output[poseSlice]
       let plan = output[planSlice]
       if detailed { note("f0 read") }
+      // An ArraySlice keeps the parent array's indices: output[poseSlice]
+      // starts at 887, so pose[0] is out of bounds and traps the process with
+      // no stack at all -- which is exactly what every build until now did.
+      // Read from the slice's own first index instead.
       if pose.count >= 6 {
-        transx.append(Double(pose[0]))
-        rotz.append(Double(pose[5]))
+        let i = pose.startIndex
+        transx.append(Double(pose[i]))
+        rotz.append(Double(pose[i + 5]))
       }
       if detailed { note("f0 pose n=\(transx.count)") }
+      // map walks the slice's elements, so it needs no index and is safe.
       if !plan.isEmpty { planmax.append(Double(plan.map { abs($0) }.max() ?? 0)) }
       if detailed { note("f0 plan n=\(planmax.count)") }
       let finite = output.withUnsafeBytes { Convert.allFinite($0.baseAddress!, count: spec.outputCount) }
