@@ -1,5 +1,6 @@
 package io.zoompilot.jetlink.ui.benchmark
 
+import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -87,6 +88,8 @@ import io.zoompilot.jetlink.ui.components.tile
 import io.zoompilot.jetlink.ui.icon
 import io.zoompilot.jetlink.ui.status.StatusL10n
 import kotlinx.coroutines.launch
+import java.io.File
+import java.io.IOException
 
 /** The phone's chip, as the run card names it. */
 data class ChipInfo(val line: String, val expectationRes: Int, val tone: Tone) {
@@ -104,7 +107,26 @@ class BenchmarkActions(
     val cancel: () -> Unit = {},
     val probe: () -> Unit = {},
     val trace: () -> Unit = {},
+    val replay: () -> Unit = {},
 )
+
+/**
+ * The frame the APK carries, unpacked beside the caches once. A real frame from
+ * the comma is what the probe has been missing: it carries the pixel
+ * statistics of a road, which neither noise nor a drawn texture does.
+ */
+private fun realFrame(context: Context): File? {
+    val target = File(context.cacheDir, "realframe.bin")
+    if (target.length() > 0) return target
+    return try {
+        context.assets.open("realframe.bin").use { input ->
+            target.outputStream().use { output -> input.copyTo(output) }
+        }
+        target
+    } catch (error: IOException) {
+        null
+    }
+}
 
 /**
  * Is this phone fast enough, and does it stay fast enough? The loaded model
@@ -152,6 +174,20 @@ fun BenchmarkScreen(graph: AppGraph) {
                 refusal = null
                 val reply = graph.server.command("trace_frames", "frames" to 120)
                 if (!reply.ok) refusal = reply.error?.let(Format::sentence)
+            }
+        },
+        replay = {
+            // Zooms a frame the comma really sent, so the engine is measured
+            // on road pixels. No comma needed: that is the point of it.
+            graph.scope.launch {
+                refusal = null
+                val file = realFrame(context)
+                if (file == null) {
+                    refusal = "the APK carries no realframe.bin"
+                } else {
+                    val reply = graph.server.command("replay_frames", "path" to file.absolutePath, "frames" to 60)
+                    if (!reply.ok) refusal = reply.error?.let(Format::sentence)
+                }
             }
         },
     )
@@ -298,6 +334,11 @@ private fun RunCard(
                 Icon(Icons.Filled.Movie, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
                 Text(l10n(R.string.bench_trace))
+            }
+            OutlinedButton(onClick = actions.replay, enabled = blocker == null && !starting, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Filled.Memory, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(l10n(R.string.bench_replay))
             }
         }
         val failure = refusal?.let { l10n(R.string.bench_refusal) + " " + it }

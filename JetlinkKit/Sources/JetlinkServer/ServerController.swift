@@ -311,6 +311,9 @@ public final class ServerController: @unchecked Sendable {
     case .probeNumerics(let frames):
       try startProbe(frames: frames)
       return ["queued": .bool(true)]
+    case .replayFrames(let path, let frames):
+      try startReplay(path: path, frames: frames)
+      return ["queued": .bool(true)]
     case .traceFrames(let frames):
       // Not a job: the frame path itself writes the lines, so a comma that is
       // connected now is exactly what this needs -- and without one nothing
@@ -344,6 +347,30 @@ public final class ServerController: @unchecked Sendable {
     }
     thread.name = "jetlink-numerics-probe"
     // The frame path's priority, as the benchmark uses.
+    thread.qualityOfService = .userInteractive
+    thread.start()
+  }
+
+  /// The same, over a frame the comma sent: the phone has no comma beside it,
+  /// so a file is the only way to put road pixels in front of the engine.
+  private func startReplay(path: String, frames: Int) throws {
+    let url = URL(fileURLWithPath: path)
+    guard FileManager.default.fileExists(atPath: url.path) else {
+      throw ControlError.refused("\(path) is not a file")
+    }
+    if currentLink.state == .connected {
+      throw ControlError.refused("a comma is connected; disconnect it to run the probe")
+    }
+    guard server.host.loadedSHA() != nil else { throw ControlError.refused("no model is loaded; prepare one first") }
+    let trace = server.configuration.cacheRoot.appendingPathComponent("probe-progress.log")
+    let thread = Thread { [self] in
+      do {
+        _ = try server.host.probeNumerics(frames: frames, source: url, trace: trace)
+      } catch {
+        log.warning("replay failed: \(String(describing: error))")
+      }
+    }
+    thread.name = "jetlink-frame-replay"
     thread.qualityOfService = .userInteractive
     thread.start()
   }

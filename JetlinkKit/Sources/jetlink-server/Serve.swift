@@ -60,6 +60,14 @@
     var noKeepAlive = false
     @Flag(name: .customLong("no-cpu-keepwarm"), help: "Do not keep a CPU core busy between Neural Engine frames (a Mac's onnxruntime).")
     var noCPUKeepWarm = false
+    @Option(help: "Fingerprint this many frames from the comma into the log and stop: twelve plane hashes, the wire kind, and whether a reset came with it.")
+    var traceFrames = 0
+    @Option(help: "Write this many frames from the comma into --dump-dir as raw (2,6,H,W) buffers.")
+    var dumpFrames = 0
+    @Option(help: "Where --dump-frames writes its files.")
+    var dumpDir = "/tmp/jetlink-frames"
+    @Option(help: "Run the frame probe over this file once the engine is loaded, print the answer and stop.")
+    var replay: String?
     @Option(help: "debug, info, warning or error.")
     var logLevel = Log.Level.info
 
@@ -107,6 +115,25 @@
         controller = ServerController(server: server, registry: Registry(layout: server.cache.layout))
         log.info("backend \(backend.name) \(backend.runtimeVersion) on \(backend.deviceTag()), cache \(root.path)")
         try server.start()
+        if traceFrames > 0 { server.host.traceFrames(traceFrames) }
+        if dumpFrames > 0 {
+          let directory = URL(fileURLWithPath: dumpDir)
+          try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+          server.host.dumpFrames(dumpFrames, to: directory)
+        }
+        // A self-test: the same probe the phone runs, over the same file, so a
+        // build can be checked here before it is pushed to a phone.
+        if let replay {
+          let url = URL(fileURLWithPath: replay)
+          var waited = 0.0
+          while server.host.loadedSHA() == nil && waited < 90 {
+            Thread.sleep(forTimeInterval: 0.5)
+            waited += 0.5
+          }
+          for line in try server.host.probeNumerics(frames: 60, source: url) { log.info(line) }
+          server.shutdown()
+          return
+        }
         // The installer waits for this line. It is said whatever the comma is
         // doing: a comma on the bus that nothing on it serves yet gets no
         // line of its own that says the server is up.

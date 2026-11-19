@@ -126,6 +126,10 @@ public final class EngineHost: @unchecked Sendable {
   /// What the trace has seen so far, for the line that closes it.
   var tracedServed = 0
   var tracedRejected = 0
+  /// Frames still to be written out as raw (2,6,H,W) buffers, and where.
+  var framesToDump = 0
+  var dumpedFrames = 0
+  var dumpDirectory: URL?
   /// When the comma last did something, a frame, a hello or the load it
   /// asked for: `warmIfIdle` goes by it.
   var lastSeenAt: TimeInterval = 0
@@ -267,6 +271,17 @@ public final class EngineHost: @unchecked Sendable {
     framesToTrace = min(max(count, 0), 600)
     tracedServed = 0
     tracedRejected = 0
+    lock.unlock()
+  }
+
+  /// Write the next `count` frames out as the engine sees them, one file each.
+  /// A real frame is what a probe has been missing: it carries the pixel
+  /// statistics of a road, which noise and a drawn texture do not.
+  public func dumpFrames(_ count: Int, to directory: URL) {
+    lock.lock()
+    framesToDump = min(max(count, 0), 240)
+    dumpedFrames = 0
+    dumpDirectory = directory
     lock.unlock()
   }
 

@@ -545,6 +545,20 @@ final class Session: @unchecked Sendable {
         log.warning("frame trace done: \(host.tracedServed) served, \(host.tracedRejected) rejected")
       }
     }
+    // The same frames, kept: a real one is what the phone's probe has been
+    // missing, and only the comma can hand one over.
+    if host.framesToDump > 0, let directory = host.dumpDirectory {
+      host.framesToDump -= 1
+      let index = host.dumpedFrames
+      host.dumpedFrames += 1
+      let url = directory.appendingPathComponent("frame-\(index).bin")
+      do {
+        try Data(bytes: warped, count: layout.warpedBytes).write(to: url)
+        log.warning("frame dumped: \(url.lastPathComponent) \(layout.warpedBytes) bytes")
+      } catch {
+        log.error("could not dump a frame: \(String(describing: error))")
+      }
+    }
 
     var status = Wire.Status.ok
     var queueUs: UInt32 = 0

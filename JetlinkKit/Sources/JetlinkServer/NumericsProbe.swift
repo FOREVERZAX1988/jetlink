@@ -58,25 +58,33 @@ private struct ZoomingScene {
 
   /// One h*w plane: the centre of the sheet, seen at `scale`.
   func fill(scale: Double, into dest: UnsafeMutableRawPointer, w: Int, h: Int) {
-    let stepX = 1.0 / max(scale, 1e-6)
-    let stepY = 1.0 / max(scale, 1e-6)
-    let cx = Double(width) * 0.5
-    let cy = Double(height) * 0.5
-    let left = cx - Double(w) * 0.5 * stepX
-    let top = cy - Double(h) * 0.5 * stepY
     sheet.withUnsafeBytes { raw in
       guard let base = raw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
-      let out = dest.assumingMemoryBound(to: UInt8.self)
-      for row in 0..<h {
-        let sy = min(max(Int((top + Double(row) * stepY).rounded()), 0), height - 1)
-        let src = base + sy * width
-        let dst = out + row * w
-        var sx = left
-        for column in 0..<w {
-          let x = min(max(Int(sx.rounded()), 0), width - 1)
-          dst[column] = src[x]
-          sx += stepX
-        }
+      Zoom.fill(source: base, width: width, height: height, scale: scale, into: dest, w: w, h: h)
+    }
+  }
+}
+
+/// Nearest-neighbour: the middle of a `width`-wide source, seen at `scale`,
+/// written into one h*w plane. The point is the flow, not the antialiasing,
+/// and the same call serves a drawn sheet and a real frame.
+enum Zoom {
+  static func fill(
+    source: UnsafePointer<UInt8>, width: Int, height: Int, scale: Double, into dest: UnsafeMutableRawPointer, w: Int, h: Int
+  ) {
+    let step = 1.0 / max(scale, 1e-6)
+    let left = Double(width) * 0.5 - Double(w) * 0.5 * step
+    let top = Double(height) * 0.5 - Double(h) * 0.5 * step
+    let out = dest.assumingMemoryBound(to: UInt8.self)
+    for row in 0..<h {
+      let sy = min(max(Int((top + Double(row) * step).rounded()), 0), height - 1)
+      let src = source + sy * width
+      let dst = out + row * w
+      var sx = left
+      for column in 0..<w {
+        let x = min(max(Int(sx.rounded()), 0), width - 1)
+        dst[column] = src[x]
+        sx += step
       }
     }
   }
@@ -104,7 +112,7 @@ private struct ZoomingScene {
 /// covers each frame rather than the whole run.
 extension EngineHost {
   @discardableResult
-  public func probeNumerics(frames requested: Int, trace traceURL: URL? = nil) throws -> [String] {
+  public func probeNumerics(frames requested: Int, source: URL? = nil, trace traceURL: URL? = nil) throws -> [String] {
     // Two halves of at least four frames each.
     let frames = min(max(requested, 8), 240)
     let half = frames / 2
@@ -172,10 +180,43 @@ extension EngineHost {
     let packed = [Float](repeating: 0, count: spec.packedCount)
     var output = [Float](repeating: 0, count: spec.outputCount)
 
-    // The sheet is twice the frame in each direction, so the window can shrink
-    // to a quarter before it runs out of texture -- more than the whole run
-    // expands by.
-    let scene = ZoomingScene(width: w * 3, height: h * 3)
+    // The sheet is three times the frame in each direction, so the window can
+    // shrink to a third before it runs out of texture -- more than the whole
+    // run expands by. With a `source`, the sheets are the planes of a frame
+    // the comma really sent, upsampled: the model then sees road statistics
+    // and a rate it can measure at the same time, which a drawn texture cannot
+    // give it.
+    let scene = source == nil ? ZoomingScene(width: w * 3, height: h * 3) : nil
+    let sheetW = w * 3
+    let sheetH = h * 3
+    let sheetPlane = sheetW * sheetH
+    var sheets: UnsafeMutablePointer<UInt8>?
+    if let source {
+      let data = try Data(contentsOf: source)
+      guard data.count == slots * 6 * planeBytes else {
+        throw HostError.invalid(
+          "\(source.lastPathComponent) is \(data.count) bytes; this engine's frame is \(slots * 6 * planeBytes)")
+      }
+      let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: slots * 6 * sheetPlane)
+      data.withUnsafeBytes { raw in
+        guard let pixels = raw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
+        for plane in 0..<(slots * 6) {
+          let src = pixels + plane * planeBytes
+          let dst = buffer + plane * sheetPlane
+          // 3x3 nearest: a crop of this is a digital zoom of that plane, and
+          // at scale 1 it reproduces the frame it came from, pixel for pixel.
+          for row in 0..<sheetH {
+            let srcRow = src + (row / 3) * w
+            let dstRow = dst + row * sheetW
+            for column in 0..<sheetW {
+              dstRow[column] = srcRow[column / 3]
+            }
+          }
+        }
+      }
+      sheets = buffer
+    }
+    defer { sheets?.deallocate() }
     var stack = [UInt8](repeating: 128, count: slots * 6 * planeBytes)
 
     var transx: [Double] = []
@@ -190,7 +231,7 @@ extension EngineHost {
     l.staging.reset()
     lock.unlock()
 
-    note("RESET ok warped=\(spec.warpedBytes) output=\(spec.outputCount) scene=\(scene.width)x\(scene.height)")
+    note("RESET ok warped=\(spec.warpedBytes) output=\(spec.outputCount) source=\(source?.lastPathComponent ?? "drawn")")
     // The comma's pace, as the benchmark keeps it: back-to-back runs are not
     // what the engine sees on a drive.
     let period = 1.0 / Double(ModelConstants.runFrequency)
@@ -221,13 +262,23 @@ extension EngineHost {
           // difference between them is the motion the graph has to read.
           let slotScale = scale - rate * Double(slot)
           let base = slot * 6 * planeBytes
-          scene.fill(scale: slotScale, into: p + base, w: w, h: h)
-          scene.fill(scale: slotScale, into: p + base + 3 * planeBytes, w: w, h: h)
-          // Colourless chroma: the plane is flat 128, so only luma carries the
-          // motion and nothing pretends to know a hue.
-          for plane in [1, 2, 4, 5] {
-            let target = p + base + plane * planeBytes
-            target.assumingMemoryBound(to: UInt8.self).initialize(repeating: 128, count: planeBytes)
+          if let sheets {
+            // A real frame: every plane keeps its own picture, so the chroma
+            // and the second camera are the comma's own and not a stand-in.
+            for plane in 0..<6 {
+              Zoom.fill(
+                source: sheets + (slot * 6 + plane) * sheetPlane, width: sheetW, height: sheetH, scale: slotScale,
+                into: p + base + plane * planeBytes, w: w, h: h)
+            }
+          } else {
+            scene?.fill(scale: slotScale, into: p + base, w: w, h: h)
+            scene?.fill(scale: slotScale, into: p + base + 3 * planeBytes, w: w, h: h)
+            // Colourless chroma: the plane is flat 128, so only luma carries the
+            // motion and nothing pretends to know a hue.
+            for plane in [1, 2, 4, 5] {
+              let target = p + base + plane * planeBytes
+              target.assumingMemoryBound(to: UInt8.self).initialize(repeating: 128, count: planeBytes)
+            }
           }
         }
       }
@@ -328,13 +379,13 @@ extension EngineHost {
 
     let device = backend.describe()["device"] ?? "?"
     var lines = [
-      "device \(device), frames \(frames), \(EngineHost.buildLine(l.engine))",
+      "device \(device), frames \(frames), source \(source?.lastPathComponent ?? "drawn sheet"), \(EngineHost.buildLine(l.engine))",
       "slow transx n=\(slowTx.count) mean=\(fixed(mean(slowTx), 4)) std=\(fixed(spread(slowTx), 4)) unique=\(unique(slowTx))",
       "fast transx n=\(fastTx.count) mean=\(fixed(mean(fastTx), 4)) std=\(fixed(spread(fastTx), 4)) unique=\(unique(fastTx))",
       "rotz all n=\(rotz.count) mean=\(fixed(mean(rotz), 5)) std=\(fixed(spread(rotz), 5)) unique=\(unique(rotz))",
       "slow pathx mean=\(fixed(mean(slowPath), 3)) fast pathx mean=\(fixed(mean(fastPath), 3))",
       "speed ratio fast/slow = \(fixed(ratio, 3))",
-      "HEALTHY: ratio 2-4, both halves distinct every frame. DEAD: ratio ~1 with unique near 1 -- the rate never reaches the graph",
+      "HEALTHY: ratio 2-4 on the drawn sheet, 1.8-2.6 on a real frame (this Mac measures 1.85). DEAD: ratio ~1 with the slow mean near 0",
     ]
     // A short series so the shape of the answer is visible, not just its stats.
     var series: [String] = []

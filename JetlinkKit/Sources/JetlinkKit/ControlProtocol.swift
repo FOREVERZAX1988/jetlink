@@ -791,6 +791,10 @@ public enum ControlCommand: Sendable, Equatable {
   /// what the decode produced plane by plane, and whether it asked for a
   /// reset. For a phone whose plan freezes while its lane lines do not.
   case traceFrames(frames: Int)
+  /// The same probe over a frame the comma really sent, taken from `path`:
+  /// twelve planes, zoomed the way the drawn sheet is. Answers whether the
+  /// engine behaves on road pixels, which a drawn texture cannot.
+  case replayFrames(path: String, frames: Int)
 
   public var name: String {
     switch self {
@@ -808,6 +812,7 @@ public enum ControlCommand: Sendable, Equatable {
     case .cancelBenchmark: return "cancel_benchmark"
     case .probeNumerics: return "probe_numerics"
     case .traceFrames: return "trace_frames"
+    case .replayFrames: return "replay_frames"
     }
   }
 
@@ -838,6 +843,7 @@ public enum ControlCommand: Sendable, Equatable {
     case "cancel_benchmark": self = .cancelBenchmark
     case "probe_numerics": self = .probeNumerics(frames: number("frames")?.intValue ?? 40)
     case "trace_frames": self = .traceFrames(frames: number("frames")?.intValue ?? 120)
+    case "replay_frames": self = .replayFrames(path: try text("path"), frames: number("frames")?.intValue ?? 60)
     default: throw Invalid(description: "unknown command \(name)")
     }
   }
