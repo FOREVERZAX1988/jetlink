@@ -190,13 +190,17 @@ extension EngineHost {
         transx.append(Double(pose[0]))
         rotz.append(Double(pose[5]))
       }
+      if detailed { note("f0 pose n=\(transx.count)") }
       if !plan.isEmpty { planmax.append(Double(plan.map { abs($0) }.max() ?? 0)) }
-      // A queued graph feeds the prior frame's hidden state back via keep();
-      // a stateful graph keeps its own state, so this is a no-op for it. Only
-      // feed back finite output, matching the frame path and the benchmark.
+      if detailed { note("f0 plan n=\(planmax.count)") }
       let finite = output.withUnsafeBytes { Convert.allFinite($0.baseAddress!, count: spec.outputCount) }
-      if finite { l.staging.keep(outputs: out, type: io.type) }
-      if detailed { note("f0 kept") }
+      if detailed { note("f0 finite=\(finite)") }
+      // No keep(): the probe reads each frame on its own and never feeds the
+      // output back. A stateful graph keeps its own state, and for a queued
+      // one the feedback is only for the next frame's inputs, which this path
+      // does not rely on -- and which is the one call left that could touch a
+      // stale or wrongly sized hidden range.
+      if detailed { note("f0 done") }
       lock.unlock()
     }
     note("LOOP done n=\(transx.count)")
