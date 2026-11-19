@@ -134,11 +134,12 @@ fun BenchmarkScreen(graph: AppGraph) {
         },
         cancel = { graph.scope.launch { graph.server.cancelBenchmark() } },
         probe = {
-            // Feeds moving synthetic frames to the engine and writes planmax /
-            // rotz / transx unique+std to the log. Share Logs carries them out.
+            // Feeds a scene that expands like a road to the engine and writes
+            // the pose/path answer for a slow then a 3x faster half to the log.
+            // Share Logs carries them out.
             graph.scope.launch {
                 refusal = null
-                val reply = graph.server.command("probe_numerics", "frames" to 40)
+                val reply = graph.server.command("probe_numerics", "frames" to 60)
                 if (!reply.ok) refusal = reply.error?.let(Format::sentence)
             }
         },

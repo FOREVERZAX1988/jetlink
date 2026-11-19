@@ -1,25 +1,119 @@
 import Foundation
 import JetlinkKit
 
-/// Feed the loaded engine moving synthetic frames and report whether its
-/// pose/plan outputs actually move. This is the on-device twin of
-/// workspace/diag1116/synth_probe.py: it bypasses the camera, the comma and
-/// the wire, and drives the engine through the same stage/run/keep path a
-/// real frame takes.
+/// A sheet of multi-scale texture, and the window of it the probe shows the
+/// model each frame. The window shrinks -- the scene scales up around its
+/// centre -- the way a forward-facing camera's view does as the car moves, so
+/// the model's temporal half has a motion it can actually measure, unlike the
+/// random bytes the benchmark feeds.
 ///
-/// A healthy model returns a plan that grows with the sliding texture and a
-/// transx that tracks it. A broken one returns the same few numbers every
-/// frame (unique ~1, std ~0). The summary goes to the server log and to the
-/// app's Share Logs; breadcrumbs also go to `trace`, a file beside the app's
-/// cache that survives a crash, so a trap is locatable after a restart.
+/// Pixels are picked nearest-neighbour: at these step sizes the flow, not the
+/// antialiasing, is what the probe is asking about.
+private struct ZoomingScene {
+  let width: Int
+  let height: Int
+  let sheet: [UInt8]
+
+  init(width: Int, height: Int) {
+    self.width = width
+    self.height = height
+    var seed: UInt64 = 0x9E37_79B9_7F4A_7C15
+    func random() -> Double {
+      seed = seed &* 6364136223846793005 &+ 1442695040888963407
+      return Double((seed >> 40) & 0xFFFF) / 65535.0
+    }
+    // Three octaves: blobs the window sees whole, mid detail, fine grain so the
+    // flanks are never flat. Bilinear inside each octave keeps it smooth, which
+    // is what makes a sub-pixel-per-frame expansion readable at all.
+    let octaves: [(cw: Int, ch: Int, weight: Double)] = [(4, 3, 0.50), (10, 6, 0.30), (26, 14, 0.20)]
+    var grids: [(data: [Double], cw: Int, ch: Int, weight: Double)] = []
+    for octave in octaves {
+      var data = [Double](repeating: 0, count: (octave.cw + 1) * (octave.ch + 1))
+      for i in 0..<data.count { data[i] = random() }
+      grids.append((data, octave.cw, octave.ch, octave.weight))
+    }
+    var pixels = [UInt8](repeating: 0, count: width * height)
+    let spanX = Double(max(width - 1, 1))
+    let spanY = Double(max(height - 1, 1))
+    for y in 0..<height {
+      for x in 0..<width {
+        var value = 0.0
+        for g in grids {
+          let fx = Double(x) / spanX * Double(g.cw)
+          let fy = Double(y) / spanY * Double(g.ch)
+          let x0 = min(Int(fx), g.cw - 1)
+          let y0 = min(Int(fy), g.ch - 1)
+          let tx = fx - Double(x0)
+          let ty = fy - Double(y0)
+          let i = y0 * (g.cw + 1) + x0
+          let top = g.data[i] * (1 - tx) + g.data[i + 1] * tx
+          let bottom = g.data[i + g.cw + 1] * (1 - tx) + g.data[i + g.cw + 2] * tx
+          value += g.weight * (top * (1 - ty) + bottom * ty)
+        }
+        pixels[y * width + x] = UInt8(clamping: Int((40 + value * 190).rounded()))
+      }
+    }
+    sheet = pixels
+  }
+
+  /// One h*w plane: the centre of the sheet, seen at `scale`.
+  func fill(scale: Double, into dest: UnsafeMutableRawPointer, w: Int, h: Int) {
+    let stepX = 1.0 / max(scale, 1e-6)
+    let stepY = 1.0 / max(scale, 1e-6)
+    let cx = Double(width) * 0.5
+    let cy = Double(height) * 0.5
+    let left = cx - Double(w) * 0.5 * stepX
+    let top = cy - Double(h) * 0.5 * stepY
+    sheet.withUnsafeBytes { raw in
+      guard let base = raw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
+      let out = dest.assumingMemoryBound(to: UInt8.self)
+      for row in 0..<h {
+        let sy = min(max(Int((top + Double(row) * stepY).rounded()), 0), height - 1)
+        let src = base + sy * width
+        let dst = out + row * w
+        var sx = left
+        for column in 0..<w {
+          let x = min(max(Int(sx.rounded()), 0), width - 1)
+          dst[column] = src[x]
+          sx += stepX
+        }
+      }
+    }
+  }
+}
+
+/// Feed the loaded engine a scene that moves the way a road does and report
+/// whether its pose/plan answers the motion. This is the on-device twin of
+/// workspace/diag1116/synth_probe.py: it bypasses the camera, the comma and the
+/// wire, and drives the engine through the same stage/run/keep path a real
+/// frame takes.
 ///
-/// Owns the engine exactly like `benchmark` does: the `benchmarking` flag
-/// keeps `warmIfIdle` and the live frame path off the engine, and the host
-/// lock covers each frame rather than the whole run.
+/// The run is split in two halves with the scene expanding three times faster in
+/// the second. A model whose temporal half works must answer that step: the
+/// pose's forward velocity and the planned path have to grow with it. One whose
+/// five-frame state never reaches the graph cannot see the rate at all, and
+/// returns the same few numbers in both halves -- which is the difference
+/// between "the frames are wrong" and "the state loop does not work here".
+///
+/// The summary goes to the server log and to the app's Share Logs; breadcrumbs
+/// also go to `trace`, a file beside the app's cache that survives a crash, so
+/// a trap is locatable after a restart.
+///
+/// Owns the engine exactly like `benchmark` does: the `benchmarking` flag keeps
+/// `warmIfIdle` and the live frame path off the engine, and the host lock
+/// covers each frame rather than the whole run.
 extension EngineHost {
   @discardableResult
   public func probeNumerics(frames requested: Int, trace traceURL: URL? = nil) throws -> [String] {
-    let frames = min(max(requested, 4), 240)
+    // Two halves of at least four frames each.
+    let frames = min(max(requested, 8), 240)
+    let half = frames / 2
+    // Fractional expansion per frame. Slow is a lazy drive, fast is three
+    // times that; the ratio is what the model has to reproduce.
+    let slowRate = 0.010
+    let fastRate = 0.030
+    // The pose's first warmup frames are the state filling up, not an answer.
+    let warmup = 4
 
     // Plain interpolation only: String(format:) with %@ segfaults on Android's
     // corelibs Foundation, and a trap here would take the whole app down.
@@ -54,7 +148,7 @@ extension EngineHost {
       lock.unlock()
     }
 
-    note("START frames=\(frames)")
+    note("START frames=\(frames) slow=\(slowRate) fast=\(fastRate)")
     let spec = l.spec
     guard let io = l.engine.outputs[ModelConstants.drivingOutput],
       io.type == .float || io.type == .float16
@@ -68,6 +162,9 @@ extension EngineHost {
     }
 
     let shape = spec.warpedShape  // [slots, 6, h, w]
+    guard shape.count >= 4, shape[2] > 1, shape[3] > 1 else {
+      throw HostError.failed("the warped shape is not [slots, 6, h, w]")
+    }
     let slots = shape[0]
     let h = shape[2]
     let w = shape[3]
@@ -75,15 +172,15 @@ extension EngineHost {
     let packed = [Float](repeating: 0, count: spec.packedCount)
     var output = [Float](repeating: 0, count: spec.outputCount)
 
-    // The benchmark's own input: random bytes, refilled every frame. Whatever
-    // the model makes of a real warped frame, it is known to survive this, and
-    // a fresh random frame each step is the strongest motion a probe can ask
-    // for -- a frozen output stays frozen however alive the input is.
-    var stack = [UInt8](repeating: 0, count: slots * 6 * planeBytes)
+    // The sheet is twice the frame in each direction, so the window can shrink
+    // to a quarter before it runs out of texture -- more than the whole run
+    // expands by.
+    let scene = ZoomingScene(width: w * 3, height: h * 3)
+    var stack = [UInt8](repeating: 128, count: slots * 6 * planeBytes)
 
     var transx: [Double] = []
     var rotz: [Double] = []
-    var planmax: [Double] = []
+    var pathx: [Double] = []
 
     lock.lock()
     if loaded !== l {
@@ -93,25 +190,40 @@ extension EngineHost {
     l.staging.reset()
     lock.unlock()
 
-    note("RESET ok warped=\(spec.warpedBytes) output=\(spec.outputCount)")
+    note("RESET ok warped=\(spec.warpedBytes) output=\(spec.outputCount) scene=\(scene.width)x\(scene.height)")
     // The comma's pace, as the benchmark keeps it: back-to-back runs are not
     // what the engine sees on a drive.
     let period = 1.0 / Double(ModelConstants.runFrequency)
     var next = ProcessInfo.processInfo.systemUptime
+    var scale = 1.0
     for step in 0..<frames {
       let detailed = step == 0
       next += period
       let wait = next - ProcessInfo.processInfo.systemUptime
       if wait > 0 { Thread.sleep(forTimeInterval: wait) }
 
-      if step % 10 == 0 { note("frame \(step)/\(frames)") }
-      // A fresh random frame every step, filled in place. That is the input
-      // the benchmark runs for minutes without complaint; a synthetic road was
-      // not, and the trap kept landing on the first frame that used it.
-      var seed = UInt64(bitPattern: Int64(step)) &* 0x9E37_79B9_7F4A_7C15 &+ 1
-      for i in 0..<stack.count {
-        seed = seed &* 6364136223846793005 &+ 1442695040888963407
-        stack[i] = UInt8(truncatingIfNeeded: seed >> 33)
+      let rate = step < half ? slowRate : fastRate
+      scale *= 1 + rate
+      // No String(format:) here: %@ traps on Android's corelibs Foundation.
+      if step % 5 == 0 { note("frame \(step)/\(frames) scale_milli=\(Int((scale * 1000).rounded()))") }
+
+      // [slot][6][h][w]: slot 0 is the newest frame; inside a slot the first
+      // three planes are one camera's YUV and the last three the other's. Older
+      // slots saw a slightly smaller scene, which is the whole point.
+      stack.withUnsafeMutableBytes { raw in
+        let p = raw.baseAddress!
+        for slot in 0..<slots {
+          let slotScale = scale / pow(1 + rate, Double(slot))
+          let base = slot * 6 * planeBytes
+          scene.fill(scale: slotScale, into: p + base, w: w, h: h)
+          scene.fill(scale: slotScale, into: p + base + 3 * planeBytes, w: w, h: h)
+          // Colourless chroma: the plane is flat 128, so only luma carries the
+          // motion and nothing pretends to know a hue.
+          for plane in [1, 2, 4, 5] {
+            let target = p + base + plane * planeBytes
+            target.assumingMemoryBound(to: UInt8.self).initialize(repeating: 128, count: planeBytes)
+          }
+        }
       }
       if detailed { note("f0 built") }
       lock.lock()
@@ -155,24 +267,25 @@ extension EngineHost {
       if detailed { note("f0 read") }
       // An ArraySlice keeps the parent array's indices: output[poseSlice]
       // starts at 887, so pose[0] is out of bounds and traps the process with
-      // no stack at all -- which is exactly what every build until now did.
-      // Read from the slice's own first index instead.
+      // no stack at all. Read from the slice's own first index instead.
       if pose.count >= 6 {
         let i = pose.startIndex
         transx.append(Double(pose[i]))
         rotz.append(Double(pose[i + 5]))
       }
       if detailed { note("f0 pose n=\(transx.count)") }
-      // map walks the slice's elements, so it needs no index and is safe.
-      if !plan.isEmpty { planmax.append(Double(plan.map { abs($0) }.max() ?? 0)) }
-      if detailed { note("f0 plan n=\(planmax.count)") }
+      // The path the model plans: position x at the last of the 33 steps, out
+      // of the mean half of the 2x33x15 MDN block. That is metres, unlike the
+      // raw tensor max, which is a mix of position and velocity.
+      let lastStepX = 32 * 15
+      if plan.count >= 2 * 33 * 15 {
+        pathx.append(Double(plan[plan.startIndex + lastStepX]))
+      }
+      if detailed { note("f0 plan n=\(pathx.count)") }
       let finite = output.withUnsafeBytes { Convert.allFinite($0.baseAddress!, count: spec.outputCount) }
       if detailed { note("f0 finite=\(finite)") }
-      // No keep(): the probe reads each frame on its own and never feeds the
-      // output back. A stateful graph keeps its own state, and for a queued
-      // one the feedback is only for the next frame's inputs, which this path
-      // does not rely on -- and which is the one call left that could touch a
-      // stale or wrongly sized hidden range.
+      // No keep(): a stateful graph keeps its own state, and its `keep` is the
+      // empty one. A queued graph is not what these models ship as.
       if detailed { note("f0 done") }
       lock.unlock()
     }
@@ -183,24 +296,48 @@ extension EngineHost {
       let scale = pow(10.0, Double(digits))
       return String(((x * scale).rounded()) / scale)
     }
-    func summarize(_ name: String, _ xs: [Double]) -> String {
-      guard !xs.isEmpty else { return "\(name) n=0" }
-      let uniq = Set(xs.map { $0.rounded(to: 4) }).count
-      let mean = xs.reduce(0, +) / Double(xs.count)
-      let variance = max(0, xs.reduce(0) { $0 + ($1 - mean) * ($1 - mean) } / Double(xs.count))
-      let lo = xs.min() ?? 0, hi = xs.max() ?? 0
-      return "\(name) n=\(xs.count) unique=\(uniq) std=\(fixed(variance.squareRoot(), 5))"
-        + " min=\(fixed(lo, 4)) max=\(fixed(hi, 4))"
+    func mean(_ xs: [Double]) -> Double {
+      xs.isEmpty ? 0 : xs.reduce(0, +) / Double(xs.count)
     }
+    func spread(_ xs: [Double]) -> Double {
+      guard !xs.isEmpty else { return 0 }
+      let m = mean(xs)
+      return max(0, xs.reduce(0) { $0 + ($1 - m) * ($1 - m) } / Double(xs.count)).squareRoot()
+    }
+    func unique(_ xs: [Double]) -> Int { Set(xs.map { $0.rounded(to: 4) }).count }
+
+    /// The second half of a series, minus the warmup frames of that half.
+    func phase(_ xs: [Double], _ second: Bool) -> [Double] {
+      let lo = second ? half : 0
+      let hi = second ? xs.count : min(half, xs.count)
+      guard hi > lo + warmup else { return [] }
+      return Array(xs[(lo + warmup)..<hi])
+    }
+
+    let slowTx = phase(transx, false)
+    let fastTx = phase(transx, true)
+    let slowPath = phase(pathx, false)
+    let fastPath = phase(pathx, true)
+    let ratio = mean(slowTx) != 0 ? mean(fastTx) / mean(slowTx) : 0
+
     let device = backend.describe()["device"] ?? "?"
-    let header = "device \(device), frames \(frames), \(EngineHost.buildLine(l.engine))"
-    let lines = [
-      header,
-      summarize("planmax", planmax),
-      summarize("rotz", rotz),
-      summarize("transx", transx),
-      "HEALTHY: planmax 3-15 m with unique near frame count; FROZEN: planmax ~0.3 m with unique near 1",
+    var lines = [
+      "device \(device), frames \(frames), \(EngineHost.buildLine(l.engine))",
+      "slow transx n=\(slowTx.count) mean=\(fixed(mean(slowTx), 4)) std=\(fixed(spread(slowTx), 4)) unique=\(unique(slowTx))",
+      "fast transx n=\(fastTx.count) mean=\(fixed(mean(fastTx), 4)) std=\(fixed(spread(fastTx), 4)) unique=\(unique(fastTx))",
+      "rotz all n=\(rotz.count) mean=\(fixed(mean(rotz), 5)) std=\(fixed(spread(rotz), 5)) unique=\(unique(rotz))",
+      "slow pathx mean=\(fixed(mean(slowPath), 3)) fast pathx mean=\(fixed(mean(fastPath), 3))",
+      "speed ratio fast/slow = \(fixed(ratio, 3))",
+      "HEALTHY: ratio 2-4, both halves distinct every frame. DEAD: ratio ~1 with unique near 1 -- the rate never reaches the graph",
     ]
+    // A short series so the shape of the answer is visible, not just its stats.
+    var series: [String] = []
+    var at = 0
+    while at < transx.count {
+      series.append("f\(at) tx=\(fixed(transx[at], 4)) px=\(fixed(at < pathx.count ? pathx[at] : 0, 2))")
+      at += 6
+    }
+    if !series.isEmpty { lines.append("series " + series.joined(separator: " | ")) }
     for line in lines { note(line) }
     note("DONE ok=1")
     return lines
