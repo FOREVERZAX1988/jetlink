@@ -202,8 +202,12 @@ extension EngineHost {
       let wait = next - ProcessInfo.processInfo.systemUptime
       if wait > 0 { Thread.sleep(forTimeInterval: wait) }
 
+      // Additive, not geometric: the pixel flow per frame is what the model
+      // measures, so it has to stay constant inside a half and triple at the
+      // step. A geometric expansion would make the fast half flow hardest at
+      // its end and read as more than the three times it is.
       let rate = step < half ? slowRate : fastRate
-      scale *= 1 + rate
+      scale += rate
       // No String(format:) here: %@ traps on Android's corelibs Foundation.
       if step % 5 == 0 { note("frame \(step)/\(frames) scale_milli=\(Int((scale * 1000).rounded()))") }
 
@@ -213,7 +217,9 @@ extension EngineHost {
       stack.withUnsafeMutableBytes { raw in
         let p = raw.baseAddress!
         for slot in 0..<slots {
-          let slotScale = scale / pow(1 + rate, Double(slot))
+          // The older slots saw the scene one frame's worth smaller: that
+          // difference between them is the motion the graph has to read.
+          let slotScale = scale - rate * Double(slot)
           let base = slot * 6 * planeBytes
           scene.fill(scale: slotScale, into: p + base, w: w, h: h)
           scene.fill(scale: slotScale, into: p + base + 3 * planeBytes, w: w, h: h)
