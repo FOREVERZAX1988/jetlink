@@ -282,23 +282,36 @@ jobs:
             echo "error: no ANDROID_KEYSTORE_BASE64 secret (docs/publishing.md#android-release-key)" >&2
             exit 1
           else
-            echo "no signing secrets: this APK will be signed with the runner's debug key"
+            echo "signing with this fork's own key (android/jetlink-signing.keystore)"
           fi
 
       - name: Write the release key
         if: env.HAVE_SIGNING == 'true'
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
           echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
           echo "JETLINK_ANDROID_KEYSTORE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+          echo "JETLINK_ANDROID_KEYSTORE_PASSWORD=$ANDROID_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+          echo "JETLINK_ANDROID_KEY_ALIAS=$ANDROID_KEY_ALIAS" >> "$GITHUB_ENV"
+
+      # A runner's debug key is minted fresh every time, so a debug-signed APK
+      # replaces only itself: every other build has to be uninstalled first,
+      # which wipes the app and its cached model. This fork signs with the key
+      # committed beside the app instead, so updates install over each other and
+      # the model survives. Its password and alias are not secrets, and it signs
+      # nothing but this fork's test builds.
+      - name: Use this fork's own signing key when no release key is set
+        if: env.HAVE_SIGNING != 'true'
+        run: |
+          echo "JETLINK_ANDROID_KEYSTORE=$GITHUB_WORKSPACE/android/jetlink-signing.keystore" >> "$GITHUB_ENV"
+          echo "JETLINK_ANDROID_KEYSTORE_PASSWORD=jetlinkdebug" >> "$GITHUB_ENV"
+          echo "JETLINK_ANDROID_KEY_ALIAS=jetlinkdebug" >> "$GITHUB_ENV"
 
       - name: Build the APK
         working-directory: android
-        env:
-          # read only when the step above named the keystore
-          JETLINK_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          JETLINK_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: ./gradlew --no-daemon :app:assembleRelease -Pjetlink.prebuiltSwift="$GITHUB_WORKSPACE/swift-out"
 
       - name: Check the APK's key
