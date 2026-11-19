@@ -75,40 +75,11 @@ extension EngineHost {
     let packed = [Float](repeating: 0, count: spec.packedCount)
     var output = [Float](repeating: 0, count: spec.outputCount)
 
-    // Both buffers live outside the loop, as the benchmark's warped does: a
-    // fresh 384 KB array every frame is 15 MB of churn, and a phone that the
-    // system kills for it leaves no crash stack at all -- which is what the
-    // probe kept looking like.
-    var stack = [UInt8](repeating: 90, count: slots * 6 * planeBytes)
-    var plane = [UInt8](repeating: 90, count: planeBytes)
-    let horizon = h / 3
-
-    // A road-ish frame: two converging lines over a textured band, shifted by
-    // the frame index so consecutive calls differ. Deliberately synthetic and
-    // identical on every host; nonsense as a road, but the same nonsense.
-    func fillPlane(_ step: Int) {
-      for i in 0..<planeBytes { plane[i] = 90 }  // flat sky
-      // Seeded by the step so no two channels are byte-identical.
-      var seed = UInt64(7) &+ UInt64(bitPattern: Int64(step)) &* 0x9E37_79B9_7F4A_7C15
-      for y in horizon..<h {
-        for x in 0..<w {
-          seed = seed &* 6364136223846793005 &+ 1442695040888963407
-          var v = UInt8(truncatingIfNeeded: (seed >> 33) & 0xff)
-          v = 40 + min(v, 175)
-          plane[y * w + x] = v
-        }
-      }
-      for centre in [w / 3 + step % 17, 2 * w / 3 + step % 17] {
-        for y in horizon..<h {
-          let cx = centre + (y - horizon) / 6
-          let half = 2 + (y > horizon ? 2 : 0)
-          let lo = max(0, cx - half), hi = min(w - 1, cx + half)
-          if lo <= hi {
-            for x in lo...hi { plane[y * w + x] = 235 }
-          }
-        }
-      }
-    }
+    // The benchmark's own input: random bytes, refilled every frame. Whatever
+    // the model makes of a real warped frame, it is known to survive this, and
+    // a fresh random frame each step is the strongest motion a probe can ask
+    // for -- a frozen output stays frozen however alive the input is.
+    var stack = [UInt8](repeating: 0, count: slots * 6 * planeBytes)
 
     var transx: [Double] = []
     var rotz: [Double] = []
@@ -134,17 +105,13 @@ extension EngineHost {
       if wait > 0 { Thread.sleep(forTimeInterval: wait) }
 
       if step % 10 == 0 { note("frame \(step)/\(frames)") }
-      // Only the newest plane matters for the output; fill the queue slots
-      // with successive frames so a stateful graph sees motion too. Each of
-      // the six channels gets its own content, as a real warped frame's do --
-      // six copies of one plane is an input the model never sees on a drive.
-      for slot in 0..<slots {
-        let base = slot * 6 * planeBytes
-        for k in 0..<6 {
-          fillPlane(step + 4 * slot + k * 7)
-          let off = base + k * planeBytes
-          stack.replaceSubrange(off..<(off + planeBytes), with: plane)
-        }
+      // A fresh random frame every step, filled in place. That is the input
+      // the benchmark runs for minutes without complaint; a synthetic road was
+      // not, and the trap kept landing on the first frame that used it.
+      var seed = UInt64(bitPattern: Int64(step)) &* 0x9E37_79B9_7F4A_7C15 &+ 1
+      for i in 0..<stack.count {
+        seed = seed &* 6364136223846793005 &+ 1442695040888963407
+        stack[i] = UInt8(truncatingIfNeeded: seed >> 33)
       }
       if detailed { note("f0 built") }
       lock.lock()
