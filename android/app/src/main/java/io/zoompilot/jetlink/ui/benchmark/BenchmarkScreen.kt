@@ -275,7 +275,7 @@ private fun RunCard(
                     Text(l10n(R.string.bench_10min))
                 }
             }
-            OutlinedButton(onClick = actions.probe, enabled = enabled, modifier = Modifier.fillMaxWidth()) {
+            OutlinedButton(onClick = actions.probe, enabled = blocker == null && !starting, modifier = Modifier.fillMaxWidth()) {
                 Icon(Icons.Filled.BarChart, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
                 Text(l10n(R.string.bench_probe))

@@ -24,15 +24,17 @@ extension EngineHost {
     }
     let spec = l.spec
     guard let io = l.engine.outputs[ModelConstants.drivingOutput],
-          io.type == .float || io.type == .float16 else {
+      io.type == .float || io.type == .float16
+    else {
       throw HostError.failed("the engine's driving output is not float")
     }
     guard let poseSlice = spec.outputSlices.first(where: { $0.name == "pose" })?.range(in: spec.outputCount),
-          let planSlice = spec.outputSlices.first(where: { $0.name == "plan" })?.range(in: spec.outputCount) else {
+      let planSlice = spec.outputSlices.first(where: { $0.name == "plan" })?.range(in: spec.outputCount)
+    else {
       throw HostError.failed("the spec has no pose or plan slice")
     }
 
-    let shape = spec.warpedShape           // [slots, 6, h, w]
+    let shape = spec.warpedShape  // [slots, 6, h, w]
     let slots = shape[0]
     let h = shape[2]
     let w = shape[3]
@@ -44,7 +46,7 @@ extension EngineHost {
     // by the frame index so consecutive calls differ. Deliberately synthetic
     // and identical on every host; nonsense as a road, but the same nonsense.
     func frame(_ step: Int) -> [UInt8] {
-      var img = [UInt8](repeating: 90, count: planeBytes)   // flat sky
+      var img = [UInt8](repeating: 90, count: planeBytes)  // flat sky
       let horizon = h / 3
       var seed = UInt64(7)
       for y in horizon..<h {
@@ -90,8 +92,11 @@ extension EngineHost {
 
       let out = l.staging.layout.output!
       output.withUnsafeMutableBytes { o in
-        if io.type == .float16 { Convert.f16ToF32(out, o.baseAddress!, count: spec.outputCount) }
-        else { o.baseAddress!.copyMemory(from: out, byteCount: spec.outputCount * 4) }
+        if io.type == .float16 {
+          Convert.f16ToF32(out, o.baseAddress!, count: spec.outputCount)
+        } else {
+          o.baseAddress!.copyMemory(from: out, byteCount: spec.outputCount * 4)
+        }
       }
       let pose = output[poseSlice]
       let plan = output[planSlice]
@@ -109,8 +114,9 @@ extension EngineHost {
       let uniq = Set(xs.map { $0.rounded(to: 4) }).count
       let mean = xs.reduce(0, +) / Double(xs.count)
       let variance = xs.reduce(0) { $0 + ($1 - mean) * ($1 - mean) } / Double(xs.count)
-      return String(format: "%@ n=%d unique=%d std=%.5f min=%+.4f max=%+.4f",
-                    name, xs.count, uniq, variance.squareRoot(), xs.min()!, xs.max()!)
+      return String(
+        format: "%@ n=%d unique=%d std=%.5f min=%+.4f max=%+.4f",
+        name, xs.count, uniq, variance.squareRoot(), xs.min()!, xs.max()!)
     }
     let device = backend.describe()["device"] ?? "?"
     let header = "device \(device), frames \(frames), \(EngineHost.buildLine(l.engine))"
