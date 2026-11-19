@@ -119,6 +119,10 @@ public final class EngineHost: @unchecked Sendable {
   var session: Session?
   /// A benchmark owns the engine: frames from a comma are answered NOT_READY.
   var benchmarking = false
+  /// Frames still to be fingerprinted into the log: what the decode path
+  /// actually produced, one line each, for a phone whose plan stops moving
+  /// while its lane lines do not. Guarded by `lock`.
+  var framesToTrace = 0
   /// When the comma last did something, a frame, a hello or the load it
   /// asked for: `warmIfIdle` goes by it.
   var lastSeenAt: TimeInterval = 0
@@ -249,6 +253,16 @@ public final class EngineHost: @unchecked Sendable {
     lock.lock()
     defer { lock.unlock() }
     return loaded?.sha256
+  }
+
+  /// Fingerprint the next `count` frames the comma sends into the log. What a
+  /// phone decodes is not otherwise visible from here: whether consecutive
+  /// frames differ at all, whether the two cameras came out as the same
+  /// picture, and whether the client asked for a reset on each one.
+  public func traceFrames(_ count: Int) {
+    lock.lock()
+    framesToTrace = min(max(count, 0), 600)
+    lock.unlock()
   }
 
   // MARK: requests

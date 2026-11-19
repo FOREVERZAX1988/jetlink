@@ -36,6 +36,7 @@
     /// path on this computer, and shutdown and unload are the apps'.
     static let commands: Set<String> = [
       "status", "catalog", "download", "cancel_download", "prepare", "forget", "inventory", "benchmark", "cancel_benchmark", "probe_numerics",
+      "trace_frames",
     ]
     /// What takes the GPU, the disk or the network from the frames.
     static let heavy: Set<String> = ["download", "prepare", "forget", "benchmark", "probe_numerics"]

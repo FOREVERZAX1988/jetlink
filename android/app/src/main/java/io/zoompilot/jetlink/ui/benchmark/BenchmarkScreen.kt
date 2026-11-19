@@ -103,6 +103,7 @@ class BenchmarkActions(
     val start: (Int) -> Unit = {},
     val cancel: () -> Unit = {},
     val probe: () -> Unit = {},
+    val trace: () -> Unit = {},
 )
 
 /**
@@ -140,6 +141,16 @@ fun BenchmarkScreen(graph: AppGraph) {
             graph.scope.launch {
                 refusal = null
                 val reply = graph.server.command("probe_numerics", "frames" to 60)
+                if (!reply.ok) refusal = reply.error?.let(Format::sentence)
+            }
+        },
+        trace = {
+            // The next 120 frames the comma sends go into the log plane by
+            // plane: a decode that repeats a picture, one camera given the
+            // other's frame, or a reset on every frame all show up there.
+            graph.scope.launch {
+                refusal = null
+                val reply = graph.server.command("trace_frames", "frames" to 120)
                 if (!reply.ok) refusal = reply.error?.let(Format::sentence)
             }
         },
@@ -280,6 +291,13 @@ private fun RunCard(
                 Icon(Icons.Filled.BarChart, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
                 Text(l10n(R.string.bench_probe))
+            }
+            // Enabled with a comma attached, unlike the benchmark above: the
+            // frames it fingerprints are the ones the comma is sending.
+            OutlinedButton(onClick = actions.trace, enabled = !running && !starting, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Filled.Movie, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(l10n(R.string.bench_trace))
             }
         }
         val failure = refusal?.let { l10n(R.string.bench_refusal) + " " + it }

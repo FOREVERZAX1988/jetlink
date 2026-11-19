@@ -515,6 +515,13 @@ final class Session: @unchecked Sendable {
     if flags.contains(.resetQueues) {
       loaded.staging.reset()
     }
+    // Asked for by the control channel: what this phone's decode made of the
+    // frame, plane by plane, so a picture it repeats or a camera it hands the
+    // other's frame is in the log rather than in a debugger.
+    if host.framesToTrace > 0 {
+      host.framesToTrace -= 1
+      trace(warped, frameID: frameID, flags: flags, warpedBytes: layout.warpedBytes)
+    }
 
     var status = Wire.Status.ok
     var queueUs: UInt32 = 0
@@ -563,6 +570,38 @@ final class Session: @unchecked Sendable {
       frameID: frameID, status: status, gpuUs: loaded.engine.lastGpuUs, queueUs: queueUs, totalUs: microseconds(since: started),
       outputCount: replied ? count : 0, hidden: replied && !flags.contains(.wantHidden) ? layout.hidden : nil,
       wantsState: flags.contains(.wantState), ran: true, failure: failure)
+  }
+
+  /// One line per frame while the control channel asked for them: each of the
+  /// twelve planes' own fingerprint. Two frames the same is a decode that did
+  /// not advance; the two cameras the same is one stream decoded twice; a
+  /// reset on every frame is the client clearing the history the model needs.
+  private func trace(_ warped: UnsafeRawPointer, frameID: UInt32, flags: Wire.Flag, warpedBytes: Int) {
+    let planes = 12
+    guard warpedBytes > 0, warpedBytes % planes == 0 else { return }
+    let planeBytes = warpedBytes / planes
+    var line = "frame=\(frameID)"
+    if flags.contains(.hevc) {
+      line += " hevc"
+    } else if flags.contains(.lossless) {
+      line += " lossless"
+    } else {
+      line += " raw"
+    }
+    if flags.contains(.resetQueues) { line += " reset" }
+    for plane in 0..<planes {
+      let start = warped.advanced(by: plane * planeBytes).assumingMemoryBound(to: UInt8.self)
+      // FNV-1a over every fourth byte: a tenth of a megabyte tells two frames
+      // apart and stays off the frame's budget.
+      var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+      var i = 0
+      while i < planeBytes {
+        hash = (hash ^ UInt64(start[i])) &* 0x0000_0100_0000_01b3
+        i += 4
+      }
+      line += " " + String(hash & 0xFFFF_FFFF, radix: 16)
+    }
+    log.warning("frame trace \(line)")
   }
 
   private func onShutdown(_ message: Message) throws {

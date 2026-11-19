@@ -311,6 +311,11 @@ public final class ServerController: @unchecked Sendable {
     case .probeNumerics(let frames):
       try startProbe(frames: frames)
       return ["queued": .bool(true)]
+    case .traceFrames(let frames):
+      // Not a job: the frame path itself writes the lines, so a comma that is
+      // connected now is exactly what this needs.
+      server.host.traceFrames(frames)
+      return ["queued": .bool(true)]
     }
   }
 

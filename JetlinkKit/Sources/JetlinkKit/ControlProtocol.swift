@@ -787,6 +787,10 @@ public enum ControlCommand: Sendable, Equatable {
   /// pose/plan outputs actually move. Writes the numbers to the server log;
   /// the app's Share Logs button carries them out. No comma required.
   case probeNumerics(frames: Int)
+  /// Fingerprint the next `frames` frames the comma sends into the server log:
+  /// what the decode produced plane by plane, and whether it asked for a
+  /// reset. For a phone whose plan freezes while its lane lines do not.
+  case traceFrames(frames: Int)
 
   public var name: String {
     switch self {
@@ -803,6 +807,7 @@ public enum ControlCommand: Sendable, Equatable {
     case .benchmark: return "benchmark"
     case .cancelBenchmark: return "cancel_benchmark"
     case .probeNumerics: return "probe_numerics"
+    case .traceFrames: return "trace_frames"
     }
   }
 
@@ -832,6 +837,7 @@ public enum ControlCommand: Sendable, Equatable {
     case "benchmark": self = .benchmark(seconds: number("seconds")?.doubleValue ?? 60)
     case "cancel_benchmark": self = .cancelBenchmark
     case "probe_numerics": self = .probeNumerics(frames: number("frames")?.intValue ?? 40)
+    case "trace_frames": self = .traceFrames(frames: number("frames")?.intValue ?? 120)
     default: throw Invalid(description: "unknown command \(name)")
     }
   }
