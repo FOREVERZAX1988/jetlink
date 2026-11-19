@@ -19,9 +19,22 @@ extension EngineHost {
   @discardableResult
   public func probeNumerics(frames requested: Int) throws -> [String] {
     let frames = min(max(requested, 4), 240)
+    // Own the engine exactly like the benchmark does. QNN HTP engines report
+    // coolsWhenIdle, so tick() calls warmIfIdle() whenever nothing else is
+    // using the engine; without these guards it races this probe on the same
+    // session and traps the process (Swift exclusive-access / native QNN).
+    // benchmarking=true makes warmIfIdle and the live frame path both stand
+    // down; the host lock serialises every stage/run/reset here.
+    lock.lock()
+    defer { lock.unlock() }
     guard let l = loaded else {
       throw HostError.invalid("no model is loaded; prepare one first")
     }
+    guard !benchmarking else {
+      throw HostError.invalid("the engine is busy (benchmark or probe running)")
+    }
+    benchmarking = true
+    defer { benchmarking = false }
     let spec = l.spec
     guard let io = l.engine.outputs[ModelConstants.drivingOutput],
       io.type == .float || io.type == .float16
@@ -39,7 +52,7 @@ extension EngineHost {
     let h = shape[2]
     let w = shape[3]
     let planeBytes = h * w
-    var packed = [Float](repeating: 0, count: spec.packedCount)
+    let packed = [Float](repeating: 0, count: spec.packedCount)
     var output = [Float](repeating: 0, count: spec.outputCount)
 
     // A road-ish frame: two converging lines over a textured band, shifted
@@ -61,8 +74,9 @@ extension EngineHost {
         for y in horizon..<h {
           let cx = centre + (y - horizon) / 6
           let half = 2 + (y > horizon ? 2 : 0)
-          for x in max(0, cx - half)...min(w - 1, cx + half) {
-            img[y * w + x] = 235
+          let lo = max(0, cx - half), hi = min(w - 1, cx + half)
+          if lo <= hi {
+            for x in lo...hi { img[y * w + x] = 235 }
           }
         }
       }
@@ -73,6 +87,9 @@ extension EngineHost {
     var rotz: [Double] = []
     var planmax: [Double] = []
 
+    guard let out = l.staging.layout.output else {
+      throw HostError.failed("the engine has no driving output buffer")
+    }
     l.staging.reset()
     for step in 0..<frames {
       // Only the newest plane matters for the output; fill the queue slots
@@ -90,7 +107,6 @@ extension EngineHost {
       }
       try l.engine.run()
 
-      let out = l.staging.layout.output!
       output.withUnsafeMutableBytes { o in
         if io.type == .float16 {
           Convert.f16ToF32(out, o.baseAddress!, count: spec.outputCount)
@@ -105,15 +121,18 @@ extension EngineHost {
         rotz.append(Double(pose[5]))
       }
       if !plan.isEmpty { planmax.append(Double(plan.map { abs($0) }.max() ?? 0)) }
-      // Carry the hidden state forward exactly as a frame from the comma does.
-      l.staging.keep(outputs: out, type: io.type)
+      // A queued graph feeds the prior frame's hidden state back via keep();
+      // a stateful graph keeps its own state, so this is a no-op for it. Only
+      // feed back finite output, matching the frame path and the benchmark.
+      let finite = output.withUnsafeBytes { Convert.allFinite($0.baseAddress!, count: spec.outputCount) }
+      if finite { l.staging.keep(outputs: out, type: io.type) }
     }
 
     func summarize(_ name: String, _ xs: [Double]) -> String {
       guard !xs.isEmpty else { return "\(name) n=0" }
       let uniq = Set(xs.map { $0.rounded(to: 4) }).count
       let mean = xs.reduce(0, +) / Double(xs.count)
-      let variance = xs.reduce(0) { $0 + ($1 - mean) * ($1 - mean) } / Double(xs.count)
+      let variance = max(0, xs.reduce(0) { $0 + ($1 - mean) * ($1 - mean) } / Double(xs.count))
       return String(
         format: "%@ n=%d unique=%d std=%.5f min=%+.4f max=%+.4f",
         name, xs.count, uniq, variance.squareRoot(), xs.min()!, xs.max()!)
