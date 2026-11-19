@@ -5,40 +5,56 @@ import JetlinkKit
 /// pose/plan outputs actually move. This is the on-device twin of
 /// workspace/diag1116/synth_probe.py: it bypasses the camera, the comma and
 /// the wire, and drives the engine through the same stage/run/keep path a
-/// real frame takes. The point is to separate "the QNN path computes a
-/// frozen answer" from "the link or the camera never delivered motion".
+/// real frame takes.
 ///
 /// A healthy model returns a plan that grows with the sliding texture and a
-/// transx that tracks it (std of order 0.7 over 40 frames). A broken one
-/// returns the same few numbers every frame (unique ~1, std ~0.005). The
-/// numbers go to the server log, which the app's Share Logs button carries
-/// out, so this can be run on a phone in someone else's hands.
+/// transx that tracks it. A broken one returns the same few numbers every
+/// frame (unique ~1, std ~0). The summary goes to the server log and to the
+/// app's Share Logs; breadcrumbs also go to `trace`, a file beside the app's
+/// cache that survives a crash, so a trap is locatable after a restart.
+///
+/// Owns the engine exactly like `benchmark` does: the `benchmarking` flag
+/// keeps `warmIfIdle` and the live frame path off the engine, and the host
+/// lock covers each frame rather than the whole run.
 extension EngineHost {
-  /// One probe report, logged as a single WARNING line prefixed with
-  /// `probe_numerics` so it survives a log tail and is easy to grep.
   @discardableResult
-  public func probeNumerics(frames requested: Int) throws -> [String] {
+  public func probeNumerics(frames requested: Int, trace traceURL: URL? = nil) throws -> [String] {
     let frames = min(max(requested, 4), 240)
-    // Own the engine exactly like the benchmark does. QNN HTP engines report
-    // coolsWhenIdle, so tick() calls warmIfIdle() whenever nothing else is
-    // using the engine; without these guards it races this probe on the same
-    // session and traps the process (Swift exclusive-access / native QNN).
-    // benchmarking=true makes warmIfIdle and the live frame path both stand
-    // down; the host lock serialises every stage/run/reset here.
+
+    // Plain interpolation only: String(format:) with %@ segfaults on Android's
+    // corelibs Foundation, and a trap here would take the whole app down.
+    func note(_ line: String) {
+      Log.write(.warning, "probe_numerics", line)
+      guard let url = traceURL else { return }
+      let data = (line + "\n").data(using: .utf8) ?? Data()
+      if let handle = try? FileHandle(forWritingTo: url) {
+        handle.seekToEndOfFile()
+        handle.write(data)
+        try? handle.close()
+      } else {
+        try? data.write(to: url)
+      }
+    }
+
     lock.lock()
-    defer { lock.unlock() }
     guard let l = loaded else {
+      lock.unlock()
       throw HostError.invalid("no model is loaded; prepare one first")
     }
     guard !benchmarking else {
+      lock.unlock()
       throw HostError.invalid("the engine is busy (benchmark or probe running)")
     }
     benchmarking = true
-    defer { benchmarking = false }
-    // Breadcrumbs: written before each risky phase so a trap is locatable from
-    // the log alone. Plain interpolation only -- String(format:) with %@ is a
-    // known segfault on Android's corelibs Foundation.
-    Log.write(.warning, "probe_numerics", "START frames=\(frames)")
+    lock.unlock()
+    defer {
+      lock.lock()
+      benchmarking = false
+      if loaded === l { l.staging.reset() }
+      lock.unlock()
+    }
+
+    note("START frames=\(frames)")
     let spec = l.spec
     guard let io = l.engine.outputs[ModelConstants.drivingOutput],
       io.type == .float || io.type == .float16
@@ -59,9 +75,9 @@ extension EngineHost {
     let packed = [Float](repeating: 0, count: spec.packedCount)
     var output = [Float](repeating: 0, count: spec.outputCount)
 
-    // A road-ish frame: two converging lines over a textured band, shifted
-    // by the frame index so consecutive calls differ. Deliberately synthetic
-    // and identical on every host; nonsense as a road, but the same nonsense.
+    // A road-ish frame: two converging lines over a textured band, shifted by
+    // the frame index so consecutive calls differ. Deliberately synthetic and
+    // identical on every host; nonsense as a road, but the same nonsense.
     func frame(_ step: Int) -> [UInt8] {
       var img = [UInt8](repeating: 90, count: planeBytes)  // flat sky
       let horizon = h / 3
@@ -91,13 +107,17 @@ extension EngineHost {
     var rotz: [Double] = []
     var planmax: [Double] = []
 
-    guard let out = l.staging.layout.output else {
-      throw HostError.failed("the engine has no driving output buffer")
+    lock.lock()
+    if loaded !== l {
+      lock.unlock()
+      throw HostError.failed("the engine was unloaded before the probe started")
     }
     l.staging.reset()
-    Log.write(.warning, "probe_numerics", "LOADED output=\(spec.outputCount) warped=\(spec.warpedBytes)")
+    lock.unlock()
+
+    note("RESET ok warped=\(spec.warpedBytes) output=\(spec.outputCount)")
     for step in 0..<frames {
-      if step % 10 == 0 { Log.write(.warning, "probe_numerics", "frame \(step)/\(frames)") }
+      if step % 10 == 0 { note("frame \(step)/\(frames)") }
       // Only the newest plane matters for the output; fill the queue slots
       // with successive frames so a stateful graph sees motion too.
       var stack = [UInt8]()
@@ -106,13 +126,28 @@ extension EngineHost {
         let plane = frame(step + 4 * slot)
         for _ in 0..<6 { stack.append(contentsOf: plane) }
       }
-      try stack.withUnsafeBytes { raw in
-        try packed.withUnsafeBytes { p in
-          try l.staging.stage(warped: raw.baseAddress!, packed: p.baseAddress!)
-        }
+      lock.lock()
+      guard loaded === l else {
+        lock.unlock()
+        throw HostError.failed("the engine was unloaded during the probe")
       }
-      try l.engine.run()
-
+      // Taken every frame, as the benchmark does: a stateful graph swaps its
+      // output buffer between runs, so a cached pointer can go stale.
+      guard let out = l.staging.layout.output else {
+        lock.unlock()
+        throw HostError.failed("the engine has no driving output buffer")
+      }
+      do {
+        try stack.withUnsafeBytes { raw in
+          try packed.withUnsafeBytes { p in
+            try l.staging.stage(warped: raw.baseAddress!, packed: p.baseAddress!)
+          }
+        }
+        try l.engine.run()
+      } catch {
+        lock.unlock()
+        throw error
+      }
       output.withUnsafeMutableBytes { o in
         if io.type == .float16 {
           Convert.f16ToF32(out, o.baseAddress!, count: spec.outputCount)
@@ -132,15 +167,14 @@ extension EngineHost {
       // feed back finite output, matching the frame path and the benchmark.
       let finite = output.withUnsafeBytes { Convert.allFinite($0.baseAddress!, count: spec.outputCount) }
       if finite { l.staging.keep(outputs: out, type: io.type) }
+      lock.unlock()
     }
+    note("LOOP done n=\(transx.count)")
 
-    // String(format:) with %@ segfaults on Android's corelibs Foundation (the
-    // variadic object bridging has no type checking). Pure interpolation only.
     func fixed(_ x: Double, _ digits: Int) -> String {
       guard x.isFinite else { return String(x) }  // nan / inf, never trap
       let scale = pow(10.0, Double(digits))
-      let r = (x * scale).rounded() / scale
-      return String(r)
+      return String(((x * scale).rounded()) / scale)
     }
     func summarize(_ name: String, _ xs: [Double]) -> String {
       guard !xs.isEmpty else { return "\(name) n=0" }
@@ -148,7 +182,8 @@ extension EngineHost {
       let mean = xs.reduce(0, +) / Double(xs.count)
       let variance = max(0, xs.reduce(0) { $0 + ($1 - mean) * ($1 - mean) } / Double(xs.count))
       let lo = xs.min() ?? 0, hi = xs.max() ?? 0
-      return "\(name) n=\(xs.count) unique=\(uniq) std=\(fixed(variance.squareRoot(), 5)) min=\(fixed(lo, 4)) max=\(fixed(hi, 4))"
+      return "\(name) n=\(xs.count) unique=\(uniq) std=\(fixed(variance.squareRoot(), 5))"
+        + " min=\(fixed(lo, 4)) max=\(fixed(hi, 4))"
     }
     let device = backend.describe()["device"] ?? "?"
     let header = "device \(device), frames \(frames), \(EngineHost.buildLine(l.engine))"
@@ -159,14 +194,9 @@ extension EngineHost {
       summarize("transx", transx),
       "HEALTHY: planmax 3-15 m with unique near frame count; FROZEN: planmax ~0.3 m with unique near 1",
     ]
-    for line in lines { Log.write(.warning, "probe_numerics", line) }
-    Log.write(.warning, "probe_numerics", "DONE ok=1")
+    for line in lines { note(line) }
+    note("DONE ok=1")
     return lines
-  }
-
-  /// Name used by the command dispatcher in ServerController.
-  public func probeNumericsAndSummarize(frames: Int) throws -> [String] {
-    try probeNumerics(frames: frames)
   }
 }
 

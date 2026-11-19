@@ -309,23 +309,34 @@ public final class ServerController: @unchecked Sendable {
       run.cancel()
       return [:]
     case .probeNumerics(let frames):
-      // Runs synchronously for a second at most; the emitted log lines carry
-      // the numbers, and the reply echoes the same three summaries so a
-      // caller that reads replies (the status page) sees them too.
-      let summaries = try await withCheckedThrowingContinuation { continuation in
-        DispatchQueue.global(qos: .userInteractive).async {
-          do {
-            let lines = try self.server.host.probeNumericsAndSummarize(frames: frames)
-            continuation.resume(returning: lines)
-          } catch {
-            continuation.resume(throwing: error)
-          }
-        }
-      }
-      var extras: [String: JSONValue] = ["ok": .bool(true)]
-      for (i, line) in summaries.enumerated() { extras["line\(i)"] = .string(line) }
-      return extras
+      try startProbe(frames: frames)
+      return ["queued": .bool(true)]
     }
+  }
+
+  // MARK: numerics probe
+
+  /// Like `startBenchmark`: refuse what cannot run, then hand it a dedicated
+  /// thread and return at once. The numbers go to the log and to a trace file
+  /// beside the cache; the reply only says it started, so the JNI caller is
+  /// never blocked while the engine runs.
+  private func startProbe(frames: Int) throws {
+    if currentLink.state == .connected {
+      throw ControlError.refused("a comma is connected; disconnect it to run the probe")
+    }
+    guard server.host.loadedSHA() != nil else { throw ControlError.refused("no model is loaded; prepare one first") }
+    let trace = server.configuration.cacheRoot.appendingPathComponent("probe-progress.log")
+    let thread = Thread { [self] in
+      do {
+        _ = try server.host.probeNumerics(frames: frames, trace: trace)
+      } catch {
+        log.warning("probe failed: \(String(describing: error))")
+      }
+    }
+    thread.name = "jetlink-numerics-probe"
+    // The frame path's priority, as the benchmark uses.
+    thread.qualityOfService = .userInteractive
+    thread.start()
   }
 
   // MARK: benchmark

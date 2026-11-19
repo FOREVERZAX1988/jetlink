@@ -70,7 +70,7 @@ fun LogsScreen(graph: AppGraph, back: () -> Unit) {
         back = back,
         share = {
             scope.launch {
-                val file = withContext(Dispatchers.IO) { logFile(context, lines) }
+                val file = withContext(Dispatchers.IO) { logFile(context, lines, graph.server.cacheDirectory) }
                 shareFile(context, file, "text/plain", shareTitle)
             }
         },
@@ -78,9 +78,24 @@ fun LogsScreen(graph: AppGraph, back: () -> Unit) {
     )
 }
 
-/** The log as a file to share: an intent's text would have to fit one Binder transaction. */
-private fun logFile(context: Context, lines: List<String>): File =
-    File(context.cacheDir, "logs").apply { mkdirs() }.resolve("jetlink.log").apply { writeText(lines.joinToString("\n", postfix = "\n")) }
+/**
+ * The log as a file to share: an intent's text would have to fit one Binder transaction.
+ *
+ * The numerics probe writes breadcrumbs to probe-progress.log on disk, so they
+ * outlive a crash (the in-memory log does not). Append it here so a crash
+ * report carries the last step the probe reached before it died.
+ */
+private fun logFile(context: Context, lines: List<String>, cacheDirectory: File): File {
+    val trace = File(cacheDirectory, "probe-progress.log")
+    val body = buildString {
+        append(lines.joinToString("\n", postfix = "\n"))
+        if (trace.exists()) {
+            append("\n--- probe progress ---\n")
+            append(trace.readText())
+        }
+    }
+    return File(context.cacheDir, "logs").apply { mkdirs() }.resolve("jetlink.log").apply { writeText(body) }
+}
 
 @Composable
 fun LogsContent(lines: List<String>, back: () -> Unit, share: () -> Unit, clear: () -> Unit) {
