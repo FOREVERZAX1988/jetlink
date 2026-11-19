@@ -126,6 +126,16 @@ public final class EngineHost: @unchecked Sendable {
   /// What the trace has seen so far, for the line that closes it.
   var tracedServed = 0
   var tracedRejected = 0
+  var tracedResets = 0
+  /// Frames whose twelve planes were the same as the frame before: a decode
+  /// that repeats a picture, which freezes a model that needs history.
+  var tracedIdentical = 0
+  var tracedLastPlanes: [UInt64] = []
+  /// The pose the engine answered, as the trace goes: `unique` near 1 over a
+  /// hundred frames is a model that never saw the road move.
+  var tracedPose: Set<Int> = []
+  var tracedPoseLow = Double.greatestFiniteMagnitude
+  var tracedPoseHigh = -Double.greatestFiniteMagnitude
   /// Frames still to be written out as raw (2,6,H,W) buffers, and where.
   var framesToDump = 0
   var dumpedFrames = 0
@@ -271,6 +281,12 @@ public final class EngineHost: @unchecked Sendable {
     framesToTrace = min(max(count, 0), 600)
     tracedServed = 0
     tracedRejected = 0
+    tracedResets = 0
+    tracedIdentical = 0
+    tracedLastPlanes = []
+    tracedPose = []
+    tracedPoseLow = .greatestFiniteMagnitude
+    tracedPoseHigh = -.greatestFiniteMagnitude
     lock.unlock()
   }
 

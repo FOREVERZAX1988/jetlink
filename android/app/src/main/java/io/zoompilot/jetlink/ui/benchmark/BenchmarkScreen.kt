@@ -167,12 +167,12 @@ fun BenchmarkScreen(graph: AppGraph) {
             }
         },
         trace = {
-            // The next 120 frames the comma sends go into the log plane by
-            // plane: a decode that repeats a picture, one camera given the
-            // other's frame, or a reset on every frame all show up there.
+            // The next 300 frames (15 s at the comma's pace) go into the log:
+            // twelve plane hashes, whether the frame repeated, the pose the
+            // engine answered, and the resets the client asked for.
             graph.scope.launch {
                 refusal = null
-                val reply = graph.server.command("trace_frames", "frames" to 120)
+                val reply = graph.server.command("trace_frames", "frames" to 300)
                 if (!reply.ok) refusal = reply.error?.let(Format::sentence)
             }
         },

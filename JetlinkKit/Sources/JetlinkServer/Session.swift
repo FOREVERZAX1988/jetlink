@@ -534,16 +534,14 @@ final class Session: @unchecked Sendable {
     if flags.contains(.resetQueues) {
       loaded.staging.reset()
     }
-    // Asked for by the control channel: what this phone's decode made of the
-    // frame, plane by plane, so a picture it repeats or a camera it hands the
-    // other's frame is in the log rather than in a debugger.
+    // Asked for by the control channel: the frame's own fingerprints, kept
+    // until the run says what the engine made of it.
+    var tracedPlanes: [UInt64]?
     if host.framesToTrace > 0 {
       host.framesToTrace -= 1
       host.tracedServed += 1
-      trace(warped, frameID: frameID, flags: flags, warpedBytes: layout.warpedBytes)
-      if host.framesToTrace == 0 {
-        log.warning("frame trace done: \(host.tracedServed) served, \(host.tracedRejected) rejected")
-      }
+      if flags.contains(.resetQueues) { host.tracedResets += 1 }
+      tracedPlanes = planeHashes(warped, warpedBytes: layout.warpedBytes)
     }
     // The same frames, kept: a real one is what the phone's probe has been
     // missing, and only the comma can hand one over.
@@ -604,20 +602,45 @@ final class Session: @unchecked Sendable {
     }
 
     let replied = status == .ok || status == .notFinite
+    // The frame, and what the engine made of it, on one line: a frame that
+    // repeats is a decode that did not advance, and a pose that never changes
+    // over frames that do is a model that is being restarted under itself.
+    if let tracedPlanes {
+      traceLine(frameID: frameID, flags: flags, planes: tracedPlanes, spec: loaded.spec, count: count, replied: replied)
+    }
     return InferReply(
       frameID: frameID, status: status, gpuUs: loaded.engine.lastGpuUs, queueUs: queueUs, totalUs: microseconds(since: started),
       outputCount: replied ? count : 0, hidden: replied && !flags.contains(.wantHidden) ? layout.hidden : nil,
       wantsState: flags.contains(.wantState), ran: true, failure: failure)
   }
 
-  /// One line per frame while the control channel asked for them: each of the
-  /// twelve planes' own fingerprint. Two frames the same is a decode that did
-  /// not advance; the two cameras the same is one stream decoded twice; a
-  /// reset on every frame is the client clearing the history the model needs.
-  private func trace(_ warped: UnsafeRawPointer, frameID: UInt32, flags: Wire.Flag, warpedBytes: Int) {
+  /// Each of the twelve planes' own fingerprint, over every fourth byte:
+  /// 100 kB tells two frames apart and stays off the frame's budget.
+  private func planeHashes(_ warped: UnsafeRawPointer, warpedBytes: Int) -> [UInt64] {
     let planes = 12
-    guard warpedBytes > 0, warpedBytes % planes == 0 else { return }
+    guard warpedBytes > 0, warpedBytes % planes == 0 else { return [] }
     let planeBytes = warpedBytes / planes
+    var hashes: [UInt64] = []
+    hashes.reserveCapacity(planes)
+    for plane in 0..<planes {
+      let start = warped.advanced(by: plane * planeBytes).assumingMemoryBound(to: UInt8.self)
+      var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+      var i = 0
+      while i < planeBytes {
+        hash = (hash ^ UInt64(start[i])) &* 0x0000_0100_0000_01b3
+        i += 4
+      }
+      hashes.append(hash & 0xFFFF_FFFF)
+    }
+    return hashes
+  }
+
+  /// One line per frame while the control channel asked for them: what came
+  /// in, what the wire carried it as, whether it was the frame before it, and
+  /// what the engine answered. Those four together name the fault: a repeated
+  /// frame is the decode, a pose that never moves over frames that do is a
+  /// model being restarted under itself, and a reset says so outright.
+  private func traceLine(frameID: UInt32, flags: Wire.Flag, planes: [UInt64], spec: ModelSpec, count: Int, replied: Bool) {
     var line = "frame=\(frameID)"
     if flags.contains(.hevc) {
       line += " hevc"
@@ -627,21 +650,43 @@ final class Session: @unchecked Sendable {
       line += " raw"
     }
     if flags.contains(.resetQueues) { line += " reset" }
-    for plane in 0..<planes {
-      let start = warped.advanced(by: plane * planeBytes).assumingMemoryBound(to: UInt8.self)
-      // FNV-1a over every fourth byte: a tenth of a megabyte tells two frames
-      // apart and stays off the frame's budget.
-      var hash: UInt64 = 0xcbf2_9ce4_8422_2325
-      var i = 0
-      while i < planeBytes {
-        hash = (hash ^ UInt64(start[i])) &* 0x0000_0100_0000_01b3
-        i += 4
+    if host.tracedLastPlanes == planes {
+      host.tracedIdentical += 1
+      line += " same-as-previous"
+    }
+    host.tracedLastPlanes = planes
+    for hash in planes { line += " " + String(hash, radix: 16) }
+
+    if replied {
+      let slices = spec.outputSlices
+      if let pose = slices.first(where: { $0.name == "pose" })?.range(in: count), pose.lowerBound < count {
+        let transx = Double(outputBuffer[pose.lowerBound])
+        line += " pose=" + String(((transx * 10000).rounded()) / 10000)
+        host.tracedPose.insert(Int((transx * 1000).rounded()))
+        host.tracedPoseLow = min(host.tracedPoseLow, transx)
+        host.tracedPoseHigh = max(host.tracedPoseHigh, transx)
       }
-      line += " " + String(hash & 0xFFFF_FFFF, radix: 16)
+      // The path's last step, out of the MDN mean block: metres, unlike the
+      // raw tensor max.
+      if let plan = slices.first(where: { $0.name == "plan" })?.range(in: count),
+        plan.lowerBound + 32 * 15 < count
+      {
+        let pathx = Double(outputBuffer[plan.lowerBound + 32 * 15])
+        line += " pathx=" + String(((pathx * 100).rounded()) / 100)
+      }
     }
     log.warning("frame trace \(line)")
+    if host.framesToTrace == 0 {
+      let low = host.tracedPoseLow.isFinite ? host.tracedPoseLow : 0
+      let high = host.tracedPoseHigh.isFinite ? host.tracedPoseHigh : 0
+      log.warning(
+        "frame trace done: \(host.tracedServed) served, \(host.tracedRejected) rejected, "
+          + "\(host.tracedIdentical) same as the frame before, \(host.tracedResets) asked for a reset, "
+          + "pose unique=\(host.tracedPose.count) from \(low) to \(high)")
+    }
   }
 
+  /// The slices of the engine being served, for the trace's own use.
   private func onShutdown(_ message: Message) throws {
     let reason = (JSONLine.decode(message.payload)?["reason"] as? String) ?? ""
     log.warning("shutdown requested by the client: \(reason.isEmpty ? "no reason given" : reason)")
