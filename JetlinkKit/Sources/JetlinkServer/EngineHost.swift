@@ -136,6 +136,10 @@ public final class EngineHost: @unchecked Sendable {
   var tracedPose: Set<Int> = []
   var tracedPoseLow = Double.greatestFiniteMagnitude
   var tracedPoseHigh = -Double.greatestFiniteMagnitude
+  /// How much texture the frames carried, the first plane's spread: a dark
+  /// frame cannot show motion, and that is not a fault of the engine.
+  var tracedLumaLow = Double.greatestFiniteMagnitude
+  var tracedLumaHigh = -Double.greatestFiniteMagnitude
   /// Frames still to be written out as raw (2,6,H,W) buffers, and where.
   var framesToDump = 0
   var dumpedFrames = 0
@@ -287,6 +291,8 @@ public final class EngineHost: @unchecked Sendable {
     tracedPose = []
     tracedPoseLow = .greatestFiniteMagnitude
     tracedPoseHigh = -.greatestFiniteMagnitude
+    tracedLumaLow = .greatestFiniteMagnitude
+    tracedLumaHigh = -.greatestFiniteMagnitude
     lock.unlock()
   }
 

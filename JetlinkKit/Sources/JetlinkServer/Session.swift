@@ -534,14 +534,18 @@ final class Session: @unchecked Sendable {
     if flags.contains(.resetQueues) {
       loaded.staging.reset()
     }
-    // Asked for by the control channel: the frame's own fingerprints, kept
-    // until the run says what the engine made of it.
+    // Asked for by the control channel: the frame's own fingerprints and how
+    // much texture it carried, kept until the run says what the engine made
+    // of it.
     var tracedPlanes: [UInt64]?
+    var tracedLuma: (mean: Double, spread: Double)?
     if host.framesToTrace > 0 {
       host.framesToTrace -= 1
       host.tracedServed += 1
       if flags.contains(.resetQueues) { host.tracedResets += 1 }
-      tracedPlanes = planeHashes(warped, warpedBytes: layout.warpedBytes)
+      let (hashes, mean, spread) = planeHashes(warped, warpedBytes: layout.warpedBytes)
+      tracedPlanes = hashes
+      tracedLuma = (mean, spread)
     }
     // The same frames, kept: a real one is what the phone's probe has been
     // missing, and only the comma can hand one over.
@@ -606,7 +610,9 @@ final class Session: @unchecked Sendable {
     // repeats is a decode that did not advance, and a pose that never changes
     // over frames that do is a model that is being restarted under itself.
     if let tracedPlanes {
-      traceLine(frameID: frameID, flags: flags, planes: tracedPlanes, spec: loaded.spec, count: count, replied: replied)
+      traceLine(
+        frameID: frameID, flags: flags, planes: tracedPlanes, luma: tracedLuma, spec: loaded.spec, count: count,
+        replied: replied)
     }
     return InferReply(
       frameID: frameID, status: status, gpuUs: loaded.engine.lastGpuUs, queueUs: queueUs, totalUs: microseconds(since: started),
@@ -615,24 +621,38 @@ final class Session: @unchecked Sendable {
   }
 
   /// Each of the twelve planes' own fingerprint, over every fourth byte:
-  /// 100 kB tells two frames apart and stays off the frame's budget.
-  private func planeHashes(_ warped: UnsafeRawPointer, warpedBytes: Int) -> [UInt64] {
+  /// 100 kB tells two frames apart and stays off the frame's budget. The first
+  /// plane's mean and spread come along with it: a night frame that carries no
+  /// texture cannot carry motion, and that has been mistaken for a dead model.
+  private func planeHashes(_ warped: UnsafeRawPointer, warpedBytes: Int) -> ([UInt64], Double, Double) {
     let planes = 12
-    guard warpedBytes > 0, warpedBytes % planes == 0 else { return [] }
+    guard warpedBytes > 0, warpedBytes % planes == 0 else { return ([], 0, 0) }
     let planeBytes = warpedBytes / planes
     var hashes: [UInt64] = []
     hashes.reserveCapacity(planes)
+    var sum = 0.0
+    var squares = 0.0
+    var sampled = 0
     for plane in 0..<planes {
       let start = warped.advanced(by: plane * planeBytes).assumingMemoryBound(to: UInt8.self)
       var hash: UInt64 = 0xcbf2_9ce4_8422_2325
       var i = 0
       while i < planeBytes {
-        hash = (hash ^ UInt64(start[i])) &* 0x0000_0100_0000_01b3
+        let value = start[i]
+        hash = (hash ^ UInt64(value)) &* 0x0000_0100_0000_01b3
+        if plane == 0 {
+          sum += Double(value)
+          squares += Double(value) * Double(value)
+          sampled += 1
+        }
         i += 4
       }
       hashes.append(hash & 0xFFFF_FFFF)
     }
-    return hashes
+    guard sampled > 0 else { return (hashes, 0, 0) }
+    let mean = sum / Double(sampled)
+    let variance = max(squares / Double(sampled) - mean * mean, 0)
+    return (hashes, mean, variance.squareRoot())
   }
 
   /// One line per frame while the control channel asked for them: what came
@@ -640,7 +660,10 @@ final class Session: @unchecked Sendable {
   /// what the engine answered. Those four together name the fault: a repeated
   /// frame is the decode, a pose that never moves over frames that do is a
   /// model being restarted under itself, and a reset says so outright.
-  private func traceLine(frameID: UInt32, flags: Wire.Flag, planes: [UInt64], spec: ModelSpec, count: Int, replied: Bool) {
+  private func traceLine(
+    frameID: UInt32, flags: Wire.Flag, planes: [UInt64], luma: (mean: Double, spread: Double)?, spec: ModelSpec, count: Int,
+    replied: Bool
+  ) {
     var line = "frame=\(frameID)"
     if flags.contains(.hevc) {
       line += " hevc"
@@ -656,6 +679,13 @@ final class Session: @unchecked Sendable {
     }
     host.tracedLastPlanes = planes
     for hash in planes { line += " " + String(hash, radix: 16) }
+    if let luma {
+      // How much there is to see: a night frame at std 4 carries no texture,
+      // and no texture means no motion for the graph to read.
+      line += " luma=" + String(Int(luma.mean.rounded())) + "/" + String(Int(luma.spread.rounded()))
+      host.tracedLumaLow = min(host.tracedLumaLow, luma.spread)
+      host.tracedLumaHigh = max(host.tracedLumaHigh, luma.spread)
+    }
 
     if replied {
       let slices = spec.outputSlices
@@ -679,10 +709,17 @@ final class Session: @unchecked Sendable {
     if host.framesToTrace == 0 {
       let low = host.tracedPoseLow.isFinite ? host.tracedPoseLow : 0
       let high = host.tracedPoseHigh.isFinite ? host.tracedPoseHigh : 0
-      log.warning(
+      let texture = host.tracedLumaHigh.isFinite ? Int(host.tracedLumaHigh.rounded()) : -1
+      var summary =
         "frame trace done: \(host.tracedServed) served, \(host.tracedRejected) rejected, "
-          + "\(host.tracedIdentical) same as the frame before, \(host.tracedResets) asked for a reset, "
-          + "pose unique=\(host.tracedPose.count) from \(low) to \(high)")
+        + "\(host.tracedIdentical) same as the frame before, \(host.tracedResets) asked for a reset, "
+        + "pose unique=\(host.tracedPose.count) from \(low) to \(high), texture up to \(texture)"
+      // Said outright, because a frame this flat has no motion in it and a
+      // still pose from it says nothing about the model.
+      if texture >= 0 && texture < 12 {
+        summary += " -- TOO FLAT: the frames carried almost no texture, so a still pose means nothing here"
+      }
+      log.warning(summary)
     }
   }
 
