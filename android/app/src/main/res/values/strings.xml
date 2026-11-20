@@ -293,6 +293,7 @@
     <string name="bench_probe">Check output</string>
     <string name="bench_trace">Trace frames</string>
     <string name="bench_replay">Real frame</string>
+    <string name="bench_sequence">Road sequence</string>
     <string name="bench_failed">The benchmark failed. See Logs for details.</string>
     <string name="bench_hint">Run it with the phone charging and in its mount.</string>
     <string name="bench_refusal">Couldn\'t start the benchmark.</string>

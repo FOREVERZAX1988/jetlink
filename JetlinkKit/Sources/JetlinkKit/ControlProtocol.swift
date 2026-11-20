@@ -795,6 +795,8 @@ public enum ControlCommand: Sendable, Equatable {
   /// twelve planes, zoomed the way the drawn sheet is. Answers whether the
   /// engine behaves on road pixels, which a drawn texture cannot.
   case replayFrames(path: String, frames: Int)
+  /// Real road frames, one at a time, with the engine looping its own state.
+  case replaySequence(path: String, frames: Int)
 
   public var name: String {
     switch self {
@@ -813,6 +815,7 @@ public enum ControlCommand: Sendable, Equatable {
     case .probeNumerics: return "probe_numerics"
     case .traceFrames: return "trace_frames"
     case .replayFrames: return "replay_frames"
+    case .replaySequence: return "replay_sequence"
     }
   }
 
@@ -844,6 +847,7 @@ public enum ControlCommand: Sendable, Equatable {
     case "probe_numerics": self = .probeNumerics(frames: number("frames")?.intValue ?? 40)
     case "trace_frames": self = .traceFrames(frames: number("frames")?.intValue ?? 120)
     case "replay_frames": self = .replayFrames(path: try text("path"), frames: number("frames")?.intValue ?? 60)
+    case "replay_sequence": self = .replaySequence(path: try text("path"), frames: number("frames")?.intValue ?? 120)
     default: throw Invalid(description: "unknown command \(name)")
     }
   }

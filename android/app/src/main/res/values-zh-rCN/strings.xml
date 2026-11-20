@@ -293,6 +293,7 @@
     <string name="bench_probe">数值自检</string>
     <string name="bench_trace">帧自检</string>
     <string name="bench_replay">真帧回放</string>
+    <string name="bench_sequence">连续路面</string>
     <string name="bench_failed">跑分失败，详情见日志。</string>
     <string name="bench_hint">跑分时请给手机充电并固定在支架上。</string>
     <string name="bench_refusal">无法启动跑分。</string>

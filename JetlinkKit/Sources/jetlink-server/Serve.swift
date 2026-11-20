@@ -68,6 +68,8 @@
     var dumpDir = "/tmp/jetlink-frames"
     @Option(help: "Run the frame probe over this file once the engine is loaded, print the answer and stop.")
     var replay: String?
+    @Option(help: "Run the real-road sequence probe over this file once the engine is loaded, print the answer and stop.")
+    var replaySequenceFile: String?
     @Option(help: "debug, info, warning or error.")
     var logLevel = Log.Level.info
 
@@ -131,6 +133,17 @@
             waited += 0.5
           }
           for line in try server.host.probeNumerics(frames: 60, source: url) { log.info(line) }
+          server.shutdown()
+          return
+        }
+        if let replaySequenceFile {
+          let url = URL(fileURLWithPath: replaySequenceFile)
+          var waited = 0.0
+          while server.host.loadedSHA() == nil && waited < 90 {
+            Thread.sleep(forTimeInterval: 0.5)
+            waited += 0.5
+          }
+          for line in try server.host.replaySequence(file: url, frames: 120) { log.info(line) }
           server.shutdown()
           return
         }

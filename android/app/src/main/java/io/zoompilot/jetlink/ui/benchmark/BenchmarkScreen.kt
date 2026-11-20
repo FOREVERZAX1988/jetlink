@@ -108,6 +108,7 @@ class BenchmarkActions(
     val probe: () -> Unit = {},
     val trace: () -> Unit = {},
     val replay: () -> Unit = {},
+    val sequence: () -> Unit = {},
 )
 
 /**
@@ -115,11 +116,11 @@ class BenchmarkActions(
  * the comma is what the probe has been missing: it carries the pixel
  * statistics of a road, which neither noise nor a drawn texture does.
  */
-private fun realFrame(context: Context): File? {
-    val target = File(context.cacheDir, "realframe.bin")
+private fun realFrame(context: Context, asset: String = "realframe.bin"): File? {
+    val target = File(context.cacheDir, asset)
     if (target.length() > 0) return target
     return try {
-        context.assets.open("realframe.bin").use { input ->
+        context.assets.open(asset).use { input ->
             target.outputStream().use { output -> input.copyTo(output) }
         }
         target
@@ -186,6 +187,20 @@ fun BenchmarkScreen(graph: AppGraph) {
                     refusal = "the APK carries no realframe.bin"
                 } else {
                     val reply = graph.server.command("replay_frames", "path" to file.absolutePath, "frames" to 60)
+                    if (!reply.ok) refusal = reply.error?.let(Format::sentence)
+                }
+            }
+        },
+        sequence = {
+            // A real road, frame by frame, with the engine looping its own
+            // state. This is the one test that asks what a live drive asks.
+            graph.scope.launch {
+                refusal = null
+                val file = realFrame(context, "drive_seq.bin")
+                if (file == null) {
+                    refusal = "the APK carries no drive_seq.bin"
+                } else {
+                    val reply = graph.server.command("replay_sequence", "path" to file.absolutePath, "frames" to 120)
                     if (!reply.ok) refusal = reply.error?.let(Format::sentence)
                 }
             }
@@ -339,6 +354,11 @@ private fun RunCard(
                 Icon(Icons.Filled.Memory, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
                 Text(l10n(R.string.bench_replay))
+            }
+            OutlinedButton(onClick = actions.sequence, enabled = blocker == null && !starting, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Filled.SlowMotionVideo, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(l10n(R.string.bench_sequence))
             }
         }
         val failure = refusal?.let { l10n(R.string.bench_refusal) + " " + it }

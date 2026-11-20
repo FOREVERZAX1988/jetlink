@@ -314,6 +314,9 @@ public final class ServerController: @unchecked Sendable {
     case .replayFrames(let path, let frames):
       try startReplay(path: path, frames: frames)
       return ["queued": .bool(true)]
+    case .replaySequence(let path, let frames):
+      try startSequence(path: path, frames: frames)
+      return ["queued": .bool(true)]
     case .traceFrames(let frames):
       // Not a job: the frame path itself writes the lines, so a comma that is
       // connected now is exactly what this needs -- and without one nothing
@@ -371,6 +374,31 @@ public final class ServerController: @unchecked Sendable {
       }
     }
     thread.name = "jetlink-frame-replay"
+    thread.qualityOfService = .userInteractive
+    thread.start()
+  }
+
+  /// Real road frames, one at a time: the graph loops its own state instead of
+  /// being handed five made-up history slots. This is the missing half of the
+  /// engine tests -- it asks whether the state path works on a moving road.
+  private func startSequence(path: String, frames: Int) throws {
+    let url = URL(fileURLWithPath: path)
+    guard FileManager.default.fileExists(atPath: url.path) else {
+      throw ControlError.refused("\(path) is not a file")
+    }
+    if currentLink.state == .connected {
+      throw ControlError.refused("a comma is connected; disconnect it to run the probe")
+    }
+    guard server.host.loadedSHA() != nil else { throw ControlError.refused("no model is loaded; prepare one first") }
+    let trace = server.configuration.cacheRoot.appendingPathComponent("probe-sequence-progress.log")
+    let thread = Thread { [self] in
+      do {
+        _ = try server.host.replaySequence(file: url, frames: frames, trace: trace)
+      } catch {
+        log.warning("sequence replay failed: \(String(describing: error))")
+      }
+    }
+    thread.name = "jetlink-sequence-replay"
     thread.qualityOfService = .userInteractive
     thread.start()
   }
