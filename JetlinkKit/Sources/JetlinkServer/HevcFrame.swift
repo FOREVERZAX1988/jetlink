@@ -148,7 +148,10 @@ final class HevcFrame: @unchecked Sendable {
                 + " au=\(l.au_bytes)/\(l.au_first_type) img=\(l.from_image)"
                 + " stride=\(l.stride) slice=\(l.slice_height) fmt=0x\(String(l.color_format, radix: 16))"
                 + " size=\(l.last_size) offset=\(l.last_offset) copies=\(l.copies)"
-                + " strided=\(l.strided) tight=\(l.tight_fallback) refused=\(l.refused)")
+                + " strided=\(l.strided) tight=\(l.tight_fallback) refused=\(l.refused)"
+                // the image's own geometry: what this decoder answers only here
+                + " img=\(l.img_w)x\(l.img_h) row=\(l.img_row0)/\(l.img_row1)"
+                + " pix=\(l.img_pix1) len=\(l.img_len0)/\(l.img_len1)")
   }
 
   /// One line a second: what the decoders say about their buffers, and what the

@@ -463,43 +463,78 @@ static int jl_mc_copy_image(struct jl_hevc *ctx, AImage *img) {
   int len[3] = {0, 0, 0};
   int32_t row[3] = {0, 0, 0}, pix[3] = {0, 0, 0};
   for (int i = 0; i < 3; i++) {
-    if (AImage_getPlaneData(img, i, &plane[i], &len[i]) != AMEDIA_OK || plane[i] == NULL) return -1;
-    if (AImage_getPlaneRowStride(img, i, &row[i]) != AMEDIA_OK) return -1;
-    if (row[i] < 1) return -1;
-    if (AImage_getPlanePixelStride(img, i, &pix[i]) != AMEDIA_OK) return -1;
+    if (AImage_getPlaneData(img, i, &plane[i], &len[i]) != AMEDIA_OK) plane[i] = NULL;
+    if (AImage_getPlaneRowStride(img, i, &row[i]) != AMEDIA_OK) row[i] = 0;
+    if (AImage_getPlanePixelStride(img, i, &pix[i]) != AMEDIA_OK) pix[i] = 0;
   }
-  if (pix[1] < 1 || pix[2] < 1) return -1;
+  ctx->layout.img_w = iw;
+  ctx->layout.img_h = ih;
+  ctx->layout.img_row0 = row[0];
+  ctx->layout.img_row1 = row[1];
+  ctx->layout.img_pix1 = pix[1];
+  ctx->layout.img_len0 = len[0];
+  ctx->layout.img_len1 = len[1];
 
-  // what the strides claim has to fit in what the planes say they hold
+  // A plane this code cannot read is not a reason to publish nothing: the luma
+  // is four of the model's six planes, and a picture with a guessed chroma is
+  // a number to argue with where an empty frame is not. So every read below is
+  // clamped to what the plane actually holds, and whatever cannot be read is
+  // filled rather than refused.
   const size_t luma = (size_t)w * (size_t)h;
   const size_t cw = (size_t)w / 2, ch = (size_t)h / 2;
-  if ((size_t)row[0] * (size_t)(h - 1) + (size_t)w > (size_t)len[0]) return -1;
-  for (int i = 1; i < 3; i++) {
-    if ((size_t)row[i] * (ch - 1) + (size_t)(cw - 1) * (size_t)pix[i] + 1 > (size_t)len[i]) return -1;
-  }
+  const int y_row = row[0] >= w ? row[0] : w;
 
-  for (int y = 0; y < h; y++) {
-    memcpy(ctx->nv12 + (size_t)y * (size_t)w, plane[0] + (size_t)y * (size_t)row[0], (size_t)w);
-  }
-  uint8_t *dst = ctx->nv12 + luma;
-  for (size_t y = 0; y < ch; y++) {
-    const uint8_t *ru = plane[1] + y * (size_t)row[1];
-    const uint8_t *rv = plane[2] + y * (size_t)row[2];
-    uint8_t *d = dst + y * (size_t)w;
-    for (size_t x = 0; x < cw; x++) {
-      d[2 * x] = ru[x * (size_t)pix[1]];
-      d[2 * x + 1] = rv[x * (size_t)pix[2]];
+  if (plane[0] != NULL) {
+    int rows = 0;
+    for (int y = 0; y < h; y++) {
+      const size_t at = (size_t)y * (size_t)y_row;
+      if (at + (size_t)w > (size_t)len[0]) break;
+      memcpy(ctx->nv12 + (size_t)y * (size_t)w, plane[0] + at, (size_t)w);
+      rows++;
     }
+    // what could not be read repeats the last row that could, so a short plane
+    // is a smear rather than a black band
+    for (int y = rows; y < h; y++) {
+      memcpy(ctx->nv12 + (size_t)y * (size_t)w,
+             ctx->nv12 + (size_t)(rows > 0 ? rows - 1 : 0) * (size_t)w, (size_t)w);
+    }
+    if (rows == 0) return -1;   // not one readable row: this is not a picture
+  } else {
+    return -1;
   }
 
-  ctx->layout.stride = row[0];
+  uint8_t *dst = ctx->nv12 + luma;
+  if (plane[1] != NULL && plane[2] != NULL && pix[1] >= 1 && pix[2] >= 1 &&
+      row[1] >= 1 && row[2] >= 1) {
+    const int u_row = row[1], v_row = row[2];
+    const int u_pix = pix[1], v_pix = pix[2];
+    for (size_t y = 0; y < ch; y++) {
+      uint8_t *d = dst + y * (size_t)w;
+      const size_t u_at = y * (size_t)u_row, v_at = y * (size_t)v_row;
+      if (u_at + (cw - 1) * (size_t)u_pix + 1 > (size_t)len[1] ||
+          v_at + (cw - 1) * (size_t)v_pix + 1 > (size_t)len[2]) {
+        memset(d, 128, (size_t)w);   // past what the plane holds
+        continue;
+      }
+      const uint8_t *ru = plane[1] + u_at;
+      const uint8_t *rv = plane[2] + v_at;
+      for (size_t x = 0; x < cw; x++) {
+        d[2 * x] = ru[x * (size_t)u_pix];
+        d[2 * x + 1] = rv[x * (size_t)v_pix];
+      }
+    }
+  } else {
+    memset(dst, 128, luma / 2);   // no readable chroma: neutral, not a guess
+  }
+
+  ctx->layout.stride = y_row;
   ctx->layout.slice_height = ih;
   ctx->layout.color_format = AIMAGE_FORMAT_YUV_420_888;
   ctx->layout.crop_left = 0;
   ctx->layout.crop_top = 0;
   ctx->layout.copies++;
   ctx->layout.from_image++;
-  if (row[0] != w) ctx->layout.strided++;
+  if (y_row != w) ctx->layout.strided++;
   ctx->layout.head_lo = 0;
   ctx->layout.head_hi = 0;
   for (int i = 0; i < 8; i++) {
