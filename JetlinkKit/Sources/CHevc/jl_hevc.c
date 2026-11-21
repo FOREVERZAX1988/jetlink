@@ -199,6 +199,13 @@ struct jl_hevc {
   /// Set when the surface path was tried and gave nothing: the decoder is then
   /// opened again the way this device is known to answer, without one.
   int no_surface;
+  /// The patient path belongs to the first access unit of a session, once. It
+  /// was keyed on "no picture yet" at first, which is true for as long as the
+  /// decoder produces nothing -- so every frame waited up to a second for a
+  /// picture that never came, and the host gave up at 1.5 s (measured
+  /// 2026-11-21: sessions of 42 and 116 frames that ended in `no answer to 2
+  /// frames in 1.5s`, not in a refusal).
+  int first_done;
   uint8_t *nv12;
   int64_t pts;              // microseconds, monotonically increasing per AU
   // the codec's own account of its output buffer (jl_hevc_layout_of). Where a
@@ -629,7 +636,7 @@ static void jl_mc_teardown(struct jl_hevc *ctx) {
 // "nothing" as a refusal, and BAD_SHAPE ends the join at frame 0. A join is
 // worth 0.8 s, which is what the link's first-frame budget is for.
 static int jl_mc_take(struct jl_hevc *ctx, const void *src, size_t n, uint8_t *out, int irap) {
-  const int first = ctx->layout.copies == 0 && ctx->layout.refused == 0;
+  const int first = ctx->first_done == 0;
   // A codec that has just been started has no input slot for a moment, and
   // asking once (2 ms) and giving up turns that moment into a refusal. The
   // first access unit is allowed to wait for one.
@@ -747,7 +754,7 @@ int jl_hevc_decode(jl_hevc *ctx, const void *src, size_t n, uint8_t *out, int *k
   // worse than a picture with the wrong layout. Open it again without one and
   // feed the same access unit once more: the buffer path is the one this
   // device is known to answer on, whatever it puts in it.
-  if (rc == 0 && ctx->layout.copies == 0 && ctx->layout.refused == 0 && ctx->reader != NULL) {
+  if (rc == 0 && ctx->first_done == 0 && ctx->reader != NULL) {
     ctx->layout.stage_first = ctx->layout.stage;   // keep what the surface got to
     jl_mc_teardown(ctx);
     ctx->no_surface = 1;
@@ -757,6 +764,7 @@ int jl_hevc_decode(jl_hevc *ctx, const void *src, size_t n, uint8_t *out, int *k
       rc = jl_mc_take(ctx, src, n, out, irap);
     }
   }
+  ctx->first_done = 1;   // from here on, frames are answered, not waited for
   return rc;
 }
 
