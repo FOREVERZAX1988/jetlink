@@ -39,6 +39,8 @@ final class HevcFrame: @unchecked Sendable {
   private var lastReport = 0.0
   /// The same, for the line a refused frame writes.
   private var lastRefusal = 0.0
+  /// The codec's own format, said once: what it decided the picture is.
+  private var loggedFormat = false
 
   /// The shape of the warped frame the model takes: (2, 6, H, W), the two
   /// cameras' six planes one after another. Nil when the shape is not one
@@ -143,6 +145,15 @@ final class HevcFrame: @unchecked Sendable {
       line += " copies=\(l.copies) strided=\(l.strided) tight=\(l.tight_fallback) refused=\(l.refused)"
       line += " size=\(l.last_size) off=\(l.last_offset) cap=\(l.out_cap)"
       line += " head=" + String(format: "%016llx%016llx", l.head_lo, l.head_hi)
+    }
+    if !loggedFormat, let road, let info = jl_hevc_layout_of(road) {
+      var buffer = [CChar](repeating: 0, count: 512)
+      let n = jl_hevc_format_string(road, &buffer, buffer.count)
+      if n > 0 {
+        loggedFormat = true
+        log.warning("hevc codec format: " + String(cString: buffer))
+      }
+      _ = info
     }
     let planeBytes = planeHeight * planeWidth
     let roadStats = stats(planes)

@@ -85,6 +85,7 @@ typedef struct {
   int copies;         ///< frames copied
   int strided;        ///< of those, how many needed the row-by-row path
   int tight_fallback; ///< of those, how many fell back to tight rows anyway
+  int from_image;     ///< of those, how many came through the image API
   int refused;        ///< buffers that could not hold the picture at all
   int last_size;      ///< the last output buffer's `info.size`
   int last_offset;    ///< and its `info.offset`
@@ -98,6 +99,11 @@ typedef struct {
 /// The last decode's layout, or NULL without a decoder. Valid until the next
 /// `jl_hevc_decode`.
 const jl_hevc_layout *jl_hevc_layout_of(jl_hevc *ctx);
+
+/// The codec's own output format as text (`AMediaFormat_toString`), copied
+/// into `out`. For a log line: it is the only place a decoder says what it
+/// decided the picture is. Returns the length written, 0 when there is none.
+int jl_hevc_format_string(jl_hevc *ctx, char *out, size_t cap);
 
 // -- the bitstream, apart from any decoder ------------------------------------
 //

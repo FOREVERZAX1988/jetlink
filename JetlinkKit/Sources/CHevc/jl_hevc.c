@@ -196,61 +196,105 @@ struct jl_hevc {
 
 static const char *jl_mc_mime(void) { return "video/hevc"; }
 
-jl_hevc *jl_hevc_create(int width, int height) {
-  size_t bytes = jl_hevc_frame_bytes(width, height);
-  if (bytes == 0) return NULL;
+// Configure from the stream's own parameter sets.
+//
+// Byte-buffer mode has no surface to hand a picture to, so the output layout is
+// entirely the codec's business -- and with nothing but width, height and a
+// colour format, this phone's decoder inferred the rest: a buffer the size of
+// the luma alone (131072 bytes for a 512x256 frame), a picture half made of
+// concealment, plane mean 33 where the encoder's was 60. The same access units
+// decoded to 59.5/4.9 on a standard decoder, so the stream was never the
+// question. Handing over VPS, SPS and PPS as csd-0 and csd-1 is what every other
+// Android HEVC client does, and it is the one thing this one did not.
+static int jl_mc_configure(struct jl_hevc *ctx, const uint8_t *au, size_t n) {
+  jl_nal nals[64];
+  size_t count = jl_hevc_nals(au, n, nals, 64);
+  const uint8_t *vps = NULL, *sps = NULL, *pps = NULL;
+  size_t vps_n = 0, sps_n = 0, pps_n = 0;
+  for (size_t i = 0; i < count; i++) {
+    switch (nals[i].type) {
+      case 32: vps = nals[i].data; vps_n = nals[i].size; break;
+      case 33: sps = nals[i].data; sps_n = nals[i].size; break;
+      case 34: pps = nals[i].data; pps_n = nals[i].size; break;
+      default: break;
+    }
+  }
+  if (sps == NULL || pps == NULL) return -1;
+
+  static const uint8_t sc[4] = {0, 0, 0, 1};
+  const size_t csd0_n = (vps != NULL ? vps_n + 4 : 0) + sps_n + 4;
+  uint8_t *csd0 = (uint8_t *)malloc(csd0_n);
+  uint8_t *csd1 = (uint8_t *)malloc(pps_n + 4);
+  if (csd0 == NULL || csd1 == NULL) { free(csd0); free(csd1); return -1; }
+  size_t at = 0;
+  if (vps != NULL) { memcpy(csd0 + at, sc, 4); at += 4; memcpy(csd0 + at, vps, vps_n); at += vps_n; }
+  memcpy(csd0 + at, sc, 4); at += 4;
+  memcpy(csd0 + at, sps, sps_n);
+  memcpy(csd1, sc, 4);
+  memcpy(csd1 + 4, pps, pps_n);
 
   AMediaCodec *codec = AMediaCodec_createDecoderByType(jl_mc_mime());
-  if (codec == NULL) return NULL;
+  if (codec == NULL) { free(csd0); free(csd1); return -1; }
 
   AMediaFormat *fmt = AMediaFormat_new();
-  if (fmt == NULL) { AMediaCodec_delete(codec); return NULL; }
+  if (fmt == NULL) { AMediaCodec_delete(codec); free(csd0); free(csd1); return -1; }
   AMediaFormat_setString(fmt, AMEDIAFORMAT_KEY_MIME, jl_mc_mime());
-  AMediaFormat_setInt32(fmt, AMEDIAFORMAT_KEY_WIDTH, width);
-  AMediaFormat_setInt32(fmt, AMEDIAFORMAT_KEY_HEIGHT, height);
-  // 0x7F000001 = COLOR_FormatYUV420SemiPlanar (NV12), the format openpilot's
-  // Venus encoder produces. Named here rather than via a header because the
-  // constant lives in MediaFormat.h (Java-facing), not in the NDK C headers.
+  AMediaFormat_setInt32(fmt, AMEDIAFORMAT_KEY_WIDTH, ctx->width);
+  AMediaFormat_setInt32(fmt, AMEDIAFORMAT_KEY_HEIGHT, ctx->height);
+  // 0x7F000001 = COLOR_FormatYUV420SemiPlanar (NV12), what openpilot's Venus
+  // encoder produces. Named here rather than via a header because the constant
+  // lives in MediaFormat.h (Java-facing), not in the NDK C headers.
   AMediaFormat_setInt32(fmt, AMEDIAFORMAT_KEY_COLOR_FORMAT, 0x7F000001);
+  AMediaFormat_setBuffer(fmt, "csd-0", csd0, csd0_n);
+  AMediaFormat_setBuffer(fmt, "csd-1", csd1, pps_n + 4);
   // Ask the codec not to queue frames ahead. Measured 2026-11-16: a frame's
-  // round trip through the phone ran 156-167 ms while the phone's own
-  // inference was 27 ms and ping was 17 ms -- the rest was the decoder sitting
-  // on two or three frames of its own internal pipeline. Both keys are hints a
-  // codec may ignore (the C headers name neither; the platform accepts the
-  // strings), so an implementation without them behaves exactly as before.
+  // round trip through the phone ran 156-167 ms while the phone's own inference
+  // was 27 ms and ping was 17 ms -- the rest was the decoder sitting on two or
+  // three frames of its own pipeline. Both keys are hints a codec may ignore.
   AMediaFormat_setInt32(fmt, "low-latency", 1);
   AMediaFormat_setInt32(fmt, "operating-rate", 30);
 
   media_status_t st = AMediaCodec_configure(codec, fmt, NULL, NULL, 0);
   if (st != AMEDIA_OK) {
-    // The two hints above are strings the NDK headers do not name, and an
-    // implementation that does not know a key may reject the whole format
-    // rather than ignore it. A decoder that queues a frame is better than no
-    // HEVC at all: rebuild the format without them and try once more.
+    // A codec that does not know a hint key may reject the whole format rather
+    // than ignore it; the parameter sets are not a hint and stay.
     AMediaFormat *plain = AMediaFormat_new();
     if (plain != NULL) {
       AMediaFormat_setString(plain, AMEDIAFORMAT_KEY_MIME, jl_mc_mime());
-      AMediaFormat_setInt32(plain, AMEDIAFORMAT_KEY_WIDTH, width);
-      AMediaFormat_setInt32(plain, AMEDIAFORMAT_KEY_HEIGHT, height);
+      AMediaFormat_setInt32(plain, AMEDIAFORMAT_KEY_WIDTH, ctx->width);
+      AMediaFormat_setInt32(plain, AMEDIAFORMAT_KEY_HEIGHT, ctx->height);
       AMediaFormat_setInt32(plain, AMEDIAFORMAT_KEY_COLOR_FORMAT, 0x7F000001);
+      AMediaFormat_setBuffer(plain, "csd-0", csd0, csd0_n);
+      AMediaFormat_setBuffer(plain, "csd-1", csd1, pps_n + 4);
       st = AMediaCodec_configure(codec, plain, NULL, NULL, 0);
       AMediaFormat_delete(plain);
     }
   }
   AMediaFormat_delete(fmt);
-  if (st != AMEDIA_OK) { AMediaCodec_delete(codec); return NULL; }
-  if (AMediaCodec_start(codec) != AMEDIA_OK) { AMediaCodec_delete(codec); return NULL; }
-
-  struct jl_hevc *ctx = (struct jl_hevc *)calloc(1, sizeof(*ctx));
-  if (ctx == NULL) { AMediaCodec_delete(codec); return NULL; }
+  free(csd0);
+  free(csd1);
+  if (st != AMEDIA_OK) { AMediaCodec_delete(codec); return -1; }
+  if (AMediaCodec_start(codec) != AMEDIA_OK) { AMediaCodec_delete(codec); return -1; }
   ctx->codec = codec;
+  return 0;
+}
+
+jl_hevc *jl_hevc_create(int width, int height) {
+  size_t bytes = jl_hevc_frame_bytes(width, height);
+  if (bytes == 0) return NULL;
+  if (jl_hevc_available() == 0) return NULL;
+  struct jl_hevc *ctx = (struct jl_hevc *)calloc(1, sizeof(*ctx));
+  if (ctx == NULL) return NULL;
   ctx->width = width;
   ctx->height = height;
   ctx->frame_bytes = bytes;
   ctx->layout.width = width;
   ctx->layout.height = height;
+  // nothing decodes until a parameter set has been seen: a P frame with no
+  // reference is a frame to conceal, and concealing it published a black picture
+  ctx->broken = 1;
   ctx->nv12 = (uint8_t *)calloc(1, bytes);
-  if (ctx->nv12 == NULL) { AMediaCodec_delete(codec); free(ctx); return NULL; }
+  if (ctx->nv12 == NULL) { free(ctx); return NULL; }
   return ctx;
 }
 
@@ -402,10 +446,32 @@ const jl_hevc_layout *jl_hevc_layout_of(jl_hevc *ctx) {
   return ctx == NULL ? NULL : &ctx->layout;
 }
 
+int jl_hevc_format_string(jl_hevc *ctx, char *out, size_t cap) {
+  if (ctx == NULL || out == NULL || cap == 0) return 0;
+  out[0] = 0;
+  if (ctx->codec == NULL) return 0;
+  AMediaFormat *fmt = AMediaCodec_getOutputFormat(ctx->codec);
+  if (fmt == NULL) return 0;
+  const char *text = AMediaFormat_toString(fmt);
+  int n = 0;
+  if (text != NULL) {
+    while (text[n] != 0 && (size_t)n + 1 < cap) { out[n] = text[n]; n++; }
+    out[n] = 0;
+  }
+  AMediaFormat_delete(fmt);
+  return n;
+}
+
 int jl_hevc_decode(jl_hevc *ctx, const void *src, size_t n, uint8_t *out, int *keyframe) {
-  if (ctx == NULL || src == NULL || out == NULL || n == 0 || ctx->codec == NULL) return -3;
+  if (ctx == NULL || src == NULL || out == NULL || n == 0) return -3;
   int irap = jl_hevc_is_keyframe(src, n);
   if (keyframe != NULL) *keyframe = irap;
+  if (ctx->codec == NULL) {
+    // The decoder is opened from a parameter set, so the first access unit that
+    // arrives with one is where it starts. Until then there is nothing to feed
+    // it: 0 is "no frame yet", not a failure.
+    if (!irap || jl_mc_configure(ctx, (const uint8_t *)src, n) != 0) return 0;
+  }
   if (irap) {
     ctx->broken = 0;
   } else if (ctx->broken) {
@@ -623,6 +689,18 @@ const char *jl_hevc_backend(void) {
   return jl_av() != NULL ? "libavcodec" : "";
 }
 
+int jl_hevc_format_string(jl_hevc *ctx, char *out, size_t cap) {
+  // libavcodec has no MediaFormat to name: the backend is the whole answer
+  (void)ctx;
+  const char *name = jl_hevc_backend();
+  size_t n = 0;
+  if (out != NULL && cap > 0) {
+    while (name[n] != 0 && n + 1 < cap) { out[n] = name[n]; n++; }
+    out[n] = 0;
+  }
+  return (int)n;
+}
+
 const jl_hevc_layout *jl_hevc_layout_of(jl_hevc *ctx) {
   return ctx == NULL ? NULL : &ctx->layout;
 }
@@ -720,6 +798,12 @@ void jl_hevc_flush(jl_hevc *ctx) { (void)ctx; }
 int jl_hevc_available(void) { return 0; }
 
 const char *jl_hevc_backend(void) { return ""; }
+
+int jl_hevc_format_string(jl_hevc *ctx, char *out, size_t cap) {
+  (void)ctx;
+  if (out != NULL && cap > 0) out[0] = 0;
+  return 0;
+}
 
 const jl_hevc_layout *jl_hevc_layout_of(jl_hevc *ctx) {
   (void)ctx;
