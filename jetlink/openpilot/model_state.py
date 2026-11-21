@@ -337,6 +337,10 @@ class JetlinkModelState:
     self._need_reset = True
     self._frame_id = 0
     self._last_logged = 0.0
+    # each camera's luma as the last measured frame left it, and when that
+    # was, for the frame-to-frame motion line (_log_frame_motion)
+    self._last_luma = None
+    self._motion_logged = 0.0
     self._last_hold_logged = 0.0
     # when the comma last told the host its own six stages (report_stages)
     self._stages_reported = 0.0
@@ -553,6 +557,56 @@ class JetlinkModelState:
     self.warp.wait()
     self.stages.warped(self._frame_id + 1, time.perf_counter())
     self._frame = Frame(t0, t1, time.perf_counter())
+    self._log_frame_motion()
+
+  # How often the warped frame is measured, in seconds: the measurement is a
+  # mean, a spread and a difference over one plane each, which is nothing
+  # beside the warp it follows.
+  MOTION_PERIOD = 1.0
+
+  def _log_frame_motion(self) -> None:
+    """Say whether the picture this frame is about to send differs from the
+    last one, and by how much.
+
+    The big model has been seen publishing `transx 0.07` for a whole drive --
+    the answer the graph gives when its frames do not change (measured
+    2026-11-21: replaying one frame 120 times gives 0.081, the drive's own
+    number). Everything upstream of the wire is ours, and none of it could be
+    cleared by reading: this line is the one that says which side is still.
+    A `moved` near 0 on a moving car means the warp or the frame it reads is
+    frozen; a `moved` of a few counts with the host still answering 0.07 means
+    the loss is after the encoder.
+
+    Both views: 0 is the narrow camera, 1 the wide one, and the mean is what a
+    black plane would show as 0-16.
+    """
+    now = time.monotonic()
+    if now - self._motion_logged < self.MOTION_PERIOD:
+      return
+    self._motion_logged = now
+    try:
+      # the warped frame is (2, 6, h, w): two cameras, six planes each, so it
+      # splits into twelve equal planes without knowing h and w at all
+      out = self.warp.output
+      planes = np.frombuffer(out, np.uint8).reshape(12, -1)
+      if self._last_luma is None:
+        self._last_luma = [None, None]
+      view = []
+      for slot in (0, 1):
+        # every 8th byte: 4k samples carry a mean, and this must stay cheaper
+        # than the warp it follows
+        luma = planes[slot * 6][::8]
+        prev = self._last_luma[slot]
+        moved = 0.0 if prev is None else float(np.abs(luma.astype(np.int16) - prev.astype(np.int16)).mean())
+        view.append((float(luma.mean()), float(luma.std()), moved))
+        self._last_luma[slot] = luma.copy()
+    except Exception as e:
+      # never the frame's problem: say why once a second, then carry on
+      self._log.warning('jetlink: warp frame probe unavailable: %s', e)
+      return
+    self._log.warning(
+      'jetlink: warp frame %d narrow %.0f/%.0f moved %.2f, wide %.0f/%.0f moved %.2f',
+      self._frame_id, view[0][0], view[0][1], view[0][2], view[1][0], view[1][1], view[1][2])
 
   def send(self, want_telemetry: bool = False) -> None:
     """The prepared frame to the host. It asks for the server's telemetry
