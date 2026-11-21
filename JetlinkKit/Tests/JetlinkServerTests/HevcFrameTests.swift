@@ -125,6 +125,50 @@ struct HevcFrameTests {
     #expect(planes[40] == 200)
   }
 
+  @Test("a decoder that pads its rows is tightened, not sheared")
+  func thePaddedLayoutIsTightened() {
+    // 8 x 4 is one 4 x 2 plane, so a frame is 48 bytes; small enough to check
+    // every byte
+    let width = 8, height = 4
+    let frameBytes = Int(jl_hevc_frame_bytes(Int32(width), Int32(height)))
+    let luma = width * height
+    // the picture the encoder made
+    var tight = [UInt8](repeating: 0, count: frameBytes)
+    for i in 0..<frameBytes { tight[i] = UInt8(i + 1) }
+    // the same picture in a decoder's buffer whose rows are 12 bytes wide, with
+    // 0xAA wherever the picture is not: what reading it as tight rows shears
+    let stride = 12
+    let slice = height
+    let chromaAt = stride * slice
+    var padded = [UInt8](repeating: 0xAA, count: chromaAt + stride * (height / 2))
+    for y in 0..<height {
+      for x in 0..<width { padded[y * stride + x] = tight[y * width + x] }
+    }
+    for y in 0..<(height / 2) {
+      for x in 0..<width { padded[chromaAt + y * stride + x] = tight[luma + y * width + x] }
+    }
+
+    var out = [UInt8](repeating: 0, count: frameBytes)
+    let rc = padded.withUnsafeBufferPointer { source in
+      out.withUnsafeMutableBufferPointer { destination in
+        jl_hevc_tighten_nv12(source.baseAddress!, source.count, Int32(width), Int32(height),
+                             stride, slice, 0, chromaAt, destination.baseAddress!)
+      }
+    }
+    #expect(rc == 0)
+    // byte for byte the encoder's own frame, not an approximation of it
+    #expect(out == tight)
+
+    // a buffer that cannot hold the picture is refused rather than read past
+    let short = padded.withUnsafeBufferPointer { source in
+      out.withUnsafeMutableBufferPointer { destination in
+        jl_hevc_tighten_nv12(source.baseAddress!, source.count - stride, Int32(width), Int32(height),
+                             stride, slice, 0, chromaAt, destination.baseAddress!)
+      }
+    }
+    #expect(short == -1)
+  }
+
   @Test("the server offers the codec only where it can decode")
   func theCodecIsOfferedOnlyWhereItCanBeTaken() {
     let codecs = Session.frameCodecs()

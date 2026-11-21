@@ -137,6 +137,34 @@ void jl_hevc_unpack_nv12(const uint8_t *nv12, int width, int height, uint8_t *ou
   }
 }
 
+// -- a decoder's layout, tightened -------------------------------------------
+
+int jl_hevc_tighten_nv12(const uint8_t *src, size_t n, int width, int height,
+                         size_t stride, size_t slice_height, size_t left,
+                         size_t chroma_at, uint8_t *out) {
+  if (src == NULL || out == NULL || width <= 0 || height < 2) return -1;
+  const size_t w = (size_t)width;
+  const size_t h = (size_t)height;
+  if (stride < w || slice_height < h) return -1;
+  const size_t luma = w * h;
+  // what this would read, against what src holds: the last luma row and the
+  // last chroma row are the far corners
+  if ((h - 1) * stride + left + w > n) return -1;
+  if (chroma_at + (h / 2 - 1) * stride + w > n) return -1;
+  if (stride == w && left == 0 && chroma_at == luma) {
+    memcpy(out, src, luma + luma / 2);
+    return 0;
+  }
+  for (size_t y = 0; y < h; y++) {
+    memcpy(out + y * w, src + y * stride + left, w);
+  }
+  const uint8_t *chroma = src + chroma_at;
+  for (size_t y = 0; y < h / 2; y++) {
+    memcpy(out + luma + y * w, chroma + y * stride, w);
+  }
+  return 0;
+}
+
 // -- the decoder --------------------------------------------------------------
 
 #ifdef JL_HEVC_MC
@@ -160,6 +188,10 @@ struct jl_hevc {
   AMediaCodec *codec;
   uint8_t *nv12;
   int64_t pts;              // microseconds, monotonically increasing per AU
+  // the codec's own account of its output buffer (jl_hevc_layout_of). Where a
+  // field is 0 the codec never said, and the copy falls back to the tight
+  // rows the encoder itself made.
+  jl_hevc_layout layout;
 };
 
 static const char *jl_mc_mime(void) { return "video/hevc"; }
@@ -215,6 +247,8 @@ jl_hevc *jl_hevc_create(int width, int height) {
   ctx->width = width;
   ctx->height = height;
   ctx->frame_bytes = bytes;
+  ctx->layout.width = width;
+  ctx->layout.height = height;
   ctx->nv12 = (uint8_t *)calloc(1, bytes);
   if (ctx->nv12 == NULL) { AMediaCodec_delete(codec); free(ctx); return NULL; }
   return ctx;
@@ -252,21 +286,102 @@ int jl_hevc_available(void) {
 
 const char *jl_hevc_backend(void) { return "mediacodec"; }
 
-// The decoder's NV12 out (luma + interleaved chroma, with strides) into one
-// tight NV12 buffer. Anonymous namespace so it cannot clash with the
-// libavcodec backend's helper of the same name.
+// What the codec says about its own output buffer. A hardware decoder aligns
+// rows to its own width (64, 128 or 256 bytes, which for a 512-pixel luma may
+// or may not land on the picture's edge) and pads the picture up to whole
+// macroblocks, and neither is visible in the buffer's size or content.
+// The keys are named as strings because the C headers carry only some of them
+// (the same reason "low-latency" below is a string).
+static void jl_mc_read_layout(struct jl_hevc *ctx) {
+  if (ctx->codec == NULL) return;
+  AMediaFormat *fmt = AMediaCodec_getOutputFormat(ctx->codec);
+  if (fmt == NULL) return;
+  int32_t v = 0;
+  if (AMediaFormat_getInt32(fmt, "stride", &v) && v > 0) ctx->layout.stride = v;
+  if (AMediaFormat_getInt32(fmt, "slice-height", &v) && v > 0) ctx->layout.slice_height = v;
+  if (AMediaFormat_getInt32(fmt, "color-format", &v) && v > 0) ctx->layout.color_format = v;
+  if (AMediaFormat_getInt32(fmt, "crop-left", &v) && v >= 0) ctx->layout.crop_left = v;
+  if (AMediaFormat_getInt32(fmt, "crop-top", &v) && v >= 0) ctx->layout.crop_top = v;
+  AMediaFormat_delete(fmt);
+}
+
+// The decoder's NV12 out (luma + interleaved chroma, with the strides the
+// codec reported) into one tight NV12 buffer.
+//
+// This used to memcpy `width * height` from the front on the assumption that
+// the codec laid its rows tight, and Android's hardware HEVC decoder does not
+// have to: it pads each row to its own alignment and the picture to whole
+// macroblocks. On a padded buffer that copy neither fails nor truncates -- it
+// reads width bytes out of every stride bytes, so the picture shears a little
+// every row and the chroma starts at the wrong place entirely. The frame still
+// "decodes", which is why the carrier looked healthy while the model answered
+// as if the car were parked: the plane means measured downstream (16/42) were
+// nothing like the encoder's (65/5).
 static int jl_mc_copy_nv12(struct jl_hevc *ctx, uint8_t *data, size_t n,
                            int32_t offset, int32_t size) {
-  if (data == NULL || size <= 0 || (size_t)offset + (size_t)size > n) return -1;
+  if (data == NULL || size <= 0 || (size_t)offset + (size_t)size > n) {
+    ctx->layout.refused++;
+    return -1;
+  }
   const uint8_t *frame = data + offset;
-  // The codec's stride can exceed width (alignment); the encoder made a
-  // tight 512x256 NV12, but read the stride the codec reports by deriving it
-  // from the buffer size: luma is width*height, chroma width*height/2.
-  size_t luma = (size_t)ctx->width * (size_t)ctx->height;
-  if ((size_t)size < luma) return -1;
-  memcpy(ctx->nv12, frame, luma);
-  memcpy(ctx->nv12 + luma, frame + luma, (size_t)size - luma);
+  ctx->layout.last_size = size;
+  ctx->layout.last_offset = offset;
+  const size_t w = (size_t)ctx->width;
+  const size_t h = (size_t)ctx->height;
+  const size_t luma = w * h;
+  if ((size_t)size < luma) {
+    // not even a tight luma: nothing here to copy, whatever it is
+    ctx->layout.refused++;
+    return -1;
+  }
+
+  // A layout the codec never named is the tight one the encoder made; a stride
+  // narrower than the picture cannot be one, so it is not trusted either.
+  const size_t stride = ctx->layout.stride > 0 && (size_t)ctx->layout.stride >= w
+                          ? (size_t)ctx->layout.stride : w;
+  size_t slice = ctx->layout.slice_height > 0 && (size_t)ctx->layout.slice_height >= h
+                   ? (size_t)ctx->layout.slice_height : h;
+  const size_t left = ctx->layout.crop_left > 0 && (size_t)ctx->layout.crop_left < w
+                        ? (size_t)ctx->layout.crop_left : 0;
+  const size_t top = ctx->layout.crop_top > 0 && (size_t)ctx->layout.crop_top < h
+                       ? (size_t)ctx->layout.crop_top : 0;
+  // the picture starts at (left, top) inside the buffer; shifting the source
+  // is the whole of it, and the bounds check below then applies to the
+  // picture rather than to the padding above it
+  if (top * stride >= (size_t)size) {
+    ctx->layout.refused++;
+    return -1;
+  }
+  const uint8_t *picture = frame + top * stride;
+  const size_t available = (size_t)size - top * stride;
+  const size_t chroma_offset = top * stride;   // chroma_at is relative to frame
+
+  // the chroma begins after the luma's slice rows, padding included
+  size_t chroma_at = stride * slice;
+  if (chroma_at + stride * (h / 2) > (size_t)size) {
+    // a codec that pads rows but starts the chroma right after the picture
+    const size_t alt = stride * h;
+    if (alt + stride * (h / 2) <= (size_t)size) {
+      chroma_at = alt;
+      slice = h;
+    } else {
+      ctx->layout.refused++;
+      return -1;
+    }
+  }
+  if (chroma_at < chroma_offset ||
+      jl_hevc_tighten_nv12(picture, available, ctx->width, ctx->height, stride, slice,
+                           left, chroma_at - chroma_offset, ctx->nv12) != 0) {
+    ctx->layout.refused++;
+    return -1;
+  }
+  ctx->layout.copies++;
+  if (stride != w || slice != h || left != 0) ctx->layout.strided++;
   return 0;
+}
+
+const jl_hevc_layout *jl_hevc_layout_of(jl_hevc *ctx) {
+  return ctx == NULL ? NULL : &ctx->layout;
 }
 
 int jl_hevc_decode(jl_hevc *ctx, const void *src, size_t n, uint8_t *out, int *keyframe) {
@@ -307,9 +422,19 @@ int jl_hevc_decode(jl_hevc *ctx, const void *src, size_t n, uint8_t *out, int *k
     memset(&info, 0, sizeof(info));
     ssize_t ix = AMediaCodec_dequeueOutputBuffer(ctx->codec, &info, 3000);  // 3 ms
     if (ix == AMEDIACODEC_INFO_TRY_AGAIN_LATER) break;
-    if (ix == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED ||
-        ix == AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED) continue;
+    if (ix == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED) {
+      // the one moment the codec says how wide its rows are and how it padded
+      // the picture: a decoder that pads is not wrong, a copy that assumed it
+      // did not is
+      jl_mc_read_layout(ctx);
+      continue;
+    }
+    if (ix == AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED) continue;
     if (ix < 0) return -3;
+    if (ctx->layout.stride == 0 && ctx->layout.copies == 0) {
+      // no format-changed event on this codec: ask once before the first frame
+      jl_mc_read_layout(ctx);
+    }
     size_t out_cap = 0;
     uint8_t *out_buf = AMediaCodec_getOutputBuffer(ctx->codec, (size_t)ix, &out_cap);
     if (out_buf == NULL) { AMediaCodec_releaseOutputBuffer(ctx->codec, (size_t)ix, 0); return -3; }
@@ -392,6 +517,7 @@ struct jl_hevc {
   jl_av_frame frame;
   uint8_t *nv12;   // the frame, NV12, copied out of the decoder's
   int opened;
+  jl_hevc_layout layout;   // the decoder's row stride, for the same log line
 };
 
 // The library, opened once and kept: dlopen on every frame would cost more
@@ -432,6 +558,8 @@ jl_hevc *jl_hevc_create(int width, int height) {
   ctx->width = width;
   ctx->height = height;
   ctx->frame_bytes = bytes;
+  ctx->layout.width = width;
+  ctx->layout.height = height;
   ctx->api = *api;
   ctx->nv12 = calloc(1, bytes);
   if (ctx->nv12 == NULL) {
@@ -473,6 +601,10 @@ const char *jl_hevc_backend(void) {
   return jl_av() != NULL ? "libavcodec" : "";
 }
 
+const jl_hevc_layout *jl_hevc_layout_of(jl_hevc *ctx) {
+  return ctx == NULL ? NULL : &ctx->layout;
+}
+
 // The decoder, opened on the first access unit: the width and height come
 // from the bitstream's own parameter sets, and the frame path is in order,
 // so there is no reconfiguration to do.
@@ -499,6 +631,12 @@ static int jl_copy_nv12(struct jl_hevc *ctx) {
   jl_av_frame *frame = &ctx->frame;
   if (frame->data[0] == NULL || frame->data[1] == NULL) return -1;
   size_t luma = (size_t)ctx->width * (size_t)ctx->height;
+  // libavcodec hands out each plane with its own line size, which is the same
+  // fact the MediaCodec path had to be taught to ask for
+  ctx->layout.stride = frame->linesize[0];
+  ctx->layout.slice_height = ctx->height;
+  if (frame->linesize[0] != ctx->width) ctx->layout.strided++;
+  ctx->layout.copies++;
   for (int row = 0; row < ctx->height; row++) {
     memcpy(ctx->nv12 + (size_t)row * (size_t)ctx->width, frame->data[0] + (size_t)row * frame->linesize[0],
            (size_t)ctx->width);
@@ -560,6 +698,11 @@ void jl_hevc_flush(jl_hevc *ctx) { (void)ctx; }
 int jl_hevc_available(void) { return 0; }
 
 const char *jl_hevc_backend(void) { return ""; }
+
+const jl_hevc_layout *jl_hevc_layout_of(jl_hevc *ctx) {
+  (void)ctx;
+  return NULL;
+}
 
 int jl_hevc_decode(jl_hevc *ctx, const void *src, size_t n, uint8_t *out, int *keyframe) {
   (void)ctx;

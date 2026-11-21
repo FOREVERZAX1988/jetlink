@@ -33,6 +33,11 @@ final class HevcFrame: @unchecked Sendable {
   private let roadNV12: UnsafeMutableRawPointer
   private let wideNV12: UnsafeMutableRawPointer
 
+  private let log = ServerLog(category: "hevc")
+  /// When the layout line last went out. Once a second is enough to watch a
+  /// carrier stay good or go bad, and costs nothing against a 20 Hz loop.
+  private var lastReport = 0.0
+
   /// The shape of the warped frame the model takes: (2, 6, H, W), the two
   /// cameras' six planes one after another. Nil when the shape is not one
   /// this can hold.
@@ -88,7 +93,66 @@ final class HevcFrame: @unchecked Sendable {
     guard decode(roadBytes, into: roadNV12, planes: roadPlanes, decoder: road),
       decode(wideBytes, into: wideNV12, planes: widePlanes, decoder: wide)
     else { return false }
+    reportIfDue()
     return true
+  }
+
+  /// One line a second: what the decoders say about their buffers, and what the
+  /// first plane of each camera actually holds.
+  ///
+  /// This is the measurement that tells a picture broken by the carrier from a
+  /// model that cannot read a picture. The comma logs the plane it is about to
+  /// encode (`jetlink: warp frame ... narrow 65/5 moved 0.5`); if this line
+  /// says `road 16/42` for the same second, the picture did not survive the
+  /// carrier, and `stride`/`slice`/`fmt` say why. The four quadrant means catch
+  /// a picture that fills only part of the buffer -- the other shape that reads
+  /// as "mean drops, spread rises".
+  private func reportIfDue() {
+    let now = Date().timeIntervalSinceReferenceDate
+    guard now - lastReport >= 1.0 else { return }
+    lastReport = now
+    var line = "hevc \(width)x\(height)"
+    if let road, let info = jl_hevc_layout_of(road) {
+      let l = info.pointee
+      line += " stride=\(l.stride) slice=\(l.slice_height) fmt=0x\(String(l.color_format, radix: 16))"
+      line += " copies=\(l.copies) strided=\(l.strided) refused=\(l.refused) size=\(l.last_size)"
+    }
+    let planeBytes = planeHeight * planeWidth
+    let roadStats = stats(planes)
+    let wideStats = stats(planes.advanced(by: 6 * planeBytes))
+    line += " | road \(roadStats.mean)/\(roadStats.spread) \(roadStats.quarters)"
+    line += " wide \(wideStats.mean)/\(wideStats.spread) \(wideStats.quarters)"
+    log.warning(line)
+  }
+
+  /// Mean, spread and four row-band means of one plane, sampled every 4th byte
+  /// the way the trace's own fingerprints are.
+  private func stats(_ at: UnsafeMutableRawPointer) -> (mean: Int, spread: Int, quarters: [Int]) {
+    let p = at.assumingMemoryBound(to: UInt8.self)
+    var sum = 0.0, squares = 0.0, sampled = 0
+    var quarters: [Int] = []
+    for band in 0..<4 {
+      let from = band * planeHeight / 4
+      let to = (band + 1) * planeHeight / 4
+      var bandSum = 0.0, bandCount = 0
+      for y in from..<to {
+        var x = 0
+        while x < planeWidth {
+          let v = Double(p[y * planeWidth + x])
+          sum += v
+          squares += v * v
+          sampled += 1
+          bandSum += v
+          bandCount += 1
+          x += 4
+        }
+      }
+      quarters.append(bandCount > 0 ? Int((bandSum / Double(bandCount)).rounded()) : 0)
+    }
+    guard sampled > 0 else { return (0, 0, quarters) }
+    let mean = sum / Double(sampled)
+    let variance = max(squares / Double(sampled) - mean * mean, 0)
+    return (Int(mean.rounded()), Int(variance.squareRoot().rounded()), quarters)
   }
 
   /// One access unit into its NV12 and its six planes.

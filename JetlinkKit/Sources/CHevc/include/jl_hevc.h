@@ -63,6 +63,36 @@ int jl_hevc_available(void);
 /// Empty when there is none.
 const char *jl_hevc_backend(void);
 
+/// How the decoder laid its output out, for a log line.
+///
+/// A decoder is free to pad its rows (a stride wider than the picture) and to
+/// pad the picture to whole macroblocks (a slice-height taller than it). That
+/// padding is readable only from the codec's own output format, never from the
+/// buffer, and a copy that assumes tight rows does not fail on a padded buffer
+/// -- it shears the picture. The model then sees a scrambled frame and answers
+/// as if the camera were still (measured 2026-11-21: the comma's warped plane
+/// mean 65/spread 5 arrived at the phone as mean 16/spread 42, on the one
+/// carrier that has a decoder). These are the numbers that say which side of
+/// the wire that happened on.
+typedef struct {
+  int width;          ///< the picture, as asked for
+  int height;
+  int stride;         ///< bytes per luma row; 0 when the codec never said
+  int slice_height;   ///< luma rows in the buffer, padding included; 0 unknown
+  int color_format;   ///< the codec's color-format; 0 when it never said
+  int crop_left;      ///< the picture's origin inside the buffer (0 = none)
+  int crop_top;
+  int copies;         ///< frames copied
+  int strided;        ///< of those, how many needed the row-by-row path
+  int refused;        ///< buffers that could not hold the picture at all
+  int last_size;      ///< the last output buffer's `info.size`
+  int last_offset;    ///< and its `info.offset`
+} jl_hevc_layout;
+
+/// The last decode's layout, or NULL without a decoder. Valid until the next
+/// `jl_hevc_decode`.
+const jl_hevc_layout *jl_hevc_layout_of(jl_hevc *ctx);
+
 // -- the bitstream, apart from any decoder ------------------------------------
 //
 // These are what the adapters are built on, and what a test can check
@@ -98,6 +128,20 @@ size_t jl_hevc_frame_bytes(int width, int height);
 /// `out` is 6 * H * W bytes, the six planes one after another. The Python is
 /// `jetlink.hevc.from_nv12`.
 void jl_hevc_unpack_nv12(const uint8_t *nv12, int width, int height, uint8_t *out);
+
+/// A decoder's NV12, as it laid it out, into a tight one: `height` luma rows
+/// of `width` bytes read every `stride` bytes from `left`, then the chroma's
+/// `height / 2` rows from `chroma_at`. `out` is the usual
+/// `jl_hevc_frame_bytes(width, height)`.
+///
+/// This is the step that used to be a plain memcpy on the assumption that
+/// every decoder lays its rows tight. Android's does not have to, and reading
+/// a padded buffer that way shears the picture instead of failing. Bounds are
+/// checked against `n`, the bytes `src` actually holds. Returns 0, or -1 when
+/// `src` cannot supply that picture.
+int jl_hevc_tighten_nv12(const uint8_t *src, size_t n, int width, int height,
+                         size_t stride, size_t slice_height, size_t left,
+                         size_t chroma_at, uint8_t *out);
 
 #ifdef __cplusplus
 }
