@@ -607,7 +607,8 @@ int jl_hevc_decode(jl_hevc *ctx, const void *src, size_t n, uint8_t *out, int *k
     // The decoder is opened from a parameter set, so the first access unit that
     // arrives with one is where it starts. Until then there is nothing to feed
     // it: 0 is "no frame yet", not a failure.
-    if (!irap || jl_mc_configure(ctx, (const uint8_t *)src, n) != 0) return 0;
+    if (!irap) { ctx->layout.stage = 1; return 0; }   // no parameter set yet
+    if (jl_mc_configure(ctx, (const uint8_t *)src, n) != 0) { ctx->layout.stage = 1; return 0; }
   }
   // what this decoder was handed, so a log line can tell a stream that never
   // arrived from a picture it could not make
@@ -642,15 +643,26 @@ int jl_hevc_decode(jl_hevc *ctx, const void *src, size_t n, uint8_t *out, int *k
   if (AMediaCodec_queueInputBuffer(ctx->codec, (size_t)in, 0, n,
                                    (uint64_t)ctx->pts++, flags) != AMEDIA_OK) return -3;
 
-  // Drain at most one decoded frame, without waiting past a few milliseconds.
-  // The codec decodes on its own time; what is not out yet is drained by the
-  // next access unit, which is exactly the one-frame-old plan a pipelined
-  // frame publishes anyway.
-  for (int tries = 0; tries < 2; tries++) {
+  // Drain one decoded frame.
+  //
+  // After the first picture this waits a few milliseconds and no more: the
+  // codec decodes on its own time, and a frame that is not out yet is the
+  // one-frame-old plan a pipelined link publishes anyway.
+  //
+  // The first picture is different, and used to be fatal. A decoder that has
+  // just been configured has nothing out for a frame or two, and the caller
+  // reads "no frame yet" as a refusal -- BAD_SHAPE at the host, which ends the
+  // join at frame 0 (measured 2026-11-21, twice: once through the codec's
+  // buffer, once through a surface). A join is worth a second of waiting, and
+  // the link's first-frame budget is exactly what that second is for.
+  const int first = ctx->layout.copies == 0 && ctx->layout.refused == 0;
+  int left_ms = first ? 800 : 6;
+  while (left_ms > 0) {
     AMediaCodecBufferInfo info;
     memset(&info, 0, sizeof(info));
-    ssize_t ix = AMediaCodec_dequeueOutputBuffer(ctx->codec, &info, 3000);  // 3 ms
-    if (ix == AMEDIACODEC_INFO_TRY_AGAIN_LATER) break;
+    ssize_t ix = AMediaCodec_dequeueOutputBuffer(ctx->codec, &info, first ? 4000 : 3000);
+    left_ms -= first ? 4 : 3;
+    if (ix == AMEDIACODEC_INFO_TRY_AGAIN_LATER) continue;
     if (ix == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED) {
       // the one moment the codec says how wide its rows are and how it padded
       // the picture: a decoder that pads is not wrong, a copy that assumed it
@@ -659,7 +671,7 @@ int jl_hevc_decode(jl_hevc *ctx, const void *src, size_t n, uint8_t *out, int *k
       continue;
     }
     if (ix == AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED) continue;
-    if (ix < 0) return -3;
+    if (ix < 0) { ctx->layout.stage = 2; return -3; }
     if (ctx->layout.stride == 0) {
       // Ask again every frame until it answers. Asking once, before the first
       // buffer came out, got nothing at all on a Snapdragon (2026-11-21:
@@ -674,29 +686,33 @@ int jl_hevc_decode(jl_hevc *ctx, const void *src, size_t n, uint8_t *out, int *k
       // than decoded a frame behind.
       AMediaCodec_releaseOutputBuffer(ctx->codec, (size_t)ix, true);
       AImage *img = NULL;
-      for (int wait = 0; wait < 12 && img == NULL; wait++) {
+      int wait = first ? 200 : 12;
+      for (; wait > 0 && img == NULL; wait--) {
         if (AImageReader_acquireLatestImage(ctx->reader, &img) != AMEDIA_OK) {
           img = NULL;
           struct timespec ts = {0, 1000000};   // 1 ms
           nanosleep(&ts, NULL);
         }
       }
-      if (img == NULL) return 0;   // rendered but not readable yet: next call
+      if (img == NULL) { ctx->layout.stage = 3; continue; }   // rendered, not readable yet
       int rc = jl_mc_copy_image(ctx, img);
       AImage_delete(img);
-      if (rc != 0) return -3;
+      if (rc != 0) { ctx->layout.stage = 4; return -3; }
+      ctx->layout.stage = 0;
       memcpy(out, ctx->nv12, ctx->frame_bytes);
       return 1;
     }
     size_t out_cap = 0;
     uint8_t *out_buf = AMediaCodec_getOutputBuffer(ctx->codec, (size_t)ix, &out_cap);
-    if (out_buf == NULL) { AMediaCodec_releaseOutputBuffer(ctx->codec, (size_t)ix, 0); return -3; }
+    if (out_buf == NULL) { AMediaCodec_releaseOutputBuffer(ctx->codec, (size_t)ix, 0); ctx->layout.stage = 2; return -3; }
     int rc = jl_mc_copy_nv12(ctx, out_buf, out_cap, info.offset, info.size);
     AMediaCodec_releaseOutputBuffer(ctx->codec, (size_t)ix, 0);
-    if (rc != 0) return -3;
+    if (rc != 0) { ctx->layout.stage = 4; return -3; }
+    ctx->layout.stage = 0;
     memcpy(out, ctx->nv12, ctx->frame_bytes);
     return 1;
   }
+  if (ctx->layout.stage == 0) ctx->layout.stage = 2;   // nothing came out
   return 0;   // no frame yet: hold the previous plan, not a failure
 }
 

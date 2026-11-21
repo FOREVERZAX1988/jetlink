@@ -90,6 +90,9 @@ typedef struct {
   int last_size;      ///< the last output buffer's `info.size`
   int last_offset;    ///< and its `info.offset`
   int out_cap;        ///< and the capacity `getOutputBuffer` reported
+  int stage;          ///< how far the last decode got: 0 frame out, 1 no
+                      ///< decoder, 2 no output buffer, 3 no readable image,
+                      ///< 4 a picture that would not copy
   int au_bytes;       ///< the access unit this decode was fed, in bytes
   int au_first_type;  ///< its first NAL's type (32 VPS on an IDR, 1 a P frame)
   unsigned long long head_lo;  ///< the picture's first 8 bytes, as they lie
