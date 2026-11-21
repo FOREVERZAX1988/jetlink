@@ -37,6 +37,8 @@ final class HevcFrame: @unchecked Sendable {
   /// When the layout line last went out. Once a second is enough to watch a
   /// carrier stay good or go bad, and costs nothing against a 20 Hz loop.
   private var lastReport = 0.0
+  /// The same, for the line a refused frame writes.
+  private var lastRefusal = 0.0
 
   /// The shape of the warped frame the model takes: (2, 6, H, W), the two
   /// cameras' six planes one after another. Nil when the shape is not one
@@ -92,9 +94,32 @@ final class HevcFrame: @unchecked Sendable {
     let widePlanes = planes.advanced(by: 6 * planeBytes)
     guard decode(roadBytes, into: roadNV12, planes: roadPlanes, decoder: road),
       decode(wideBytes, into: wideNV12, planes: widePlanes, decoder: wide)
-    else { return false }
+    else {
+      reportRefusal()
+      return false
+    }
     reportIfDue()
     return true
+  }
+
+  /// A frame this could not turn into planes, said once a second with the
+  /// numbers that decide it. A rejected frame reaches the comma as BAD_SHAPE
+  /// and hands the whole link back, so this line is what says why: a stream
+  /// that owes an IDR, a buffer the codec laid out differently than it said,
+  /// or a decoder that failed outright.
+  private func reportRefusal() {
+    let now = Date().timeIntervalSinceReferenceDate
+    guard now - lastRefusal >= 1.0 else { return }
+    lastRefusal = now
+    guard let road, let info = jl_hevc_layout_of(road) else {
+      log.warning("hevc refused a frame, and no decoder to explain it")
+      return
+    }
+    let l = info.pointee
+    log.warning("hevc refused a frame: \(width)x\(height)"
+                + " stride=\(l.stride) slice=\(l.slice_height) fmt=0x\(String(l.color_format, radix: 16))"
+                + " size=\(l.last_size) offset=\(l.last_offset) copies=\(l.copies)"
+                + " strided=\(l.strided) tight=\(l.tight_fallback) refused=\(l.refused)")
   }
 
   /// One line a second: what the decoders say about their buffers, and what the
@@ -115,7 +140,7 @@ final class HevcFrame: @unchecked Sendable {
     if let road, let info = jl_hevc_layout_of(road) {
       let l = info.pointee
       line += " stride=\(l.stride) slice=\(l.slice_height) fmt=0x\(String(l.color_format, radix: 16))"
-      line += " copies=\(l.copies) strided=\(l.strided) refused=\(l.refused) size=\(l.last_size)"
+      line += " copies=\(l.copies) strided=\(l.strided) tight=\(l.tight_fallback) refused=\(l.refused) size=\(l.last_size)"
     }
     let planeBytes = planeHeight * planeWidth
     let roadStats = stats(planes)

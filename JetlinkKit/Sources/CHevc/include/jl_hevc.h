@@ -84,6 +84,7 @@ typedef struct {
   int crop_top;
   int copies;         ///< frames copied
   int strided;        ///< of those, how many needed the row-by-row path
+  int tight_fallback; ///< of those, how many fell back to tight rows anyway
   int refused;        ///< buffers that could not hold the picture at all
   int last_size;      ///< the last output buffer's `info.size`
   int last_offset;    ///< and its `info.offset`

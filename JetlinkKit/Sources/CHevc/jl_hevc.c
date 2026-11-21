@@ -334,49 +334,58 @@ static int jl_mc_copy_nv12(struct jl_hevc *ctx, uint8_t *data, size_t n,
     ctx->layout.refused++;
     return -1;
   }
+  // What bounds a padded read is the buffer's own capacity, not `size`: a
+  // decoder reports `size` as the bytes of the picture it cropped, while the
+  // allocation behind it carries the padding. Bounding by `size` refuses a
+  // frame this could have laid out -- the first closed loop on 2026-11-21 came
+  // back BAD_SHAPE at frame 0 for exactly that.
+  const size_t avail = n > (size_t)offset ? n - (size_t)offset : 0;
 
   // A layout the codec never named is the tight one the encoder made; a stride
   // narrower than the picture cannot be one, so it is not trusted either.
-  const size_t stride = ctx->layout.stride > 0 && (size_t)ctx->layout.stride >= w
-                          ? (size_t)ctx->layout.stride : w;
+  size_t stride = ctx->layout.stride > 0 && (size_t)ctx->layout.stride >= w
+                    ? (size_t)ctx->layout.stride : w;
   size_t slice = ctx->layout.slice_height > 0 && (size_t)ctx->layout.slice_height >= h
                    ? (size_t)ctx->layout.slice_height : h;
   const size_t left = ctx->layout.crop_left > 0 && (size_t)ctx->layout.crop_left < w
                         ? (size_t)ctx->layout.crop_left : 0;
   const size_t top = ctx->layout.crop_top > 0 && (size_t)ctx->layout.crop_top < h
                        ? (size_t)ctx->layout.crop_top : 0;
-  // the picture starts at (left, top) inside the buffer; shifting the source
-  // is the whole of it, and the bounds check below then applies to the
-  // picture rather than to the padding above it
-  if (top * stride >= (size_t)size) {
-    ctx->layout.refused++;
-    return -1;
-  }
-  const uint8_t *picture = frame + top * stride;
-  const size_t available = (size_t)size - top * stride;
-  const size_t chroma_offset = top * stride;   // chroma_at is relative to frame
+  const size_t top_off = top * stride;
+  const uint8_t *picture = frame + top_off;
+  const size_t room = top_off < avail ? avail - top_off : 0;
 
   // the chroma begins after the luma's slice rows, padding included
   size_t chroma_at = stride * slice;
-  if (chroma_at + stride * (h / 2) > (size_t)size) {
+  if (chroma_at + stride * (h / 2) > avail) {
     // a codec that pads rows but starts the chroma right after the picture
     const size_t alt = stride * h;
-    if (alt + stride * (h / 2) <= (size_t)size) {
+    if (alt + stride * (h / 2) <= avail) {
       chroma_at = alt;
       slice = h;
-    } else {
-      ctx->layout.refused++;
-      return -1;
     }
   }
-  if (chroma_at < chroma_offset ||
-      jl_hevc_tighten_nv12(picture, available, ctx->width, ctx->height, stride, slice,
-                           left, chroma_at - chroma_offset, ctx->nv12) != 0) {
-    ctx->layout.refused++;
-    return -1;
+  const size_t chroma_rel = chroma_at > top_off ? chroma_at - top_off : 0;
+  if (chroma_at > top_off && chroma_rel + (h / 2 - 1) * stride + w <= room &&
+      jl_hevc_tighten_nv12(picture, room, ctx->width, ctx->height, stride, slice,
+                           left, chroma_rel, ctx->nv12) == 0) {
+    ctx->layout.copies++;
+    if (stride != w || slice != h || left != 0) ctx->layout.strided++;
+    return 0;
+  }
+
+  // Nothing fitted the layout the codec named, so the buffer is the tight one
+  // after all -- or its geometry is not one this understands. Take what is
+  // there rather than refuse a frame: a sheared picture is bad, no picture is
+  // worse (it is BAD_SHAPE at the host, and the whole link hands back).
+  if ((size_t)size >= luma + luma / 2) {
+    memcpy(ctx->nv12, frame, luma + luma / 2);
+  } else {
+    memcpy(ctx->nv12, frame, luma);
+    memset(ctx->nv12 + luma, 0, luma / 2);
   }
   ctx->layout.copies++;
-  if (stride != w || slice != h || left != 0) ctx->layout.strided++;
+  ctx->layout.tight_fallback++;
   return 0;
 }
 
