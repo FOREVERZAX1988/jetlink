@@ -196,6 +196,10 @@ struct jl_hevc {
   // by construction. Both are NULL when it would not take one.
   AImageReader *reader;
   ANativeWindow *window;
+  /// Which component the decoder was opened from, for the log line: the same
+  /// bytes through a hardware decoder and a software one are different
+  /// pictures, and which one answered has to be readable.
+  char codec_name[64];
   /// Set when the surface path was tried and gave nothing: the decoder is then
   /// opened again the way this device is known to answer, without one.
   int no_surface;
@@ -253,8 +257,19 @@ static int jl_mc_configure(struct jl_hevc *ctx, const uint8_t *au, size_t n) {
   memcpy(csd1, sc, 4);
   memcpy(csd1 + 4, pps, pps_n);
 
-  AMediaCodec *codec = AMediaCodec_createDecoderByType(jl_mc_mime());
-  if (codec == NULL) { free(csd0); free(csd1); return -1; }
+  // The software decoder first, then whatever the platform picks. This is an
+  // A/B on the component, not a preference: the same access units decode to
+  // 125.0/72.5 here and to 43/68 with no chroma plane on the phone, through
+  // both the codec's buffer and a surface, with and without parameter sets.
+  // What is left to vary is which decoder answered.
+  AMediaCodec *codec = AMediaCodec_createCodecByName("c2.android.hevc.decoder");
+  if (codec != NULL) {
+    snprintf(ctx->codec_name, sizeof(ctx->codec_name), "%s", "c2.android.hevc.decoder");
+  } else {
+    codec = AMediaCodec_createDecoderByType(jl_mc_mime());
+    if (codec == NULL) { free(csd0); free(csd1); return -1; }
+    snprintf(ctx->codec_name, sizeof(ctx->codec_name), "%s", "platform default");
+  }
 
   AMediaFormat *fmt = AMediaFormat_new();
   if (fmt == NULL) { AMediaCodec_delete(codec); free(csd0); free(csd1); return -1; }
@@ -634,15 +649,20 @@ int jl_hevc_format_string(jl_hevc *ctx, char *out, size_t cap) {
   out[0] = 0;
   if (ctx->codec == NULL) return 0;
   AMediaFormat *fmt = AMediaCodec_getOutputFormat(ctx->codec);
-  if (fmt == NULL) return 0;
+  size_t at = 0;
+  const char *pre = "codec=";
+  while (*pre != 0 && at + 1 < cap) out[at++] = *pre++;
+  for (int i = 0; ctx->codec_name[i] != 0 && at + 1 < cap; i++) out[at++] = ctx->codec_name[i];
+  out[at] = 0;
+  if (fmt == NULL) return (int)at;
   const char *text = AMediaFormat_toString(fmt);
-  int n = 0;
   if (text != NULL) {
-    while (text[n] != 0 && (size_t)n + 1 < cap) { out[n] = text[n]; n++; }
-    out[n] = 0;
+    if (at + 1 < cap) out[at++] = ' ';
+    for (int i = 0; text[i] != 0 && at + 1 < cap; i++) out[at++] = text[i];
+    out[at] = 0;
   }
   AMediaFormat_delete(fmt);
-  return n;
+  return (int)at;
 }
 
 // Take the decoder down and keep nothing: the codec and the queue it renders
