@@ -684,24 +684,28 @@ static void jl_mc_teardown(struct jl_hevc *ctx) {
 // Feed one access unit and take one picture out of it.
 //
 // 1 is a frame, 0 is nothing out yet, -3 is a codec that would not even take
-// the bytes. After the first picture this waits a few milliseconds and no more:
-// a frame that is not out is the one-frame-old plan a pipelined link publishes
-// anyway. The first picture is different, and used to be fatal -- a decoder
-// that was just configured has nothing out for a frame or two, the caller reads
-// "nothing" as a refusal, and BAD_SHAPE ends the join at frame 0. A join is
-// worth 0.8 s, which is what the link's first-frame budget is for.
+// the bytes. Nothing here waits: a frame that is not out yet is the one-frame-old
+// plan a pipelined link publishes anyway, and a decoder that has only just been
+// configured is covered by the blank-frame grace on the other side of the
+// bridge. Waiting here instead -- 0.8 s for a first picture -- was what could
+// not fit the link's 0.45 s first-frame budget.
 static int jl_mc_take(struct jl_hevc *ctx, const void *src, size_t n, uint8_t *out, int irap) {
-  const int first = ctx->first_done == 0;
-  // A codec that has just been started has no input slot for a moment, and
-  // asking once (2 ms) and giving up turns that moment into a refusal. The
-  // first access unit is allowed to wait for one.
+  // No access unit waits any more.
+  //
+  // The 300 ms for an input slot and 700 ms for a picture were what made a join
+  // survive a decoder that had not started, back when "nothing yet" was answered
+  // as BAD_SHAPE. The blank-frame grace in HevcFrame answers that now, and the
+  // wait has become the only thing that cannot meet the link's first-frame
+  // budget (0.45 s) with the phone's decoder taking a frame or two to warm up.
+  // So a frame is fed and taken in a few milliseconds, and a picture that is not
+  // out yet is the next frame's.
   ssize_t in = -1;
-  int slot_ms = first ? 300 : 2;
+  int slot_ms = 2;
   while (slot_ms > 0) {
     in = AMediaCodec_dequeueInputBuffer(ctx->codec, 2000);   // 2 ms
     if (in >= 0) break;
     slot_ms -= 2;
-    if (!first) break;
+    break;
     struct timespec ts = {0, 2000000};   // 2 ms
     nanosleep(&ts, NULL);
   }
@@ -717,12 +721,12 @@ static int jl_mc_take(struct jl_hevc *ctx, const void *src, size_t n, uint8_t *o
     return -3;
   }
 
-  int left_ms = first ? 700 : 6;
+  int left_ms = 6;
   while (left_ms > 0) {
     AMediaCodecBufferInfo info;
     memset(&info, 0, sizeof(info));
-    ssize_t ix = AMediaCodec_dequeueOutputBuffer(ctx->codec, &info, first ? 4000 : 3000);
-    left_ms -= first ? 4 : 3;
+    ssize_t ix = AMediaCodec_dequeueOutputBuffer(ctx->codec, &info, 3000);
+    left_ms -= 3;
     if (ix == AMEDIACODEC_INFO_TRY_AGAIN_LATER) continue;
     if (ix == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED) {
       // the one moment a codec says how wide its rows are and how it padded
@@ -743,7 +747,7 @@ static int jl_mc_take(struct jl_hevc *ctx, const void *src, size_t n, uint8_t *o
       // frame behind
       AMediaCodec_releaseOutputBuffer(ctx->codec, (size_t)ix, true);
       AImage *img = NULL;
-      int wait = first ? 200 : 12;
+      int wait = 12;
       for (; wait > 0 && img == NULL; wait--) {
         if (AImageReader_acquireLatestImage(ctx->reader, &img) != AMEDIA_OK) {
           img = NULL;
