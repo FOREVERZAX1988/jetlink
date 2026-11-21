@@ -140,44 +140,68 @@ final class HevcFrame: @unchecked Sendable {
     if let road, let info = jl_hevc_layout_of(road) {
       let l = info.pointee
       line += " stride=\(l.stride) slice=\(l.slice_height) fmt=0x\(String(l.color_format, radix: 16))"
-      line += " copies=\(l.copies) strided=\(l.strided) tight=\(l.tight_fallback) refused=\(l.refused) size=\(l.last_size)"
+      line += " copies=\(l.copies) strided=\(l.strided) tight=\(l.tight_fallback) refused=\(l.refused)"
+      line += " size=\(l.last_size) off=\(l.last_offset) cap=\(l.out_cap)"
+      line += " head=" + String(format: "%016llx%016llx", l.head_lo, l.head_hi)
     }
     let planeBytes = planeHeight * planeWidth
     let roadStats = stats(planes)
     let wideStats = stats(planes.advanced(by: 6 * planeBytes))
     line += " | road \(roadStats.mean)/\(roadStats.spread) \(roadStats.quarters)"
+    line += " even=\(roadStats.even) odd=\(roadStats.odd)"
     line += " wide \(wideStats.mean)/\(wideStats.spread) \(wideStats.quarters)"
     log.warning(line)
   }
 
   /// Mean, spread and four row-band means of one plane, sampled every 4th byte
   /// the way the trace's own fingerprints are.
-  private func stats(_ at: UnsafeMutableRawPointer) -> (mean: Int, spread: Int, quarters: [Int]) {
+  private func stats(_ at: UnsafeMutableRawPointer) -> (mean: Int, spread: Int, quarters: [Int],
+                                                         even: Int, odd: Int) {
     let p = at.assumingMemoryBound(to: UInt8.self)
     var sum = 0.0, squares = 0.0, sampled = 0
+    var evenSum = 0.0, evenCount = 0
+    var oddSum = 0.0, oddCount = 0
     var quarters: [Int] = []
+    // every 4th byte, and its neighbour across: a plane read as 8-bit gives
+    // the two the same mean, a 10-bit one read as 8-bit splits them (low byte
+    // against high), which is a bit depth problem wearing a shear's clothes
     for band in 0..<4 {
       let from = band * planeHeight / 4
       let to = (band + 1) * planeHeight / 4
       var bandSum = 0.0, bandCount = 0
       for y in from..<to {
         var x = 0
-        while x < planeWidth {
-          let v = Double(p[y * planeWidth + x])
-          sum += v
-          squares += v * v
+        while x + 1 < planeWidth {
+          let i = y * planeWidth + x
+          let a = Double(p[i])
+          let b = Double(p[i + 1])
+          sum += a
+          squares += a * a
           sampled += 1
-          bandSum += v
+          bandSum += a
           bandCount += 1
+          if i % 2 == 0 {
+            evenSum += a
+            evenCount += 1
+            oddSum += b
+            oddCount += 1
+          } else {
+            oddSum += a
+            oddCount += 1
+            evenSum += b
+            evenCount += 1
+          }
           x += 4
         }
       }
       quarters.append(bandCount > 0 ? Int((bandSum / Double(bandCount)).rounded()) : 0)
     }
-    guard sampled > 0 else { return (0, 0, quarters) }
+    guard sampled > 0 else { return (0, 0, quarters, 0, 0) }
     let mean = sum / Double(sampled)
     let variance = max(squares / Double(sampled) - mean * mean, 0)
-    return (Int(mean.rounded()), Int(variance.squareRoot().rounded()), quarters)
+    let even = evenCount > 0 ? Int((evenSum / Double(evenCount)).rounded()) : 0
+    let odd = oddCount > 0 ? Int((oddSum / Double(oddCount)).rounded()) : 0
+    return (Int(mean.rounded()), Int(variance.squareRoot().rounded()), quarters, even, odd)
   }
 
   /// One access unit into its NV12 and its six planes.

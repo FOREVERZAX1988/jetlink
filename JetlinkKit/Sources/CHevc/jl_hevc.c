@@ -326,6 +326,15 @@ static int jl_mc_copy_nv12(struct jl_hevc *ctx, uint8_t *data, size_t n,
   const uint8_t *frame = data + offset;
   ctx->layout.last_size = size;
   ctx->layout.last_offset = offset;
+  ctx->layout.out_cap = (int)(n - (size_t)offset);
+  // The first 16 bytes of the picture, as they lie in the buffer. A linear
+  // NV12 row of a lit scene is a smooth run of neighbouring values; a tiled or
+  // compressed buffer is not, and telling those apart from the numbers alone
+  // cost an afternoon (2026-11-21: stride=0, size=luma, mean 28, spread 55).
+  if (n >= (size_t)offset + 16) {
+    memcpy(&ctx->layout.head_lo, frame, 8);
+    memcpy(&ctx->layout.head_hi, frame + 8, 8);
+  }
   const size_t w = (size_t)ctx->width;
   const size_t h = (size_t)ctx->height;
   const size_t luma = w * h;
@@ -440,8 +449,12 @@ int jl_hevc_decode(jl_hevc *ctx, const void *src, size_t n, uint8_t *out, int *k
     }
     if (ix == AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED) continue;
     if (ix < 0) return -3;
-    if (ctx->layout.stride == 0 && ctx->layout.copies == 0) {
-      // no format-changed event on this codec: ask once before the first frame
+    if (ctx->layout.stride == 0) {
+      // Ask again every frame until it answers. Asking once, before the first
+      // buffer came out, got nothing at all on a Snapdragon (2026-11-21:
+      // stride=0 slice=0 for a whole session, so the copy fell back to tight
+      // rows on a buffer that was not tight). A format it has not finished
+      // configuring is not a format that has no stride.
       jl_mc_read_layout(ctx);
     }
     size_t out_cap = 0;

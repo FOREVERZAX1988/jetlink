@@ -88,6 +88,11 @@ typedef struct {
   int refused;        ///< buffers that could not hold the picture at all
   int last_size;      ///< the last output buffer's `info.size`
   int last_offset;    ///< and its `info.offset`
+  int out_cap;        ///< and the capacity `getOutputBuffer` reported
+  unsigned long long head_lo;  ///< the picture's first 8 bytes, as they lie
+  unsigned long long head_hi;  ///< and the next 8: a linear NV12 row of a lit
+                               ///< scene is smooth; a tiled/compressed buffer
+                               ///< is not
 } jl_hevc_layout;
 
 /// The last decode's layout, or NULL without a decoder. Valid until the next
