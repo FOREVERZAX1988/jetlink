@@ -41,6 +41,11 @@ final class HevcFrame: @unchecked Sendable {
   private var lastRefusal = 0.0
   /// The codec's own format, said once: what it decided the picture is.
   private var loggedFormat = false
+  /// Frames published blank while no decoder has produced a picture yet.
+  private var warmup = 0
+  /// How many of those a join is allowed: a few seconds at 20 Hz, after which a
+  /// frame that still cannot be decoded is the answer, not the excuse.
+  static let warmupLimit = 150
 
   /// The shape of the warped frame the model takes: (2, 6, H, W), the two
   /// cameras' six planes one after another. Nil when the shape is not one
@@ -94,14 +99,31 @@ final class HevcFrame: @unchecked Sendable {
     let planeBytes = planeHeight * planeWidth
     let roadPlanes = planes.advanced(by: 0)
     let widePlanes = planes.advanced(by: 6 * planeBytes)
-    guard decode(roadBytes, into: roadNV12, planes: roadPlanes, decoder: road),
+    if decode(roadBytes, into: roadNV12, planes: roadPlanes, decoder: road),
       decode(wideBytes, into: wideNV12, planes: widePlanes, decoder: wide)
-    else {
-      reportRefusal()
-      return false
+    {
+      warmup = 0
+      reportIfDue()
+      return true
     }
-    reportIfDue()
-    return true
+    // A decoder that has never produced a picture is warming up, not refusing.
+    //
+    // Answering "no frame yet" as BAD_SHAPE ends the join at frame 0, and a link
+    // that cannot be joined cannot be measured at all: every session of this
+    // afternoon died there, twice through the codec's own buffer and twice
+    // through a surface. A blank frame for a bounded number of tries keeps the
+    // link alive while the decoder starts -- the same pixels a dead camera would
+    // give -- and once pictures are flowing, a frame that cannot be decoded is
+    // still refused, which is the invariant that matters.
+    let neverDecoded = road.flatMap { jl_hevc_layout_of($0)?.pointee.copies } ?? 0
+    if warmup < HevcFrame.warmupLimit && neverDecoded == 0 {
+      warmup += 1
+      planes.initializeMemory(as: UInt8.self, repeating: 0, count: 12 * planeHeight * planeWidth)
+      reportRefusal()
+      return true
+    }
+    reportRefusal()
+    return false
   }
 
   /// A frame this could not turn into planes, said once a second with the

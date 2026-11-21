@@ -630,7 +630,19 @@ static void jl_mc_teardown(struct jl_hevc *ctx) {
 // worth 0.8 s, which is what the link's first-frame budget is for.
 static int jl_mc_take(struct jl_hevc *ctx, const void *src, size_t n, uint8_t *out, int irap) {
   const int first = ctx->layout.copies == 0 && ctx->layout.refused == 0;
-  ssize_t in = AMediaCodec_dequeueInputBuffer(ctx->codec, 2000);  // 2 ms
+  // A codec that has just been started has no input slot for a moment, and
+  // asking once (2 ms) and giving up turns that moment into a refusal. The
+  // first access unit is allowed to wait for one.
+  ssize_t in = -1;
+  int slot_ms = first ? 300 : 2;
+  while (slot_ms > 0) {
+    in = AMediaCodec_dequeueInputBuffer(ctx->codec, 2000);   // 2 ms
+    if (in >= 0) break;
+    slot_ms -= 2;
+    if (!first) break;
+    struct timespec ts = {0, 2000000};   // 2 ms
+    nanosleep(&ts, NULL);
+  }
   if (in < 0) { ctx->layout.stage = 5; return 0; }   // no input slot yet
   size_t cap = 0;
   uint8_t *buf = AMediaCodec_getInputBuffer(ctx->codec, (size_t)in, &cap);
@@ -643,7 +655,7 @@ static int jl_mc_take(struct jl_hevc *ctx, const void *src, size_t n, uint8_t *o
     return -3;
   }
 
-  int left_ms = first ? 800 : 6;
+  int left_ms = first ? 700 : 6;
   while (left_ms > 0) {
     AMediaCodecBufferInfo info;
     memset(&info, 0, sizeof(info));
