@@ -177,8 +177,12 @@ int jl_hevc_tighten_nv12(const uint8_t *src, size_t n, int width, int height,
 //
 // Output is COLOR_FormatYUV420SemiPlanar (NV12): a luma plane followed by
 // interleaved chroma, exactly what jl_copy_nv12 below reads.
+#include <android/native_window.h>
+#include <media/NdkImage.h>
+#include <media/NdkImageReader.h>
 #include <media/NdkMediaCodec.h>
 #include <media/NdkMediaFormat.h>
+#include <time.h>
 
 struct jl_hevc {
   int width;
@@ -186,6 +190,11 @@ struct jl_hevc {
   size_t frame_bytes;
   int broken;
   AMediaCodec *codec;
+  // When the codec took a surface, the picture comes out through the reader:
+  // three planes with their own row and pixel strides, in YUV_420_888, linear
+  // by construction. Both are NULL when it would not take one.
+  AImageReader *reader;
+  ANativeWindow *window;
   uint8_t *nv12;
   int64_t pts;              // microseconds, monotonically increasing per AU
   // the codec's own account of its output buffer (jl_hevc_layout_of). Where a
@@ -254,28 +263,74 @@ static int jl_mc_configure(struct jl_hevc *ctx, const uint8_t *au, size_t n) {
   AMediaFormat_setInt32(fmt, "low-latency", 1);
   AMediaFormat_setInt32(fmt, "operating-rate", 30);
 
-  media_status_t st = AMediaCodec_configure(codec, fmt, NULL, NULL, 0);
+  // A surface for the codec to render into, and a reader behind it.
+  //
+  // Byte-buffer output from this decoder was never a picture: a 131072-byte
+  // buffer for a 512x256 frame (the luma alone) holding black with a little
+  // noise, while the same access units decoded to 59.5/4.9 elsewhere. Handing
+  // it a surface takes the layout out of its hands twice over: the queue does
+  // the colour conversion, and what comes back is YUV_420_888 with its own row
+  // and pixel strides, which AImage reports instead of being guessed at.
+  AImageReader *reader = NULL;
+  ANativeWindow *window = NULL;
+  if (AImageReader_new(ctx->width, ctx->height, AIMAGE_FORMAT_YUV_420_888, 4,
+                       &reader) != AMEDIA_OK ||
+      reader == NULL || AImageReader_getWindow(reader, &window) != AMEDIA_OK) {
+    // no reader on this device: fall back to the buffer the codec hands over
+    if (reader != NULL) AImageReader_delete(reader);
+    reader = NULL;
+    window = NULL;
+  }
+
+  // The parameter sets are the one part that is not a hint: a codec that does
+  // not know a key in `fmt` may reject the whole format, so this is also tried
+  // stripped down to what a decoder cannot do without.
+  AMediaFormat *plain = AMediaFormat_new();
+  if (plain != NULL) {
+    AMediaFormat_setString(plain, AMEDIAFORMAT_KEY_MIME, jl_mc_mime());
+    AMediaFormat_setInt32(plain, AMEDIAFORMAT_KEY_WIDTH, ctx->width);
+    AMediaFormat_setInt32(plain, AMEDIAFORMAT_KEY_HEIGHT, ctx->height);
+    AMediaFormat_setInt32(plain, AMEDIAFORMAT_KEY_COLOR_FORMAT, 0x7F000001);
+    AMediaFormat_setBuffer(plain, "csd-0", csd0, csd0_n);
+    AMediaFormat_setBuffer(plain, "csd-1", csd1, pps_n + 4);
+  }
+
+  // In order of preference, and the surface is the one that matters: a picture
+  // through the reader has a layout the codec cannot get wrong.
+  media_status_t st = AMEDIA_ERROR_UNKNOWN;
+  if (window != NULL) st = AMediaCodec_configure(codec, fmt, window, NULL, 0);
+  if (st != AMEDIA_OK && window != NULL && plain != NULL) {
+    st = AMediaCodec_configure(codec, plain, window, NULL, 0);
+  }
   if (st != AMEDIA_OK) {
-    // A codec that does not know a hint key may reject the whole format rather
-    // than ignore it; the parameter sets are not a hint and stay.
-    AMediaFormat *plain = AMediaFormat_new();
-    if (plain != NULL) {
-      AMediaFormat_setString(plain, AMEDIAFORMAT_KEY_MIME, jl_mc_mime());
-      AMediaFormat_setInt32(plain, AMEDIAFORMAT_KEY_WIDTH, ctx->width);
-      AMediaFormat_setInt32(plain, AMEDIAFORMAT_KEY_HEIGHT, ctx->height);
-      AMediaFormat_setInt32(plain, AMEDIAFORMAT_KEY_COLOR_FORMAT, 0x7F000001);
-      AMediaFormat_setBuffer(plain, "csd-0", csd0, csd0_n);
-      AMediaFormat_setBuffer(plain, "csd-1", csd1, pps_n + 4);
+    // a codec that will not take the surface still decodes into a buffer
+    if (window != NULL) {
+      AImageReader_delete(reader);
+      reader = NULL;
+      window = NULL;
+    }
+    st = AMediaCodec_configure(codec, fmt, NULL, NULL, 0);
+    if (st != AMEDIA_OK && plain != NULL) {
       st = AMediaCodec_configure(codec, plain, NULL, NULL, 0);
-      AMediaFormat_delete(plain);
     }
   }
+  if (plain != NULL) AMediaFormat_delete(plain);
   AMediaFormat_delete(fmt);
   free(csd0);
   free(csd1);
-  if (st != AMEDIA_OK) { AMediaCodec_delete(codec); return -1; }
-  if (AMediaCodec_start(codec) != AMEDIA_OK) { AMediaCodec_delete(codec); return -1; }
+  if (st != AMEDIA_OK) {
+    AMediaCodec_delete(codec);
+    if (reader != NULL) AImageReader_delete(reader);
+    return -1;
+  }
+  if (AMediaCodec_start(codec) != AMEDIA_OK) {
+    AMediaCodec_delete(codec);
+    if (reader != NULL) AImageReader_delete(reader);
+    return -1;
+  }
   ctx->codec = codec;
+  ctx->reader = reader;
+  ctx->window = window;
   return 0;
 }
 
@@ -304,6 +359,8 @@ void jl_hevc_free(jl_hevc *ctx) {
     AMediaCodec_stop(ctx->codec);
     AMediaCodec_delete(ctx->codec);
   }
+  // the window is the reader's, so it goes when the reader does
+  if (ctx->reader != NULL) AImageReader_delete(ctx->reader);
   free(ctx->nv12);
   free(ctx);
 }
@@ -312,6 +369,14 @@ void jl_hevc_flush(jl_hevc *ctx) {
   if (ctx == NULL || ctx->codec == NULL) return;
   ctx->broken = 1;
   AMediaCodec_flush(ctx->codec);
+  if (ctx->reader != NULL) {
+    // frames already rendered are from before the flush
+    AImage *stale = NULL;
+    while (AImageReader_acquireLatestImage(ctx->reader, &stale) == AMEDIA_OK && stale != NULL) {
+      AImage_delete(stale);
+      stale = NULL;
+    }
+  }
 }
 
 int jl_hevc_available(void) {
@@ -361,6 +426,69 @@ static void jl_mc_read_layout(struct jl_hevc *ctx) {
 // "decodes", which is why the carrier looked healthy while the model answered
 // as if the car were parked: the plane means measured downstream (16/42) were
 // nothing like the encoder's (65/5).
+// One picture out of the reader, as tight NV12.
+//
+// YUV_420_888 is three planes and neither of them is guaranteed tight: the row
+// stride is whatever the queue picked and the chroma may be interleaved (pixel
+// stride 2, NV12) or planar (1, I420). Both are read here the same way, from
+// the strides the image itself carries -- the numbers the byte-buffer path
+// could never get out of this decoder.
+static int jl_mc_copy_image(struct jl_hevc *ctx, AImage *img) {
+  int32_t iw = 0, ih = 0;
+  if (AImage_getWidth(img, &iw) != AMEDIA_OK || AImage_getHeight(img, &ih) != AMEDIA_OK) return -1;
+  const int w = ctx->width, h = ctx->height;
+  if (iw < w || ih < h) return -1;   // a picture smaller than the model's frame
+
+  uint8_t *plane[3] = {NULL, NULL, NULL};
+  int len[3] = {0, 0, 0};
+  int32_t row[3] = {0, 0, 0}, pix[3] = {0, 0, 0};
+  for (int i = 0; i < 3; i++) {
+    if (AImage_getPlaneData(img, i, &plane[i], &len[i]) != AMEDIA_OK || plane[i] == NULL) return -1;
+    if (AImage_getPlaneRowStride(img, i, &row[i]) != AMEDIA_OK) return -1;
+    if (row[i] < 1) return -1;
+    if (AImage_getPlanePixelStride(img, i, &pix[i]) != AMEDIA_OK) return -1;
+  }
+  if (pix[1] < 1 || pix[2] < 1) return -1;
+
+  // what the strides claim has to fit in what the planes say they hold
+  const size_t luma = (size_t)w * (size_t)h;
+  const size_t cw = (size_t)w / 2, ch = (size_t)h / 2;
+  if ((size_t)row[0] * (size_t)(h - 1) + (size_t)w > (size_t)len[0]) return -1;
+  for (int i = 1; i < 3; i++) {
+    if ((size_t)row[i] * (ch - 1) + (size_t)(cw - 1) * (size_t)pix[i] + 1 > (size_t)len[i]) return -1;
+  }
+
+  for (int y = 0; y < h; y++) {
+    memcpy(ctx->nv12 + (size_t)y * (size_t)w, plane[0] + (size_t)y * (size_t)row[0], (size_t)w);
+  }
+  uint8_t *dst = ctx->nv12 + luma;
+  for (size_t y = 0; y < ch; y++) {
+    const uint8_t *ru = plane[1] + y * (size_t)row[1];
+    const uint8_t *rv = plane[2] + y * (size_t)row[2];
+    uint8_t *d = dst + y * (size_t)w;
+    for (size_t x = 0; x < cw; x++) {
+      d[2 * x] = ru[x * (size_t)pix[1]];
+      d[2 * x + 1] = rv[x * (size_t)pix[2]];
+    }
+  }
+
+  ctx->layout.stride = row[0];
+  ctx->layout.slice_height = ih;
+  ctx->layout.color_format = AIMAGE_FORMAT_YUV_420_888;
+  ctx->layout.crop_left = 0;
+  ctx->layout.crop_top = 0;
+  ctx->layout.copies++;
+  ctx->layout.from_image++;
+  if (row[0] != w) ctx->layout.strided++;
+  ctx->layout.head_lo = 0;
+  ctx->layout.head_hi = 0;
+  for (int i = 0; i < 8; i++) {
+    ctx->layout.head_lo |= (unsigned long long)ctx->nv12[i] << (8 * i);
+    ctx->layout.head_hi |= (unsigned long long)ctx->nv12[8 + i] << (8 * i);
+  }
+  return 0;
+}
+
 static int jl_mc_copy_nv12(struct jl_hevc *ctx, uint8_t *data, size_t n,
                            int32_t offset, int32_t size) {
   if (data == NULL || size <= 0 || (size_t)offset + (size_t)size > n) {
@@ -472,6 +600,14 @@ int jl_hevc_decode(jl_hevc *ctx, const void *src, size_t n, uint8_t *out, int *k
     // it: 0 is "no frame yet", not a failure.
     if (!irap || jl_mc_configure(ctx, (const uint8_t *)src, n) != 0) return 0;
   }
+  // what this decoder was handed, so a log line can tell a stream that never
+  // arrived from a picture it could not make
+  ctx->layout.au_bytes = (int)n;
+  {
+    jl_nal head[1];
+    size_t got = jl_hevc_nals((const uint8_t *)src, n, head, 1);
+    ctx->layout.au_first_type = got > 0 ? head[0].type : -1;
+  }
   if (irap) {
     ctx->broken = 0;
   } else if (ctx->broken) {
@@ -522,6 +658,26 @@ int jl_hevc_decode(jl_hevc *ctx, const void *src, size_t n, uint8_t *out, int *k
       // rows on a buffer that was not tight). A format it has not finished
       // configuring is not a format that has no stride.
       jl_mc_read_layout(ctx);
+    }
+    if (ctx->reader != NULL) {
+      // Render it, which hands the frame to the reader, then take it: the
+      // newest one, so a picture the link is too late for is dropped rather
+      // than decoded a frame behind.
+      AMediaCodec_releaseOutputBuffer(ctx->codec, (size_t)ix, true);
+      AImage *img = NULL;
+      for (int wait = 0; wait < 12 && img == NULL; wait++) {
+        if (AImageReader_acquireLatestImage(ctx->reader, &img) != AMEDIA_OK) {
+          img = NULL;
+          struct timespec ts = {0, 1000000};   // 1 ms
+          nanosleep(&ts, NULL);
+        }
+      }
+      if (img == NULL) return 0;   // rendered but not readable yet: next call
+      int rc = jl_mc_copy_image(ctx, img);
+      AImage_delete(img);
+      if (rc != 0) return -3;
+      memcpy(out, ctx->nv12, ctx->frame_bytes);
+      return 1;
     }
     size_t out_cap = 0;
     uint8_t *out_buf = AMediaCodec_getOutputBuffer(ctx->codec, (size_t)ix, &out_cap);

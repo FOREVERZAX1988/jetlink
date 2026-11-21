@@ -90,6 +90,8 @@ typedef struct {
   int last_size;      ///< the last output buffer's `info.size`
   int last_offset;    ///< and its `info.offset`
   int out_cap;        ///< and the capacity `getOutputBuffer` reported
+  int au_bytes;       ///< the access unit this decode was fed, in bytes
+  int au_first_type;  ///< its first NAL's type (32 VPS on an IDR, 1 a P frame)
   unsigned long long head_lo;  ///< the picture's first 8 bytes, as they lie
   unsigned long long head_hi;  ///< and the next 8: a linear NV12 row of a lit
                                ///< scene is smooth; a tiled/compressed buffer

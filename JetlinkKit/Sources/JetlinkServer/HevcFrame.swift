@@ -143,6 +143,10 @@ final class HevcFrame: @unchecked Sendable {
       let l = info.pointee
       line += " stride=\(l.stride) slice=\(l.slice_height) fmt=0x\(String(l.color_format, radix: 16))"
       line += " copies=\(l.copies) strided=\(l.strided) tight=\(l.tight_fallback) refused=\(l.refused)"
+      // `img` counts the pictures that came through the reader: on a phone that
+      // took the surface it is every one of them, and a zero here says the
+      // decoder fell back to handing over a buffer.
+      line += " img=\(l.from_image) au=\(l.au_bytes)/\(l.au_first_type)"
       line += " size=\(l.last_size) off=\(l.last_offset) cap=\(l.out_cap)"
       line += " head=" + String(format: "%016llx%016llx", l.head_lo, l.head_hi)
     }
