@@ -177,6 +177,7 @@ int jl_hevc_tighten_nv12(const uint8_t *src, size_t n, int width, int height,
 //
 // Output is COLOR_FormatYUV420SemiPlanar (NV12): a luma plane followed by
 // interleaved chroma, exactly what jl_copy_nv12 below reads.
+#include <android/hardware_buffer.h>
 #include <android/native_window.h>
 #include <media/NdkImage.h>
 #include <media/NdkImageReader.h>
@@ -273,9 +274,17 @@ static int jl_mc_configure(struct jl_hevc *ctx, const uint8_t *au, size_t n) {
   // and pixel strides, which AImage reports instead of being guessed at.
   AImageReader *reader = NULL;
   ANativeWindow *window = NULL;
-  if (AImageReader_new(ctx->width, ctx->height, AIMAGE_FORMAT_YUV_420_888, 4,
-                       &reader) != AMEDIA_OK ||
-      reader == NULL || AImageReader_getWindow(reader, &window) != AMEDIA_OK) {
+  // CPU_READ_OFTEN, because the picture is read here and nowhere else: without
+  // it the queue may hand back buffers only the GPU can touch, and
+  // AImage_getPlaneData answers with nothing.
+  media_status_t made = AImageReader_newWithUsage(
+    ctx->width, ctx->height, AIMAGE_FORMAT_YUV_420_888,
+    AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN, 4, &reader);
+  if (made != AMEDIA_OK) {
+    made = AImageReader_new(ctx->width, ctx->height, AIMAGE_FORMAT_YUV_420_888, 4, &reader);
+  }
+  if (made != AMEDIA_OK || reader == NULL ||
+      AImageReader_getWindow(reader, &window) != AMEDIA_OK) {
     // no reader on this device: fall back to the buffer the codec hands over
     if (reader != NULL) AImageReader_delete(reader);
     reader = NULL;
