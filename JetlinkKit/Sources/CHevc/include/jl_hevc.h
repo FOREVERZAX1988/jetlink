@@ -90,6 +90,8 @@ typedef struct {
   int last_size;      ///< the last output buffer's `info.size`
   int last_offset;    ///< and its `info.offset`
   int out_cap;        ///< and the capacity `getOutputBuffer` reported
+  int stage_first;    ///< the stage the surface attempt reached before the
+                      ///< decoder was reopened without one
   int stage;          ///< how far the last decode got: 0 frame out, 1 no
                       ///< decoder, 2 no output buffer, 3 no readable image,
                       ///< 4 a picture that would not copy

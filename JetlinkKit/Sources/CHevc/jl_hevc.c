@@ -196,6 +196,9 @@ struct jl_hevc {
   // by construction. Both are NULL when it would not take one.
   AImageReader *reader;
   ANativeWindow *window;
+  /// Set when the surface path was tried and gave nothing: the decoder is then
+  /// opened again the way this device is known to answer, without one.
+  int no_surface;
   uint8_t *nv12;
   int64_t pts;              // microseconds, monotonically increasing per AU
   // the codec's own account of its output buffer (jl_hevc_layout_of). Where a
@@ -277,10 +280,11 @@ static int jl_mc_configure(struct jl_hevc *ctx, const uint8_t *au, size_t n) {
   // CPU_READ_OFTEN, because the picture is read here and nowhere else: without
   // it the queue may hand back buffers only the GPU can touch, and
   // AImage_getPlaneData answers with nothing.
-  media_status_t made = AImageReader_newWithUsage(
-    ctx->width, ctx->height, AIMAGE_FORMAT_YUV_420_888,
-    AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN, 4, &reader);
-  if (made != AMEDIA_OK) {
+  media_status_t made = ctx->no_surface ? AMEDIA_ERROR_UNKNOWN
+                                         : AImageReader_newWithUsage(
+                                             ctx->width, ctx->height, AIMAGE_FORMAT_YUV_420_888,
+                                             AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN, 4, &reader);
+  if (made != AMEDIA_OK && !ctx->no_surface) {
     made = AImageReader_new(ctx->width, ctx->height, AIMAGE_FORMAT_YUV_420_888, 4, &reader);
   }
   if (made != AMEDIA_OK || reader == NULL ||
@@ -599,6 +603,106 @@ int jl_hevc_format_string(jl_hevc *ctx, char *out, size_t cap) {
   return n;
 }
 
+// Take the decoder down and keep nothing: the codec and the queue it renders
+// into only make sense together.
+static void jl_mc_teardown(struct jl_hevc *ctx) {
+  if (ctx->codec != NULL) {
+    AMediaCodec_stop(ctx->codec);
+    AMediaCodec_delete(ctx->codec);
+    ctx->codec = NULL;
+  }
+  if (ctx->reader != NULL) {
+    AImageReader_delete(ctx->reader);
+    ctx->reader = NULL;
+  }
+  ctx->window = NULL;
+  ctx->broken = 1;
+}
+
+// Feed one access unit and take one picture out of it.
+//
+// 1 is a frame, 0 is nothing out yet, -3 is a codec that would not even take
+// the bytes. After the first picture this waits a few milliseconds and no more:
+// a frame that is not out is the one-frame-old plan a pipelined link publishes
+// anyway. The first picture is different, and used to be fatal -- a decoder
+// that was just configured has nothing out for a frame or two, the caller reads
+// "nothing" as a refusal, and BAD_SHAPE ends the join at frame 0. A join is
+// worth 0.8 s, which is what the link's first-frame budget is for.
+static int jl_mc_take(struct jl_hevc *ctx, const void *src, size_t n, uint8_t *out, int irap) {
+  const int first = ctx->layout.copies == 0 && ctx->layout.refused == 0;
+  ssize_t in = AMediaCodec_dequeueInputBuffer(ctx->codec, 2000);  // 2 ms
+  if (in < 0) { ctx->layout.stage = 5; return 0; }   // no input slot yet
+  size_t cap = 0;
+  uint8_t *buf = AMediaCodec_getInputBuffer(ctx->codec, (size_t)in, &cap);
+  if (buf == NULL || n > cap) { ctx->layout.stage = 6; return -3; }
+  memcpy(buf, src, n);
+  uint32_t flags = irap ? AMEDIACODEC_BUFFER_FLAG_KEY_FRAME : 0;
+  if (AMediaCodec_queueInputBuffer(ctx->codec, (size_t)in, 0, n,
+                                   (uint64_t)ctx->pts++, flags) != AMEDIA_OK) {
+    ctx->layout.stage = 6;
+    return -3;
+  }
+
+  int left_ms = first ? 800 : 6;
+  while (left_ms > 0) {
+    AMediaCodecBufferInfo info;
+    memset(&info, 0, sizeof(info));
+    ssize_t ix = AMediaCodec_dequeueOutputBuffer(ctx->codec, &info, first ? 4000 : 3000);
+    left_ms -= first ? 4 : 3;
+    if (ix == AMEDIACODEC_INFO_TRY_AGAIN_LATER) continue;
+    if (ix == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED) {
+      // the one moment a codec says how wide its rows are and how it padded
+      // the picture
+      jl_mc_read_layout(ctx);
+      continue;
+    }
+    if (ix == AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED) continue;
+    if (ix < 0) { ctx->layout.stage = 2; return -3; }
+    if (ctx->layout.stride == 0) {
+      // ask again every frame until it answers: a format it has not finished
+      // configuring is not a format that has no stride
+      jl_mc_read_layout(ctx);
+    }
+    if (ctx->reader != NULL) {
+      // render it, which hands the frame to the reader, then take the newest
+      // one: a picture the link is too late for is dropped, not decoded a
+      // frame behind
+      AMediaCodec_releaseOutputBuffer(ctx->codec, (size_t)ix, true);
+      AImage *img = NULL;
+      int wait = first ? 200 : 12;
+      for (; wait > 0 && img == NULL; wait--) {
+        if (AImageReader_acquireLatestImage(ctx->reader, &img) != AMEDIA_OK) {
+          img = NULL;
+          struct timespec ts = {0, 1000000};   // 1 ms
+          nanosleep(&ts, NULL);
+        }
+      }
+      if (img == NULL) { ctx->layout.stage = 3; continue; }
+      int rc = jl_mc_copy_image(ctx, img);
+      AImage_delete(img);
+      if (rc != 0) { ctx->layout.stage = 4; return -3; }
+      ctx->layout.stage = 0;
+      memcpy(out, ctx->nv12, ctx->frame_bytes);
+      return 1;
+    }
+    size_t out_cap = 0;
+    uint8_t *out_buf = AMediaCodec_getOutputBuffer(ctx->codec, (size_t)ix, &out_cap);
+    if (out_buf == NULL) {
+      AMediaCodec_releaseOutputBuffer(ctx->codec, (size_t)ix, 0);
+      ctx->layout.stage = 2;
+      return -3;
+    }
+    int rc = jl_mc_copy_nv12(ctx, out_buf, out_cap, info.offset, info.size);
+    AMediaCodec_releaseOutputBuffer(ctx->codec, (size_t)ix, 0);
+    if (rc != 0) { ctx->layout.stage = 4; return -3; }
+    ctx->layout.stage = 0;
+    memcpy(out, ctx->nv12, ctx->frame_bytes);
+    return 1;
+  }
+  if (ctx->layout.stage == 0) ctx->layout.stage = 2;
+  return 0;
+}
+
 int jl_hevc_decode(jl_hevc *ctx, const void *src, size_t n, uint8_t *out, int *keyframe) {
   if (ctx == NULL || src == NULL || out == NULL || n == 0) return -3;
   int irap = jl_hevc_is_keyframe(src, n);
@@ -624,96 +728,24 @@ int jl_hevc_decode(jl_hevc *ctx, const void *src, size_t n, uint8_t *out, int *k
     return -2;   // no IDR yet: the codec has no reference picture for this AU
   }
 
-  // Feed the access unit. A positive index is an input buffer slot; the
-  // negatives are INFO_TRY_AGAIN_LATER (-1) and a codec that went away.
-  //
-  // Both waits are short on purpose. This call runs on modeld's frame thread,
-  // inside a 50 ms camera period: waiting 20 ms for an input slot and then up
-  // to 4 x 20 ms for its frame spent 100 ms here and pushed the reply past the
-  // link's 0.2 s deadline (measured 2026-11-16: `link 158 ms`, failure 7).
-  // Jetlink is pipelined, so a frame whose picture is not out yet is a frame
-  // to publish the previous plan for -- the next call drains it.
-  ssize_t in = AMediaCodec_dequeueInputBuffer(ctx->codec, 2000);  // 2 ms
-  if (in < 0) return 0;   // no input slot yet: publish the previous plan
-  size_t cap = 0;
-  uint8_t *buf = AMediaCodec_getInputBuffer(ctx->codec, (size_t)in, &cap);
-  if (buf == NULL || n > cap) return -3;
-  memcpy(buf, src, n);
-  uint32_t flags = irap ? AMEDIACODEC_BUFFER_FLAG_KEY_FRAME : 0;
-  if (AMediaCodec_queueInputBuffer(ctx->codec, (size_t)in, 0, n,
-                                   (uint64_t)ctx->pts++, flags) != AMEDIA_OK) return -3;
+  int rc = jl_mc_take(ctx, src, n, out, irap);
 
-  // Drain one decoded frame.
-  //
-  // After the first picture this waits a few milliseconds and no more: the
-  // codec decodes on its own time, and a frame that is not out yet is the
-  // one-frame-old plan a pipelined link publishes anyway.
-  //
-  // The first picture is different, and used to be fatal. A decoder that has
-  // just been configured has nothing out for a frame or two, and the caller
-  // reads "no frame yet" as a refusal -- BAD_SHAPE at the host, which ends the
-  // join at frame 0 (measured 2026-11-21, twice: once through the codec's
-  // buffer, once through a surface). A join is worth a second of waiting, and
-  // the link's first-frame budget is exactly what that second is for.
-  const int first = ctx->layout.copies == 0 && ctx->layout.refused == 0;
-  int left_ms = first ? 800 : 6;
-  while (left_ms > 0) {
-    AMediaCodecBufferInfo info;
-    memset(&info, 0, sizeof(info));
-    ssize_t ix = AMediaCodec_dequeueOutputBuffer(ctx->codec, &info, first ? 4000 : 3000);
-    left_ms -= first ? 4 : 3;
-    if (ix == AMEDIACODEC_INFO_TRY_AGAIN_LATER) continue;
-    if (ix == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED) {
-      // the one moment the codec says how wide its rows are and how it padded
-      // the picture: a decoder that pads is not wrong, a copy that assumed it
-      // did not is
-      jl_mc_read_layout(ctx);
-      continue;
-    }
-    if (ix == AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED) continue;
-    if (ix < 0) { ctx->layout.stage = 2; return -3; }
-    if (ctx->layout.stride == 0) {
-      // Ask again every frame until it answers. Asking once, before the first
-      // buffer came out, got nothing at all on a Snapdragon (2026-11-21:
-      // stride=0 slice=0 for a whole session, so the copy fell back to tight
-      // rows on a buffer that was not tight). A format it has not finished
-      // configuring is not a format that has no stride.
-      jl_mc_read_layout(ctx);
-    }
-    if (ctx->reader != NULL) {
-      // Render it, which hands the frame to the reader, then take it: the
-      // newest one, so a picture the link is too late for is dropped rather
-      // than decoded a frame behind.
-      AMediaCodec_releaseOutputBuffer(ctx->codec, (size_t)ix, true);
-      AImage *img = NULL;
-      int wait = first ? 200 : 12;
-      for (; wait > 0 && img == NULL; wait--) {
-        if (AImageReader_acquireLatestImage(ctx->reader, &img) != AMEDIA_OK) {
-          img = NULL;
-          struct timespec ts = {0, 1000000};   // 1 ms
-          nanosleep(&ts, NULL);
-        }
-      }
-      if (img == NULL) { ctx->layout.stage = 3; continue; }   // rendered, not readable yet
-      int rc = jl_mc_copy_image(ctx, img);
-      AImage_delete(img);
-      if (rc != 0) { ctx->layout.stage = 4; return -3; }
+  // A surface that gives no picture on the very first access unit is a surface
+  // this decoder will not render into -- and a join that dies at frame 0 is
+  // worse than a picture with the wrong layout. Open it again without one and
+  // feed the same access unit once more: the buffer path is the one this
+  // device is known to answer on, whatever it puts in it.
+  if (rc == 0 && ctx->layout.copies == 0 && ctx->layout.refused == 0 && ctx->reader != NULL) {
+    ctx->layout.stage_first = ctx->layout.stage;   // keep what the surface got to
+    jl_mc_teardown(ctx);
+    ctx->no_surface = 1;
+    if (jl_mc_configure(ctx, (const uint8_t *)src, n) == 0) {
       ctx->layout.stage = 0;
-      memcpy(out, ctx->nv12, ctx->frame_bytes);
-      return 1;
+      ctx->broken = 0;
+      rc = jl_mc_take(ctx, src, n, out, irap);
     }
-    size_t out_cap = 0;
-    uint8_t *out_buf = AMediaCodec_getOutputBuffer(ctx->codec, (size_t)ix, &out_cap);
-    if (out_buf == NULL) { AMediaCodec_releaseOutputBuffer(ctx->codec, (size_t)ix, 0); ctx->layout.stage = 2; return -3; }
-    int rc = jl_mc_copy_nv12(ctx, out_buf, out_cap, info.offset, info.size);
-    AMediaCodec_releaseOutputBuffer(ctx->codec, (size_t)ix, 0);
-    if (rc != 0) { ctx->layout.stage = 4; return -3; }
-    ctx->layout.stage = 0;
-    memcpy(out, ctx->nv12, ctx->frame_bytes);
-    return 1;
   }
-  if (ctx->layout.stage == 0) ctx->layout.stage = 2;   // nothing came out
-  return 0;   // no frame yet: hold the previous plan, not a failure
+  return rc;
 }
 
 #elif defined(JL_HEVC_AV)

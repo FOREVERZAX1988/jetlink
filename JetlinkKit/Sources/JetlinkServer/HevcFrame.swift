@@ -122,7 +122,7 @@ final class HevcFrame: @unchecked Sendable {
     // 2 nothing came out of the codec, 3 the codec rendered but no readable
     // image followed, 4 a picture that would not copy. A refusal with all its
     // numbers is a place to look; without them it was an afternoon.
-    log.warning("hevc refused a frame: \(width)x\(height) stage=\(l.stage)"
+    log.warning("hevc refused a frame: \(width)x\(height) stage=\(l.stage)/\(l.stage_first)"
                 + " au=\(l.au_bytes)/\(l.au_first_type) img=\(l.from_image)"
                 + " stride=\(l.stride) slice=\(l.slice_height) fmt=0x\(String(l.color_format, radix: 16))"
                 + " size=\(l.last_size) offset=\(l.last_offset) copies=\(l.copies)"
