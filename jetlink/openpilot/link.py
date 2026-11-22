@@ -43,7 +43,24 @@ CONNECT_DELAY = 0.5
 # margin and still leaves room for the small model inside the 0.5 s alive
 # limit (test_link asserts timeout + 0.1 < 0.5); a host that is truly gone is
 # still caught by the next frame's check.
-INFERENCE_TIMEOUT = 0.35
+#
+# DIAGNOSTIC MODE 2026-11-22: the "Jetlink remote diagnostic" toggle in
+# developer settings relaxes this to 1.5 s for offroad/bench sessions over a
+# slow relay, where a round trip measured 599 ms. That deliberately breaks
+# the timeout + 0.1 < 0.5 invariant above: the small model still runs, but
+# modelV2 goes stale for up to this long. Fine parked, NOT fine on a drive.
+# The default stays at 0.35 s and is the value used on the car.
+def _remote_diag() -> bool:
+  # JetlinkDiagMode is not in Params' compiled key table, so reading it through
+  # Params raises UnknownKeyName. The UI toggle writes the same 1/0 file that
+  # Params would, just without the registry.
+  try:
+    return Path("/data/params/d/JetlinkDiagMode").read_bytes().strip() == b"1"
+  except OSError:
+    return False
+
+
+INFERENCE_TIMEOUT = 1.5 if _remote_diag() else 0.35
 # between joins while neither end has the picked model and nothing else is built
 MODEL_WAIT = 60.0
 # how long the load may wait for the early gadget bind; a provisioning run may
