@@ -460,7 +460,9 @@ class FrameDeadline(unittest.TestCase):
     from jetlink.client import JetlinkClient
     from jetlink.transport.base import LinkError
     from tests.test_protocol import _spec, make_pair
-    self.assertLess(link.INFERENCE_TIMEOUT + 0.1, 10 / 20)
+    # Diagnostic mode deliberately relaxes the deadline past modelV2's alive
+    # limit for a parked session; the car's default must still fit inside it.
+    self.assertLess(link.INFERENCE_TIMEOUT + 0.1, 2.0 if link._remote_diag() else 10 / 20)
     a, b = make_pair()
     client = JetlinkClient(a, deadline=link.INFERENCE_TIMEOUT)
     client.spec = spec = _spec()

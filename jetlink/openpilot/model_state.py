@@ -31,6 +31,7 @@ import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 
@@ -79,7 +80,19 @@ HOLD_FRAME = 0.046
 # has answered, and every retry starts cold again -- a phone that was freshly
 # installed can never join. Kept under modelV2's 0.5 s alive limit; later
 # frames still use client.deadline so a host that has gone silent fails fast.
-FIRST_FRAME_BUDGET = 0.45
+# DIAGNOSTIC MODE 2026-11-22: the "Jetlink remote diagnostic" toggle in
+# developer settings raises this to 2.0 s for offroad/bench sessions, where
+# the two video encoders cost ~1.2 s to open. That time is spent before the
+# first frame is sent, so it fits a parked session but not a drive. Default
+# stays at 0.45 s, under modelV2's 0.5 s alive limit.
+def _remote_diag() -> bool:
+  try:
+    return Path("/data/params/d/JetlinkDiagMode").read_bytes().strip() == b"1"
+  except OSError:
+    return False
+
+
+FIRST_FRAME_BUDGET = 2.0 if _remote_diag() else 0.45
 # Held frames the large model may make before it is behind rather than
 # tailing: this many in a row, or more than HOLDS_ALLOWED within HOLD_WINDOW.
 # A host at 40 ms a frame with a tail past 46 (an iPhone) holds a few frames
@@ -393,6 +406,16 @@ class JetlinkModelState:
     self._hevc_geometry = hevc.nv12_geometry((h, w))
     self._warp_shape = spec.warped_shape
     self._hevc = True
+    # The two encoders are built here, before the first frame, and not on it.
+    #
+    # Opening the Venus block -- two V4L2 devices, their formats, their buffers
+    # -- costs about 1.2 s once per state (measured 2026-11-21: an 1134 ms and
+    # a 1293 ms first frame, every rejoin, with the encoders' log lines printed
+    # in between). Built on the first frame, that second is spent with a frame
+    # outstanding, and every frame pipelined behind it misses the link's
+    # deadline: 0.35 s is what keeps modelV2 from going stale on a drive, and
+    # 1.2 s cannot fit inside it. Here it is spent before anything is sent.
+    self._encoder_for()
     # a connection is up and the stream starts here
     self._open_hevc_stream()
 
@@ -430,7 +453,43 @@ class JetlinkModelState:
     idrs: dict[str, bool] = {}
     for name, enc in encoders.items():
       nv12 = hevc.to_nv12(planes[int(name == stream_mod.STREAMS[1])])
-      data, key = enc.encode(nv12, force_keyframe=(name in step.request_idr))
+      # DIAGNOSTIC 2026-11-21: a bright, structured picture instead of the
+      # camera's, while /data/local/tmp/jetlink_test_pattern exists. The scene
+      # at the bench went flat and dark (narrow 19/1), which makes a dark
+      # picture on the far end ambiguous: a decoder that works and a decoder
+      # that returns nothing look the same. A ramp cannot be either.
+      if os.path.exists('/data/local/tmp/jetlink_test_pattern'):
+        yy = np.fromfunction(lambda r, c: (3 * r + c) % 251, (256, 512)).astype(np.uint8)
+        uv = np.full((128, 256, 2), 128, np.uint8)
+        nv12 = np.concatenate([yy.reshape(-1), uv.reshape(-1)])
+      # DIAGNOSTIC 2026-11-21: an IDR every 8 frames, so a receiver that joined
+      # mid-stream recovers within a fraction of a second. Remove once the gate
+      # is shown to open with one on its own.
+      forced = (name in step.request_idr) or (frame_id % 8 == 0)
+      data, key = enc.encode(nv12, force_keyframe=forced)
+      # DIAGNOSTIC 2026-11-21: what this side actually feeds and sends, so the
+      # coded picture can be checked against the warped one somewhere else.
+      if 12 <= frame_id <= 24 and name == stream_mod.STREAMS[0]:
+        try:
+          import os as _os
+          if _os.path.exists('/data/local/tmp/jetlink_au_dump'):
+            with open('/data/local/tmp/au_%03d.hevc' % frame_id, 'wb') as f:
+              f.write(bytes(data))
+            with open('/data/local/tmp/nv12_%03d.raw' % frame_id, 'wb') as f:
+              f.write(nv12.tobytes())
+        except Exception:
+          pass
+      # DIAGNOSTIC 2026-11-21: what the encoder was actually handed, against the
+      # `warp frame ... narrow` line that says what the warp produced. A gap
+      # between the two is a gap between the warp and the encoder, not between
+      # the encoder and the decoder.
+      if frame_id % 10 == 0 and name == stream_mod.STREAMS[0]:
+        try:
+          a = np.frombuffer(nv12, dtype=np.uint8)[: 512 * 256][::7]
+          self._log.warning('jetlink hevc in: %.1f/%.1f au=%d key=%s',
+                            float(a.mean()), float(a.std()), len(data), key)
+        except Exception:
+          pass
       if not data:
         # Nothing out of this encoder yet, which the opening frames of a
         # hardware stream always are: the block holds several frames before
@@ -620,13 +679,22 @@ class JetlinkModelState:
     frame = self._frame
     self._frame_id += 1
     frame.telemetry = want_telemetry or time.monotonic() - self._last_logged >= TELEMETRY_PERIOD
-    if self._pipeline and self.client.unanswered >= PIPELINE_IN_FLIGHT:
+    # At the head of a session only one frame may be outstanding.
+    #
+    # The host's first frame after a join costs about 1.2 s -- the model's first
+    # run on a phone that has just been handed a picture, not the frame itself --
+    # and it is allowed the first-frame budget. Frames pipelined behind it are
+    # judged by the steady-state deadline, which exists so modelV2 never goes
+    # stale on a drive; they would all miss it and their loss would end the
+    # link. So the head of a session does not pipeline, and the rest does.
+    inflight_limit = PIPELINE_IN_FLIGHT if self._frame_id > 3 else 1
+    if self._pipeline and self.client.unanswered >= inflight_limit:
       # Read what has arrived before deciding: a reply that just landed makes
       # room without dropping a camera frame. If the host really is that far
       # behind, hold this one (publish the previous plan) rather than push it
       # out and let the oldest reply cross the link's deadline.
       self.client.drain()
-      if self.client.unanswered >= PIPELINE_IN_FLIGHT:
+      if self.client.unanswered >= inflight_limit:
         frame.skipped = True
         frame.sent = time.perf_counter()
         self.stages.sent(self._frame_id, frame.sent)
